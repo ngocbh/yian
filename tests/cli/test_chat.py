@@ -7,6 +7,7 @@ and the session survives).
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -64,7 +65,11 @@ class _GoodModel:
 def test_chat_help():
     r = runner.invoke(app, ["chat", "--help"])
     assert r.exit_code == 0
-    assert "--workspace" in r.output
+    # Typer renders help via Rich, which under color (CI sets FORCE_COLOR) styles the
+    # leading dash of a flag separately — splitting "--workspace" with ANSI escapes.
+    # Strip them so the assertion tests the flag, not the terminal's color support.
+    clean = re.sub(r"\x1b\[[0-9;]*m", "", r.output)
+    assert "--workspace" in clean
 
 
 def test_chat_two_turns(tmp_path, monkeypatch):

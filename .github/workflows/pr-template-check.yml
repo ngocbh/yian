@@ -1,0 +1,49 @@
+name: PR template check
+
+# Fail a pull request whose description does not follow
+# .github/PULL_REQUEST_TEMPLATE.md — i.e. is missing one of the required
+# section headers. This keeps every PR (human- or agent-authored) reviewable
+# against the same structure. It checks presence of the headers only, not that
+# each section is filled in.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  check-body:
+    name: PR body has required sections
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required template sections are present
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          required=(
+            "## Summary"
+            "## What changed"
+            "## Implementation plan"
+            "## Invariants respected"
+            "## Adversarial self-review"
+            "## Test plan"
+          )
+          missing=()
+          for header in "${required[@]}"; do
+            # Match the header at the start of a line, ignoring trailing spaces.
+            if ! grep -qxE "[[:space:]]*${header}[[:space:]]*" <<<"$PR_BODY"; then
+              missing+=("$header")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "::error::PR description is missing required section(s) from .github/PULL_REQUEST_TEMPLATE.md:"
+            for header in "${missing[@]}"; do
+              echo "::error::  - $header"
+            done
+            echo ""
+            echo "Fill in the PR template and re-edit the description. See .github/PULL_REQUEST_TEMPLATE.md."
+            exit 1
+          fi
+          echo "All required PR template sections are present."

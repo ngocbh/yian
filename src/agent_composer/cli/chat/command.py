@@ -26,7 +26,9 @@ from agent_composer.cli.run import (  # reused helpers
     _ensure_cwd_importable,
     _ensure_provider_keys,
     _last_segment,
+    _render_load_error,
 )
+from agent_composer.compose.errors import LoadError
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.run import resume_command, resume_flow, run_flow
 from agent_composer.events import NodeSucceeded
@@ -62,10 +64,17 @@ def chat(
     search = [path.parent, workspace]
     # The CLI flags supply the OUTERMOST cascade layer (fill-the-gap), not a hard override.
     cli_cfg = {k: v for k, v in {"provider": provider, "model": model}.items() if v}
-    # Preflight keys once. Mirror `ac run` (run.py:891-895): a missing key with no TTY raises
-    # RuntimeError — surface it as a clean red error on stderr + exit 1, not a raw traceback.
+    # Load and preflight once, mirroring `ac run` — both failure modes surface as a clean
+    # stderr error + exit 1, never a raw traceback:
+    #   - a malformed flow raises LoadError (a ValueError) -> a located `.yaml` source frame;
+    #   - a missing key with no TTY raises RuntimeError    -> a red key message.
     try:
-        _ensure_provider_keys(load_flow(text, search_paths=search), cli_cfg)
+        loaded = load_flow(text, search_paths=search)
+    except LoadError as err:
+        _render_load_error(err, path, text)
+        raise typer.Exit(code=1)
+    try:
+        _ensure_provider_keys(loaded, cli_cfg)
     except RuntimeError as exc:
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)

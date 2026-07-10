@@ -262,6 +262,21 @@ def test_chat_missing_key_no_tty_exits_clean(monkeypatch):
     assert "OPENAI_API_KEY" in _ANSI_SGR.sub("", r.stderr)  # the red key message, on stderr
 
 
+def test_chat_malformed_flow_exits_clean(tmp_path):
+    """A malformed chat flow must exit cleanly (located `.yaml` error on stderr, exit 1), NOT dump a
+    raw traceback — the SAME parity with `ac run` as the missing-key path. `load_flow` raises
+    `LoadError` (a `ValueError`, not `RuntimeError`), so the missing-key guard alone would let it
+    escape; the guard here is the exception TYPE — a clean `typer.Exit` (`SystemExit`), never a bare
+    `ValueError`/`LoadError`. Regression for #16."""
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("id: f\nname: f\ninput: {}\noutput: int\nnodes:\n  a:\n    kind: nonesuch\n")
+    r = runner.invoke(app, ["chat", str(bad)], input="")
+    assert r.exit_code == 1
+    assert isinstance(r.exception, SystemExit)      # a clean typer.Exit, not a crash
+    assert not isinstance(r.exception, ValueError)  # the real regression guard (LoadError is a ValueError)
+    assert "bad.yaml" in _ANSI_SGR.sub("", r.stderr)  # the located source-frame error, on stderr
+
+
 def test_chat_tool_call_through_the_loop(tmp_path, monkeypatch):
     """The reply agent (tool_calling) must invoke a flow-op tool THROUGH the loop and then answer —
     model -> tool -> model -> reply — not merely echo text. The five flow-op tools are unit-tested

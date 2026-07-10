@@ -18,6 +18,11 @@ from agent_composer.cli import app
 
 runner = CliRunner()
 
+# The bundled example chat flow, resolved from THIS file's location — not cwd. The `chat`
+# command's `flow` arg is `exists=True`, so a cwd-relative path only works when pytest runs
+# from the repo root; anchoring to `__file__` keeps these tests cwd-independent.
+EXAMPLE_CHAT = Path(__file__).resolve().parents[2] / "examples" / "chat.yaml"
+
 # Matches an ANSI SGR (color/style) escape sequence, e.g. "\x1b[1;36m".
 _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -108,7 +113,7 @@ def test_chat_two_turns(tmp_path, monkeypatch):
     # Use the plain example flow (mode: plain) so no tools/keys are needed for the drive test.
     # It grows the transcript in its `output:` template bindings (no code node), so it needs
     # nothing on sys.path beyond the package.
-    flow = Path("examples/chat.yaml")
+    flow = EXAMPLE_CHAT
     # two user turns then EOF (CliRunner closes stdin -> loop breaks)
     r = runner.invoke(app, ["chat", str(flow), "--provider", "openai"], input="hi\nagain\n")
     assert r.exit_code == 0
@@ -123,7 +128,7 @@ def test_chat_eof_exit_is_newline_terminated(tmp_path, monkeypatch):
     Regression for "the screen doesn't refresh / no trailing newline on exit"."""
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: _FakeModel())
     monkeypatch.setenv("OPENAI_API_KEY", "x")
-    flow = Path("examples/chat.yaml")
+    flow = EXAMPLE_CHAT
     r = runner.invoke(app, ["chat", str(flow), "--provider", "openai"], input="hi\n")
     assert r.exit_code == 0
     assert "session ended" in r.output
@@ -254,7 +259,7 @@ def test_chat_missing_key_no_tty_exits_clean(monkeypatch):
     # none); delete its key so the preflight raises regardless of the ambient environment. No model
     # is invoked — the raise is at the preflight, before any model call, so no key/network is needed.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    flow = Path("examples/chat.yaml")
+    flow = EXAMPLE_CHAT
     r = runner.invoke(app, ["chat", str(flow), "--provider", "openai"], input="")
     assert r.exit_code == 1
     assert isinstance(r.exception, SystemExit)          # a clean typer.Exit, not a crash

@@ -64,6 +64,25 @@ class _GoodModel:
         return _Msg(content="recovered reply")
 
 
+class _ToolThenAnswer:
+    """First `invoke` requests one tool; the second returns a final answer. Proves the
+    `tool_calling` loop wires model -> tool -> model within a single turn. A fresh instance
+    per turn (the `model_from_config` factory) resets the call counter, so each turn is
+    "one tool call, then answer."""
+
+    def __init__(self):
+        self._n = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, msgs):
+        self._n += 1
+        if self._n == 1:
+            return _Msg(tool_calls=[{"name": "list_flows", "args": {}, "id": "c1"}])
+        return _Msg(content="here are your flows")
+
+
 
 def test_chat_help():
     # typer renders --help as a rich options table with ANSI color. Newer rich (what a
@@ -241,4 +260,25 @@ def test_chat_missing_key_no_tty_exits_clean(monkeypatch):
     assert isinstance(r.exception, SystemExit)          # a clean typer.Exit, not a crash
     assert not isinstance(r.exception, RuntimeError)     # the real regression guard
     assert "OPENAI_API_KEY" in _ANSI_SGR.sub("", r.stderr)  # the red key message, on stderr
+
+
+def test_chat_tool_call_through_the_loop(tmp_path, monkeypatch):
+    """The reply agent (tool_calling) must invoke a flow-op tool THROUGH the loop and then answer —
+    model -> tool -> model -> reply — not merely echo text. The five flow-op tools are unit-tested
+    directly in test_chat_tools.py; this covers the loop wiring, which otherwise only the failure/
+    cap path exercises."""
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: _ToolThenAnswer())
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    # A workspace with one flow so `list_flows` (the tool the model calls) has something to return.
+    (tmp_path / "a.yaml").write_text(
+        "id: a\nname: a\ninput: {}\noutput: int\nkind: code\ncode: tests.seeds.fns:const_one\n"
+    )
+    # The bundled composer chat (tool_calling reply). One turn, then EOF ends the session.
+    r = runner.invoke(
+        app, ["chat", "--workspace", str(tmp_path), "--provider", "openai"],
+        input="list my flows\n",
+    )
+    assert r.exit_code == 0
+    assert "here are your flows" in r.output   # the loop reached a final answer after the tool call
+    assert "turn failed" not in r.output       # the tool call was handled, not looped to the cap
 

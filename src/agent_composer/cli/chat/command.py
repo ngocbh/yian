@@ -32,6 +32,7 @@ from agent_composer.compose.run import resume_command, resume_flow, run_flow
 from agent_composer.events import NodeSucceeded
 
 console = Console()
+err_console = Console(stderr=True)  # errors go to stderr, mirroring `ac run` (run.py:45-46)
 
 # The composer chat flow shipped with the package — the default when no flow is given.
 _BUNDLED = Path(__file__).parent / "chat.yaml"
@@ -61,7 +62,13 @@ def chat(
     search = [path.parent, workspace]
     # The CLI flags supply the OUTERMOST cascade layer (fill-the-gap), not a hard override.
     cli_cfg = {k: v for k, v in {"provider": provider, "model": model}.items() if v}
-    _ensure_provider_keys(load_flow(text, search_paths=search), cli_cfg)  # preflight keys once
+    # Preflight keys once. Mirror `ac run` (run.py:891-895): a missing key with no TTY raises
+    # RuntimeError — surface it as a clean red error on stderr + exit 1, not a raw traceback.
+    try:
+        _ensure_provider_keys(load_flow(text, search_paths=search), cli_cfg)
+    except RuntimeError as exc:
+        err_console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
 
     # Host-mirrored conversation state, updated off the flow's event stream each turn:
     #   reply      — the reply node's latest output, printed before the next prompt (`None`

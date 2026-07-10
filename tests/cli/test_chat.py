@@ -225,3 +225,20 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     assert "recovered reply" in r.output      # the restarted run produced a working turn
     assert "session ended" in r.output
 
+
+def test_chat_missing_key_no_tty_exits_clean(monkeypatch):
+    """A key-requiring provider with no key and no TTY must exit cleanly (red on stderr, exit 1),
+    NOT dump a raw traceback — parity with `ac run`. Both the buggy and fixed code exit 1 under
+    CliRunner, so the guard is the exception TYPE: a clean `typer.Exit` (surfaces as `SystemExit`),
+    never a bare `RuntimeError`. Regression for #16."""
+    # `--provider openai` makes `_ensure_provider_keys` pick openai for the flow's agent (which sets
+    # none); delete its key so the preflight raises regardless of the ambient environment. No model
+    # is invoked — the raise is at the preflight, before any model call, so no key/network is needed.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    flow = Path("examples/chat.yaml")
+    r = runner.invoke(app, ["chat", str(flow), "--provider", "openai"], input="")
+    assert r.exit_code == 1
+    assert isinstance(r.exception, SystemExit)          # a clean typer.Exit, not a crash
+    assert not isinstance(r.exception, RuntimeError)     # the real regression guard
+    assert "OPENAI_API_KEY" in _ANSI_SGR.sub("", r.stderr)  # the red key message, on stderr
+

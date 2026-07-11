@@ -14,6 +14,7 @@ from agent_composer.compose.errors import LoadError
 from agent_composer.compose.kinds.agent import AgentDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
+from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.stages.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
@@ -115,3 +116,24 @@ def test_desugar_inline_calls_preserves_ranges():
     assert call_desc.call == "helper"
     assert call_desc.range == host.range
     assert call_desc.field_ranges == host.field_ranges
+
+
+# ---------- 7.3 desugar_adaptive_questions: synth composer inherits gate ranges ----------
+
+
+def test_desugar_adaptive_questions_preserves_ranges():
+    # An adaptive human_input gate lifts a synth composer agent (`<gate>__compose`).
+    # The synth agent must inherit the gate node's range/field_ranges (no node_lines map).
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  ask:\n    kind: human_input\n"
+        "    adaptive_questions:\n      prompt: Ask about ${input.topic}\n"
+        "    input:\n      topic: ${input.topic}\n"
+        "output: ${ask.output}\n"
+    )
+    descriptors = parse_nodes(_nodes_reader(text))
+    gate = descriptors["ask"]
+    new_descriptors = desugar_adaptive_questions(descriptors)
+    composer = new_descriptors["ask__compose"]
+    assert composer.range == gate.range
+    assert composer.field_ranges == gate.field_ranges

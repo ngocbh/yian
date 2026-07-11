@@ -141,6 +141,29 @@ class NodeReader:
                     out[item.value] = rng
         return out
 
+    def mapping_value_ranges(self, key: str) -> dict[str, SourceRange]:
+        """For a MAPPING field, map each child key -> its VALUE node's `SourceRange`.
+
+        Descends `key`'s value node (a `MappingNode`) and, for every `(child_key, child_value)`
+        pair, records `child_key_text -> value_range`. Used to give each `inputs:` binding its
+        own caret (the runtime keys `node.field_ranges` on the param name — eval_node's
+        binding-failure funnel). Returns `{}` in spanless mode, when the field is absent, or
+        when it is not a mapping — best-effort, never raising (mirrors `item_ranges`).
+        """
+        pair = self._pair(key)
+        if pair is None:
+            return {}
+        _key_node, value_node = pair
+        if not isinstance(value_node, yaml.MappingNode):
+            return {}
+        out: dict[str, SourceRange] = {}
+        for child_key, child_value in value_node.value:
+            name = getattr(child_key, "value", None)
+            rng = self.spans.get(id(child_value))
+            if isinstance(name, str) and rng is not None:
+                out[name] = rng
+        return out
+
     # -- typed accessors --------------------------------------------------------
 
     def str(self, key: str) -> str:

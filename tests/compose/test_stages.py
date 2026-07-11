@@ -410,3 +410,33 @@ def test_classify_asserts_carries_ranges():
     assert fr["${output} <= 10"].start_line == 12
     assert "asserts" in fr  # coarse list range still present under the field name
 
+
+# ---------- 8.3 per-input-param: each input binding carries its own SourceRange ----------
+
+
+_INPUT_FLOW = """\
+id: f
+name: f
+nodes:
+  report:
+    kind: agent
+    prompt: "About ${topic} at ${as_of}"
+    input:
+      topic: ${input.topic}
+      as_of: ${input.as_of:?"as_of is required"}
+    output: str
+output: ${report.output}
+"""
+
+
+def test_per_input_param_carries_ranges():
+    # Each input binding maps to its OWN SourceRange under its param NAME in the descriptor's
+    # field_ranges — the key eval_node's binding-failure funnel resolves (`loc.key` == param
+    # name). Recorded kind-blind in the parse choke point alongside the coarse `inputs:` span
+    # (still present under the field name).
+    descriptors = parse_nodes(_nodes_reader(_INPUT_FLOW))
+    fr = descriptors["report"].field_ranges
+    assert fr["topic"].start_line == 8
+    assert fr["as_of"].start_line == 9
+    assert "inputs" in fr  # coarse mapping range still present under the field name
+

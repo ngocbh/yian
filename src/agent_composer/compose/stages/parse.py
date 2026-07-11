@@ -7,10 +7,11 @@ The first cross-node assembly pass (#70 Step 7). Consumes a `NodeReader` over th
 
 Only the generic, kind-independent pre-checks live here (body-is-mapping, reserved node ids,
 the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own `parse`
-owns its field legality (allowed/required/asserts/env) and its `SourceRange` recording. One
-kind-blind enrichment runs after every kind parse: each `asserts:` list item's own
-`SourceRange` is stamped into the descriptor's `field_ranges` keyed by the raw assert string,
-since the runtime resolves an assert-failure caret by that string (not by field name).
+owns its field legality (allowed/required/asserts/env) and its `SourceRange` recording. Two
+kind-blind enrichments run after every kind parse: each `asserts:` list item's own
+`SourceRange` (keyed by the raw assert string) and each `inputs:` binding's own `SourceRange`
+(keyed by the param name) are stamped into the descriptor's `field_ranges`, since the runtime
+resolves a failure caret by that symbolic key — not by field name.
 """
 
 from __future__ import annotations
@@ -66,13 +67,19 @@ def _parse_node(node_id: str, reader: NodeReader) -> Any:
             range=reader.range_of("kind"),
         )
     desc = spec.parse(node_id, reader)
-    # Per-assert-text ranges (kind-blind): the runtime keys `node.field_ranges` on the raw
-    # assert STRING (eval_node's pre/post-assert failure path), so stamp each `asserts:` list
-    # item's own `SourceRange` alongside the coarse `asserts:` field range the kind recorded.
-    # No-op for a spanless reader or a node with no `asserts:`.
+    # Per-item ranges (kind-blind): the runtime keys `node.field_ranges` on a symbolic locator
+    # KEY, not a field name (eval_node's failure funnel). Stamp the two keyed-by-content maps
+    # alongside the coarse field ranges the kind recorded:
+    #   - each `asserts:` list item -> its own range, keyed by the raw assert STRING (pre/post
+    #     assert failure resolves by that string);
+    #   - each `inputs:` binding -> its own range, keyed by the param NAME (a binding failure's
+    #     `input` locator carries the param name as its key).
+    # Both no-op for a spanless reader or a node without the field. `inputs:` is read AFTER
+    # `_back_map_input_output` has renamed the author's singular `input:` key to plural.
     field_ranges = getattr(desc, "field_ranges", None)
     if isinstance(field_ranges, dict):
         field_ranges.update(reader.item_ranges("asserts"))
+        field_ranges.update(reader.mapping_value_ranges("inputs"))
     return desc
 
 

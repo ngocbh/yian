@@ -82,6 +82,13 @@ def load_with_spans(text) -> tuple[object, dict]:
     `yaml.load(text, SpanLoader)` would discard the loader and its recorded spans.
 
     Returns `(value, spans)` where `spans` is `dict[id(node) -> SourceRange]`.
+
+    WARNING: `spans` is keyed by `id(node)` of *this loader's* yaml nodes, and those
+    nodes are NOT returned here (the loader is disposed on return). A caller therefore
+    cannot resolve any range from `spans` alone — the ids belong to a node tree that is
+    no longer reachable, and `id()` values are recycled once it is garbage-collected.
+    Until a later step also returns the root node (keeping the tree alive so callers can
+    look up `spans[id(node)]`), `spans` is effectively write-only for external callers.
     """
     loader = SpanLoader(text)
     try:

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     # Import-cycle guard: `compile.model` imports `nodes.base`, so `Flow` is only pulled in for
     # type checking. `Grow.subgraph`/`replay_grow` annotate it as a forward-ref string at runtime.
     from agent_composer.compile.model import Flow
+    from agent_composer.events import SourceRange
 
 
 class NodeKind(str, Enum):
@@ -234,6 +235,15 @@ class Node(ABC):
         # (e.g. AGENT reads `max_tool_iterations`); unknown keys are carried but ignored. `{}`
         # for a node that declares no `env:` and inherits no flow default.
         self.env: dict[str, Any] = {}
+        # Render-only source-location metadata, populated by the compose builder (never by hand)
+        # and NEVER serialized: a checkpoint stores no topology, so `.range`/`.field_ranges` are
+        # rebuilt from the flow spec on restore, never round-tripped. Purely for diagnostics.
+        # `self.range`: this node's own `SourceRange` in the flow YAML (the whole node block); None
+        #   for a fake / directly-constructed node with no known source.
+        # `self.field_ranges`: `dict[field_name -> SourceRange]` for the node's individual authored
+        #   fields (a bad input binding, an assert expr); `{}` when no per-field spans are recorded.
+        self.range: Optional["SourceRange"] = None
+        self.field_ranges: dict[str, "SourceRange"] = {}
 
     @abstractmethod
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":

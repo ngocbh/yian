@@ -21,19 +21,27 @@ _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
 
 class _FakeQuestionary:
-    """Fake `questionary`: `.password`/`.text` return a canned answer via `.ask()`."""
+    """Fake `questionary`: `.password`/`.text` return canned answers via `.ask()`.
+
+    `answer` may be a scalar (returned on every call) or a list (consumed in order,
+    one per prompt) so a single test can script a sequence like empty-then-real-key.
+    """
 
     def __init__(self, answer):
+        self._seq = list(answer) if isinstance(answer, list) else None
         self._answer = answer
         self.prompts: list[str] = []
 
+    def _next(self):
+        return self._seq.pop(0) if self._seq is not None else self._answer
+
     def password(self, label, **kwargs):
         self.prompts.append(label)
-        return SimpleNamespace(ask=lambda: self._answer)
+        return SimpleNamespace(ask=self._next)
 
     def text(self, label, default="", **kwargs):
         self.prompts.append(label)
-        return SimpleNamespace(ask=lambda: self._answer)
+        return SimpleNamespace(ask=self._next)
 
 
 def _tty(monkeypatch, is_tty: bool) -> None:
@@ -80,12 +88,63 @@ def test_ensure_api_key_interactive_prompts_and_exports(monkeypatch):
     assert any("ANTHROPIC_API_KEY" in p for p in fake.prompts)
 
 
-def test_ensure_api_key_empty_answer_raises(monkeypatch):
+def test_ensure_api_key_reprompts_on_empty(monkeypatch):
+    """An empty interactive answer re-prompts; the next non-empty key is accepted."""
+    import os
+
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     _tty(monkeypatch, True)
-    monkeypatch.setitem(sys.modules, "questionary", _FakeQuestionary(""))
+    fake = _FakeQuestionary(["", "sk-typed"])  # fingerslip, then a real key
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    assert utils.ensure_api_key("anthropic") == "sk-typed"
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-typed"
+    assert len(fake.prompts) == 2  # the loop re-asked
+
+
+def test_ensure_api_key_cancel_raises(monkeypatch):
+    """Ctrl-C/Esc (questionary returns None) raises at once -> clean exit-1 upstream."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _tty(monkeypatch, True)
+    fake = _FakeQuestionary([None])
+    monkeypatch.setitem(sys.modules, "questionary", fake)
     with pytest.raises(RuntimeError, match="no API key provided"):
         utils.ensure_api_key("anthropic")
+    assert len(fake.prompts) == 1  # cancel does not spend extra tries
+
+
+def test_ensure_api_key_exhausts_after_max(monkeypatch):
+    """Three empty answers exhaust the cap: a distinct 'after N attempts' raise, exactly 3 prompts."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _tty(monkeypatch, True)
+    fake = _FakeQuestionary(["", "", ""])
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    with pytest.raises(RuntimeError, match="after 3 attempts"):  # not the cancel message
+        utils.ensure_api_key("anthropic")
+    assert len(fake.prompts) == 3  # capped at _MAX_KEY_PROMPTS
+
+
+def test_ensure_api_key_accepts_on_last_attempt(monkeypatch):
+    """A non-empty key on the 3rd (last) try is still accepted -> range(3) gives 3 usable tries.
+
+    The leading whitespace entry also exercises whitespace-only being treated as empty.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _tty(monkeypatch, True)
+    fake = _FakeQuestionary(["  ", "", "sk-typed"])  # whitespace, empty, then a real key
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    assert utils.ensure_api_key("anthropic") == "sk-typed"
+    assert len(fake.prompts) == 3
+
+
+def test_ensure_api_key_strips_surrounding_whitespace(monkeypatch):
+    """A pasted key with edge whitespace is stripped before export/return."""
+    import os
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _tty(monkeypatch, True)
+    monkeypatch.setitem(sys.modules, "questionary", _FakeQuestionary(["  sk-abc  "]))
+    assert utils.ensure_api_key("anthropic") == "sk-abc"
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-abc"
 
 
 def test_ensure_api_key_interactive_false_forces_non_interactive(monkeypatch):

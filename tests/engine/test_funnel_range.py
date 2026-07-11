@@ -8,6 +8,7 @@ key (an assert-expr string, an input name), never on `node.kind`. The builder st
 """
 
 from agent_composer.events import NodeFailed, SourceRange
+from agent_composer.nodes.binding import ParamDecl
 from tests.engine._fakes import FuncNode, drive
 
 
@@ -35,4 +36,21 @@ def test_assert_failure_carries_range():
     assert nf.locator is not None
     assert nf.locator.node == "n" and nf.locator.kind == "assert" and nf.locator.key == expr
     # concrete range resolved from field_ranges[key]
+    assert nf.range == rng
+
+
+def test_binding_failure_carries_range():
+    # A required input with no wiring edge raises BindingError, which stamps a node-less
+    # `input` locator (key == param name); the funnel fills the node id AND resolves the
+    # concrete range from field_ranges[param]. Same generic key->range path as asserts —
+    # this proves the kind-blind funnel already covers input keys (no per-kind branch).
+    rng = SourceRange(7, 3, 7, 20)
+    node = FuncNode("n", lambda i: i)
+    node.params = [ParamDecl(name="x", required=True)]
+    node._wiring_src = {}  # x omitted -> BindingError through the funnel
+    node.field_ranges = {"x": rng}
+    nf = _node_failed(_drive(node))
+    assert nf is not None
+    assert nf.locator is not None
+    assert nf.locator.node == "n" and nf.locator.kind == "input" and nf.locator.key == "x"
     assert nf.range == rng

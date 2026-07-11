@@ -22,8 +22,8 @@ def test_def_call_node_carries_source_frame():
     assert isinstance(frame, SourceFrame)
     assert frame.label == "defs:review"
     assert frame.text == text                                # a def indexes the PARENT file
-    assert frame.node_ranges["approve"].start_line == 27     # inner nodes at their parent lines
-    assert frame.node_ranges["record"].start_line == 33
+    assert frame.node_ranges["approve"].start_line == 26     # inner nodes at their parent HEADER lines
+    assert frame.node_ranges["record"].start_line == 32
     assert frame.field_ranges["approve"]["outputs"].start_line == 31
 
 
@@ -34,7 +34,7 @@ def test_external_call_node_carries_source_frame_labelled_by_filename():
     assert isinstance(frame, SourceFrame)
     assert frame.label == "lib_verdict.yaml"           # the resolved filename, not name:
     assert frame.text == (_SEEDS / "lib_verdict.yaml").read_text()  # the external file's OWN text
-    assert frame.node_ranges["v"].start_line == 17                 # the inner node line in that file
+    assert frame.node_ranges["v"].start_line == 16                 # the inner node HEADER line in that file
 
 
 def test_source_frame_shared_across_deepcopy():

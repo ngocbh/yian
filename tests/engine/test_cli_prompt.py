@@ -306,7 +306,7 @@ def test_run_error_multi_frame_stack_into_def(monkeypatch):
     _render_run_error(result, flow, text, loaded=loaded)
     out = buf.getvalue()
     assert "call traceback (most recent call last):" in out
-    assert "e24-nested-code-raise.yaml:28" in out   # frame 0: the owning `run:` call node
+    assert "e24-nested-code-raise.yaml:27" in out   # frame 0: the owning `run:` call node (header)
     assert "e24-nested-code-raise.yaml defs:inner:20" in out  # frame 1: filename-qualified def
     assert "intentional CODE failure" in out
 
@@ -324,7 +324,7 @@ def test_run_error_multi_frame_stack_into_external(monkeypatch):
     _render_run_error(result, flow, text, loaded=loaded)
     out = buf.getvalue()
     assert "call traceback (most recent call last):" in out
-    assert "e25-external-raise.yaml:20" in out      # frame 0: the `go:` call node
+    assert "e25-external-raise.yaml:19" in out      # frame 0: the `go:` call node (header)
     assert "lib_boom.yaml:18" in out                # frame 1: the external file's `code:` line
 
 
@@ -340,8 +340,8 @@ def test_run_error_multi_frame_three_levels(monkeypatch):
     _render_run_error(result, flow, text, loaded=loaded)
     out = buf.getvalue()
     assert "call traceback (most recent call last):" in out
-    assert "e26-three-level-raise.yaml:38" in out   # frame 0: the top `outer:` call node
-    assert "e26-three-level-raise.yaml defs:middle:30" in out  # frame 1: `via:` call in `middle`
+    assert "e26-three-level-raise.yaml:37" in out   # frame 0: the top `outer:` call node (header)
+    assert "e26-three-level-raise.yaml defs:middle:29" in out  # frame 1: `via:` call in `middle` (header)
     assert "e26-three-level-raise.yaml defs:deep:20" in out    # frame 2: `boom` code in `deep`
 
 
@@ -362,7 +362,7 @@ def test_run_error_multi_frame_on_nested_resume_failure(monkeypatch):
     _render_run_error(result, flow, text, loaded=loaded)
     out = buf.getvalue()
     assert "call traceback (most recent call last):" in out
-    assert "25-nested-suspension.yaml:42" in out    # frame 0: the `gate:` call node
+    assert "25-nested-suspension.yaml:41" in out    # frame 0: the `gate:` call node (header)
     assert "25-nested-suspension.yaml defs:review:31" in out  # frame 1: precise `output:` line
     assert "is not a member of variant" in out
 

@@ -16,6 +16,7 @@ resolves a failure caret by that symbolic key — not by field name.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 from agent_composer.compile.model import END_ID, START_ID
@@ -42,7 +43,18 @@ def parse_nodes(nodes_reader: NodeReader) -> dict[str, Any]:
     if not isinstance(nodes, dict):
         return out
     for node_id in list(nodes):
-        out[node_id] = _parse_node(node_id, nodes_reader.child(node_id))
+        desc = _parse_node(node_id, nodes_reader.child(node_id))
+        # Anchor the descriptor's node-level `.range` on the node's HEADER line (its `key:`
+        # token), not its body/value block. The header is the node-level diagnostic anchor a
+        # cycle, an unresolved ref, or a namespaced runtime failure boxes — matching the old
+        # `node_lines` map (each kind's own `parse` records the value-block range for its
+        # field-legality errors; here we promote the descriptor's stored range to the header).
+        # No-op for a spanless reader (`key_range_of` -> None). `replace` returns a new frozen
+        # descriptor sharing the same (already field-range-stamped) `field_ranges` dict.
+        header = nodes_reader.key_range_of(node_id)
+        if header is not None and getattr(desc, "range", None) is not None:
+            desc = dataclasses.replace(desc, range=header)
+        out[node_id] = desc
     return out
 
 

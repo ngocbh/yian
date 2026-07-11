@@ -108,7 +108,7 @@ def build_leaf_node(
     registry: TypeRegistry,
     *,
     source_file: str = "<inline-code>",
-    code_line: int = 1,
+    code_line: Optional[int] = None,
     code_field_line: Optional[int] = None,
 ) -> tuple[Node, dict[str, Any]]:
     """Build one leaf runtime `Node` (agent/code/model/tool/human_input/wait) + its WIRING.
@@ -119,11 +119,11 @@ def build_leaf_node(
     `"until"` key; an event WAIT's wiring is `{}`. `registry` is the flow's
     `read_typedefs(...)` map. A MODEL node builds with no serving seam (removed as dead).
 
-    `source_file` (the flow's file label) and `code_line` (the `code:` block's content
-    start line) are used only by an inline CODE node, to frame its tracebacks at the
-    absolute YAML line. `code_field_line` (the `code:` field-key line) anchors an inline
-    load error that has no interior line — a reject, or a no-`return` body — at the `code:`
-    field rather than the node header.
+    `source_file` (the flow's file label) frames an inline CODE node's tracebacks at the
+    absolute YAML line. `code_line` (the `code:` block's content start line) and
+    `code_field_line` (the `code:` field-key line, anchoring an inline reject / no-`return`
+    error) are optional caller overrides; when omitted (the range-native loader path) the
+    CODE build derives both from the descriptor's own recorded `code:` `SourceRange`.
     """
     # Two-axis dispatch (#70): every leaf kind (agent/code/model/tool/human_input/wait) builds
     # through its own `KindSpec.build`. Leaf descriptors are 1:1 with their kind, so we match a

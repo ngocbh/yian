@@ -118,6 +118,24 @@ class NodeReader:
             return None
         return self.spans.get(id(value_node))
 
+    def key_range_of(self, key: str) -> SourceRange | None:
+        """The `SourceRange` of `key`'s KEY node (the header token, not its value).
+
+        The counterpart of `range_of`: it points at the `key:` scalar itself (e.g. a node's
+        `run:` header line) rather than its value block. `parse_nodes` uses it to anchor a
+        node descriptor's `.range` on the node's HEADER line — the node-level diagnostic
+        anchor (cycles, unresolved refs, a namespaced runtime failure) — mirroring the old
+        `node_lines` map. `None` in spanless mode, when the key is absent, or when the key
+        node has no recorded span. Best-effort: never raises (unlike `range_of`).
+        """
+        pair = self._pair(key)
+        if pair is None:
+            return None
+        key_node, _value_node = pair
+        if key_node is None:
+            return None
+        return self.spans.get(id(key_node))
+
     def item_ranges(self, key: str) -> dict[str, SourceRange]:
         """For a SEQUENCE field, map each scalar item's text -> its own `SourceRange`.
 

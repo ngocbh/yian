@@ -39,9 +39,7 @@ from agent_composer.compose.parser import (
     NodeDescriptor,
     ToolDescriptor,
     ComposeFile,
-    node_lines,
     parse_file,
-    section_lines,
 )
 from agent_composer.compose.stages.cycles import reject_cycles
 from agent_composer.compose.stages.parse import parse_nodes
@@ -56,8 +54,6 @@ __all__ = [
     "ComposeFile",
     "parse_file",
     "parse_nodes",
-    "node_lines",
-    "section_lines",
     "NodeDescriptor",
     "AgentDescriptor",
     "CodeDescriptor",

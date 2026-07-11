@@ -30,14 +30,7 @@ from rich.text import Text
 
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose.errors import LoadError
-from agent_composer.compose.loader import load_flow
-from agent_composer.compose.parser import (
-    assert_lines,
-    input_decl_lines,
-    node_field_lines,
-    node_input_lines,
-    node_lines,
-)
+from agent_composer.compose.loader import load_flow, top_frame_ranges
 from agent_composer.compose.run import RunResult, resume_command, resume_flow, run_flow
 from agent_composer.events import Diagnostic, NodeFailed, SourceRange, SourceSpan
 from agent_composer.typesys.values import ValueKind
@@ -63,10 +56,9 @@ def _ensure_cwd_importable() -> None:
 # (a window, so a large flow doesn't dump in full — mirrors a Python traceback's code frame).
 _ERR_CONTEXT = 5
 
-# When a failure carries no precise locator, fall back to the best sub-line for the node's
-# kind before the node header. Keyed by the field name the parser exposes in
-# `node_field_lines` (presence avoids threading the loaded IR): a CODE node -> its `code:`
-# line. Ordered: the first field present on the node wins.
+# When a failure carries no precise locator, fall back to the best sub-field range for the
+# node's kind before the node header. Keyed by the field name the descriptor records in its
+# `field_ranges`: a CODE node -> its `code:` range. Ordered: the first field present wins.
 _KIND_FALLBACK_FIELDS = ("code",)
 
 # The engine's `field` locator uses the SINGULAR write-boundary vocabulary (`output`/`input`),
@@ -80,24 +72,17 @@ def _field_range(fields: dict, key: str) -> Optional[SourceRange]:
     return fields.get(key) or fields.get(_FIELD_KEY_ALIAS.get(key, key))
 
 
-def _locate(span: Optional[SourceSpan], text: str) -> Optional[int]:
-    """Resolve a `SourceSpan` to a 1-based YAML line via the parser sub-line maps, or `None`.
+def _top_ranges(loaded, text: str):
+    """The top flow's `(node_ranges, field_ranges)` for run-error framing.
 
-    Each `kind` resolves against its own map: an `input` binding against `node_input_lines`,
-    an `assert` expr against `assert_lines` (keyed `(node|None, expr)`), an `input_decl`
-    against `input_decl_lines`, a `field` against `node_field_lines`. `None`/an unknown kind/
-    a key absent from its map yields `None` so the caller can fall back."""
-    if span is None:
-        return None
-    if span.kind == "input":
-        return node_input_lines(text).get(span.node, {}).get(span.key)
-    if span.kind == "assert":
-        return assert_lines(text).get((span.node, span.key))
-    if span.kind == "input_decl":
-        return input_decl_lines(text).get(span.key)
-    if span.kind == "field":
-        return node_field_lines(text).get(span.node, {}).get(span.key)
-    return None
+    Prefers the loaded IR's render-only `SourceFrame` (`loaded.source`) when the caller holds
+    it; otherwise recomputes the maps from `text` alone (best-effort). Both map a node id to
+    its header `SourceRange` and to its per-field `SourceRange`s — the source the single-frame
+    renderer boxes a node/field range from."""
+    src = getattr(loaded, "source", None) if loaded is not None else None
+    if src is not None:
+        return src.node_ranges, src.field_ranges
+    return top_frame_ranges(text)
 
 
 def _render_frame_box(text: str, marks, title: str) -> bool:
@@ -147,6 +132,12 @@ def _render_load_error(err: LoadError, flow: Path, text: str) -> None:
     of range), prints `file: <message>` with no frame. The "why" legend (`.notes`) follows.
     """
     marks = err.lines or ([err.line] if err.line is not None else [])
+    if len(marks) > 1:
+        # A multi-node error (a cycle implicates several nodes) highlights EVERY stuck line —
+        # `.range` anchors only the first, so the multi-mark frame wins here to box them all.
+        _render_source_frame(text, marks, flow.name, str(err))
+        _render_notes(err)
+        return
     if err.range is not None:
         # Span-aware path (Step 8): the loader resolved a precise `SourceRange`, so box it
         # directly instead of re-deriving a line. The `.notes` "why" legend still follows.
@@ -157,15 +148,45 @@ def _render_load_error(err: LoadError, flow: Path, text: str) -> None:
     _render_notes(err)
 
 
-def _node_line(text: str, node_id: str) -> Optional[int]:
-    """Best YAML line for a node id: its kind's fallback sub-field (e.g. a code node's
-    `code:` line), else the node header. `None` when the id isn't an authored top-level node
-    (the parser only indexes top-level `nodes:`)."""
-    fields = node_field_lines(text).get(node_id, {})
-    for field_name in _KIND_FALLBACK_FIELDS:
-        if field_name in fields:
-            return fields[field_name]
-    return node_lines(text).get(node_id)
+def _node_range(node_id: str, node_ranges: dict, field_ranges: dict) -> Optional[SourceRange]:
+    """Best `SourceRange` for a (possibly namespaced/clone) node id, or `None`.
+
+    Tries the leaf segment first, then the owning top-level segment (so a runtime-namespaced
+    `gate/approve` or a loop-driver clone `polish~5` resolves to the authored `gate:`/`polish:`
+    node). For each, prefers the node's kind fallback sub-field (a code node's `code:` range),
+    else its header range. `None` when neither segment is an authored top-level node."""
+    leaf = _last_segment(node_id)
+    owning = _strip_clone_suffix(node_id.split("/", 1)[0])
+    for key in (leaf, owning):
+        if key is None:
+            continue
+        fields = field_ranges.get(key, {})
+        for fname in _KIND_FALLBACK_FIELDS:
+            if fname in fields:
+                return fields[fname]
+        if key in node_ranges:
+            return node_ranges[key]
+    return None
+
+
+def _resolve_range(
+    span: Optional[SourceSpan], node_id: Optional[str], loaded, text: str
+) -> Optional[SourceRange]:
+    """Resolve a run failure to a source `SourceRange` for the single-frame box, or `None`.
+
+    A `kind=field` locator (e.g. an `output:` coercion mismatch) resolves against the failing
+    node's `field_ranges` (honoring the `output`/`outputs` alias); otherwise the node's own
+    range via `_node_range` (kind fallback, else header). `None` when nothing resolves, so the
+    caller degrades to a plain message line."""
+    node_ranges, field_ranges = _top_ranges(loaded, text)
+    if span is not None and span.kind == "field" and span.node is not None:
+        seg = _last_segment(span.node) or span.node
+        rng = _field_range(field_ranges.get(seg, {}), span.key)
+        if rng is not None:
+            return rng
+    if node_id:
+        return _node_range(node_id, node_ranges, field_ranges)
+    return None
 
 
 def _strip_clone_suffix(seg: str) -> str:
@@ -202,8 +223,9 @@ def _walk_call_frames(loaded, node_id: str, top_text: str, top_label: str,
     frames collected so far kept. Descent stops at the first segment that is not a call/map
     with a baked child (the leaf), or when a segment can't be resolved. For the LAST segment a
     `kind=field` locator (e.g. an `output:` coercion) is preferred, else the node's kind
-    fallback field (e.g. a code node's `code:`), else its body range. Never raises — the caller
-    treats any failure as "no multi-frame stack" and falls back to the single-frame path."""
+    fallback field (e.g. a code node's `code:`), else its body range (the node header). Never
+    raises — the caller treats any failure as "no multi-frame stack" and falls back to the
+    single-frame path."""
     segments = [_strip_clone_suffix(seg) for seg in node_id.split("/")]
     nodes = loaded.compiled.nodes
     # Both the top frame and each descended child read ranges off a render-only `SourceFrame`:
@@ -264,7 +286,8 @@ def _render_frame_stack(frames, message: str) -> None:
     Mirrors a Python traceback: a header, then one boxed `.yaml` frame per descended level
     (outermost `call` first, the failing leaf last), then the error message in red. Each
     frame carries a `SourceRange`; the box anchors on its `start_line` (one line per frame,
-    like a Python traceback), which for a node body is its first field / call site."""
+    like a Python traceback), which for a call-chain node is its header line and for the failing
+    leaf its precise field / kind-fallback line."""
     err_console.print(Text("call traceback (most recent call last):", style="red bold"))
     for label, ftext, rng in frames:
         _render_frame_box(ftext, [rng.start_line], label)
@@ -320,12 +343,13 @@ def _render_run_error(
     boxed frame per descended level — the top-level `call` node, then each child (`defs:` or
     external `uses:` file) — down to the failing leaf, most-recent-call-last
     (`_walk_call_frames`). With fewer than two frames it falls back to the single-frame box,
-    whose line is resolved by:
+    whose `SourceRange` is resolved by, in order:
 
-    1. the precise locator line (`_locate`);
-    2. else, when a node is known, the best sub-line for its kind (`_KIND_FALLBACK_FIELDS`,
-       e.g. a code node's `code:` line), then the node header (`node_lines`);
-    3. else, when the node id is namespaced, the owning call node (the first path segment);
+    1. the `NodeFailed`'s resolved `range` (the funnel's key->range twin of its locator);
+    2. else the flow-level `RunResult.range` (a node-less boundary input-decl / assert failure);
+    3. else `_resolve_range`: a `kind=field` locator's field range, else the node's own range
+       (its kind fallback `code:` range, else the header), resolving a namespaced/clone id to
+       its owning top-level node;
     4. else a plain `run <status>: <message>` line (no frame).
 
     When `engine_trace` is set and a Python traceback was captured (a code/tool/agent raise),
@@ -352,27 +376,21 @@ def _render_run_error(
             _render_traceback(tb)
         return
 
-    # Span-aware single frame (Step 8): the funnel resolved a precise `SourceRange` on the
-    # failing `NodeFailed`, so box it directly instead of resolving the symbolic locator.
-    if nf is not None and nf.range is not None:
-        render_diagnostic(Diagnostic("error", message, nf.range), text, flow.name)
-        if engine_trace and tb:
-            _render_traceback(tb)
-        return
+    # Span-aware single frame (Step 8): a concrete `SourceRange` the funnel already resolved —
+    # on the failing `NodeFailed` (a node error), else on the flow-level `RunResult` (a node-less
+    # boundary input-decl / assert failure). Box it directly.
+    rng = nf.range if nf is not None else None
+    if rng is None:
+        rng = getattr(result, "range", None)
+    # else resolve from the locator/node against the source ranges (kind=field precision, then
+    # the node's kind fallback / header), recomputed from the loaded IR or the text.
+    if rng is None:
+        rng = _resolve_range(span, node_id, loaded, text)
 
-    line = _locate(span, text)
-    if line is None and node_id:
-        line = _node_line(text, node_id)
-        if line is None:
-            # A runtime id (a namespaced child `gate/approve`, or a loop driver clone
-            # `polish~5` that raised the runaway guard) isn't authored -> resolve to the
-            # owning top-level node: the first path segment with its `#<n>`/`~<k>` suffix stripped.
-            line = _node_line(text, _strip_clone_suffix(node_id.split("/", 1)[0]))
-
-    if line is None:
+    if rng is None:
         err_console.print(f"[red]run {result.status}: {message}[/red]")
     else:
-        _render_source_frame(text, [line], flow.name, message)
+        render_diagnostic(Diagnostic("error", message, rng), text, flow.name)
     if engine_trace and tb:
         _render_traceback(tb)
 

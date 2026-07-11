@@ -79,6 +79,8 @@ nav:
   - Flow syntax: syntax.md
   - Examples: examples.md
   - Internals:
+    - Architecture: architecture.md
+    - Compose (YAML → IR): compose.md
     - The engine: engine.md
     - Nodes: nodes.md
     - Types: typing.md

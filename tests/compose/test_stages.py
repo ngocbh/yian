@@ -278,3 +278,32 @@ def test_validate_references_diag_has_range():
     assert exc.value.range is not None
     assert exc.value.range == nodes["a"].field_ranges["inputs"]
 
+
+# ---------- 7.8 check_ref_map_types: a call type mismatch carries the binding range ----------
+
+
+def test_check_ref_map_types_moved():
+    # A `call` binding whose SOURCE Type mismatches the child input's declared Type is loud.
+    # After the relocation the check lives in `stages.ref_map_types`; the LoadError still
+    # carries `.line` (additive) AND anchors its `.range` on the call node's `input:` mapping
+    # span (`field_ranges["inputs"]`, the coarsest available binding-site span).
+    from agent_composer.compose.stages.ref_map_types import check_ref_map_types
+    from agent_composer.compose.types import InputDecl
+    from agent_composer.nodes.call import CallNode
+    from agent_composer.typesys.values import Type, ValueKind
+
+    node = CallNode(
+        "c",
+        flow_id="child",
+        child_inputs=[InputDecl("n", "int", None, True, Type.scalar(ValueKind.INTEGER))],
+    )
+    rng = SourceRange(start_line=7, start_col=5, end_line=8, end_col=20)
+    node.field_ranges = {"inputs": rng}
+    producers = {"src": Type.scalar(ValueKind.STRING)}  # source is a string
+    wiring = {"c": {"n": "${src.output}"}}  # bound to the int-expecting child input
+    with pytest.raises(LoadError) as exc:
+        check_ref_map_types({"c": node}, producers, {}, wiring, {"c": 7})
+    assert "child expects" in str(exc.value)
+    assert exc.value.line == 7  # additive: node_lines still feeds `.line`
+    assert exc.value.range == rng
+

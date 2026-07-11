@@ -355,3 +355,25 @@ def test_check_wiring_parity_moved():
     assert exc.value.line == 3  # additive: node_lines still feeds `.line`
     assert exc.value.range == rng
 
+
+# ---------- 7.11 validate_human_questions: a bad questions surface carries the range ----------
+
+
+def test_validate_human_questions_diag_has_range():
+    # A human_input gate with a structurally-invalid literal `questions:` list is loud. After
+    # the relocation the check lives in `stages.human_questions_validate`; the LoadError still
+    # carries `.line` (additive) AND anchors its `.range` on the gate's `questions:` field span.
+    from agent_composer.compose.stages.human_questions_validate import (
+        validate_human_questions,
+    )
+    from agent_composer.nodes.human_input.node import HumanInputNode
+
+    node = HumanInputNode("ask", questions=[])  # empty -> "expected 1..4 questions, got 0"
+    rng = SourceRange(start_line=5, start_col=5, end_line=6, end_col=20)
+    node.field_ranges = {"questions": rng}
+    with pytest.raises(LoadError) as exc:
+        validate_human_questions({"ask": node}, node_lines={"ask": 5})
+    assert "questions" in str(exc.value)
+    assert exc.value.line == 5  # additive: node_lines still feeds `.line`
+    assert exc.value.range == rng
+

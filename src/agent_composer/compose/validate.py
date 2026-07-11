@@ -58,59 +58,6 @@ def check_case_handles(nodes: dict[str, Node], edges: list[Edge]) -> None:
                 )
 
 
-def validate_human_questions(
-    nodes: dict[str, Node],
-    node_lines: "dict[str, int] | None" = None,
-) -> None:
-    """Validate each built human_input gate's questions surface at load time.
-
-    - A LITERAL questions list -> parse_questions (rejects bad count/shape/dup headers),
-      re-raised as a located LoadError.
-    - A ref-form questions_input -> the name MUST be one of the node's declared inputs
-      (mirrors the AGENT prompt-scope rule); otherwise LoadError with a hint.
-    Legacy (no questions) gates pass through. Accumulates all errors into one LoadError.
-    """
-    from agent_composer.nodes.human_input.node import HumanInputNode
-    from agent_composer.nodes.human_input.questions import (
-        QuestionSpecError,
-        parse_questions,
-    )
-
-    lines = node_lines or {}
-    # (message, line) pairs — line locates the offending `.yaml` line where known.
-    errors: list[tuple[str, "int | None"]] = []
-    for node_id, node in nodes.items():
-        if not isinstance(node, HumanInputNode):
-            continue
-        line = lines.get(node_id)
-        if node.questions is not None:
-            # A literal list baked into the node: structurally check it at LOAD,
-            # so a bad count/shape/duplicate header fails here rather than at run.
-            try:
-                parse_questions(node.questions)
-            except QuestionSpecError as exc:
-                errors.append((f"node {node_id!r} (kind=human_input): {exc}", line))
-        elif node.questions_input is not None:
-            # A ref-form gate reads its questions from a declared input — the name
-            # must be wired in via `input:` (mirrors the AGENT prompt-scope rule).
-            declared = {p.name for p in (node.params or [])}
-            if node.questions_input not in declared:
-                errors.append((
-                    f"node {node_id!r} (kind=human_input): questions reference "
-                    f"${{{node.questions_input}}} is not a declared input — feed dynamic "
-                    f"questions through `input:` wiring and reference the declared name "
-                    f"(questions: ${{name}}), or use adaptive_questions:",
-                    line,
-                ))
-    if errors:
-        first_line = next((ln for _, ln in errors if ln is not None), None)
-        raise LoadError(
-            "flow has invalid human_input questions:\n  "
-            + "\n  ".join(msg for msg, _ in errors),
-            line=first_line,
-        )
-
-
 # Pool heads forbidden in a node-local assert (use bare `${name}` / `${output}` instead).
 # Post-alias-delete — only the new singular heads remain.
 _POOL_HEADS = frozenset({"input", "system", "item"})

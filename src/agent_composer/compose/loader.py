@@ -61,6 +61,9 @@ from agent_composer.compose.errors import LoadError
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.stages.case_targets import desugar_case_call_targets
 from agent_composer.compose.stages.cycles import reject_cycles
+from agent_composer.compose.stages.human_questions_validate import (
+    validate_human_questions,
+)
 from agent_composer.compose.stages.loop_contract import check_loop_type_contract
 from agent_composer.compose.stages.ordering import infer_ordering_edges
 from agent_composer.compose.stages.ref_map_types import check_ref_map_types
@@ -85,7 +88,6 @@ from agent_composer.compose.parser import (
 from agent_composer.compose.types import InputDecl, read_flow_inputs
 from agent_composer.compose.validate import (
     check_case_handles,
-    validate_human_questions,
     validate_node_asserts,
 )
 

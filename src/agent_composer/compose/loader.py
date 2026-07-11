@@ -45,9 +45,7 @@ from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
     ChildResolver,
-    build_call_node,
     build_leaf_node,
-    build_loop_node,
     infer_data_edges,
     synthesize_boundary_graph,
 )
@@ -840,13 +838,21 @@ def _assemble(
     # and CASE stay `{}` until relocated.
     leaf: dict[str, Node] = {}
     flow_wiring: dict[str, dict] = {}
+    # Kind-blind build dispatch table (imported lazily: kind modules import build helpers from
+    # `compose.build`, so a top-level import here would risk a cycle — mirrors `build_leaf_node`).
+    from agent_composer.compose.kinds import KINDS
+
     for nid, desc in descriptors.items():
         if isinstance(desc, CaseDescriptor):
             flow_wiring[nid] = {}  # case wiring relocated below
             continue
         if isinstance(desc, CallDescriptor):
             try:
-                node, wiring = build_call_node(desc, resolver)
+                # Route through the kind's own `KindSpec.build` (`desc.kind` is "call"/"map") so
+                # it stamps `.range`/`.field_ranges` uniformly with the leaf path — the funnel's
+                # concrete-range resolution needs a call/map node's `field_ranges` (e.g. an
+                # `over:`/call-arg binding failure) just as much as a leaf's.
+                node, wiring = KINDS[desc.kind].build(desc, registry=registry, resolver=resolver)
             except LoadError as exc:  # locate a resolver failure at the call node's line
                 if exc.line is None:
                     exc.line = n_lines.get(nid)
@@ -855,7 +861,7 @@ def _assemble(
             flow_wiring[nid] = wiring
         elif isinstance(desc, LoopDescriptor):
             try:
-                node, wiring = build_loop_node(desc, resolver)
+                node, wiring = KINDS["loop"].build(desc, registry=registry, resolver=resolver)
             except LoadError as exc:  # locate a resolver / name-set / legality failure at the loop node's line
                 if exc.line is None:
                     exc.line = n_lines.get(nid)

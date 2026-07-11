@@ -28,6 +28,13 @@ from agent_composer.llm_clients.api_key_env import get_api_key_env
 # at module top, which we don't want on the CLI's hot path.
 _OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 
+# How many times the interactive key prompt re-asks on an empty answer before giving
+# up. An empty answer is a fingerslip (the key can't be validated locally, so it is
+# never a "wrong guess"); we re-prompt to be friendly, but bound the loop so a
+# non-interactive-but-TTY caller feeding empty forever can't hang. 3 mirrors sudo's
+# `passwd_tries` default — the most familiar credential prompt on Linux.
+_MAX_KEY_PROMPTS = 3
+
 
 def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
     """Return `provider`'s API key, prompting for it interactively if it is unset.
@@ -37,9 +44,10 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
     A keyless provider (`ollama`) or an unknown one maps to no env var, so nothing
     is checked and `None` is returned. When the env var is set its value is
     returned unchanged. When it is unset and a TTY is attached, the user is
-    prompted (the answer is exported into the process env so downstream clients
-    read it); with no TTY (or `interactive=False`) a required-but-missing key
-    raises rather than hanging on a prompt.
+    prompted (the answer is stripped and exported into the process env so downstream
+    clients read it); an empty answer is treated as a fingerslip and re-prompts, up to
+    `_MAX_KEY_PROMPTS` times. With no TTY (or `interactive=False`) a required-but-missing
+    key raises rather than hanging on a prompt.
 
     Args:
         provider (`str`):
@@ -56,9 +64,11 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
 
     Raises:
         `RuntimeError`:
-            The provider requires a key, none is set, and no interactive prompt
-            is available (no TTY, or `interactive=False`, or the user entered an
-            empty value).
+            The provider requires a key, none is set, and one of: no interactive
+            prompt is available (no TTY, or `interactive=False`); the user cancels
+            the prompt (Ctrl-C / Esc); or the user submits an empty answer
+            `_MAX_KEY_PROMPTS` times in a row. A single empty answer is not an
+            error — it re-prompts.
     """
     env_var = get_api_key_env(provider)
     if env_var is None:
@@ -73,11 +83,21 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
         )
     import questionary
 
-    key = questionary.password(f"Enter {env_var} for provider {provider!r}:").ask()
-    if not key:
-        raise RuntimeError(f"no API key provided for {provider!r} (${env_var})")
-    os.environ[env_var] = key
-    return key
+    # Interactive: an empty/whitespace answer is a fingerslip -> re-prompt, capped at
+    # _MAX_KEY_PROMPTS tries so the loop can't run forever. An explicit cancel (Ctrl-C / Esc,
+    # where questionary returns None) aborts at once. The no-TTY path above already raised up front.
+    for _ in range(_MAX_KEY_PROMPTS):
+        key = questionary.password(f"Enter {env_var} for provider {provider!r}:").ask()
+        if key is None:  # Ctrl-C / Esc — the user chose to cancel; does not spend an extra try
+            raise RuntimeError(f"no API key provided for {provider!r} (${env_var})")
+        key = key.strip()  # strip once; the guard and the export share the stripped value
+        if key:
+            os.environ[env_var] = key
+            return key
+        # empty / whitespace-only — hit Enter with no real input; this attempt is spent, ask again
+    raise RuntimeError(
+        f"no API key provided for {provider!r} (${env_var}) after {_MAX_KEY_PROMPTS} attempts"
+    )
 
 
 def confirm_ollama_endpoint(*, interactive: bool = True) -> str:

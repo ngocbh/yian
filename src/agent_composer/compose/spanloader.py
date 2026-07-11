@@ -57,6 +57,22 @@ class SpanLoader(yaml.SafeLoader):
         self._span_marks[id(node)] = _mark_to_range(node.start_mark, node.end_mark)
         return data
 
+    def construct_sequence(self, node, deep=False):
+        data = super().construct_sequence(node, deep=deep)
+        for elem_node in node.value:
+            self._span_marks[id(elem_node)] = _mark_to_range(
+                elem_node.start_mark, elem_node.end_mark)
+        self._span_marks[id(node)] = _mark_to_range(node.start_mark, node.end_mark)
+        return data
+
+    def construct_scalar(self, node):
+        # construct_scalar also runs during key construction; recording the node's own
+        # range unconditionally is safe (idempotent per id(node)) and calling super()
+        # first preserves SafeConstructor's scalar handling.
+        data = super().construct_scalar(node)
+        self._span_marks[id(node)] = _mark_to_range(node.start_mark, node.end_mark)
+        return data
+
 
 def load_with_spans(text) -> tuple[object, dict]:
     """Parse a single YAML document, returning both the value and its span tree.

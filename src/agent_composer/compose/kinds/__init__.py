@@ -62,3 +62,6 @@ BINDING_FIELDS: dict[str, tuple[str, ...]] = {}
 # `register()` reads them. Kind modules import parser/build helpers lazily, so no cycle.
 from agent_composer.compose.kinds import agent as _agent  # noqa: E402,F401
 from agent_composer.compose.kinds import code as _code  # noqa: E402,F401
+from agent_composer.compose.kinds import model as _model  # noqa: E402,F401
+from agent_composer.compose.kinds import tool as _tool  # noqa: E402,F401
+from agent_composer.compose.kinds import wait as _wait  # noqa: E402,F401

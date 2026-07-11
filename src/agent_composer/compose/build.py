@@ -36,10 +36,7 @@ from agent_composer.nodes.map import MapNode
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.human_input import HumanInputNode
-from agent_composer.nodes.model import ModelNode
 from agent_composer.nodes.start import StartNode
-from agent_composer.nodes.tool import ToolNode
-from agent_composer.nodes.wait import WaitNode
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.typesys.types import TypeRegistry
@@ -48,10 +45,8 @@ from agent_composer.compose.parser import (
     CallDescriptor,
     CaseDescriptor,
     HumanInputDescriptor,
-    ModelDescriptor,
     NodeDescriptor,
     LoopDescriptor,
-    ToolDescriptor,
     WaitDescriptor,
 )
 from agent_composer.compose.types import InputDecl, read_type
@@ -205,20 +200,8 @@ def build_leaf_node(
                 desc, registry=registry, resolver=None,
                 source_file=source_file, code_line=code_line, code_field_line=code_field_line,
             )
-    if isinstance(desc, ModelDescriptor):
-        node = ModelNode(
-            desc.id,
-            model_id=desc.model_id,
-            weights_uri=desc.weights_uri,
-            runtime=desc.runtime,
-            title=desc.node_name,
-        )
-    elif isinstance(desc, ToolDescriptor):
-        node = ToolNode(desc.id, tool_id=desc.tool_id, title=desc.node_name)
-    elif isinstance(desc, HumanInputDescriptor):
+    if isinstance(desc, HumanInputDescriptor):
         node = _build_human_input(desc)
-    elif isinstance(desc, WaitDescriptor):
-        node = WaitNode(desc.id, is_timed=desc.until is not None, title=desc.node_name)
     else:
         raise LoadError(
             f"node {desc.id!r}: kind {type(desc).__name__} is not a leaf node "
@@ -226,30 +209,19 @@ def build_leaf_node(
         )
 
     # Stamp the node-side `params` (signature) + the flow-owned wiring (the source), derived
-    # from the same descriptor map (key parity). A timed WAIT's `until` source rides the
-    # reserved wiring key (no author params); an event WAIT's wiring is `{}`.
-    if isinstance(desc, ToolDescriptor):
-        node.params = _sink_params(desc.args)
-        wiring = _sink_wiring(desc.args)
-    elif isinstance(desc, WaitDescriptor):
-        node.params = []
-        wiring = {"until": desc.until} if desc.until is not None else {}
-    else:
-        # A code-built override (set by the adaptive_questions desugar on the
-        # synthesized agent) wins; getattr keeps non-agent descriptors safe.
-        override = getattr(desc, "output_type_override", None)
-        node.output_type = override if override is not None else _output_type(desc.outputs, registry)
-        node.params = _sink_params(desc.inputs)
-        wiring = _sink_wiring(desc.inputs)
-        if isinstance(node, HumanInputNode):
-            # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT
-            # (the host returns a free-form answer record). Legacy gates derive their
-            # answer schema from the (possibly absent) declared output type.
-            if node.output_type is None and (
-                node.questions is not None or node.questions_input is not None
-            ):
-                node.output_type = Type.scalar(ValueKind.OBJECT)
-            node.answer_schema = _answer_schema(node.output_type)
+    # from the same descriptor map (key parity).
+    node.output_type = _output_type(desc.outputs, registry)
+    node.params = _sink_params(desc.inputs)
+    wiring = _sink_wiring(desc.inputs)
+    if isinstance(node, HumanInputNode):
+        # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT
+        # (the host returns a free-form answer record). Legacy gates derive their
+        # answer schema from the (possibly absent) declared output type.
+        if node.output_type is None and (
+            node.questions is not None or node.questions_input is not None
+        ):
+            node.output_type = Type.scalar(ValueKind.OBJECT)
+        node.answer_schema = _answer_schema(node.output_type)
     return node, wiring
 
 

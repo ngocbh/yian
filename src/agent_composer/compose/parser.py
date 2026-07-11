@@ -28,11 +28,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agent_composer.compose.errors import LoadError
 from agent_composer.compile.model import END_ID, START_ID
 
-# `AgentDescriptor`/`CodeDescriptor` now live with their parse/build handles in
-# `kinds/agent.py` + `kinds/code.py` (#70); re-export them here so `_KIND_SPECS`, the
-# `NodeDescriptor` union, and existing importers keep working.
+# `AgentDescriptor`/`CodeDescriptor`/`ModelDescriptor`/`ToolDescriptor`/`WaitDescriptor`
+# now live with their parse/build handles in `kinds/<kind>.py` (#70); re-export them here so
+# `_KIND_SPECS`, the `NodeDescriptor` union, and existing importers keep working.
 from agent_composer.compose.kinds.agent import AgentDescriptor
 from agent_composer.compose.kinds.code import CodeDescriptor
+from agent_composer.compose.kinds.model import ModelDescriptor
+from agent_composer.compose.kinds.tool import ToolDescriptor
+from agent_composer.compose.kinds.wait import WaitDescriptor
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -294,37 +297,6 @@ def parse_file(text: str) -> ComposeFile:
 
 
 @dataclass(frozen=True)
-class ModelDescriptor:
-    """kind=model — ML inference (a `model_id`, optional weights/runtime)."""
-
-    id: str
-    model_id: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    outputs: Any = None
-    weights_uri: Optional[str] = None
-    runtime: Optional[str] = None
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
-class ToolDescriptor:
-    """kind=tool — a direct, deterministic call into TOOL_REGISTRY (untyped args)."""
-
-    id: str
-    tool_id: str
-    args: dict[str, Any] = field(default_factory=dict)
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
 class CaseDescriptor:
     """kind=case — branch routing (searched `when:` or `on:`-value form).
 
@@ -417,18 +389,6 @@ class HumanInputDescriptor:
     inputs: dict[str, Any] = field(default_factory=dict)
     outputs: Any = None
     asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
-class WaitDescriptor:
-    """kind=wait — suspend until a timestamp (until:); produces no value."""
-
-    id: str
-    until: str
     node_name: Optional[str] = None
     depends_on: list[str] = field(default_factory=list)
     runs_after: list[str] = field(default_factory=list)

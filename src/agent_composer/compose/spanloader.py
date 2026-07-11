@@ -46,29 +46,24 @@ class SpanLoader(yaml.SafeLoader):
         super().__init__(stream)
         self._span_marks = {}  # id(node) -> SourceRange
 
+    # Each override calls super() first (preserving SafeConstructor's value construction:
+    # anchors, `<<:` merge via flatten_mapping, scalar coercion) then records the node's
+    # own range. super() constructs every child via construct_object, which routes back
+    # into these three overrides, so each key/value/element records itself — the mapping
+    # and sequence overrides only need to record their own container node. Merged/anchored
+    # keys are recorded at their anchor definition site (anchors share node identity).
+
     def construct_mapping(self, node, deep=False):
-        data = super().construct_mapping(node, deep=deep)  # flatten_mapping runs here
-        # read node.value AFTER super() so merged (<<) keys are spliced with anchor marks (S-new-3)
-        for key_node, value_node in node.value:
-            self._span_marks[id(value_node)] = _mark_to_range(
-                value_node.start_mark, value_node.end_mark)
-            self._span_marks[id(key_node)] = _mark_to_range(
-                key_node.start_mark, key_node.end_mark)
+        data = super().construct_mapping(node, deep=deep)
         self._span_marks[id(node)] = _mark_to_range(node.start_mark, node.end_mark)
         return data
 
     def construct_sequence(self, node, deep=False):
         data = super().construct_sequence(node, deep=deep)
-        for elem_node in node.value:
-            self._span_marks[id(elem_node)] = _mark_to_range(
-                elem_node.start_mark, elem_node.end_mark)
         self._span_marks[id(node)] = _mark_to_range(node.start_mark, node.end_mark)
         return data
 
     def construct_scalar(self, node):
-        # construct_scalar also runs during key construction; recording the node's own
-        # range unconditionally is safe (idempotent per id(node)) and calling super()
-        # first preserves SafeConstructor's scalar handling.
         data = super().construct_scalar(node)
         self._span_marks[id(node)] = _mark_to_range(node.start_mark, node.end_mark)
         return data

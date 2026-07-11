@@ -53,10 +53,10 @@ from agent_composer.expr import (
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.case import DEFAULT_HANDLE, Case, CaseNode
 from agent_composer.typesys.values import Type
+from agent_composer.compose.bindings import map_binding_strings
 from agent_composer.compose.calls import (
     _to_call_descriptor,
     desugar_call_directives,
-    map_binding_strings_in_descriptor,
     map_outputs_strings,
 )
 from agent_composer.compose.errors import LoadError
@@ -494,7 +494,7 @@ def expand_case_outputs(
     targets = _case_leaf_targets(descriptors, case_ids)
 
     new_descriptors = {
-        nid: map_binding_strings_in_descriptor(
+        nid: map_binding_strings(
             d, _expander(case_ids, targets, f"node {nid!r}", lines.get(nid))
         )
         for nid, d in descriptors.items()

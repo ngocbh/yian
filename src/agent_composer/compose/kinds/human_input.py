@@ -30,9 +30,12 @@ HUMAN_INPUT_REQUIRED: frozenset[str] = frozenset()
 HUMAN_INPUT_ALLOWED: frozenset[str] = frozenset(
     {"prompt", "questions", "adaptive_questions", "inputs", "outputs", "asserts"}
 )
-# Descriptor fields carrying inline-call binding strings (the kind-blind walk in bindings.py):
-# only `inputs` — `questions`/`prompt` are template/ref surfaces handled elsewhere.
-HUMAN_INPUT_BINDING_FIELDS: tuple[str, ...] = ("inputs",)
+# Descriptor fields carrying `${...}` binding strings for the kind-blind walk in bindings.py.
+# Empty to PRESERVE the retired `calls.py:map_binding_strings_in_descriptor` ladder behavior:
+# that isinstance ladder never matched `HumanInputDescriptor`, so a human_input's `inputs:` were
+# NOT inline-call-desugared (nor case-output-expanded). Empty keeps that exact behavior — making
+# human_input inputs desugarable would be a behavior change, out of scope for the #70 refactor.
+HUMAN_INPUT_BINDING_FIELDS: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

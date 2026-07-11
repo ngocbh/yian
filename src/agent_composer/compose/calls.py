@@ -24,15 +24,15 @@ Two guards (loud): an inline call cannot capture `${item}` (the synth node is a
 top-level node with no map-element scope — use a named `call` node with `over:`), and
 a user node id may not use the reserved synth prefix `__call_`.
 
-Imports flow DOWN/peer only: `compose.parser` (descriptors) + `compose.errors`
-(peer), `expr` (the ref-walk + the span flow-call detector). Only the loader imports this back.
+Imports flow DOWN/peer only: `compose.parser` (descriptors), `compose.bindings` (the
+kind-blind binding-field walk) + `compose.errors` (peers), `expr` (the ref-walk + the
+span flow-call detector). Only the loader imports this back.
 """
 
 from __future__ import annotations
 
 import itertools
 import re
-from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from agent_composer.expr import (
@@ -47,14 +47,11 @@ from agent_composer.expr.template import (
     _split_kv,
     flow_call_callees_in_spans,
 )
+from agent_composer.compose.bindings import map_binding_strings
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.parser import (
-    AgentDescriptor,
     CallDescriptor,
-    CodeDescriptor,
-    ModelDescriptor,
     NodeDescriptor,
-    ToolDescriptor,
 )
 
 # The reserved id prefix for synthesized inline-call nodes. A monotonic counter per
@@ -120,26 +117,10 @@ def desugar_inline_calls(
 
 
 # --------------------------------------------------------------------------- #
-# Shared binding-field walk (used by this pass AND the case-value
-# expansion in `compose.cases`). One place for "which fields are bindings".
+# The flow `outputs:` binding walk (used by this pass AND the case-value
+# expansion in `compose.cases`). Descriptor binding fields go through the
+# kind-blind `compose.bindings.map_binding_strings` instead.
 # --------------------------------------------------------------------------- #
-
-
-def map_binding_strings_in_descriptor(
-    desc: NodeDescriptor, fn: Callable[[str], Any]
-) -> NodeDescriptor:
-    """Apply `fn` to each STRING binding field of `desc`, returning a new (frozen)
-    descriptor: `inputs` (agent/code/model/call), `args` (tool), `over` (call). A
-    `case` (conditions, not bindings) and any other shape pass through unchanged.
-    Non-string values (literals / native YAML) are left as-is. `fn` may raise."""
-    if isinstance(desc, (AgentDescriptor, CodeDescriptor, ModelDescriptor)):
-        return replace(desc, inputs=_map_strings(desc.inputs, fn))
-    if isinstance(desc, ToolDescriptor):
-        return replace(desc, args=_map_strings(desc.args, fn))
-    if isinstance(desc, CallDescriptor):
-        new_over = fn(desc.over) if isinstance(desc.over, str) else desc.over
-        return replace(desc, inputs=_map_strings(desc.inputs, fn), over=new_over)
-    return desc
 
 
 def map_outputs_strings(outputs: Any, fn: Callable[[str], Any]) -> Any:
@@ -152,19 +133,15 @@ def map_outputs_strings(outputs: Any, fn: Callable[[str], Any]) -> Any:
     return outputs
 
 
-def _map_strings(mapping: Optional[dict], fn: Callable[[str], Any]) -> dict:
-    return {k: (fn(v) if isinstance(v, str) else v) for k, v in (mapping or {}).items()}
-
-
 def _desugar_descriptor(
     desc: NodeDescriptor, mint: Callable[[], str], *, host: str, line: Optional[int]
 ) -> tuple:
     """Desugar a descriptor's binding fields, returning `(new_desc, inline_calls)`.
 
-    Walks the binding fields via `map_binding_strings_in_descriptor`; the closure
-    `fn` desugars each string and accumulates the inline calls it finds."""
+    Walks the binding fields via `map_binding_strings`; the closure `fn` desugars each
+    string and accumulates the inline calls it finds."""
     calls: list = []
-    new_desc = map_binding_strings_in_descriptor(
+    new_desc = map_binding_strings(
         desc, lambda value: _desugar_value(value, mint, calls, host, line)
     )
     return new_desc, calls

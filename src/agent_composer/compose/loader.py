@@ -139,6 +139,32 @@ def _def_nodes_reader(parent_text: str, name: str) -> NodeReader:
     return NodeReader.spanless({})
 
 
+def _boundary_field_ranges(text: Optional[str]) -> dict[str, SourceRange]:
+    """The flow-boundary source map stamped onto the top-level StartNode.
+
+    Keys: each top-level `input:`/`inputs:` decl name -> its declaration value `SourceRange`,
+    plus each flow-level `asserts:` expr string -> its `SourceRange`. Feeds StartNode.field_ranges
+    so a boundary input-type failure (`input <name> — ...`) or a false boundary assert resolves a
+    precise caret. Empty for a spanless / uncomposable flow (compact / in-memory / a def, whose
+    `input:` lives under `defs.<name>` — best-effort, boundary errors there fall back to the node
+    range). Mirrors `_frame_ranges`: render metadata, never raises."""
+    if not text:
+        return {}
+    try:
+        value, spans, root = load_with_spans(text, return_root=True)
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    reader = NodeReader(value, spans, root)
+    out: dict[str, SourceRange] = {}
+    for key in ("input", "inputs"):
+        if isinstance(value.get(key), dict):
+            out.update(reader.mapping_value_ranges(key))
+    out.update(reader.item_ranges("asserts"))
+    return out
+
+
 def _frame_ranges(
     reader: NodeReader,
 ) -> tuple[dict[str, SourceRange], dict[str, dict[str, SourceRange]]]:
@@ -501,6 +527,7 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> LoadedFlo
         flow_llm_config=f.llm_config,
         flow_env=f.env,
         source=source,
+        boundary_field_ranges=_boundary_field_ranges(text),
     )
 
 
@@ -694,6 +721,7 @@ def _assemble(
     flow_llm_config: Optional[dict] = None,
     flow_env: Optional[dict] = None,
     source: Optional[SourceFrame] = None,
+    boundary_field_ranges: Optional[dict] = None,
 ) -> LoadedFlow:
     """Assemble parsed sections into a `LoadedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
@@ -893,7 +921,7 @@ def _assemble(
     flow_outputs = _flow_outputs(outputs_section)
     structural = reconciled + ordering_edges
     boundary_nodes, boundary_edges, boundary_wiring = synthesize_boundary_graph(
-        inputs, flow_outputs, node_ids, structural
+        inputs, flow_outputs, node_ids, structural, boundary_field_ranges
     )
     nodes.update(boundary_nodes)
     flow_wiring.update(boundary_wiring)

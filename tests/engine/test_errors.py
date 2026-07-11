@@ -263,6 +263,30 @@ def test_runtime_error_gallery(filename, inputs, substr):
     assert substr in (result.error or "")
 
 
+def test_flow_input_type_failure_carries_range():
+    # e08: `window` is declared `int` on line 20; a non-coercible run value fails the boundary
+    # type check. The flow-level RunFailed/RunResult carries a concrete `range` boxing the
+    # failing input decl line (resolved from the StartNode's per-input-decl field_ranges).
+    result = run_flow(
+        load_flow((_ERRORS / "e08-input-type-mismatch.yaml").read_text()),
+        {"topic": "X", "window": "soon"},
+    )
+    assert result.status == "failed"
+    assert result.range is not None and result.range.start_line == 20
+
+
+def test_false_boundary_assert_carries_range():
+    # e18: the flow-level `asserts:` item `input.window > 0` is on line 15; window <= 0 makes it
+    # false before any node runs. The RunResult carries a concrete `range` boxing that assert
+    # line (resolved from the StartNode's flow-assert field_ranges keyed by the expr string).
+    result = run_flow(
+        load_flow((_ERRORS / "e18-false-boundary-assert.yaml").read_text()),
+        {"window": -5},
+    )
+    assert result.status == "failed"
+    assert result.range is not None and result.range.start_line == 15
+
+
 # --------------------------------------------------------------------------- #
 # Deferred negative fixtures (NOTED, not asserted yet):
 #   e05 — bare-tags union  -> read_typedefs mechanism (already covered)

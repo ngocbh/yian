@@ -341,6 +341,7 @@ def synthesize_boundary_graph(
     outputs: list[FlowOutput],
     node_ids: "set[str]",
     body_edges: list[Edge],
+    start_field_ranges: "Optional[dict]" = None,
 ) -> tuple[dict[str, Node], list[Edge], dict[str, dict[str, Any]]]:
     """Synthesize the `START_ID`/`END_ID` boundary nodes + their edges + wiring.
 
@@ -360,8 +361,14 @@ def synthesize_boundary_graph(
 
     The START_ID-side `${input.X}`-producer DATA edges + the demote-input-reader-from-root
     rule live here too (every input read resolves through the START_ID namespace).
+
+    `start_field_ranges` (optional) is the flow-boundary source map stamped onto the StartNode
+    (`input name -> SourceRange`, flow-`asserts:` `expr -> SourceRange`) — render-only, so a
+    boundary input-type failure / false boundary assert resolves a precise caret. `None` for a
+    spanless flow (compact / in-memory / def).
     """
-    start = StartNode(START_ID, input_decls=list(input_decls))
+    start = StartNode(START_ID, input_decls=list(input_decls),
+                      field_ranges=start_field_ranges)
     end = EndNode.record(END_ID, output_names=[o.name for o in outputs])
     boundary_nodes: dict[str, Node] = {START_ID: start, END_ID: end}
 

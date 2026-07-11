@@ -15,6 +15,7 @@ from agent_composer.compose.kinds.agent import AgentDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
+from agent_composer.compose.stages.case_targets import desugar_case_call_targets
 from agent_composer.compose.stages.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
@@ -137,3 +138,28 @@ def test_desugar_adaptive_questions_preserves_ranges():
     composer = new_descriptors["ask__compose"]
     assert composer.range == gate.range
     assert composer.field_ranges == gate.field_ranges
+
+
+# ---------- 7.4 desugar_case_call_targets: synth branch-target call inherits case ranges ----------
+
+
+def test_desugar_case_call_targets_preserves_ranges():
+    # A `case` then:/else: that is a whole-value `call(...)` directive lifts a synth `call`
+    # node. That synth node must inherit the HOST case descriptor's range/field_ranges (so its
+    # downstream errors locate at the case node) — no `node_lines` map needed.
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  route:\n    kind: case\n    on: ${score.output}\n"
+        "    cases:\n      - when: high\n        then: call(helper, n=3)\n"
+        "    else: cold\n"
+        "output: ${route.output}\n"
+    )
+    descriptors = parse_nodes(_nodes_reader(text))
+    host = descriptors["route"]
+    new_descriptors = desugar_case_call_targets(descriptors, _synth_id_gen())
+    synth = [d for nid, d in new_descriptors.items() if nid.startswith("__call_")]
+    assert len(synth) == 1
+    call_desc = synth[0]
+    assert call_desc.call == "helper"
+    assert call_desc.range == host.range
+    assert call_desc.field_ranges == host.field_ranges

@@ -58,12 +58,12 @@ from agent_composer.compose.stages.inline_calls import _synth_id_gen, desugar_in
 from agent_composer.compose.cases import (
     CaseDesugar,
     desugar_case,
-    desugar_case_call_targets,
     expand_case_outputs,
     reconcile_case_edges,
 )
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
+from agent_composer.compose.stages.case_targets import desugar_case_call_targets
 from agent_composer.compose.uses import parse_uses_ref
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
@@ -696,7 +696,7 @@ def _assemble(
     # `then:/else: ${call}`: a `case` branch target that is an inline call becomes a
     # synth `call` node, the then:/else: rewritten to its id. Runs BEFORE expand_case_outputs
     # (so the synth args + the rewritten then-targets are visible to it) and shares `mint`.
-    descriptors = desugar_case_call_targets(descriptors, mint, node_lines=n_lines)
+    descriptors = desugar_case_call_targets(descriptors, mint)
 
     # Expand `${<case>.output}` value refs to a coalesce over the case's branch targets.
     # Runs after the inline-call desugar (so synth-node bindings are covered too)

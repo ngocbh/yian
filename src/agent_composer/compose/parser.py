@@ -37,6 +37,7 @@ from agent_composer.compose.kinds.model import ModelDescriptor
 from agent_composer.compose.kinds.tool import ToolDescriptor
 from agent_composer.compose.kinds.wait import WaitDescriptor
 from agent_composer.compose.kinds.human_input import HumanInputDescriptor
+from agent_composer.compose.kinds.case import CaseDescriptor
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -295,25 +296,6 @@ def parse_file(text: str) -> ComposeFile:
 # to every kind. `depends_on` and `runs_after` are RUN-ORDERING edges (no data flows): both
 # gate on the source settling; `depends_on` co-skips the dependent if the source skipped,
 # `runs_after` does not (the dependent still runs). See the loader edge pass.
-
-
-@dataclass(frozen=True)
-class CaseDescriptor:
-    """kind=case — branch routing (searched `when:` or `on:`-value form).
-
-    A `case` routes only — it carries NO `inputs:` (the desugar maps it
-    onto the inputs-bearing `CaseNode`). `else_` is the `else:` fallback.
-    """
-
-    id: str
-    cases: list[dict[str, Any]] = field(default_factory=list)
-    else_: Optional[str] = None
-    on: Optional[str] = None
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
 
 
 @dataclass(frozen=True)

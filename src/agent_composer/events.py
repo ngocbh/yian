@@ -54,6 +54,38 @@ class SourceSpan:
     key: str
 
 
+@dataclass(frozen=True)
+class SourceRange:
+    """A concrete 1-based source span: [start, end) with an exclusive end column.
+
+    Coordinates are 1-based (line 1, col 1 = first char); `end_col` is one past the
+    last covered column (half-open) so a zero-width caret is start == end. Produced by
+    the compose loader from PyYAML marks and by the funnel that resolves a symbolic
+    `SourceSpan` key to the node's recorded range.
+    """
+
+    start_line: int
+    start_col: int
+    end_line: int
+    end_col: int
+
+
+@dataclass(frozen=True)
+class Diagnostic:
+    """A renderable compile/run error: one message + a primary range + secondary notes.
+
+    `severity` is "error" | "warning"; `primary` is the SourceRange the caret points
+    at; `notes` is a tuple of secondary annotation strings (e.g. outer call frames of a
+    nested-call traceback, or an anchor definition site for a merged key). The single
+    `render_diagnostic` renderer (CLI) consumes this — no kind-specific rendering.
+    """
+
+    severity: str
+    message: str
+    primary: SourceRange | None
+    notes: tuple[str, ...] = ()
+
+
 # --------------------------------------------------------------------------- #
 # Node-level events
 # --------------------------------------------------------------------------- #
@@ -111,6 +143,11 @@ class NodeFailed:
     # an assert expr); None when no sub-line is determinable (a code raise) -> the
     # CLI falls back to the node's best sub-line / header.
     locator: Optional[SourceSpan] = None
+    # The concrete source span the funnel resolves ALONGSIDE the symbolic locator, by
+    # looking up the node's recorded `field_ranges[locator.key]` (kind-blind — keyed only
+    # on the locator key). None when the node records no range for that key. The CLI
+    # prefers this over resolving the symbolic `locator`. Additive/coexistent with `locator`.
+    range: Optional[SourceRange] = None
     # The formatted Python traceback of the raising call, captured at the node-failure
     # boundary. None for failures synthesized without an exception (e.g. an assert that did
     # not hold). Surfaced by the CLI only under `--engine-trace`.

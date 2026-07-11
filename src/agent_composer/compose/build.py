@@ -28,34 +28,23 @@ from agent_composer.expr import (
     condition_refs,
     expr_refs_of,
 )
-from agent_composer.expr.template import Span, prompt_refs, scan_template, template_refs
-from agent_composer.nodes.agent import AgentNode
+from agent_composer.expr.template import Span, scan_template, template_refs
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.code import CodeNode
 from agent_composer.nodes.map import MapNode
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.human_input import HumanInputNode
-from agent_composer.nodes.model import ModelNode
 from agent_composer.nodes.start import StartNode
-from agent_composer.nodes.tool import ToolNode
-from agent_composer.nodes.wait import WaitNode
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.parser import (
-    AgentDescriptor,
     CallDescriptor,
     CaseDescriptor,
-    CodeDescriptor,
-    HumanInputDescriptor,
-    ModelDescriptor,
     NodeDescriptor,
     LoopDescriptor,
-    ToolDescriptor,
     WaitDescriptor,
 )
 from agent_composer.compose.types import InputDecl, read_type
@@ -77,32 +66,6 @@ def _output_type(outputs: Any, registry: TypeRegistry) -> Optional[Type]:
     if outputs is None:
         return None
     return read_type(outputs, registry)
-
-
-def _field_schema(name: str, typ: Type, required: bool) -> dict[str, Any]:
-    entry: dict[str, Any] = {"name": name, "type": typ.kind.value, "required": required}
-    if typ.tags:  # a Literal[...] enum -> the allowed values
-        entry["enum"] = sorted(typ.tags)
-    elif typ.element is not None and typ.element.tags:  # list[Literal[...]] -> element enum
-        entry["enum"] = sorted(typ.element.tags)
-    if typ.kind == ValueKind.OBJECT and typ.fields:  # nested record -> sub-fields
-        req = typ.required or frozenset()
-        entry["fields"] = [_field_schema(k, f, k in req) for k, f in typ.fields.items()]
-    return entry
-
-
-def _answer_schema(typ: Optional[Type]) -> list[dict[str, Any]]:
-    """A light IOField-shaped schema for a HUMAN_INPUT answer, from its output `Type`.
-
-    A record output -> one entry per field (recursively); any other (scalar / enum / list,
-    incl. list-of-enum) -> a single `answer` entry. Lets a host renderer prompt against the
-    expected answer type, and the pause reason self-describe."""
-    if typ is None:
-        return []
-    if typ.kind == ValueKind.OBJECT and typ.fields:
-        required = typ.required or frozenset()
-        return [_field_schema(k, f, k in required) for k, f in typ.fields.items()]
-    return [_field_schema("answer", typ, not typ.nullable)]
 
 
 def _sink_params(mapping: dict[str, Any]) -> list[ParamDecl]:
@@ -141,38 +104,6 @@ def _validate_llm_config(
     return cfg, inherit
 
 
-def _build_human_input(desc: HumanInputDescriptor) -> HumanInputNode:
-    """Build a `human_input` gate, carrying its `questions:` config in one of three forms.
-
-    - `desc.questions` is a **list** (static/literal form): carried verbatim as
-      `questions` (`questions_input=None`).
-    - `desc.questions` is a **string** (a bare `"${name}"` input ref): the named INPUT
-      param is recorded as `questions_input` (`questions=None`), so the gate resolves the
-      list from its bound input at run time. The ref must name a single declared input —
-      exactly one ref, no dots (a pool ref like `"${a.output}"` is rejected; deeper
-      pool-ref validation is a later pass).
-    - `desc.questions` is `None` (legacy form): a plain prompt gate with no questions.
-    """
-    questions = desc.questions
-    if isinstance(questions, list):
-        return HumanInputNode(
-            desc.id, prompt=desc.prompt or "", questions=questions,
-            questions_input=None, title=desc.node_name,
-        )
-    if isinstance(questions, str):
-        refs = prompt_refs(questions)
-        if len(refs) != 1 or "." in refs[0]:
-            raise LoadError(
-                f"node {desc.id!r}: questions ref must be a single bare input name "
-                f"(e.g. ${{qs}}), got {questions!r}"
-            )
-        return HumanInputNode(
-            desc.id, prompt=desc.prompt or "", questions=None,
-            questions_input=refs[0], title=desc.node_name,
-        )
-    return HumanInputNode(desc.id, prompt=desc.prompt or "", title=desc.node_name)
-
-
 def build_leaf_node(
     desc: NodeDescriptor,
     registry: TypeRegistry,
@@ -195,103 +126,26 @@ def build_leaf_node(
     load error that has no interior line — a reject, or a no-`return` body — at the `code:`
     field rather than the node header.
     """
-    if isinstance(desc, AgentDescriptor):
-        own_cfg, inherit = _validate_llm_config(desc.llm_config, desc.id)
-        try:
-            node: Node = AgentNode(
-                desc.id,
-                prompt=desc.prompt or "",
-                tools=list(desc.tools),
-                controls=list(desc.controls),
-                # desc.llm_config is a plain dict; carry it through. AgentNode keeps it as
-                # `own_llm_config` (the authored source) and `llm_config` (the effective
-                # config, baked by resolve_llm_cascade at run start). `inherit=False` opts
-                # the node out of the whole cascade. The extra="forbid" on LLMConfig caught
-                # typo'd keys at LOAD via _validate_llm_config above.
-                llm_config=own_cfg,
-                llm_inherit=inherit,
-                mode=desc.mode,
-                retries=desc.retries,
-                title=desc.node_name,
-            )
-        except ValueError as exc:
-            # AgentNode validates mode/controls against the registries; surface a
-            # rejection as the loader's one error type (loud), not a bare ValueError.
-            raise LoadError(f"node {desc.id!r}: {exc}") from exc
-    elif isinstance(desc, CodeDescriptor):
-        try:
-            node = CodeNode(
-                desc.id,
-                code=desc.code,
-                source_file=source_file,
-                code_line=code_line,
-                title=desc.node_name,
-            )
-        except (ValueError, SyntaxError) as exc:
-            # CodeNode classifies `code:` (reference / inline / reject) and syntax- +
-            # has-return-gates inline at construction; surface a reject, an inline
-            # SyntaxError, or a missing-return as the loader's one error type (loud),
-            # mirroring the AgentNode branch above — not a raw ValueError/SyntaxError.
-            #
-            # Anchor the frame precisely, matching the runtime exact-line framing:
-            #  - an inline SyntaxError's padded compile gives an ABSOLUTE `lineno` (the real
-            #    YAML line of the slip) — box it, but only with a real anchor (`code_line >
-            #    1`); a body-relative framing (nested def / uncaptured) would mis-point.
-            #  - a reject / no-`return` `ValueError` has no trustworthy interior line, so
-            #    fall to the `code:` field line.
-            # `code_field_line` is None only when the field line wasn't captured -> the
-            # loader then anchors at the node header, like every other load error.
-            if isinstance(exc, SyntaxError) and code_line > 1:
-                line = exc.lineno
-            else:
-                line = code_field_line
-            raise LoadError(f"node {desc.id!r}: {exc}", line=line) from exc
-    elif isinstance(desc, ModelDescriptor):
-        node = ModelNode(
-            desc.id,
-            model_id=desc.model_id,
-            weights_uri=desc.weights_uri,
-            runtime=desc.runtime,
-            title=desc.node_name,
-        )
-    elif isinstance(desc, ToolDescriptor):
-        node = ToolNode(desc.id, tool_id=desc.tool_id, title=desc.node_name)
-    elif isinstance(desc, HumanInputDescriptor):
-        node = _build_human_input(desc)
-    elif isinstance(desc, WaitDescriptor):
-        node = WaitNode(desc.id, is_timed=desc.until is not None, title=desc.node_name)
-    else:
-        raise LoadError(
-            f"node {desc.id!r}: kind {type(desc).__name__} is not a leaf node "
-            f"(case nodes are desugared; ref/map nodes expand at runtime)"
-        )
+    # Two-axis dispatch (#70): every leaf kind (agent/code/model/tool/human_input/wait) builds
+    # through its own `KindSpec.build`. Leaf descriptors are 1:1 with their kind, so we match a
+    # spec by descriptor class; leaf builds ignore `resolver` (the shared signature carries it
+    # only for call/map/loop). `source_file`/`code_line`/`code_field_line` are inline-CODE
+    # traceback anchors — only the CODE build reads them; every other build absorbs them via
+    # `**_loader_hints`. Imported lazily: kind modules import build helpers from here, so a
+    # top-level import would cycle. Anything past this loop is not a leaf (case is desugared;
+    # ref/map nodes expand at runtime) — a loud LoadError.
+    from agent_composer.compose.kinds import KINDS
 
-    # Stamp the node-side `params` (signature) + the flow-owned wiring (the source), derived
-    # from the same descriptor map (key parity). A timed WAIT's `until` source rides the
-    # reserved wiring key (no author params); an event WAIT's wiring is `{}`.
-    if isinstance(desc, ToolDescriptor):
-        node.params = _sink_params(desc.args)
-        wiring = _sink_wiring(desc.args)
-    elif isinstance(desc, WaitDescriptor):
-        node.params = []
-        wiring = {"until": desc.until} if desc.until is not None else {}
-    else:
-        # A code-built override (set by the adaptive_questions desugar on the
-        # synthesized agent) wins; getattr keeps non-agent descriptors safe.
-        override = getattr(desc, "output_type_override", None)
-        node.output_type = override if override is not None else _output_type(desc.outputs, registry)
-        node.params = _sink_params(desc.inputs)
-        wiring = _sink_wiring(desc.inputs)
-        if isinstance(node, HumanInputNode):
-            # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT
-            # (the host returns a free-form answer record). Legacy gates derive their
-            # answer schema from the (possibly absent) declared output type.
-            if node.output_type is None and (
-                node.questions is not None or node.questions_input is not None
-            ):
-                node.output_type = Type.scalar(ValueKind.OBJECT)
-            node.answer_schema = _answer_schema(node.output_type)
-    return node, wiring
+    for spec in KINDS.values():
+        if spec.descriptor_cls is type(desc):
+            return spec.build(
+                desc, registry=registry, resolver=None,
+                source_file=source_file, code_line=code_line, code_field_line=code_field_line,
+            )
+    raise LoadError(
+        f"node {desc.id!r}: kind {type(desc).__name__} is not a leaf node "
+        f"(case nodes are desugared; ref/map nodes expand at runtime)"
+    )
 
 
 # --------------------------------------------------------------------------- #

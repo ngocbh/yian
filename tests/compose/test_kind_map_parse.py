@@ -1,0 +1,69 @@
+"""6.9 — the `map` kind handle: parse reuses call's `CallDescriptor` + shared `parse_call`,
+stamping `kind="map"` and recording the `call`/`over`/`inputs` field ranges. `over` (the
+iteration source) is required alongside `call`; build (`build_call_node`, `MapNode` branch) is
+exercised end-to-end via the `load_flow` suite."""
+
+import pytest
+
+from agent_composer.compose.errors import LoadError
+from agent_composer.compose.kinds.call import CallDescriptor
+from agent_composer.compose.kinds.map import parse
+from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.spanloader import load_with_spans
+from agent_composer.events import SourceRange
+
+
+_FLOW = """\
+nodes:
+  fan:
+    kind: map
+    call: child_flow
+    over: ${input.items}
+    inputs:
+      x: ${item}
+"""
+
+
+def _reader_for(text, node_id):
+    value, spans, root = load_with_spans(text, return_root=True)
+    root_reader = NodeReader(value, spans, root)
+    return root_reader.child("nodes").child(node_id)
+
+
+def test_map_parse_matches_descriptor_and_records_ranges():
+    reader = _reader_for(_FLOW, "fan")
+    desc = parse("fan", reader)
+
+    assert desc == CallDescriptor(
+        id="fan",
+        call="child_flow",
+        over="${input.items}",
+        inputs={"x": "${item}"},
+        kind="map",
+    )
+    assert isinstance(desc.range, SourceRange)
+    assert isinstance(desc.field_ranges["call"], SourceRange)
+    assert isinstance(desc.field_ranges["over"], SourceRange)
+    assert isinstance(desc.field_ranges["inputs"], SourceRange)
+
+
+def test_map_parse_requires_over():
+    flow = "nodes:\n  fan:\n    kind: map\n    call: child_flow\n    inputs:\n      x: ${item}\n"
+    reader = _reader_for(flow, "fan")
+    with pytest.raises(LoadError, match="missing required field 'over'"):
+        parse("fan", reader)
+
+
+def test_map_parse_records_parallel():
+    flow = (
+        "nodes:\n"
+        "  fan:\n"
+        "    kind: map\n"
+        "    call: child_flow\n"
+        "    over: ${input.items}\n"
+        "    parallel: true\n"
+    )
+    reader = _reader_for(flow, "fan")
+    desc = parse("fan", reader)
+    assert desc.parallel is True
+    assert isinstance(desc.field_ranges["parallel"], SourceRange)

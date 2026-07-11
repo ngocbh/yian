@@ -27,7 +27,19 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent_composer.compose.errors import LoadError
 from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.typesys.values import Type
+
+# `AgentDescriptor`/`CodeDescriptor`/`ModelDescriptor`/`ToolDescriptor`/`WaitDescriptor`
+# now live with their parse/build handles in `kinds/<kind>.py` (#70); re-export them here so
+# `_KIND_SPECS`, the `NodeDescriptor` union, and existing importers keep working.
+from agent_composer.compose.kinds.agent import AgentDescriptor
+from agent_composer.compose.kinds.code import CodeDescriptor
+from agent_composer.compose.kinds.model import ModelDescriptor
+from agent_composer.compose.kinds.tool import ToolDescriptor
+from agent_composer.compose.kinds.wait import WaitDescriptor
+from agent_composer.compose.kinds.human_input import HumanInputDescriptor
+from agent_composer.compose.kinds.case import CaseDescriptor
+from agent_composer.compose.kinds.call import CallDescriptor
+from agent_composer.compose.kinds.loop import LoopDescriptor
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -286,188 +298,6 @@ def parse_file(text: str) -> ComposeFile:
 # to every kind. `depends_on` and `runs_after` are RUN-ORDERING edges (no data flows): both
 # gate on the source settling; `depends_on` co-skips the dependent if the source skipped,
 # `runs_after` does not (the dependent still runs). See the loader edge pass.
-
-
-@dataclass(frozen=True)
-class AgentDescriptor:
-    """kind=agent — an LLM reasoner (prompt + mode + optional tools/controls/llm)."""
-
-    id: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    outputs: Any = None
-    prompt: Optional[str] = None
-    tools: list[str] = field(default_factory=list)
-    controls: list[str] = field(default_factory=list)
-    mode: str = "tool_calling"
-    llm_config: dict[str, Any] = field(default_factory=dict)
-    retries: int = 2
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-    # INTERNAL — never parsed from YAML (not in `_KIND_SPECS`), set only by the
-    # adaptive_questions desugar pass. When present it overrides the type-string
-    # derived `output_type` for a synthesized structured agent whose codomain is
-    # a code-built Type (e.g. `question_list_type()`) with no surface type-string.
-    output_type_override: Optional[Type] = None
-
-
-@dataclass(frozen=True)
-class CodeDescriptor:
-    """kind=code — deterministic code (a `module:function` ref or a source snippet)."""
-
-    id: str
-    code: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    outputs: Any = None
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
-class ModelDescriptor:
-    """kind=model — ML inference (a `model_id`, optional weights/runtime)."""
-
-    id: str
-    model_id: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    outputs: Any = None
-    weights_uri: Optional[str] = None
-    runtime: Optional[str] = None
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
-class ToolDescriptor:
-    """kind=tool — a direct, deterministic call into TOOL_REGISTRY (untyped args)."""
-
-    id: str
-    tool_id: str
-    args: dict[str, Any] = field(default_factory=dict)
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
-class CaseDescriptor:
-    """kind=case — branch routing (searched `when:` or `on:`-value form).
-
-    A `case` routes only — it carries NO `inputs:` (the desugar maps it
-    onto the inputs-bearing `CaseNode`). `else_` is the `else:` fallback.
-    """
-
-    id: str
-    cases: list[dict[str, Any]] = field(default_factory=list)
-    else_: Optional[str] = None
-    on: Optional[str] = None
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
-class CallDescriptor:
-    """kind=call|map — function application of a callable (`call:` + call-arg bindings).
-
-    `call` names the callable, resolved **defs-first, else an external flow id** (the
-    loader composes that resolution). `kind: call` is a single application (built as a plain
-    `CallNode`); `kind: map` + `over: ${list}` is `List.map` — iteration with `${item}` in
-    element scope (built as a `MapNode`), and `parallel:` overlaps the element runs. `inputs:`
-    are the (per-element) call-arg bindings.
-
-    `kind` is the REF/MAP discriminator: `"call"` (REF, the default) or `"map"`. The parser sets
-    it from the YAML kind; the two SYNTH paths (inline-call + case desugar) keep the REF default
-    (`over=None`). `build` branches on it: a `map` builds a `MapNode`, a `call` a `CallNode`.
-    """
-
-    id: str
-    call: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    over: Optional[str] = None
-    parallel: bool = False
-    kind: str = "call"
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
-class LoopDescriptor:
-    """kind=loop — a `('a -> 'a) -> 'a -> 'a` driver over a carried record.
-
-    `call` names the body subflow (defs-first, else external — same resolution as
-    `call`/`map`). `inputs` seeds the carried record at turn 0. Exactly one of
-    `while_`/`until_`/`times` carries the predicate (this slice builds `while_`);
-    `max` is the runaway guard (required for while/until). `while`/`until` are Python
-    keywords, so they land here as `while_`/`until_` (the `_parse_node` remap, like
-    `else`->`else_`).
-    """
-
-    id: str
-    call: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    while_: Optional[str] = None
-    until_: Optional[str] = None
-    times: Optional[int] = None
-    max: Optional[int] = None
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
-class HumanInputDescriptor:
-    """kind=human_input — suspend for a person; the typed answer is the node's output.
-
-    Three author surfaces, exactly one of which carries the question(s):
-    - `questions`: static list (`[{question, header, options, multi_select}, ...]`) OR
-      a `${...}` ref string to a declared input (the manual-ref form);
-    - `adaptive_questions`: a nested block (dict) `{prompt: <LLM brief>, mode?,
-      llm_config?, retries?}` — the engine asks an LLM to author the questions;
-    - `prompt`: the legacy free-text approve/answer surface.
-    Legality (exactly-one, adaptive needs its own `prompt:`) is enforced in `_parse_node`.
-    """
-
-    id: str
-    prompt: Optional[str] = None
-    questions: Any = None
-    adaptive_questions: Optional[dict] = None
-    inputs: dict[str, Any] = field(default_factory=dict)
-    outputs: Any = None
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
-class WaitDescriptor:
-    """kind=wait — suspend until a timestamp (until:); produces no value."""
-
-    id: str
-    until: str
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
 
 
 NodeDescriptor = (

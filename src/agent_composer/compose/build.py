@@ -32,7 +32,6 @@ from agent_composer.expr.template import Span, prompt_refs, scan_template, templ
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.code import CodeNode
 from agent_composer.nodes.map import MapNode
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.end import EndNode
@@ -48,7 +47,6 @@ from agent_composer.compose.errors import LoadError
 from agent_composer.compose.parser import (
     CallDescriptor,
     CaseDescriptor,
-    CodeDescriptor,
     HumanInputDescriptor,
     ModelDescriptor,
     NodeDescriptor,
@@ -203,36 +201,11 @@ def build_leaf_node(
 
     for spec in KINDS.values():
         if spec.descriptor_cls is type(desc):
-            return spec.build(desc, registry=registry, resolver=None)
-    if isinstance(desc, CodeDescriptor):
-        try:
-            node = CodeNode(
-                desc.id,
-                code=desc.code,
-                source_file=source_file,
-                code_line=code_line,
-                title=desc.node_name,
+            return spec.build(
+                desc, registry=registry, resolver=None,
+                source_file=source_file, code_line=code_line, code_field_line=code_field_line,
             )
-        except (ValueError, SyntaxError) as exc:
-            # CodeNode classifies `code:` (reference / inline / reject) and syntax- +
-            # has-return-gates inline at construction; surface a reject, an inline
-            # SyntaxError, or a missing-return as the loader's one error type (loud),
-            # mirroring the AgentNode branch above — not a raw ValueError/SyntaxError.
-            #
-            # Anchor the frame precisely, matching the runtime exact-line framing:
-            #  - an inline SyntaxError's padded compile gives an ABSOLUTE `lineno` (the real
-            #    YAML line of the slip) — box it, but only with a real anchor (`code_line >
-            #    1`); a body-relative framing (nested def / uncaptured) would mis-point.
-            #  - a reject / no-`return` `ValueError` has no trustworthy interior line, so
-            #    fall to the `code:` field line.
-            # `code_field_line` is None only when the field line wasn't captured -> the
-            # loader then anchors at the node header, like every other load error.
-            if isinstance(exc, SyntaxError) and code_line > 1:
-                line = exc.lineno
-            else:
-                line = code_field_line
-            raise LoadError(f"node {desc.id!r}: {exc}", line=line) from exc
-    elif isinstance(desc, ModelDescriptor):
+    if isinstance(desc, ModelDescriptor):
         node = ModelNode(
             desc.id,
             model_id=desc.model_id,

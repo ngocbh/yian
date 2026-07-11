@@ -28,9 +28,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agent_composer.compose.errors import LoadError
 from agent_composer.compile.model import END_ID, START_ID
 
-# `AgentDescriptor` now lives with its parse/build handle in `kinds/agent.py` (#70); re-export
-# it here so `_KIND_SPECS`, the `NodeDescriptor` union, and existing importers keep working.
+# `AgentDescriptor`/`CodeDescriptor` now live with their parse/build handles in
+# `kinds/agent.py` + `kinds/code.py` (#70); re-export them here so `_KIND_SPECS`, the
+# `NodeDescriptor` union, and existing importers keep working.
 from agent_composer.compose.kinds.agent import AgentDescriptor
+from agent_composer.compose.kinds.code import CodeDescriptor
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -289,21 +291,6 @@ def parse_file(text: str) -> ComposeFile:
 # to every kind. `depends_on` and `runs_after` are RUN-ORDERING edges (no data flows): both
 # gate on the source settling; `depends_on` co-skips the dependent if the source skipped,
 # `runs_after` does not (the dependent still runs). See the loader edge pass.
-
-
-@dataclass(frozen=True)
-class CodeDescriptor:
-    """kind=code — deterministic code (a `module:function` ref or a source snippet)."""
-
-    id: str
-    code: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    outputs: Any = None
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
 
 
 @dataclass(frozen=True)

@@ -61,3 +61,4 @@ BINDING_FIELDS: dict[str, tuple[str, ...]] = {}
 # KINDS/BINDING_FIELDS). Kept at the BOTTOM so the tables above already exist when a kind's
 # `register()` reads them. Kind modules import parser/build helpers lazily, so no cycle.
 from agent_composer.compose.kinds import agent as _agent  # noqa: E402,F401
+from agent_composer.compose.kinds import code as _code  # noqa: E402,F401

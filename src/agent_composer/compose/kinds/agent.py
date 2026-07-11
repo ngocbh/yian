@@ -122,13 +122,15 @@ def parse(node_id: str, reader: NodeReader) -> AgentDescriptor:
     return AgentDescriptor(**kwargs, range=reader._own_range(), field_ranges=ranges)
 
 
-def build(desc: AgentDescriptor, *, registry, resolver=None):
+def build(desc: AgentDescriptor, *, registry, resolver=None, **_loader_hints):
     """Construct the runtime `AgentNode` (+ wiring) for one `AgentDescriptor`.
 
     Mirrors the legacy `build.build_leaf_node` agent path (LLM-config validation, node-side
     `params` + flow-owned `inputs` wiring, `output_type` from `outputs:`/override) and
     additionally stamps `.range`/`.field_ranges` from the descriptor. `resolver` is unused
-    (leaf kind); it rides the shared `KindSpec.build` signature for call/map/loop.
+    (leaf kind) and `_loader_hints` absorbs the inline-CODE traceback anchors
+    (`source_file`/`code_line`/`code_field_line`) that only the CODE build reads; both ride
+    the shared `KindSpec.build` signature.
     """
     from agent_composer.compose.build import (
         _output_type,

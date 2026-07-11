@@ -29,7 +29,6 @@ from agent_composer.expr import (
     expr_refs_of,
 )
 from agent_composer.expr.template import Span, prompt_refs, scan_template, template_refs
-from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.call import CallNode
@@ -47,7 +46,6 @@ from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.parser import (
-    AgentDescriptor,
     CallDescriptor,
     CaseDescriptor,
     CodeDescriptor,
@@ -206,30 +204,7 @@ def build_leaf_node(
     for spec in KINDS.values():
         if spec.descriptor_cls is type(desc):
             return spec.build(desc, registry=registry, resolver=None)
-    if isinstance(desc, AgentDescriptor):
-        own_cfg, inherit = _validate_llm_config(desc.llm_config, desc.id)
-        try:
-            node: Node = AgentNode(
-                desc.id,
-                prompt=desc.prompt or "",
-                tools=list(desc.tools),
-                controls=list(desc.controls),
-                # desc.llm_config is a plain dict; carry it through. AgentNode keeps it as
-                # `own_llm_config` (the authored source) and `llm_config` (the effective
-                # config, baked by resolve_llm_cascade at run start). `inherit=False` opts
-                # the node out of the whole cascade. The extra="forbid" on LLMConfig caught
-                # typo'd keys at LOAD via _validate_llm_config above.
-                llm_config=own_cfg,
-                llm_inherit=inherit,
-                mode=desc.mode,
-                retries=desc.retries,
-                title=desc.node_name,
-            )
-        except ValueError as exc:
-            # AgentNode validates mode/controls against the registries; surface a
-            # rejection as the loader's one error type (loud), not a bare ValueError.
-            raise LoadError(f"node {desc.id!r}: {exc}") from exc
-    elif isinstance(desc, CodeDescriptor):
+    if isinstance(desc, CodeDescriptor):
         try:
             node = CodeNode(
                 desc.id,

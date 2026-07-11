@@ -27,7 +27,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent_composer.compose.errors import LoadError
 from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.typesys.values import Type
+
+# `AgentDescriptor` now lives with its parse/build handle in `kinds/agent.py` (#70); re-export
+# it here so `_KIND_SPECS`, the `NodeDescriptor` union, and existing importers keep working.
+from agent_composer.compose.kinds.agent import AgentDescriptor
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -286,31 +289,6 @@ def parse_file(text: str) -> ComposeFile:
 # to every kind. `depends_on` and `runs_after` are RUN-ORDERING edges (no data flows): both
 # gate on the source settling; `depends_on` co-skips the dependent if the source skipped,
 # `runs_after` does not (the dependent still runs). See the loader edge pass.
-
-
-@dataclass(frozen=True)
-class AgentDescriptor:
-    """kind=agent — an LLM reasoner (prompt + mode + optional tools/controls/llm)."""
-
-    id: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    outputs: Any = None
-    prompt: Optional[str] = None
-    tools: list[str] = field(default_factory=list)
-    controls: list[str] = field(default_factory=list)
-    mode: str = "tool_calling"
-    llm_config: dict[str, Any] = field(default_factory=dict)
-    retries: int = 2
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-    # INTERNAL — never parsed from YAML (not in `_KIND_SPECS`), set only by the
-    # adaptive_questions desugar pass. When present it overrides the type-string
-    # derived `output_type` for a synthesized structured agent whose codomain is
-    # a code-built Type (e.g. `question_list_type()`) with no surface type-string.
-    output_type_override: Optional[Type] = None
 
 
 @dataclass(frozen=True)

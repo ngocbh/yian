@@ -55,3 +55,9 @@ KINDS: dict[str, KindSpec] = {}
 # Surface `kind:` string -> the descriptor field names that carry `${...}` binding strings.
 # Consumed by the kind-blind walk in `compose/bindings.py`.
 BINDING_FIELDS: dict[str, tuple[str, ...]] = {}
+
+
+# Import each migrated kind module for its import-time `register()` side effect (populates
+# KINDS/BINDING_FIELDS). Kept at the BOTTOM so the tables above already exist when a kind's
+# `register()` reads them. Kind modules import parser/build helpers lazily, so no cycle.
+from agent_composer.compose.kinds import agent as _agent  # noqa: E402,F401

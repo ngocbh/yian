@@ -18,6 +18,11 @@ from agent_composer.cli import app
 
 runner = CliRunner()
 
+# The bundled example chat flow, resolved from THIS file's location — not cwd. The `chat`
+# command's `flow` arg is `exists=True`, so a cwd-relative path only works when pytest runs
+# from the repo root; anchoring to `__file__` keeps these tests cwd-independent.
+EXAMPLE_CHAT = Path(__file__).resolve().parents[2] / "examples" / "chat.yaml"
+
 # Matches an ANSI SGR (color/style) escape sequence, e.g. "\x1b[1;36m".
 _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -64,6 +69,25 @@ class _GoodModel:
         return _Msg(content="recovered reply")
 
 
+class _ToolThenAnswer:
+    """First `invoke` requests one tool; the second returns a final answer. Proves the
+    `tool_calling` loop wires model -> tool -> model within a single turn. A fresh instance
+    per turn (the `model_from_config` factory) resets the call counter, so each turn is
+    "one tool call, then answer."""
+
+    def __init__(self):
+        self._n = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, msgs):
+        self._n += 1
+        if self._n == 1:
+            return _Msg(tool_calls=[{"name": "list_flows", "args": {}, "id": "c1"}])
+        return _Msg(content="here are your flows")
+
+
 
 def test_chat_help():
     # typer renders --help as a rich options table with ANSI color. Newer rich (what a
@@ -89,7 +113,7 @@ def test_chat_two_turns(tmp_path, monkeypatch):
     # Use the plain example flow (mode: plain) so no tools/keys are needed for the drive test.
     # It grows the transcript in its `output:` template bindings (no code node), so it needs
     # nothing on sys.path beyond the package.
-    flow = Path("examples/chat.yaml")
+    flow = EXAMPLE_CHAT
     # two user turns then EOF (CliRunner closes stdin -> loop breaks)
     r = runner.invoke(app, ["chat", str(flow), "--provider", "openai"], input="hi\nagain\n")
     assert r.exit_code == 0
@@ -104,7 +128,7 @@ def test_chat_eof_exit_is_newline_terminated(tmp_path, monkeypatch):
     Regression for "the screen doesn't refresh / no trailing newline on exit"."""
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: _FakeModel())
     monkeypatch.setenv("OPENAI_API_KEY", "x")
-    flow = Path("examples/chat.yaml")
+    flow = EXAMPLE_CHAT
     r = runner.invoke(app, ["chat", str(flow), "--provider", "openai"], input="hi\n")
     assert r.exit_code == 0
     assert "session ended" in r.output
@@ -224,4 +248,57 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     assert "continuing" in r.output           # and the session was kept alive
     assert "recovered reply" in r.output      # the restarted run produced a working turn
     assert "session ended" in r.output
+
+
+def test_chat_missing_key_no_tty_exits_clean(monkeypatch):
+    """A key-requiring provider with no key and no TTY must exit cleanly (red on stderr, exit 1),
+    NOT dump a raw traceback — parity with `ac run`. Both the buggy and fixed code exit 1 under
+    CliRunner, so the guard is the exception TYPE: a clean `typer.Exit` (surfaces as `SystemExit`),
+    never a bare `RuntimeError`. Regression for #16."""
+    # `--provider openai` makes `_ensure_provider_keys` pick openai for the flow's agent (which sets
+    # none); delete its key so the preflight raises regardless of the ambient environment. No model
+    # is invoked — the raise is at the preflight, before any model call, so no key/network is needed.
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    flow = EXAMPLE_CHAT
+    r = runner.invoke(app, ["chat", str(flow), "--provider", "openai"], input="")
+    assert r.exit_code == 1
+    assert isinstance(r.exception, SystemExit)          # a clean typer.Exit, not a crash
+    assert not isinstance(r.exception, RuntimeError)     # the real regression guard
+    assert "OPENAI_API_KEY" in _ANSI_SGR.sub("", r.stderr)  # the red key message, on stderr
+
+
+def test_chat_malformed_flow_exits_clean(tmp_path):
+    """A malformed chat flow must exit cleanly (located `.yaml` error on stderr, exit 1), NOT dump a
+    raw traceback — the SAME parity with `ac run` as the missing-key path. `load_flow` raises
+    `LoadError` (a `ValueError`, not `RuntimeError`), so the missing-key guard alone would let it
+    escape; the guard here is the exception TYPE — a clean `typer.Exit` (`SystemExit`), never a bare
+    `ValueError`/`LoadError`. Regression for #16."""
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("id: f\nname: f\ninput: {}\noutput: int\nnodes:\n  a:\n    kind: nonesuch\n")
+    r = runner.invoke(app, ["chat", str(bad)], input="")
+    assert r.exit_code == 1
+    assert isinstance(r.exception, SystemExit)      # a clean typer.Exit, not a crash
+    assert not isinstance(r.exception, ValueError)  # the real regression guard (LoadError is a ValueError)
+    assert "bad.yaml" in _ANSI_SGR.sub("", r.stderr)  # the located source-frame error, on stderr
+
+
+def test_chat_tool_call_through_the_loop(tmp_path, monkeypatch):
+    """The reply agent (tool_calling) must invoke a flow-op tool THROUGH the loop and then answer —
+    model -> tool -> model -> reply — not merely echo text. The five flow-op tools are unit-tested
+    directly in test_chat_tools.py; this covers the loop wiring, which otherwise only the failure/
+    cap path exercises."""
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: _ToolThenAnswer())
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    # A workspace with one flow so `list_flows` (the tool the model calls) has something to return.
+    (tmp_path / "a.yaml").write_text(
+        "id: a\nname: a\ninput: {}\noutput: int\nkind: code\ncode: tests.seeds.fns:const_one\n"
+    )
+    # The bundled composer chat (tool_calling reply). One turn, then EOF ends the session.
+    r = runner.invoke(
+        app, ["chat", "--workspace", str(tmp_path), "--provider", "openai"],
+        input="list my flows\n",
+    )
+    assert r.exit_code == 0
+    assert "here are your flows" in r.output   # the loop reached a final answer after the tool call
+    assert "turn failed" not in r.output       # the tool call was handled, not looped to the cap
 

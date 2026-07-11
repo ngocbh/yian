@@ -7,7 +7,10 @@ The first cross-node assembly pass (#70 Step 7). Consumes a `NodeReader` over th
 
 Only the generic, kind-independent pre-checks live here (body-is-mapping, reserved node ids,
 the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own `parse`
-owns its field legality (allowed/required/asserts/env) and its `SourceRange` recording.
+owns its field legality (allowed/required/asserts/env) and its `SourceRange` recording. One
+kind-blind enrichment runs after every kind parse: each `asserts:` list item's own
+`SourceRange` is stamped into the descriptor's `field_ranges` keyed by the raw assert string,
+since the runtime resolves an assert-failure caret by that string (not by field name).
 """
 
 from __future__ import annotations
@@ -62,7 +65,15 @@ def _parse_node(node_id: str, reader: NodeReader) -> Any:
             f"(allowed: {', '.join(sorted(KINDS))})",
             range=reader.range_of("kind"),
         )
-    return spec.parse(node_id, reader)
+    desc = spec.parse(node_id, reader)
+    # Per-assert-text ranges (kind-blind): the runtime keys `node.field_ranges` on the raw
+    # assert STRING (eval_node's pre/post-assert failure path), so stamp each `asserts:` list
+    # item's own `SourceRange` alongside the coarse `asserts:` field range the kind recorded.
+    # No-op for a spanless reader or a node with no `asserts:`.
+    field_ranges = getattr(desc, "field_ranges", None)
+    if isinstance(field_ranges, dict):
+        field_ranges.update(reader.item_ranges("asserts"))
+    return desc
 
 
 def _reject_reserved_node_id(node_id: str, reader: NodeReader) -> None:

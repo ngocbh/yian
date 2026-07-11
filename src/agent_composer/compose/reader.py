@@ -118,6 +118,29 @@ class NodeReader:
             return None
         return self.spans.get(id(value_node))
 
+    def item_ranges(self, key: str) -> dict[str, SourceRange]:
+        """For a SEQUENCE field, map each scalar item's text -> its own `SourceRange`.
+
+        Descends `key`'s value node (a `SequenceNode`) and, for every scalar element,
+        records `element_text -> range`. Used to give each `asserts:` list item its own
+        caret (the runtime keys `node.field_ranges` on the raw assert string). Returns
+        `{}` in spanless mode, when the field is absent, or when it is not a sequence —
+        best-effort, never raising (unlike `range_of`).
+        """
+        pair = self._pair(key)
+        if pair is None:
+            return {}
+        _key_node, value_node = pair
+        if not isinstance(value_node, yaml.SequenceNode):
+            return {}
+        out: dict[str, SourceRange] = {}
+        for item in value_node.value:
+            if isinstance(item, yaml.ScalarNode):
+                rng = self.spans.get(id(item))
+                if rng is not None:
+                    out[item.value] = rng
+        return out
+
     # -- typed accessors --------------------------------------------------------
 
     def str(self, key: str) -> str:

@@ -377,3 +377,36 @@ def test_validate_human_questions_diag_has_range():
     assert exc.value.line == 5  # additive: node_lines still feeds `.line`
     assert exc.value.range == rng
 
+
+# ---------- 7.12 asserts: each node-local assert carries its own SourceRange ----------
+
+
+_ASSERT_FLOW = """\
+id: f
+name: f
+nodes:
+  score:
+    kind: agent
+    prompt: "Rate ${topic}"
+    input:
+      topic: ${input.topic}
+    output: int
+    asserts:
+      - ${output} >= 0
+      - ${output} <= 10
+output: ${score.output}
+"""
+
+
+def test_classify_asserts_carries_ranges():
+    # Each node-local assert string maps to its OWN SourceRange in the descriptor's
+    # field_ranges (replacing the legacy assert_lines map keyed (node|None, expr)). The
+    # runtime keys node.field_ranges on the raw assert text (eval_node pre/post-assert
+    # failure), so every assert item gets its own caret — not just the coarse `asserts:`
+    # list span, which is still recorded under the field name.
+    descriptors = parse_nodes(_nodes_reader(_ASSERT_FLOW))
+    fr = descriptors["score"].field_ranges
+    assert fr["${output} >= 0"].start_line == 11
+    assert fr["${output} <= 10"].start_line == 12
+    assert "asserts" in fr  # coarse list range still present under the field name
+

@@ -21,8 +21,9 @@ never sees any of it (kind-blind invariant, `tests/engine/test_kind_census.py`).
 `${...}` binding strings. `compose/bindings.py` walks it kind-blind (replacing the old
 `map_binding_strings_in_descriptor` isinstance ladder).
 
-Both tables are empty at first; kinds register themselves as they are migrated
-(#70 rollout, one kind at a time).
+Both tables are populated at import: every kind module registers itself (its `register()`
+runs on import, wiring its `KindSpec` into `KINDS` and its binding fields into
+`BINDING_FIELDS`). The `#70` rollout is complete — there is no `_KIND_SPECS` fallback.
 """
 
 from __future__ import annotations
@@ -48,8 +49,8 @@ class KindSpec:
     build: Callable[..., tuple]
 
 
-# Surface `kind:` string -> its `KindSpec`. Populated per-kind during the #70 rollout;
-# the shared dispatch consults this before the legacy `_KIND_SPECS` / isinstance ladder.
+# Surface `kind:` string -> its `KindSpec`. Populated at import by each kind's `register()`;
+# the shared dispatch (`stages/parse.py`, `build.build_leaf_node`) consults this.
 KINDS: dict[str, KindSpec] = {}
 
 # Surface `kind:` string -> the descriptor field names that carry `${...}` binding strings.
@@ -57,7 +58,7 @@ KINDS: dict[str, KindSpec] = {}
 BINDING_FIELDS: dict[str, tuple[str, ...]] = {}
 
 
-# Import each migrated kind module for its import-time `register()` side effect (populates
+# Import each kind module for its import-time `register()` side effect (populates
 # KINDS/BINDING_FIELDS). Kept at the BOTTOM so the tables above already exist when a kind's
 # `register()` reads them. Kind modules import parser/build helpers lazily, so no cycle.
 from agent_composer.compose.kinds import agent as _agent  # noqa: E402,F401

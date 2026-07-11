@@ -5,6 +5,17 @@ of a node's `outputs:` / a flow's `inputs:` is read directly into one recursive
 `Type` (see `types.read_type`) rather than a flat `list[IOField]`; nested records
 are native.
 
+Organized along two axes (#70): the per-node-kind axis lives in `kinds/<kind>.py`
+(each owns its descriptor + `parse` + `build`, self-registered into the shared `KINDS`
+table), and the cross-node graph-stage axis lives in `stages/` (parse / references /
+cycles / inline-calls). The shared choke points (`stages/parse.py`, `build.py`,
+`bindings.py`) dispatch through `KINDS` kind-blind — there is no per-kind isinstance
+ladder. `parser.py` is now just the YAML text/span front door (`parse_file`).
+
+Errors carry a concrete `SourceRange` (from `events`): a located `NodeReader` records
+each field's range during `parse`, the runtime funnel resolves a failure's range from
+`node.field_ranges`, and the CLI boxes it as a `Diagnostic`.
+
 Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes`; nothing
 in the engine imports `compose`.
 """

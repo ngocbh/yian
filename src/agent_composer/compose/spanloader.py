@@ -69,7 +69,7 @@ class SpanLoader(yaml.SafeLoader):
         return data
 
 
-def load_with_spans(text) -> tuple[object, dict]:
+def load_with_spans(text, return_root=False):
     """Parse a single YAML document, returning both the value and its span tree.
 
     Mirrors PyYAML's `yaml.load` (construct via `get_single_data`, dispose in a
@@ -78,15 +78,30 @@ def load_with_spans(text) -> tuple[object, dict]:
 
     Returns `(value, spans)` where `spans` is `dict[id(node) -> SourceRange]`.
 
-    WARNING: `spans` is keyed by `id(node)` of *this loader's* yaml nodes, and those
-    nodes are NOT returned here (the loader is disposed on return). A caller therefore
-    cannot resolve any range from `spans` alone — the ids belong to a node tree that is
-    no longer reachable, and `id()` values are recycled once it is garbage-collected.
-    Until a later step also returns the root node (keeping the tree alive so callers can
-    look up `spans[id(node)]`), `spans` is effectively write-only for external callers.
+    `spans` is keyed by `id(node)` of *this loader's* yaml nodes. To resolve any range
+    from `spans` a caller must ALSO hold the yaml node tree alive (else the ids belong to
+    a garbage-collected tree and `id()` values are recycled). Pass `return_root=True` to
+    additionally return the composed root node so the tree stays reachable:
+
+    - `return_root=False` (default): `(value, spans)` — the 2-tuple for back-compat.
+    - `return_root=True`:            `(value, spans, root)` — `root` is the composed
+      `yaml.Node` tree; keep it alive alongside `spans` to look up `spans[id(node)]`.
+
+    The root branch drives the loader as `get_single_node()` -> `construct_document(root)`
+    (the same construction `get_single_data` performs internally), so the constructed
+    `value` and the recorded `spans` are identical to the default path; only the live root
+    node is additionally surfaced.
     """
     loader = SpanLoader(text)
     try:
+        if return_root:
+            # Compose the node tree first (keeps its node identities live), THEN construct
+            # the value against those same nodes so `spans[id(node)]` stays resolvable via
+            # the returned root. `construct_document` is what `get_single_data` calls under
+            # the hood after `get_single_node`.
+            root = loader.get_single_node()
+            value = loader.construct_document(root)
+            return value, loader._span_marks, root
         value = loader.get_single_data()
         return value, loader._span_marks
     finally:

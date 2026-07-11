@@ -130,7 +130,8 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm):
         if bad is not None:
             yield NodeFailed(node.id, error=f"node {node.id!r} pre-assert failed: {bad}",
                              error_type="NodeAssertFailed",
-                             locator=SourceSpan(node.id, "assert", bad))
+                             locator=SourceSpan(node.id, "assert", bad),
+                             range=node.field_ranges.get(bad))
             return
         # Per-kind narrow caps, built by the engine — never the pool itself.
         # HUMAN_INPUT/WAIT are deliver-as-Output: they always Pause and the engine
@@ -179,11 +180,15 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm):
         loc = getattr(exc, "locator", None)
         if loc is not None and loc.node is None:
             loc = replace(loc, node=node.id)
+        # Dual-path: ALONGSIDE the symbolic locator, resolve a concrete SourceRange by keying
+        # the node's recorded `field_ranges` on the locator KEY (an input name / assert expr) —
+        # NOT on `node.kind`. None when no locator or no range is recorded for that key.
+        rng = node.field_ranges.get(loc.key) if loc is not None else None
         # Capture the full formatted traceback here, while the exception is live, so the CLI
         # can surface the raising call's Python stack under `--engine-trace`. The terse
         # default (message + boxed YAML frame) never shows it.
         yield NodeFailed(node.id, error=str(exc), error_type=type(exc).__name__, locator=loc,
-                         traceback=_tb.format_exc())
+                         range=rng, traceback=_tb.format_exc())
         return
 
     if isinstance(result, Pause):
@@ -206,7 +211,8 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm):
         if bad is not None:
             yield NodeFailed(node.id, error=f"node {node.id!r} post-assert failed: {bad}",
                              error_type="NodeAssertFailed",
-                             locator=SourceSpan(node.id, "assert", bad))
+                             locator=SourceSpan(node.id, "assert", bad),
+                             range=node.field_ranges.get(bad))
             return
     # Fold the commit redirect onto the terminal: a node-chosen `Output.commit_as` (roadmap)
     # wins over the engine-baked `node.commit_as` (the subflow-terminal redirect); both default

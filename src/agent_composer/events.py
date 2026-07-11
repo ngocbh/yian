@@ -143,6 +143,11 @@ class NodeFailed:
     # an assert expr); None when no sub-line is determinable (a code raise) -> the
     # CLI falls back to the node's best sub-line / header.
     locator: Optional[SourceSpan] = None
+    # The concrete source span the funnel resolves ALONGSIDE the symbolic locator, by
+    # looking up the node's recorded `field_ranges[locator.key]` (kind-blind — keyed only
+    # on the locator key). None when the node records no range for that key. The CLI
+    # prefers this over resolving the symbolic `locator`. Additive/coexistent with `locator`.
+    range: Optional[SourceRange] = None
     # The formatted Python traceback of the raising call, captured at the node-failure
     # boundary. None for failures synthesized without an exception (e.g. an assert that did
     # not hold). Surfaced by the CLI only under `--engine-trace`.

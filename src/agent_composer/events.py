@@ -54,6 +54,22 @@ class SourceSpan:
     key: str
 
 
+@dataclass(frozen=True)
+class SourceRange:
+    """A concrete 1-based source span: [start, end) with an exclusive end column.
+
+    Coordinates are 1-based (line 1, col 1 = first char); `end_col` is one past the
+    last covered column (half-open) so a zero-width caret is start == end. Produced by
+    the compose loader from PyYAML marks and by the funnel that resolves a symbolic
+    `SourceSpan` key to the node's recorded range.
+    """
+
+    start_line: int
+    start_col: int
+    end_line: int
+    end_col: int
+
+
 # --------------------------------------------------------------------------- #
 # Node-level events
 # --------------------------------------------------------------------------- #

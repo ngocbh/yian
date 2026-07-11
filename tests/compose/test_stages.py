@@ -14,6 +14,10 @@ from agent_composer.compose.errors import LoadError
 from agent_composer.compose.kinds.agent import AgentDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
+from agent_composer.compose.stages.inline_calls import (
+    _synth_id_gen,
+    desugar_inline_calls,
+)
 from agent_composer.compose.stages.parse import parse_nodes
 
 
@@ -85,3 +89,29 @@ def test_parse_nodes_spanless_reader():
     assert desc == AgentDescriptor(id="w", prompt="hi", inputs={"x": "${input.x}"}, outputs="str")
     assert desc.range is None
     assert desc.field_ranges == {}
+
+
+# ---------- 7.2 desugar_inline_calls: synth call nodes inherit host ranges ----------
+
+
+def test_desugar_inline_calls_preserves_ranges():
+    # A whole-value `call(...)` in a node's `input:` binding lifts to a synth `call` node.
+    # The synth CallDescriptor must inherit the HOST node's range/field_ranges (so its
+    # downstream errors locate at the host binding site) — no `node_lines` map needed.
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  writer:\n    kind: code\n    code: m:f\n"
+        "    input:\n      x: call(helper, n=3)\n    output: str\n"
+        "output: ${writer.output}\n"
+    )
+    descriptors = parse_nodes(_nodes_reader(text))
+    host = descriptors["writer"]
+    new_descriptors, _outputs, _asserts = desugar_inline_calls(
+        descriptors, None, next_id=_synth_id_gen()
+    )
+    synth = [d for nid, d in new_descriptors.items() if nid.startswith("__call_")]
+    assert len(synth) == 1
+    call_desc = synth[0]
+    assert call_desc.call == "helper"
+    assert call_desc.range == host.range
+    assert call_desc.field_ranges == host.field_ranges

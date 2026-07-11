@@ -20,7 +20,7 @@ from agent_composer.compose.build import (
     synthesize_boundary_graph,
     synthesize_roots,
 )
-from agent_composer.compose.calls import desugar_inline_calls
+from agent_composer.compose.stages.inline_calls import desugar_inline_calls
 from agent_composer.compose.cases import (
     CaseDesugar,
     desugar_case,

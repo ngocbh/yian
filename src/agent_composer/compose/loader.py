@@ -54,7 +54,7 @@ from agent_composer.compose.build import (
     infer_ordering_edges,
     synthesize_boundary_graph,
 )
-from agent_composer.compose.calls import _synth_id_gen, desugar_inline_calls
+from agent_composer.compose.stages.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.cases import (
     CaseDesugar,
     desugar_case,
@@ -683,7 +683,7 @@ def _assemble(
     # nodes as ordinary `call` nodes (build/edges/validate/DAG run unchanged).
     mint = _synth_id_gen()  # ONE synth-id minter shared by both inline-call desugars (no collision)
     descriptors, outputs_section, asserts_section = desugar_inline_calls(
-        descriptors, outputs_section, asserts_section=asserts_section, node_lines=n_lines,
+        descriptors, outputs_section, asserts_section=asserts_section,
         outputs_line=s_lines.get("output") or s_lines.get("outputs"), asserts_line=s_lines.get("asserts"), next_id=mint,
     )
 

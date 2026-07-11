@@ -31,9 +31,10 @@ present `else:`. A missing tag with no `else:` is a `LoadError`.
 Imports flow down/peer only: `expr` (ref scan), `nodes` (Case/CaseNode/ParamDecl),
 `compile.model` (Edge) + `compile.validation._walk_record_fields` (the dotted-field walk,
 a representation-neutral leaf checker), `typesys` (Type), and the compose peers
-`compose.calls` (the shared binding-walk, for `expand_case_outputs`), `compose.errors`,
-`compose.parser`. The `compose.calls` edge is acyclic (calls.py never imports cases.py; the
-loader imports both). Nothing in the engine imports this back.
+`compose.stages.inline_calls` (the shared binding-walk, for `expand_case_outputs`),
+`compose.errors`, `compose.parser`. The `stages.inline_calls` edge is acyclic
+(inline_calls.py never imports cases.py; the loader imports both). Nothing in the engine
+imports this back.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.case import DEFAULT_HANDLE, Case, CaseNode
 from agent_composer.typesys.values import Type
 from agent_composer.compose.bindings import map_binding_strings
-from agent_composer.compose.calls import (
+from agent_composer.compose.stages.inline_calls import (
     _to_call_descriptor,
     desugar_call_directives,
     map_outputs_strings,

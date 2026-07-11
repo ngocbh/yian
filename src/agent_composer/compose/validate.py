@@ -44,7 +44,7 @@ from agent_composer.expr import (
     prompt_refs,
 )
 from agent_composer.expr.template import flow_call_callees_in_spans
-from agent_composer.compose.calls import desugar_call_directives
+from agent_composer.compose.stages.inline_calls import desugar_call_directives
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode

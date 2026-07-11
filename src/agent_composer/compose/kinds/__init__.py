@@ -13,7 +13,7 @@ of the `build_leaf_node` isinstance ladder):
   stamping `.range`/`.field_ranges` onto it.
 
 A `KindSpec` bundles those three; the `KINDS` table maps the surface `kind:` string to
-its spec. The shared dispatch sites (`parser._parse_node`, `build.build_leaf_node`)
+its spec. The shared dispatch sites (`stages/parse.py::_parse_node`, `build.build_leaf_node`)
 consult `KINDS` first, so adding/altering a kind is a local edit here — the engine core
 never sees any of it (kind-blind invariant, `tests/engine/test_kind_census.py`).
 

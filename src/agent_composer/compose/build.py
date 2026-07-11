@@ -131,10 +131,19 @@ def build_leaf_node(
     # only for call/map/loop). `source_file`/`code_line`/`code_field_line` are inline-CODE
     # traceback anchors — only the CODE build reads them; every other build absorbs them via
     # `**_loader_hints`. Imported lazily: kind modules import build helpers from here, so a
-    # top-level import would cycle. Anything past this loop is not a leaf (case is desugared;
-    # ref/map nodes expand at runtime) — a loud LoadError.
+    # top-level import would cycle. call/map/loop share the table but are not leaves — they
+    # are rejected up front (they need a resolver and route through their own KindSpec). case is
+    # desugared; ref nodes expand at runtime — anything else past the loop is a loud LoadError.
     from agent_composer.compose.kinds import KINDS
 
+    # call/map/loop share this table but need a `resolver` — building them here with
+    # `resolver=None` would fail deep inside `build_call_node` with a confusing message. They
+    # are routed through `KINDS[kind].build` by the loader, never here; reject them up front.
+    if isinstance(desc, (CallDescriptor, LoopDescriptor)):
+        raise LoadError(
+            f"node {desc.id!r}: kind {type(desc).__name__} is not a leaf node "
+            f"(call/map/loop build through their own KindSpec with a resolver)"
+        )
     for spec in KINDS.values():
         if spec.descriptor_cls is type(desc):
             return spec.build(

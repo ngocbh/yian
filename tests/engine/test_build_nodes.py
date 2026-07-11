@@ -213,6 +213,21 @@ def test_tool_node_built_with_args_bindings():
 # ---------- registry-resolved output type ----------
 
 
+def test_call_loop_descriptors_rejected_as_non_leaf():
+    # call/map/loop share the KINDS table but need a resolver — `build_leaf_node` (the
+    # leaf-only, resolver=None path) must reject them up front rather than build with a
+    # missing resolver and fail with a confusing message deep in `build_call_node`.
+    from agent_composer.compose.parser import CallDescriptor, LoopDescriptor
+
+    for desc in (
+        CallDescriptor(id="c", call="child", kind="call"),
+        CallDescriptor(id="m", call="child", over="${input.xs}", kind="map"),
+        LoopDescriptor(id="p", call="body", times=3),
+    ):
+        with pytest.raises(LoadError, match="is not a leaf node"):
+            build_leaf_node(desc, {})
+
+
 def test_output_type_resolves_registry_name():
     registry = read_typedefs({"Rating": {"category": "str", "score": "float"}})
     # an agent descriptor whose outputs name a registry record.

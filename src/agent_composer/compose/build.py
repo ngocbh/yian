@@ -21,7 +21,6 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Optional
 
 from agent_composer.compile.model import END_ID, START_ID, Edge, FlowOutput
-from agent_composer.compile.validation import types_compatible
 from agent_composer.expr import (
     ExpressionError,
     binding_co_skips,
@@ -764,72 +763,6 @@ def build_loop_node(desc: LoopDescriptor, resolver: ChildResolver) -> tuple[Node
     if errors:
         raise LoadError("\n  ".join(errors))
     return node, wiring
-
-
-def check_loop_type_contract(
-    nodes: dict,
-    producers: dict[str, Type],
-    flow_input_types: dict[str, Type],
-    flow_wiring: dict[str, dict[str, Any]],
-    node_lines: Optional[dict] = None,
-) -> None:
-    """The TYPE-level half of a `loop`'s `'a -> 'a` contract (a loader post-build pass).
-
-    `build_loop_node` checked only the field-NAME sets (it lacks the resolved carried-record
-    Types — the seed sources' types depend on the parent producers/flow inputs assembled
-    LATER). This pass, run after `check_ref_map_types`, resolves each carried field's Type
-    from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producers +
-    flow-input types, exactly as `check_ref_map_types` via `_output_value_type`) and checks
-    it is structurally compatible (`types_compatible`, C-EQUIV) with the body OUTPUT's
-    same-named field Type (the body `output_type`). A literal/coalesce/opaque seed source,
-    or an opaque body output field, stays lenient (skipped). Loud + located at the loop
-    node's `.yaml` line on a same-names/different-TYPES mismatch."""
-    for nid, node in nodes.items():
-        if not node.is_loop:
-            continue
-        body_out = node.output_type
-        # A non-record / absent body output was already caught by the field-name half in
-        # build_loop_node; nothing typed to compare against here.
-        if body_out is None or body_out.fields is None:
-            continue
-        for field_name, src in flow_wiring.get(nid, {}).items():
-            body_field = body_out.fields.get(field_name)
-            if body_field is None:
-                continue  # name mismatch caught in build; nothing to type-check
-            source = _output_value_type(src, producers, flow_input_types)
-            if source is None:
-                continue  # literal/coalesce/opaque seed source -> lenient
-            if not types_compatible(source, body_field):
-                raise LoadError(
-                    f"loop node {nid!r}: carried field {field_name!r} — body output is "
-                    f"{body_field.kind.value!r}, carried source is "
-                    f"{source.kind.value!r} (the body must return the same 'a it reads)",
-                    line=(node_lines or {}).get(nid),
-                )
-
-
-def check_wiring_parity(
-    nodes: dict, flow_wiring: dict[str, dict[str, Any]], node_lines: Optional[dict] = None
-) -> None:
-    """Load-time key parity: every node's `flow.wiring` keys must equal its declared
-    `params` names PLUS the kind's reserved keys (`until` for a timed WAIT, `over` for a mapped
-    `call`).
-
-    Closes the duplicate-param hole by construction (a nested-dict wiring cannot hold a duplicate
-    param) and turns an orphan source (a wiring key with no param), a missing source (a param with no
-    wiring), or a node absent from `flow.wiring` entirely (silent {} bind -> lost input) into a
-    located `LoadError`. Engine bind-time reserved keys (the mapped-call `over` / WAIT `until` the
-    eval_node seam pre-resolves) are never author wiring and do not appear here."""
-    lines = node_lines or {}
-    for nid, node in nodes.items():
-        expected = {p.name for p in (node.params or [])} | node.reserved_wiring_keys()
-        actual = set(flow_wiring.get(nid, {}))
-        if actual != expected:
-            raise LoadError(
-                f"node {nid!r}: flow.wiring keys {sorted(actual)} != declared params + reserved "
-                f"{sorted(expected)} (wiring/params key parity)",
-                line=lines.get(nid),
-            )
 
 
 def _resolve_child(node_id: str, flow_id: str, resolver: ChildResolver) -> Any:

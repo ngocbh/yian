@@ -47,8 +47,6 @@ from agent_composer.compose.build import (
     build_call_node,
     build_leaf_node,
     build_loop_node,
-    check_loop_type_contract,
-    check_wiring_parity,
     infer_data_edges,
     synthesize_boundary_graph,
 )
@@ -63,9 +61,11 @@ from agent_composer.compose.errors import LoadError
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.stages.case_targets import desugar_case_call_targets
 from agent_composer.compose.stages.cycles import reject_cycles
+from agent_composer.compose.stages.loop_contract import check_loop_type_contract
 from agent_composer.compose.stages.ordering import infer_ordering_edges
 from agent_composer.compose.stages.ref_map_types import check_ref_map_types
 from agent_composer.compose.stages.references import validate_references
+from agent_composer.compose.stages.wiring_parity import check_wiring_parity
 from agent_composer.compose.uses import parse_uses_ref
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans

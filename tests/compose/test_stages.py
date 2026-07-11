@@ -307,3 +307,51 @@ def test_check_ref_map_types_moved():
     assert exc.value.line == 7  # additive: node_lines still feeds `.line`
     assert exc.value.range == rng
 
+
+# ---------- 7.9 check_loop_type_contract: a carried-field type mismatch carries the range ----------
+
+
+def test_check_loop_type_contract_moved():
+    # A `loop` whose carried field is SEEDED from a source Type that mismatches the body
+    # output's same-named field Type is loud. After the relocation the check lives in
+    # `stages.loop_contract`; the LoadError still carries `.line` (additive) AND anchors its
+    # `.range` on the loop node's `input:` mapping span (`field_ranges["inputs"]`).
+    from agent_composer.compose.stages.loop_contract import check_loop_type_contract
+    from agent_composer.nodes.loop import LoopNode
+    from agent_composer.typesys.values import Type, ValueKind
+
+    node = LoopNode("lp", flow_id="body")
+    # body returns a record {n: int}; the carried field `n` must be seeded from an int.
+    node.output_type = Type(
+        kind=ValueKind.OBJECT, fields={"n": Type.scalar(ValueKind.INTEGER)}
+    )
+    rng = SourceRange(start_line=4, start_col=5, end_line=5, end_col=20)
+    node.field_ranges = {"inputs": rng}
+    producers = {"src": Type.scalar(ValueKind.STRING)}  # seed source is a string
+    wiring = {"lp": {"n": "${src.output}"}}  # carried `n` seeded from the string
+    with pytest.raises(LoadError) as exc:
+        check_loop_type_contract({"lp": node}, producers, {}, wiring, {"lp": 4})
+    assert "carried field" in str(exc.value)
+    assert exc.value.line == 4  # additive: node_lines still feeds `.line`
+    assert exc.value.range == rng
+
+
+# ---------- 7.10 check_wiring_parity: a key-parity mismatch carries the node range ----------
+
+
+def test_check_wiring_parity_moved():
+    # A node whose `flow.wiring` keys don't match its declared params is loud. After the
+    # relocation the check lives in `stages.wiring_parity`; the LoadError still carries `.line`
+    # (additive) AND anchors its `.range` on the node's `input:` mapping span (else node.range).
+    from agent_composer.compose.stages.wiring_parity import check_wiring_parity
+
+    node, wiring = build_leaf_node(CodeDescriptor(id="n", code="m:f", inputs={"x": "${input.x}"}), {})
+    rng = SourceRange(start_line=3, start_col=5, end_line=4, end_col=20)
+    node.field_ranges = {"inputs": rng}
+    with pytest.raises(LoadError) as exc:
+        # orphan wiring key with no matching param -> parity failure
+        check_wiring_parity({"n": node}, {"n": {**wiring, "orphan": "${input.y}"}}, {"n": 3})
+    assert "key parity" in str(exc.value)
+    assert exc.value.line == 3  # additive: node_lines still feeds `.line`
+    assert exc.value.range == rng
+

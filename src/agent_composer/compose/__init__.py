@@ -43,11 +43,11 @@ from agent_composer.compose.parser import (
     parse_file,
     section_lines,
 )
+from agent_composer.compose.stages.cycles import reject_cycles
 from agent_composer.compose.stages.parse import parse_nodes
 from agent_composer.compose.types import InputDecl, read_flow_inputs, read_type
 from agent_composer.compose.validate import (
     check_case_handles,
-    reject_cycles,
     validate_references,
 )
 

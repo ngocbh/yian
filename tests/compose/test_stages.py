@@ -10,18 +10,21 @@ the span tree (not `yaml.safe_load` + `node_lines`) and dispatches each body to 
 import pytest
 
 import agent_composer.compose.stages as stages
+from agent_composer.compile.model import Edge
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.kinds.agent import AgentDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.stages.case_targets import desugar_case_call_targets
+from agent_composer.compose.stages.cycles import reject_cycles
 from agent_composer.compose.stages.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
 )
 from agent_composer.compose.stages.ordering import infer_ordering_edges
 from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.events import SourceRange
 
 
 def test_stages_package_imports():
@@ -199,3 +202,31 @@ def test_infer_ordering_edges_builds_ordering_edges():
     assert edges[0].to == "a"
     assert edges[0].ordering is True
     assert edges[0].optional is False
+
+
+# ---------- 7.6 reject_cycles: the cycle error anchors on a stuck node's range ----------
+
+
+def test_reject_cycles_diag_has_range():
+    # A directed cycle (a -> b -> a) is loud; the LoadError anchors its range on the first
+    # (sorted) stuck node that has one, taken from the passed node_ranges map.
+    edges = [
+        Edge(id="a->b", from_="a", to="b", input_group="x"),
+        Edge(id="b->a", from_="b", to="a", input_group="y"),
+    ]
+    ra = SourceRange(start_line=2, start_col=3, end_line=2, end_col=8)
+    rb = SourceRange(start_line=5, start_col=3, end_line=5, end_col=8)
+    with pytest.raises(LoadError) as exc:
+        reject_cycles(edges, {"a", "b"}, node_ranges={"a": ra, "b": rb})
+    # `a` sorts first among the stuck nodes, so its range is the anchor.
+    assert exc.value.range == ra
+    # The "why" legend still spells out the loop's dependency edges.
+    assert exc.value.notes is not None
+
+
+def test_reject_cycles_no_ranges_leaves_range_none():
+    # Without a node_ranges map the cycle is still rejected; the error simply carries no range.
+    edges = [Edge(id="a->b", from_="a", to="b"), Edge(id="b->a", from_="b", to="a")]
+    with pytest.raises(LoadError) as exc:
+        reject_cycles(edges, {"a", "b"})
+    assert exc.value.range is None

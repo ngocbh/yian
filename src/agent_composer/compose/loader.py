@@ -63,6 +63,7 @@ from agent_composer.compose.cases import (
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.stages.case_targets import desugar_case_call_targets
+from agent_composer.compose.stages.cycles import reject_cycles
 from agent_composer.compose.stages.ordering import infer_ordering_edges
 from agent_composer.compose.uses import parse_uses_ref
 from agent_composer.compose.reader import NodeReader
@@ -83,7 +84,6 @@ from agent_composer.compose.parser import (
 from agent_composer.compose.types import InputDecl, read_flow_inputs
 from agent_composer.compose.validate import (
     check_case_handles,
-    reject_cycles,
     validate_human_questions,
     validate_node_asserts,
     validate_references,
@@ -844,9 +844,13 @@ def _assemble(
     flow_wiring.update(boundary_wiring)
     edges: list[Edge] = structural + boundary_edges
 
-    # A cycle spans nodes; anchor the error on the first stuck node's line. START_ID/END_ID are
-    # acyclic by construction (START_ID has no incoming, END_ID no outgoing).
-    reject_cycles(edges, node_ids, n_lines)
+    # A cycle spans nodes; anchor the error on the first stuck node's range and highlight every
+    # stuck node's line (transitional `n_lines`, retired at Step 8). START_ID/END_ID are acyclic
+    # by construction (START_ID has no incoming, END_ID no outgoing).
+    node_ranges = {
+        nid: d.range for nid, d in descriptors.items() if getattr(d, "range", None)
+    }
+    reject_cycles(edges, node_ids, n_lines, node_ranges)
     check_case_handles(nodes, edges)
 
     compiled = CompiledFlow.from_parts(nodes, edges, outputs=flow_outputs, wiring=flow_wiring,

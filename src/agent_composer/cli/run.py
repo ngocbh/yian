@@ -39,7 +39,7 @@ from agent_composer.compose.parser import (
     node_lines,
 )
 from agent_composer.compose.run import RunResult, resume_command, resume_flow, run_flow
-from agent_composer.events import NodeFailed, SourceSpan
+from agent_composer.events import Diagnostic, NodeFailed, SourceSpan
 from agent_composer.typesys.values import ValueKind
 
 console = Console()
@@ -137,6 +137,12 @@ def _render_load_error(err: LoadError, flow: Path, text: str) -> None:
     of range), prints `file: <message>` with no frame. The "why" legend (`.notes`) follows.
     """
     marks = err.lines or ([err.line] if err.line is not None else [])
+    if err.range is not None:
+        # Span-aware path (Step 8): the loader resolved a precise `SourceRange`, so box it
+        # directly instead of re-deriving a line. The `.notes` "why" legend still follows.
+        render_diagnostic(Diagnostic("error", str(err), err.range), text, flow.name)
+        _render_notes(err)
+        return
     _render_source_frame(text, marks, flow.name, str(err))
     _render_notes(err)
 
@@ -248,6 +254,26 @@ def _render_frame_stack(frames, message: str) -> None:
     err_console.print(Text(message, style="red"))
 
 
+def render_diagnostic(diag: Diagnostic, source_text: str, title: str = "") -> None:
+    """Render a `Diagnostic` as the CLI's one located error frame (the Step-8 funnel).
+
+    Boxes `diag.primary` — its `[start_line, end_line]` lines highlighted in `source_text` —
+    and prints `diag.message` below in red, the same boxed frame a compile/run error used to
+    get, now fed by a resolved `SourceRange` rather than a line lookup. When `diag.notes` is
+    non-empty (the outer call-traceback frames of a nested `call`/`map` failure, innermost
+    last) they render as a stacked "call traceback" header ABOVE the primary, mirroring a
+    Python traceback. Falls back to a plain `title: message` line when there is no primary
+    range (or it falls outside the source). Writes to `err_console`; `title` labels the
+    primary box (the flow filename)."""
+    if diag.notes:
+        err_console.print(Text("call traceback (most recent call last):", style="red bold"))
+        for note in diag.notes:
+            err_console.print(Text(f"  {note}", style="dim"))
+    primary = diag.primary
+    marks = list(range(primary.start_line, primary.end_line + 1)) if primary else []
+    _render_source_frame(source_text, marks, title, diag.message)
+
+
 def _render_traceback(tb: str) -> None:
     """Box the captured Python traceback below the error frame (only under `--engine-trace`).
 
@@ -305,6 +331,14 @@ def _render_run_error(
             frames = []
     if len(frames) >= 2:
         _render_frame_stack(frames, message)
+        if engine_trace and tb:
+            _render_traceback(tb)
+        return
+
+    # Span-aware single frame (Step 8): the funnel resolved a precise `SourceRange` on the
+    # failing `NodeFailed`, so box it directly instead of resolving the symbolic locator.
+    if nf is not None and nf.range is not None:
+        render_diagnostic(Diagnostic("error", message, nf.range), text, flow.name)
         if engine_trace and tb:
             _render_traceback(tb)
         return

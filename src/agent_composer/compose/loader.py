@@ -38,6 +38,7 @@ from typing import Any, Optional
 import yaml
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
+from agent_composer.events import SourceRange
 from agent_composer.nodes.base import Node
 from agent_composer.typesys.values import TypeCheckError, Type
 from agent_composer.typesys.types import read_typedefs
@@ -78,9 +79,6 @@ from agent_composer.compose.parser import (
     CaseDescriptor,
     LoopDescriptor,
     code_content_lines,
-    def_node_field_lines,
-    def_node_lines,
-    node_field_lines,
     node_lines,
     parse_file,
     section_lines,
@@ -116,6 +114,58 @@ def _nodes_reader(text: Optional[str], nodes_section: dict) -> NodeReader:
     return NodeReader.spanless(nodes_section)
 
 
+def _def_nodes_reader(parent_text: str, name: str) -> NodeReader:
+    """A span-aware `NodeReader` over a `defs:<name>:nodes:` mapping in the parent file.
+
+    A def is BUILT from a spanless reader (its nodes have no baked ranges), so the def's
+    render-only `SourceFrame` sources its node/field ranges here — a separate span parse of
+    the parent file, descended to `defs.<name>.nodes`, where the def's nodes physically live
+    at their absolute lines. Spanless (empty ranges -> frame collapses to the call line) when
+    `parent_text` does not compose or lacks that sub-tree (a single-node / compact def).
+    """
+    if parent_text:
+        try:
+            value, spans, root = load_with_spans(parent_text, return_root=True)
+        except yaml.YAMLError:
+            pass
+        else:
+            defs = value.get("defs") if isinstance(value, dict) else None
+            body = defs.get(name) if isinstance(defs, dict) else None
+            if isinstance(body, dict) and isinstance(body.get("nodes"), dict):
+                return (
+                    NodeReader(value, spans, root)
+                    .child("defs").child(name).child("nodes")
+                )
+    return NodeReader.spanless({})
+
+
+def _frame_ranges(
+    reader: NodeReader,
+) -> tuple[dict[str, SourceRange], dict[str, dict[str, SourceRange]]]:
+    """The `(node_ranges, field_ranges)` a `SourceFrame` carries, from a best-effort parse.
+
+    Runs `parse_nodes(reader)` and pulls each descriptor's own `.range`/`.field_ranges` — the
+    render-only location maps the CLI's call-traceback boxes. A spanless reader (a compact /
+    single-node def) yields empty maps; a malformed `nodes:` (which the build path rejects with
+    its own located error) is swallowed here to empty maps — this is render metadata, never the
+    error path, so it must not raise.
+    """
+    try:
+        descriptors = parse_nodes(reader)
+    except LoadError:
+        return {}, {}
+    node_ranges: dict[str, SourceRange] = {}
+    field_ranges: dict[str, dict[str, SourceRange]] = {}
+    for nid, desc in descriptors.items():
+        rng = getattr(desc, "range", None)
+        if rng is not None:
+            node_ranges[nid] = rng
+        fr = getattr(desc, "field_ranges", None)
+        if fr:
+            field_ranges[nid] = dict(fr)
+    return node_ranges, field_ranges
+
+
 @dataclass(frozen=True)
 class SourceFrame:
     """Render-only source-location metadata for one flow (a def or an external file).
@@ -133,19 +183,19 @@ class SourceFrame:
             The YAML source whose lines the maps below index. For a def this is the
             **parent** file's text (the def's nodes live at absolute lines there); for an
             external flow it is that file's own text.
-        node_lines (`dict[str, int]`):
-            `node_id -> 1-based line in `text`` for the child's nodes. Empty (frame
-            collapses to the call line) for a compact single-node def with no authored
-            inner `nodes:` mapping.
-        field_lines (`dict[str, dict[str, int]]`):
-            `node_id -> {field -> 1-based line}` — the kind-fallback / `output:` precision
+        node_ranges (`dict[str, SourceRange]`):
+            `node_id -> the node body's `SourceRange` in `text`` for the child's nodes.
+            Empty (frame collapses to the call line) for a compact single-node def with no
+            authored inner `nodes:` mapping.
+        field_ranges (`dict[str, dict[str, SourceRange]]`):
+            `node_id -> {field -> `SourceRange`}` — the kind-fallback / `output:` precision
             used when the failing locator is `kind=field`.
     """
 
     label: str
     text: str
-    node_lines: dict[str, int]
-    field_lines: dict[str, dict[str, int]]
+    node_ranges: dict[str, SourceRange]
+    field_ranges: dict[str, dict[str, SourceRange]]
 
     def __deepcopy__(self, memo):
         # Frozen + render-only: every per-callsite `clone_child` deep-copies each child
@@ -426,11 +476,12 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> LoadedFlo
     # Render-only source frame for THIS flow: copied onto child call/map nodes for the
     # nested-error traceback. For an external file (loaded via make_file_resolver) the
     # label is relabeled to the filename in `resolve`.
+    top_node_ranges, top_field_ranges = _frame_ranges(_nodes_reader(text, f.nodes))
     source = SourceFrame(
         label=f.name or "<flow>",
         text=text,
-        node_lines=node_lines(text),
-        field_lines=node_field_lines(text),
+        node_ranges=top_node_ranges,
+        field_ranges=top_field_ranges,
     )
 
     return _assemble(
@@ -536,7 +587,7 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
     other defs / external flows). A **single-node** form (a top-level `kind:`) is deferred
     -> `LoadError`. `parent_text` is the source of the declaring file: the def's nodes
     live at absolute lines there, so its `SourceFrame` indexes them via
-    `def_node_lines(parent_text)[name]` for the nested-error traceback."""
+    `_frame_ranges(_def_nodes_reader(parent_text, name))` for the nested-error traceback."""
     if not isinstance(body, dict):
         raise LoadError(
             f"defs entry {name!r}: body must be a mapping, got {type(body).__name__}"
@@ -555,11 +606,12 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
             f"(allowed: {', '.join(sorted(_DEF_ALLOWED))})"
         )
     # The def's frame indexes its inner nodes at their absolute lines in the parent file.
+    def_node_ranges, def_field_ranges = _frame_ranges(_def_nodes_reader(parent_text, name))
     source = SourceFrame(
         label="defs:" + name,
         text=parent_text,
-        node_lines=def_node_lines(parent_text).get(name, {}),
-        field_lines=def_node_field_lines(parent_text).get(name, {}),
+        node_ranges=def_node_ranges,
+        field_ranges=def_field_ranges,
     )
     try:
         return _assemble(
@@ -605,7 +657,7 @@ def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolv
     node_body["inputs"] = {p: f"${{input.{p}}}" for p in param_types}  # auto-wire by name
     if "outputs" in body:
         node_body["outputs"] = body["outputs"]  # the node's output type = the def codomain
-    source = SourceFrame(label="defs:" + name, text=parent_text, node_lines={}, field_lines={})
+    source = SourceFrame(label="defs:" + name, text=parent_text, node_ranges={}, field_ranges={})
     try:
         return _assemble(
             inputs_section=param_types,
@@ -744,12 +796,13 @@ def _assemble(
             flow_wiring[nid] = wiring
         else:
             try:
+                _code_rng = source.field_ranges.get(nid, {}).get("code") if source else None
                 node, wiring = build_leaf_node(
                     desc, registry,
                     source_file=flow_label, code_line=code_lines.get(nid, 1),
                     # the `code:` field-key line — anchors an inline reject / no-`return`
                     # load error (which has no interior line) at `code:`, not the node header.
-                    code_field_line=(source.field_lines.get(nid, {}).get("code") if source else None),
+                    code_field_line=(_code_rng.start_line if _code_rng else None),
                 )
             except LoadError as exc:  # locate a build failure (e.g. a bad type expr) at the node's line
                 if exc.line is None:

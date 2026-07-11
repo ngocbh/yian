@@ -39,7 +39,7 @@ from agent_composer.compose.parser import (
     node_lines,
 )
 from agent_composer.compose.run import RunResult, resume_command, resume_flow, run_flow
-from agent_composer.events import Diagnostic, NodeFailed, SourceSpan
+from agent_composer.events import Diagnostic, NodeFailed, SourceRange, SourceSpan
 from agent_composer.typesys.values import ValueKind
 
 console = Console()
@@ -68,6 +68,16 @@ _ERR_CONTEXT = 5
 # `node_field_lines` (presence avoids threading the loaded IR): a CODE node -> its `code:`
 # line. Ordered: the first field present on the node wins.
 _KIND_FALLBACK_FIELDS = ("code",)
+
+# The engine's `field` locator uses the SINGULAR write-boundary vocabulary (`output`/`input`),
+# but a node's `field_ranges` is keyed by the descriptor's canonical PLURAL field names
+# (`outputs`/`inputs`). Translate the locator key to the descriptor key before lookup.
+_FIELD_KEY_ALIAS = {"output": "outputs", "input": "inputs"}
+
+
+def _field_range(fields: dict, key: str) -> Optional[SourceRange]:
+    """Look up a `field` locator key in a node's `field_ranges`, honoring the singular alias."""
+    return fields.get(key) or fields.get(_FIELD_KEY_ALIAS.get(key, key))
 
 
 def _locate(span: Optional[SourceSpan], text: str) -> Optional[int]:
@@ -184,42 +194,47 @@ def _walk_call_frames(loaded, node_id: str, top_text: str, top_label: str,
     child a `call`/`map` descends into (a `defs:` callable or an external `uses:` file via the
     node's render-only `child_source` `SourceFrame`) — down to the failing leaf.
 
-    Returns `list[(label, text, line)]`, most-recent-call-last (ready to render stacked). Each
+    Returns `list[(label, text, range)]`, most-recent-call-last (ready to render stacked). Each
     frame's `label` names WHERE it lives: a top/external file frame is the filename alone; a
     `defs:` child frame is filename-qualified (`<file> defs:<name>`) since its nodes physically
-    live in that file. A segment with NO authored line (a synthetic `__start__`/`__end__`/`__ask…`
+    live in that file. A segment with NO recorded range (a synthetic `__start__`/`__end__`/`__ask…`
     runtime segment, or a collapsed compact single-node def) is SKIPPED — its frame is dropped, the
     frames collected so far kept. Descent stops at the first segment that is not a call/map
     with a baked child (the leaf), or when a segment can't be resolved. For the LAST segment a
     `kind=field` locator (e.g. an `output:` coercion) is preferred, else the node's kind
-    fallback field (e.g. a code node's `code:`), else its header. Never raises — the caller
+    fallback field (e.g. a code node's `code:`), else its body range. Never raises — the caller
     treats any failure as "no multi-frame stack" and falls back to the single-frame path."""
     segments = [_strip_clone_suffix(seg) for seg in node_id.split("/")]
     nodes = loaded.compiled.nodes
-    n_lines = node_lines(top_text)
-    f_lines = node_field_lines(top_text)
+    # Both the top frame and each descended child read ranges off a render-only `SourceFrame`:
+    # frame 0 from the top flow's own `loaded.source`, then each child from its `child_source`.
+    # (The baked call/loop/map nodes a walk descends THROUGH carry no `.range` — only leaf kind
+    # builds stamp it — so the SourceFrame, populated by a span parse, is the uniform source.)
+    top_src = getattr(loaded, "source", None)
+    node_ranges: dict = dict(top_src.node_ranges) if top_src is not None else {}
+    field_ranges: dict = dict(top_src.field_ranges) if top_src is not None else {}
     text, label = top_text, top_label
     current_file = top_label  # the display filename of the file the current frame lives in
-    frames: list[tuple[str, str, int]] = []
+    frames: list[tuple[str, str, SourceRange]] = []
     span_leaf = _last_segment(span.node) if span is not None else None
 
     for i, seg in enumerate(segments):
         is_last = i == len(segments) - 1
-        line: Optional[int] = None
-        fields = f_lines.get(seg, {})
+        rng: Optional[SourceRange] = None
+        fields = field_ranges.get(seg, {})
         if is_last:
             # precise field locator (e.g. `output:` for a coercion / type mismatch)
             if span is not None and span.kind == "field" and span_leaf == seg:
-                line = fields.get(span.key)
-            if line is None:  # else the node's kind fallback (e.g. a code node's `code:`)
+                rng = _field_range(fields, span.key)
+            if rng is None:  # else the node's kind fallback (e.g. a code node's `code:`)
                 for fname in _KIND_FALLBACK_FIELDS:
                     if fname in fields:
-                        line = fields[fname]
+                        rng = fields[fname]
                         break
-        if line is None:
-            line = n_lines.get(seg)  # the node header (None -> synthetic/unauthored: skip)
-        if line is not None:
-            frames.append((label, text, line))
+        if rng is None:
+            rng = node_ranges.get(seg)  # the node body range (None -> synthetic/unauthored: skip)
+        if rng is not None:
+            frames.append((label, text, rng))
 
         # Descend into the child this segment calls, if any (else the leaf is reached).
         node = nodes.get(seg)
@@ -231,7 +246,7 @@ def _walk_call_frames(loaded, node_id: str, top_text: str, top_label: str,
             break
         nodes = child.nodes
         text = src.text
-        n_lines, f_lines = src.node_lines, src.field_lines
+        node_ranges, field_ranges = src.node_ranges, src.field_ranges
         # A `defs:` child physically lives in the CURRENT file -> qualify its frame title with
         # that filename (`<file> defs:<name>`); an external `uses:` child is a different file,
         # so its own filename becomes the current file and stands alone as the title.
@@ -247,10 +262,12 @@ def _render_frame_stack(frames, message: str) -> None:
     """Render a multi-frame call traceback (most-recent-call-last) + the message below.
 
     Mirrors a Python traceback: a header, then one boxed `.yaml` frame per descended level
-    (outermost `call` first, the failing leaf last), then the error message in red."""
+    (outermost `call` first, the failing leaf last), then the error message in red. Each
+    frame carries a `SourceRange`; the box anchors on its `start_line` (one line per frame,
+    like a Python traceback), which for a node body is its first field / call site."""
     err_console.print(Text("call traceback (most recent call last):", style="red bold"))
-    for label, ftext, fline in frames:
-        _render_frame_box(ftext, [fline], label)
+    for label, ftext, rng in frames:
+        _render_frame_box(ftext, [rng.start_line], label)
     err_console.print(Text(message, style="red"))
 
 

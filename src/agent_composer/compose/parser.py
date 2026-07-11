@@ -39,6 +39,7 @@ from agent_composer.compose.kinds.wait import WaitDescriptor
 from agent_composer.compose.kinds.human_input import HumanInputDescriptor
 from agent_composer.compose.kinds.case import CaseDescriptor
 from agent_composer.compose.kinds.call import CallDescriptor
+from agent_composer.compose.kinds.loop import LoopDescriptor
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -297,32 +298,6 @@ def parse_file(text: str) -> ComposeFile:
 # to every kind. `depends_on` and `runs_after` are RUN-ORDERING edges (no data flows): both
 # gate on the source settling; `depends_on` co-skips the dependent if the source skipped,
 # `runs_after` does not (the dependent still runs). See the loader edge pass.
-
-
-@dataclass(frozen=True)
-class LoopDescriptor:
-    """kind=loop — a `('a -> 'a) -> 'a -> 'a` driver over a carried record.
-
-    `call` names the body subflow (defs-first, else external — same resolution as
-    `call`/`map`). `inputs` seeds the carried record at turn 0. Exactly one of
-    `while_`/`until_`/`times` carries the predicate (this slice builds `while_`);
-    `max` is the runaway guard (required for while/until). `while`/`until` are Python
-    keywords, so they land here as `while_`/`until_` (the `_parse_node` remap, like
-    `else`->`else_`).
-    """
-
-    id: str
-    call: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    while_: Optional[str] = None
-    until_: Optional[str] = None
-    times: Optional[int] = None
-    max: Optional[int] = None
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
 
 
 NodeDescriptor = (

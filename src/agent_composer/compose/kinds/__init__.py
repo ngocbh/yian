@@ -69,3 +69,4 @@ from agent_composer.compose.kinds import human_input as _human_input  # noqa: E4
 from agent_composer.compose.kinds import case as _case  # noqa: E402,F401
 from agent_composer.compose.kinds import call as _call  # noqa: E402,F401
 from agent_composer.compose.kinds import map as _map  # noqa: E402,F401
+from agent_composer.compose.kinds import loop as _loop  # noqa: E402,F401

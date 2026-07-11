@@ -195,6 +195,17 @@ def build_leaf_node(
     load error that has no interior line — a reject, or a no-`return` body — at the `code:`
     field rather than the node header.
     """
+    # Two-axis dispatch (#70): a migrated leaf kind builds through its own `KindSpec.build`.
+    # `KINDS` is empty until kinds register themselves, so this is a no-op today; once a kind
+    # registers, its isinstance branch below is deleted and this guard serves it. Leaf
+    # descriptors are 1:1 with their kind, so we match a spec by descriptor class; leaf builds
+    # ignore `resolver` (the shared signature carries it only for call/map/loop). Imported
+    # lazily: kind modules import build helpers from here, so a top-level import would cycle.
+    from agent_composer.compose.kinds import KINDS
+
+    for spec in KINDS.values():
+        if spec.descriptor_cls is type(desc):
+            return spec.build(desc, registry=registry, resolver=None)
     if isinstance(desc, AgentDescriptor):
         own_cfg, inherit = _validate_llm_config(desc.llm_config, desc.id)
         try:

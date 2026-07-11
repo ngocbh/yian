@@ -1,6 +1,6 @@
 """_answer_schema derives a light, lossless IOField-shaped schema from an output Type."""
 
-from agent_composer.compose.build import _answer_schema
+from agent_composer.compose.kinds.human_input import _answer_schema
 from agent_composer.compose.types import read_type
 from agent_composer.typesys.types import read_typedefs
 

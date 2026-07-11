@@ -36,6 +36,7 @@ from agent_composer.compose.kinds.code import CodeDescriptor
 from agent_composer.compose.kinds.model import ModelDescriptor
 from agent_composer.compose.kinds.tool import ToolDescriptor
 from agent_composer.compose.kinds.wait import WaitDescriptor
+from agent_composer.compose.kinds.human_input import HumanInputDescriptor
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -362,32 +363,6 @@ class LoopDescriptor:
     until_: Optional[str] = None
     times: Optional[int] = None
     max: Optional[int] = None
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-
-
-@dataclass(frozen=True)
-class HumanInputDescriptor:
-    """kind=human_input — suspend for a person; the typed answer is the node's output.
-
-    Three author surfaces, exactly one of which carries the question(s):
-    - `questions`: static list (`[{question, header, options, multi_select}, ...]`) OR
-      a `${...}` ref string to a declared input (the manual-ref form);
-    - `adaptive_questions`: a nested block (dict) `{prompt: <LLM brief>, mode?,
-      llm_config?, retries?}` — the engine asks an LLM to author the questions;
-    - `prompt`: the legacy free-text approve/answer surface.
-    Legality (exactly-one, adaptive needs its own `prompt:`) is enforced in `_parse_node`.
-    """
-
-    id: str
-    prompt: Optional[str] = None
-    questions: Any = None
-    adaptive_questions: Optional[dict] = None
-    inputs: dict[str, Any] = field(default_factory=dict)
-    outputs: Any = None
     asserts: list[str] = field(default_factory=list)
     node_name: Optional[str] = None
     depends_on: list[str] = field(default_factory=list)

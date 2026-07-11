@@ -65,3 +65,4 @@ from agent_composer.compose.kinds import code as _code  # noqa: E402,F401
 from agent_composer.compose.kinds import model as _model  # noqa: E402,F401
 from agent_composer.compose.kinds import tool as _tool  # noqa: E402,F401
 from agent_composer.compose.kinds import wait as _wait  # noqa: E402,F401
+from agent_composer.compose.kinds import human_input as _human_input  # noqa: E402,F401

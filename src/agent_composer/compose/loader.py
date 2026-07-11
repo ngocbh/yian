@@ -51,7 +51,6 @@ from agent_composer.compose.build import (
     check_ref_map_types,
     check_wiring_parity,
     infer_data_edges,
-    infer_ordering_edges,
     synthesize_boundary_graph,
 )
 from agent_composer.compose.stages.inline_calls import _synth_id_gen, desugar_inline_calls
@@ -64,6 +63,7 @@ from agent_composer.compose.cases import (
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.stages.case_targets import desugar_case_call_targets
+from agent_composer.compose.stages.ordering import infer_ordering_edges
 from agent_composer.compose.uses import parse_uses_ref
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
@@ -827,7 +827,7 @@ def _assemble(
     # Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in
     # BEFORE root synthesis so an ordering-only dependent is demoted from root, and into
     # the cycle check below so an ordering cycle is loud.
-    ordering_edges = infer_ordering_edges(descriptors, node_ids := set(descriptors), n_lines)
+    ordering_edges = infer_ordering_edges(descriptors, node_ids := set(descriptors))
 
     # DAG assembly: synthesize the START_ID/END_ID boundary NODES + their edges over the
     # FULL reconciled body-edge set (the __start__/__end__ sentinels retire; the strings

@@ -20,6 +20,7 @@ from agent_composer.compose.stages.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
 )
+from agent_composer.compose.stages.ordering import infer_ordering_edges
 from agent_composer.compose.stages.parse import parse_nodes
 
 
@@ -163,3 +164,38 @@ def test_desugar_case_call_targets_preserves_ranges():
     assert call_desc.call == "helper"
     assert call_desc.range == host.range
     assert call_desc.field_ranges == host.field_ranges
+
+
+# ---------- 7.5 infer_ordering_edges: unknown target located at the declaring node ----------
+
+
+def test_infer_ordering_edges_unknown_target_is_located():
+    # A `depends_on:`/`runs_after:` that names an unknown node is a LoadError located at the
+    # DECLARING node descriptor's range (no `node_lines` map).
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  a:\n    kind: code\n    code: m:f\n    depends_on: [ghost]\n    output: str\n"
+        "output: ${a.output}\n"
+    )
+    descriptors = parse_nodes(_nodes_reader(text))
+    with pytest.raises(LoadError) as exc:
+        infer_ordering_edges(descriptors, set(descriptors))
+    assert "ghost" in str(exc.value)
+    assert exc.value.range == descriptors["a"].range
+
+
+def test_infer_ordering_edges_builds_ordering_edges():
+    # A valid `depends_on:` lowers to a zero-data ordering edge (optional=False).
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  warm:\n    kind: code\n    code: m:f\n    output: str\n"
+        "  a:\n    kind: code\n    code: m:f\n    depends_on: [warm]\n    output: str\n"
+        "output: ${a.output}\n"
+    )
+    descriptors = parse_nodes(_nodes_reader(text))
+    edges = infer_ordering_edges(descriptors, set(descriptors))
+    assert len(edges) == 1
+    assert edges[0].from_ == "warm"
+    assert edges[0].to == "a"
+    assert edges[0].ordering is True
+    assert edges[0].optional is False

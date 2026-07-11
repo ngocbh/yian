@@ -397,47 +397,6 @@ def synthesize_boundary_graph(
     return boundary_nodes, end_edges + root_edges, boundary_wiring
 
 
-def infer_ordering_edges(
-    descriptors: dict[str, NodeDescriptor],
-    node_ids: "set[str]",
-    node_lines: Optional[dict[str, int]] = None,
-) -> list[Edge]:
-    """Run-ordering edges from `depends_on:` (co-skip) and `runs_after:` (pure order).
-
-    An ordering edge carries no data (`ordering=True`); it gates the dependent on the
-    source SETTLING. `depends_on` co-skips (source SKIPPED -> dependent dies, `optional=
-    False`); `runs_after` does not (`optional=True`). An unknown target is a located
-    `LoadError`; cycle rejection is the caller's (the edges join the `reject_cycles` set).
-    Distinct `~>` ids keep an ordering edge from colliding with a data edge on the same pair.
-    """
-    node_lines = node_lines or {}
-    edges: list[Edge] = []
-    counts: dict[tuple[str, str], int] = {}
-    for node_id, desc in descriptors.items():
-        for key, sources, optional in (
-            ("depends_on", desc.depends_on, False),
-            ("runs_after", desc.runs_after, True),
-        ):
-            for src in sources:
-                if src not in node_ids:
-                    raise LoadError(
-                        f"node {node_id!r}: `{key}` references unknown node {src!r}",
-                        line=node_lines.get(node_id),
-                    )
-                i = counts.get((src, node_id), 0)
-                counts[(src, node_id)] = i + 1
-                edges.append(
-                    Edge(
-                        id=f"{src}~>{node_id}#{i}",
-                        from_=src,
-                        to=node_id,
-                        ordering=True,
-                        optional=optional,
-                    )
-                )
-    return edges
-
-
 # --------------------------------------------------------------------------- #
 # `call` build + child resolve-and-bake.
 #

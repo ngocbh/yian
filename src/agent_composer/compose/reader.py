@@ -16,6 +16,11 @@ The three parts must travel together (see `load_with_spans(..., return_root=True
 
 `child(key)` descends to a sub-`NodeReader` over the child's value node, so the whole
 tree can be walked while every accessor stays located.
+
+A **spanless** reader (`NodeReader.spanless(value)`, `yaml_node=None`) wraps a value that
+has no source text to point at — a compact flow's in-memory node, a `defs:` sub-flow's
+already-normalized nodes, or a test's inline dict. Field presence and typing still work off
+`value`; every range accessor returns `None`. Descendants of a spanless reader are spanless.
 """
 
 from __future__ import annotations
@@ -53,10 +58,22 @@ class NodeReader:
         # into `spans`. A `MappingNode` for a mapping.
         self.yaml_node = yaml_node
 
+    @classmethod
+    def spanless(cls, value: Any) -> "NodeReader":
+        """A location-free reader over an already-constructed value (no span tree).
+
+        For inputs with no source text to point at — a compact flow's in-memory node, a
+        `defs:` sub-flow's nested nodes, or a test's inline dict. All range accessors
+        return `None`; field presence/typing still resolve off `value`.
+        """
+        return cls(value, {}, None)
+
     # -- internal ---------------------------------------------------------------
 
     def _own_range(self) -> SourceRange | None:
         """This mapping node's own recorded range (the fallback anchor for a missing field)."""
+        if self.yaml_node is None:
+            return None
         return self.spans.get(id(self.yaml_node))
 
     def _pair(self, key: str):
@@ -64,8 +81,14 @@ class NodeReader:
 
         Returns the pair, or `None` when this node is not a mapping or has no such key.
         Compares against `key_node.value` (the raw scalar text of the key), which for a
-        plain string key equals its constructed value.
+        plain string key equals its constructed value. In spanless mode (`yaml_node is
+        None`) there are no yaml nodes, so presence is synthesized from `self.value` and
+        the pair is `(None, None)` (the range accessors resolve to `None`).
         """
+        if self.yaml_node is None:
+            if isinstance(self.value, dict) and key in self.value:
+                return None, None
+            return None
         pairs = getattr(self.yaml_node, "value", None)
         if not isinstance(pairs, list):
             return None
@@ -91,6 +114,8 @@ class NodeReader:
         the field is missing.
         """
         _key_node, value_node = self._require_pair(key)
+        if value_node is None:
+            return None
         return self.spans.get(id(value_node))
 
     # -- typed accessors --------------------------------------------------------

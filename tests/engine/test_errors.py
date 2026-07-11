@@ -213,9 +213,10 @@ def test_e06_cross_flow_type_mismatch_is_loud():
     ("filename", "substr", "line"),
     [
         ("e09-unknown-top-level-key.yaml", "unknown top-level key 'bogus'", 14),
-        ("e10-unknown-node-kind.yaml", "unknown kind 'llm'", 7),
-        ("e11-field-not-allowed.yaml", "field 'prompt' is not allowed", 7),
-        ("e12-missing-required-field.yaml", "missing required field 'code'", 7),
+        # Per-kind parse anchors these at the precise offending field (not the node body):
+        ("e10-unknown-node-kind.yaml", "unknown kind 'llm'", 8),  # the `kind:` value
+        ("e11-field-not-allowed.yaml", "field 'prompt' is not allowed", 13),  # the stray field
+        ("e12-missing-required-field.yaml", "missing required field 'code'", 8),  # the node body
         ("e13-bad-type-expression.yaml", "bad type expression 'list['", 7),
         ("e14-unknown-system-ambient.yaml", "bogus", 7),
         ("e15-prompt-undeclared-input.yaml", "is not a declared input", 7),

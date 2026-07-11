@@ -29,9 +29,10 @@ from agent_composer.compose.parser import (
     CaseDescriptor,
     CodeDescriptor,
     WaitDescriptor,
-    parse_nodes,
     parse_file,
 )
+from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.stages.parse import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -54,7 +55,7 @@ def _all_edges(seed: str):
     _p = (_SEEDS / seed) if (_SEEDS / seed).exists() else (_SEEDS / "_future" / seed)
     f = parse_file(_p.read_text())
     registry = read_typedefs(f.typedefs)
-    descriptors = parse_nodes(f.nodes)
+    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
     flow_wiring = {
         nid: build_leaf_node(d, registry)[1]
         for nid, d in descriptors.items()

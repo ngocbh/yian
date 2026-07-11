@@ -22,9 +22,10 @@ from agent_composer.compose.parser import (
     AgentDescriptor,
     CaseDescriptor,
     CodeDescriptor,
-    parse_nodes,
     parse_file,
 )
+from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.stages.parse import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -33,7 +34,7 @@ def _seed(name: str):
     """(descriptors, flow_wiring) for a seed — leaf-kind wiring built, case/ref/map skipped.
     infer_data_edges now derives leaf edges from the flow-owned wiring."""
     f = parse_file((_SEEDS / name).read_text())
-    descriptors = parse_nodes(f.nodes)
+    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
     flow_wiring = {
         nid: build_leaf_node(desc, {})[1]
         for nid, desc in descriptors.items()
@@ -88,16 +89,18 @@ def test_edge_id_is_synthesized():
 def test_coalesce_sink_shares_input_group():
     # A node input bound to ${pro.output | con.output} -> two edges, same group.
     descriptors = parse_nodes(
-        {
-            "pro": {"kind": "agent", "outputs": "str", "prompt": "x"},
-            "con": {"kind": "agent", "outputs": "str", "prompt": "x"},
-            "merge": {
-                "kind": "code",
-                "inputs": {"claim": "${pro.output | con.output}"},
-                "outputs": "str",
-                "code": "m:f",
-            },
-        }
+        NodeReader.spanless(
+            {
+                "pro": {"kind": "agent", "outputs": "str", "prompt": "x"},
+                "con": {"kind": "agent", "outputs": "str", "prompt": "x"},
+                "merge": {
+                    "kind": "code",
+                    "inputs": {"claim": "${pro.output | con.output}"},
+                    "outputs": "str",
+                    "code": "m:f",
+                },
+            }
+        )
     )
     wiring = {nid: build_leaf_node(d, {})[1] for nid, d in descriptors.items()}
     edges = infer_data_edges(descriptors, wiring)
@@ -115,15 +118,17 @@ def test_coalesce_sink_shares_input_group():
 
 def test_map_over_ref_produces_data_edge():
     descriptors = parse_nodes(
-        {
-            "bundle": {"kind": "code", "outputs": "list[str]", "code": "m:f"},
-            "each": {
-                "kind": "map",
-                "call": "child",
-                "over": "${bundle.output}",
-                "inputs": {"topic": "${item}"},
-            },
-        }
+        NodeReader.spanless(
+            {
+                "bundle": {"kind": "code", "outputs": "list[str]", "code": "m:f"},
+                "each": {
+                    "kind": "map",
+                    "call": "child",
+                    "over": "${bundle.output}",
+                    "inputs": {"topic": "${item}"},
+                },
+            }
+        )
     )
     # The MAP wiring is built by build_call_node (needs a resolver); supply it directly —
     # the `over` source rides the reserved "over" key, over-then-inputs order.
@@ -188,7 +193,7 @@ def test_case_when_produces_data_edge_in_every_spelling(when):
         "output: ${hi.output | lo.output}\n"
     )
     f = parse_file(text)
-    descriptors = parse_nodes(f.nodes)
+    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
     built = {
         nid: build_leaf_node(desc, {})[1]
         for nid, desc in descriptors.items()

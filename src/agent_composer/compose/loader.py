@@ -35,6 +35,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
+import yaml
+
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
 from agent_composer.nodes.base import Node
 from agent_composer.typesys.values import TypeCheckError, Type
@@ -63,6 +65,9 @@ from agent_composer.compose.cases import (
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.human_questions import desugar_adaptive_questions
 from agent_composer.compose.uses import parse_uses_ref
+from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.spanloader import load_with_spans
+from agent_composer.compose.stages.parse import parse_nodes
 from agent_composer.compose.parser import (
     CallDescriptor,
     CaseDescriptor,
@@ -72,7 +77,6 @@ from agent_composer.compose.parser import (
     def_node_lines,
     node_field_lines,
     node_lines,
-    parse_nodes,
     parse_file,
     section_lines,
 )
@@ -89,6 +93,25 @@ from agent_composer.compose.validate import (
 # `FlowOutput`, `terminal_output` returns the bare resolved value, so the name
 # only labels the carrier.
 _SINGLE_OUTPUT_NAME = "result"
+
+
+def _nodes_reader(text: Optional[str], nodes_section: dict) -> NodeReader:
+    """A `NodeReader` over a flow's `nodes:` mapping for `parse_nodes`.
+
+    Span-aware over the source when `text` carries a `nodes:` mapping (the top-level flow);
+    otherwise a spanless reader over `nodes_section` — a compact flow (its sole node is
+    desugared in-memory, absent from source), a `defs:` sub-flow (nested, already
+    normalized), or an uncomposable document.
+    """
+    if text:
+        try:
+            value, spans, root = load_with_spans(text, return_root=True)
+        except yaml.YAMLError:
+            pass
+        else:
+            if isinstance(value, dict) and isinstance(value.get("nodes"), dict):
+                return NodeReader(value, spans, root).child("nodes")
+    return NodeReader.spanless(nodes_section)
 
 
 @dataclass(frozen=True)
@@ -410,7 +433,7 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> LoadedFlo
 
     return _assemble(
         inputs_section=f.inputs,
-        nodes_section=f.nodes,
+        nodes_reader=_nodes_reader(text, f.nodes),
         outputs_section=f.outputs,
         asserts_section=f.asserts,
         registry=registry,
@@ -539,7 +562,7 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
     try:
         return _assemble(
             inputs_section=body.get("inputs") or {},
-            nodes_section=body["nodes"],
+            nodes_reader=NodeReader.spanless(body["nodes"]),
             outputs_section=body.get("outputs"),
             asserts_section=body.get("asserts") or [],  # enforced at the child seam
             registry=registry,
@@ -584,7 +607,7 @@ def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolv
     try:
         return _assemble(
             inputs_section=param_types,
-            nodes_section={name: node_body},
+            nodes_reader=NodeReader.spanless({name: node_body}),
             outputs_section={"result": f"${{{name}.output}}"},  # single value re-export (node-first)
             asserts_section=[],
             registry=registry,
@@ -602,7 +625,7 @@ def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolv
 def _assemble(
     *,
     inputs_section: dict,
-    nodes_section: dict,
+    nodes_reader: NodeReader,
     outputs_section,
     asserts_section: list,
     registry,
@@ -635,7 +658,7 @@ def _assemble(
     flow_label = source.label if source is not None else "<inline-code>"
     inputs = read_flow_inputs(inputs_section, registry)
     flow_inputs = {decl.name for decl in inputs}
-    descriptors = parse_nodes(nodes_section, n_lines)
+    descriptors = parse_nodes(nodes_reader)
 
     # A `uses:` alias shares the callable namespace, so it must not collide with a node
     # id (the resolver only sees a bare name; the author conflates them). Checked here, where

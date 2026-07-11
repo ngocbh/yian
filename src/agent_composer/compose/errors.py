@@ -26,7 +26,9 @@ class LoadError(ValueError):
     `.range` carries the precise 1-based `SourceRange` the error points at, when known —
     the span-aware successor to `.line`, filled in by the span loader / `NodeReader` cursor.
     The two coexist during the migration off `line=`: a renderer prefers `.range` when set
-    and falls back to `.line`. None for errors raised away from a parsed node.
+    and falls back to `.line`. None for errors raised away from a parsed node. When a
+    `range` is given and no explicit `line`/`lines`, `.line` defaults to the range's start
+    line, so legacy line-based consumers keep working as callers move to `range=`.
     """
 
     def __init__(
@@ -39,7 +41,14 @@ class LoadError(ValueError):
     ):
         super().__init__(message)
         self.lines = lines
-        self.line = line if line is not None else (min(lines) if lines else None)
+        if line is not None:
+            self.line = line
+        elif lines:
+            self.line = min(lines)
+        elif range is not None:
+            self.line = range.start_line
+        else:
+            self.line = None
         self.notes = notes
         self.range = range
 

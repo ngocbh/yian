@@ -75,7 +75,10 @@ def parse(node_id: str, reader: NodeReader) -> CaseDescriptor:
         _normalize_keys,
     )
 
-    body = _normalize_keys(reader.value)
+    # Undo the `on:`->True coercion on the reader in place, so spanless presence checks
+    # (`_pair` reads `reader.value`) find `on`; span-aware range lookups match raw key text.
+    reader.value = _normalize_keys(reader.value)
+    body = reader.value
     allowed_keys = CASE_ALLOWED | _COMMON_FIELDS | {"kind"}
     for key in body:
         if key not in allowed_keys:

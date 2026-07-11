@@ -23,14 +23,16 @@ from agent_composer.typesys.values import ValueKind
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose import LoadError
 from agent_composer.compose.build import build_leaf_node
-from agent_composer.compose.parser import parse_nodes, parse_file
+from agent_composer.compose.parser import parse_file
+from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.stages.parse import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
 
 def _seed_nodes(name: str):
     f = parse_file((_SEEDS / name).read_text())
-    return parse_nodes(f.nodes)
+    return parse_nodes(NodeReader.spanless(f.nodes))
 
 
 # ---------- agent ----------
@@ -69,7 +71,7 @@ def test_agent_unknown_mode_is_loud_loaderror():
         "    output: str\n    prompt: \"hi ${topic}\"\n    mode: react\n"
         "output: ${note.output}\n"
     )
-    desc = parse_nodes(parse_file(text).nodes)["note"]
+    desc = parse_nodes(NodeReader.spanless(parse_file(text).nodes))["note"]
     with pytest.raises(LoadError, match="unknown mode"):
         build_leaf_node(desc, {})
 
@@ -132,15 +134,17 @@ def test_node_name_becomes_title():
     assert note.title is None
     named, _ = build_leaf_node(
         parse_nodes(
-            {
-                "n": {
-                    "kind": "code",
-                    "node_name": "Format verdict",
-                    "inputs": {"x": "${input.x}"},
-                    "outputs": "str",
-                    "code": "m:f",
+            NodeReader.spanless(
+                {
+                    "n": {
+                        "kind": "code",
+                        "node_name": "Format verdict",
+                        "inputs": {"x": "${input.x}"},
+                        "outputs": "str",
+                        "code": "m:f",
+                    }
                 }
-            }
+            )
         )["n"],
         {},
     )
@@ -213,14 +217,16 @@ def test_output_type_resolves_registry_name():
     registry = read_typedefs({"Rating": {"category": "str", "score": "float"}})
     # an agent descriptor whose outputs name a registry record.
     nodes = parse_nodes(
-        {
-            "synth": {
-                "kind": "agent",
-                "inputs": {"topic": "${input.topic}"},
-                "outputs": "Rating",
-                "prompt": "x",
+        NodeReader.spanless(
+            {
+                "synth": {
+                    "kind": "agent",
+                    "inputs": {"topic": "${input.topic}"},
+                    "outputs": "Rating",
+                    "prompt": "x",
+                }
             }
-        }
+        )
     )
     node, _ = build_leaf_node(nodes["synth"], registry)
     assert isinstance(node, AgentNode)

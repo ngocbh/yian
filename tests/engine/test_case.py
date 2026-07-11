@@ -31,16 +31,17 @@ from agent_composer.compose.parser import (
     AgentDescriptor,
     CaseDescriptor,
     CodeDescriptor,
-    parse_nodes,
     parse_file,
 )
+from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.stages.parse import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
 
 def _case_desc(seed: str, node_id: str) -> CaseDescriptor:
     f = parse_file((_SEEDS / seed).read_text())
-    desc = parse_nodes(f.nodes)[node_id]
+    desc = parse_nodes(NodeReader.spanless(f.nodes))[node_id]
     assert isinstance(desc, CaseDescriptor)
     return desc
 
@@ -327,7 +328,7 @@ def test_reconcile_replaces_provisional_case_edges():
     # seed 02: the data-edge pass emits a provisional score->gate (group "gate:0"); reconciliation
     # drops it and splices the desugar's __r0 data edge + control edges.
     f = parse_file((_SEEDS / "02-case.yaml").read_text())
-    descriptors = parse_nodes(f.nodes)
+    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
     flow_wiring = {
         nid: build_leaf_node(d, {})[1]
         for nid, d in descriptors.items()

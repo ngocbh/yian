@@ -40,10 +40,10 @@ from agent_composer.compose.parser import (
     ToolDescriptor,
     ComposeFile,
     node_lines,
-    parse_nodes,
     parse_file,
     section_lines,
 )
+from agent_composer.compose.stages.parse import parse_nodes
 from agent_composer.compose.types import InputDecl, read_flow_inputs, read_type
 from agent_composer.compose.validate import (
     check_case_handles,

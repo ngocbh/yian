@@ -195,7 +195,8 @@ def test_case_condition_escape_marks_optional():
 
 def test_item_head_ref_yields_no_edge_but_producer_ref_does():
     from agent_composer.compose.build import infer_data_edges
-    from agent_composer.compose.parser import parse_nodes
+    from agent_composer.compose.reader import NodeReader
+    from agent_composer.compose.stages.parse import parse_nodes
 
     # A CODE `producer` and a stand-in `mapbody` consumer whose wiring binds both an
     # `${item.foo}` (body-local) and a `${producer.output}` (a real producer ref). We drive
@@ -203,20 +204,22 @@ def test_item_head_ref_yields_no_edge_but_producer_ref_does():
     # branch reads `flow_wiring[node_id]` verbatim), so this exercises the exact producer
     # ref-walk the map/loop body inputs go through.
     descriptors = parse_nodes(
-        {
-            "producer": {
-                "kind": "code",
-                "code": "tests.engine._compose_codefns:score",
-                "input": {"seed": "${input.seed}"},
-                "output": "float",
-            },
-            "mapbody": {
-                "kind": "code",
-                "code": "tests.engine._compose_codefns:cautious",
-                "input": {"v": "${producer.output}"},
-                "output": "str",
-            },
-        }
+        NodeReader.spanless(
+            {
+                "producer": {
+                    "kind": "code",
+                    "code": "tests.engine._compose_codefns:score",
+                    "input": {"seed": "${input.seed}"},
+                    "output": "float",
+                },
+                "mapbody": {
+                    "kind": "code",
+                    "code": "tests.engine._compose_codefns:cautious",
+                    "input": {"v": "${producer.output}"},
+                    "output": "str",
+                },
+            }
+        )
     )
     flow_wiring = {
         # the map body's per-element sink: `item`-headed refs are body-local (no edge),

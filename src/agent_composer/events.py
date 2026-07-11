@@ -70,6 +70,22 @@ class SourceRange:
     end_col: int
 
 
+@dataclass(frozen=True)
+class Diagnostic:
+    """A renderable compile/run error: one message + a primary range + secondary notes.
+
+    `severity` is "error" | "warning"; `primary` is the SourceRange the caret points
+    at; `notes` is a tuple of secondary annotation strings (e.g. outer call frames of a
+    nested-call traceback, or an anchor definition site for a merged key). The single
+    `render_diagnostic` renderer (CLI) consumes this — no kind-specific rendering.
+    """
+
+    severity: str
+    message: str
+    primary: SourceRange | None
+    notes: tuple[str, ...] = ()
+
+
 # --------------------------------------------------------------------------- #
 # Node-level events
 # --------------------------------------------------------------------------- #

@@ -38,6 +38,7 @@ from agent_composer.compose.kinds.tool import ToolDescriptor
 from agent_composer.compose.kinds.wait import WaitDescriptor
 from agent_composer.compose.kinds.human_input import HumanInputDescriptor
 from agent_composer.compose.kinds.case import CaseDescriptor
+from agent_composer.compose.kinds.call import CallDescriptor
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -296,34 +297,6 @@ def parse_file(text: str) -> ComposeFile:
 # to every kind. `depends_on` and `runs_after` are RUN-ORDERING edges (no data flows): both
 # gate on the source settling; `depends_on` co-skips the dependent if the source skipped,
 # `runs_after` does not (the dependent still runs). See the loader edge pass.
-
-
-@dataclass(frozen=True)
-class CallDescriptor:
-    """kind=call|map — function application of a callable (`call:` + call-arg bindings).
-
-    `call` names the callable, resolved **defs-first, else an external flow id** (the
-    loader composes that resolution). `kind: call` is a single application (built as a plain
-    `CallNode`); `kind: map` + `over: ${list}` is `List.map` — iteration with `${item}` in
-    element scope (built as a `MapNode`), and `parallel:` overlaps the element runs. `inputs:`
-    are the (per-element) call-arg bindings.
-
-    `kind` is the REF/MAP discriminator: `"call"` (REF, the default) or `"map"`. The parser sets
-    it from the YAML kind; the two SYNTH paths (inline-call + case desugar) keep the REF default
-    (`over=None`). `build` branches on it: a `map` builds a `MapNode`, a `call` a `CallNode`.
-    """
-
-    id: str
-    call: str
-    inputs: dict[str, Any] = field(default_factory=dict)
-    over: Optional[str] = None
-    parallel: bool = False
-    kind: str = "call"
-    asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
 
 
 @dataclass(frozen=True)

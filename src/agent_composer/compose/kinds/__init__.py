@@ -67,3 +67,4 @@ from agent_composer.compose.kinds import tool as _tool  # noqa: E402,F401
 from agent_composer.compose.kinds import wait as _wait  # noqa: E402,F401
 from agent_composer.compose.kinds import human_input as _human_input  # noqa: E402,F401
 from agent_composer.compose.kinds import case as _case  # noqa: E402,F401
+from agent_composer.compose.kinds import call as _call  # noqa: E402,F401

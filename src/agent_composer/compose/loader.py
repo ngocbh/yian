@@ -65,6 +65,7 @@ from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_qu
 from agent_composer.compose.stages.case_targets import desugar_case_call_targets
 from agent_composer.compose.stages.cycles import reject_cycles
 from agent_composer.compose.stages.ordering import infer_ordering_edges
+from agent_composer.compose.stages.references import validate_references
 from agent_composer.compose.uses import parse_uses_ref
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
@@ -86,7 +87,6 @@ from agent_composer.compose.validate import (
     check_case_handles,
     validate_human_questions,
     validate_node_asserts,
-    validate_references,
 )
 
 # Name for the single output of a bare whole-string `outputs:` binding. With one

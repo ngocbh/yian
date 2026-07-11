@@ -45,10 +45,10 @@ from agent_composer.compose.parser import (
 )
 from agent_composer.compose.stages.cycles import reject_cycles
 from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.stages.references import validate_references
 from agent_composer.compose.types import InputDecl, read_flow_inputs, read_type
 from agent_composer.compose.validate import (
     check_case_handles,
-    validate_references,
 )
 
 __all__ = [

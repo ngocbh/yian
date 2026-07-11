@@ -11,8 +11,10 @@ import pytest
 
 import agent_composer.compose.stages as stages
 from agent_composer.compile.model import Edge
+from agent_composer.compose.build import build_leaf_node
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.kinds.agent import AgentDescriptor
+from agent_composer.compose.kinds.code import CodeDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
@@ -24,6 +26,7 @@ from agent_composer.compose.stages.inline_calls import (
 )
 from agent_composer.compose.stages.ordering import infer_ordering_edges
 from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.stages.references import validate_references
 from agent_composer.events import SourceRange
 
 
@@ -230,3 +233,48 @@ def test_reject_cycles_no_ranges_leaves_range_none():
     with pytest.raises(LoadError) as exc:
         reject_cycles(edges, {"a", "b"})
     assert exc.value.range is None
+
+
+# ---------- 7.7 validate_references: a dangling ref carries the field's range ----------
+
+
+def _built_flow(text):
+    """Build leaf nodes + flow wiring + producers from a flow's `nodes:` (span-aware).
+
+    Mirrors the loader's leaf-build slice: parse the `nodes:` mapping off the span tree,
+    build each agent/code leaf, and split into `{nid: node}` / `{nid: wiring}` plus the
+    `{nid: output_type}` producer map — enough to drive `validate_references` in isolation.
+    """
+    value, spans, root = load_with_spans(text, return_root=True)
+    reader = NodeReader(value, spans, root).child("nodes")
+    descriptors = parse_nodes(reader)
+    built = {
+        nid: build_leaf_node(d, {})
+        for nid, d in descriptors.items()
+        if isinstance(d, (AgentDescriptor, CodeDescriptor))
+    }
+    nodes = {nid: n for nid, (n, _) in built.items()}
+    wiring = {nid: w for nid, (_, w) in built.items()}
+    producers = {
+        nid: n.output_type for nid, n in nodes.items() if n.output_type is not None
+    }
+    return nodes, wiring, producers
+
+
+def test_validate_references_diag_has_range():
+    # A node input binding that references an unknown node (`${ghost.output}`) is a dangling
+    # ref. The aggregate LoadError anchors its `range` on the referencing field — the node's
+    # `input:` mapping range (`field_ranges["inputs"]`), the coarsest available field span.
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  a:\n    kind: agent\n    prompt: hi\n"
+        "    input:\n      x: ${ghost.output}\n    output: str\n"
+        "output: ${a.output}\n"
+    )
+    nodes, wiring, producers = _built_flow(text)
+    with pytest.raises(LoadError) as exc:
+        validate_references(nodes, set(), producers, "${a.output}", wiring)
+    assert "ghost" in str(exc.value)
+    assert exc.value.range is not None
+    assert exc.value.range == nodes["a"].field_ranges["inputs"]
+

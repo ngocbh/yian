@@ -35,7 +35,7 @@ from agent_composer.compose.parser import (
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.stages.parse import parse_nodes
 from agent_composer.compose.types import read_flow_inputs
-from agent_composer.compose.validate import validate_references
+from agent_composer.compose.stages.references import validate_references
 from tests.engine._fakes import derive_wiring, stamp_reads
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"

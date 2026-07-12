@@ -1,6 +1,6 @@
 """kind=tool — the deterministic-tool node's descriptor + parse/build handle (#70).
 
-One of the two-axis `compose/kinds/<kind>.py` modules: it owns the `tool` node's frozen
+One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `tool` node's frozen
 `ToolDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`), and overriding `build` (which constructs the runtime `ToolNode` +
 wiring and stamps span metadata onto it). Registered into `KINDS`/`BINDING_FIELDS` at import
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.nodes.base import NodeDescriptor
 from agent_composer.nodes.tool import ToolNode
 
 

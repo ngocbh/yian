@@ -48,7 +48,7 @@ from agent_composer.compose.build import (
     infer_data_edges,
     synthesize_boundary_graph,
 )
-from agent_composer.compose.kinds.resolver import ChildResolver
+from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.stages.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.cases import (
     CaseDesugar,

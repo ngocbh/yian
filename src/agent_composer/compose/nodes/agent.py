@@ -1,6 +1,6 @@
 """kind=agent — the LLM-reasoner node's descriptor + parse/build handle (#70).
 
-One of the two-axis `compose/kinds/<kind>.py` modules: it owns the `agent` node's frozen
+One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `agent` node's frozen
 `AgentDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`), and overriding `build` (which constructs the runtime `AgentNode` +
 wiring and stamps span metadata onto it). Registered into `KINDS`/`BINDING_FIELDS` at import
@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.nodes.base import NodeDescriptor
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.typesys.values import Type

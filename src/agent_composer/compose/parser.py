@@ -27,21 +27,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agent_composer.compose.helpers.errors import LoadError
 
 # `AgentDescriptor`/`CodeDescriptor`/`ModelDescriptor`/`ToolDescriptor`/`WaitDescriptor`
-# now live with their parse/build handles in `kinds/<kind>.py` (#70); re-export them here so
+# now live with their parse/build handles in `nodes/<kind>.py` (#70); re-export them here so
 # existing importers keep working. `NodeDescriptor` — the base class every kind descriptor
-# inherits — lives in `kinds/base.py` (the leaf, mirroring `nodes/base.py`); re-exported here as
+# inherits — lives in `nodes/base.py` (the leaf, mirroring `nodes/base.py`); re-exported here as
 # the descriptor base type for importers that annotate `dict[str, NodeDescriptor]` (build/stages).
-from agent_composer.compose.kinds.base import NodeDescriptor  # noqa: F401
-from agent_composer.compose.kinds.agent import AgentDescriptor  # noqa: F401
-from agent_composer.compose.kinds.code import CodeDescriptor  # noqa: F401
-from agent_composer.compose.kinds.model import ModelDescriptor  # noqa: F401
-from agent_composer.compose.kinds.tool import ToolDescriptor  # noqa: F401
-from agent_composer.compose.kinds.wait import WaitDescriptor  # noqa: F401
-from agent_composer.compose.kinds.human_input import HumanInputDescriptor  # noqa: F401
-from agent_composer.compose.kinds.case import CaseDescriptor  # noqa: F401
-from agent_composer.compose.kinds.call import CallDescriptor  # noqa: F401
-from agent_composer.compose.kinds.map import MapDescriptor  # noqa: F401
-from agent_composer.compose.kinds.loop import LoopDescriptor  # noqa: F401
+from agent_composer.compose.nodes.base import NodeDescriptor  # noqa: F401
+from agent_composer.compose.nodes.agent import AgentDescriptor  # noqa: F401
+from agent_composer.compose.nodes.code import CodeDescriptor  # noqa: F401
+from agent_composer.compose.nodes.model import ModelDescriptor  # noqa: F401
+from agent_composer.compose.nodes.tool import ToolDescriptor  # noqa: F401
+from agent_composer.compose.nodes.wait import WaitDescriptor  # noqa: F401
+from agent_composer.compose.nodes.human_input import HumanInputDescriptor  # noqa: F401
+from agent_composer.compose.nodes.case import CaseDescriptor  # noqa: F401
+from agent_composer.compose.nodes.call import CallDescriptor  # noqa: F401
+from agent_composer.compose.nodes.map import MapDescriptor  # noqa: F401
+from agent_composer.compose.nodes.loop import LoopDescriptor  # noqa: F401
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -281,9 +281,9 @@ def parse_file(text: str) -> ComposeFile:
 # A `nodes:` entry is a keyed map (key = node id, no `id:` field) carrying a
 # `kind:` plus FLAT kind-fields — the surface flattens `inputs:`/`outputs:`
 # onto the node (vs the legacy spec's body wrappers, `spec/nodes.py`). These are
-# DESCRIPTORS: the validated parsed shape per kind, each owned by its `kinds/<kind>.py`
+# DESCRIPTORS: the validated parsed shape per kind, each owned by its `nodes/<kind>.py`
 # module (the frozen dataclass + its `parse`/`build`) and inheriting the common
-# `NodeDescriptor` base (see `kinds/base.py`); this module only re-exports them.
+# `NodeDescriptor` base (see `nodes/base.py`); this module only re-exports them.
 # Building the runtime `Node` (`output_type` + `params` + flow `wiring`, `read_type` over
 # `outputs:`) happens later in the loader; the descriptors keep `inputs`/`outputs`/`args`/
 # `cases` raw (binding strings / type nodes).

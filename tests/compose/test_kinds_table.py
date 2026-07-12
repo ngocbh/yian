@@ -7,9 +7,9 @@
 
 import pytest
 
-from agent_composer.compose.kinds import KINDS, BINDING_FIELDS
-from agent_composer.compose.kinds.agent import AgentDescriptor
-from agent_composer.compose.kinds.tool import ToolDescriptor
+from agent_composer.compose.nodes import KINDS, BINDING_FIELDS
+from agent_composer.compose.nodes.agent import AgentDescriptor
+from agent_composer.compose.nodes.tool import ToolDescriptor
 
 # The author-written surface kinds (mirrors docs/syntax.md; excludes the synthesized
 # start/end boundaries). Adding a kind here without registering its handle fails below.
@@ -35,7 +35,7 @@ def test_kinds_maps_string_to_descriptor_class():
 def test_kindspec_is_gone():
     # The old KindSpec bundling wrapper was deleted when parse/build became methods.
     with pytest.raises(ImportError):
-        from agent_composer.compose.kinds import KindSpec  # noqa: F401
+        from agent_composer.compose.nodes import KindSpec  # noqa: F401
 
 
 def test_all_authored_kinds_registered():

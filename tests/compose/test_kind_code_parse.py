@@ -4,7 +4,7 @@ inline `def main(inputs):` wrapper offset so an inline syntax slip frames at the
 import pytest
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds.code import CodeDescriptor
+from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.events import SourceRange

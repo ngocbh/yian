@@ -1,7 +1,7 @@
 """6.3 — the `model` kind handle: parse records field ranges into the descriptor; build
 returns a runtime ModelNode with output_type + wiring and stamped ranges."""
 
-from agent_composer.compose.kinds.model import ModelDescriptor
+from agent_composer.compose.nodes.model import ModelDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.events import SourceRange

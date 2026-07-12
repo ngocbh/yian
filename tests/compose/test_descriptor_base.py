@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import pytest
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.nodes.base import NodeDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 
 

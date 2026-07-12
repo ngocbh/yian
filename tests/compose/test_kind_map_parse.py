@@ -6,7 +6,7 @@ iteration source) is required alongside `call`; build (`CallDescriptor.build`, `
 import pytest
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds.map import MapDescriptor
+from agent_composer.compose.nodes.map import MapDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.events import SourceRange

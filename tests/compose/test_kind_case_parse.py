@@ -5,7 +5,7 @@ built as a leaf node)."""
 import pytest
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds.case import CaseDescriptor
+from agent_composer.compose.nodes.case import CaseDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.events import SourceRange

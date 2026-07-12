@@ -1,6 +1,6 @@
 """kind=code — the deterministic-code node's descriptor + parse/build handle (#70).
 
-One of the two-axis `compose/kinds/<kind>.py` modules: it owns the `code` node's frozen
+One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `code` node's frozen
 `CodeDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`, incl. the `code:` body's own range), and overriding `build` (which
 constructs the runtime `CodeNode` + wiring, reconciling the inline `def main(inputs):` wrapper
@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.nodes.base import NodeDescriptor
 from agent_composer.nodes.code import CodeNode
 
 

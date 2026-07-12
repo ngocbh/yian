@@ -13,8 +13,8 @@ import agent_composer.compose.stages as stages
 from agent_composer.compile.model import Edge
 from agent_composer.compose.build import build_leaf_node
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds.agent import AgentDescriptor
-from agent_composer.compose.kinds.code import CodeDescriptor
+from agent_composer.compose.nodes.agent import AgentDescriptor
+from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions

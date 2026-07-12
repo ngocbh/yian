@@ -1,6 +1,6 @@
 """The base descriptor contract — the parse-time analogue of `nodes/base.py`.
 
-A `compose/kinds/<kind>.py` module owns a frozen *descriptor*: the validated, located
+A `compose/nodes/<kind>.py` module owns a frozen *descriptor*: the validated, located
 shape a `kind:` node body parses into (before it is built into a runtime `Node`). Every one
 of those per-kind descriptors inherits `NodeDescriptor`, which holds the fields common to all
 nodes so no kind redeclares them — exactly as every runtime node subclasses `nodes.base.Node`.
@@ -19,7 +19,7 @@ Like `nodes/base.py` (which imports `typesys`/`binding` for the `Node` contract)
 imports the deps its methods need — `typesys` (Type/TypeRegistry), `nodes.binding` (ParamDecl),
 `compose.types` (read_type), `compose.errors` (LoadError) and `compose.reader` (NodeReader) for
 the ported parse machinery, `events` (SourceRange) — none of which import back into `kinds`, so
-it stays a leaf of the kinds package: it never imports any sibling kind, `kinds/__init__`, or
+it stays a leaf of the nodes package: it never imports any sibling kind, `nodes/__init__`, or
 `parser.py`. Every kind module imports it at module top level without cycling; `parser.py`
 re-exports it as the descriptor base type for its importers.
 """
@@ -40,7 +40,7 @@ from agent_composer.events import SourceRange
 
 @dataclass(frozen=True, kw_only=True)
 class NodeDescriptor:
-    """The base every `compose/kinds/<kind>.py` descriptor inherits — the fields common to
+    """The base every `compose/nodes/<kind>.py` descriptor inherits — the fields common to
     all nodes, so no kind redeclares them.
 
     Three field groups:

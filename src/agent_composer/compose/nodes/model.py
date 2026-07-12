@@ -1,6 +1,6 @@
 """kind=model — the ML-inference node's descriptor + parse/build handle (#70).
 
-One of the two-axis `compose/kinds/<kind>.py` modules: it owns the `model` node's frozen
+One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `model` node's frozen
 `ModelDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`), and overriding `build` (which constructs the runtime `ModelNode` +
 wiring and stamps span metadata onto it). Registered into `KINDS`/`BINDING_FIELDS` at import
@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.nodes.base import NodeDescriptor
 from agent_composer.nodes.model import ModelNode
 
 

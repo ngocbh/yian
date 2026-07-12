@@ -63,7 +63,7 @@ Two ideas make this phase tractable:
 a *consequence* of the data references, so it can never disagree with them.
 
 **The front end is split on two axes (issue #70).** Per-node-kind logic lives in
-`compose/kinds/<kind>.py` — each kind module owns its descriptor, its `parse()`, and
+`compose/nodes/<kind>.py` — each kind module owns its descriptor, its `parse()`, and
 its `build()`, and registers them into the `KINDS` table. Cross-node graph passes live
 in `compose/stages/`. The engine core sees none of it.
 

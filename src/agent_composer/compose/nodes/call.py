@@ -1,6 +1,6 @@
 """kind=call|map — function application of a callable; descriptor + parse/build handle (#70).
 
-One of the two-axis `compose/kinds/<kind>.py` modules. `call` and `map` share the resolve-and-bake
+One of the two-axis `compose/nodes/<kind>.py` modules. `call` and `map` share the resolve-and-bake
 `build` (which branches on `isinstance(self, MapDescriptor)`: a `map` -> `MapNode`, else `CallNode`);
 `kinds/map.py`'s `MapDescriptor` subclasses `CallDescriptor`, adding only the map field surface
 (`over`/`parallel`) and the `kind="map"` class attr. Both inherit the template `parse` from
@@ -19,8 +19,8 @@ from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds.base import NodeDescriptor
-from agent_composer.compose.kinds.resolver import (
+from agent_composer.compose.nodes.base import NodeDescriptor
+from agent_composer.compose.nodes.resolver import (
     ChildSignature,
     _resolve_child,
     child_signature,
@@ -96,7 +96,7 @@ class CallDescriptor(NodeDescriptor):
         # to pick the runtime class. `MapDescriptor` is imported locally to avoid a module-top
         # cycle (map.py imports CallDescriptor from here). Kind identity is BORN here — downstream
         # compile passes then dispatch on the node's traits, never on `node.kind`.
-        from agent_composer.compose.kinds.map import MapDescriptor
+        from agent_composer.compose.nodes.map import MapDescriptor
 
         is_map = isinstance(self, MapDescriptor)
         if is_map and "over" in (self.inputs or {}):

@@ -1,7 +1,7 @@
 """6.5 — the `wait` kind handle: parse records the `until` field range; build returns a timed
 WaitNode whose `until` SOURCE rides the reserved wiring key (no author params)."""
 
-from agent_composer.compose.kinds.wait import WaitDescriptor
+from agent_composer.compose.nodes.wait import WaitDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.events import SourceRange

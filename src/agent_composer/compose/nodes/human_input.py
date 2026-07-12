@@ -1,6 +1,6 @@
 """kind=human_input — the suspend-for-a-person node's descriptor + parse/build handle (#70).
 
-One of the two-axis `compose/kinds/<kind>.py` modules: it owns the `human_input` node's
+One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input` node's
 frozen `HumanInputDescriptor`. It inherits the template `parse` from `NodeDescriptor` (which
 records each field's `SourceRange`), overriding only the `_validate_fields` hook to enforce the
 one-of-three question-surface legality, and overriding `build` (which constructs the runtime
@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.nodes.base import NodeDescriptor
 from agent_composer.events import SourceRange
 from agent_composer.expr.template import prompt_refs
 from agent_composer.nodes.human_input import HumanInputNode

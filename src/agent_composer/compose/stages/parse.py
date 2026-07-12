@@ -21,7 +21,7 @@ from typing import Any
 
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds import KINDS
+from agent_composer.compose.nodes import KINDS
 from agent_composer.compose.helpers.reader import NodeReader
 
 # Singular source keys the descriptor dataclasses carry in their plural form. The span tree

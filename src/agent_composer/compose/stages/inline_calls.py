@@ -30,7 +30,7 @@ downstream errors locate at the host binding site — no `node_lines` map. The f
 `outputs:`/`asserts:` sections have no descriptor, so their inline calls locate at the
 section source line (`outputs_line`/`asserts_line`) until the span cutover retires those.
 
-Imports flow DOWN/peer only: `compose.parser` (descriptors), `compose.bindings` (the
+Imports flow DOWN/peer only: `compose.parser` (descriptors), `compose.nodes.bindings` (the
 kind-blind binding-field walk) + `compose.errors` (peers), `expr` (the ref-walk + the
 span flow-call detector), `events` (SourceRange). Only the loader imports this back.
 """
@@ -54,7 +54,7 @@ from agent_composer.expr.template import (
     _split_kv,
     flow_call_callees_in_spans,
 )
-from agent_composer.compose.bindings import map_binding_strings
+from agent_composer.compose.nodes.bindings import map_binding_strings
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parser import (
     CallDescriptor,
@@ -131,7 +131,7 @@ def desugar_inline_calls(
 # --------------------------------------------------------------------------- #
 # The flow `outputs:` binding walk (used by this pass AND the case-value
 # expansion in `compose.cases`). Descriptor binding fields go through the
-# kind-blind `compose.bindings.map_binding_strings` instead.
+# kind-blind `compose.nodes.bindings.map_binding_strings` instead.
 # --------------------------------------------------------------------------- #
 
 

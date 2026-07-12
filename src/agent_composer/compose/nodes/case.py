@@ -1,6 +1,6 @@
 """kind=case — the branch-routing node's descriptor + parse/build handle (#70).
 
-One of the two-axis `compose/kinds/<kind>.py` modules: it owns the `case` node's frozen
+One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `case` node's frozen
 `CaseDescriptor`. It inherits the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`), overriding only the `_normalize_reader` hook — case is the sole kind
 whose surface carries a key YAML 1.1 coerces (`on:`->`True`), so it undoes that coercion before
@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.nodes.base import NodeDescriptor
 
 # YAML 1.1 (PyYAML `safe_load`) coerces the bare key `on:` to the boolean `True` (likewise
 # `off`/`yes`/`no`). The case-node surface key `on:` is the only such key in any node body, so

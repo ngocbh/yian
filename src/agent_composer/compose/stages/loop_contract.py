@@ -9,7 +9,7 @@ with the body OUTPUT's same-named field Type. It relocates `build.check_loop_typ
 verbatim, adding a `.range` anchor off the built loop node's `field_ranges["inputs"]` (the coarse
 `input:` mapping span) — the transitional `node_lines` still feeds `.line`.
 
-Imports flow down only: `compile.validation` (the type comparator), `compose.kinds.resolver`
+Imports flow down only: `compile.validation` (the type comparator), `compose.nodes.resolver`
 (`_output_value_type`, the shared ref-to-Type resolver — `resolver` does not import
 `compose.stages`, so this edge is acyclic), `typesys` (Type), `compose.errors`. Only the loader
 (and the compose package facade) import this back.
@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from agent_composer.compile.validation import types_compatible
-from agent_composer.compose.kinds.resolver import _output_value_type
+from agent_composer.compose.nodes.resolver import _output_value_type
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
 from agent_composer.typesys.values import Type

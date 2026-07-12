@@ -24,7 +24,7 @@ from agent_composer.nodes.call import CallNode   # nodes/call/__init__.py
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind
 from agent_composer.compose import LoadedFlow, LoadError, load_flow
-from agent_composer.compose.kinds.resolver import ChildSignature, child_signature
+from agent_composer.compose.nodes.resolver import ChildSignature, child_signature
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

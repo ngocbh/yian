@@ -1,6 +1,6 @@
 """kind=loop — the `('a -> 'a) -> 'a -> 'a` driver's descriptor + parse/build handle (#70).
 
-One of the two-axis `compose/kinds/<kind>.py` modules: it owns the `loop` node's frozen
+One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `loop` node's frozen
 `LoopDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`), and overriding the resolve-and-bake `build` (predicate-slice legality +
 the `'a -> 'a` field-name contract). Registered into `KINDS`/`BINDING_FIELDS` at import so the
@@ -16,8 +16,8 @@ from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.typesys.values import Type
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.kinds.base import NodeDescriptor
-from agent_composer.compose.kinds.resolver import (
+from agent_composer.compose.nodes.base import NodeDescriptor
+from agent_composer.compose.nodes.resolver import (
     _resolve_child,
     child_signature,
 )

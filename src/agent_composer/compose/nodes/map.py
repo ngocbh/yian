@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent_composer.compose.kinds.call import CallDescriptor
+from agent_composer.compose.nodes.call import CallDescriptor
 
 
 @dataclass(frozen=True, kw_only=True)

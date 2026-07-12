@@ -47,7 +47,7 @@ The pipeline has two representations of a node, and the split matters:
 | | **Descriptor** | **Node** |
 |---|---|---|
 | what | a frozen record of *what you wrote* | the runtime object the engine calls |
-| where | `compose/kinds/<kind>.py` | `nodes/<kind>/` |
+| where | `compose/nodes/<kind>.py` | `nodes/<kind>/` |
 | carries | raw fields + `SourceRange`s | `run()`, typed `output_type`, params |
 | lifetime | load-time only | lives through the whole run |
 
@@ -62,14 +62,14 @@ clean and generic.
 
 `compose/` is split along two axes so a change stays local:
 
-- **Per node kind** → `compose/kinds/<kind>.py`. Each module owns a frozen **descriptor**
+- **Per node kind** → `compose/nodes/<kind>.py`. Each module owns a frozen **descriptor**
   dataclass (`CodeDescriptor`) that subclasses `NodeDescriptor`. The base holds the common
   contract; each kind carries:
   - **`parse(node_id, reader)`** — a classmethod (the base template) that reads one node body,
     recording each field's `SourceRange`,
   - **`build(*, registry, resolver, …)`** — a method that constructs the runtime `Node` + wiring.
 
-  `compose/kinds/__init__.py` derives the `KINDS` table from a single `_DESCRIPTORS` tuple —
+  `compose/nodes/__init__.py` derives the `KINDS` table from a single `_DESCRIPTORS` tuple —
   each kind maps its `kind` string to its descriptor class:
   ```python
   _DESCRIPTORS = (agent.AgentDescriptor, code.CodeDescriptor, ...)
@@ -181,7 +181,7 @@ section header rather than guessing.
 
 | You want to change… | Go to |
 |---|---|
-| a node kind's fields or how it builds | `compose/kinds/<kind>.py` |
+| a node kind's fields or how it builds | `compose/nodes/<kind>.py` |
 | a whole-graph pass (edges, validation, cycles) | `compose/stages/` |
 | the YAML → span-tree parse | `parser.py` + `spanloader.py` |
 | the located cursor over the tree | `reader.py` (`NodeReader`) |

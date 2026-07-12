@@ -7,11 +7,12 @@ Two passes need to rewrite those strings in place: inline-call desugar
 used to reach for the same isinstance ladder (the old
 `calls.map_binding_strings_in_descriptor`); this module replaces it with a
 table-driven walk over `BINDING_FIELDS[kind]`, so adding or altering a kind's
-binding surface is a local edit in `compose/kinds/<kind>.py` (its
-`*_BINDING_FIELDS`) — not a new ladder arm here.
+binding surface is a local edit in `compose/nodes/<kind>.py` (its
+`binding_fields`) — not a new ladder arm here.
 
-Layer: sits above `compose.kinds` (reads `BINDING_FIELDS`) and is imported
-by the `compose.stages.inline_calls` + `compose.cases` peers; it never imports either back.
+Layer: sits inside `compose.nodes` (reads its sibling `BINDING_FIELDS` table) and is
+imported by the `compose.stages.inline_calls` + `compose.cases` peers; it never imports
+either back.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Callable
 
-from agent_composer.compose.kinds import BINDING_FIELDS
+from agent_composer.compose.nodes import BINDING_FIELDS
 
 
 def _descriptor_kind(desc: Any) -> str:

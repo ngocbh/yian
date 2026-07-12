@@ -5,8 +5,8 @@ of a node's `outputs:` / a flow's `inputs:` is read directly into one recursive
 `Type` (see `types.read_type`) rather than a flat `list[IOField]`; nested records
 are native.
 
-Organized along two axes (#70): the per-node-kind axis lives in `kinds/<kind>.py`
-(each owns its descriptor + `parse` + `build` methods; `kinds/__init__.py` derives the shared
+Organized along two axes (#70): the per-node-kind axis lives in `nodes/<kind>.py`
+(each owns its descriptor + `parse` + `build` methods; `nodes/__init__.py` derives the shared
 `KINDS` table from those classes), and the cross-node graph-stage axis lives in `stages/`
 (parse / references / cycles / inline-calls). The shared choke points (`stages/parse.py`,
 `build.py`, `bindings.py`) dispatch through `KINDS` kind-blind — there is no per-kind isinstance
@@ -27,7 +27,7 @@ from agent_composer.compose.build import (
     synthesize_boundary_graph,
     synthesize_roots,
 )
-from agent_composer.compose.kinds.resolver import (
+from agent_composer.compose.nodes.resolver import (
     ChildResolver,
     ChildSignature,
     child_signature,

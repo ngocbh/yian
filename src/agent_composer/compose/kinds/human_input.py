@@ -19,8 +19,17 @@ from typing import Any, Optional
 
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.kinds.helpers import (
+    _output_type,
+    _sink_params,
+    _sink_wiring,
+    check_node_keys,
+    read_common_fields,
+)
 from agent_composer.events import SourceRange
 from agent_composer.expr.template import prompt_refs
+from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.typesys.values import Type, ValueKind
 
 # Human_input's own field surface (was the `human_input` row of parser._KIND_SPECS): no single
@@ -38,8 +47,8 @@ HUMAN_INPUT_ALLOWED: frozenset[str] = frozenset(
 HUMAN_INPUT_BINDING_FIELDS: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class HumanInputDescriptor:
+@dataclass(frozen=True, kw_only=True)
+class HumanInputDescriptor(NodeDescriptor):
     """kind=human_input — suspend for a person; the typed answer is the node's output.
 
     Three author surfaces, exactly one of which carries the question(s):
@@ -50,25 +59,17 @@ class HumanInputDescriptor:
     - `prompt`: the legacy free-text approve/answer surface.
     Legality (exactly-one, adaptive needs its own `prompt:`) is enforced in `parse`.
 
-    `range`/`field_ranges` are located-parse metadata (the node body's `SourceRange` and
-    per-field `SourceRange`s); `compare=False` keeps them out of `==` so a descriptor still
-    equals an identically-configured one built without ranges. Populated by `parse`.
+    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
+    `range`/`field_ranges` parse metadata) from `NodeDescriptor`; only the human_input-specific
+    fields are declared here.
     """
 
-    id: str
     prompt: Optional[str] = None
     questions: Any = None
     adaptive_questions: Optional[dict] = None
     inputs: dict[str, Any] = field(default_factory=dict)
     outputs: Any = None
     asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-    # Located-parse metadata (see class docstring); excluded from equality.
-    range: Optional[SourceRange] = field(default=None, compare=False)
-    field_ranges: dict[str, SourceRange] = field(default_factory=dict, compare=False)
 
 
 def parse(node_id: str, reader: NodeReader) -> HumanInputDescriptor:
@@ -80,17 +81,8 @@ def parse(node_id: str, reader: NodeReader) -> HumanInputDescriptor:
     and each present field's `SourceRange` (`desc.field_ranges[field]`). Field legality mirrors
     the legacy `parser._parse_node` human_input path.
     """
-    from agent_composer.compose.parser import _COMMON_FIELDS
-
+    check_node_keys(node_id, "human_input", reader, HUMAN_INPUT_ALLOWED, HUMAN_INPUT_REQUIRED)
     body = reader.value
-    allowed_keys = HUMAN_INPUT_ALLOWED | _COMMON_FIELDS | {"kind"}
-    for key in body:
-        if key not in allowed_keys:
-            raise LoadError(
-                f"node {node_id!r} (kind=human_input): field {key!r} is not allowed "
-                f"(allowed: {', '.join(sorted(allowed_keys))})",
-                range=reader.range_of(key),
-            )
 
     # One-of-three legality: needs a question surface, `questions`/`adaptive_questions` are
     # mutually exclusive, and an adaptive block needs its own `prompt:` (the LLM brief).
@@ -135,23 +127,7 @@ def parse(node_id: str, reader: NodeReader) -> HumanInputDescriptor:
             range=ranges.get("asserts"),
         )
 
-    for key in ("node_name", "depends_on", "runs_after"):
-        if key in body:
-            kwargs[key] = body[key]
-            rng = reader.range_of(key)
-            if rng is not None:
-                ranges[key] = rng
-    if "env" in body:
-        env = body["env"]
-        if not isinstance(env, dict) or not all(isinstance(k, str) for k in env):
-            raise LoadError(
-                f"node {node_id!r} (kind=human_input): `env:` must be a mapping with string keys",
-                range=reader.range_of("env"),
-            )
-        kwargs["env"] = env
-        rng = reader.range_of("env")
-        if rng is not None:
-            ranges["env"] = rng
+    read_common_fields(node_id, "human_input", reader, kwargs, ranges)
 
     return HumanInputDescriptor(**kwargs, range=reader._own_range(), field_ranges=ranges)
 
@@ -194,8 +170,6 @@ def _build_human_input(desc: HumanInputDescriptor):
       pool-ref validation is a later pass).
     - `desc.questions` is `None` (legacy form): a plain prompt gate with no questions.
     """
-    from agent_composer.nodes.human_input import HumanInputNode
-
     questions = desc.questions
     if isinstance(questions, list):
         return HumanInputNode(
@@ -226,8 +200,6 @@ def build(desc: HumanInputDescriptor, *, registry, resolver=None, **_loader_hint
     `.range`/`.field_ranges` from the descriptor. `resolver` is unused (leaf kind) and
     `_loader_hints` absorbs the inline-CODE traceback anchors that only the CODE build reads.
     """
-    from agent_composer.compose.build import _output_type, _sink_params, _sink_wiring
-
     node = _build_human_input(desc)
     node.output_type = _output_type(desc.outputs, registry)
     # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT (the host
@@ -243,14 +215,3 @@ def build(desc: HumanInputDescriptor, *, registry, resolver=None, **_loader_hint
     node.range = desc.range
     node.field_ranges = dict(desc.field_ranges)
     return node, wiring
-
-
-def register() -> None:
-    """Register the `human_input` kind into the shared dispatch tables (idempotent)."""
-    from agent_composer.compose.kinds import KindSpec, KINDS, BINDING_FIELDS
-
-    KINDS["human_input"] = KindSpec(descriptor_cls=HumanInputDescriptor, parse=parse, build=build)
-    BINDING_FIELDS["human_input"] = HUMAN_INPUT_BINDING_FIELDS
-
-
-register()

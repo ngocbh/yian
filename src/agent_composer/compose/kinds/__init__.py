@@ -21,15 +21,35 @@ never sees any of it (kind-blind invariant, `tests/engine/test_kind_census.py`).
 `${...}` binding strings. `compose/bindings.py` walks it kind-blind (replacing the old
 `map_binding_strings_in_descriptor` isinstance ladder).
 
-Both tables are populated at import: every kind module registers itself (its `register()`
-runs on import, wiring its `KindSpec` into `KINDS` and its binding fields into
-`BINDING_FIELDS`). The `#70` rollout is complete — there is no `_KIND_SPECS` fallback.
+Both tables are assembled **explicitly below** from each kind module's exports — one row
+per author-written kind. Adding a kind means adding its import and one row to each table.
+The `#70` rollout is complete — there is no `_KIND_SPECS` fallback.
+
+Kind modules take their `build` helpers at module top level — from `kinds/helpers.py` (a leaf
+of this package: it imports no `kinds/__init__` symbol) and from `nodes.*` (below `compose` in
+the layer ladder) — so importing them here cannot cycle. The one import each still defers is in
+`parse`: the shared field constants from `parser.py`, which re-exports these descriptors, so a
+top-level import there WOULD cycle. Assembling the tables below therefore only reads each
+module's already-defined descriptor + functions; it never touches `KINDS`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
+
+from agent_composer.compose.kinds import (
+    agent,
+    call,
+    case,
+    code,
+    human_input,
+    loop,
+    model,
+    tool,
+    wait,
+)
+from agent_composer.compose.kinds import map as map_kind  # `map` shadows the builtin
 
 
 @dataclass(frozen=True)
@@ -49,25 +69,33 @@ class KindSpec:
     build: Callable[..., tuple]
 
 
-# Surface `kind:` string -> its `KindSpec`. Populated at import by each kind's `register()`;
-# the shared dispatch (`stages/parse.py`, `build.build_leaf_node`) consults this.
-KINDS: dict[str, KindSpec] = {}
+# Surface `kind:` string -> its `KindSpec`; the shared dispatch (`stages/parse.py`,
+# `build.build_leaf_node`) consults this. `map` reuses `call`'s `CallDescriptor` + build
+# (a map IS a call with an `over:` iteration source), with its own `over`-aware `parse`.
+KINDS: dict[str, KindSpec] = {
+    "agent": KindSpec(agent.AgentDescriptor, agent.parse, agent.build),
+    "code": KindSpec(code.CodeDescriptor, code.parse, code.build),
+    "model": KindSpec(model.ModelDescriptor, model.parse, model.build),
+    "tool": KindSpec(tool.ToolDescriptor, tool.parse, tool.build),
+    "wait": KindSpec(wait.WaitDescriptor, wait.parse, wait.build),
+    "human_input": KindSpec(human_input.HumanInputDescriptor, human_input.parse, human_input.build),
+    "case": KindSpec(case.CaseDescriptor, case.parse, case.build),
+    "call": KindSpec(call.CallDescriptor, call.parse, call.build),
+    "map": KindSpec(call.CallDescriptor, map_kind.parse, call.build),
+    "loop": KindSpec(loop.LoopDescriptor, loop.parse, loop.build),
+}
 
 # Surface `kind:` string -> the descriptor field names that carry `${...}` binding strings.
 # Consumed by the kind-blind walk in `compose/bindings.py`.
-BINDING_FIELDS: dict[str, tuple[str, ...]] = {}
-
-
-# Import each kind module for its import-time `register()` side effect (populates
-# KINDS/BINDING_FIELDS). Kept at the BOTTOM so the tables above already exist when a kind's
-# `register()` reads them. Kind modules import parser/build helpers lazily, so no cycle.
-from agent_composer.compose.kinds import agent as _agent  # noqa: E402,F401
-from agent_composer.compose.kinds import code as _code  # noqa: E402,F401
-from agent_composer.compose.kinds import model as _model  # noqa: E402,F401
-from agent_composer.compose.kinds import tool as _tool  # noqa: E402,F401
-from agent_composer.compose.kinds import wait as _wait  # noqa: E402,F401
-from agent_composer.compose.kinds import human_input as _human_input  # noqa: E402,F401
-from agent_composer.compose.kinds import case as _case  # noqa: E402,F401
-from agent_composer.compose.kinds import call as _call  # noqa: E402,F401
-from agent_composer.compose.kinds import map as _map  # noqa: E402,F401
-from agent_composer.compose.kinds import loop as _loop  # noqa: E402,F401
+BINDING_FIELDS: dict[str, tuple[str, ...]] = {
+    "agent": agent.AGENT_BINDING_FIELDS,
+    "code": code.CODE_BINDING_FIELDS,
+    "model": model.MODEL_BINDING_FIELDS,
+    "tool": tool.TOOL_BINDING_FIELDS,
+    "wait": wait.WAIT_BINDING_FIELDS,
+    "human_input": human_input.HUMAN_INPUT_BINDING_FIELDS,
+    "case": case.CASE_BINDING_FIELDS,
+    "call": call.CALL_BINDING_FIELDS,
+    "map": map_kind.MAP_BINDING_FIELDS,
+    "loop": loop.LOOP_BINDING_FIELDS,
+}

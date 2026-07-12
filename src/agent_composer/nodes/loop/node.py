@@ -36,7 +36,7 @@ class LoopMaxExceeded(RuntimeError):
 class LoopNode(Node):
     """A higher-order `('a -> 'a) -> 'a -> 'a` driver over a carried record.
 
-    Fields (baked at load by `compose.build.build_loop_node`; copied onto every clone by `respawn`):
+    Fields (baked at load by `compose.kinds.loop.build`; copied onto every clone by `respawn`):
       child          the compiled body subflow (the `'a -> 'a` callable); the Grow subgraph body.
       child_inputs   the body's declared input decls (subset of the carried record).
       predicate_kind one of "while" | "until" | "times".
@@ -107,7 +107,7 @@ class LoopNode(Node):
         # CONTINUE: runaway guard for predicate loops (times stops via _should_stop_now above).
         # Guard on `should_stop(k)` (NOT k+1): driver@k grows body_k, so body_k is the (k+1)-th
         # body. It is within budget iff `k < max_iters`; raise once `k >= max_iters`. This makes
-        # `max: M` permit exactly M body runs (`build_loop_node` documents "max must permit at
+        # `max: M` permit exactly M body runs (the loop build documents "max must permit at
         # least one body run" — `max: 1` runs one body then fails on the second driver).
         if self.predicate_kind in ("while", "until") and self.should_stop(k):
             raise LoopMaxExceeded(
@@ -153,7 +153,7 @@ class LoopNode(Node):
         """The loop's hard iteration budget: True once `iteration` has reached `max_iters`.
 
         Pure, node-owned budget policy (`iteration >= self.max_iters`); assumes `max_iters` was
-        baked at load (`compose.build.build_loop_node`). `run` consults this both as the `times`
+        baked at load (`compose.kinds.loop.build`). `run` consults this both as the `times`
         stop-count and as the `while`/`until` runaway guard."""
         return iteration >= self.max_iters
 

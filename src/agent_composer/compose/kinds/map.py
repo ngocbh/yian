@@ -4,13 +4,13 @@ The second of the two REF/MAP kinds that SHARE one frozen `CallDescriptor` (owne
 `kinds/call.py`). A `map` is `kind: map` + `over: ${list}` — iteration with `${item}` in
 element scope, built as a `MapNode` (`parallel:` overlaps the element runs). This module owns
 only the map FIELD SURFACE (`over`/`parallel` join call's `call`/`inputs`) and reuses call's
-shared located `parse_call` and its `build` (which drives `build.build_call_node`, branching on
-`desc.kind == "map"`). Registered into `KINDS`/`BINDING_FIELDS` at import.
+shared located `parse_call` and its `build` (which branches on `desc.kind == "map"` to build a
+`MapNode`). Registered into `KINDS`/`BINDING_FIELDS` at import.
 """
 
 from __future__ import annotations
 
-from agent_composer.compose.kinds.call import CallDescriptor, build, parse_call
+from agent_composer.compose.kinds.call import CallDescriptor, parse_call
 from agent_composer.compose.reader import NodeReader
 
 # Map's field surface (was the `map` row of parser._KIND_SPECS): `call` (the callable) and
@@ -29,14 +29,3 @@ def parse(node_id: str, reader: NodeReader) -> CallDescriptor:
     map field surface (`over`/`parallel` in addition to `call`/`inputs`).
     """
     return parse_call(node_id, reader, kind="map", required=MAP_REQUIRED, allowed=MAP_ALLOWED)
-
-
-def register() -> None:
-    """Register the `map` kind into the shared dispatch tables (idempotent)."""
-    from agent_composer.compose.kinds import KindSpec, KINDS, BINDING_FIELDS
-
-    KINDS["map"] = KindSpec(descriptor_cls=CallDescriptor, parse=parse, build=build)
-    BINDING_FIELDS["map"] = MAP_BINDING_FIELDS
-
-
-register()

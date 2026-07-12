@@ -2,10 +2,10 @@
 
 One of the two-axis `compose/kinds/<kind>.py` modules. `call` and `map` SHARE one frozen
 `CallDescriptor` (the REF/MAP discriminator is `desc.kind`), so this module owns the
-descriptor and the shared located parse; `kinds/map.py` reuses both with the map field
-surface. `build(desc, *, registry, resolver)` drives `build.build_call_node` (which branches
-on `desc.kind`: `"map"` -> `MapNode`, else `CallNode`). Registered into `KINDS`/`BINDING_FIELDS`
-at import so the shared dispatch routes here.
+descriptor, the shared located parse, and the resolve-and-bake `build` (which branches on
+`desc.kind`: `"map"` -> `MapNode`, else `CallNode`); `kinds/map.py` reuses all three with the
+map field surface. Registered into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch
+routes here.
 """
 
 from __future__ import annotations
@@ -13,9 +13,37 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from agent_composer.nodes.base import Node
+from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.call import CallNode
+from agent_composer.nodes.map import MapNode
+from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.kinds.helpers import (
+    _sink_params,
+    _sink_wiring,
+    check_node_keys,
+    read_common_fields,
+)
+from agent_composer.compose.kinds.resolver import (
+    ChildSignature,
+    _resolve_child,
+    child_signature,
+)
 from agent_composer.events import SourceRange
+
+# A list-type helper: the LIST_OBJECT/LIST_* seg for an element Type (mirrors
+# `typesys.types._LIST_SEG_FOR_ELEMENT` + the list-of-record / list-of-variant rule in
+# `resolve_type`, applied to a precomputed element Type rather than a Type).
+_LIST_SEG_FOR_ELEMENT: dict[ValueKind, ValueKind] = {
+    ValueKind.STRING: ValueKind.LIST_STRING,
+    ValueKind.INTEGER: ValueKind.LIST_INTEGER,
+    ValueKind.NUMBER: ValueKind.LIST_NUMBER,
+    ValueKind.BOOLEAN: ValueKind.LIST_BOOLEAN,
+    ValueKind.OBJECT: ValueKind.LIST_OBJECT,
+}
 
 # Call's own field surface (was the `call` row of parser._KIND_SPECS): `call` (the callable) is
 # the one required flat field. `map` reuses CallDescriptor with a wider surface (see kinds/map.py).
@@ -28,8 +56,8 @@ CALL_ALLOWED: frozenset[str] = frozenset({"call", "inputs", "asserts"})
 CALL_BINDING_FIELDS: tuple[str, ...] = ("inputs", "over")
 
 
-@dataclass(frozen=True)
-class CallDescriptor:
+@dataclass(frozen=True, kw_only=True)
+class CallDescriptor(NodeDescriptor):
     """kind=call|map — function application of a callable (`call:` + call-arg bindings).
 
     `call` names the callable, resolved **defs-first, else an external flow id** (the
@@ -42,25 +70,17 @@ class CallDescriptor:
     it from the YAML kind; the two SYNTH paths (inline-call + case desugar) keep the REF default
     (`over=None`). `build` branches on it: a `map` builds a `MapNode`, a `call` a `CallNode`.
 
-    `range`/`field_ranges` are located-parse metadata (the node body's `SourceRange` and
-    per-field `SourceRange`s); `compare=False` keeps them out of `==` so a descriptor still
-    equals an identically-configured one built without ranges. Populated by `parse`.
+    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
+    `range`/`field_ranges` parse metadata) from `NodeDescriptor`; only the call/map-specific
+    fields are declared here.
     """
 
-    id: str
     call: str
     inputs: dict[str, Any] = field(default_factory=dict)
     over: Optional[str] = None
     parallel: bool = False
     kind: str = "call"
     asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-    # Located-parse metadata (see class docstring); excluded from equality.
-    range: Optional[SourceRange] = field(default=None, compare=False)
-    field_ranges: dict[str, SourceRange] = field(default_factory=dict, compare=False)
 
 
 def parse_call(
@@ -78,23 +98,8 @@ def parse_call(
     (`desc.range`) and each present field's `SourceRange` (`desc.field_ranges[field]`). Field
     legality mirrors the legacy `parser._parse_node` call/map path.
     """
-    from agent_composer.compose.parser import _COMMON_FIELDS
-
+    check_node_keys(node_id, kind, reader, allowed, required)
     body = reader.value
-    allowed_keys = allowed | _COMMON_FIELDS | {"kind"}
-    for key in body:
-        if key not in allowed_keys:
-            raise LoadError(
-                f"node {node_id!r} (kind={kind}): field {key!r} is not allowed "
-                f"(allowed: {', '.join(sorted(allowed_keys))})",
-                range=reader.range_of(key),
-            )
-    for key in required:
-        if key not in body:
-            raise LoadError(
-                f"node {node_id!r} (kind={kind}): missing required field {key!r}",
-                range=reader._own_range(),
-            )
 
     ranges: dict[str, SourceRange] = {}
     kwargs: dict[str, Any] = {"id": node_id, "kind": kind}
@@ -115,23 +120,7 @@ def parse_call(
             range=ranges.get("asserts"),
         )
 
-    for key in ("node_name", "depends_on", "runs_after"):
-        if key in body:
-            kwargs[key] = body[key]
-            rng = reader.range_of(key)
-            if rng is not None:
-                ranges[key] = rng
-    if "env" in body:
-        env = body["env"]
-        if not isinstance(env, dict) or not all(isinstance(k, str) for k in env):
-            raise LoadError(
-                f"node {node_id!r} (kind={kind}): `env:` must be a mapping with string keys",
-                range=reader.range_of("env"),
-            )
-        kwargs["env"] = env
-        rng = reader.range_of("env")
-        if rng is not None:
-            ranges["env"] = rng
+    read_common_fields(node_id, kind, reader, kwargs, ranges)
 
     return CallDescriptor(**kwargs, range=reader._own_range(), field_ranges=ranges)
 
@@ -141,29 +130,116 @@ def parse(node_id: str, reader: NodeReader) -> CallDescriptor:
     return parse_call(node_id, reader, kind="call", required=CALL_REQUIRED, allowed=CALL_ALLOWED)
 
 
+def _list_of(element: Type) -> Type:
+    """`element` -> a `list[element]` Type (the MAP codomain). Mirrors `resolve_type`'s
+    list-seg rule: a record/variant element -> LIST_OBJECT/LIST_STRING; else by scalar."""
+    if element.tags is not None:
+        list_seg = ValueKind.LIST_STRING
+    elif element.fields is not None:
+        list_seg = ValueKind.LIST_OBJECT
+    else:
+        list_seg = _LIST_SEG_FOR_ELEMENT.get(element.kind, ValueKind.LIST_ANY)
+    return Type(kind=list_seg, element=element)
+
+
+def _check_child_bindings(
+    node_id: str,
+    flow_id: str,
+    params: list[ParamDecl],
+    sig: ChildSignature,
+    errors: list[str],
+) -> None:
+    """Name/arity check a `call` node's PARAMS against the child SIGNATURE (the analogue of
+    `compile.validation._check_ref_bindings`'s name + required-input checks, read off the
+    signature). Reads the node-side `params` (the split); the deep cross-flow TYPE
+    check is `check_ref_map_types`, a loader post-build pass over the flow wiring."""
+    declared = {d.name for d in sig.inputs}
+    bound = set()
+    for p in params:
+        bound.add(p.name)
+        if p.name not in declared:
+            errors.append(
+                f"call node {node_id!r}: binding {p.name!r} is not a declared "
+                f"input of callable {flow_id!r}"
+            )
+    for decl in sig.inputs:
+        if decl.required and decl.name not in bound and decl.default is None:
+            errors.append(
+                f"call node {node_id!r}: required callable input {decl.name!r} is unbound"
+            )
+
+
 def build(desc: CallDescriptor, *, registry=None, resolver, **_loader_hints):
-    """Construct the runtime `CallNode`/`MapNode` (+ wiring) for one `CallDescriptor`.
+    """Construct the runtime `CallNode`/`MapNode` (+ wiring) for one `CallDescriptor` —
+    REF's `CallNode` (single application) or MAP's `MapNode` (`kind: map` + `over:`, mapped
+    iteration) — resolve-and-bake, then stamp `.range`/`.field_ranges` from the descriptor.
 
-    Drives `build.build_call_node` (which branches on `desc.kind`), then stamps
-    `.range`/`.field_ranges` from the descriptor. `registry` is unused (call/map resolve their
-    output type from the child signature, not the flow typedefs); `_loader_hints` absorbs the
-    inline-CODE traceback anchors that only the CODE build reads — both ride the shared
-    `KindSpec.build` signature.
+    Returns `(node, wiring)` (the split): the node carries `params`; the flow owns the sources
+    in `wiring`. A MAP's reserved `over:` iteration source rides the wiring under the `"over"`
+    key (over-then-inputs order); a REF's wiring is just its `inputs:`. Resolves the callable
+    via `resolver`, derives its `ChildSignature`, stamps `output_type` (REF re-exports the
+    codomain; MAP wraps it in `list[U]`), name/arity-checks the params, and BAKES the child's
+    compiled flow onto the node. The REF/MAP discriminator is `desc.kind` (`"map"` -> `MapNode`,
+    else `CallNode`). `registry` is unused (call/map resolve their output type from the child
+    signature, not the flow typedefs); `_loader_hints` absorbs the inline-CODE traceback
+    anchors that only the CODE build reads — both ride the shared `KindSpec.build` signature.
     """
-    from agent_composer.compose.build import build_call_node
-
-    node, wiring = build_call_node(desc, resolver)
+    # The construction boundary: this reads the RAW authored `desc.kind` STRING (not the
+    # compiled kind enum) to pick the runtime class. Kind identity is BORN here — downstream
+    # compile passes then dispatch on the node's traits, never on `node.kind`.
+    is_map = desc.kind == "map"
+    if is_map and "over" in (desc.inputs or {}):
+        # Reserved-name guard: a MAP's `over` is the iteration source, carried under
+        # the reserved wiring key — an `inputs:` param named `over` would collide.
+        raise LoadError(
+            f"map node {desc.id!r}: input name 'over' is reserved (the iteration "
+            f"source); rename the `inputs:` entry"
+        )
+    child = _resolve_child(desc.id, desc.call, resolver)
+    sig = child_signature(child)
+    # Stamp the child's AssertSet onto its compiled flow: the Grow subgraph body is `child.compiled`,
+    # and `expand.clone_child` reads `child_asserts` off the cloned child to carry the
+    # boundary asserts (eval'd eagerly in the CALL grow residual) + re-home the post asserts onto __out.
+    child.compiled.child_asserts = child.asserts
+    errors: list[str] = []
+    if is_map:
+        node: Node = MapNode(
+            desc.id,
+            flow_id=desc.call,
+            flow_version=None,
+            child=child.compiled,
+            child_inputs=child.input,
+            child_asserts=child.asserts,
+            child_source=child.source,        # render-only; the CLI nested-error traceback
+            parallel=desc.parallel,           # inert; carried for the over case only
+            title=desc.node_name,
+        )
+        node.params = _sink_params(desc.inputs)
+        wiring = {"over": desc.over, **_sink_wiring(desc.inputs)}   # over FIRST (edge order)
+        if sig.output is None:
+            errors.append(
+                f"map node {desc.id!r}: callable {desc.call!r} must declare exactly one "
+                f"output value — a mapped call (over:) returns list[U] of that single output"
+            )
+        else:
+            node.output_type = _list_of(sig.output)
+    else:
+        node = CallNode(
+            desc.id,
+            flow_id=desc.call,
+            flow_version=None,
+            child=child.compiled,
+            child_inputs=child.input,
+            child_asserts=child.asserts,
+            child_source=child.source,        # render-only; the CLI nested-error traceback
+            title=desc.node_name,
+        )
+        node.params = _sink_params(desc.inputs)
+        wiring = _sink_wiring(desc.inputs)
+        node.output_type = sig.output         # re-export the child's single codomain value
+    _check_child_bindings(desc.id, desc.call, node.params, sig, errors)
+    if errors:
+        raise LoadError("\n  ".join(errors))
     node.range = desc.range
     node.field_ranges = dict(desc.field_ranges)
     return node, wiring
-
-
-def register() -> None:
-    """Register the `call` kind into the shared dispatch tables (idempotent)."""
-    from agent_composer.compose.kinds import KindSpec, KINDS, BINDING_FIELDS
-
-    KINDS["call"] = KindSpec(descriptor_cls=CallDescriptor, parse=parse, build=build)
-    BINDING_FIELDS["call"] = CALL_BINDING_FIELDS
-
-
-register()

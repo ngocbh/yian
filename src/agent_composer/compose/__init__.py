@@ -22,14 +22,15 @@ in the engine imports `compose`.
 
 from agent_composer.compose.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
-    ChildResolver,
-    ChildSignature,
-    build_call_node,
     build_leaf_node,
-    child_signature,
     infer_data_edges,
     synthesize_boundary_graph,
     synthesize_roots,
+)
+from agent_composer.compose.kinds.resolver import (
+    ChildResolver,
+    ChildSignature,
+    child_signature,
 )
 from agent_composer.compose.stages.inline_calls import desugar_inline_calls
 from agent_composer.compose.cases import (
@@ -76,7 +77,6 @@ __all__ = [
     "read_flow_inputs",
     "read_type",
     "build_leaf_node",
-    "build_call_node",
     "child_signature",
     "ChildSignature",
     "ChildResolver",

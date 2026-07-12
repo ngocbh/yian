@@ -15,7 +15,16 @@ from typing import Any, Optional
 
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.kinds.helpers import (
+    _output_type,
+    _sink_params,
+    _sink_wiring,
+    check_node_keys,
+    read_common_fields,
+)
 from agent_composer.events import SourceRange
+from agent_composer.nodes.code import CodeNode
 
 # Code's own field surface (was the `code` row of parser._KIND_SPECS): `code` is the one
 # required flat field; these flat keys are allowed besides the shared `_COMMON_FIELDS` + `kind`.
@@ -26,27 +35,19 @@ CODE_ALLOWED: frozenset[str] = frozenset({"code", "inputs", "outputs", "asserts"
 CODE_BINDING_FIELDS: tuple[str, ...] = ("inputs",)
 
 
-@dataclass(frozen=True)
-class CodeDescriptor:
+@dataclass(frozen=True, kw_only=True)
+class CodeDescriptor(NodeDescriptor):
     """kind=code — deterministic code (a `module:function` ref or a source snippet).
 
-    `range`/`field_ranges` are located-parse metadata (the node body's `SourceRange` and
-    per-field `SourceRange`s); `compare=False` keeps them out of `==` so a descriptor still
-    equals an identically-configured one built without ranges. Populated by `parse`.
+    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
+    `range`/`field_ranges` parse metadata) from `NodeDescriptor`; only the code-specific
+    fields are declared here.
     """
 
-    id: str
     code: str
     inputs: dict[str, Any] = field(default_factory=dict)
     outputs: Any = None
     asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-    # Located-parse metadata (see class docstring); excluded from equality.
-    range: Optional[SourceRange] = field(default=None, compare=False)
-    field_ranges: dict[str, SourceRange] = field(default_factory=dict, compare=False)
 
 
 def parse(node_id: str, reader: NodeReader) -> CodeDescriptor:
@@ -57,23 +58,8 @@ def parse(node_id: str, reader: NodeReader) -> CodeDescriptor:
     which `build` uses to frame inline tracebacks. Field legality mirrors the legacy
     `parser._parse_node` code path (allowed/required flat keys, `asserts:`/`env:` shape).
     """
-    from agent_composer.compose.parser import _COMMON_FIELDS
-
+    check_node_keys(node_id, "code", reader, CODE_ALLOWED, CODE_REQUIRED)
     body = reader.value
-    allowed_keys = CODE_ALLOWED | _COMMON_FIELDS | {"kind"}
-    for key in body:
-        if key not in allowed_keys:
-            raise LoadError(
-                f"node {node_id!r} (kind=code): field {key!r} is not allowed "
-                f"(allowed: {', '.join(sorted(allowed_keys))})",
-                range=reader.range_of(key),
-            )
-    for key in CODE_REQUIRED:
-        if key not in body:
-            raise LoadError(
-                f"node {node_id!r} (kind=code): missing required field {key!r}",
-                range=reader._own_range(),
-            )
 
     ranges: dict[str, SourceRange] = {}
     kwargs: dict[str, Any] = {"id": node_id}
@@ -94,23 +80,7 @@ def parse(node_id: str, reader: NodeReader) -> CodeDescriptor:
             range=ranges.get("asserts"),
         )
 
-    for key in ("node_name", "depends_on", "runs_after"):
-        if key in body:
-            kwargs[key] = body[key]
-            rng = reader.range_of(key)
-            if rng is not None:
-                ranges[key] = rng
-    if "env" in body:
-        env = body["env"]
-        if not isinstance(env, dict) or not all(isinstance(k, str) for k in env):
-            raise LoadError(
-                f"node {node_id!r} (kind=code): `env:` must be a mapping with string keys",
-                range=reader.range_of("env"),
-            )
-        kwargs["env"] = env
-        rng = reader.range_of("env")
-        if rng is not None:
-            ranges["env"] = rng
+    read_common_fields(node_id, "code", reader, kwargs, ranges)
 
     return CodeDescriptor(**kwargs, range=reader._own_range(), field_ranges=ranges)
 
@@ -142,9 +112,6 @@ def build(
     All three ride the shared `KindSpec.build` call from `build_leaf_node`. `resolver` is
     unused (leaf kind); it rides the shared signature for call/map/loop.
     """
-    from agent_composer.compose.build import _output_type, _sink_params, _sink_wiring
-    from agent_composer.nodes.code import CodeNode
-
     # Prefer the caller's explicit hints (the loader's source maps today); otherwise derive
     # them from the recorded `code:` range (the standalone / Step-7 range-threaded path).
     code_rng = desc.field_ranges.get("code")
@@ -184,14 +151,3 @@ def build(
     node.range = desc.range
     node.field_ranges = dict(desc.field_ranges)
     return node, wiring
-
-
-def register() -> None:
-    """Register the `code` kind into the shared dispatch tables (idempotent)."""
-    from agent_composer.compose.kinds import KindSpec, KINDS, BINDING_FIELDS
-
-    KINDS["code"] = KindSpec(descriptor_cls=CodeDescriptor, parse=parse, build=build)
-    BINDING_FIELDS["code"] = CODE_BINDING_FIELDS
-
-
-register()

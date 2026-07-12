@@ -19,12 +19,31 @@ from typing import Any, Optional
 
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.kinds.base import NodeDescriptor
+from agent_composer.compose.kinds.helpers import (
+    _KEYWORD_FIELD_REMAP,
+    check_node_keys,
+    read_common_fields,
+)
 from agent_composer.events import SourceRange
+
+# YAML 1.1 (PyYAML `safe_load`) coerces the bare key `on:` to the boolean `True` (likewise
+# `off`/`yes`/`no`). The case-node surface key `on:` is the only such key in any node body, so
+# this back-map + `_normalize_keys` (below) undo the coercion. Case-local: no other kind body
+# carries a YAML-bool-coerced key.
+_YAML_BOOL_KEYS = {True: "on", False: "off"}
+
+
+def _normalize_keys(body: dict) -> dict:
+    """Undo YAML 1.1 boolean-key coercion for the surface key `on:`."""
+    if not any(k in _YAML_BOOL_KEYS for k in body):
+        return body
+    return {_YAML_BOOL_KEYS.get(k, k): v for k, v in body.items()}
 
 # Case's own field surface (was the `case` row of parser._KIND_SPECS): `cases` is the one
 # required flat field; `on`/`else` are the optional discriminator/fallback. These flat keys
 # are allowed besides the shared `_COMMON_FIELDS` + `kind`. NOTE: `else` is a Python keyword,
-# so it maps onto the descriptor's `else_` field (via parser._KEYWORD_FIELD_REMAP).
+# so it maps onto the descriptor's `else_` field (via helpers._KEYWORD_FIELD_REMAP).
 CASE_REQUIRED: frozenset[str] = frozenset({"cases"})
 CASE_ALLOWED: frozenset[str] = frozenset({"cases", "else", "on"})
 # A `case` carries CONDITIONS (`on:` + each `when:`), not `${...}` sink bindings, so the
@@ -33,30 +52,22 @@ CASE_ALLOWED: frozenset[str] = frozenset({"cases", "else", "on"})
 CASE_BINDING_FIELDS: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class CaseDescriptor:
+@dataclass(frozen=True, kw_only=True)
+class CaseDescriptor(NodeDescriptor):
     """kind=case — branch routing (searched `when:` or `on:`-value form).
 
     A `case` routes only — it carries NO `inputs:` (the desugar maps it onto the
     inputs-bearing `CaseNode`). `else_` is the `else:` fallback.
 
-    `range`/`field_ranges` are located-parse metadata (the node body's `SourceRange` and
-    per-field `SourceRange`s); `compare=False` keeps them out of `==` so a descriptor still
-    equals an identically-configured one built without ranges. Populated by `parse`.
+    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
+    `range`/`field_ranges` parse metadata) from `NodeDescriptor`; only the case-specific
+    fields are declared here.
     """
 
-    id: str
     cases: list[dict[str, Any]] = field(default_factory=list)
     else_: Optional[str] = None
     on: Optional[str] = None
     asserts: list[str] = field(default_factory=list)
-    node_name: Optional[str] = None
-    depends_on: list[str] = field(default_factory=list)
-    runs_after: list[str] = field(default_factory=list)
-    env: dict[str, Any] = field(default_factory=dict)  # static per-node config; merged under flow env: at build
-    # Located-parse metadata (see class docstring); excluded from equality.
-    range: Optional[SourceRange] = field(default=None, compare=False)
-    field_ranges: dict[str, SourceRange] = field(default_factory=dict, compare=False)
 
 
 def parse(node_id: str, reader: NodeReader) -> CaseDescriptor:
@@ -65,34 +76,15 @@ def parse(node_id: str, reader: NodeReader) -> CaseDescriptor:
     Records the node body's `SourceRange` (`desc.range`) and each present field's
     `SourceRange` (`desc.field_ranges[field]`). Field legality mirrors the legacy
     `parser._parse_node` case path. The bare surface key `on:` is coerced to the boolean
-    `True` by YAML 1.1 (SafeLoader) — undone via `parser._normalize_keys` for the body
-    iteration; ranges still resolve because `NodeReader` matches the RAW key text (`"on"`).
+    `True` by YAML 1.1 (SafeLoader) — undone via the module-local `_normalize_keys` for the
+    body iteration; ranges still resolve because `NodeReader` matches the RAW key text (`"on"`).
     The `else:` surface key (a Python keyword) maps onto the `else_` field.
     """
-    from agent_composer.compose.parser import (
-        _COMMON_FIELDS,
-        _KEYWORD_FIELD_REMAP,
-        _normalize_keys,
-    )
-
     # Undo the `on:`->True coercion on the reader in place, so spanless presence checks
     # (`_pair` reads `reader.value`) find `on`; span-aware range lookups match raw key text.
     reader.value = _normalize_keys(reader.value)
+    check_node_keys(node_id, "case", reader, CASE_ALLOWED, CASE_REQUIRED)
     body = reader.value
-    allowed_keys = CASE_ALLOWED | _COMMON_FIELDS | {"kind"}
-    for key in body:
-        if key not in allowed_keys:
-            raise LoadError(
-                f"node {node_id!r} (kind=case): field {key!r} is not allowed "
-                f"(allowed: {', '.join(sorted(allowed_keys))})",
-                range=reader.range_of(key),
-            )
-    for key in CASE_REQUIRED:
-        if key not in body:
-            raise LoadError(
-                f"node {node_id!r} (kind=case): missing required field {key!r}",
-                range=reader._own_range(),
-            )
 
     ranges: dict[str, SourceRange] = {}
     kwargs: dict[str, Any] = {"id": node_id}
@@ -105,23 +97,7 @@ def parse(node_id: str, reader: NodeReader) -> CaseDescriptor:
         # `else` -> `else_` (the descriptor field name); `cases`/`on` are unchanged.
         kwargs[_KEYWORD_FIELD_REMAP.get(key, key)] = body[key]
 
-    for key in ("node_name", "depends_on", "runs_after"):
-        if key in body:
-            kwargs[key] = body[key]
-            rng = reader.range_of(key)
-            if rng is not None:
-                ranges[key] = rng
-    if "env" in body:
-        env = body["env"]
-        if not isinstance(env, dict) or not all(isinstance(k, str) for k in env):
-            raise LoadError(
-                f"node {node_id!r} (kind=case): `env:` must be a mapping with string keys",
-                range=reader.range_of("env"),
-            )
-        kwargs["env"] = env
-        rng = reader.range_of("env")
-        if rng is not None:
-            ranges["env"] = rng
+    read_common_fields(node_id, "case", reader, kwargs, ranges)
 
     return CaseDescriptor(**kwargs, range=reader._own_range(), field_ranges=ranges)
 
@@ -137,14 +113,3 @@ def build(desc: CaseDescriptor, *, registry, resolver=None, **_loader_hints):
         f"node {desc.id!r}: kind case is not a leaf node "
         f"(case nodes are desugared; ref/map nodes expand at runtime)"
     )
-
-
-def register() -> None:
-    """Register the `case` kind into the shared dispatch tables (idempotent)."""
-    from agent_composer.compose.kinds import KindSpec, KINDS, BINDING_FIELDS
-
-    KINDS["case"] = KindSpec(descriptor_cls=CaseDescriptor, parse=parse, build=build)
-    BINDING_FIELDS["case"] = CASE_BINDING_FIELDS
-
-
-register()

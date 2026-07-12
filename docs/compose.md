@@ -62,16 +62,20 @@ clean and generic.
 
 `compose/` is split along two axes so a change stays local:
 
-- **Per node kind** → `compose/kinds/<kind>.py`. Each module owns three things and
-  registers them at import into the `KINDS` table:
-  ```python
-  KINDS["code"] = KindSpec(descriptor_cls=CodeDescriptor, parse=parse, build=build)
-  ```
+- **Per node kind** → `compose/kinds/<kind>.py`. Each module owns three things:
   - a frozen **descriptor** dataclass (`CodeDescriptor`),
   - **`parse(node_id, reader)`** — read one node body, recording each field's `SourceRange`,
   - **`build(desc, *, registry, resolver, …)`** — construct the runtime `Node` + wiring.
 
-  Adding or changing a kind is one file. The shared dispatch sites
+  `compose/kinds/__init__.py` assembles the `KINDS` table explicitly — one row per
+  kind, built from each module's exports:
+  ```python
+  KINDS = {
+      "code": KindSpec(code.CodeDescriptor, code.parse, code.build),
+      ...
+  }
+  ```
+  Adding or changing a kind is one file plus one row here. The shared dispatch sites
   (`stages/parse.py`, `build.build_leaf_node`) consult `KINDS` — they never grow an
   `if kind == …` ladder.
 

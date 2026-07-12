@@ -1,6 +1,6 @@
 """Graph-stage: the TYPE-level half of a `loop`'s `'a -> 'a` contract.
 
-A loader post-build pass (run after `check_ref_map_types`). `build_loop_node` checked only the
+A loader post-build pass (run after `check_ref_map_types`). `kinds.loop.build` checked only the
 carried field-NAME sets — it lacks the resolved carried-record Types, which depend on the parent
 producers/flow inputs assembled LATER. This pass resolves each carried field's Type from its
 bound seed source (`${<id>.output}`/`${input.X}` over the parent producers + flow-input types,
@@ -9,8 +9,8 @@ with the body OUTPUT's same-named field Type. It relocates `build.check_loop_typ
 verbatim, adding a `.range` anchor off the built loop node's `field_ranges["inputs"]` (the coarse
 `input:` mapping span) — the transitional `node_lines` still feeds `.line`.
 
-Imports flow down only: `compile.validation` (the type comparator), `compose.build`
-(`_output_value_type`, the shared ref-to-Type resolver — `build` does not import
+Imports flow down only: `compile.validation` (the type comparator), `compose.kinds.resolver`
+(`_output_value_type`, the shared ref-to-Type resolver — `resolver` does not import
 `compose.stages`, so this edge is acyclic), `typesys` (Type), `compose.errors`. Only the loader
 (and the compose package facade) import this back.
 """
@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from agent_composer.compile.validation import types_compatible
-from agent_composer.compose.build import _output_value_type
+from agent_composer.compose.kinds.resolver import _output_value_type
 from agent_composer.compose.errors import LoadError
 from agent_composer.events import SourceRange
 from agent_composer.typesys.values import Type
@@ -35,7 +35,7 @@ def check_loop_type_contract(
 ) -> None:
     """The TYPE-level half of a `loop`'s `'a -> 'a` contract (a loader post-build pass).
 
-    `build_loop_node` checked only the field-NAME sets (it lacks the resolved carried-record
+    `kinds.loop.build` checked only the field-NAME sets (it lacks the resolved carried-record
     Types — the seed sources' types depend on the parent producers/flow inputs assembled
     LATER). This pass, run after `check_ref_map_types`, resolves each carried field's Type
     from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producers +
@@ -51,7 +51,7 @@ def check_loop_type_contract(
             continue
         body_out = node.output_type
         # A non-record / absent body output was already caught by the field-name half in
-        # build_loop_node; nothing typed to compare against here.
+        # kinds.loop.build; nothing typed to compare against here.
         if body_out is None or body_out.fields is None:
             continue
         for field_name, src in flow_wiring.get(nid, {}).items():

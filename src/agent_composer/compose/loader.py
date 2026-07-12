@@ -44,11 +44,11 @@ from agent_composer.typesys.values import TypeCheckError, Type
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
-    ChildResolver,
     build_leaf_node,
     infer_data_edges,
     synthesize_boundary_graph,
 )
+from agent_composer.compose.kinds.resolver import ChildResolver
 from agent_composer.compose.stages.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.cases import (
     CaseDesugar,

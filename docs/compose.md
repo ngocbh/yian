@@ -25,9 +25,10 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ expand_case_outputs         ┘
   │
   ├─ build (per kind, via KINDS) → a runtime NODE + its flow-owned WIRING
+  │                                (a case lowers in its own build, returning its edges)
   │
-  ├─ infer_data_edges       → read every ${...} → draw the edges (nobody draws them by hand)
-  ├─ reconcile_case_edges   → branch edges agree with the case graph
+  ├─ infer_data_edges       → read every ${...} → draw the edges (nobody draws them by hand);
+  │                            append each case's own data+control edges from its build
   ├─ validate_references    → every ${...} resolves & type-checks; classify asserts
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
@@ -47,7 +48,7 @@ The pipeline has two representations of a node, and the split matters:
 | | **Descriptor** | **Node** |
 |---|---|---|
 | what | a frozen record of *what you wrote* | the runtime object the engine calls |
-| where | `compose/kinds/<kind>.py` | `nodes/<kind>/` |
+| where | `compose/nodes/<kind>.py` | `nodes/<kind>/` |
 | carries | raw fields + `SourceRange`s | `run()`, typed `output_type`, params |
 | lifetime | load-time only | lives through the whole run |
 
@@ -58,30 +59,34 @@ clean and generic.
 
 ---
 
-## The two-axis layout (#70)
+## The two-axis layout
 
 `compose/` is split along two axes so a change stays local:
 
-- **Per node kind** → `compose/kinds/<kind>.py`. Each module owns a frozen **descriptor**
+- **Per node kind** → `compose/nodes/<kind>.py`. Each module owns a frozen **descriptor**
   dataclass (`CodeDescriptor`) that subclasses `NodeDescriptor`. The base holds the common
   contract; each kind carries:
   - **`parse(node_id, reader)`** — a classmethod (the base template) that reads one node body,
     recording each field's `SourceRange`,
-  - **`build(*, registry, resolver, …)`** — a method that constructs the runtime `Node` + wiring.
+  - **`build(ctx: BuildContext) -> BuildResult`** — a method that constructs the runtime
+    `Node` + its flow-owned wiring (and, for a `case`, its own data+control edges). `ctx`
+    carries the shared build inputs (`registry`, `resolver`, inline-CODE source hints).
 
-  `compose/kinds/__init__.py` derives the `KINDS` table from a single `_DESCRIPTORS` tuple —
+  `compose/nodes/__init__.py` derives the `KINDS` table from a single `_DESCRIPTORS` tuple —
   each kind maps its `kind` string to its descriptor class:
   ```python
   _DESCRIPTORS = (agent.AgentDescriptor, code.CodeDescriptor, ...)
   KINDS = {d.kind: d for d in _DESCRIPTORS}   # kind string -> descriptor class
   ```
   Adding or changing a kind is one file plus one entry here. The shared dispatch sites
-  (`stages/parse.py`, `build.build_leaf_node`, `loader.py`) look the class up in `KINDS`
+  (`parse/`, `build/pipeline.py::_assemble`) look the class up in `KINDS`
   and call `cls.parse(...)` / `desc.build(...)` — they never grow an `if kind == …` ladder.
 
-- **Cross-node graph passes** → `compose/stages/`. These operate on the *whole* set of
-  descriptors: `parse_nodes`, the desugars, `infer_ordering_edges`,
-  `validate_references`, `reject_cycles`, wiring-parity, and the rest.
+- **Cross-node graph passes** → the ordered phase packages `compose/parse/ →
+  compose/desugar/ → compose/edges/ → compose/validate/ → compose/build/`. These operate on
+  the *whole* set of descriptors: `parse_nodes`, the desugars, `infer_data_edges`/
+  `infer_ordering_edges`, `validate_references`, `reject_cycles`, wiring-parity, boundary
+  synthesis, and the rest — each phase may import only the earlier ones.
 
 A sibling table, `BINDING_FIELDS`, records which descriptor fields carry `${...}`
 strings (a code node's `inputs`, a tool's `inputs`, a map's `over`). One kind-blind walk
@@ -92,10 +97,11 @@ ladder.
 
 ## Build: descriptor → node + wiring
 
-`build()` produces **two** things, and the split is deliberate:
+`build()` produces a `BuildResult` bundling **three** things, and the split is deliberate:
 
 ```python
-node, wiring = desc.build(registry=registry, resolver=resolver)
+result = desc.build(BuildContext(registry=registry, resolver=resolver))
+node, wiring, edges = result.node, result.wiring, result.edges
 ```
 
 - the **node** carries only what it needs to run: its `output_type` (resolved against
@@ -104,8 +110,10 @@ node, wiring = desc.build(registry=registry, resolver=resolver)
 - the **wiring** is *flow-owned*: `{param → "${source}"}`. The node knows its parameter
   *names*; the flow knows where each one is *sourced from*. This is why a node is
   reusable and why the flow, not the node, owns the graph.
+- the **edges** are empty (`()`) for every kind EXCEPT `case`, which lowers to a
+  `CaseNode` in its own `build()` and returns its data+control branch edges here.
 
-Leaf kinds (`agent`/`code`/`model`/`tool`) ignore `resolver`; `call`/`map`/`loop` use
+Leaf kinds (`agent`/`code`/`model`/`tool`) ignore `ctx.resolver`; `call`/`map`/`loop` use
 it to resolve the child flow they expand into.
 
 ---
@@ -121,7 +129,7 @@ verdict:
     against_case: ${against_case.output}
 ```
 
-`infer_data_edges` (in `build.py`) ref-walks every binding, reads out the node ids each
+`infer_data_edges` (in `edges/data.py`) ref-walks every binding, reads out the node ids each
 `${...}` depends on, and adds exactly those edges. The graph is a
 *consequence* of the data references — it cannot drift out of sync with them, and
 parallelism is automatic: two nodes that don't reference each other simply have no edge
@@ -181,9 +189,9 @@ section header rather than guessing.
 
 | You want to change… | Go to |
 |---|---|
-| a node kind's fields or how it builds | `compose/kinds/<kind>.py` |
-| a whole-graph pass (edges, validation, cycles) | `compose/stages/` |
-| the YAML → span-tree parse | `parser.py` + `spanloader.py` |
-| the located cursor over the tree | `reader.py` (`NodeReader`) |
-| the pipeline wiring itself | `loader.py` (`_assemble`) |
+| a node kind's fields or how it builds | `compose/nodes/<kind>.py` |
+| a whole-graph pass (edges, validation, cycles) | the phase packages `compose/{parse,desugar,edges,validate,build}/` |
+| the YAML → span-tree parse | `parse/file.py` (`parse_file`) + `helpers/spanloader.py` |
+| the located cursor over the tree | `helpers/reader.py` (`NodeReader`) |
+| the pipeline wiring itself | `build/pipeline.py` (`_assemble`), driven by `loader.py` |
 | running the compiled flow | [engine.md](engine.md) |

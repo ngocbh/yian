@@ -1,13 +1,15 @@
 """6.7 — the `case` kind handle: parse records the `on`/`cases`/`else` field ranges and
-survives YAML 1.1's `on:` -> True key coercion; build raises (a case is desugared, never
-built as a leaf node)."""
+survives YAML 1.1's `on:` -> True key coercion; build LOWERS the case to a strict `CaseNode`
+plus its data + control edges (the case's lowering is its own `.build(ctx)`, no leaf Node)."""
 
 import pytest
 
-from agent_composer.compose.errors import LoadError
-from agent_composer.compose.kinds.case import CaseDescriptor
-from agent_composer.compose.reader import NodeReader
-from agent_composer.compose.spanloader import load_with_spans
+from agent_composer.nodes.case import CaseNode
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.nodes.case import CaseDescriptor
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.events import SourceRange
 
 
@@ -54,8 +56,20 @@ def test_case_parse_requires_cases():
         CaseDescriptor.parse("route", reader)
 
 
-def test_case_build_raises_because_case_is_desugared():
+def test_case_build_lowers_to_case_node_with_edges():
     reader = _reader_for(_FLOW, "route")
     desc = CaseDescriptor.parse("route", reader)
-    with pytest.raises(LoadError, match="not a leaf node"):
-        desc.build(registry={}, resolver=None)
+    result = desc.build(BuildContext({}))
+    # the case's lowering IS its build: a strict CaseNode + a flow-owned {__on -> source} wiring.
+    assert isinstance(result.node, CaseNode)
+    assert result.node.id == "route"
+    assert result.wiring == {"__on": "${score.output}"}
+    # the flat edges tuple is DATA (score->route on __on) then CONTROL (route->hot / route->cold).
+    data = [e for e in result.edges if e.source_handle is None]
+    control = [e for e in result.edges if e.source_handle is not None]
+    assert ("score", "route", "__on") in {(e.from_, e.to, e.input_group) for e in data}
+    ctl = {(e.from_, e.to, e.source_handle) for e in control}
+    assert ("route", "hot", "hot") in ctl
+    assert ("route", "cold", "default") in ctl
+    # `.range`/`.field_ranges` are stamped onto the built node via `_finish`.
+    assert isinstance(result.node.range, SourceRange)

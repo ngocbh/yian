@@ -1,16 +1,16 @@
 # Wiring a new authorable leaf node kind
 
 The Node subclass (from `node.py.template`) is only half the job — a kind also
-needs a `compose/kinds/<kind>.py` module (its descriptor, which carries `parse` +
-`build`) plus one entry in the `_DESCRIPTORS` tuple in `compose/kinds/__init__.py`,
+needs a `compose/nodes/<kind>.py` module (its descriptor, which carries `parse` +
+`build`) plus one entry in the `_DESCRIPTORS` tuple in `compose/nodes/__init__.py`,
 so a flow author can write `kind: xxx` in YAML. This is the file-by-file checklist
 for an **authorable leaf** kind (one a flow names directly, like `code`/`tool`).
 
 > Internal-only kinds (`START`/`END`) are *synthesized* by the loader, not authored —
-> they have no `kinds/<kind>.py` module and expand at load/runtime instead. This
+> they have no `compose/nodes/<kind>.py` module and expand at load/runtime instead. This
 > checklist is for a leaf you want authors to write.
 
-Use `code` (`compose/kinds/code.py`, the simplest real leaf) as the reference
+Use `code` (`compose/nodes/code.py`, the simplest real leaf) as the reference
 implementation throughout. Build bottom-up by dependency, **one test green before the
 next step** (CLAUDE.md).
 
@@ -35,7 +35,7 @@ class NodeKind(str, Enum):
 - `nodes/xxx/__init__.py` — copy `__init__.py.template` (re-export only; the
   package charter per the `structure` skill).
 
-## 3. `compose/kinds/xxx.py` — descriptor (subclass of `NodeDescriptor`)
+## 3. `compose/nodes/xxx.py` — descriptor (subclass of `NodeDescriptor`)
 
 This one module owns the kind's front-end handle: a frozen `XxxDescriptor` dataclass
 that **subclasses `NodeDescriptor`**. The base holds the common contract — the shared
@@ -51,7 +51,7 @@ Copy `code.py`.
     kind's own keys (`allow` unions onto the base allowed set).
   - `required = NodeDescriptor.require("field_a", ...)` — the mandatory flat keys.
   - `binding_fields = ("inputs", ...)` — the descriptor fields carrying `${...}` binding
-    strings (walked kind-blind by `compose/bindings.py`). Empty tuple if none.
+    strings (walked kind-blind by `compose/nodes/bindings.py`). Empty tuple if none.
   - (optional) `keyword_remap = {...}` — author-key → field-name aliases, if any.
 - Declare only the **kind-specific** dataclass fields (`inputs`/`outputs` come from the
   base). Give each a type; use `field(default_factory=...)` for mutable defaults.
@@ -59,22 +59,23 @@ Copy `code.py`.
   fields, and records each field's `SourceRange`. Override the `_normalize_reader` /
   `_validate_fields` hooks only if the kind needs pre-normalization or extra checks
   (see `case.py` / `human_input.py` for examples). Most leaves need neither.
-- **Override `build`** — an instance method `build(self, *, registry=None, resolver=None,
-  **_loader_hints)` that constructs `XxxNode(...)`, sets `output_type` / `params` /
-  wiring via the inherited `self.output_type(registry)` / `self.sink_params()` /
-  `self.sink_wiring()`, and returns `self._finish(node, wiring)` (which stamps
-  `.range`/`.field_ranges`). Leaf kinds ignore `resolver`; it rides the shared signature
-  for call/map/loop. Absorb the inline-CODE anchors (`source_file`/`code_line`/
-  `code_field_line`) via `**_loader_hints` unless this is the CODE kind.
+- **Override `build`** — an instance method `build(self, ctx: BuildContext) -> BuildResult`
+  that constructs `XxxNode(...)`, sets `output_type` / `params` / wiring via the inherited
+  `self.output_type(ctx.registry)` / `self.sink_params()` / `self.sink_wiring()`, and returns
+  `self._finish(node, wiring)` (which stamps `.range`/`.field_ranges` and wraps a `BuildResult`).
+  The one input is the immutable `BuildContext`: `ctx.registry` (the `TypeRegistry`),
+  `ctx.resolver` (the child-flow resolver — only call/map/loop read it), and the inline-CODE
+  traceback anchors `ctx.source_file`/`ctx.code_line`/`ctx.code_field_line` (only the CODE build
+  reads them). A leaf kind reads only `ctx.registry`.
 
-## 4. `compose/kinds/__init__.py` — add to the `_DESCRIPTORS` tuple
+## 4. `compose/nodes/__init__.py` — add to the `_DESCRIPTORS` tuple
 
 Import the module and add its descriptor class to the `_DESCRIPTORS` tuple. `KINDS`
 (kind-string → descriptor class) and `BINDING_FIELDS` are derived from that tuple, so
 one entry registers both:
 
 ```python
-from agent_composer.compose.kinds import xxx
+from agent_composer.compose.nodes import xxx
 ...
 _DESCRIPTORS = (
     ...,
@@ -82,14 +83,14 @@ _DESCRIPTORS = (
 )
 ```
 
-The shared dispatch (`stages/parse.py::_parse_node`, `build.build_leaf_node`,
+The shared dispatch (`parse/`, `build/pipeline.py::_assemble`'s build loop,
 `bindings.py`) looks the class up in `KINDS` and calls `cls.parse(...)` / `desc.build(...)`
 kind-blind — no isinstance branch to add.
 
 ## 5. `compose/__init__.py` — re-export the descriptor
 
 If anything outside `compose/` references `XxxDescriptor`, add it to the imports +
-`__all__`, mirroring `CodeDescriptor` (re-exported from `compose.kinds.code`).
+`__all__`, mirroring `CodeDescriptor` (re-exported from `compose.nodes.code`).
 
 ## 6. `tests/engine/test_xxx.py` — prove it
 
@@ -114,8 +115,8 @@ Close the tracking GitHub issue when the work lands, referencing the commit/PR
 |------------|------|--------|
 | Enum tag | `nodes/base.py` | `class NodeKind` |
 | Node impl | `nodes/xxx/node.py` + `__init__.py` | new package |
-| Descriptor (subclass `NodeDescriptor`) | `compose/kinds/xxx.py` | copy `code.py` |
-| Register | `compose/kinds/__init__.py` | `_DESCRIPTORS` tuple |
+| Descriptor (subclass `NodeDescriptor`) | `compose/nodes/xxx.py` | copy `code.py` |
+| Register | `compose/nodes/__init__.py` | `_DESCRIPTORS` tuple |
 | Re-export | `compose/__init__.py` | imports + `__all__` |
 | Test | `tests/engine/test_xxx.py` | new file |
 | Issue/docs | GitHub issue, `docs/syntax.md` | — |

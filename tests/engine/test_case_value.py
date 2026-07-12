@@ -20,7 +20,7 @@ import pytest
 
 from agent_composer.compose import LoadError, expand_case_outputs, load_flow
 from agent_composer.run import run_flow
-from agent_composer.compose.parser import CaseDescriptor, CodeDescriptor
+from agent_composer.compose.parse.file import CaseDescriptor, CodeDescriptor
 
 
 # --------------------------------------------------------------------------- #
@@ -108,7 +108,7 @@ def test_multiple_case_values_in_one_binding_both_expand():
 
 
 def test_case_value_in_tool_inputs_expands():
-    from agent_composer.compose.parser import ToolDescriptor
+    from agent_composer.compose.parse.file import ToolDescriptor
 
     descs = {"gate": _gate(), "t": ToolDescriptor(id="t", tool_id="x", inputs={"q": "${gate.output}"})}
     new, _ = expand_case_outputs(descs, None, [])

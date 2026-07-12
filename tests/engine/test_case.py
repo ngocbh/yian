@@ -1,20 +1,24 @@
-"""Unit tests for the `case` desugar -> strict `CaseNode`.
+"""Unit tests for the `case` build -> strict `CaseNode`.
 
-A `case` node carries no inputs and no built leaf Node; `desugar_case` lowers it to
-a strict `CaseNode` plus control + data edges, with NO new NodeKind:
+A `case` node carries no inputs and no built leaf Node; its own `.build(ctx)` lowers it to
+a strict `CaseNode` plus control + data edges (its `BuildResult.edges`), with NO new NodeKind:
 
 - **searched** (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): each distinct
   ref across the `when:`s -> one `CaseNode` input `__rN`
   (`source=<original ref>`); the `when:` is rewritten with each ref replaced by its
   local `__rN` (preserving the original spelling — bare stays bare); control
   edges `gate->then(source_handle=then)` + `gate->else(source_handle="default")`;
-  the data edges carry the `__rN` `input_group` (reconciling the data-edge pass's provisional).
+  the data edges carry the `__rN` `input_group`.
 - **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input
   `__on = ${ref}`; each `when: <value>` -> `${__on} == "<value>"`.
-- **exhaustiveness**: when `on:` names an ENUM producer (the dotted ref resolves to a
-  `Type` with `.tags`), every tag must be covered by a case OR a present `else:`.
+- **exhaustiveness**: a SEPARATE validate-phase check (`check_case_exhaustive`), NOT part of
+  `.build()` — when `on:` names an ENUM producer (the dotted ref resolves to a `Type` with
+  `.tags`), every tag must be covered by a case OR a present `else:`.
 
-The desugared `CaseNode.when`s evaluate via the EXISTING `evaluate_when_record`.
+`BuildResult.edges` is a FLAT tuple — data edges (an `input_group`, no `source_handle`)
+FOLLOWED BY control edges (a `source_handle`, no `input_group`); `_split` recovers the two
+by that attribute invariant. The built `CaseNode.when`s evaluate via the EXISTING
+`evaluate_when_record`.
 """
 
 from pathlib import Path
@@ -24,17 +28,12 @@ import pytest
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode
 from agent_composer.typesys.values import ValueKind, Type
-from agent_composer.compose.build import build_leaf_node, infer_data_edges
-from agent_composer.compose.cases import desugar_case, reconcile_case_edges
-from agent_composer.compose.errors import LoadError
-from agent_composer.compose.parser import (
-    AgentDescriptor,
-    CaseDescriptor,
-    CodeDescriptor,
-    parse_file,
-)
-from agent_composer.compose.reader import NodeReader
-from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.parse.file import CaseDescriptor, parse_file
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.validate.case_exhaustive import check_case_exhaustive
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -46,7 +45,23 @@ def _case_desc(seed: str, node_id: str) -> CaseDescriptor:
     return desc
 
 
-# The desugared gate's input sources now live on the flow-owned wiring (CaseDesugar.wiring),
+def _split(result):
+    """Recover the (data_edges, control_edges) split from a case `BuildResult`.
+
+    The flat `BuildResult.edges` tuple is data-then-control; the edge-field invariant is the
+    discriminator — a DATA edge carries an `input_group` (and no `source_handle`), a CONTROL
+    edge carries a `source_handle` (and no `input_group`). Returns `(data, control)` lists."""
+    data = [e for e in result.edges if e.source_handle is None]
+    control = [e for e in result.edges if e.source_handle is not None]
+    return data, control
+
+
+def _build_case(desc: CaseDescriptor, producers=None):
+    """Build a case descriptor -> its `BuildResult` (node + wiring + flat edges)."""
+    return desc.build(BuildContext(producers if producers is not None else {}))
+
+
+# The built gate's input sources live on the flow-owned wiring (BuildResult.wiring),
 # keyed by the __rN/__on param name (the node carries only the param names).
 
 
@@ -58,7 +73,7 @@ def _case_desc(seed: str, node_id: str) -> CaseDescriptor:
 def test_searched_desugar_builds_case():
     # seed 02: when "score.output >= 0.5" then positive, else cautious.
     desc = _case_desc("02-case.yaml", "gate")
-    result = desugar_case(desc, {})
+    result = _build_case(desc)
     node = result.node
     assert isinstance(node, CaseNode)
     assert node.id == "gate"
@@ -73,8 +88,8 @@ def test_searched_desugar_builds_case():
 
 def test_searched_control_edges():
     desc = _case_desc("02-case.yaml", "gate")
-    result = desugar_case(desc, {})
-    ctl = {(e.from_, e.to, e.source_handle) for e in result.control_edges}
+    _, control_edges = _split(_build_case(desc))
+    ctl = {(e.from_, e.to, e.source_handle) for e in control_edges}
     assert ("gate", "positive", "positive") in ctl
     assert ("gate", "cautious", DEFAULT_HANDLE) in ctl
 
@@ -82,27 +97,28 @@ def test_searched_control_edges():
 def test_searched_data_edge_reconciled_to_input_group():
     # the data edge score -> gate carries the __r0 input_group (not a <case>:<n>).
     desc = _case_desc("02-case.yaml", "gate")
-    result = desugar_case(desc, {})
-    data = {(e.from_, e.to, e.input_group) for e in result.data_edges}
+    data_edges, _ = _split(_build_case(desc))
+    data = {(e.from_, e.to, e.input_group) for e in data_edges}
     assert ("score", "gate", "__r0") in data
     # no provisional <case>:<n> group survives.
-    assert not any(":" in (e.input_group or "") for e in result.data_edges)
+    assert not any(":" in (e.input_group or "") for e in data_edges)
 
 
 def test_searched_multiref_allocates_r0_r1():
     # seed 10: "score.output > 0 and input.weight * 100 <= 5".
     desc = _case_desc("10-asserts-arithmetic.yaml", "size")
-    result = desugar_case(desc, {})
+    result = _build_case(desc)
+    data_edges, _ = _split(result)
     assert result.wiring == {"__r0": "${score.output}", "__r1": "${input.weight}"}
     assert result.node.cases[0].when == "__r0 > 0 and __r1 * 100 <= 5"
     # only the ${X.output} ref is a data edge; ${input.X} is not.
-    data = {(e.from_, e.to, e.input_group) for e in result.data_edges}
+    data = {(e.from_, e.to, e.input_group) for e in data_edges}
     assert ("score", "size", "__r0") in data
-    assert not any(e.from_ == "weight" for e in result.data_edges)
+    assert not any(e.from_ == "weight" for e in data_edges)
 
 
 # A searched `when:` may be written in any of the three condition spellings — the
-# desugar extracts refs (_refs_in) and rewrites them (_rewrite_when) through the SAME
+# build extracts refs (_refs_in) and rewrites them (_rewrite_when) through the SAME
 # parse, so all three allocate the same __rN, wire the same source, and route the same.
 @pytest.mark.parametrize(
     "when, expect_when",
@@ -118,7 +134,7 @@ def test_searched_when_all_spellings_desugar_equivalently(when, expect_when):
         cases=[{"when": when, "then": "positive"}],
         else_="cautious",
     )
-    result = desugar_case(desc, {})
+    result = _build_case(desc)
     node = result.node
     assert [p.name for p in node.params] == ["__r0"]
     assert result.wiring == {"__r0": "${score.output}"}
@@ -127,7 +143,8 @@ def test_searched_when_all_spellings_desugar_equivalently(when, expect_when):
     assert evaluate_when_record(node.cases[0].when, {"__r0": 0.7}) is True
     assert evaluate_when_record(node.cases[0].when, {"__r0": 0.3}) is False
     # the data edge reconciles to __r0 regardless of spelling.
-    data = {(e.from_, e.to, e.input_group) for e in result.data_edges}
+    data_edges, _ = _split(result)
+    data = {(e.from_, e.to, e.input_group) for e in data_edges}
     assert ("score", "gate", "__r0") in data
 
 
@@ -138,7 +155,7 @@ def test_searched_when_malformed_is_loud():
         else_="cautious",
     )
     with pytest.raises(LoadError, match="valid boolean expression"):
-        desugar_case(desc, {})
+        _build_case(desc)
 
 
 # --------------------------------------------------------------------------- #
@@ -149,7 +166,7 @@ def test_searched_when_malformed_is_loud():
 def test_on_desugar_builds_case():
     # seed 06: on ${classify.output}; when pro/con/mixed.
     desc = _case_desc("06-case-on.yaml", "route")
-    result = desugar_case(desc, {})
+    result = _build_case(desc)
     node = result.node
     assert result.wiring == {"__on": "${classify.output}"}
     whens = [c.when for c in node.cases]
@@ -160,8 +177,8 @@ def test_on_desugar_builds_case():
 
 def test_on_control_edges():
     desc = _case_desc("06-case-on.yaml", "route")
-    result = desugar_case(desc, {})
-    ctl = {(e.from_, e.to, e.source_handle) for e in result.control_edges}
+    _, control_edges = _split(_build_case(desc))
+    ctl = {(e.from_, e.to, e.source_handle) for e in control_edges}
     assert ("route", "pro_note", "pro_note") in ctl
     assert ("route", "con_note", "con_note") in ctl
     assert ("route", "choppy_note", "choppy_note") in ctl
@@ -171,19 +188,19 @@ def test_on_control_edges():
 
 def test_on_data_edge_reconciled():
     desc = _case_desc("06-case-on.yaml", "route")
-    result = desugar_case(desc, {})
-    data = {(e.from_, e.to, e.input_group) for e in result.data_edges}
+    data_edges, _ = _split(_build_case(desc))
+    data = {(e.from_, e.to, e.input_group) for e in data_edges}
     assert ("classify", "route", "__on") in data
 
 
 # --------------------------------------------------------------------------- #
-# the desugared when: routes via the EXISTING evaluate_when_record
+# the built when: routes via the EXISTING evaluate_when_record
 # --------------------------------------------------------------------------- #
 
 
 def test_desugared_searched_routes_via_evaluate_when_record():
     desc = _case_desc("02-case.yaml", "gate")
-    node = desugar_case(desc, {}).node
+    node = _build_case(desc).node
     # bound input record uses the bare local names.
     assert evaluate_when_record(node.cases[0].when, {"__r0": 0.7}) is True
     assert evaluate_when_record(node.cases[0].when, {"__r0": 0.3}) is False
@@ -191,14 +208,14 @@ def test_desugared_searched_routes_via_evaluate_when_record():
 
 def test_desugared_on_routes_via_evaluate_when_record():
     desc = _case_desc("06-case-on.yaml", "route")
-    node = desugar_case(desc, {}).node
+    node = _build_case(desc).node
     assert evaluate_when_record(node.cases[0].when, {"__on": "pro"}) is True
     assert evaluate_when_record(node.cases[0].when, {"__on": "con"}) is False
     assert evaluate_when_record(node.cases[1].when, {"__on": "con"}) is True
 
 
 # --------------------------------------------------------------------------- #
-# 9c — exhaustiveness over an enum producer
+# 9c — exhaustiveness over an enum producer (the SEPARATE validate-phase check)
 # --------------------------------------------------------------------------- #
 
 
@@ -222,8 +239,9 @@ def test_exhaustiveness_missing_tag_no_else_raises():
     desc, producers = _enum_case(
         tags=["pro", "con", "mixed"], cases=["pro", "con"], else_=None
     )
+    _build_case(desc, producers)  # build lowers unconditionally — no raise
     with pytest.raises(LoadError) as exc:
-        desugar_case(desc, producers)
+        check_case_exhaustive({desc.id: desc}, producers)
     assert "mixed" in str(exc.value)
 
 
@@ -232,16 +250,18 @@ def test_exhaustiveness_else_satisfies_coverage():
     desc, producers = _enum_case(
         tags=["pro", "con", "mixed"], cases=["pro", "con"], else_="neutral_note"
     )
-    result = desugar_case(desc, producers)  # no raise
+    result = _build_case(desc, producers)  # no raise
     assert isinstance(result.node, CaseNode)
+    check_case_exhaustive({desc.id: desc}, producers)  # no raise
 
 
 def test_exhaustiveness_all_tags_covered_no_else_ok():
     desc, producers = _enum_case(
         tags=["pro", "con"], cases=["pro", "con"], else_=None
     )
-    result = desugar_case(desc, producers)  # no raise
+    result = _build_case(desc, producers)  # no raise
     assert isinstance(result.node, CaseNode)
+    check_case_exhaustive({desc.id: desc}, producers)  # no raise
 
 
 def test_exhaustiveness_walks_dotted_field_into_record():
@@ -264,8 +284,7 @@ def test_exhaustiveness_walks_dotted_field_into_record():
         cases=[{"when": "positive", "then": "pro_note"}, {"when": "negative", "then": "con_note"}],
         else_="neutral_note",
     )
-    result = desugar_case(desc, {"synth": view})  # else: covers `neutral` -> ok
-    assert isinstance(result.node, CaseNode)
+    check_case_exhaustive({desc.id: desc}, {"synth": view})  # else: covers `neutral` -> ok
 
 
 def test_exhaustiveness_dotted_missing_tag_raises():
@@ -286,33 +305,37 @@ def test_exhaustiveness_dotted_missing_tag_raises():
         else_=None,
     )
     with pytest.raises(LoadError) as exc:
-        desugar_case(desc, {"synth": view})
+        check_case_exhaustive({desc.id: desc}, {"synth": view})
     assert "neutral" in str(exc.value)
 
 
 def test_no_exhaustiveness_for_searched_form():
     # a searched case (no on:) over an enum-ish producer is NOT exhaustiveness-checked.
     desc = _case_desc("02-case.yaml", "gate")
-    desugar_case(desc, {"score": Type(kind=ValueKind.STRING, tags=frozenset({"a"}))})
+    check_case_exhaustive(
+        {desc.id: desc}, {"score": Type(kind=ValueKind.STRING, tags=frozenset({"a"}))}
+    )  # no raise
 
 
 def test_on_non_enum_producer_skips_exhaustiveness():
     # on: a plain scalar producer (no .tags) -> lenient, no exhaustiveness, no raise.
     desc = _case_desc("06-case-on.yaml", "route")
-    result = desugar_case(desc, {"classify": Type.scalar(ValueKind.STRING)})
+    result = _build_case(desc, {"classify": Type.scalar(ValueKind.STRING)})
     assert isinstance(result.node, CaseNode)
+    check_case_exhaustive({desc.id: desc}, {"classify": Type.scalar(ValueKind.STRING)})
 
 
 # --------------------------------------------------------------------------- #
-# the desugared CASE passes handle alignment (every case has an edge)
+# the built CASE passes handle alignment (every case has an edge)
 # --------------------------------------------------------------------------- #
 
 
 def test_handles_align_with_control_edges():
     desc = _case_desc("06-case-on.yaml", "route")
-    result = desugar_case(desc, {})
+    result = _build_case(desc)
+    _, control_edges = _split(result)
     case_handles = {c.handle for c in result.node.cases}
-    edge_handles = {e.source_handle for e in result.control_edges}
+    edge_handles = {e.source_handle for e in control_edges}
     # every case handle has an outgoing edge.
     assert case_handles <= edge_handles
     # every edge handle is a case handle or the default.
@@ -320,31 +343,36 @@ def test_handles_align_with_control_edges():
 
 
 # --------------------------------------------------------------------------- #
-# reconciliation: drop the provisional data-edge-pass case edges, splice in the desugar's
+# the case's BuildResult.edges carry the reconciled __rN data group + control edges
+# (no provisional <case>:<n> group is ever emitted for a case)
 # --------------------------------------------------------------------------- #
 
 
-def test_reconcile_replaces_provisional_case_edges():
-    # seed 02: the data-edge pass emits a provisional score->gate (group "gate:0"); reconciliation
-    # drops it and splices the desugar's __r0 data edge + control edges.
+def test_build_emits_reconciled_edges_no_provisional_group():
+    # seed 02: the case's own build emits the reconciled __r0 data edge + control edges
+    # directly — there is no provisional <case>:<n> group to reconcile away (infer_data_edges
+    # emits nothing for a case; the case owns its edges).
+    from agent_composer.compose.edges.data import infer_data_edges
+
     f = parse_file((_SEEDS / "02-case.yaml").read_text())
     descriptors = parse_nodes(NodeReader.spanless(f.nodes))
+    # infer_data_edges emits NO edge for the case node (it `continue`s on a case).
     flow_wiring = {
-        nid: build_leaf_node(d, {})[1]
+        nid: d.build(BuildContext({})).wiring
         for nid, d in descriptors.items()
-        if isinstance(d, (AgentDescriptor, CodeDescriptor))
+        if not isinstance(d, CaseDescriptor)
     }
     data_edges = infer_data_edges(descriptors, flow_wiring)
-    # the data-edge pass keys the case edge by a provisional <case>:<n> group.
-    assert any(e.to == "gate" and ":" in (e.input_group or "") for e in data_edges)
+    assert not any(e.to == "gate" for e in data_edges)
 
-    desugars = {"gate": desugar_case(descriptors["gate"], {})}
-    merged = reconcile_case_edges(data_edges, desugars)
-    # the provisional case edge is gone; the reconciled __r0 data edge is present.
-    assert not any(e.to == "gate" and ":" in (e.input_group or "") for e in merged)
-    assert ("score", "gate", "__r0") in {(e.from_, e.to, e.input_group) for e in merged}
-    # the control edges are spliced in.
-    ctl = {(e.from_, e.to, e.source_handle) for e in merged}
+    result = _build_case(descriptors["gate"])
+    # the reconciled __r0 data edge is present (no provisional <case>:<n> group).
+    assert not any(":" in (e.input_group or "") for e in result.edges)
+    assert ("score", "gate", "__r0") in {
+        (e.from_, e.to, e.input_group) for e in result.edges
+    }
+    # the control edges are present.
+    ctl = {(e.from_, e.to, e.source_handle) for e in result.edges if e.source_handle}
     assert ("gate", "positive", "positive") in ctl
     assert ("gate", "cautious", DEFAULT_HANDLE) in ctl
 
@@ -352,7 +380,7 @@ def test_reconcile_replaces_provisional_case_edges():
 def test_on_value_with_double_quote_uses_single_quote_and_routes():
     # an on: match value containing " must compile to a parseable when: (single-quoted,
     # since the grammar has no escape support) and route correctly at eval time.
-    from agent_composer.compose.cases import _quote
+    from agent_composer.compose.nodes.case import _quote
 
     expr = '${__on} == ' + _quote('a"b')
     assert evaluate_when_record(expr, {"__on": 'a"b'}) is True
@@ -362,7 +390,7 @@ def test_on_value_with_double_quote_uses_single_quote_and_routes():
 def test_on_value_with_both_quotes_is_loud_load_error():
     # a value containing BOTH ' and " is unrepresentable in the escape-less grammar
     # -> a loud load error, not a route-time crash.
-    from agent_composer.compose.cases import _quote
+    from agent_composer.compose.nodes.case import _quote
 
     with pytest.raises(LoadError):
         _quote("a'b\"c")

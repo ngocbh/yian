@@ -22,7 +22,7 @@ def test_lines_api_not_reexported_from_compose():
 
 
 def test_lines_producers_gone_from_parser():
-    import agent_composer.compose.parser as parser
+    import agent_composer.compose.parse.file as parser
 
     for name in (
         "node_lines",

@@ -636,7 +636,7 @@ def expr_refs(tree: "Tree | Token") -> list[str]:
 
     `item`-headed refs ARE collected here — matching the evaluator, which resolves
     them from the MAP-body-local scope. The CALLER (compose `_ref_producer`,
-    `compose/build.py`) is responsible for skipping `item`-headed refs when minting
+    `compose/edges/producers.py`) is responsible for skipping `item`-headed refs when minting
     edges; that rule is unchanged and stays at the caller.
 
     Args:

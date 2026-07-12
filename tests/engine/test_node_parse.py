@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compose import LoadError
-from agent_composer.compose.parser import (
+from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CallDescriptor,
     CaseDescriptor,
@@ -21,9 +21,9 @@ from agent_composer.compose.parser import (
     ToolDescriptor,
     parse_file,
 )
-from agent_composer.compose.reader import NodeReader
-from agent_composer.compose.spanloader import load_with_spans
-from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.helpers.spanloader import load_with_spans
+from agent_composer.compose.parse.nodes import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

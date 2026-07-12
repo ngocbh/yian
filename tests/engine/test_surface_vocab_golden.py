@@ -12,7 +12,7 @@ import pytest
 
 from agent_composer.compose import load_flow
 from agent_composer.run import run_flow
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 
 
 # --------------------------------------------------------------------------- #
@@ -211,7 +211,7 @@ def test_all_test_fixtures_use_new_shape() -> None:
 # `_POOL_HEADS` is singular
 def test_pool_heads_singular() -> None:
     """`_POOL_HEADS = {input, system, item}` (no plural); a node-local assert reading `${inputs.X}` raises."""
-    from agent_composer.compose.validate import _POOL_HEADS
+    from agent_composer.compose.validate.asserts import _POOL_HEADS
 
     assert _POOL_HEADS == frozenset({"input", "system", "item"})
     # `inputs`/`outputs` are NOT in the pool-head set; they would be caught by the typo hint.

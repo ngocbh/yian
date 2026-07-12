@@ -15,7 +15,7 @@ import pytest
 
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.run import run_flow
-from agent_composer.compose.parser import parse_file
+from agent_composer.compose.parse.file import parse_file
 
 
 # --- a compact CODE flow runs end-to-end (auto-wire + output re-export) ------ #

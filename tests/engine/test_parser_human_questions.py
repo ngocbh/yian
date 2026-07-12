@@ -1,7 +1,7 @@
 import pytest
-from agent_composer.compose.reader import NodeReader
-from agent_composer.compose.stages.parse import parse_nodes
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.helpers.errors import LoadError
 
 
 def _node(body):

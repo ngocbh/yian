@@ -1,0 +1,243 @@
+"""Tests for the validate phase: cross-node checks over the assembled flow.
+
+Covers cycle rejection, reference validation, the cross-flow call/loop type checks,
+wiring parity, the human_input questions surface, and assert/input-binding location
+metadata. Each check rejects an ill-formed flow with a `LoadError` that anchors its
+`.range` on the offending field span.
+"""
+
+import pytest
+
+from agent_composer.compile.model import Edge
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.helpers.spanloader import load_with_spans
+from agent_composer.compose.nodes.agent import AgentDescriptor
+from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.nodes.code import CodeDescriptor
+from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.validate.cycles import reject_cycles
+from agent_composer.compose.validate.references import validate_references
+from agent_composer.events import SourceRange
+
+
+def _nodes_reader(text):
+    """A span-aware NodeReader over the `nodes:` mapping of a flow document."""
+    value, spans, root = load_with_spans(text, return_root=True)
+    return NodeReader(value, spans, root).child("nodes")
+
+
+def _node_wiring(desc):
+    """Build a leaf descriptor -> the `(node, wiring)` pair (unwrapping the BuildResult)."""
+    result = desc.build(BuildContext({}))
+    return result.node, result.wiring
+
+
+def _built_flow(text):
+    """Build leaf nodes + flow wiring + producers from a flow's `nodes:` (span-aware).
+
+    Mirrors the loader's leaf-build slice: parse the `nodes:` mapping off the span tree,
+    build each agent/code leaf, and split into `{nid: node}` / `{nid: wiring}` plus the
+    `{nid: output_type}` producer map — enough to drive `validate_references` in isolation.
+    """
+    value, spans, root = load_with_spans(text, return_root=True)
+    reader = NodeReader(value, spans, root).child("nodes")
+    descriptors = parse_nodes(reader)
+    built = {
+        nid: _node_wiring(d)
+        for nid, d in descriptors.items()
+        if isinstance(d, (AgentDescriptor, CodeDescriptor))
+    }
+    nodes = {nid: n for nid, (n, _) in built.items()}
+    wiring = {nid: w for nid, (_, w) in built.items()}
+    producers = {
+        nid: n.output_type for nid, n in nodes.items() if n.output_type is not None
+    }
+    return nodes, wiring, producers
+
+
+def test_reject_cycles_diag_has_range():
+    # A directed cycle (a -> b -> a) is loud; the LoadError anchors its range on the first
+    # (sorted) stuck node that has one, taken from the passed node_ranges map.
+    edges = [
+        Edge(id="a->b", from_="a", to="b", input_group="x"),
+        Edge(id="b->a", from_="b", to="a", input_group="y"),
+    ]
+    ra = SourceRange(start_line=2, start_col=3, end_line=2, end_col=8)
+    rb = SourceRange(start_line=5, start_col=3, end_line=5, end_col=8)
+    with pytest.raises(LoadError) as exc:
+        reject_cycles(edges, {"a", "b"}, node_ranges={"a": ra, "b": rb})
+    # `a` sorts first among the stuck nodes, so its range is the anchor.
+    assert exc.value.range == ra
+    # The "why" legend still spells out the loop's dependency edges.
+    assert exc.value.notes is not None
+
+
+def test_reject_cycles_no_ranges_leaves_range_none():
+    # Without a node_ranges map the cycle is still rejected; the error simply carries no range.
+    edges = [Edge(id="a->b", from_="a", to="b"), Edge(id="b->a", from_="b", to="a")]
+    with pytest.raises(LoadError) as exc:
+        reject_cycles(edges, {"a", "b"})
+    assert exc.value.range is None
+
+
+def test_validate_references_diag_has_range():
+    # A node input binding that references an unknown node (`${ghost.output}`) is a dangling
+    # ref. The aggregate LoadError anchors its `range` on the referencing field — the node's
+    # `input:` mapping range (`field_ranges["inputs"]`), the coarsest available field span.
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  a:\n    kind: agent\n    prompt: hi\n"
+        "    input:\n      x: ${ghost.output}\n    output: str\n"
+        "output: ${a.output}\n"
+    )
+    nodes, wiring, producers = _built_flow(text)
+    with pytest.raises(LoadError) as exc:
+        validate_references(nodes, set(), producers, "${a.output}", wiring)
+    assert "ghost" in str(exc.value)
+    assert exc.value.range is not None
+    assert exc.value.range == nodes["a"].field_ranges["inputs"]
+
+
+def test_check_ref_map_types_moved():
+    # A `call` binding whose SOURCE Type mismatches the child input's declared Type is loud.
+    # The check lives in `validate.call_types`; the LoadError carries `.line` (additive) AND
+    # anchors its `.range` on the call node's `input:` mapping span (`field_ranges["inputs"]`,
+    # the coarsest available binding-site span).
+    from agent_composer.compose.validate.call_types import check_ref_map_types
+    from agent_composer.compose.helpers.types import InputDecl
+    from agent_composer.nodes.call import CallNode
+    from agent_composer.typesys.values import Type, ValueKind
+
+    node = CallNode(
+        "c",
+        flow_id="child",
+        child_inputs=[InputDecl("n", "int", None, True, Type.scalar(ValueKind.INTEGER))],
+    )
+    rng = SourceRange(start_line=7, start_col=5, end_line=8, end_col=20)
+    node.field_ranges = {"inputs": rng}
+    producers = {"src": Type.scalar(ValueKind.STRING)}  # source is a string
+    wiring = {"c": {"n": "${src.output}"}}  # bound to the int-expecting child input
+    with pytest.raises(LoadError) as exc:
+        check_ref_map_types({"c": node}, producers, {}, wiring, {"c": 7})
+    assert "child expects" in str(exc.value)
+    assert exc.value.line == 7  # additive: node_lines still feeds `.line`
+    assert exc.value.range == rng
+
+
+def test_check_loop_type_contract_moved():
+    # A `loop` whose carried field is SEEDED from a source Type that mismatches the body
+    # output's same-named field Type is loud. The check lives in `validate.loop_types`; the
+    # LoadError carries `.line` (additive) AND anchors its `.range` on the loop node's
+    # `input:` mapping span (`field_ranges["inputs"]`).
+    from agent_composer.compose.validate.loop_types import check_loop_type_contract
+    from agent_composer.nodes.loop import LoopNode
+    from agent_composer.typesys.values import Type, ValueKind
+
+    node = LoopNode("lp", flow_id="body")
+    # body returns a record {n: int}; the carried field `n` must be seeded from an int.
+    node.output_type = Type(
+        kind=ValueKind.OBJECT, fields={"n": Type.scalar(ValueKind.INTEGER)}
+    )
+    rng = SourceRange(start_line=4, start_col=5, end_line=5, end_col=20)
+    node.field_ranges = {"inputs": rng}
+    producers = {"src": Type.scalar(ValueKind.STRING)}  # seed source is a string
+    wiring = {"lp": {"n": "${src.output}"}}  # carried `n` seeded from the string
+    with pytest.raises(LoadError) as exc:
+        check_loop_type_contract({"lp": node}, producers, {}, wiring, {"lp": 4})
+    assert "carried field" in str(exc.value)
+    assert exc.value.line == 4  # additive: node_lines still feeds `.line`
+    assert exc.value.range == rng
+
+
+def test_check_wiring_parity_moved():
+    # A node whose `flow.wiring` keys don't match its declared params is loud. The check lives
+    # in `validate.wiring_parity`; the LoadError carries `.line` (additive) AND anchors its
+    # `.range` on the node's `input:` mapping span (else node.range).
+    from agent_composer.compose.validate.wiring_parity import check_wiring_parity
+
+    node, wiring = _node_wiring(CodeDescriptor(id="n", code="m:f", inputs={"x": "${input.x}"}))
+    rng = SourceRange(start_line=3, start_col=5, end_line=4, end_col=20)
+    node.field_ranges = {"inputs": rng}
+    with pytest.raises(LoadError) as exc:
+        # orphan wiring key with no matching param -> parity failure
+        check_wiring_parity({"n": node}, {"n": {**wiring, "orphan": "${input.y}"}}, {"n": 3})
+    assert "key parity" in str(exc.value)
+    assert exc.value.line == 3  # additive: node_lines still feeds `.line`
+    assert exc.value.range == rng
+
+
+def test_validate_human_questions_diag_has_range():
+    # A human_input gate with a structurally-invalid literal `questions:` list is loud. The
+    # check lives in `validate.human_questions`; the LoadError carries `.line` (additive) AND
+    # anchors its `.range` on the gate's `questions:` field span.
+    from agent_composer.compose.validate.human_questions import (
+        validate_human_questions,
+    )
+    from agent_composer.nodes.human_input.node import HumanInputNode
+
+    node = HumanInputNode("ask", questions=[])  # empty -> "expected 1..4 questions, got 0"
+    rng = SourceRange(start_line=5, start_col=5, end_line=6, end_col=20)
+    node.field_ranges = {"questions": rng}
+    with pytest.raises(LoadError) as exc:
+        validate_human_questions({"ask": node}, node_lines={"ask": 5})
+    assert "questions" in str(exc.value)
+    assert exc.value.line == 5  # additive: node_lines still feeds `.line`
+    assert exc.value.range == rng
+
+
+_ASSERT_FLOW = """\
+id: f
+name: f
+nodes:
+  score:
+    kind: agent
+    prompt: "Rate ${topic}"
+    input:
+      topic: ${input.topic}
+    output: int
+    asserts:
+      - ${output} >= 0
+      - ${output} <= 10
+output: ${score.output}
+"""
+
+
+def test_classify_asserts_carries_ranges():
+    # Each node-local assert string maps to its OWN SourceRange in the descriptor's
+    # field_ranges (replacing the legacy assert_lines map keyed (node|None, expr)). The
+    # runtime keys node.field_ranges on the raw assert text (eval_node pre/post-assert
+    # failure), so every assert item gets its own caret — not just the coarse `asserts:`
+    # list span, which is still recorded under the field name.
+    descriptors = parse_nodes(_nodes_reader(_ASSERT_FLOW))
+    fr = descriptors["score"].field_ranges
+    assert fr["${output} >= 0"].start_line == 11
+    assert fr["${output} <= 10"].start_line == 12
+    assert "asserts" in fr  # coarse list range still present under the field name
+
+
+_INPUT_FLOW = """\
+id: f
+name: f
+nodes:
+  report:
+    kind: agent
+    prompt: "About ${topic} at ${as_of}"
+    input:
+      topic: ${input.topic}
+      as_of: ${input.as_of:?"as_of is required"}
+    output: str
+output: ${report.output}
+"""
+
+
+def test_per_input_param_carries_ranges():
+    # Each input binding maps to its OWN SourceRange under its param NAME in the descriptor's
+    # field_ranges — the key eval_node's binding-failure funnel resolves (`loc.key` == param
+    # name). Recorded kind-blind in the parse choke point alongside the coarse `inputs:` span
+    # (still present under the field name).
+    descriptors = parse_nodes(_nodes_reader(_INPUT_FLOW))
+    fr = descriptors["report"].field_ranges
+    assert fr["topic"].start_line == 8
+    assert fr["as_of"].start_line == 9
+    assert "inputs" in fr  # coarse mapping range still present under the field name

@@ -14,7 +14,7 @@ is asserted on the returned descriptor map with a deterministic minter.
 import pytest
 
 from agent_composer.compose import LoadError, desugar_inline_calls
-from agent_composer.compose.parser import CodeDescriptor
+from agent_composer.compose.parse.file import CodeDescriptor
 
 
 def _ids():

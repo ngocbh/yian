@@ -318,7 +318,7 @@ def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: i
     with a `Resume` entry (the continuation arm — same `kind = AGENT`, no separate kind); it
     reads the human's `answer` via the BARE forward-ref `${<hi_id>.output}` bound to
     its single `answer` param; the data edge for that ref is synthesized via the SAME producer
-    derivation `clone_child`/`build.py` use (`f"{producer}->{consumer}#{i}"`), so the pool ref
+    derivation `clone_child`/`compose/edges/data.py` use (`f"{producer}->{consumer}#{i}"`), so the pool ref
     and the edge agree on `hi_id`. Returns a `Flow` (`start_id = hi_id`, `end_id = resume_id`). Pure
     — the dispatcher performs the impure append/register/seed.
 
@@ -366,7 +366,7 @@ def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: i
     producer = _producer_of(answer_ref)                  # == hi_id
     assert producer is not None                          # a well-formed `${id.output}` always resolves
     edge = Edge(
-        id=f"{producer}->{resume_id}#0",                 # same shape as build.py's producer edges
+        id=f"{producer}->{resume_id}#0",                 # same shape as compose/edges/data.py's producer edges
         from_=producer,
         to=resume_id,
         input_group="answer",

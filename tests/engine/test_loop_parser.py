@@ -6,9 +6,9 @@ The parser layer only: `parse_file` -> `ComposeFile` (raw `nodes` dict), then
 populated. Baking the descriptor into a runtime LoopNode is a later step.
 """
 
-from agent_composer.compose.parser import parse_file
-from agent_composer.compose.reader import NodeReader
-from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.parse.file import parse_file
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.parse.nodes import parse_nodes
 
 LOOP_YAML = """
 id: chat

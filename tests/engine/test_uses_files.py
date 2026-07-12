@@ -2,7 +2,7 @@
 
 import pytest
 
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
 
 _CODE = "tests.seeds.fns:one_line_summary"

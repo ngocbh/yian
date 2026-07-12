@@ -1,11 +1,13 @@
 """Unit tests for infer_data_edges — data-edge inference + input_group.
 
 A flow-level pass: for every SINK binding in the flow — each built node's
-`inputs` (the InputBindings from the binding pass), a mapped `call`'s `over:`, and a `case` node's
-`on:`/`when:` refs — collect its reference paths. Binding/template sinks use `expr_refs_of`
-(over `${...}` spans); a `case` `on:`/`when:` is a whole expression, so its refs come from
-`condition_refs` (parses the whole condition, so the bare spelling is seen too). Each
-`${<id>[.output.…]}` ref becomes a data `Edge(from_=<id>, to=<consumer>, input_group=<sink key>)`.
+`inputs` (the InputBindings from the binding pass) and a mapped `call`'s `over:` — collect its
+reference paths via `expr_refs_of` (over `${...}` spans). Each `${<id>[.output.…]}` ref becomes
+a data `Edge(from_=<id>, to=<consumer>, input_group=<sink key>)`.
+
+A `case` node is SKIPPED here (the pass `continue`s on it): a case owns its lowering in
+`CaseDescriptor.build`, which emits its `__rN`/`__on` data edges directly. So `infer_data_edges`
+mints no edge to/from a case node (the case data-edge coverage is `tests/engine/test_case.py`).
 
 A coalesce `${a | b}` sink yields TWO edges that SHARE one `input_group` (the sink
 input name). An `${input.X}` read mints a `START_ID->reader` input-producer DATA edge;
@@ -14,20 +16,23 @@ input name). An `${input.X}` read mints a `START_ID->reader` input-producer DATA
 
 from pathlib import Path
 
-import pytest
-
 from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose.build import build_leaf_node, infer_data_edges
-from agent_composer.compose.parser import (
+from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.edges.data import infer_data_edges
+from agent_composer.compose.parse.file import (
     AgentDescriptor,
-    CaseDescriptor,
     CodeDescriptor,
     parse_file,
 )
-from agent_composer.compose.reader import NodeReader
-from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.parse.nodes import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
+
+
+def _wiring(desc):
+    """The flow-owned wiring of a built leaf descriptor (unwrapping BuildResult)."""
+    return desc.build(BuildContext({})).wiring
 
 
 def _seed(name: str):
@@ -36,7 +41,7 @@ def _seed(name: str):
     f = parse_file((_SEEDS / name).read_text())
     descriptors = parse_nodes(NodeReader.spanless(f.nodes))
     flow_wiring = {
-        nid: build_leaf_node(desc, {})[1]
+        nid: _wiring(desc)
         for nid, desc in descriptors.items()
         if isinstance(desc, (AgentDescriptor, CodeDescriptor))
     }
@@ -102,7 +107,7 @@ def test_coalesce_sink_shares_input_group():
             }
         )
     )
-    wiring = {nid: build_leaf_node(d, {})[1] for nid, d in descriptors.items()}
+    wiring = {nid: _wiring(d) for nid, d in descriptors.items()}
     edges = infer_data_edges(descriptors, wiring)
     coalesce_edges = [e for e in edges if e.to == "merge"]
     assert len(coalesce_edges) == 2
@@ -133,7 +138,7 @@ def test_map_over_ref_produces_data_edge():
     # The MAP wiring is built by build_call_node (needs a resolver); supply it directly —
     # the `over` source rides the reserved "over" key, over-then-inputs order.
     wiring = {
-        "bundle": build_leaf_node(descriptors["bundle"], {})[1],
+        "bundle": _wiring(descriptors["bundle"]),
         "each": {"over": "${bundle.output}", "topic": "${item}"},
     }
     edges = infer_data_edges(descriptors, wiring)
@@ -143,64 +148,58 @@ def test_map_over_ref_produces_data_edge():
     assert not any(e.from_ == "item" for e in edges)
 
 
-# ---------- case on:/when: refs produce data edges (score -> gate) ----------
+# ---------- a case node's data edges are NO LONGER inferred here ----------
+# The case owns its lowering in `CaseDescriptor.build`, which emits the reconciled
+# `__rN`/`__on` data edges directly (its `BuildResult.edges`). `infer_data_edges` therefore
+# `continue`s on a case descriptor — it emits NO edge to/from a case node. (The case data-edge
+# coverage lives in `tests/engine/test_case.py`.)
 
 
-def test_case_on_ref_produces_data_edge():
-    # seed 06: route is a case with on: ${classify.output} -> classify -> route edge.
+def test_case_on_ref_produces_no_infer_edge():
+    # seed 06: route is a case with on: ${classify.output}. infer_data_edges emits no edge
+    # into route (the classify->route edge is the case build's, not inferred here).
     descriptors, built = _seed("06-case-on.yaml")
     edges = infer_data_edges(descriptors, built)
-    assert any(e.from_ == "classify" and e.to == "route" for e in edges)
+    assert not any(e.to == "route" for e in edges)
 
 
-def test_case_searched_when_ref_produces_data_edge():
-    # seed 02: gate's when: "${score.output} >= 0.5" -> score -> gate edge.
+def test_case_searched_when_ref_produces_no_infer_edge():
+    # seed 02: gate is a case; infer_data_edges emits no edge into gate.
     descriptors, built = _seed("02-case.yaml")
     edges = infer_data_edges(descriptors, built)
-    assert any(e.from_ == "score" and e.to == "gate" for e in edges)
+    assert not any(e.to == "gate" for e in edges)
 
 
-def test_case_multiref_when_produces_data_edge():
-    # seed 10: size's when reads ${score.output} (and ${input.weight}) -> one edge.
+def test_case_multiref_when_produces_no_infer_edge():
+    # seed 10: size is a case; infer_data_edges emits no edge into size.
     descriptors, built = _seed("10-asserts-arithmetic.yaml")
     edges = infer_data_edges(descriptors, built)
-    case_edges = [e for e in edges if e.to == "size"]
-    assert any(e.from_ == "score" for e in case_edges)
-    # ${input.weight} is a flow input, not an ${X.output} -> no data edge.
-    assert not any(e.from_ == "weight" for e in case_edges)
+    assert not any(e.to == "size" for e in edges)
 
 
-@pytest.mark.parametrize(
-    "when",
-    [
-        "score.output >= 0.5",        # bare (canonical)
-        "${score.output} >= 0.5",     # mixed
-        "${score.output >= 0.5}",     # whole-span
-    ],
-)
-def test_case_when_produces_data_edge_in_every_spelling(when):
-    # A searched `when:` is a condition, not a template: its refs must be extracted with
-    # condition_refs (which parses the whole expression), so the score->gate data edge is
-    # inferred even for the bare spelling (which has no ${...} span for the template walker).
-    text = (
-        "id: f\nname: f\ninput:\n  x: float\nnodes:\n"
-        "  score:\n    kind: code\n    input:\n      x: ${input.x}\n"
-        "    output: float\n    code: m:fn\n"
-        "  gate:\n    kind: case\n    cases:\n"
-        f'      - when: "{when}"\n        then: hi\n    else: lo\n'
-        '  hi:\n    kind: agent\n    prompt: "hi"\n    output: str\n'
-        '  lo:\n    kind: agent\n    prompt: "lo"\n    output: str\n'
-        "output: ${hi.output | lo.output}\n"
-    )
-    f = parse_file(text)
-    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
-    built = {
-        nid: build_leaf_node(desc, {})[1]
-        for nid, desc in descriptors.items()
-        if isinstance(desc, (AgentDescriptor, CodeDescriptor))
-    }
-    edges = infer_data_edges(descriptors, built)
-    assert any(e.from_ == "score" and e.to == "gate" for e in edges)
+def test_case_when_produces_no_infer_edge_in_every_spelling():
+    # A searched `when:` in any spelling yields no infer_data_edges edge into the case node
+    # (the case build owns the score->gate edge). One flow, all three spellings.
+    for when in ("score.output >= 0.5", "${score.output} >= 0.5", "${score.output >= 0.5}"):
+        text = (
+            "id: f\nname: f\ninput:\n  x: float\nnodes:\n"
+            "  score:\n    kind: code\n    input:\n      x: ${input.x}\n"
+            "    output: float\n    code: m:fn\n"
+            "  gate:\n    kind: case\n    cases:\n"
+            f'      - when: "{when}"\n        then: hi\n    else: lo\n'
+            '  hi:\n    kind: agent\n    prompt: "hi"\n    output: str\n'
+            '  lo:\n    kind: agent\n    prompt: "lo"\n    output: str\n'
+            "output: ${hi.output | lo.output}\n"
+        )
+        f = parse_file(text)
+        descriptors = parse_nodes(NodeReader.spanless(f.nodes))
+        built = {
+            nid: _wiring(desc)
+            for nid, desc in descriptors.items()
+            if isinstance(desc, (AgentDescriptor, CodeDescriptor))
+        }
+        edges = infer_data_edges(descriptors, built)
+        assert not any(e.to == "gate" for e in edges), when
 
 
 def test_no_end_edges_for_case_seed():

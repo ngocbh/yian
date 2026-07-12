@@ -14,7 +14,7 @@ needed), stamps `output_type`, and enforces the two halves of the type contract:
 import pytest
 
 from agent_composer.compose.loader import load_flow
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.nodes.base import NodeKind
 from agent_composer.typesys.values import ValueKind
 

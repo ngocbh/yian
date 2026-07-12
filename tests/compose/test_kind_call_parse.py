@@ -5,10 +5,10 @@
 
 import pytest
 
-from agent_composer.compose.errors import LoadError
-from agent_composer.compose.kinds.call import CallDescriptor
-from agent_composer.compose.reader import NodeReader
-from agent_composer.compose.spanloader import load_with_spans
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.nodes.call import CallDescriptor
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.events import SourceRange
 
 

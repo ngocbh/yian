@@ -33,7 +33,7 @@ nodes/        Node contract (base) + per-kind implementations
                loop, human_input, wait)
 compile/      compiled IR (CompiledFlow) + representation-neutral validation
 compose/      the Compose-YAML loader: text -> CompiledFlow
-              (parser/types/build/cases/validate/asserts/loader)
+              (helpers/nodes/parse/desugar/edges/validate/build/loader)
 run.py        the run boundary: LoadedFlow + inputs -> RunResult (run/resume)
 runtime/      state_manager, single-threaded engine, parallel worker pool, node watchdog
 suspension/   pause reasons, commands, checkpoint

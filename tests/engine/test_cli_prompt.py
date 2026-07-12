@@ -23,7 +23,7 @@ from agent_composer.cli.run import (
 )
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import RunResult, resume_command, resume_flow, run_flow
-from agent_composer.compose.types import read_flow_inputs
+from agent_composer.compose.helpers.types import read_flow_inputs
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 _ERRORS = _SEEDS / "errors"

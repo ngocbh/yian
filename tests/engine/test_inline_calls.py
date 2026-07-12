@@ -335,7 +335,7 @@ def test_inline_call_seed_21_loads():
 # --------------------------------------------------------------------------- #
 
 from agent_composer.compose import desugar_inline_calls  # noqa: E402
-from agent_composer.compose.parser import ToolDescriptor  # noqa: E402
+from agent_composer.compose.parse.file import ToolDescriptor  # noqa: E402
 
 
 def test_quoted_interpolated_arg_strips_quotes_like_named_form():

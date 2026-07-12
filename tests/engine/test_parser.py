@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compose import LoadError
-from agent_composer.compose.parser import ComposeFile, parse_file
+from agent_composer.compose.parse.file import ComposeFile, parse_file
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

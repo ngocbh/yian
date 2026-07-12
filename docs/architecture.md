@@ -46,9 +46,10 @@ stages: **parse → desugar → wire → check → freeze.**
   │  parse_nodes           tree      -> one frozen *descriptor* per node (kind-specific)
   │  desugar_*             rewrite sugar into core nodes:
   │                          inline ${f(x)} calls, adaptive questions, case targets, cases
-  │  build (per kind)      each descriptor -> a runtime Node  (+ its flow-owned wiring)
+  │  build (per kind)      each descriptor -> a runtime Node  (+ its flow-owned wiring;
+  │                          a case lowers in its own build, emitting its branch edges)
   │  infer_data_edges      read every ${...} -> draw the edges NOBODY drew by hand
-  │  reconcile_case_edges  make branch edges agree with the case graph
+  │                          (+ append each case's own data+control edges)
   │  validate_references   every ${...} points at something real & type-compatible
   │  reject_cycles         the graph must be a DAG
   │  check_case_handles    every branch has a home
@@ -62,10 +63,11 @@ Two ideas make this phase tractable:
 `infer_data_edges` reads that reference and adds the `frame → this` edge. The graph is
 a *consequence* of the data references, so it can never disagree with them.
 
-**The front end is split on two axes (issue #70).** Per-node-kind logic lives in
-`compose/kinds/<kind>.py` — each kind module owns its descriptor, its `parse()`, and
+**The front end is split on two axes.** Per-node-kind logic lives in
+`compose/nodes/<kind>.py` — each kind module owns its descriptor, its `parse()`, and
 its `build()`, and registers them into the `KINDS` table. Cross-node graph passes live
-in `compose/stages/`. The engine core sees none of it.
+in the ordered phase packages `compose/parse/ → compose/desugar/ → compose/edges/ →
+compose/validate/ → compose/build/`. The engine core sees none of it.
 
 The output is a **`LoadedFlow`**: a `CompiledFlow` (the immutable topology) plus the
 typed `input:` declarations, the `asserts`, and a render-only *source frame* used to

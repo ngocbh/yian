@@ -4,7 +4,7 @@ reserved `inherit` key is stripped before LLMConfig validation and carried as a 
 import pytest
 
 from agent_composer.compose.loader import load_flow
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 
 
 def _agent(loaded, nid):

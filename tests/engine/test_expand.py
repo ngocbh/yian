@@ -45,7 +45,7 @@ def test_rens_internal_computed_whole_span_renamespaces_all_leaves():
 import pytest
 from agent_composer.events import RunSucceeded
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, NodeState, START_ID, END_ID
-from agent_composer.compose.types import InputDecl, read_type
+from agent_composer.compose.helpers.types import InputDecl, read_type
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.engine import FlowEngine
@@ -61,7 +61,7 @@ def _with_boundary(nodes: dict, edges: list, outputs: list, input_decls=()) -> t
     # child START_ID carries `input_decls` (so its params == the call-arg names the splice seeds);
     # END_ID is RECORD-mode from the declared outputs; the manual `(.., END_ID)` terminal Edge is
     # replaced by the producer edge (input_group = output name) so the engine reads store[END_ID].
-    from agent_composer.compose.build import _binding_producers
+    from agent_composer.compose.edges.producers import _binding_producers
 
     decls = list(input_decls)
     nodes = dict(nodes)

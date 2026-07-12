@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
-from agent_composer.compose.build import _binding_producers
+from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.expr import binding_co_skips
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode

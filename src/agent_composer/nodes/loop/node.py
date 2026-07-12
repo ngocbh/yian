@@ -36,7 +36,7 @@ class LoopMaxExceeded(RuntimeError):
 class LoopNode(Node):
     """A higher-order `('a -> 'a) -> 'a -> 'a` driver over a carried record.
 
-    Fields (baked at load by `compose.kinds.loop.build`; copied onto every clone by `respawn`):
+    Fields (baked at load by `compose.nodes.loop.build`; copied onto every clone by `respawn`):
       child          the compiled body subflow (the `'a -> 'a` callable); the Grow subgraph body.
       child_inputs   the body's declared input decls (subset of the carried record).
       predicate_kind one of "while" | "until" | "times".
@@ -153,7 +153,7 @@ class LoopNode(Node):
         """The loop's hard iteration budget: True once `iteration` has reached `max_iters`.
 
         Pure, node-owned budget policy (`iteration >= self.max_iters`); assumes `max_iters` was
-        baked at load (`compose.kinds.loop.build`). `run` consults this both as the `times`
+        baked at load (`compose.nodes.loop.build`). `run` consults this both as the `times`
         stop-count and as the `while`/`until` runaway guard."""
         return iteration >= self.max_iters
 

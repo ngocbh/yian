@@ -62,29 +62,29 @@ clean and generic.
 
 `compose/` is split along two axes so a change stays local:
 
-- **Per node kind** → `compose/kinds/<kind>.py`. Each module owns three things:
-  - a frozen **descriptor** dataclass (`CodeDescriptor`),
-  - **`parse(node_id, reader)`** — read one node body, recording each field's `SourceRange`,
-  - **`build(desc, *, registry, resolver, …)`** — construct the runtime `Node` + wiring.
+- **Per node kind** → `compose/kinds/<kind>.py`. Each module owns a frozen **descriptor**
+  dataclass (`CodeDescriptor`) that subclasses `NodeDescriptor`. The base holds the common
+  contract; each kind carries:
+  - **`parse(node_id, reader)`** — a classmethod (the base template) that reads one node body,
+    recording each field's `SourceRange`,
+  - **`build(*, registry, resolver, …)`** — a method that constructs the runtime `Node` + wiring.
 
-  `compose/kinds/__init__.py` assembles the `KINDS` table explicitly — one row per
-  kind, built from each module's exports:
+  `compose/kinds/__init__.py` derives the `KINDS` table from a single `_DESCRIPTORS` tuple —
+  each kind maps its `kind` string to its descriptor class:
   ```python
-  KINDS = {
-      "code": KindSpec(code.CodeDescriptor, code.parse, code.build),
-      ...
-  }
+  _DESCRIPTORS = (agent.AgentDescriptor, code.CodeDescriptor, ...)
+  KINDS = {d.kind: d for d in _DESCRIPTORS}   # kind string -> descriptor class
   ```
-  Adding or changing a kind is one file plus one row here. The shared dispatch sites
-  (`stages/parse.py`, `build.build_leaf_node`) consult `KINDS` — they never grow an
-  `if kind == …` ladder.
+  Adding or changing a kind is one file plus one entry here. The shared dispatch sites
+  (`stages/parse.py`, `build.build_leaf_node`, `loader.py`) look the class up in `KINDS`
+  and call `cls.parse(...)` / `desc.build(...)` — they never grow an `if kind == …` ladder.
 
 - **Cross-node graph passes** → `compose/stages/`. These operate on the *whole* set of
   descriptors: `parse_nodes`, the desugars, `infer_ordering_edges`,
   `validate_references`, `reject_cycles`, wiring-parity, and the rest.
 
 A sibling table, `BINDING_FIELDS`, records which descriptor fields carry `${...}`
-strings (a code node's `inputs`, a tool's `args`, a map's `over`). One kind-blind walk
+strings (a code node's `inputs`, a tool's `inputs`, a map's `over`). One kind-blind walk
 in `bindings.py` reads it, so the desugar passes rewrite bindings without an isinstance
 ladder.
 
@@ -95,7 +95,7 @@ ladder.
 `build()` produces **two** things, and the split is deliberate:
 
 ```python
-node, wiring = KINDS[desc.kind].build(desc, registry=registry, resolver=resolver)
+node, wiring = desc.build(registry=registry, resolver=resolver)
 ```
 
 - the **node** carries only what it needs to run: its `output_type` (resolved against

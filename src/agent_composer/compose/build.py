@@ -1,6 +1,6 @@
 """DAG boundary synthesis: `START_ID`/`END_ID` nodes + their edges over ALL edges.
 
-The `build_leaf_node` funnel is DISSOLVED (#70, Step 6): every node kind now builds through
+The `build_leaf_node` funnel is dissolved: every node kind now builds through
 its own `descriptor.build(ctx) -> BuildResult` (see `compose/nodes/<kind>.py`), and the loader's
 conductor loop drives them kind-blind. What remains here is the boundary synthesis — `synthesize_roots`
 and `synthesize_boundary_graph` — which is representation-neutral graph plumbing, not per-kind build.

@@ -144,20 +144,24 @@ def run_flow(
     num_workers: int = 0,
 ) -> RunResult:
     """
-    Coerce inputs, seed the variable pool, enforce asserts, and drive the flow to a terminal.
+    Coerce inputs, seed the variable pool, and drive the flow to a terminal.
 
     Never raises on a flow failure: a failed, paused, or aborted run is returned as a
     `RunResult` with a non-`"succeeded"` status (a `RunFailed` is an engine event, not an
     exception). Compile-time errors of a bad flow surface earlier, in
-    [`load_flow`][agent_composer.load_flow]. Asserts run in two phases — boundary asserts
-    (`${input}`/`${system}`-only) fire *before* any node runs and return `status="failed"`
-    on a false one; post-terminal asserts (`${<id>.output}`) run *after* the flow reaches a
-    terminal and flip an otherwise-succeeded run to `"failed"`.
+    [`load_flow`][agent_composer.load_flow]. Asserts are NOT enforced here: a flow's
+    `asserts:` are lowered at build onto the synthesized boundary nodes — boundary asserts
+    (`${input}`-only) ride `StartNode.boundary_asserts` and fire inside `StartNode.run()`
+    post-coercion (a false one returns `status="failed"` before any body node); post-terminal
+    asserts (`${<id>.output}`) ride `end.post_asserts` and fire through `eval_node` when END
+    runs (flipping an otherwise-succeeded run to `"failed"`). This unifies top-level and child
+    (subflow) asserts on one firing path.
 
     Args:
         loaded (`LoadedFlow`):
             A compiled, validated flow from [`load_flow`][agent_composer.load_flow].
-            Carries the IR, the declared input schema, and the assert sets.
+            Carries the IR (asserts lowered onto its boundary nodes) and the declared
+            input schema.
         inputs (`dict[str, Any]`):
             Run arguments keyed by declared input name. Each value is coerced to its
             declared type; names omitted here fall back to their declared defaults.

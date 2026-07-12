@@ -183,9 +183,10 @@ def call_subgraph(child, callsite: str, record: dict) -> Flow:
     Wraps `clone_child` (the deep-namespaced clone of the child's `START_ID..END_ID` at `callsite`,
     seeded with `record`), bakes `commit_as=callsite` on the cloned child END filler (so its Output
     commits under the spawner id on the ordinary success path), and returns a `Flow` whose `start_id`
-    is the single cloned child START and whose `end_id` is the cloned child END filler. The child
-    boundary asserts are re-derived engine-side (the engine reads them off the spawner node), so they
-    are not carried on the returned `Flow`."""
+    is the single cloned child START and whose `end_id` is the cloned child END filler. The child's
+    asserts (a def's `asserts:` lowered onto its START/END at build) ride the cloned boundary nodes
+    and fire through the ordinary node path — boundary asserts in the cloned `StartNode.run()` (post
+    coercion), post asserts on the cloned END via `eval_node` — exactly like the top-level flow."""
     cloned = clone_child(child, callsite=callsite, record=record)
     cloned.nodes[cloned.end_id].commit_as = callsite
     return Flow(nodes=cloned.nodes, edges=cloned.edges, wiring=cloned.wiring,

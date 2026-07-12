@@ -3,7 +3,7 @@
 Issue #70 splits `compose/` along two axes: the *node-kind* axis lives here
 (`compose/nodes/<kind>.py`), and the cross-node *graph-stage* axis lives in
 `compose/stages/`. Each kind module owns the three things that used to be scattered
-across `parser.py` (its descriptor + the `_KIND_SPECS` row) and `build.py` (its branch
+across `parse/file.py` (its descriptor + the `_KIND_SPECS` row) and `build.py` (its branch
 of the `build_leaf_node` isinstance ladder):
 
 - its frozen **descriptor** dataclass (subclassing `NodeDescriptor`),
@@ -14,7 +14,7 @@ of the `build_leaf_node` isinstance ladder):
 
 `parse`/`build` ride on the descriptor class itself, so `KINDS` maps the surface `kind:`
 string straight to the descriptor class — no bundling wrapper. The shared dispatch sites
-(`stages/parse.py::_parse_node`, `build.build_leaf_node`, `loader.py`) look the class up and
+(`parse/nodes.py::_parse_node`, `build.build_leaf_node`, `loader.py`) look the class up and
 call `cls.parse(...)` / `desc.build(...)`, so adding/altering a kind is a local edit here —
 the engine core never sees any of it (kind-blind invariant, `tests/engine/test_kind_census.py`).
 
@@ -29,7 +29,7 @@ kind means adding its import and one entry to that tuple.
 Importing the kind modules here cannot cycle: each takes its `build` helpers from `nodes.*`
 (the engine node package, below `compose` in the layer ladder) and from `NodeDescriptor` in
 `compose/nodes/base.py` (a leaf of this package). The one import each still defers is in
-`parse`: the shared field constants from `parser.py`, which re-exports these descriptors, so a
+`parse`: the shared field constants from `parse/file.py`, which re-exports these descriptors, so a
 top-level import there WOULD cycle. Deriving the tables below only reads each class's
 already-defined ClassVars; it never touches `KINDS`.
 """
@@ -65,7 +65,7 @@ _DESCRIPTORS = (
     loop.LoopDescriptor,
 )
 
-# Surface `kind:` string -> its descriptor class; the shared dispatch (`stages/parse.py`,
+# Surface `kind:` string -> its descriptor class; the shared dispatch (`parse/nodes.py`,
 # `build.build_leaf_node`, `loader.py`) looks up the class and calls its `parse`/`build`.
 KINDS: dict[str, type] = {d.kind: d for d in _DESCRIPTORS}
 

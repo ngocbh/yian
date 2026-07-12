@@ -19,7 +19,7 @@ Located parse metadata: a synth branch-target call node inherits the HOST case
 descriptor's `range`/`field_ranges` (so its downstream errors locate at the case node).
 No `node_lines` map.
 
-Imports flow down/peer only: `compose.parser` (CaseDescriptor), `compose.stages.inline_calls`
+Imports flow down/peer only: `compose.parse.file` (CaseDescriptor), `compose.stages.inline_calls`
 (the shared `call(...)` recognizer + synth-node factory), `compose.errors`. Only the loader
 imports this back.
 """
@@ -31,7 +31,7 @@ from typing import Any, Callable, Optional
 
 from agent_composer.events import SourceRange
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parser import CaseDescriptor
+from agent_composer.compose.parse.file import CaseDescriptor
 from agent_composer.compose.stages.inline_calls import (
     _to_call_descriptor,
     desugar_call_directives,

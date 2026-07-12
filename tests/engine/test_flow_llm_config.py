@@ -1,7 +1,7 @@
 """Flow-level `llm_config:` — parsing it onto ComposeFile and threading it onto the
 compiled flow (the cascade's flow layer)."""
 
-from agent_composer.compose.parser import parse_file
+from agent_composer.compose.parse.file import parse_file
 from agent_composer.compose.loader import load_flow
 
 

@@ -32,7 +32,7 @@ Imports flow down/peer only: `expr` (ref scan), `nodes` (Case/CaseNode/ParamDecl
 `compile.model` (Edge) + `compile.validation._walk_record_fields` (the dotted-field walk,
 a representation-neutral leaf checker), `typesys` (Type), and the compose peers
 `compose.stages.inline_calls` (the shared binding-walk, for `expand_case_outputs`),
-`compose.errors`, `compose.parser`. The `stages.inline_calls` edge is acyclic
+`compose.errors`, `compose.parse.file`. The `stages.inline_calls` edge is acyclic
 (inline_calls.py never imports cases.py; the loader imports both). Nothing in the engine
 imports this back.
 """
@@ -57,7 +57,7 @@ from agent_composer.typesys.values import Type
 from agent_composer.compose.nodes.bindings import map_binding_strings
 from agent_composer.compose.stages.inline_calls import map_outputs_strings
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parser import CaseDescriptor
+from agent_composer.compose.parse.file import CaseDescriptor
 
 
 @dataclass(frozen=True)

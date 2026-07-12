@@ -24,7 +24,7 @@ from agent_composer.compose.build import (
 from agent_composer.compose.stages.wiring_parity import check_wiring_parity
 from agent_composer.compose.loader import _flow_outputs
 from agent_composer.compose.cases import desugar_case, reconcile_case_edges
-from agent_composer.compose.parser import (
+from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CaseDescriptor,
     CodeDescriptor,
@@ -32,7 +32,7 @@ from agent_composer.compose.parser import (
     parse_file,
 )
 from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.parse.nodes import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

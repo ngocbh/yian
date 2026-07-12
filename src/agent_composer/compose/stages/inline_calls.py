@@ -30,7 +30,7 @@ downstream errors locate at the host binding site — no `node_lines` map. The f
 `outputs:`/`asserts:` sections have no descriptor, so their inline calls locate at the
 section source line (`outputs_line`/`asserts_line`) until the span cutover retires those.
 
-Imports flow DOWN/peer only: `compose.parser` (descriptors), `compose.nodes.bindings` (the
+Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
 kind-blind binding-field walk) + `compose.errors` (peers), `expr` (the ref-walk + the
 span flow-call detector), `events` (SourceRange). Only the loader imports this back.
 """
@@ -56,7 +56,7 @@ from agent_composer.expr.template import (
 )
 from agent_composer.compose.nodes.bindings import map_binding_strings
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parser import (
+from agent_composer.compose.parse.file import (
     CallDescriptor,
     NodeDescriptor,
 )

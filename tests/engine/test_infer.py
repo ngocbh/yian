@@ -18,14 +18,14 @@ import pytest
 
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose.build import build_leaf_node, infer_data_edges
-from agent_composer.compose.parser import (
+from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CaseDescriptor,
     CodeDescriptor,
     parse_file,
 )
 from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.parse.nodes import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

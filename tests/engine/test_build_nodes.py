@@ -23,9 +23,9 @@ from agent_composer.typesys.values import ValueKind
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose import LoadError
 from agent_composer.compose.build import build_leaf_node
-from agent_composer.compose.parser import parse_file
+from agent_composer.compose.parse.file import parse_file
 from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.parse.nodes import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -217,7 +217,7 @@ def test_call_loop_descriptors_rejected_as_non_leaf():
     # call/map/loop share the KINDS table but need a resolver — `build_leaf_node` (the
     # leaf-only, resolver=None path) must reject them up front rather than build with a
     # missing resolver and fail with a confusing message deep in `build_call_node`.
-    from agent_composer.compose.parser import CallDescriptor, MapDescriptor, LoopDescriptor
+    from agent_composer.compose.parse.file import CallDescriptor, MapDescriptor, LoopDescriptor
 
     for desc in (
         CallDescriptor(id="c", call="child"),

@@ -5,7 +5,7 @@ output is a code-built `list[Question]` Type (it has no surface type-string).
 The override lets that code-built Type win over the type-string-derived one.
 """
 
-from agent_composer.compose.parser import AgentDescriptor
+from agent_composer.compose.parse.file import AgentDescriptor
 from agent_composer.compose.build import build_leaf_node
 from agent_composer.nodes.human_input.questions import question_list_type
 

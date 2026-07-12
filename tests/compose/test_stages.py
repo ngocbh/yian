@@ -25,7 +25,7 @@ from agent_composer.compose.stages.inline_calls import (
     desugar_inline_calls,
 )
 from agent_composer.compose.stages.ordering import infer_ordering_edges
-from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.stages.references import validate_references
 from agent_composer.events import SourceRange
 

@@ -1,8 +1,8 @@
 """Unit tests for the effect-node parser arms — human_input + wait."""
 
-from agent_composer.compose.parser import HumanInputDescriptor, WaitDescriptor
+from agent_composer.compose.parse.file import HumanInputDescriptor, WaitDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.helpers.errors import LoadError
 import pytest
 

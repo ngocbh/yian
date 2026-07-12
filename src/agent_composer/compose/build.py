@@ -31,7 +31,7 @@ from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parser import (
+from agent_composer.compose.parse.file import (
     CallDescriptor,
     CaseDescriptor,
     NodeDescriptor,

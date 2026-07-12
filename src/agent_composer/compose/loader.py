@@ -76,8 +76,8 @@ from agent_composer.compose.helpers.source import (
     _boundary_field_ranges,
     _section_lines,
 )
-from agent_composer.compose.stages.parse import parse_nodes
-from agent_composer.compose.parser import (
+from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.parse.file import (
     CallDescriptor,
     CaseDescriptor,
     LoopDescriptor,

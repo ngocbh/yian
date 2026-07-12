@@ -26,14 +26,14 @@ from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.build import build_leaf_node, infer_data_edges
 from agent_composer.compose.cases import desugar_case, reconcile_case_edges
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parser import (
+from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CaseDescriptor,
     CodeDescriptor,
     parse_file,
 )
 from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.helpers.types import read_flow_inputs
 from agent_composer.compose.stages.references import validate_references
 from tests.engine._fakes import derive_wiring, stamp_reads

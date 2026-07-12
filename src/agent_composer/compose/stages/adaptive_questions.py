@@ -33,7 +33,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parser import (
+from agent_composer.compose.parse.file import (
     AgentDescriptor,
     HumanInputDescriptor,
     NodeDescriptor,

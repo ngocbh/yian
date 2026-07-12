@@ -11,7 +11,7 @@ job — these edges join the `reject_cycles` set.
 Located parse metadata: the unknown-target `LoadError` locates at the declaring node
 descriptor's `range` (no `node_lines` map).
 
-Imports flow down/peer only: `compile.model` (Edge), `compose.parser` (NodeDescriptor),
+Imports flow down/peer only: `compile.model` (Edge), `compose.parse.file` (NodeDescriptor),
 `compose.errors`. Only the loader imports this back.
 """
 
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parser import NodeDescriptor
+from agent_composer.compose.parse.file import NodeDescriptor
 
 
 def infer_ordering_edges(

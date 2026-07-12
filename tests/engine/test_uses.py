@@ -4,7 +4,7 @@ import pytest
 
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
-from agent_composer.compose.parser import parse_file
+from agent_composer.compose.parse.file import parse_file
 from agent_composer.compose.helpers.uses import UsesRef, parse_uses_ref
 
 

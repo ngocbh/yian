@@ -7,8 +7,9 @@ no node behind them, so the locator rides the `RunResult`, not a `NodeFailed`.
 
 from pathlib import Path
 
-from agent_composer.compose import load_flow, run_flow
-from agent_composer.compose.run import resume_flow
+from agent_composer.compose import load_flow
+from agent_composer.run import run_flow
+from agent_composer.run import resume_flow
 from agent_composer.suspension.commands import DeliverAnswerCommand
 
 _ERRORS = Path(__file__).resolve().parents[1] / "seeds" / "errors"

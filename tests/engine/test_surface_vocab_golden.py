@@ -10,7 +10,8 @@ from __future__ import annotations
 import importlib
 import pytest
 
-from agent_composer.compose import load_flow, run_flow
+from agent_composer.compose import load_flow
+from agent_composer.run import run_flow
 from agent_composer.compose.errors import LoadError
 
 
@@ -276,7 +277,7 @@ def test_end_post_assert_reads_output() -> None:
 def test_python_carriers_singular() -> None:
     """All Python carriers expose `.input` (singular); `.inputs` no longer exists."""
     from agent_composer.compose.loader import LoadedFlow
-    from agent_composer.compose.run import RunResult
+    from agent_composer.run import RunResult
 
     assert "input" in LoadedFlow.__dataclass_fields__
     assert "inputs" not in LoadedFlow.__dataclass_fields__

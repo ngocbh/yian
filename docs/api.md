@@ -27,10 +27,10 @@ These are exported from the top-level `agent_composer` package:
 | `FlowValidationError` | raised on a failed validation check |
 | `ExpressionError` | raised on a bad `${...}` expression |
 
-The resume helpers live in `agent_composer.compose.run`:
+The resume helpers live in `agent_composer.run`:
 
 ```python
-from agent_composer.compose.run import resume_flow, resume_command, RunResult
+from agent_composer.run import resume_flow, resume_command, RunResult
 ```
 
 ## `load_flow`
@@ -89,7 +89,7 @@ control. When `result.status == "paused"`, deliver an answer per pause reason an
 resume:
 
 ```python
-from agent_composer.compose.run import resume_flow, resume_command
+from agent_composer.run import resume_flow, resume_command
 
 result = run_flow(loaded, {"task": "Plan a team offsite"})
 while result.status == "paused":

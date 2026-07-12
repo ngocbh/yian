@@ -44,11 +44,11 @@ from agent_composer.typesys.values import TypeCheckError, Type
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
-    ChildResolver,
     build_leaf_node,
     infer_data_edges,
     synthesize_boundary_graph,
 )
+from agent_composer.compose.kinds.resolver import ChildResolver
 from agent_composer.compose.stages.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.cases import (
     CaseDesugar,
@@ -838,9 +838,6 @@ def _assemble(
     # and CASE stay `{}` until relocated.
     leaf: dict[str, Node] = {}
     flow_wiring: dict[str, dict] = {}
-    # Kind-blind build dispatch table (imported lazily: kind modules import build helpers from
-    # `compose.build`, so a top-level import here would risk a cycle — mirrors `build_leaf_node`).
-    from agent_composer.compose.kinds import KINDS
 
     for nid, desc in descriptors.items():
         if isinstance(desc, CaseDescriptor):
@@ -848,11 +845,11 @@ def _assemble(
             continue
         if isinstance(desc, CallDescriptor):
             try:
-                # Route through the kind's own `KindSpec.build` (`desc.kind` is "call"/"map") so
-                # it stamps `.range`/`.field_ranges` uniformly with the leaf path — the funnel's
+                # Build through the descriptor's own `build` (call/map) so it stamps
+                # `.range`/`.field_ranges` uniformly with the leaf path — the funnel's
                 # concrete-range resolution needs a call/map node's `field_ranges` (e.g. an
                 # `over:`/call-arg binding failure) just as much as a leaf's.
-                node, wiring = KINDS[desc.kind].build(desc, registry=registry, resolver=resolver)
+                node, wiring = desc.build(registry=registry, resolver=resolver)
             except LoadError as exc:  # locate a resolver failure at the call node's line
                 if exc.line is None:
                     exc.line = n_lines.get(nid)
@@ -861,7 +858,7 @@ def _assemble(
             flow_wiring[nid] = wiring
         elif isinstance(desc, LoopDescriptor):
             try:
-                node, wiring = KINDS["loop"].build(desc, registry=registry, resolver=resolver)
+                node, wiring = desc.build(registry=registry, resolver=resolver)
             except LoadError as exc:  # locate a resolver / name-set / legality failure at the loop node's line
                 if exc.line is None:
                     exc.line = n_lines.get(nid)

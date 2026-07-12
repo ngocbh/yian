@@ -9,7 +9,7 @@ configs stay isolated; runtime
 expansion (`clone_child`) then deep-copies an already-resolved child, so the effective configs
 ride into the live graph with no change to `expand.py`. On a DURABLE resume this must run
 BEFORE `FlowEngine.restore` (restore's replay re-clones children from
-`self.flow.nodes[spawner_id].child` — see `compose/run.py` / `runtime/engine.py`).
+`self.flow.nodes[spawner_id].child` — see `run.py` / `runtime/engine.py`).
 
 Layer: compile — imports nodes + compile.model only; never runtime.
 """

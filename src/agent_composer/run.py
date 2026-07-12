@@ -19,9 +19,12 @@ Never raises on a flow failure — a failed/aborted run, or a false assert, come
 a `RunResult` with `status != "succeeded"` (RunFailed is an engine EVENT, not an
 exception). Compile-time errors (a bad flow) are surfaced by `load_flow`, not here.
 
-Imports flow DOWN only: `runtime` (FlowEngine), `typesys` (the pool + seeding),
-`expr` (evaluate_when), `events`, and the sibling `loader` (LoadedFlow). Nothing
-imports back.
+This is the top-level RUN BOUNDARY: it sits at the package root, above both `compose`
+(it consumes `compose`'s product type, `LoadedFlow`) and `runtime` (it drives the
+`FlowEngine`). It is deliberately NOT a `compose` submodule — it touches no YAML; it
+turns an already-compiled flow contract into a run. Imports flow DOWN only: `compose`
+(LoadedFlow), `runtime` (FlowEngine), `compile`, `typesys` (the pool + seeding),
+`expr`, and `events`. Nothing imports back.
 """
 
 from __future__ import annotations
@@ -69,7 +72,7 @@ class RunResult:
     The outcome of one flow run (or resume) — surface-agnostic.
 
     Returned by [`run_flow`][agent_composer.run_flow] and
-    [`resume_flow`][agent_composer.compose.run.resume_flow] for every terminal,
+    [`resume_flow`][agent_composer.run.resume_flow] for every terminal,
     including failures and pauses; these functions never raise on a flow failure.
 
     Attributes:
@@ -276,7 +279,7 @@ def resume_flow(
     Resume from a live `engine=` (fast, in-process) or a deserialized `checkpoint=`
     (durable, cross-process) — pass exactly one. The `commands` (typically the injected
     human answer or a wait release, built with
-    [`resume_command`][agent_composer.compose.run.resume_command]) are applied before the
+    [`resume_command`][agent_composer.run.resume_command]) are applied before the
     run continues. Mirrors [`run_flow`][agent_composer.run_flow]'s terminal-event loop and
     post-terminal asserts; if the run pauses again, the returned result carries fresh handles.
 
@@ -392,7 +395,7 @@ def resume_command(loaded: LoadedFlow, reason: Any, value: Any) -> "DeliverAnswe
     Returns:
         `DeliverAnswerCommand`:
             The command to pass to
-            [`resume_flow`][agent_composer.compose.run.resume_flow] via `commands=`.
+            [`resume_flow`][agent_composer.run.resume_flow] via `commands=`.
 
     Raises:
         `ValueError`:

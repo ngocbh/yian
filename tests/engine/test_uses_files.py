@@ -189,7 +189,7 @@ def test_diamond_reuse(tmp_path):
 
 from pathlib import Path
 
-from agent_composer.compose.run import run_flow
+from agent_composer.run import run_flow
 
 _SEEDS = Path(__file__).resolve().parents[1].parent / "tests" / "seeds"
 

@@ -16,8 +16,8 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from agent_composer import load_flow
-from agent_composer.compose import run_flow
-from agent_composer.compose.run import resume_command
+from agent_composer.run import run_flow
+from agent_composer.run import resume_command
 from agent_composer.events import RunPaused, RunSucceeded
 from agent_composer.suspension.pause import HumanInputRequired
 

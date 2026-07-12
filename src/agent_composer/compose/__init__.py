@@ -6,10 +6,10 @@ of a node's `outputs:` / a flow's `inputs:` is read directly into one recursive
 are native.
 
 Organized along two axes (#70): the per-node-kind axis lives in `kinds/<kind>.py`
-(each owns its descriptor + `parse` + `build`, self-registered into the shared `KINDS`
-table), and the cross-node graph-stage axis lives in `stages/` (parse / references /
-cycles / inline-calls). The shared choke points (`stages/parse.py`, `build.py`,
-`bindings.py`) dispatch through `KINDS` kind-blind — there is no per-kind isinstance
+(each owns its descriptor + `parse` + `build` methods; `kinds/__init__.py` derives the shared
+`KINDS` table from those classes), and the cross-node graph-stage axis lives in `stages/`
+(parse / references / cycles / inline-calls). The shared choke points (`stages/parse.py`,
+`build.py`, `bindings.py`) dispatch through `KINDS` kind-blind — there is no per-kind isinstance
 ladder. `parser.py` is now just the YAML text/span front door (`parse_file`).
 
 Errors carry a concrete `SourceRange` (from `events`): a located `NodeReader` records
@@ -22,14 +22,15 @@ in the engine imports `compose`.
 
 from agent_composer.compose.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
-    ChildResolver,
-    ChildSignature,
-    build_call_node,
     build_leaf_node,
-    child_signature,
     infer_data_edges,
     synthesize_boundary_graph,
     synthesize_roots,
+)
+from agent_composer.compose.kinds.resolver import (
+    ChildResolver,
+    ChildSignature,
+    child_signature,
 )
 from agent_composer.compose.stages.inline_calls import desugar_inline_calls
 from agent_composer.compose.cases import (
@@ -40,7 +41,6 @@ from agent_composer.compose.cases import (
 )
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.loader import LoadedFlow, load_flow
-from agent_composer.compose.run import resume_command, resume_flow, run_flow
 from agent_composer.compose.parser import (
     AgentDescriptor,
     CallDescriptor,
@@ -76,7 +76,6 @@ __all__ = [
     "read_flow_inputs",
     "read_type",
     "build_leaf_node",
-    "build_call_node",
     "child_signature",
     "ChildSignature",
     "ChildResolver",
@@ -95,7 +94,4 @@ __all__ = [
     "classify_asserts",
     "LoadedFlow",
     "load_flow",
-    "run_flow",
-    "resume_flow",
-    "resume_command",
 ]

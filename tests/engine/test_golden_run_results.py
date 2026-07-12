@@ -3,6 +3,8 @@ from pathlib import Path
 from agent_composer.compose import (
     LoadError,
     load_flow,
+)
+from agent_composer.run import (
     resume_command,
     resume_flow,
     run_flow,

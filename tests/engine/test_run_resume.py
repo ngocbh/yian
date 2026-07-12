@@ -1,7 +1,7 @@
 import pytest
 
 from agent_composer.compose.loader import load_flow
-from agent_composer.compose.run import resume_command, run_flow, resume_flow
+from agent_composer.run import resume_command, run_flow, resume_flow
 from agent_composer.suspension.commands import DeliverAnswerCommand
 from agent_composer.suspension.checkpoint import RunCheckpoint
 from agent_composer.suspension.pause import EventAwaited
@@ -237,7 +237,7 @@ def test_checkpoint_rejects_pre_6_blob():
 def test_live_pooled_resume_matches_serial():
     """A run started pooled pauses at the wait; resume() then drives the post-wait fan-out
     under the POOLED driver and reaches the SAME terminal as a serial resume."""
-    from agent_composer.compose.run import run_flow, resume_flow
+    from agent_composer.run import run_flow, resume_flow
     from agent_composer.suspension.commands import DeliverAnswerCommand
     loaded = load_flow(_RESUME_FANOUT)
 
@@ -258,7 +258,7 @@ def test_live_pooled_resume_matches_serial():
 def test_resume_flow_num_workers_passthrough():
     """A durable (checkpoint=) resume accepts a num_workers override and drives the
     restored engine under that mode to terminal."""
-    from agent_composer.compose.run import run_flow, resume_flow
+    from agent_composer.run import run_flow, resume_flow
     from agent_composer.suspension.commands import DeliverAnswerCommand
     from agent_composer.suspension.checkpoint import RunCheckpoint
     loaded = load_flow(_RESUME_FANOUT)

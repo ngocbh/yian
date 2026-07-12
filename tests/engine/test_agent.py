@@ -184,7 +184,7 @@ def test_ask_user_in_memory_continuation_round_trip(monkeypatch):
     from types import SimpleNamespace
 
     from agent_composer.events import RunPaused, RunResumed
-    from agent_composer.compose.run import resume_command
+    from agent_composer.run import resume_command
     from agent_composer.suspension.pause import HumanInputRequired
 
     chat = _FakeChat([

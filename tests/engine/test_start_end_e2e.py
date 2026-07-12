@@ -15,7 +15,8 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose import load_flow, run_flow
+from agent_composer.compose import load_flow
+from agent_composer.run import run_flow
 from agent_composer.nodes.base import NodeKind
 
 _REPO = Path(__file__).resolve().parents[2]

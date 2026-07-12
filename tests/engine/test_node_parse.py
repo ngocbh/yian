@@ -179,7 +179,24 @@ def test_tool_parses():
     node = parse_nodes(NodeReader.spanless(f.nodes))["news"]
     assert isinstance(node, ToolDescriptor)
     assert node.tool_id == "get_facts"
-    assert node.args == {"symbol": "${input.topic}", "limit": 10}
+    assert node.inputs == {"symbol": "${input.topic}", "limit": 10}
+
+
+def test_tool_legacy_args_key_is_loud():
+    # `args:` was retired in favor of `input:` (the standard sink surface) — a tool
+    # authoring the old key is a located LoadError (unknown field), no silent alias.
+    with pytest.raises(LoadError, match="args") as exc:
+        _nodes(
+            """
+news:
+  kind: tool
+  tool_id: get_facts
+  args:
+    symbol: ${input.topic}
+"""
+        )
+    assert "not allowed" in str(exc.value)
+    assert exc.value.line is not None
 
 
 # ---------- case / call ----------

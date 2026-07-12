@@ -11,7 +11,7 @@ from typing import Annotated, Any, Optional
 from agent_composer.tools import register_tool
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.errors import LoadError
-from agent_composer.compose.run import run_flow as _run_flow
+from agent_composer.run import run_flow as _run_flow
 
 # The workspace root every tool path is confined to. Set at `ac chat` startup.
 _WORKSPACE: Path = Path.cwd()

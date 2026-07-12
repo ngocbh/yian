@@ -6,7 +6,7 @@
 import pytest
 
 from agent_composer.compose.errors import LoadError
-from agent_composer.compose.kinds.call import CallDescriptor, parse
+from agent_composer.compose.kinds.call import CallDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
 from agent_composer.events import SourceRange
@@ -30,13 +30,12 @@ def _reader_for(text, node_id):
 
 def test_call_parse_matches_descriptor_and_records_ranges():
     reader = _reader_for(_FLOW, "step")
-    desc = parse("step", reader)
+    desc = CallDescriptor.parse("step", reader)
 
     assert desc == CallDescriptor(
         id="step",
         call="child_flow",
         inputs={"x": "${input.x}"},
-        kind="call",
     )
     assert isinstance(desc.range, SourceRange)
     assert isinstance(desc.field_ranges["call"], SourceRange)
@@ -47,7 +46,7 @@ def test_call_parse_requires_call():
     flow = "nodes:\n  step:\n    kind: call\n    inputs:\n      x: ${input.x}\n"
     reader = _reader_for(flow, "step")
     with pytest.raises(LoadError, match="missing required field 'call'"):
-        parse("step", reader)
+        CallDescriptor.parse("step", reader)
 
 
 def test_call_parse_rejects_non_string_asserts():
@@ -61,4 +60,4 @@ def test_call_parse_rejects_non_string_asserts():
     )
     reader = _reader_for(flow, "step")
     with pytest.raises(LoadError, match="`asserts:` must be a list of strings"):
-        parse("step", reader)
+        CallDescriptor.parse("step", reader)

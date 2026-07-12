@@ -10,7 +10,7 @@ per-kind CALL residual (depth/refdepth/finish-mark + the transitional boundary-a
 `Grow.seed` is the raw call-arg record (the durable builder input). The spliced child
 START_ID owns omitted-input defaulting (its params carry default/required), so the driver no longer
 pre-defaults. `child`/`child_inputs`/`child_asserts` are baked at load by
-`compose.build` (`build_call_node`); `child_inputs` is read by compile validation
+`compose.kinds.call.build`; `child_inputs` is read by compile validation
 (`check_ref_map_types`) AND at runtime by the engine's boundary-assert temp pool (to mirror START_ID's
 coerce+default view for the eager `${input.X}` check).
 """

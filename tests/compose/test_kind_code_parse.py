@@ -4,7 +4,7 @@ inline `def main(inputs):` wrapper offset so an inline syntax slip frames at the
 import pytest
 
 from agent_composer.compose.errors import LoadError
-from agent_composer.compose.kinds.code import CodeDescriptor, build, parse
+from agent_composer.compose.kinds.code import CodeDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
 from agent_composer.events import SourceRange
@@ -31,7 +31,7 @@ def _reader_for(text, node_id):
 
 def test_code_parse_matches_descriptor_and_records_body_range():
     reader = _reader_for(_FLOW, "verdict")
-    desc = parse("verdict", reader)
+    desc = CodeDescriptor.parse("verdict", reader)
 
     # The descriptor is exactly today's CodeDescriptor (field_ranges excluded from ==).
     assert desc == CodeDescriptor(
@@ -48,8 +48,8 @@ def test_code_parse_matches_descriptor_and_records_body_range():
 
 def test_code_build_returns_code_node_and_stamps_ranges():
     reader = _reader_for(_FLOW, "verdict")
-    desc = parse("verdict", reader)
-    node, wiring = build(desc, registry={}, resolver=None, source_file="flow.yaml")
+    desc = CodeDescriptor.parse("verdict", reader)
+    node, wiring = desc.build(registry={}, resolver=None, source_file="flow.yaml")
 
     from agent_composer.nodes.code import CodeNode
 
@@ -72,8 +72,8 @@ def test_code_build_frames_inline_syntax_error_at_yaml_line():
         "      return (\n"
     )
     reader = _reader_for(text, "broken")
-    desc = parse("broken", reader)
+    desc = CodeDescriptor.parse("broken", reader)
     with pytest.raises(LoadError) as ei:
-        build(desc, registry={}, resolver=None, source_file="flow.yaml")
+        desc.build(registry={}, resolver=None, source_file="flow.yaml")
     # The padded compile frames the slip at its absolute YAML line (8), not body-relative.
     assert ei.value.line == 8

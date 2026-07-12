@@ -33,7 +33,8 @@ nodes/        Node contract (base) + per-kind implementations
                loop, human_input, wait)
 compile/      compiled IR (CompiledFlow) + representation-neutral validation
 compose/      the Compose-YAML loader: text -> CompiledFlow
-              (parser/types/build/cases/validate/asserts/loader/run)
+              (parser/types/build/cases/validate/asserts/loader)
+run.py        the run boundary: LoadedFlow + inputs -> RunResult (run/resume)
 runtime/      state_manager, single-threaded engine, parallel worker pool, node watchdog
 suspension/   pause reasons, commands, checkpoint
 llm_clients/  provider clients (lazy-imported) + LLMConfig + model_from_config
@@ -44,4 +45,6 @@ _settings.py  env-based default provider/model
 
 Import direction (acyclic): `events <- typesys <- nodes <- compile <- compose`,
 with `compile`/`typesys`/`nodes`/`expr` feeding `compose` (the front-end that reads
-YAML into the IR), `expr` feeding nodes, and `suspension` feeding runtime.
+YAML into the IR), `expr` feeding nodes, and `suspension` feeding runtime. The
+package-root `run.py` is the run boundary: it consumes `compose`'s `LoadedFlow` and
+drives the `runtime` engine, sitting above both and imported by neither.

@@ -9,9 +9,9 @@ compatible with the CHILD input's declared `Type` (`types_compatible`, C-EQUIV).
 still feeds `.line`.
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
-analysis), `compose.build` (`_output_value_type`, the shared ref-to-Type resolver — `build`
-does not import `compose.stages`, so this edge is acyclic), `typesys` (Type), `compose.errors`.
-Only the loader (and the compose package facade) import this back.
+analysis), `compose.kinds.resolver` (`_output_value_type`, the shared ref-to-Type resolver —
+`resolver` does not import `compose.stages`, so this edge is acyclic), `typesys` (Type),
+`compose.errors`. Only the loader (and the compose package facade) import this back.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from dataclasses import replace
 from typing import Any, Optional
 
 from agent_composer.compile.validation import types_compatible
-from agent_composer.compose.build import _output_value_type
+from agent_composer.compose.kinds.resolver import _output_value_type
 from agent_composer.compose.errors import LoadError
 from agent_composer.events import SourceRange
 from agent_composer.expr import binding_co_skips

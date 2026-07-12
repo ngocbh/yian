@@ -6,7 +6,7 @@ distinct typed drivers. `CallNode` carries no `over`/`parallel`; `run` returns o
 *description* for the engine's generic `_apply_grow` to splice into the live graph.
 
 Imports flow one way: `nodes.base` (peer) + a deferred `typesys.seeding` import inside `run`
-(keeping the ladder clean). `compose.build`'s `build_call_node` is the caller.
+(keeping the ladder clean). `compose.kinds.call.build` is the caller.
 """
 
 from agent_composer.nodes.call.node import CallNode

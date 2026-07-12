@@ -66,7 +66,7 @@ def test_node_range_does_not_ride_checkpoint():
     carries no range/field_ranges keys and (b) the restored run resumes successfully.
     """
     from agent_composer.compose.loader import load_flow
-    from agent_composer.compose.run import run_flow, resume_flow
+    from agent_composer.run import run_flow, resume_flow
     from agent_composer.suspension.checkpoint import RunCheckpoint
     from agent_composer.suspension.commands import DeliverAnswerCommand
     from agent_composer.events import SourceRange

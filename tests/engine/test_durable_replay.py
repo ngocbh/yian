@@ -287,7 +287,7 @@ def test_durable_two_pause_agent_resumes_on_fresh_flow(monkeypatch):
     each even across restore (mirrors test_agent_continuation's single-chat invariant)."""
     import agent_composer.llm_clients as llm
     from agent_composer import load_flow
-    from agent_composer.compose.run import resume_command, run_flow
+    from agent_composer.run import resume_command, run_flow
     from tests.engine.test_agent_continuation import _chat, ASK
 
     chat = _chat(_two_pause_agent_chat())                   # ONE instance shared across processes
@@ -316,7 +316,7 @@ def test_two_hop_agent_resnapshot_ledger_matches_live(monkeypatch):
     3rd process restore(fresh)->resume reaches RunSucceeded 'FINAL'."""
     import agent_composer.llm_clients as llm
     from agent_composer import load_flow
-    from agent_composer.compose.run import resume_command, run_flow
+    from agent_composer.run import resume_command, run_flow
     from tests.engine.test_agent_continuation import _chat, ASK
 
     # --- live oracle: run to pause 2 on ONE engine; capture its ledger shape ---
@@ -451,7 +451,7 @@ def test_durable_agent_under_call_resumes_on_fresh_flow(monkeypatch):
     from langchain_core.messages import AIMessage
 
     from agent_composer import load_flow
-    from agent_composer.compose.run import resume_command, run_flow
+    from agent_composer.run import resume_command, run_flow
     from tests.engine.test_agent_continuation import _ask, _chat
 
     chat = _chat([_ask({"question": "ok?"}, "q1"), AIMessage(content="FINAL")])  # ONE shared chat
@@ -484,7 +484,7 @@ def test_durable_two_pause_agent_under_call_resumes_on_fresh_flow(monkeypatch):
     from langchain_core.messages import AIMessage
 
     from agent_composer import load_flow
-    from agent_composer.compose.run import resume_command, run_flow
+    from agent_composer.run import resume_command, run_flow
     from tests.engine.test_agent_continuation import _ask, _chat
 
     chat = _chat([_ask({"question": "q1?"}, "q1"), _ask({"question": "q2?"}, "q2"),
@@ -624,7 +624,7 @@ def test_replay_reproduces_live_loop_overlay():
     CONTINUE body-END carries NO `commit_as` (it feeds `loop~1` by plain wiring), so the loop
     contributes nothing to the `commit_as` map at this pause."""
     from agent_composer.compose.loader import load_flow
-    from agent_composer.compose.run import run_flow
+    from agent_composer.run import run_flow
     from tests.engine.test_loop_run import LOOP_CHAT
 
     # Drive LOOP_CHAT to its FIRST pause on a live engine: iteration #0 is grown (its body parks on
@@ -677,7 +677,7 @@ def test_durable_loop_resumes_on_fresh_flow():
     `_origin_record` must be consistent for the next driver to attribute its grow. Delivering "bye"
     sets exited=true -> predicate false -> the run succeeds identically to the live oracle."""
     from agent_composer.compose.loader import load_flow
-    from agent_composer.compose.run import resume_command, resume_flow, run_flow
+    from agent_composer.run import resume_command, resume_flow, run_flow
     from tests.engine.test_loop_run import LOOP_CHAT
 
     # --- Live oracle (in-process): drive LOOP_CHAT to terminal exactly as the in-process test.
@@ -737,7 +737,7 @@ def test_loop_multi_hop_resnapshot_ledger_matches_live():
     deserialized `expansions[0]`), so the next driver's CONTINUE grow supersedes it on the ledger the
     re-snapshot serializes."""
     from agent_composer.compose.loader import load_flow
-    from agent_composer.compose.run import resume_command, resume_flow, run_flow
+    from agent_composer.run import resume_command, resume_flow, run_flow
     from tests.engine.test_loop_run import LOOP_CHAT
 
     # --- Live oracle: drive LOOP_CHAT to the SECOND pause (turn 2) in-process; capture its ledger
@@ -905,7 +905,7 @@ def test_nested_loop_in_call_durable_hop_bounded_and_matches_live():
     record (origin `wrap/loop`) at each pause — bounded, no chain — and the restored run reaches the
     SAME terminal as the live in-process run (review S2)."""
     from agent_composer.compose.loader import load_flow
-    from agent_composer.compose.run import resume_command, resume_flow, run_flow
+    from agent_composer.run import resume_command, resume_flow, run_flow
 
     loaded = load_flow(_NESTED_CHAT_LOOP_IN_CALL)
 
@@ -970,7 +970,7 @@ def test_durable_resume_pooled_matches_serial():
     """dumps -> loads -> restore(num_workers=N) -> resume reaches the same terminal as a
     serial durable resume. A run checkpointed serial is resumable pooled (override) and
     vice-versa — correctness is worker-count-independent."""
-    from agent_composer.compose.run import run_flow, resume_flow
+    from agent_composer.run import run_flow, resume_flow
     from agent_composer.compose.loader import load_flow
     from tests.engine.test_run_resume import _RESUME_FANOUT
 

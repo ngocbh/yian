@@ -5,7 +5,8 @@ terminal output must be identical — workers are pure executors, so the result 
 worker-count-independent (only intra-run concurrency changes).
 """
 
-from agent_composer.compose import load_flow, run_flow
+from agent_composer.compose import load_flow
+from agent_composer.run import run_flow
 
 # topic -> {positive, cautious} in parallel -> a code node fans them in.
 _FANOUT = """

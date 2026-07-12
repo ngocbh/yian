@@ -1,5 +1,5 @@
 # Tool use — a TOOL node (deterministic, no LLM) feeds an AGENT.
-# A `tool` uses `tool_id:` + `args:` (NOT input:/output:). The id must be
+# A `tool` uses `tool_id:` + `input:` (a tool declares no output:). The id must be
 # registered in Python before the flow runs:
 #
 #   from agent_composer.tools import register_tool
@@ -20,7 +20,7 @@ nodes:
   facts:
     kind: tool
     tool_id: get_facts             # a TOOL_REGISTRY key
-    args:                          # untyped — each value is a ${...} ref or a literal
+    input:                         # untyped — each value is a ${...} ref or a literal
       query: ${input.subject}
       limit: 5
 

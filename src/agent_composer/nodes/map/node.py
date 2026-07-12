@@ -15,7 +15,7 @@ boundary-assert/ledger). The `Grow.seed` is the raw list of per-element records 
 input); an empty `over` -> a subgraph whose sole node is the list-`END` (it emits `[]`). The
 per-element call-args go RAW: the spliced child START_ID owns omitted-input defaulting (its params
 carry default/required), so the driver no longer pre-defaults. `child`/`child_inputs`/`child_asserts`
-are baked at load by `compose.build` (`build_call_node`); `child_inputs` is read by compile
+are baked at load by `compose.kinds.call.build`; `child_inputs` is read by compile
 validation (`check_ref_map_types`) AND at runtime by the engine's per-element boundary-assert temp
 pool (to mirror START_ID's coerce+default view). `parallel` is inert (concurrency is the engine's
 `num_workers`); it is carried for the over case.

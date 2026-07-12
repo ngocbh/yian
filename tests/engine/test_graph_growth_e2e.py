@@ -30,7 +30,8 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compile.model import START_ID
-from agent_composer.compose import LoadError, load_flow, resume_command, resume_flow, run_flow
+from agent_composer.compose import LoadError, load_flow
+from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.nodes.base import NodeKind
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool

@@ -198,7 +198,7 @@ def test_model_node_run_raises_serving_not_wired():
 
 
 def test_tool_node_built_with_args_bindings():
-    # seed 08 news — tool_id + untyped `args` -> InputBindings.
+    # seed 08 news — tool_id + untyped `inputs` -> InputBindings.
     desc = _seed_nodes("08-tool-news.yaml")["news"]
     node, wiring = build_leaf_node(desc, {})
     assert isinstance(node, ToolNode)
@@ -206,7 +206,7 @@ def test_tool_node_built_with_args_bindings():
     assert node.output_type is None  # no outputs: declared
     assert {p.name for p in node.params} == {"symbol", "limit"}
     assert wiring == {"symbol": "${input.topic}", "limit": 10}
-    # args are untyped sink params.
+    # inputs are untyped sink params.
     assert all(p.type_str is None for p in node.params)
 
 
@@ -217,11 +217,11 @@ def test_call_loop_descriptors_rejected_as_non_leaf():
     # call/map/loop share the KINDS table but need a resolver — `build_leaf_node` (the
     # leaf-only, resolver=None path) must reject them up front rather than build with a
     # missing resolver and fail with a confusing message deep in `build_call_node`.
-    from agent_composer.compose.parser import CallDescriptor, LoopDescriptor
+    from agent_composer.compose.parser import CallDescriptor, MapDescriptor, LoopDescriptor
 
     for desc in (
-        CallDescriptor(id="c", call="child", kind="call"),
-        CallDescriptor(id="m", call="child", over="${input.xs}", kind="map"),
+        CallDescriptor(id="c", call="child"),
+        MapDescriptor(id="m", call="child", over="${input.xs}"),
         LoopDescriptor(id="p", call="body", times=3),
     ):
         with pytest.raises(LoadError, match="is not a leaf node"):

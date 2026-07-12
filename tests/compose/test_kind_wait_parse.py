@@ -1,7 +1,7 @@
 """6.5 — the `wait` kind handle: parse records the `until` field range; build returns a timed
 WaitNode whose `until` SOURCE rides the reserved wiring key (no author params)."""
 
-from agent_composer.compose.kinds.wait import WaitDescriptor, build, parse
+from agent_composer.compose.kinds.wait import WaitDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
 from agent_composer.events import SourceRange
@@ -23,7 +23,7 @@ def _reader_for(text, node_id):
 
 def test_wait_parse_matches_descriptor_and_records_ranges():
     reader = _reader_for(_FLOW, "hold")
-    desc = parse("hold", reader)
+    desc = WaitDescriptor.parse("hold", reader)
 
     assert desc == WaitDescriptor(id="hold", until="${input.deadline}")
     assert isinstance(desc.range, SourceRange)
@@ -32,8 +32,8 @@ def test_wait_parse_matches_descriptor_and_records_ranges():
 
 def test_wait_build_returns_timed_node_with_reserved_until_wiring():
     reader = _reader_for(_FLOW, "hold")
-    desc = parse("hold", reader)
-    node, wiring = build(desc, registry={}, resolver=None)
+    desc = WaitDescriptor.parse("hold", reader)
+    node, wiring = desc.build(registry={}, resolver=None)
 
     from agent_composer.nodes.wait import WaitNode
 

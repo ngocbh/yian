@@ -29,13 +29,13 @@ These are exported from `agent_composer`.
 
 ## Run / resume
 
-The run-loop primitives live in `agent_composer.compose.run`.
+The run-loop primitives live in `agent_composer.run`.
 
-::: agent_composer.compose.run.RunResult
+::: agent_composer.run.RunResult
 
-::: agent_composer.compose.run.resume_flow
+::: agent_composer.run.resume_flow
 
-::: agent_composer.compose.run.resume_command
+::: agent_composer.run.resume_command
 
 ## Nodes
 

@@ -18,7 +18,8 @@ consuming `${gate.output}` (incl. nested case-of-case).
 
 import pytest
 
-from agent_composer.compose import LoadError, expand_case_outputs, load_flow, run_flow
+from agent_composer.compose import LoadError, expand_case_outputs, load_flow
+from agent_composer.run import run_flow
 from agent_composer.compose.parser import CaseDescriptor, CodeDescriptor
 
 
@@ -106,12 +107,12 @@ def test_multiple_case_values_in_one_binding_both_expand():
     assert new["n"].inputs["v"] == "pre ${a.output | b.output} mid ${c.output | d.output} post"
 
 
-def test_case_value_in_tool_args_expands():
+def test_case_value_in_tool_inputs_expands():
     from agent_composer.compose.parser import ToolDescriptor
 
-    descs = {"gate": _gate(), "t": ToolDescriptor(id="t", tool_id="x", args={"q": "${gate.output}"})}
+    descs = {"gate": _gate(), "t": ToolDescriptor(id="t", tool_id="x", inputs={"q": "${gate.output}"})}
     new, _ = expand_case_outputs(descs, None, [])
-    assert new["t"].args["q"] == "${pro.output | caut.output}"
+    assert new["t"].inputs["q"] == "${pro.output | caut.output}"
 
 
 def test_case_with_no_branch_target_is_loud():

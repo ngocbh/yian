@@ -9,7 +9,8 @@ child / MAP child / nested grandchild) are the end-to-end proof the whole graph-
 deliver-as-Output design composes.
 """
 
-from agent_composer.compose import load_flow, resume_command, resume_flow, run_flow
+from agent_composer.compose import load_flow
+from agent_composer.run import resume_command, resume_flow, run_flow
 
 CHILD_EFFECT = """
 id: parent

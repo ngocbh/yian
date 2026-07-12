@@ -9,7 +9,8 @@ CODE-only children via `run_flow`.
 import pytest
 
 from agent_composer.compile.model import START_ID
-from agent_composer.compose import LoadError, load_flow, run_flow
+from agent_composer.compose import LoadError, load_flow
+from agent_composer.run import run_flow
 
 # topic -> the topic (echo), so MAP results == the over list.
 _ECHO_CHILD = """

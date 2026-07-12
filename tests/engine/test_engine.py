@@ -462,7 +462,7 @@ def test_num_workers_0_and_4_same_terminal():
 
 
 def test_bare_num_workers_defaults_serial():
-    # The default knob is serial (num_workers=0) — compose/run.py:116 relies on it.
+    # The default knob is serial (num_workers=0) — run.py's run_flow relies on it.
     eng = FlowEngine(_graph([RecordNode("a", [])], [(START_ID, "a"), ("a", END_ID)]))
     assert eng.num_workers == 0
 

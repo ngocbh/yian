@@ -137,7 +137,7 @@ def test_ledger_records_agent_expansion_per_pause(monkeypatch):
     ])
     monkeypatch.setattr(llm, "model_from_config", lambda cfg: chat)
     loaded = load_flow(ASK)
-    from agent_composer.compose.run import run_flow, resume_command
+    from agent_composer.run import run_flow, resume_command
     rec = run_flow(loaded, {})  # parks at pause 1
     agents = [e for e in rec.engine.expansions if e.spawner_id == "agent"]
     assert len(agents) == 1

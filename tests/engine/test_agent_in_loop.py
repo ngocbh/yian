@@ -8,7 +8,7 @@ import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
 from langchain_core.messages import AIMessage
 from agent_composer.compose.loader import load_flow
-from agent_composer.compose.run import run_flow
+from agent_composer.run import run_flow
 
 
 class _FakeChat:

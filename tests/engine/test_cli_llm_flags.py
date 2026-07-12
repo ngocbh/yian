@@ -4,7 +4,7 @@ import typer
 from typer.testing import CliRunner
 
 import agent_composer.cli.run as climod
-from agent_composer.compose.run import RunResult
+from agent_composer.run import RunResult
 
 _FLOW = "id: f\nname: f\nnodes:\n  a: {kind: agent, prompt: hi}\noutput: ${a.output}\n"
 

@@ -1,10 +1,10 @@
 # Wiring a new authorable leaf node kind
 
 The Node subclass (from `node.py.template`) is only half the job — a kind also
-needs a `compose/kinds/<kind>.py` module (its descriptor + `parse` + `build`, all
-registered into the shared `KINDS` table) so a flow author can write `kind: xxx` in
-YAML. This is the file-by-file checklist for an **authorable leaf** kind (one a flow
-names directly, like `code`/`tool`).
+needs a `compose/kinds/<kind>.py` module (its descriptor, which carries `parse` +
+`build`) plus one entry in the `_DESCRIPTORS` tuple in `compose/kinds/__init__.py`,
+so a flow author can write `kind: xxx` in YAML. This is the file-by-file checklist
+for an **authorable leaf** kind (one a flow names directly, like `code`/`tool`).
 
 > Internal-only kinds (`START`/`END`) are *synthesized* by the loader, not authored —
 > they have no `kinds/<kind>.py` module and expand at load/runtime instead. This
@@ -35,45 +35,56 @@ class NodeKind(str, Enum):
 - `nodes/xxx/__init__.py` — copy `__init__.py.template` (re-export only; the
   package charter per the `structure` skill).
 
-## 3. `compose/kinds/xxx.py` — descriptor + parse + build + register
+## 3. `compose/kinds/xxx.py` — descriptor (subclass of `NodeDescriptor`)
 
-This one module owns everything the front end needs for the kind. It carries (a) the
-frozen descriptor, (b) `parse(node_id, reader)` — read the located node body, recording
-each field's `SourceRange`, (c) `build(desc, *, registry, resolver, ...)` — construct the
-runtime node + wiring, stamping `.range`/`.field_ranges`, and (d) `register()` — wire the
-`KindSpec` into `KINDS` and the binding fields into `BINDING_FIELDS`. Copy `code.py`.
+This one module owns the kind's front-end handle: a frozen `XxxDescriptor` dataclass
+that **subclasses `NodeDescriptor`**. The base holds the common contract — the shared
+fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + `inputs`/`outputs` + the
+`range`/`field_ranges` parse metadata), the key-legality check, the template
+`parse(node_id, reader)` classmethod, and the sink derivations (`output_type` /
+`sink_params` / `sink_wiring` / `_finish`). A leaf kind diverges only where it must.
+Copy `code.py`.
 
-- Define an `XxxDescriptor` dataclass. Keep the common tail (`node_name` / `depends_on` /
-  `runs_after` / `env`) and the located-parse metadata (`range` / `field_ranges`, both
-  `compare=False`); add your kind's own fields. Declare `XXX_REQUIRED` / `XXX_ALLOWED` /
-  `XXX_BINDING_FIELDS` frozensets at module top.
-- Write `parse(node_id, reader)` — field-legality check against `XXX_ALLOWED | _COMMON_FIELDS
-  | {"kind"}`, then record each present field's `reader.range_of(key)` into `field_ranges`.
-- Write `build(desc, *, registry, resolver=None, ...)` — construct `XxxNode(...)`, set
-  `output_type` / `params` / wiring via the shared `build.py` helpers, stamp `node.range` /
-  `node.field_ranges`. Leaf kinds ignore `resolver`.
-- Add `register()` and call it at import (bottom of the module):
+- Declare the kind's ClassVars at the top of the dataclass body:
+  - `kind = "xxx"` — the surface string (drives the `KINDS`/`BINDING_FIELDS` keys).
+  - `allowed = NodeDescriptor.allow("field_a", "field_b", ...)` — the commons plus this
+    kind's own keys (`allow` unions onto the base allowed set).
+  - `required = NodeDescriptor.require("field_a", ...)` — the mandatory flat keys.
+  - `binding_fields = ("inputs", ...)` — the descriptor fields carrying `${...}` binding
+    strings (walked kind-blind by `compose/bindings.py`). Empty tuple if none.
+  - (optional) `keyword_remap = {...}` — author-key → field-name aliases, if any.
+- Declare only the **kind-specific** dataclass fields (`inputs`/`outputs` come from the
+  base). Give each a type; use `field(default_factory=...)` for mutable defaults.
+- **`parse` is inherited** — the base template checks key legality, reads the common
+  fields, and records each field's `SourceRange`. Override the `_normalize_reader` /
+  `_validate_fields` hooks only if the kind needs pre-normalization or extra checks
+  (see `case.py` / `human_input.py` for examples). Most leaves need neither.
+- **Override `build`** — an instance method `build(self, *, registry=None, resolver=None,
+  **_loader_hints)` that constructs `XxxNode(...)`, sets `output_type` / `params` /
+  wiring via the inherited `self.output_type(registry)` / `self.sink_params()` /
+  `self.sink_wiring()`, and returns `self._finish(node, wiring)` (which stamps
+  `.range`/`.field_ranges`). Leaf kinds ignore `resolver`; it rides the shared signature
+  for call/map/loop. Absorb the inline-CODE anchors (`source_file`/`code_line`/
+  `code_field_line`) via `**_loader_hints` unless this is the CODE kind.
+
+## 4. `compose/kinds/__init__.py` — add to the `_DESCRIPTORS` tuple
+
+Import the module and add its descriptor class to the `_DESCRIPTORS` tuple. `KINDS`
+(kind-string → descriptor class) and `BINDING_FIELDS` are derived from that tuple, so
+one entry registers both:
 
 ```python
-def register() -> None:
-    from agent_composer.compose.kinds import KindSpec, KINDS, BINDING_FIELDS
-    KINDS["xxx"] = KindSpec(descriptor_cls=XxxDescriptor, parse=parse, build=build)
-    BINDING_FIELDS["xxx"] = XXX_BINDING_FIELDS
-
-register()
+from agent_composer.compose.kinds import xxx
+...
+_DESCRIPTORS = (
+    ...,
+    xxx.XxxDescriptor,
+)
 ```
 
-## 4. `compose/kinds/__init__.py` — import for the register side effect
-
-Add a bottom-of-file import so the module's `register()` runs at package import
-(mirroring the existing `from agent_composer.compose.kinds import code as _code`):
-
-```python
-from agent_composer.compose.kinds import xxx as _xxx  # noqa: E402,F401
-```
-
-The shared dispatch (`stages/parse.py` `_parse_node`, `build.build_leaf_node`,
-`bindings.py`) consults `KINDS` / `BINDING_FIELDS` kind-blind — no isinstance branch to add.
+The shared dispatch (`stages/parse.py::_parse_node`, `build.build_leaf_node`,
+`bindings.py`) looks the class up in `KINDS` and calls `cls.parse(...)` / `desc.build(...)`
+kind-blind — no isinstance branch to add.
 
 ## 5. `compose/__init__.py` — re-export the descriptor
 
@@ -103,8 +114,8 @@ Close the tracking GitHub issue when the work lands, referencing the commit/PR
 |------------|------|--------|
 | Enum tag | `nodes/base.py` | `class NodeKind` |
 | Node impl | `nodes/xxx/node.py` + `__init__.py` | new package |
-| Descriptor + parse + build + register | `compose/kinds/xxx.py` | copy `code.py` |
-| Register import | `compose/kinds/__init__.py` | bottom-of-file imports |
+| Descriptor (subclass `NodeDescriptor`) | `compose/kinds/xxx.py` | copy `code.py` |
+| Register | `compose/kinds/__init__.py` | `_DESCRIPTORS` tuple |
 | Re-export | `compose/__init__.py` | imports + `__all__` |
 | Test | `tests/engine/test_xxx.py` | new file |
 | Issue/docs | GitHub issue, `docs/syntax.md` | — |

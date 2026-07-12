@@ -11,7 +11,8 @@ import logging
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow, run_flow
+from agent_composer.compose import LoadError, load_flow
+from agent_composer.run import run_flow
 from agent_composer.nodes.base import Output
 from agent_composer.nodes.code.node import CodeNode, classify_code_source
 

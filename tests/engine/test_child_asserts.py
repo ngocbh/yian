@@ -9,7 +9,8 @@ parent run fails.
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow, run_flow
+from agent_composer.compose import LoadError, load_flow
+from agent_composer.run import run_flow
 
 # `checked` def: doubles its int input; boundary asserts n>=0, post asserts the output < 100.
 _CHECKED_DEF = """

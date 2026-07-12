@@ -5,7 +5,7 @@ questions config + derived answer_schema, with wiring from `inputs` and stamped 
 import pytest
 
 from agent_composer.compose.errors import LoadError
-from agent_composer.compose.kinds.human_input import HumanInputDescriptor, build, parse
+from agent_composer.compose.kinds.human_input import HumanInputDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
 from agent_composer.events import SourceRange
@@ -39,7 +39,7 @@ def _reader_for(text, node_id):
 
 def test_human_input_parse_matches_descriptor_and_records_ranges():
     reader = _reader_for(_FLOW, "ask")
-    desc = parse("ask", reader)
+    desc = HumanInputDescriptor.parse("ask", reader)
 
     assert desc == HumanInputDescriptor(
         id="ask",
@@ -53,8 +53,8 @@ def test_human_input_parse_matches_descriptor_and_records_ranges():
 
 def test_human_input_build_returns_gate_and_wires_inputs():
     reader = _reader_for(_FLOW, "ask")
-    desc = parse("ask", reader)
-    node, wiring = build(desc, registry={}, resolver=None)
+    desc = HumanInputDescriptor.parse("ask", reader)
+    node, wiring = desc.build(registry={}, resolver=None)
 
     from agent_composer.nodes.human_input import HumanInputNode
 
@@ -66,8 +66,8 @@ def test_human_input_build_returns_gate_and_wires_inputs():
 
 def test_human_input_build_questions_gate_defaults_to_open_object():
     reader = _reader_for(_QUESTIONS_FLOW, "ask")
-    desc = parse("ask", reader)
-    node, wiring = build(desc, registry={}, resolver=None)
+    desc = HumanInputDescriptor.parse("ask", reader)
+    node, wiring = desc.build(registry={}, resolver=None)
 
     from agent_composer.nodes.human_input import HumanInputNode
     from agent_composer.typesys.values import ValueKind
@@ -82,8 +82,11 @@ def test_human_input_build_questions_gate_defaults_to_open_object():
 def test_human_input_parse_requires_a_question_surface():
     flow = "nodes:\n  ask:\n    kind: human_input\n    inputs:\n      x: ${input.x}\n"
     reader = _reader_for(flow, "ask")
-    with pytest.raises(LoadError, match="needs `prompt:`"):
-        parse("ask", reader)
+    with pytest.raises(LoadError, match="needs `prompt:`") as exc:
+        HumanInputDescriptor.parse("ask", reader)
+    # The absent-question-surface error anchors on the node body range (no question field
+    # exists to carry one) — a regression guard: it must not silently lose its location.
+    assert isinstance(exc.value.range, SourceRange)
 
 
 def test_human_input_parse_questions_and_adaptive_are_mutually_exclusive():
@@ -100,4 +103,4 @@ def test_human_input_parse_questions_and_adaptive_are_mutually_exclusive():
     )
     reader = _reader_for(flow, "ask")
     with pytest.raises(LoadError, match="mutually exclusive"):
-        parse("ask", reader)
+        HumanInputDescriptor.parse("ask", reader)

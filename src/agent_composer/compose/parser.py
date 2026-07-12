@@ -19,7 +19,6 @@ rules shape it:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import yaml
@@ -29,16 +28,20 @@ from agent_composer.compose.errors import LoadError
 
 # `AgentDescriptor`/`CodeDescriptor`/`ModelDescriptor`/`ToolDescriptor`/`WaitDescriptor`
 # now live with their parse/build handles in `kinds/<kind>.py` (#70); re-export them here so
-# the `NodeDescriptor` union and existing importers keep working.
-from agent_composer.compose.kinds.agent import AgentDescriptor
-from agent_composer.compose.kinds.code import CodeDescriptor
-from agent_composer.compose.kinds.model import ModelDescriptor
-from agent_composer.compose.kinds.tool import ToolDescriptor
-from agent_composer.compose.kinds.wait import WaitDescriptor
-from agent_composer.compose.kinds.human_input import HumanInputDescriptor
-from agent_composer.compose.kinds.case import CaseDescriptor
-from agent_composer.compose.kinds.call import CallDescriptor
-from agent_composer.compose.kinds.loop import LoopDescriptor
+# existing importers keep working. `NodeDescriptor` — the base class every kind descriptor
+# inherits — lives in `kinds/base.py` (the leaf, mirroring `nodes/base.py`); re-exported here as
+# the descriptor base type for importers that annotate `dict[str, NodeDescriptor]` (build/stages).
+from agent_composer.compose.kinds.base import NodeDescriptor  # noqa: F401
+from agent_composer.compose.kinds.agent import AgentDescriptor  # noqa: F401
+from agent_composer.compose.kinds.code import CodeDescriptor  # noqa: F401
+from agent_composer.compose.kinds.model import ModelDescriptor  # noqa: F401
+from agent_composer.compose.kinds.tool import ToolDescriptor  # noqa: F401
+from agent_composer.compose.kinds.wait import WaitDescriptor  # noqa: F401
+from agent_composer.compose.kinds.human_input import HumanInputDescriptor  # noqa: F401
+from agent_composer.compose.kinds.case import CaseDescriptor  # noqa: F401
+from agent_composer.compose.kinds.call import CallDescriptor  # noqa: F401
+from agent_composer.compose.kinds.map import MapDescriptor  # noqa: F401
+from agent_composer.compose.kinds.loop import LoopDescriptor  # noqa: F401
 
 _STRICT = ConfigDict(extra="forbid")
 
@@ -278,45 +281,14 @@ def parse_file(text: str) -> ComposeFile:
 # A `nodes:` entry is a keyed map (key = node id, no `id:` field) carrying a
 # `kind:` plus FLAT kind-fields — the surface flattens `inputs:`/`outputs:`
 # onto the node (vs the legacy spec's body wrappers, `spec/nodes.py`). These are
-# DESCRIPTORS: the validated parsed shape per kind. Building the runtime `Node`
-# (`output_type` + `params` + flow `wiring`, `read_type` over `outputs:`) happens
-# later in the loader; here `inputs`/`outputs`/`args`/`cases` stay raw (binding strings / type nodes).
+# DESCRIPTORS: the validated parsed shape per kind, each owned by its `kinds/<kind>.py`
+# module (the frozen dataclass + its `parse`/`build`) and inheriting the common
+# `NodeDescriptor` base (see `kinds/base.py`); this module only re-exports them.
+# Building the runtime `Node` (`output_type` + `params` + flow `wiring`, `read_type` over
+# `outputs:`) happens later in the loader; the descriptors keep `inputs`/`outputs`/`args`/
+# `cases` raw (binding strings / type nodes).
 #
-# Per-kind allowed fields mirror `spec/nodes.py:_validate_body_shape` in flat form
-# (a field illegal for the kind is loud); `node_name`/`depends_on`/`runs_after` are common
-# to every kind. `depends_on` and `runs_after` are RUN-ORDERING edges (no data flows): both
-# gate on the source settling; `depends_on` co-skips the dependent if the source skipped,
-# `runs_after` does not (the dependent still runs). See the loader edge pass.
-
-
-NodeDescriptor = (
-    AgentDescriptor
-    | CodeDescriptor
-    | ModelDescriptor
-    | ToolDescriptor
-    | CaseDescriptor
-    | CallDescriptor
-    | LoopDescriptor
-    | HumanInputDescriptor
-    | WaitDescriptor
-)
-
-# Common keys every kind accepts (besides `kind` itself).
-_COMMON_FIELDS = frozenset({"node_name", "depends_on", "runs_after", "env"})
-
-
-# YAML 1.1 (PyYAML `safe_load`) coerces the bare key `on:` to the boolean `True`
-# (likewise `off`/`yes`/`no`). The case-node surface key `on:` is the only such
-# key in a node body, so we map the coerced key back to its string form.
-_YAML_BOOL_KEYS = {True: "on", False: "off"}
-
-# Surface keys that collide with Python keywords map onto a trailing-underscore field on
-# the descriptor: `else:`->`else_` (case), `while:`/`until:`->`while_`/`until_` (loop).
-_KEYWORD_FIELD_REMAP = {"else": "else_", "while": "while_", "until": "until_"}
-
-
-def _normalize_keys(body: dict) -> dict:
-    """Undo YAML 1.1 boolean-key coercion for the surface key `on:`."""
-    if not any(k in _YAML_BOOL_KEYS for k in body):
-        return body
-    return {_YAML_BOOL_KEYS.get(k, k): v for k, v in body.items()}
+# `node_name`/`depends_on`/`runs_after`/`env` are common to every kind (the `NodeDescriptor`
+# base). `depends_on` and `runs_after` are RUN-ORDERING edges (no data flows): both gate on the
+# source settling; `depends_on` co-skips the dependent if the source skipped, `runs_after` does
+# not (the dependent still runs). See the loader edge pass.

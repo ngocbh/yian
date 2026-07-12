@@ -3,7 +3,7 @@
 `ac run FLOW.yaml` loads a Compose flow, gathers its inputs (flags first, then an
 interactive prompt for any missing required one), drives it to a terminal, resumes
 any HUMAN_INPUT / WAIT pause interactively, and renders the output. The CLI owns no
-engine logic: it calls `agent_composer.compose.run` directly.
+engine logic: it calls `agent_composer.run` directly.
 """
 
 from __future__ import annotations

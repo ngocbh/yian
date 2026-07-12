@@ -30,7 +30,7 @@ from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from agent_composer.events import SourceRange
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parser import CaseDescriptor
 from agent_composer.compose.stages.inline_calls import (
     _to_call_descriptor,

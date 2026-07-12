@@ -56,7 +56,7 @@ from agent_composer.nodes.case import DEFAULT_HANDLE, Case, CaseNode
 from agent_composer.typesys.values import Type
 from agent_composer.compose.bindings import map_binding_strings
 from agent_composer.compose.stages.inline_calls import map_outputs_strings
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parser import CaseDescriptor
 
 

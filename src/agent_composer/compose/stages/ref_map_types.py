@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 from agent_composer.compile.validation import types_compatible
 from agent_composer.compose.kinds.resolver import _output_value_type
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
 from agent_composer.expr import binding_co_skips
 from agent_composer.typesys.values import Type

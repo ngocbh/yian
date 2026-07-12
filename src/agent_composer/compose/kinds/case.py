@@ -19,8 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from agent_composer.compose.errors import LoadError
-from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.kinds.base import NodeDescriptor
 
 # YAML 1.1 (PyYAML `safe_load`) coerces the bare key `on:` to the boolean `True` (likewise

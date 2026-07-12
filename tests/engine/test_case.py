@@ -26,14 +26,14 @@ from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.build import build_leaf_node, infer_data_edges
 from agent_composer.compose.cases import desugar_case, reconcile_case_edges
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parser import (
     AgentDescriptor,
     CaseDescriptor,
     CodeDescriptor,
     parse_file,
 )
-from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.stages.parse import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"

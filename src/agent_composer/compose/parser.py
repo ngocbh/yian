@@ -24,7 +24,7 @@ from typing import Any, Optional
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 
 # `AgentDescriptor`/`CodeDescriptor`/`ModelDescriptor`/`ToolDescriptor`/`WaitDescriptor`
 # now live with their parse/build handles in `kinds/<kind>.py` (#70); re-export them here so

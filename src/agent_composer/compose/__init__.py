@@ -39,7 +39,7 @@ from agent_composer.compose.cases import (
     expand_case_outputs,
     reconcile_case_edges,
 )
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import LoadedFlow, load_flow
 from agent_composer.compose.parser import (
     AgentDescriptor,
@@ -55,7 +55,7 @@ from agent_composer.compose.parser import (
 from agent_composer.compose.stages.cycles import reject_cycles
 from agent_composer.compose.stages.parse import parse_nodes
 from agent_composer.compose.stages.references import validate_references
-from agent_composer.compose.types import InputDecl, read_flow_inputs, read_type
+from agent_composer.compose.helpers.types import InputDecl, read_flow_inputs, read_type
 from agent_composer.compose.validate import (
     check_case_handles,
 )

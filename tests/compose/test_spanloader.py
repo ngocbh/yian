@@ -1,6 +1,6 @@
 import yaml
 
-from agent_composer.compose.spanloader import (
+from agent_composer.compose.helpers.spanloader import (
     SpanLoader,
     _mark_to_range,
     load_with_spans,

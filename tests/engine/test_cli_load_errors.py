@@ -15,7 +15,7 @@ from typer.testing import CliRunner
 
 import agent_composer.cli.run as climod
 from agent_composer.cli.run import _render_load_error
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 
 
 def test_loaderror_line_defaults_to_min_of_lines():

@@ -55,7 +55,7 @@ from agent_composer.expr.template import (
     flow_call_callees_in_spans,
 )
 from agent_composer.compose.bindings import map_binding_strings
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parser import (
     CallDescriptor,
     NodeDescriptor,

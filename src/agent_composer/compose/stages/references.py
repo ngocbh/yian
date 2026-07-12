@@ -30,7 +30,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from agent_composer.compile.validation import _classify_path
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
 from agent_composer.expr import (
     ExpressionError,

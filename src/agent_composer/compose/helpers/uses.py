@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 

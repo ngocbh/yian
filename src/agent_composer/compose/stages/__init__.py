@@ -8,7 +8,7 @@ case-call targets, expand case outputs, infer ordering edges, reject cycles, val
 references, and the cross-flow type/wiring checks.
 
 Each stage consumes and produces `.range`/`field_ranges` located metadata on
-descriptors/nodes (from the span tree, see `compose/reader.py` + `compose/spanloader.py`)
+descriptors/nodes (from the span tree, see `compose/helpers/reader.py` + `compose/helpers/spanloader.py`)
 instead of the legacy `*_lines` maps threaded through `loader.py`. The stages are wired
 together by `loader._assemble`.
 

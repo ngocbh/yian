@@ -28,7 +28,7 @@ def test_adaptive_questions_lowers_to_agent_plus_gate():
 
 def test_adaptive_questions_scope_is_validated_like_an_agent():
     import pytest
-    from agent_composer.compose.errors import LoadError
+    from agent_composer.compose.helpers.errors import LoadError
     bad = _AUTO.replace("for: ${ctx}", "for: ${undeclared}")
     with pytest.raises(LoadError):
         load_flow(bad)   # synth agent inherits agent prompt-scope checking

@@ -1,4 +1,4 @@
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
 
 
@@ -9,8 +9,8 @@ def test_loaderror_carries_range():
 
 
 def test_node_reader_field_and_missing():
-    from agent_composer.compose.spanloader import load_with_spans
-    from agent_composer.compose.reader import NodeReader
+    from agent_composer.compose.helpers.spanloader import load_with_spans
+    from agent_composer.compose.helpers.reader import NodeReader
     import pytest
 
     value, spans, root = load_with_spans("a: 1\nb: two\n", return_root=True)

@@ -15,7 +15,7 @@ from typing import Any, Optional
 from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.typesys.values import Type
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.kinds.base import NodeDescriptor
 from agent_composer.compose.kinds.resolver import (
     _resolve_child,

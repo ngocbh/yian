@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parser import parse_file
 
 

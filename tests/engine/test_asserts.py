@@ -18,7 +18,7 @@ import pytest
 
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.asserts import AssertSet, classify_asserts
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

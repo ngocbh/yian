@@ -18,7 +18,7 @@ from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind, Type
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.kinds.base import NodeDescriptor
 from agent_composer.compose.kinds.resolver import (
     ChildSignature,

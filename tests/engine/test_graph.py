@@ -195,7 +195,7 @@ def test_case_condition_escape_marks_optional():
 
 def test_item_head_ref_yields_no_edge_but_producer_ref_does():
     from agent_composer.compose.build import infer_data_edges
-    from agent_composer.compose.reader import NodeReader
+    from agent_composer.compose.helpers.reader import NodeReader
     from agent_composer.compose.stages.parse import parse_nodes
 
     # A CODE `producer` and a stand-in `mapbody` consumer whose wiring binds both an

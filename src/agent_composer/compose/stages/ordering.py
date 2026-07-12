@@ -18,7 +18,7 @@ Imports flow down/peer only: `compile.model` (Edge), `compose.parser` (NodeDescr
 from __future__ import annotations
 
 from agent_composer.compile.model import Edge
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parser import NodeDescriptor
 
 

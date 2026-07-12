@@ -27,7 +27,7 @@ from agent_composer.compose.stages.inline_calls import desugar_call_directives
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode
 from agent_composer.typesys.values import ValueKind
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 
 
 def check_case_handles(nodes: dict[str, Node], edges: list[Edge]) -> None:

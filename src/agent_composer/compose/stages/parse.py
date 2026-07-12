@@ -20,9 +20,9 @@ import dataclasses
 from typing import Any
 
 from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.kinds import KINDS
-from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.helpers.reader import NodeReader
 
 # Singular source keys the descriptor dataclasses carry in their plural form. The span tree
 # (a raw parse) preserves the author's singular `input:`/`output:`; ComposeFile normalizes

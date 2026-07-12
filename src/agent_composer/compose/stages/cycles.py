@@ -26,7 +26,7 @@ from typing import Optional
 
 from agent_composer.compile.model import END_ID, START_ID, Edge
 from agent_composer.compile.validation import FlowValidationError, _reject_cycles
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
 
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.kinds.base import NodeDescriptor
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.nodes.agent import AgentNode

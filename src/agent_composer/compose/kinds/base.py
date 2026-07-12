@@ -32,9 +32,9 @@ from typing import Any, ClassVar, Optional
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.typesys.values import Type
 from agent_composer.typesys.types import TypeRegistry
-from agent_composer.compose.types import read_type
-from agent_composer.compose.errors import LoadError
-from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.helpers.types import read_type
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.events import SourceRange
 
 

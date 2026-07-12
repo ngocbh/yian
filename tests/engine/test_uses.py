@@ -2,10 +2,10 @@
 
 import pytest
 
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.parser import parse_file
-from agent_composer.compose.uses import UsesRef, parse_uses_ref
+from agent_composer.compose.helpers.uses import UsesRef, parse_uses_ref
 
 
 # A minimal valid single-node flow; each test appends its own `uses:`/`system:` sections.

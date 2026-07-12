@@ -56,7 +56,7 @@ from agent_composer.compose.cases import (
     expand_case_outputs,
     reconcile_case_edges,
 )
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.stages.case_targets import desugar_case_call_targets
 from agent_composer.compose.stages.cycles import reject_cycles
@@ -68,9 +68,9 @@ from agent_composer.compose.stages.ordering import infer_ordering_edges
 from agent_composer.compose.stages.ref_map_types import check_ref_map_types
 from agent_composer.compose.stages.references import validate_references
 from agent_composer.compose.stages.wiring_parity import check_wiring_parity
-from agent_composer.compose.uses import parse_uses_ref
-from agent_composer.compose.reader import NodeReader
-from agent_composer.compose.spanloader import load_with_spans
+from agent_composer.compose.helpers.uses import parse_uses_ref
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.stages.parse import parse_nodes
 from agent_composer.compose.parser import (
     CallDescriptor,
@@ -78,7 +78,7 @@ from agent_composer.compose.parser import (
     LoopDescriptor,
     parse_file,
 )
-from agent_composer.compose.types import InputDecl, read_flow_inputs
+from agent_composer.compose.helpers.types import InputDecl, read_flow_inputs
 from agent_composer.compose.validate import (
     check_case_handles,
     validate_node_asserts,

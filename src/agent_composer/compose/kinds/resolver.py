@@ -23,8 +23,8 @@ from typing import Any, Callable, Optional
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.template import Span, scan_template, template_refs
 from agent_composer.typesys.values import ValueKind, Type
-from agent_composer.compose.errors import LoadError
-from agent_composer.compose.types import InputDecl
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.types import InputDecl
 
 
 @dataclass(frozen=True)

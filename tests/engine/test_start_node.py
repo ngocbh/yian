@@ -1,7 +1,7 @@
 import pytest
 
 from agent_composer.compile.model import START_ID
-from agent_composer.compose.types import InputDecl
+from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.nodes.base import NodeKind, Output
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.start import StartNode

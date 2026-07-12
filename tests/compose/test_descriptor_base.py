@@ -14,9 +14,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.kinds.base import NodeDescriptor
-from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.helpers.reader import NodeReader
 
 
 def test_allow_unions_with_parent():

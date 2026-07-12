@@ -5,7 +5,7 @@ import pytest
 from agent_composer.typesys.values import ValueKind
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose import LoadError
-from agent_composer.compose.types import read_type
+from agent_composer.compose.helpers.types import read_type
 
 
 def test_scalar():

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from agent_composer.compile.validation import _classify_path
 from agent_composer.expr.expressions import ExpressionError, condition_refs
 from agent_composer.typesys.values import Type
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 
 
 @dataclass(frozen=True)

@@ -31,7 +31,7 @@ from agent_composer.compose.parser import (
     WaitDescriptor,
     parse_file,
 )
-from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.stages.parse import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"

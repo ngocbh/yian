@@ -16,7 +16,7 @@ from agent_composer.typesys import TypeCheckError, Type, type_for
 from agent_composer.typesys.values import ValueKind
 from agent_composer.typesys.types import ScalarExpr, TypeRegistry, parse_type
 
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 
 
 def read_type(node, registry: TypeRegistry) -> Type:

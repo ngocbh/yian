@@ -29,7 +29,7 @@ from typing import Any
 
 import yaml
 
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
 
 

@@ -45,7 +45,7 @@ def test_rens_internal_computed_whole_span_renamespaces_all_leaves():
 import pytest
 from agent_composer.events import RunSucceeded
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, NodeState, START_ID, END_ID
-from agent_composer.compose.types import InputDecl, read_type
+from agent_composer.compose.helpers.types import InputDecl, read_type
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.engine import FlowEngine

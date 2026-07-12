@@ -2,8 +2,8 @@
 returns a runtime ToolNode with `inputs` wiring (the tool's sink surface) and stamped ranges."""
 
 from agent_composer.compose.kinds.tool import ToolDescriptor
-from agent_composer.compose.reader import NodeReader
-from agent_composer.compose.spanloader import load_with_spans
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.events import SourceRange
 
 

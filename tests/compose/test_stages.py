@@ -12,11 +12,11 @@ import pytest
 import agent_composer.compose.stages as stages
 from agent_composer.compile.model import Edge
 from agent_composer.compose.build import build_leaf_node
-from agent_composer.compose.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.kinds.agent import AgentDescriptor
 from agent_composer.compose.kinds.code import CodeDescriptor
-from agent_composer.compose.reader import NodeReader
-from agent_composer.compose.spanloader import load_with_spans
+from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.stages.case_targets import desugar_case_call_targets
 from agent_composer.compose.stages.cycles import reject_cycles
@@ -288,7 +288,7 @@ def test_check_ref_map_types_moved():
     # carries `.line` (additive) AND anchors its `.range` on the call node's `input:` mapping
     # span (`field_ranges["inputs"]`, the coarsest available binding-site span).
     from agent_composer.compose.stages.ref_map_types import check_ref_map_types
-    from agent_composer.compose.types import InputDecl
+    from agent_composer.compose.helpers.types import InputDecl
     from agent_composer.nodes.call import CallNode
     from agent_composer.typesys.values import Type, ValueKind
 

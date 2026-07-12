@@ -18,7 +18,7 @@ from pathlib import Path
 
 import agent_composer.llm_clients as llm_clients_mod
 from agent_composer.compose import load_flow
-from agent_composer.compose.run import resume_command, resume_flow, run_flow
+from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.suspension.pause import HumanInputRequired
 
 

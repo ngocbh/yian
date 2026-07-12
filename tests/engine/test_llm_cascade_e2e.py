@@ -5,7 +5,7 @@ dict."""
 
 import agent_composer.llm_clients as llm_clients_mod
 from agent_composer.compose.loader import load_flow
-from agent_composer.compose.run import run_flow
+from agent_composer.run import run_flow
 
 # Top flow sets provider+temperature; calls `sub`. Inside `sub`, `inner` overrides only
 # `model` (so it fills provider/temperature from the flow and the CLI fields), while

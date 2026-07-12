@@ -17,7 +17,8 @@ import pytest
 # CODE-only children (Ollama-free), resolver-free via in-file `defs:`.
 # --------------------------------------------------------------------------- #
 
-from agent_composer.compose import LoadError, load_flow, run_flow  # noqa: E402
+from agent_composer.compose import LoadError, load_flow  # noqa: E402
+from agent_composer.run import run_flow  # noqa: E402
 
 # An in-file `enrich` def that echoes its `topic` — the callee for the inline calls.
 _ENRICH_DEF = """

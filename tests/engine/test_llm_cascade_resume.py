@@ -8,7 +8,7 @@ A cross-process resume recompiles the flow and rebuilds the live graph inside
 
 import agent_composer.llm_clients as llm_clients_mod
 from agent_composer.compose.loader import load_flow
-from agent_composer.compose.run import resume_command, resume_flow, run_flow
+from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.suspension.checkpoint import RunCheckpoint
 
 # An AGENT(ask_user) inside a CALL child: the resume replays the CALL expansion, re-cloning

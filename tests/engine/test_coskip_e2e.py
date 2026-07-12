@@ -9,7 +9,8 @@ the veto + co-skip run via the full loader -> engine path (not just hand-built e
   `${pro_detail.output:-null}` (optional escape -> binds null when `pro_detail` co-skips).
 """
 
-from agent_composer.compose import load_flow, run_flow
+from agent_composer.compose import load_flow
+from agent_composer.run import run_flow
 
 _FLOW = """
 id: coskip

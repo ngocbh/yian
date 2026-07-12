@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 import agent_composer.cli.run as climod
 from agent_composer.cli.run import _ProgressReporter
 from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose.run import RunResult
+from agent_composer.run import RunResult
 from agent_composer.events import NodeFailed, NodeRouted, NodeStarted, NodeSucceeded
 
 

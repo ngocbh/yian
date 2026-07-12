@@ -31,7 +31,7 @@ from rich.text import Text
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.loader import load_flow, top_frame_ranges
-from agent_composer.compose.run import RunResult, resume_command, resume_flow, run_flow
+from agent_composer.run import RunResult, resume_command, resume_flow, run_flow
 from agent_composer.events import Diagnostic, NodeFailed, SourceRange, SourceSpan
 from agent_composer.typesys.values import ValueKind
 

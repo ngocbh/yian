@@ -13,7 +13,8 @@ assert reads is recovered from the persisted `GrowRecord.seed` after a checkpoin
 round-trip — no new checkpoint field.
 """
 
-from agent_composer.compose import load_flow, resume_command, resume_flow, run_flow
+from agent_composer.compose import load_flow
+from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.events import RunFailed
 from agent_composer.suspension.checkpoint import RunCheckpoint
 

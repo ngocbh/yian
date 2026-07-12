@@ -10,7 +10,7 @@ proof.
 """
 
 from agent_composer.compose.loader import load_flow
-from agent_composer.compose.run import resume_command, resume_flow, run_flow
+from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.suspension.checkpoint import RunCheckpoint
 

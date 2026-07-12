@@ -18,7 +18,8 @@ consuming `${gate.output}` (incl. nested case-of-case).
 
 import pytest
 
-from agent_composer.compose import LoadError, expand_case_outputs, load_flow, run_flow
+from agent_composer.compose import LoadError, expand_case_outputs, load_flow
+from agent_composer.run import run_flow
 from agent_composer.compose.parser import CaseDescriptor, CodeDescriptor
 
 

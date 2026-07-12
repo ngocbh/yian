@@ -19,7 +19,7 @@ def test_xxx_runs_pure():
 def test_xxx_end_to_end():
     # Load a tiny flow that uses the kind, run it, assert the terminal value.
     from agent_composer import load_flow
-    from agent_composer.compose.run import run_flow
+    from agent_composer.run import run_flow
 
     flow = """
 id: t

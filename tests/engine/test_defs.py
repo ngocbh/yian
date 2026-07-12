@@ -15,7 +15,8 @@ real CODE-only children through `run_flow` (no LLM). Pinned here:
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow, run_flow
+from agent_composer.compose import LoadError, load_flow
+from agent_composer.run import run_flow
 from agent_composer.compose.parser import parse_file
 
 # --------------------------------------------------------------------------- #

@@ -41,7 +41,6 @@ from agent_composer.compose.cases import (
 )
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.loader import LoadedFlow, load_flow
-from agent_composer.compose.run import resume_command, resume_flow, run_flow
 from agent_composer.compose.parser import (
     AgentDescriptor,
     CallDescriptor,
@@ -95,7 +94,4 @@ __all__ = [
     "classify_asserts",
     "LoadedFlow",
     "load_flow",
-    "run_flow",
-    "resume_flow",
-    "resume_command",
 ]

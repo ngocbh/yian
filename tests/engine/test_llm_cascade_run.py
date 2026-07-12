@@ -1,7 +1,7 @@
 """`run_flow` applies the CLI cascade layer at run start (fresh-run path)."""
 
 from agent_composer.compose.loader import load_flow
-from agent_composer.compose.run import run_flow
+from agent_composer.run import run_flow
 
 
 def test_run_flow_applies_cli_llm_config(monkeypatch):

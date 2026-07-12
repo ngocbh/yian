@@ -24,7 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compose import LoadError, load_flow, run_flow
+from agent_composer.compose import LoadError, load_flow
+from agent_composer.run import run_flow
 
 _ERRORS = Path(__file__).resolve().parents[2] / "tests" / "seeds" / "errors"
 

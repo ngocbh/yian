@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage
 
 import agent_composer.llm_clients as llm_clients_mod
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
-from agent_composer.compose.run import resume_command
+from agent_composer.run import resume_command
 from agent_composer.events import RunPaused, RunResumed, RunSucceeded
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.nodes.agent import AgentNode

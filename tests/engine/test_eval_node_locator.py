@@ -6,7 +6,8 @@ node id. The three direct node-assert yields produce `assert` locators directly.
 
 from pathlib import Path
 
-from agent_composer.compose import load_flow, run_flow
+from agent_composer.compose import load_flow
+from agent_composer.run import run_flow
 from agent_composer.events import NodeFailed
 
 _ERRORS = Path(__file__).resolve().parents[1] / "seeds" / "errors"

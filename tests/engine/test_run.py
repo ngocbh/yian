@@ -16,7 +16,7 @@ with `status == "failed"`. The four behaviors pinned:
 
 from agent_composer.events import NodeSucceeded
 from agent_composer.compose import load_flow
-from agent_composer.compose.run import run_flow
+from agent_composer.run import run_flow
 
 
 # --------------------------------------------------------------------------- #

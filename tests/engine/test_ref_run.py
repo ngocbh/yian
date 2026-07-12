@@ -6,7 +6,8 @@ declared defaults for omitted args), drive the baked child engine, and re-export
 child's single value. These drive real CODE-only children through `run_flow` (no LLM).
 """
 
-from agent_composer.compose import LoadError, load_flow, run_flow
+from agent_composer.compose import LoadError, load_flow
+from agent_composer.run import run_flow
 
 # A CODE-only child: topic -> {report, n}.
 _CHILD = """

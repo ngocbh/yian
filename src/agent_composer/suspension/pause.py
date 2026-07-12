@@ -49,7 +49,7 @@ class HumanInputRequired(BaseModel):
     questions: list[dict[str, Any]] = Field(default_factory=list)
     node_title: Optional[str] = None
     # LOGICAL resumption identity: the node that paused. The agent `ask_user` pause is now a
-    # namespaced HUMAN_INPUT leaf, so `compose.run.resume_command` delivers the answer
+    # namespaced HUMAN_INPUT leaf, so `run.resume_command` delivers the answer
     # as that leaf's Output keyed on `node_id` — the `slot` field is vestigial (always None for
     # the leaf-pause model; the resume-plumbing prune is a later cleanup step).
     node_id: Optional[str] = None

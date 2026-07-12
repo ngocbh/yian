@@ -5,13 +5,13 @@ of a node's `outputs:` / a flow's `inputs:` is read directly into one recursive
 `Type` (see `types.read_type`) rather than a flat `list[IOField]`; nested records
 are native.
 
-Organized along two axes (#70): the per-node-kind axis lives in `nodes/<kind>.py`
+Organized along two axes: the per-node-kind axis lives in `nodes/<kind>.py`
 (each owns its descriptor + `parse` + `build(ctx) -> BuildResult` methods; `nodes/__init__.py`
 derives the shared `KINDS` table from those classes), and the cross-node graph-stage axis lives
-in the `parse/`, `desugar/`, `edges/`, and `validate/` phases. The shared choke points
-(`parse/nodes.py`, the loader's conductor loop, `nodes/bindings.py`) dispatch through `KINDS`
-kind-blind — there is no per-kind isinstance ladder. `parse/file.py` is the YAML text/span
-front door (`parse_file`).
+in the ordered phases `parse/ -> desugar/ -> edges/ -> validate/ -> build/`. The shared choke
+points (`parse/nodes.py`, the loader's conductor loop, `nodes/bindings.py`) dispatch through
+`KINDS` kind-blind — there is no per-kind isinstance ladder. `parse/file.py` is the YAML
+text/span front door (`parse_file`).
 
 Errors carry a concrete `SourceRange` (from `events`): a located `NodeReader` records
 each field's range during `parse`, the runtime funnel resolves a failure's range from

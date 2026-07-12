@@ -1,4 +1,4 @@
-"""kind=model — the ML-inference node's descriptor + parse/build handle (#70).
+"""kind=model — the ML-inference node's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `model` node's frozen
 `ModelDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
@@ -47,7 +47,7 @@ class ModelDescriptor(NodeDescriptor):
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `ModelNode` (+ wiring) for this `ModelDescriptor`.
 
-        Mirrors the legacy `build.build_leaf_node` model path (node-side `params` + flow-owned
+        Builds the model leaf (node-side `params` + flow-owned
         `inputs` wiring, `output_type` from `outputs:`) and stamps `.range`/`.field_ranges` from
         the descriptor via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is
         unused (leaf kind) and the inline-CODE anchors on `ctx` are read only by the CODE build.

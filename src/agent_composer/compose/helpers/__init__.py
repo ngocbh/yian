@@ -19,7 +19,8 @@ Modules:
   - `uses`        `UsesRef` / `parse_uses_ref`: the `uses:` child-flow reference parser.
 
 Layer: bottom of `compose`. Imports the engine core only; imported by `compose.nodes`,
-`compose.stages`, `compose.loader`, and the package `__init__` re-exports.
+the graph-stage phases (`parse`/`desugar`/`edges`/`validate`/`build`), `compose.loader`,
+and the package `__init__` re-exports.
 """
 
 from __future__ import annotations

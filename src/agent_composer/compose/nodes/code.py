@@ -1,4 +1,4 @@
-"""kind=code — the deterministic-code node's descriptor + parse/build handle (#70).
+"""kind=code — the deterministic-code node's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `code` node's frozen
 `CodeDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
@@ -43,7 +43,7 @@ class CodeDescriptor(NodeDescriptor):
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `CodeNode` (+ wiring) for this `CodeDescriptor`.
 
-        Mirrors the legacy `build.build_leaf_node` code path (classify + syntax/return gates,
+        Builds the code leaf (classify + syntax/return gates,
         node-side `params` + flow-owned `inputs` wiring, `output_type` from `outputs:`) and
         anchors inline tracebacks from two line hints on `ctx`, preferring the caller's over the
         desc's:

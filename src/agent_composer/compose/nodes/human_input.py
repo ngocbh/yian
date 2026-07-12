@@ -1,4 +1,4 @@
-"""kind=human_input — the suspend-for-a-person node's descriptor + parse/build handle (#70).
+"""kind=human_input — the suspend-for-a-person node's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input` node's
 frozen `HumanInputDescriptor`. It inherits the template `parse` from `NodeDescriptor` (which
@@ -48,7 +48,7 @@ class HumanInputDescriptor(NodeDescriptor):
     required — the question surface is one-of-three, enforced in `_validate_fields`);
     `binding_fields=()` — this PRESERVES the retired `map_binding_strings_in_descriptor` ladder
     behavior, which never matched a human_input, so its `inputs:` were NOT inline-call-desugared
-    (making them desugarable would be a behavior change, out of scope for the #70 refactor).
+    (making them desugarable would be a behavior change, out of scope here).
     """
 
     kind = "human_input"
@@ -142,7 +142,7 @@ class HumanInputDescriptor(NodeDescriptor):
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `HumanInputNode` (+ wiring) for this `HumanInputDescriptor`.
 
-        Mirrors the legacy `build.build_leaf_node` human_input path: build the gate (one of three
+        Builds the human_input leaf: build the gate (one of three
         question forms), derive `output_type` from `outputs:` (a questions gate with none defaults
         to a bare open OBJECT — the host returns a free-form answer record), compute the
         `answer_schema`, and wire node-side `params` + flow-owned `inputs`. Stamps `.range`/

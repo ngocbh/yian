@@ -1,4 +1,4 @@
-"""kind=call|map — function application of a callable; descriptor + parse/build handle (#70).
+"""kind=call|map — function application of a callable; descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules. `call` and `map` share the resolve-and-bake
 `build` (which branches on `isinstance(self, MapDescriptor)`: a `map` -> `MapNode`, else `CallNode`);

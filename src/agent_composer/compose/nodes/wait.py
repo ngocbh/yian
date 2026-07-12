@@ -1,4 +1,4 @@
-"""kind=wait — the suspend-until-timestamp node's descriptor + parse/build handle (#70).
+"""kind=wait — the suspend-until-timestamp node's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `wait` node's frozen
 `WaitDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
@@ -39,7 +39,7 @@ class WaitDescriptor(NodeDescriptor):
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `WaitNode` (+ wiring) for this `WaitDescriptor`.
 
-        Mirrors the legacy `build.build_leaf_node` wait path: a timed WAIT's `until` SOURCE rides
+        Builds the wait leaf: a timed WAIT's `until` SOURCE rides
         the reserved wiring key (`{"until": self.until}`), never a node-side param, and the node
         carries only the `is_timed` residual. Stamps `.range`/`.field_ranges` from the descriptor
         via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is unused (leaf kind)

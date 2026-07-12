@@ -5,13 +5,13 @@ carried field-NAME sets — it lacks the resolved carried-record Types, which de
 producers/flow inputs assembled LATER. This pass resolves each carried field's Type from its
 bound seed source (`${<id>.output}`/`${input.X}` over the parent producers + flow-input types,
 via `_output_value_type`) and checks it is structurally compatible (`types_compatible`, C-EQUIV)
-with the body OUTPUT's same-named field Type. It relocates `build.check_loop_type_contract`
-verbatim, adding a `.range` anchor off the built loop node's `field_ranges["inputs"]` (the coarse
-`input:` mapping span) — the transitional `node_lines` still feeds `.line`.
+with the body OUTPUT's same-named field Type. It carries a `.range` anchor off the built loop
+node's `field_ranges["inputs"]` (the coarse `input:` mapping span) — the transitional
+`node_lines` still feeds `.line`.
 
 Imports flow down only: `compile.validation` (the type comparator), `compose.nodes.resolver`
-(`_output_value_type`, the shared ref-to-Type resolver — `resolver` does not import
-`compose.stages`, so this edge is acyclic), `typesys` (Type), `compose.errors`. Only the loader
+(`_output_value_type`, the shared ref-to-Type resolver — `resolver` imports no later phase, so
+this edge is acyclic), `typesys` (Type), `compose.errors`. Only the loader
 (and the compose package facade) import this back.
 """
 

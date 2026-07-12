@@ -3,14 +3,13 @@
 A loader post-build pass (run after the flow's leaves + child signatures are assembled).
 Each binding's SOURCE `Type` — resolved from its `${<id>.output}`/`${input.X}` ref over the
 PARENT producers + flow-input types, read from the flow-owned `wiring` — must be structurally
-compatible with the CHILD input's declared `Type` (`types_compatible`, C-EQUIV). It relocates
-`build.check_ref_map_types` verbatim, adding a `.range` anchor off the built call node's
-`field_ranges["inputs"]` (the coarse `input:` mapping span) — the transitional `node_lines`
-still feeds `.line`.
+compatible with the CHILD input's declared `Type` (`types_compatible`, C-EQUIV). It carries
+a `.range` anchor off the built call node's `field_ranges["inputs"]` (the coarse `input:`
+mapping span) — the transitional `node_lines` still feeds `.line`.
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
 analysis), `compose.nodes.resolver` (`_output_value_type`, the shared ref-to-Type resolver —
-`resolver` does not import `compose.stages`, so this edge is acyclic), `typesys` (Type),
+`resolver` imports no later phase, so this edge is acyclic), `typesys` (Type),
 `compose.errors`. Only the loader (and the compose package facade) import this back.
 """
 

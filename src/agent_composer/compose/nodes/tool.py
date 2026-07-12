@@ -1,4 +1,4 @@
-"""kind=tool — the deterministic-tool node's descriptor + parse/build handle (#70).
+"""kind=tool — the deterministic-tool node's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `tool` node's frozen
 `ToolDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each

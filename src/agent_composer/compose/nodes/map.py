@@ -1,4 +1,4 @@
-"""kind=map — mapped function application (`List.map`); a `CallDescriptor` subclass (#70).
+"""kind=map — mapped function application (`List.map`); a `CallDescriptor` subclass.
 
 The second of the two REF/MAP kinds. A `map` is `kind: map` + `over: ${list}` — iteration with
 `${item}` in element scope, built as a `MapNode` (`parallel:` overlaps the element runs).

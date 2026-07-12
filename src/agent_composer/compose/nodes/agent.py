@@ -1,4 +1,4 @@
-"""kind=agent — the LLM-reasoner node's descriptor + parse/build handle (#70).
+"""kind=agent — the LLM-reasoner node's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `agent` node's frozen
 `AgentDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
@@ -81,7 +81,7 @@ class AgentDescriptor(NodeDescriptor):
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `AgentNode` (+ wiring) for this `AgentDescriptor`.
 
-        Mirrors the legacy `build.build_leaf_node` agent path (LLM-config validation, node-side
+        Builds the agent leaf (LLM-config validation, node-side
         `params` + flow-owned `inputs` wiring, `output_type` from `outputs:`/override) and
         additionally stamps `.range`/`.field_ranges` from the descriptor via `_finish` (which
         wraps them in a `BuildResult`). `ctx.resolver` is unused (leaf kind) and the inline-CODE

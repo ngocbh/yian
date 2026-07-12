@@ -1,4 +1,4 @@
-"""kind=loop — the `('a -> 'a) -> 'a -> 'a` driver's descriptor + parse/build handle (#70).
+"""kind=loop — the `('a -> 'a) -> 'a -> 'a` driver's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `loop` node's frozen
 `LoopDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each

@@ -1,4 +1,4 @@
-"""kind=case — the branch-routing node's descriptor + parse/build handle (#70).
+"""kind=case — the branch-routing node's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `case` node's frozen
 `CaseDescriptor`. It inherits the template `parse` from `NodeDescriptor` (which records each

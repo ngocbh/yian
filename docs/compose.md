@@ -59,7 +59,7 @@ clean and generic.
 
 ---
 
-## The two-axis layout (#70)
+## The two-axis layout
 
 `compose/` is split along two axes so a change stays local:
 
@@ -79,12 +79,14 @@ clean and generic.
   KINDS = {d.kind: d for d in _DESCRIPTORS}   # kind string -> descriptor class
   ```
   Adding or changing a kind is one file plus one entry here. The shared dispatch sites
-  (`parse/`, `loader._assemble`) look the class up in `KINDS`
+  (`parse/`, `build/pipeline.py::_assemble`) look the class up in `KINDS`
   and call `cls.parse(...)` / `desc.build(...)` — they never grow an `if kind == …` ladder.
 
-- **Cross-node graph passes** → `compose/stages/`. These operate on the *whole* set of
-  descriptors: `parse_nodes`, the desugars, `infer_ordering_edges`,
-  `validate_references`, `reject_cycles`, wiring-parity, and the rest.
+- **Cross-node graph passes** → the ordered phase packages `compose/parse/ →
+  compose/desugar/ → compose/edges/ → compose/validate/ → compose/build/`. These operate on
+  the *whole* set of descriptors: `parse_nodes`, the desugars, `infer_data_edges`/
+  `infer_ordering_edges`, `validate_references`, `reject_cycles`, wiring-parity, boundary
+  synthesis, and the rest — each phase may import only the earlier ones.
 
 A sibling table, `BINDING_FIELDS`, records which descriptor fields carry `${...}`
 strings (a code node's `inputs`, a tool's `inputs`, a map's `over`). One kind-blind walk
@@ -127,7 +129,7 @@ verdict:
     against_case: ${against_case.output}
 ```
 
-`infer_data_edges` (in `build.py`) ref-walks every binding, reads out the node ids each
+`infer_data_edges` (in `edges/data.py`) ref-walks every binding, reads out the node ids each
 `${...}` depends on, and adds exactly those edges. The graph is a
 *consequence* of the data references — it cannot drift out of sync with them, and
 parallelism is automatic: two nodes that don't reference each other simply have no edge
@@ -188,8 +190,8 @@ section header rather than guessing.
 | You want to change… | Go to |
 |---|---|
 | a node kind's fields or how it builds | `compose/nodes/<kind>.py` |
-| a whole-graph pass (edges, validation, cycles) | `compose/stages/` |
-| the YAML → span-tree parse | `parser.py` + `spanloader.py` |
-| the located cursor over the tree | `reader.py` (`NodeReader`) |
-| the pipeline wiring itself | `loader.py` (`_assemble`) |
+| a whole-graph pass (edges, validation, cycles) | the phase packages `compose/{parse,desugar,edges,validate,build}/` |
+| the YAML → span-tree parse | `parse/file.py` (`parse_file`) + `helpers/spanloader.py` |
+| the located cursor over the tree | `helpers/reader.py` (`NodeReader`) |
+| the pipeline wiring itself | `build/pipeline.py` (`_assemble`), driven by `loader.py` |
 | running the compiled flow | [engine.md](engine.md) |

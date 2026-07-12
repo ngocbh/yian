@@ -63,10 +63,11 @@ Two ideas make this phase tractable:
 `infer_data_edges` reads that reference and adds the `frame → this` edge. The graph is
 a *consequence* of the data references, so it can never disagree with them.
 
-**The front end is split on two axes (issue #70).** Per-node-kind logic lives in
+**The front end is split on two axes.** Per-node-kind logic lives in
 `compose/nodes/<kind>.py` — each kind module owns its descriptor, its `parse()`, and
 its `build()`, and registers them into the `KINDS` table. Cross-node graph passes live
-in `compose/stages/`. The engine core sees none of it.
+in the ordered phase packages `compose/parse/ → compose/desugar/ → compose/edges/ →
+compose/validate/ → compose/build/`. The engine core sees none of it.
 
 The output is a **`LoadedFlow`**: a `CompiledFlow` (the immutable topology) plus the
 typed `input:` declarations, the `asserts`, and a render-only *source frame* used to

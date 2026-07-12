@@ -1,6 +1,6 @@
 """Graph-stage: parse the `nodes:` mapping into typed per-kind descriptors.
 
-The first cross-node assembly pass (#70 Step 7). Consumes a `NodeReader` over the flow's
+The first cross-node assembly pass. Consumes a `NodeReader` over the flow's
 `nodes:` mapping (located, from the span tree) and dispatches each node body to its kind's
 `parse` via the `KINDS` table — replacing the legacy line-based
 `parser.parse_nodes`/`_parse_node`/`_KIND_SPECS` trio.

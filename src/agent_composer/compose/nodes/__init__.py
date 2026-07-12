@@ -1,11 +1,11 @@
 """The per-kind axis of the Compose front end: one handle per author-written `kind:`.
 
-Issue #70 splits `compose/` along two axes: the *node-kind* axis lives here
+The Compose front end is split along two axes: the *node-kind* axis lives here
 (`compose/nodes/<kind>.py`), and the cross-node *graph-stage* axis lives in the
 `compose/parse/`, `compose/desugar/`, `compose/edges/`, and `compose/validate/` phases.
 Each kind module owns the three things that used to be scattered across `parse/file.py`
-(its descriptor + the `_KIND_SPECS` row) and `build.py` (its branch of the old
-`build_leaf_node` isinstance ladder, now dissolved):
+(its descriptor + the `_KIND_SPECS` row) and the old leaf-build branch (its slice of the
+per-kind isinstance ladder, now dissolved):
 
 - its frozen **descriptor** dataclass (subclassing `NodeDescriptor`),
 - **`parse(id, reader)`** — a classmethod that reads one node body via a located

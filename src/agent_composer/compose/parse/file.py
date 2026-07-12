@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agent_composer.compose.helpers.errors import LoadError
 
 # `AgentDescriptor`/`CodeDescriptor`/`ModelDescriptor`/`ToolDescriptor`/`WaitDescriptor`
-# now live with their parse/build handles in `nodes/<kind>.py` (#70); re-export them here so
+# now live with their parse/build handles in `nodes/<kind>.py`; re-export them here so
 # existing importers keep working. `NodeDescriptor` — the base class every kind descriptor
 # inherits — lives in `nodes/base.py` (the leaf, mirroring `nodes/base.py`); re-exported here as
 # the descriptor base type for importers that annotate `dict[str, NodeDescriptor]` (build/stages).

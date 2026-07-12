@@ -59,13 +59,14 @@ Copy `code.py`.
   fields, and records each field's `SourceRange`. Override the `_normalize_reader` /
   `_validate_fields` hooks only if the kind needs pre-normalization or extra checks
   (see `case.py` / `human_input.py` for examples). Most leaves need neither.
-- **Override `build`** — an instance method `build(self, *, registry=None, resolver=None,
-  **_loader_hints)` that constructs `XxxNode(...)`, sets `output_type` / `params` /
-  wiring via the inherited `self.output_type(registry)` / `self.sink_params()` /
-  `self.sink_wiring()`, and returns `self._finish(node, wiring)` (which stamps
-  `.range`/`.field_ranges`). Leaf kinds ignore `resolver`; it rides the shared signature
-  for call/map/loop. Absorb the inline-CODE anchors (`source_file`/`code_line`/
-  `code_field_line`) via `**_loader_hints` unless this is the CODE kind.
+- **Override `build`** — an instance method `build(self, ctx: BuildContext) -> BuildResult`
+  that constructs `XxxNode(...)`, sets `output_type` / `params` / wiring via the inherited
+  `self.output_type(ctx.registry)` / `self.sink_params()` / `self.sink_wiring()`, and returns
+  `self._finish(node, wiring)` (which stamps `.range`/`.field_ranges` and wraps a `BuildResult`).
+  The one input is the immutable `BuildContext`: `ctx.registry` (the `TypeRegistry`),
+  `ctx.resolver` (the child-flow resolver — only call/map/loop read it), and the inline-CODE
+  traceback anchors `ctx.source_file`/`ctx.code_line`/`ctx.code_field_line` (only the CODE build
+  reads them). A leaf kind reads only `ctx.registry`.
 
 ## 4. `compose/nodes/__init__.py` — add to the `_DESCRIPTORS` tuple
 
@@ -82,7 +83,7 @@ _DESCRIPTORS = (
 )
 ```
 
-The shared dispatch (`parse/`, `loader._assemble`'s build loop,
+The shared dispatch (`parse/`, `build/pipeline.py::_assemble`'s build loop,
 `bindings.py`) looks the class up in `KINDS` and calls `cls.parse(...)` / `desc.build(...)`
 kind-blind — no isinstance branch to add.
 

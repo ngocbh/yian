@@ -40,7 +40,7 @@ def test_validate_fields_default_rejects_bad_asserts():
         kind = "d"
 
     with pytest.raises(LoadError):
-        D._validate_fields("n", {"asserts": [1, 2]}, {})
+        D._validate_fields("n", {"asserts": [1, 2]}, {}, None)
 
 
 def test_validate_fields_default_skips_absent_asserts():
@@ -48,7 +48,7 @@ def test_validate_fields_default_skips_absent_asserts():
     class D(NodeDescriptor):
         kind = "d"
 
-    D._validate_fields("n", {}, {})  # no raise
+    D._validate_fields("n", {}, {}, None)  # no raise
 
 
 def test_normalize_reader_default_noop():

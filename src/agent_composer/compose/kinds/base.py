@@ -227,6 +227,7 @@ class NodeDescriptor:
         cls._normalize_reader(reader)
         cls._check_keys(node_id, reader)
         body = reader.value
+        own_range = reader._own_range()
         ranges: dict[str, SourceRange] = {}
         kwargs: dict[str, Any] = {"id": node_id}
         for key in cls.allowed - NodeDescriptor.allowed:  # this kind's OWN keys only
@@ -236,9 +237,9 @@ class NodeDescriptor:
             if rng is not None:
                 ranges[key] = rng
             kwargs[cls.keyword_remap.get(key, key)] = body[key]
-        cls._validate_fields(node_id, kwargs, ranges)
+        cls._validate_fields(node_id, kwargs, ranges, own_range)
         cls._read_common_fields(node_id, reader, kwargs, ranges)
-        return cls(**kwargs, range=reader._own_range(), field_ranges=ranges)
+        return cls(**kwargs, range=own_range, field_ranges=ranges)
 
     @classmethod
     def _normalize_reader(cls, reader: NodeReader) -> None:
@@ -254,14 +255,16 @@ class NodeDescriptor:
         node_id: str,
         kwargs: dict[str, Any],
         ranges: dict[str, SourceRange],
+        own_range: Optional[SourceRange],
     ) -> None:
         """Kind-specific field legality, run by the template `parse` after the own-key loop.
 
-        Receives `kwargs` (already remapped/populated by the loop), not the raw body. Default:
-        if an `asserts:` field is present, it must be a `list` of `str` — a bad shape raises a
-        located `LoadError` naming `cls.kind`. Presence-guarded: absent `asserts` is a no-op,
-        so kinds that never author `asserts` are unaffected. Only `human_input` overrides this
-        (calling `super()` first for the asserts check)."""
+        Receives `kwargs` (already remapped/populated by the loop), not the raw body, plus
+        `own_range` (the node body's range, for anchoring an error about an ABSENT field, which
+        has no per-field range). Default: if an `asserts:` field is present, it must be a `list`
+        of `str` — a bad shape raises a located `LoadError` naming `cls.kind`. Presence-guarded:
+        absent `asserts` is a no-op, so kinds that never author `asserts` are unaffected. Only
+        `human_input` overrides this (running its one-of-three check, then `super()` for asserts)."""
         asserts = kwargs.get("asserts")
         if asserts is not None and not (
             isinstance(asserts, list) and all(isinstance(a, str) for a in asserts)

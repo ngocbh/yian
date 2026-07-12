@@ -69,18 +69,20 @@ class HumanInputDescriptor(NodeDescriptor):
         node_id: str,
         kwargs: dict[str, Any],
         ranges: dict[str, SourceRange],
+        own_range: Optional[SourceRange],
     ) -> None:
         """Enforce the one-of-three question-surface legality, on top of the default checks.
 
         Overrides the base hook, run by the template `parse` after the own-key loop. Reads the
         three question surfaces from `kwargs` (already populated by the loop — human_input has no
-        `keyword_remap`, so the kwargs keys equal the surface keys), NOT the raw body. Calls
-        `super()` FIRST (to keep the default asserts-list check), then requires exactly one of
-        prompt/questions/adaptive_questions: `questions` and `adaptive_questions` are mutually
+        `keyword_remap`, so the kwargs keys equal the surface keys), NOT the raw body. Runs the
+        one-of-three legality check FIRST (matching the pre-refactor precedence), then calls
+        `super()` for the default asserts-list check: exactly one of prompt/questions/
+        adaptive_questions is required, `questions` and `adaptive_questions` are mutually
         exclusive, and an adaptive block must itself be a dict carrying its own `prompt:` (the
-        LLM brief). Field-anchored where a field range exists (`ranges.get("adaptive_questions")`).
-        """
-        super()._validate_fields(node_id, kwargs, ranges)
+        LLM brief). The "needs a question surface" error anchors on `own_range` (the node body)
+        since no question field is present to carry a range; the other two anchor on the
+        `adaptive_questions:` field range where it exists."""
         # One-of-three legality: needs a question surface, `questions`/`adaptive_questions` are
         # mutually exclusive, and an adaptive block needs its own `prompt:` (the LLM brief).
         has_q = kwargs.get("questions") is not None
@@ -89,7 +91,7 @@ class HumanInputDescriptor(NodeDescriptor):
             raise LoadError(
                 f"node {node_id!r} (kind=human_input): needs `prompt:`, "
                 f"`questions:`, or `adaptive_questions:`",
-                range=ranges.get("adaptive_questions"),
+                range=own_range,
             )
         if has_q and auto is not None:
             raise LoadError(
@@ -104,6 +106,7 @@ class HumanInputDescriptor(NodeDescriptor):
                     f"requires a `prompt:` (the LLM brief)",
                     range=ranges.get("adaptive_questions"),
                 )
+        super()._validate_fields(node_id, kwargs, ranges, own_range)
 
     def _build_gate(self) -> HumanInputNode:
         """Build a `human_input` gate, carrying its `questions:` config in one of three forms.

@@ -11,6 +11,9 @@ Modules:
   - `reader`      `NodeReader`, the located cursor over a parsed `nodes:` mapping: reads a
                   field's value AND records its `SourceRange` from the span tree.
   - `spanloader`  the YAML-text -> located span tree front door (line/col-aware parse).
+  - `source`      `SourceFrame` + the parse-free span-map helpers (`_boundary_field_ranges`
+                  / `_section_lines`): render-only source-location metadata built on
+                  `load_with_spans` + `NodeReader`, never the parser.
   - `types`       `read_type` / `read_flow_inputs` / `InputDecl`: the `outputs:`/`inputs:`
                   source side read into one recursive `Type` (nested records native).
   - `uses`        `UsesRef` / `parse_uses_ref`: the `uses:` child-flow reference parser.

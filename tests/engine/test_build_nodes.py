@@ -217,11 +217,11 @@ def test_call_loop_descriptors_rejected_as_non_leaf():
     # call/map/loop share the KINDS table but need a resolver — `build_leaf_node` (the
     # leaf-only, resolver=None path) must reject them up front rather than build with a
     # missing resolver and fail with a confusing message deep in `build_call_node`.
-    from agent_composer.compose.parser import CallDescriptor, LoopDescriptor
+    from agent_composer.compose.parser import CallDescriptor, MapDescriptor, LoopDescriptor
 
     for desc in (
-        CallDescriptor(id="c", call="child", kind="call"),
-        CallDescriptor(id="m", call="child", over="${input.xs}", kind="map"),
+        CallDescriptor(id="c", call="child"),
+        MapDescriptor(id="m", call="child", over="${input.xs}"),
         LoopDescriptor(id="p", call="body", times=3),
     ):
         with pytest.raises(LoadError, match="is not a leaf node"):

@@ -1,31 +1,33 @@
-"""kind=map — mapped function application (`List.map`); reuses `call`'s descriptor + build (#70).
+"""kind=map — mapped function application (`List.map`); a `CallDescriptor` subclass (#70).
 
-The second of the two REF/MAP kinds that SHARE one frozen `CallDescriptor` (owned by
-`kinds/call.py`). A `map` is `kind: map` + `over: ${list}` — iteration with `${item}` in
-element scope, built as a `MapNode` (`parallel:` overlaps the element runs). This module owns
-only the map FIELD SURFACE (`over`/`parallel` join call's `call`/`inputs`) and reuses call's
-shared located `parse_call` and its `build` (which branches on `desc.kind == "map"` to build a
-`MapNode`). Registered into `KINDS`/`BINDING_FIELDS` at import.
+The second of the two REF/MAP kinds. A `map` is `kind: map` + `over: ${list}` — iteration with
+`${item}` in element scope, built as a `MapNode` (`parallel:` overlaps the element runs).
+`MapDescriptor` subclasses `CallDescriptor` (in `kinds/call.py`), adding only the map FIELD
+SURFACE (`over`/`parallel` join call's `call`/`inputs`) via `allowed`/`required`; it inherits the
+template `parse`, the resolve-and-bake `build` (which builds a `MapNode` because the descriptor is
+a `MapDescriptor`), and every field (`over`/`parallel` live on the shared base class). Registered
+into `KINDS`/`BINDING_FIELDS` at import.
 """
 
 from __future__ import annotations
 
-from agent_composer.compose.kinds.call import CallDescriptor, parse_call
-from agent_composer.compose.reader import NodeReader
+from dataclasses import dataclass
 
-# Map's field surface (was the `map` row of parser._KIND_SPECS): `call` (the callable) and
-# `over` (the iteration source) are both required; `inputs`/`parallel`/`asserts` are optional.
-MAP_REQUIRED: frozenset[str] = frozenset({"call", "over"})
-MAP_ALLOWED: frozenset[str] = frozenset({"call", "inputs", "over", "parallel", "asserts"})
-# Descriptor fields carrying `${...}` binding strings: `inputs` (per-element call-arg bindings)
-# and `over` (the map iteration source — a `${list}` ref). Same walk as call (see kinds/call.py).
-MAP_BINDING_FIELDS: tuple[str, ...] = ("inputs", "over")
+from agent_composer.compose.kinds.call import CallDescriptor
 
 
-def parse(node_id: str, reader: NodeReader) -> CallDescriptor:
-    """Read one `kind: map` node body into a `CallDescriptor` (mapped application).
+@dataclass(frozen=True, kw_only=True)
+class MapDescriptor(CallDescriptor):
+    """kind=map — `List.map`: apply a callable over each element of an `over: ${list}` source.
 
-    Reuses call's shared `parse_call`, stamping `kind="map"` (the build discriminator) and the
-    map field surface (`over`/`parallel` in addition to `call`/`inputs`).
+    A `CallDescriptor` with a wider authoring surface: `over` (the iteration source) is required
+    alongside `call`, and `parallel` opts into overlapping element runs. It declares NO new fields
+    (`over`/`parallel` already live on `CallDescriptor`); it only widens `allowed`/`required` and
+    sets `kind="map"`, which is what makes `CallDescriptor.build` construct a `MapNode` (it
+    branches on `isinstance(self, MapDescriptor)`). Inherits the template `parse` and
+    `binding_fields=("inputs","over")` from `CallDescriptor`.
     """
-    return parse_call(node_id, reader, kind="map", required=MAP_REQUIRED, allowed=MAP_ALLOWED)
+
+    kind = "map"
+    allowed = CallDescriptor.allow("over", "parallel")
+    required = CallDescriptor.require("over")

@@ -40,6 +40,7 @@ from agent_composer.compose.kinds.wait import WaitDescriptor  # noqa: F401
 from agent_composer.compose.kinds.human_input import HumanInputDescriptor  # noqa: F401
 from agent_composer.compose.kinds.case import CaseDescriptor  # noqa: F401
 from agent_composer.compose.kinds.call import CallDescriptor  # noqa: F401
+from agent_composer.compose.kinds.map import MapDescriptor  # noqa: F401
 from agent_composer.compose.kinds.loop import LoopDescriptor  # noqa: F401
 
 _STRICT = ConfigDict(extra="forbid")

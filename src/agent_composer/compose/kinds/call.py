@@ -1,22 +1,17 @@
 """kind=call|map — function application of a callable; descriptor + parse/build handle (#70).
 
-One of the two-axis `compose/kinds/<kind>.py` modules. `call` and `map` SHARE one frozen
-`CallDescriptor` (the REF/MAP discriminator is the instance `kind` field), so this module owns
-the descriptor, the shared located `parse_call`, and the resolve-and-bake `build` (which branches
-on `self.kind`: `"map"` -> `MapNode`, else `CallNode`); `kinds/map.py` reuses all three with the
-map field surface. Registered into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch
-routes here.
-
-`call` inherits the template `parse` from `NodeDescriptor` (its class attrs `allowed`/`required`/
-`binding_fields` describe its own surface). `map` still calls the shared `parse_call` this step —
-it becomes a `MapDescriptor(CallDescriptor)` on the template in a later step; until then the
-instance `kind` field carries the REF/MAP distinction rather than a class attr.
+One of the two-axis `compose/kinds/<kind>.py` modules. `call` and `map` share the resolve-and-bake
+`build` (which branches on `isinstance(self, MapDescriptor)`: a `map` -> `MapNode`, else `CallNode`);
+`kinds/map.py`'s `MapDescriptor` subclasses `CallDescriptor`, adding only the map field surface
+(`over`/`parallel`) and the `kind="map"` class attr. Both inherit the template `parse` from
+`NodeDescriptor`. Registered into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes
+here.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.binding import ParamDecl
@@ -24,18 +19,12 @@ from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.errors import LoadError
-from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.kinds.base import NodeDescriptor
-from agent_composer.compose.kinds.helpers import (
-    check_node_keys,
-    read_common_fields,
-)
 from agent_composer.compose.kinds.resolver import (
     ChildSignature,
     _resolve_child,
     child_signature,
 )
-from agent_composer.events import SourceRange
 
 # A list-type helper: the LIST_OBJECT/LIST_* seg for an element Type (mirrors
 # `typesys.types._LIST_SEG_FOR_ELEMENT` + the list-of-record / list-of-variant rule in
@@ -59,23 +48,25 @@ class CallDescriptor(NodeDescriptor):
     element scope (built as a `MapNode`), and `parallel:` overlaps the element runs. `inputs:`
     are the (per-element) call-arg bindings.
 
-    The instance `kind` field is the REF/MAP discriminator: `"call"` (REF, the default) or
-    `"map"`. `call` parses via the inherited template (which leaves `kind` at its `"call"`
-    default); `map` parses via the shared `parse_call` (which stamps `kind="map"`); the two SYNTH
-    paths (inline-call + case desugar) keep the REF default (`over=None`). `build` branches on it:
-    a `map` builds a `MapNode`, a `call` a `CallNode`. (`kind` stays an INSTANCE field — not a
-    class attr — precisely so one `CallDescriptor` class can carry both discriminator values
-    until `map` splits into its own subclass.)
+    The REF/MAP discriminator is the descriptor CLASS: a plain `CallDescriptor` is a REF (built
+    as a `CallNode`); a `MapDescriptor` (its subclass, in `kinds/map.py`) is a MAP (built as a
+    `MapNode`). `build` branches on `isinstance(self, MapDescriptor)`. The `kind` CLASS ATTR
+    (`"call"` here, `"map"` on the subclass) is the surface string for dispatch/diagnostics; it is
+    no longer an instance field. The two SYNTH paths (inline-call + case desugar) mint plain
+    `CallDescriptor`s (REF, `over=None`).
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
     `range`/`field_ranges` parse metadata) and `inputs` from `NodeDescriptor`; only the
-    call/map-specific fields are declared here.
+    call/map-specific fields are declared here. `over`/`parallel` are fields on the shared base
+    class (a plain `call` leaves them at `None`/`False`); only `map` lists them in its `allowed`.
 
-    Class attrs (call's own surface): `allowed` adds `call`/`inputs`/`asserts` to the commons;
-    `required` is `{"call"}`; `binding_fields=("inputs","over")` — the call-arg bindings plus the
-    map iteration source (a plain `call` leaves `over=None`, so the kind-blind walk skips it).
+    Class attrs (call's own surface): `kind="call"`; `allowed` adds `call`/`inputs`/`asserts` to
+    the commons; `required` is `{"call"}`; `binding_fields=("inputs","over")` — the call-arg
+    bindings plus the map iteration source (a plain `call` leaves `over=None`, so the kind-blind
+    walk skips it).
     """
 
+    kind = "call"
     allowed = NodeDescriptor.allow("call", "inputs", "asserts")
     required = NodeDescriptor.require("call")
     binding_fields = ("inputs", "over")
@@ -83,7 +74,6 @@ class CallDescriptor(NodeDescriptor):
     call: str
     over: Optional[str] = None
     parallel: bool = False
-    kind: str = "call"
     asserts: list[str] = field(default_factory=list)
 
     def build(self, *, registry=None, resolver=None, **_loader_hints):
@@ -96,16 +86,19 @@ class CallDescriptor(NodeDescriptor):
         key (over-then-inputs order); a REF's wiring is just its `inputs:`. Resolves the callable
         via `resolver`, derives its `ChildSignature`, stamps `output_type` (REF re-exports the
         codomain; MAP wraps it in `list[U]`), name/arity-checks the params, and BAKES the child's
-        compiled flow onto the node. The REF/MAP discriminator is the instance `kind`
-        (`"map"` -> `MapNode`, else `CallNode`). `registry` is unused (call/map resolve their
-        output type from the child signature, not the flow typedefs); `_loader_hints` absorbs the
-        inline-CODE traceback anchors that only the CODE build reads — both ride the shared build
-        signature.
+        compiled flow onto the node. The REF/MAP discriminator is the descriptor CLASS
+        (`MapDescriptor` -> `MapNode`, else `CallNode`). `registry` is unused (call/map resolve
+        their output type from the child signature, not the flow typedefs); `_loader_hints` absorbs
+        the inline-CODE traceback anchors that only the CODE build reads — both ride the shared
+        build signature.
         """
-        # The construction boundary: this reads the RAW authored `kind` STRING (not the
-        # compiled kind enum) to pick the runtime class. Kind identity is BORN here — downstream
+        # The construction boundary: this reads the descriptor CLASS (not a compiled kind enum)
+        # to pick the runtime class. `MapDescriptor` is imported locally to avoid a module-top
+        # cycle (map.py imports CallDescriptor from here). Kind identity is BORN here — downstream
         # compile passes then dispatch on the node's traits, never on `node.kind`.
-        is_map = self.kind == "map"
+        from agent_composer.compose.kinds.map import MapDescriptor
+
+        is_map = isinstance(self, MapDescriptor)
         if is_map and "over" in (self.inputs or {}):
             # Reserved-name guard: a MAP's `over` is the iteration source, carried under
             # the reserved wiring key — an `inputs:` param named `over` would collide.
@@ -159,48 +152,6 @@ class CallDescriptor(NodeDescriptor):
         if errors:
             raise LoadError("\n  ".join(errors))
         return self._finish(node, wiring)
-
-
-def parse_call(
-    node_id: str,
-    reader: NodeReader,
-    *,
-    kind: str,
-    required: frozenset[str],
-    allowed: frozenset[str],
-) -> CallDescriptor:
-    """Shared located parse for `map` (and, until it inherits the template, any REF caller).
-
-    `kind` (`"call"`/`"map"`) is stamped onto the descriptor (the REF/MAP build discriminator);
-    `required`/`allowed` are the kind's flat-field surface. Records the node body's `SourceRange`
-    (`desc.range`) and each present field's `SourceRange` (`desc.field_ranges[field]`). `call`
-    parses via the inherited `NodeDescriptor.parse` template instead; `map` still routes here.
-    """
-    check_node_keys(node_id, kind, reader, allowed, required)
-    body = reader.value
-
-    ranges: dict[str, SourceRange] = {}
-    kwargs: dict[str, Any] = {"id": node_id, "kind": kind}
-    for key in allowed:
-        if key not in body:
-            continue
-        rng = reader.range_of(key)
-        if rng is not None:
-            ranges[key] = rng
-        kwargs[key] = body[key]
-
-    asserts = kwargs.get("asserts")
-    if asserts is not None and not (
-        isinstance(asserts, list) and all(isinstance(a, str) for a in asserts)
-    ):
-        raise LoadError(
-            f"node {node_id!r} (kind={kind}): `asserts:` must be a list of strings",
-            range=ranges.get("asserts"),
-        )
-
-    read_common_fields(node_id, kind, reader, kwargs, ranges)
-
-    return CallDescriptor(**kwargs, range=reader._own_range(), field_ranges=ranges)
 
 
 def _list_of(element: Type) -> Type:

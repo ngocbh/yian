@@ -11,6 +11,7 @@ from agent_composer.compose.kinds.call import CallDescriptor
 from agent_composer.compose.kinds.case import CaseDescriptor
 from agent_composer.compose.kinds.human_input import HumanInputDescriptor
 from agent_composer.compose.kinds.loop import LoopDescriptor
+from agent_composer.compose.kinds.map import MapDescriptor
 from agent_composer.compose.kinds.tool import ToolDescriptor
 from agent_composer.compose.kinds.wait import WaitDescriptor
 
@@ -42,8 +43,8 @@ def test_call_inputs_and_over_rewritten():
 
 
 def test_map_kind_inputs_and_over_rewritten():
-    desc = CallDescriptor(
-        id="m", call="sub", inputs={"seed": "${s}"}, over="${xs}", kind="map"
+    desc = MapDescriptor(
+        id="m", call="sub", inputs={"seed": "${s}"}, over="${xs}"
     )
     out = map_binding_strings(desc, _up)
     assert out.inputs == {"seed": "${S}"}

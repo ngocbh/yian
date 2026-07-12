@@ -70,8 +70,8 @@ class KindSpec:
 
 
 # Surface `kind:` string -> its `KindSpec`; the shared dispatch (`stages/parse.py`,
-# `build.build_leaf_node`) consults this. `map` reuses `call`'s `CallDescriptor` + build
-# (a map IS a call with an `over:` iteration source), with its own `over`-aware `parse`.
+# `build.build_leaf_node`) consults this. `map`'s `MapDescriptor` subclasses `call`'s
+# `CallDescriptor` (a map IS a call with an `over:` iteration source), inheriting its build.
 KINDS: dict[str, KindSpec] = {
     "agent": KindSpec(agent.AgentDescriptor, agent.AgentDescriptor.parse, agent.AgentDescriptor.build),
     "code": KindSpec(code.CodeDescriptor, code.CodeDescriptor.parse, code.CodeDescriptor.build),
@@ -81,7 +81,7 @@ KINDS: dict[str, KindSpec] = {
     "human_input": KindSpec(human_input.HumanInputDescriptor, human_input.HumanInputDescriptor.parse, human_input.HumanInputDescriptor.build),
     "case": KindSpec(case.CaseDescriptor, case.CaseDescriptor.parse, case.CaseDescriptor.build),
     "call": KindSpec(call.CallDescriptor, call.CallDescriptor.parse, call.CallDescriptor.build),
-    "map": KindSpec(call.CallDescriptor, map_kind.parse, call.CallDescriptor.build),
+    "map": KindSpec(map_kind.MapDescriptor, map_kind.MapDescriptor.parse, map_kind.MapDescriptor.build),
     "loop": KindSpec(loop.LoopDescriptor, loop.LoopDescriptor.parse, loop.LoopDescriptor.build),
 }
 
@@ -96,6 +96,6 @@ BINDING_FIELDS: dict[str, tuple[str, ...]] = {
     "human_input": human_input.HumanInputDescriptor.binding_fields,
     "case": case.CaseDescriptor.binding_fields,
     "call": call.CallDescriptor.binding_fields,
-    "map": map_kind.MAP_BINDING_FIELDS,
+    "map": map_kind.MapDescriptor.binding_fields,
     "loop": loop.LoopDescriptor.binding_fields,
 }

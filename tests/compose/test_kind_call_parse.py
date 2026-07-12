@@ -36,7 +36,6 @@ def test_call_parse_matches_descriptor_and_records_ranges():
         id="step",
         call="child_flow",
         inputs={"x": "${input.x}"},
-        kind="call",
     )
     assert isinstance(desc.range, SourceRange)
     assert isinstance(desc.field_ranges["call"], SourceRange)

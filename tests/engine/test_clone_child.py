@@ -1,6 +1,5 @@
 from agent_composer.compile.expand import clone_child
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
-from agent_composer.compose.validate.asserts import AssertSet
 from agent_composer.compose.helpers.types import InputDecl, read_type
 from agent_composer.events import NodeFailed, NodeSucceeded
 from agent_composer.nodes.base import NodeKind, Output, ParamDecl
@@ -14,7 +13,7 @@ def _decl(name: str, type_: str = "str") -> InputDecl:
     return InputDecl(name, type_, None, True, read_type(type_, {}))
 
 
-def _child(outputs, *, tail_reads=None, asserts=None, inputs=("topic",)) -> CompiledFlow:
+def _child(outputs, *, tail_reads=None, inputs=("topic",)) -> CompiledFlow:
     # A child shaped START_ID -> head (reads ${input.topic}) -> tail (reads ${head.output.r}) -> END_ID.
     head = stamp_reads(FuncNode("head", lambda i: {"r": i["topic"]}),
                        {"topic": "${input.topic}"})
@@ -37,7 +36,6 @@ def _child(outputs, *, tail_reads=None, asserts=None, inputs=("topic",)) -> Comp
     wiring[START_ID] = {d.name: f"${{input.{d.name}}}" for d in decls}
     wiring[END_ID] = {o.name: o.from_ for o in outputs}
     flow = CompiledFlow.from_parts(nodes=nodes, edges=edges, outputs=outputs, wiring=wiring)
-    flow.child_asserts = asserts  # clone_child reads the carried AssertSet off the cloned child
     return flow
 
 

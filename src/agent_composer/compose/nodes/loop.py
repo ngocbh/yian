@@ -80,16 +80,15 @@ class LoopDescriptor(NodeDescriptor):
         resolver = ctx.resolver
         child = _resolve_child(self.id, self.call, resolver)
         sig = child_signature(child)
-        # Stamp the child's AssertSet onto its compiled flow (the Grow subgraph body), exactly as
-        # the call/map build — clone_child reads child_asserts off the cloned body child.
-        child.compiled.child_asserts = child.asserts
+        # The child's asserts ride its compiled boundary nodes (lowered at the child's own
+        # build); `clone_child` deep-copies the whole child subgraph per iteration, so those
+        # lowered asserts survive the splice.
         node = LoopNode(
             self.id,
             flow_id=self.call,
             flow_version=None,
             child=child.compiled,
             child_inputs=child.input,
-            child_asserts=child.asserts,
             child_source=child.source,        # render-only; the CLI nested-error traceback
             title=self.node_name,
         )

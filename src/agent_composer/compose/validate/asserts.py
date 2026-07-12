@@ -1,22 +1,27 @@
-"""`asserts:` compile-validate + classify — flow-level AND node-local.
+"""`asserts:` compile-validate + lower — flow-level AND node-local.
 
 Two halves of the `asserts:` contract, both in the validate phase:
 
-FLOW-LEVEL (`AssertSet` + `classify_asserts`). A flow's `asserts:` is a list of
+FLOW-LEVEL (`LoweredAsserts` + `lower_flow_asserts`). A flow's `asserts:` is a list of
 boolean checks in the `when:`/`asserts:` grammar (comparisons + `and`/`or`/`not`
 + arithmetic + `in`). This is the COMPILE-TIME half: it parses each assert,
 validates every `${...}` reference it reads (reusing the leaf checker
 `compile.validation._classify_path` — a dangling node/input or a bad record
-field is a loud `LoadError`), and CLASSIFIES each assert by which side it
-constrains:
+field is a loud `LoadError`), and LOWERS each assert onto the synthesized
+START/END boundary nodes so it fires node-locally through `eval_node`:
 
-- a `${input.X}` / `${system.X}`-only assert -> **boundary**: depends only on the
-  run arguments + ambients, so it can fire BEFORE any node runs (fail-fast).
+- a `${input.X}`-only assert -> **pre (boundary)**: depends only on the run
+  arguments, so it rides `StartNode.boundary_asserts` and fires BEFORE any body
+  node runs (fail-fast), with the `input.` prefix dropped (START's params ARE the
+  input names).
 - an assert that reads ANY `${<id>.output[.X]}` -> **post-terminal**: it depends
-  on a produced value, so it can only fire AFTER the run reaches a terminal.
+  on a produced value, so it rides the synthesized `EndNode.post_asserts` and
+  fires AFTER the run reaches a terminal, with each producer ref rewritten to a
+  synthesized END input edge (so the dependency is STRUCTURAL and survives
+  child-cloning/namespacing under `kind: call`).
 
-This module does NOT run the asserts — `run_flow` evaluates each split against the
-appropriate pool via `expr.evaluate_when`. Here we just parse, validate, and split.
+`${system.X}` is forbidden in a flow assert (ambient — no producer to draw an edge
+from). This module does NOT run the asserts — the boundary nodes fire them.
 
 NODE-LOCAL (`validate_node_asserts` + `_POOL_HEADS`). A node assert is scoped to
 one node: a bare `${name}` is a declared input, `${output}`/`${output.field}` is
@@ -42,75 +47,6 @@ from agent_composer.compose.desugar.inline_calls import desugar_call_directives
 from agent_composer.nodes.base import Node, ParamDecl
 from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.compose.helpers.errors import LoadError
-
-
-@dataclass(frozen=True)
-class AssertSet:
-    """The compile-time split of a flow's `asserts:`, for `run_flow` to enforce in two phases.
-
-    `boundary` fires pre-run against the `${input}`/`${system}` pool; `post` fires after the
-    run reaches a terminal, against the full pool (it reads `${<id>.output[.X]}`). Each list
-    holds the raw assert strings (run via `expr.evaluate_when`), order-preserving.
-    """
-
-    boundary: list[str] = field(default_factory=list)
-    post: list[str] = field(default_factory=list)
-
-
-def classify_asserts(
-    assert_list: list[str],
-    flow_inputs: "set[str]",
-    valid_targets: "set[str]",
-    producers: "dict[str, Type]",
-) -> AssertSet:
-    """Parse, validate, and split a flow's `asserts:` into boundary vs post-terminal.
-
-    `flow_inputs` is the declared flow-input names (the `${input.X}` set); `valid_targets`
-    is the node ids (the `${<id>.output}` set); `producers` maps node id -> its
-    `output_type` (drives the dotted-field walk, e.g. `${synth.output.confidence}`
-    against the `View` record). Each assert is parse-checked in the boolean grammar (a
-    malformed expression is loud) and each `${...}` ref is name-checked via
-    `_classify_path` (a dangling ref / bad field is loud). An assert is
-    **post-terminal** iff ANY of its refs has a head OTHER than `input`/`system`;
-    otherwise **boundary**.
-
-    Raises `LoadError` on the first malformed assert or bad ref.
-    """
-    result = AssertSet()
-    # Only resolvable producers participate in the dotted walk (an opaque/None producer
-    # stays lenient) — mirrors validate.validate_references.
-    producer_types = {nid: sh for nid, sh in producers.items() if sh is not None}
-
-    for expr in assert_list:
-        # 1. parse-check + collect refs on the ONE unified condition walk. `condition_refs`
-        # parses the WHOLE value as an expression (all three brace spellings) and returns its
-        # reference leaves — so a whole-span `${a <= 10}` and a bare `a <= 10` extract the same
-        # refs a mixed `${a} <= 10` does (a flat `${...}` regex could not).
-        try:
-            refs = condition_refs(expr)
-        except ExpressionError as exc:
-            raise LoadError(
-                f"assert {expr!r} is not a valid boolean expression: {exc}"
-            ) from exc
-
-        # 2. validate each ref + 3. detect any outputs-head ref (-> post-terminal).
-        is_post = False
-        for path in refs:
-            err = _classify_path(path, valid_targets, flow_inputs, (), producer_types)
-            if err is not None:
-                raise LoadError(f"assert {expr!r}: {err}")
-            # post-terminal iff a ref has a head other than input/system.
-            # The `item` head is body-local (not valid at flow-level), so a stray
-            # `${item.X}` falls into "head not in input/system" → POST and raises later
-            # at resolve time. Legacy `inputs`/`outputs` heads are already rejected by
-            # _classify_path with the typo hint so they never reach here.
-            head = path.split(".")[0]
-            if head not in ("input", "system"):
-                is_post = True
-
-        (result.post if is_post else result.boundary).append(expr)
-
-    return result
 
 
 # Reserved prefix for the END params synthesized from a lowered post-assert. Authors
@@ -162,9 +98,9 @@ def lower_flow_asserts(
 ) -> LoweredAsserts:
     """Lower a flow's `asserts:` into node-local asserts for the START/END boundary nodes.
 
-    Validation mirrors `classify_asserts` exactly (same parse + `_classify_path` loop, same
-    LoadError shapes); the difference is that instead of returning the raw assert strings
-    split into two lists, each assert is REWRITTEN so it can fire node-locally:
+    Validation parses each assert + walks its `${...}` refs via `_classify_path` (a dangling
+    ref / bad field is a loud LoadError); the lowering then REWRITES each assert so it can fire
+    node-locally, instead of returning the raw assert strings split into two lists:
 
     - a PRE (boundary) assert drops the `input.` prefix from every ref, since START's own
       params carry the input names; and
@@ -180,7 +116,8 @@ def lower_flow_asserts(
     Raises `LoadError` on the first malformed assert, bad ref, or `${system}` ref.
     """
     result = LoweredAsserts()
-    # Only resolvable producers participate in the dotted walk (mirrors classify_asserts).
+    # Only resolvable producers participate in the dotted walk (an opaque/None producer
+    # stays lenient) — mirrors validate.validate_references.
     producer_types = {nid: sh for nid, sh in producers.items() if sh is not None}
     ranges = assert_ranges or {}
 

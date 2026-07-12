@@ -305,17 +305,6 @@ class Node(ABC):
         the empty set (an ordinary node reserves no keys)."""
         return set()
 
-    def iter_boundary_records(self, seed: Any) -> "list[tuple[dict, str]]":
-        """The `(record, label)` pairs the engine's growth core boundary-checks EAGERLY, before it
-        attaches the grow to the ledger (so a boundary failure leaves no orphan expansion).
-
-        Each pair names one input record whose EFFECTIVE inputs (coerce + default) are checked
-        against this node's child BOUNDARY asserts, plus a human `label` the failure message
-        formats as `f"{label} boundary assert failed: {bad}"`. A subflow spawner returns one pair
-        per child instance: CALL -> one pair from its call-arg seed; MAP -> one per element (label
-        carries the element index). Default: `[]` (a node with no boundary check — AGENT, LOOP)."""
-        return []
-
     def replay_grow(self, seed: Any) -> "Flow":
         """Durable-replay seam (the READ half of `Grow`): rebuild THIS spawner's subgraph from the
         persisted `seed` (the pure builder input captured on the live `Grow.seed`). The engine's

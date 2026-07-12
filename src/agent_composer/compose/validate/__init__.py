@@ -16,7 +16,8 @@ reject an ill-formed flow before it is compiled:
   Type is compatible with the child input's declared Type.
 - `loop_types.py` — `check_loop_type_contract`: a `loop`'s carried record obeys
   the `'a -> 'a` type contract.
-- `asserts.py` — `AssertSet` + `classify_asserts` (flow-level `asserts:`) and
+- `asserts.py` — `LoweredAsserts` + `lower_flow_asserts` (flow-level `asserts:`,
+  lowered onto the synthesized START/END boundary nodes) and
   `validate_node_asserts` + `_POOL_HEADS` (the per-node `asserts:` contract).
 - `handles.py` — `check_case_handles`: a `CaseNode`'s handles align with its
   outgoing control edges.

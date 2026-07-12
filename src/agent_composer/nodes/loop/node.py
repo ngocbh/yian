@@ -60,7 +60,6 @@ class LoopNode(Node):
         flow_version: Optional[str] = None,
         child: Any = None,
         child_inputs: Any = None,
-        child_asserts: Any = None,
         child_source: Any = None,
         predicate_kind: str = "while",
         predicate: Optional[str] = None,
@@ -75,7 +74,6 @@ class LoopNode(Node):
         self.flow_version = flow_version
         self.child = child
         self.child_inputs = child_inputs
-        self.child_asserts = child_asserts
         self.child_source = child_source
         self.predicate_kind = predicate_kind
         self.predicate = predicate
@@ -139,7 +137,7 @@ class LoopNode(Node):
         reads the COMPILED origin `L`'s type via `_on_success`, not the clone's."""
         clone = LoopNode(
             f"{self.origin_id}~{k}", flow_id=self.flow_id, flow_version=self.flow_version,
-            child=self.child, child_inputs=self.child_inputs, child_asserts=self.child_asserts,
+            child=self.child, child_inputs=self.child_inputs,
             child_source=self.child_source, predicate_kind=self.predicate_kind,
             predicate=self.predicate, times=self.times, max_iters=self.max_iters,
             title=self.title, iteration=k, origin_id=self.origin_id)

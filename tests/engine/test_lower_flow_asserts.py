@@ -97,6 +97,32 @@ def test_dangling_producer_ref_raises():
         _lower(["nonexist.output.x > 0"])
 
 
+def test_dangling_input_ref_raises():
+    # A `${input.X}` naming an undeclared input is a loud LoadError (mirrors the old
+    # classify_asserts dangling-input check).
+    with pytest.raises(LoadError, match="nope"):
+        _lower(["${input.nope} != []"])
+
+
+def test_unknown_field_on_record_producer_raises():
+    # A dotted ref against a RECORD producer must name a real field; an unknown field is
+    # a loud LoadError (mirrors the old classify_asserts bad-field walk). A typed producer
+    # is needed so the dotted walk actually runs (opaque `None` producers stay lenient).
+    from agent_composer.typesys.values import Type, ValueKind
+
+    view = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": Type.scalar(ValueKind.NUMBER)},
+        required=frozenset({"score"}),
+    )
+    with pytest.raises(LoadError, match="badfield"):
+        _lower(
+            ["${synth.output.badfield} >= 0"],
+            valid_targets={"synth"},
+            producers={"synth": view},
+        )
+
+
 def test_malformed_expression_raises():
     with pytest.raises(LoadError):
         _lower(["emit.output.n >= "])

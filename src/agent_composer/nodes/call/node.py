@@ -6,13 +6,13 @@ distinct typed drivers. `CallNode` carries NO `over`/`parallel`.
 
 `run` returns one `Grow(Flow)` — self-describing expansion: it builds the child subgraph
 (`call_subgraph`) and the engine's generic `_apply_grow` splices it into the live graph, with a
-per-kind CALL residual (depth/refdepth/finish-mark + the transitional boundary-assert/ledger). The
+per-kind CALL residual (depth/refdepth/finish-mark). The
 `Grow.seed` is the raw call-arg record (the durable builder input). The spliced child
 START_ID owns omitted-input defaulting (its params carry default/required), so the driver no longer
-pre-defaults. `child`/`child_inputs`/`child_asserts` are baked at load by
+pre-defaults. `child`/`child_inputs` are baked at load by
 `compose.nodes.call.build`; `child_inputs` is read by compile validation
-(`check_ref_map_types`) AND at runtime by the engine's boundary-assert temp pool (to mirror START_ID's
-coerce+default view for the eager `${input.X}` check).
+(`check_ref_map_types`). The child's asserts ride its own compiled boundary nodes and
+survive the `clone_child` deep-copy of the spliced subgraph.
 """
 
 from typing import Any, ClassVar, Optional
@@ -41,9 +41,7 @@ class CallNode(Node):
         child (`Any`, *optional*, defaults to `None`):
             The baked child flow (stamped at load); a `None` child raises at run time.
         child_inputs (`list`, *optional*, defaults to `None`):
-            The child's input decls, read by compile validation and the boundary-assert temp pool.
-        child_asserts (`Any`, *optional*, defaults to `None`):
-            The child's baked boundary asserts.
+            The child's input decls, read by compile validation.
         child_source (`Any`, *optional*, defaults to `None`):
             The child flow's render-only `SourceFrame` (label + node-line maps). Carried
             for the CLI's nested-error traceback only; `run` ignores it entirely.
@@ -56,14 +54,13 @@ class CallNode(Node):
     grow_depth_delta: ClassVar[int] = 1  # each child is one REF level deeper (bounded by MAX_REF_DEPTH)
 
     def __init__(self, node_id: str, *, flow_id: str, flow_version: Optional[int] = None,
-                 child: Any = None, child_inputs: Optional[list] = None, child_asserts: Any = None,
+                 child: Any = None, child_inputs: Optional[list] = None,
                  child_source: Any = None, title: Optional[str] = None) -> None:
         super().__init__(node_id, title=title)
         self.flow_id = flow_id
         self.flow_version = flow_version
         self.child = child
         self.child_inputs = child_inputs or []
-        self.child_asserts = child_asserts
         # Render-only: the child's SourceFrame for the CLI error traceback. `run` never reads it.
         self.child_source = child_source
 
@@ -82,8 +79,3 @@ class CallNode(Node):
         """Durable-replay inverse of `run`: rebuild the CALL child subgraph from the persisted
         call-arg record (`seed`) via the SAME `call_subgraph` builder — no body re-run."""
         return call_subgraph(self.child, callsite=self.id, record=dict(seed))
-
-    def iter_boundary_records(self, seed: Any) -> list:
-        """One boundary record: the call-arg record (`seed`), labelled `REF child <id>`. The engine
-        checks its effective inputs against the child's boundary asserts before attaching the grow."""
-        return [(dict(seed), f"REF child {self.id!r}")]

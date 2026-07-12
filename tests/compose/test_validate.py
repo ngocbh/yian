@@ -203,7 +203,7 @@ output: ${score.output}
 """
 
 
-def test_classify_asserts_carries_ranges():
+def test_node_local_asserts_carry_ranges():
     # Each node-local assert string maps to its OWN SourceRange in the descriptor's
     # field_ranges (replacing the legacy assert_lines map keyed (node|None, expr)). The
     # runtime keys node.field_ranges on the raw assert text (eval_node pre/post-assert

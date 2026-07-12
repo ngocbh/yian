@@ -29,13 +29,35 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from typing import Any, ClassVar, Optional
 
+from agent_composer.nodes.base import Node
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.typesys.values import Type
 from agent_composer.typesys.types import TypeRegistry
+from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.types import read_type
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.events import SourceRange
+
+
+@dataclass(frozen=True)
+class BuildContext:
+    """The immutable inputs a node `.build()` reads — the read-only build environment."""
+
+    registry: Any                          # TypeRegistry (flow's read_typedefs map)
+    resolver: Any = None                   # ChildResolver | None (None for leaves)
+    source_file: str = "<inline-code>"     # flow file label — frames CODE tracebacks
+    code_line: int | None = None           # inline CODE content-start override
+    code_field_line: int | None = None     # inline CODE field-key override
+
+
+@dataclass(frozen=True)
+class BuildResult:
+    """The immutable product a node `.build()` returns — the built node + its wiring/edges."""
+
+    node: Node
+    wiring: dict[str, Any]                  # flow-owned {param -> source}
+    edges: tuple[Edge, ...] = ()            # () for leaf/call/loop; case returns its own
 
 
 @dataclass(frozen=True, kw_only=True)

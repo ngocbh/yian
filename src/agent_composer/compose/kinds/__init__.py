@@ -82,7 +82,7 @@ KINDS: dict[str, KindSpec] = {
     "case": KindSpec(case.CaseDescriptor, case.parse, case.build),
     "call": KindSpec(call.CallDescriptor, call.parse, call.build),
     "map": KindSpec(call.CallDescriptor, map_kind.parse, call.build),
-    "loop": KindSpec(loop.LoopDescriptor, loop.parse, loop.build),
+    "loop": KindSpec(loop.LoopDescriptor, loop.LoopDescriptor.parse, loop.LoopDescriptor.build),
 }
 
 # Surface `kind:` string -> the descriptor field names that carry `${...}` binding strings.
@@ -97,5 +97,5 @@ BINDING_FIELDS: dict[str, tuple[str, ...]] = {
     "case": case.CASE_BINDING_FIELDS,
     "call": call.CALL_BINDING_FIELDS,
     "map": map_kind.MAP_BINDING_FIELDS,
-    "loop": loop.LOOP_BINDING_FIELDS,
+    "loop": loop.LoopDescriptor.binding_fields,
 }

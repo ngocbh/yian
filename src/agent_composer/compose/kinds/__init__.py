@@ -74,7 +74,7 @@ class KindSpec:
 # (a map IS a call with an `over:` iteration source), with its own `over`-aware `parse`.
 KINDS: dict[str, KindSpec] = {
     "agent": KindSpec(agent.AgentDescriptor, agent.parse, agent.build),
-    "code": KindSpec(code.CodeDescriptor, code.parse, code.build),
+    "code": KindSpec(code.CodeDescriptor, code.CodeDescriptor.parse, code.CodeDescriptor.build),
     "model": KindSpec(model.ModelDescriptor, model.parse, model.build),
     "tool": KindSpec(tool.ToolDescriptor, tool.parse, tool.build),
     "wait": KindSpec(wait.WaitDescriptor, wait.parse, wait.build),
@@ -89,7 +89,7 @@ KINDS: dict[str, KindSpec] = {
 # Consumed by the kind-blind walk in `compose/bindings.py`.
 BINDING_FIELDS: dict[str, tuple[str, ...]] = {
     "agent": agent.AGENT_BINDING_FIELDS,
-    "code": code.CODE_BINDING_FIELDS,
+    "code": code.CodeDescriptor.binding_fields,
     "model": model.MODEL_BINDING_FIELDS,
     "tool": tool.TOOL_BINDING_FIELDS,
     "wait": wait.WAIT_BINDING_FIELDS,

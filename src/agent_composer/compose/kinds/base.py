@@ -92,14 +92,12 @@ class NodeDescriptor:
     # (e.g. `("inputs",)`).
     binding_fields: ClassVar[tuple[str, ...]] = ()
 
-    # Surface keys that collide with Python keywords -> a trailing-underscore field name:
-    # `else:`->`else_` (case), `while:`/`until:`->`while_`/`until_` (loop). Harmless for
-    # the kinds that carry none of them, so the template `parse` applies it uniformly.
-    keyword_remap: ClassVar[dict[str, str]] = {
-        "else": "else_",
-        "while": "while_",
-        "until": "until_",
-    }
+    # Surface key -> descriptor field-name overrides the template `parse` applies. Empty on the
+    # base: the remaps are kind-specific, not common, so the kind that owns the collision declares
+    # it (`case` maps `else:`->`else_`; `loop` maps `while:`/`until:`->`while_`/`until_`). Keeping
+    # it empty here is what lets `wait` author a plain `until:` field without a spurious `until_`
+    # rename — the collision the base cannot know about until a kind opts in.
+    keyword_remap: ClassVar[dict[str, str]] = {}
 
     id: str
     node_name: Optional[str] = None

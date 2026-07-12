@@ -33,12 +33,6 @@ class WaitDescriptor(NodeDescriptor):
     allowed = NodeDescriptor.allow("until")
     required = NodeDescriptor.require("until")
     binding_fields = ()
-    # The base `keyword_remap` maps the surface key `until:`->`until_` for the LOOP kind (whose
-    # predicate field is spelled `until_` to stay symmetric with `while_`). A WAIT authors `until:`
-    # too, but its descriptor field is the plain `until` (unlike `while`, `until` is not a Python
-    # keyword — no rename is needed). Drop that entry here so the template `parse` reads `until:`
-    # straight into `self.until` instead of the non-existent `until_`.
-    keyword_remap = {k: v for k, v in NodeDescriptor.keyword_remap.items() if k != "until"}
 
     until: str
 

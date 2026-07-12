@@ -31,7 +31,7 @@ downstream errors locate at the host binding site — no `node_lines` map. The f
 section source line (`outputs_line`/`asserts_line`) until the span cutover retires those.
 
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
-kind-blind binding-field walk) + `compose.errors` (peers), `expr` (the ref-walk + the
+kind-blind binding-field walk) + `compose.helpers.errors` (peers), `expr` (the ref-walk + the
 span flow-call detector), `events` (SourceRange). Only the loader imports this back.
 """
 

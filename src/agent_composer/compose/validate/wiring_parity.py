@@ -6,7 +6,7 @@ names PLUS the kind's reserved wiring keys (`until` for a timed WAIT, `over` for
 built node's `field_ranges["inputs"]` (the coarse `input:` mapping span, else the node's own
 range) — the transitional `node_lines` still feeds `.line`.
 
-Imports flow down only: `compose.errors`, `events` (SourceRange), `typing`. Only the loader
+Imports flow down only: `compose.helpers.errors`, `events` (SourceRange), `typing`. Only the loader
 (and the compose package facade) import this back.
 """
 

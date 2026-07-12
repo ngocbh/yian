@@ -29,8 +29,9 @@ from agent_composer.compose.helpers.errors import LoadError
 # `AgentDescriptor`/`CodeDescriptor`/`ModelDescriptor`/`ToolDescriptor`/`WaitDescriptor`
 # now live with their parse/build handles in `nodes/<kind>.py`; re-export them here so
 # existing importers keep working. `NodeDescriptor` — the base class every kind descriptor
-# inherits — lives in `nodes/base.py` (the leaf, mirroring `nodes/base.py`); re-exported here as
-# the descriptor base type for importers that annotate `dict[str, NodeDescriptor]` (build/stages).
+# inherits — lives in `compose/nodes/base.py` (the leaf, mirroring the engine's `nodes/base.py`);
+# re-exported here as the descriptor base type for importers that annotate
+# `dict[str, NodeDescriptor]` (build/pipeline).
 from agent_composer.compose.nodes.base import NodeDescriptor  # noqa: F401
 from agent_composer.compose.nodes.agent import AgentDescriptor  # noqa: F401
 from agent_composer.compose.nodes.code import CodeDescriptor  # noqa: F401

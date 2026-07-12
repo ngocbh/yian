@@ -21,7 +21,7 @@ mapping for an input-binding ref, its `prompt:` for a prompt ref). The transitio
 renderer; a later renderer collapse retires them for the range.
 
 Imports flow down only: `compile.validation` (the leaf ref checker), `expr` (the binding
-parser), `nodes` (Node/AgentNode/WaitNode discrimination), `typesys` (Type), `compose.errors`.
+parser), `nodes` (Node/AgentNode/WaitNode discrimination), `typesys` (Type), `compose.helpers.errors`.
 Only the loader (and the compose package facade) import this back.
 """
 

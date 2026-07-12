@@ -12,7 +12,7 @@ Located parse metadata: the unknown-target `LoadError` locates at the declaring 
 descriptor's `range` (no `node_lines` map).
 
 Imports flow down/peer only: `compile.model` (Edge), `compose.parse.file` (NodeDescriptor),
-`compose.errors`. Only the loader imports this back.
+`compose.helpers.errors`. Only the loader imports this back.
 """
 
 from __future__ import annotations

@@ -10,7 +10,7 @@ Grammar: `[<scheme>:]<path>[@<version>]`.
 - **`@<version>`** — optional opaque tag, split on the LAST `@` (`a@b@c` -> path `a@b`,
   version `c`); a trailing `@` (empty version) is loud.
 
-Imports only `compose.errors` (lowest layer — no cycle: both `loader` and the resolver
+Imports only `compose.helpers.errors` (lowest layer — no cycle: both `loader` and the resolver
 import this).
 """
 

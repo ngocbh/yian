@@ -8,10 +8,10 @@ name/arity- + type-check the bindings, AND bakes the child's compiled flow onto 
 (resolve-and-bake — the call graph, incl. nested flows, is fixed at compile). The bake itself
 lives in each kind's own `build` (`call.py`/`loop.py`); this module supplies the shared
 resolution + signature derivation they both call, plus `_output_value_type` (the ref-to-Type
-resolver the loader graph-stages `ref_map_types`/`loop_contract` also read).
+resolver the loader validate passes `validate/call_types.py`/`validate/loop_types.py` also read).
 
 Like `base.py` this is a leaf of the nodes package: it imports no `nodes/__init__`
-symbol and no other kind module, so `call`/`loop`, the graph-stages, and `compose.__init__`/
+symbol and no other kind module, so `call`/`loop`, the validate passes, and `compose.__init__`/
 `loader` (the `ChildResolver` seam type) import from it at module top level without cycling.
 """
 

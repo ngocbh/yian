@@ -11,7 +11,7 @@ node's `field_ranges["inputs"]` (the coarse `input:` mapping span) — the trans
 
 Imports flow down only: `compile.validation` (the type comparator), `compose.nodes.resolver`
 (`_output_value_type`, the shared ref-to-Type resolver — `resolver` imports no later phase, so
-this edge is acyclic), `typesys` (Type), `compose.errors`. Only the loader
+this edge is acyclic), `typesys` (Type), `compose.helpers.errors`. Only the loader
 (and the compose package facade) import this back.
 """
 

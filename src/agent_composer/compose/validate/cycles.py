@@ -16,7 +16,7 @@ legend (`LoadError.notes`): one line per dependency edge inside the loop, so the
 which `${...}` reference closes the cycle.
 
 Imports flow down/peer only: `compile.model` (Edge + boundary ids), `compile.validation`
-(the shared Kahn check), `compose.errors`, `events` (SourceRange). Only the loader (and
+(the shared Kahn check), `compose.helpers.errors`, `events` (SourceRange). Only the loader (and
 the compose package facade) import this back.
 """
 

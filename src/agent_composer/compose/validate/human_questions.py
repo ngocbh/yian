@@ -7,7 +7,7 @@ rule). It relocates `validate.validate_human_questions` verbatim, adding a `.ran
 the built gate's `field_ranges["questions"]` (the coarse `questions:` span, else the node's own
 range) — the transitional `node_lines` still feeds `.line`.
 
-Imports flow down only: `nodes` (HumanInputNode + its questions parser), `compose.errors`,
+Imports flow down only: `nodes` (HumanInputNode + its questions parser), `compose.helpers.errors`,
 `events` (SourceRange). Only the loader (and the compose package facade) import this back.
 """
 

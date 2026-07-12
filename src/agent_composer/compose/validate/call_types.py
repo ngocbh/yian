@@ -10,7 +10,7 @@ mapping span) — the transitional `node_lines` still feeds `.line`.
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
 analysis), `compose.nodes.resolver` (`_output_value_type`, the shared ref-to-Type resolver —
 `resolver` imports no later phase, so this edge is acyclic), `typesys` (Type),
-`compose.errors`. Only the loader (and the compose package facade) import this back.
+`compose.helpers.errors`. Only the loader (and the compose package facade) import this back.
 """
 
 from __future__ import annotations

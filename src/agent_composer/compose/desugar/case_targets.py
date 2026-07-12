@@ -20,7 +20,7 @@ descriptor's `range`/`field_ranges` (so its downstream errors locate at the case
 No `node_lines` map.
 
 Imports flow down/peer only: `compose.parse.file` (CaseDescriptor), `compose.desugar.inline_calls`
-(the shared `call(...)` recognizer + synth-node factory), `compose.errors`. Only the loader
+(the shared `call(...)` recognizer + synth-node factory), `compose.helpers.errors`. Only the loader
 imports this back.
 """
 

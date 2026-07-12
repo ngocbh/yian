@@ -75,7 +75,7 @@ class KindSpec:
 KINDS: dict[str, KindSpec] = {
     "agent": KindSpec(agent.AgentDescriptor, agent.parse, agent.build),
     "code": KindSpec(code.CodeDescriptor, code.CodeDescriptor.parse, code.CodeDescriptor.build),
-    "model": KindSpec(model.ModelDescriptor, model.parse, model.build),
+    "model": KindSpec(model.ModelDescriptor, model.ModelDescriptor.parse, model.ModelDescriptor.build),
     "tool": KindSpec(tool.ToolDescriptor, tool.parse, tool.build),
     "wait": KindSpec(wait.WaitDescriptor, wait.parse, wait.build),
     "human_input": KindSpec(human_input.HumanInputDescriptor, human_input.parse, human_input.build),
@@ -90,7 +90,7 @@ KINDS: dict[str, KindSpec] = {
 BINDING_FIELDS: dict[str, tuple[str, ...]] = {
     "agent": agent.AGENT_BINDING_FIELDS,
     "code": code.CodeDescriptor.binding_fields,
-    "model": model.MODEL_BINDING_FIELDS,
+    "model": model.ModelDescriptor.binding_fields,
     "tool": tool.TOOL_BINDING_FIELDS,
     "wait": wait.WAIT_BINDING_FIELDS,
     "human_input": human_input.HUMAN_INPUT_BINDING_FIELDS,

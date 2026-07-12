@@ -1,7 +1,7 @@
 """6.3 — the `model` kind handle: parse records field ranges into the descriptor; build
 returns a runtime ModelNode with output_type + wiring and stamped ranges."""
 
-from agent_composer.compose.kinds.model import ModelDescriptor, build, parse
+from agent_composer.compose.kinds.model import ModelDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
 from agent_composer.events import SourceRange
@@ -26,7 +26,7 @@ def _reader_for(text, node_id):
 
 def test_model_parse_matches_descriptor_and_records_ranges():
     reader = _reader_for(_FLOW, "infer")
-    desc = parse("infer", reader)
+    desc = ModelDescriptor.parse("infer", reader)
 
     assert desc == ModelDescriptor(
         id="infer",
@@ -41,8 +41,8 @@ def test_model_parse_matches_descriptor_and_records_ranges():
 
 def test_model_build_returns_model_node_and_stamps_ranges():
     reader = _reader_for(_FLOW, "infer")
-    desc = parse("infer", reader)
-    node, wiring = build(desc, registry={}, resolver=None)
+    desc = ModelDescriptor.parse("infer", reader)
+    node, wiring = desc.build(registry={}, resolver=None)
 
     from agent_composer.nodes.model import ModelNode
 

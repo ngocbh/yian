@@ -36,9 +36,10 @@ from dataclasses import dataclass, field
 
 from agent_composer.compile.validation import _classify_path, _walk_record_fields
 from agent_composer.expr import ExpressionError, condition_refs
+from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.expr.template import flow_call_callees_in_spans
 from agent_composer.compose.desugar.inline_calls import desugar_call_directives
-from agent_composer.nodes.base import Node
+from agent_composer.nodes.base import Node, ParamDecl
 from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.compose.helpers.errors import LoadError
 
@@ -108,6 +109,177 @@ def classify_asserts(
                 is_post = True
 
         (result.post if is_post else result.boundary).append(expr)
+
+    return result
+
+
+# Reserved prefix for the END params synthesized from a lowered post-assert. Authors
+# cannot write `__`-prefixed ids, so a synth name never collides with an author id.
+_SYNTH_PREFIX = "__assert_"
+
+
+@dataclass(frozen=True)
+class LoweredAsserts:
+    """A flow's `asserts:` lowered into node-local asserts on the synthesized START/END.
+
+    The refactor replaces flow-level assert enforcement (which resolves refs against the
+    pool) with node-local asserts stamped on the boundary nodes and fired uniformly by
+    `eval_node`. That makes a cross-node post-assert's dependency STRUCTURAL — each
+    `${producer.output}` ref becomes a real END input edge — so it survives child-cloning
+    and namespacing under `kind: call` instead of silently failing.
+
+    - `start_pre`: pre (boundary) asserts, `${input.X}`/`input.X` rewritten to bare
+      `${X}`/`X` (START's params ARE the input names, resolved record-scoped).
+    - `end_post`: post asserts, each producer/input ref rewritten to its synth-param ref.
+    - `synth_params`: one untyped `ParamDecl(name=<synth>)` per synthesized END input.
+    - `synth_wiring`: `dict[synth_name -> ${...} source string wired into END]`. A
+      producer ref uses `${pid.output:-null}` (the `:-null` keeps the edge optional so a
+      skipped producer does not co-skip END); an input ref uses `${input.X}` (always present).
+    - `pre_ranges` / `post_ranges`: `dict[lowered-string -> SourceRange]`, render-only for
+      error carets; empty when `assert_ranges` was not supplied.
+    """
+
+    start_pre: list[str] = field(default_factory=list)
+    end_post: list[str] = field(default_factory=list)
+    synth_params: list[ParamDecl] = field(default_factory=list)
+    synth_wiring: dict = field(default_factory=dict)
+    pre_ranges: dict = field(default_factory=dict)
+    post_ranges: dict = field(default_factory=dict)
+
+
+def lower_flow_asserts(
+    assert_list: list[str],
+    flow_inputs: "set[str]",
+    valid_targets: "set[str]",
+    producers: "dict[str, Type]",
+    assert_ranges: "dict | None" = None,
+) -> LoweredAsserts:
+    """Lower a flow's `asserts:` into node-local asserts for the START/END boundary nodes.
+
+    Validation mirrors `classify_asserts` exactly (same parse + `_classify_path` loop, same
+    LoadError shapes); the difference is that instead of returning the raw assert strings
+    split into two lists, each assert is REWRITTEN so it can fire node-locally:
+
+    - a PRE (boundary) assert drops the `input.` prefix from every ref, since START's own
+      params carry the input names; and
+    - a POST assert turns every non-`output` ref into a synthesized END param (`${producer
+      .output}` -> `${__assert_<pid>}`, `${input.X}` -> `${__assert_input_<X>}`), with a
+      matching `synth_wiring` edge, so the producer value is present in END's record when the
+      assert fires. Multiple refs to the same producer / input SHARE one synth param.
+
+    `${system.X}` is forbidden anywhere in an assert: it is ambient (no producer to draw an
+    edge from), so a `system` ref raises a located `LoadError` telling the author to move the
+    check into a body node.
+
+    Raises `LoadError` on the first malformed assert, bad ref, or `${system}` ref.
+    """
+    result = LoweredAsserts()
+    # Only resolvable producers participate in the dotted walk (mirrors classify_asserts).
+    producer_types = {nid: sh for nid, sh in producers.items() if sh is not None}
+    ranges = assert_ranges or {}
+
+    # <producer pid or input X> -> allocated synth name, shared across all asserts so
+    # repeated refs to the same source reuse the one END edge.
+    synth_for_producer: dict[str, str] = {}
+    synth_for_input: dict[str, str] = {}
+    # Names already handed out, to guard the (near-impossible) collision case.
+    allocated: set[str] = set()
+
+    def _alloc(base: str) -> str:
+        """Allocate a collision-proof synth name from `base`, verified parseable as a ref."""
+        name = base
+        i = 1
+        while (
+            name in flow_inputs
+            or name in valid_targets
+            or name in allocated
+        ):
+            name = f"{base}_{i}"
+            i += 1
+        # A synth name must be a legal ref path — verify empirically (defensive; the
+        # `__assert_` prefix + author id components are always parseable in practice).
+        try:
+            condition_refs("${" + name + "}")
+        except ExpressionError:
+            name = f"{base}_{i}"
+        allocated.add(name)
+        return name
+
+    for expr in assert_list:
+        # 1. parse-check + collect refs on the ONE unified condition walk (any brace spelling).
+        try:
+            refs = condition_refs(expr)
+        except ExpressionError as exc:
+            raise LoadError(
+                f"assert {expr!r} is not a valid boolean expression: {exc}"
+            ) from exc
+
+        rng = ranges.get(expr)
+
+        # 2. validate each ref + forbid `${system}` + detect any outputs-head ref (-> post).
+        is_post = False
+        for path in refs:
+            err = _classify_path(path, valid_targets, flow_inputs, (), producer_types)
+            if err is not None:
+                raise LoadError(f"assert {expr!r}: {err}", range=rng)
+            head = path.split(".")[0]
+            if head == "system":
+                raise LoadError(
+                    f"assert {expr!r}: the `system` namespace is not allowed in asserts "
+                    f"(it is ambient — there is no producer to draw an edge from; move the "
+                    f"check into a body node)",
+                    range=rng,
+                )
+            if head not in ("input", "system"):
+                is_post = True
+
+        if not is_post:
+            # 3. PRE (boundary): drop the `input.` prefix so the ref names a START param.
+            def _pre_rename(path: str) -> "str | None":
+                if path == "input":
+                    return "input"  # defensive; a bare `${input}` head shouldn't appear
+                if path.startswith("input."):
+                    return path[len("input."):]
+                return None
+
+            lowered = rewrite_condition_refs(expr, _pre_rename)
+            result.start_pre.append(lowered)
+            if rng is not None:
+                result.pre_ranges[lowered] = rng
+            continue
+
+        # 4. POST: turn each non-`output` ref into a synth END param, wired as an edge.
+        def _post_rename(path: str) -> "str | None":
+            segs = path.split(".")
+            head = segs[0]
+            if head == "output":
+                return None  # the node's own output — keep unchanged (defensive)
+            if head == "input" and len(segs) >= 2:
+                x = segs[1]
+                synth = synth_for_input.get(x)
+                if synth is None:
+                    synth = _alloc(f"{_SYNTH_PREFIX}input_{x}")
+                    synth_for_input[x] = synth
+                    result.synth_params.append(ParamDecl(name=synth))
+                    result.synth_wiring[synth] = f"${{input.{x}}}"
+                return ".".join([synth, *segs[2:]])
+            # producer-output ref: `pid.output[.f.g...]`, pid in valid_targets, seg[1] == output.
+            if head in valid_targets and len(segs) >= 2 and segs[1] == "output":
+                synth = synth_for_producer.get(head)
+                if synth is None:
+                    synth = _alloc(f"{_SYNTH_PREFIX}{head}")
+                    synth_for_producer[head] = synth
+                    result.synth_params.append(ParamDecl(name=synth))
+                    # `:-null` makes the END edge optional: a conditionally-skipped
+                    # producer binds None instead of co-skipping END to dead.
+                    result.synth_wiring[synth] = f"${{{head}.output:-null}}"
+                return ".".join([synth, *segs[2:]])
+            return None  # anything else (e.g. `input` head w/o field) — keep
+
+        lowered = rewrite_condition_refs(expr, _post_rename)
+        result.end_post.append(lowered)
+        if rng is not None:
+            result.post_ranges[lowered] = rng
 
     return result
 

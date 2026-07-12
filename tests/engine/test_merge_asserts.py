@@ -66,17 +66,12 @@ defs:
 """
 
 
-@pytest.mark.xfail(
-    reason="C2: a def's BARE top-level assert on an internal producer wrongly fails "
-    "when run via call; the refactor fires it node-locally. Pass-after.",
-    strict=False,
-)
 def test_c2_call_bare_internal_assert_succeeds():
-    """C2 (call), xfail-now / pass-after.
+    """C2 (call).
 
     A `call` invoking a def whose top-level BARE assert reads an internal producer.
-    seed=5 -> emit.output.n == 6 >= 1 holds, so the run MUST succeed. Today it fails
-    with "node 'callee/__end__' post-assert failed: emit.output.n >= 1".
+    seed=5 -> emit.output.n == 6 >= 1 holds, so the run MUST succeed. Before the
+    refactor this failed with "node 'callee/__end__' post-assert failed: emit.output.n >= 1".
     """
     flow = f"""
 id: c2call
@@ -97,17 +92,12 @@ output: ${{callee.output}}
     assert res.output == {"n": 6}
 
 
-@pytest.mark.xfail(
-    reason="C2: a def's BARE internal-producer assert wrongly fails per element when "
-    "run via map; the refactor fires it node-locally. Pass-after.",
-    strict=False,
-)
 def test_c2_map_bare_internal_assert_all_satisfy_succeeds():
-    """C2 (map, all satisfy), xfail-now / pass-after.
+    """C2 (map, all satisfy).
 
     A `map` fans the def over a list; every element's internal-producer assert holds
-    (seed>=0 -> n>=1), so the run MUST succeed with the over-order join. Today the
-    child END mis-fires the BARE assert on element 0 and fails.
+    (seed>=0 -> n>=1), so the run MUST succeed with the over-order join. Before the
+    refactor the child END mis-fired the BARE assert on element 0 and failed.
     """
     flow = f"""
 id: c2map
@@ -158,18 +148,13 @@ output: ${{fan.output}}
     assert "assert" in (res.error or "").lower()
 
 
-@pytest.mark.xfail(
-    reason="C2: a loop BODY def's BARE internal-producer assert wrongly fails per "
-    "iteration; the refactor fires it node-locally. Pass-after.",
-    strict=False,
-)
 def test_c2_loop_bare_internal_assert_succeeds():
-    """C2 (loop), xfail-now / pass-after.
+    """C2 (loop).
 
     A `loop` whose BODY def carries a top-level BARE assert on an internal producer
     (`step.output.n >= 1`). The body threads {n:int}; with start=5 every iteration's
-    producer holds, so times:3 MUST succeed (final n == 8). Today each iteration's
-    child END mis-fires the BARE assert and fails.
+    producer holds, so times:3 MUST succeed (final n == 8). Before the refactor each
+    iteration's child END mis-fired the BARE assert and failed.
     """
     flow = """
 id: c2loop
@@ -356,17 +341,11 @@ def test_c1_ordered_assert_on_skipped_producer_fails_loudly():
 # =========================================================================== #
 
 
-@pytest.mark.xfail(
-    reason="system-forbid: a ${system.X} flow assert is NOT rejected at load today; "
-    "the refactor adds the check so load_flow raises LoadError. Pass-after.",
-    strict=False,
-)
 def test_system_ref_in_flow_assert_is_load_error():
-    """system-forbid, xfail-now / pass-after.
+    """system-forbid.
 
-    A `${system.X}` ref in a top-level flow `asserts:` must raise LoadError at load.
-    Today the flow loads without error, so `pytest.raises(LoadError)` does not fire
-    and the test fails — hence the xfail. After the check lands it raises and passes.
+    A `${system.X}` ref in a top-level flow `asserts:` must raise LoadError at load —
+    it is ambient, so there is no producer to draw a synth END edge from.
     """
     flow = f"""
 id: sysf

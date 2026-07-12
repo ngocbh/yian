@@ -24,7 +24,7 @@ from typing import Optional
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
 from agent_composer.nodes.base import Node
 from agent_composer.typesys.values import Type
-from agent_composer.compose.validate.asserts import AssertSet, classify_asserts
+from agent_composer.compose.validate.asserts import AssertSet, classify_asserts, lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.nodes.base import BuildContext
@@ -286,6 +286,15 @@ def _assemble(
     # stamp onto each built leaf/call node. Shared by defs (a def's internal nodes too).
     validate_node_asserts(nodes_built, descriptors, n_lines)
     asserts = classify_asserts(asserts_section, flow_inputs, set(descriptors), producers)
+    # Lower the SAME flow-level `asserts:` into node-local asserts stamped on the synthesized
+    # START/END (Step 2's LoweredAsserts). Fires uniformly via eval_node — a cross-node post
+    # assert's `${producer.output}` becomes a real END input edge, so it survives child cloning.
+    # `boundary_field_ranges` is keyed by the raw assert string (among input names, which the
+    # lookup ignores), so it doubles as the render-only per-assert source map; `None` when spanless.
+    lowered = lower_flow_asserts(
+        asserts_section, flow_inputs, set(descriptors), producers,
+        assert_ranges=boundary_field_ranges,
+    )
 
     # Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in
     # BEFORE root synthesis so an ordering-only dependent is demoted from root, and into
@@ -301,7 +310,7 @@ def _assemble(
     flow_outputs = _flow_outputs(outputs_section)
     structural = reconciled + ordering_edges
     boundary_nodes, boundary_edges, boundary_wiring = synthesize_boundary_graph(
-        inputs, flow_outputs, node_ids, structural, boundary_field_ranges
+        inputs, flow_outputs, node_ids, structural, boundary_field_ranges, lowered=lowered
     )
     nodes.update(boundary_nodes)
     flow_wiring.update(boundary_wiring)

@@ -137,6 +137,10 @@ class LoweredAsserts:
       skipped producer does not co-skip END); an input ref uses `${input.X}` (always present).
     - `pre_ranges` / `post_ranges`: `dict[lowered-string -> SourceRange]`, render-only for
       error carets; empty when `assert_ranges` was not supplied.
+    - `pre_texts` / `post_texts`: `dict[lowered-string -> original author text]`. The node fires
+      the LOWERED form, but a failure message must show the author's ORIGINAL text (`calc.output
+      > 100`, not the synth form `${__assert_calc} > 100`) — eval_node / StartNode look the display
+      text up here, falling back to the lowered string when a mapping is absent.
     """
 
     start_pre: list[str] = field(default_factory=list)
@@ -145,6 +149,8 @@ class LoweredAsserts:
     synth_wiring: dict = field(default_factory=dict)
     pre_ranges: dict = field(default_factory=dict)
     post_ranges: dict = field(default_factory=dict)
+    pre_texts: dict = field(default_factory=dict)
+    post_texts: dict = field(default_factory=dict)
 
 
 def lower_flow_asserts(
@@ -244,6 +250,7 @@ def lower_flow_asserts(
 
             lowered = rewrite_condition_refs(expr, _pre_rename)
             result.start_pre.append(lowered)
+            result.pre_texts[lowered] = expr
             if rng is not None:
                 result.pre_ranges[lowered] = rng
             continue
@@ -278,6 +285,7 @@ def lower_flow_asserts(
 
         lowered = rewrite_condition_refs(expr, _post_rename)
         result.end_post.append(lowered)
+        result.post_texts[lowered] = expr
         if rng is not None:
             result.post_ranges[lowered] = rng
 

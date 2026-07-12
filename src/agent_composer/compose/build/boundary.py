@@ -17,6 +17,9 @@ from agent_composer.nodes.base import Node
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.compose.edges.producers import _binding_producers
+# Forward edge only: `validate/asserts.py` (and its own deps) never import this module,
+# so importing the lowered-asserts carrier here adds no import cycle.
+from agent_composer.compose.validate.asserts import LoweredAsserts
 
 
 # --------------------------------------------------------------------------- #
@@ -39,6 +42,7 @@ def synthesize_boundary_graph(
     node_ids: "set[str]",
     body_edges: list[Edge],
     start_field_ranges: "Optional[dict]" = None,
+    lowered: "Optional[LoweredAsserts]" = None,
 ) -> tuple[dict[str, Node], list[Edge], dict[str, dict[str, Any]]]:
     """Synthesize the `START_ID`/`END_ID` boundary nodes + their edges + wiring.
 
@@ -48,13 +52,15 @@ def synthesize_boundary_graph(
     - `boundary_nodes`: `{START_ID: StartNode, END_ID: EndNode(record)}`.
     - `edges`: the END_ID producer edges (one per producer per declared output, `input_group`
       = the output name, `optional = not binding_co_skips` so a coalesce/`:-`/`:?` output
-      never co-skips) + the START_ID root edges (a bare
+      never co-skips) + the lowered-assert synth END edges (one per producer per synthesized
+      END input, same numbering scheme so ids never collide) + the START_ID root edges (a bare
       `START_ID->nid` for every body node with no incoming of any kind, over the FULL set
-      incl. the END_ID producer edges) + a bare `START_ID->END_ID` root edge for a 0-output END_ID
-      (so the 0-output END_ID runs and commits `None`).
+      incl. the END_ID producer AND synth edges) + a bare `START_ID->END_ID` root edge for a
+      0-output END_ID with no synth edges (so the 0-output END_ID runs and commits `None`).
     - `boundary_wiring`: parity-clean wiring for both — `START_ID` keyed by input name
       (provisional `${input.X}` source so `check_wiring_parity` passes; the engine seeds
-      START_ID's record directly at runtime), `END_ID` keyed by output name -> the output's `from_`.
+      START_ID's record directly at runtime), `END_ID` keyed by output name -> the output's
+      `from_`, merged with the lowered synth wiring (`<synth> -> ${pid.output:-null}` / `${input.X}`).
 
     The START_ID-side `${input.X}`-producer DATA edges + the demote-input-reader-from-root
     rule live here too (every input read resolves through the START_ID namespace).
@@ -63,6 +69,13 @@ def synthesize_boundary_graph(
     (`input name -> SourceRange`, flow-`asserts:` `expr -> SourceRange`) — render-only, so a
     boundary input-type failure / false boundary assert resolves a precise caret. `None` for a
     spanless flow (compact / in-memory / def).
+
+    `lowered` (optional) is the flow's `asserts:` lowered into node-local asserts (Step 2's
+    `LoweredAsserts`). When given, its PRE asserts are stamped on START (`start.pre_asserts`), its
+    POST asserts on END (`end.post_asserts`), each synthesized END input becomes an extra
+    `ParamDecl` on END plus a wiring entry and a producer edge — so a cross-node post assert's
+    `${producer.output}` dependency is STRUCTURAL (a real END input) and survives child cloning.
+    `None` leaves the boundary nodes assert-free (a def / in-memory flow with no flow-level asserts).
     """
     start = StartNode(START_ID, input_decls=list(input_decls),
                       field_ranges=start_field_ranges)
@@ -81,6 +94,42 @@ def synthesize_boundary_graph(
             end_edges.append(Edge(id=f"{producer}->{END_ID}#{i}", from_=producer, to=END_ID,
                                   input_group=o.name, optional=optional))
 
+    # Stamp the lowered flow-level asserts onto the boundary nodes (Node is not frozen —
+    # validate_node_asserts mutates the assert slots the same way).
+    if lowered is not None:
+        # START fires its PRE asserts from a DEDICATED slot (`boundary_asserts`), NOT the generic
+        # `pre_asserts` seam: eval_node fires `pre_asserts` against the RAW pre-coercion record, but
+        # a boundary assert must see the coerced/defaulted record, so StartNode.run() fires these
+        # itself post-coercion. END fires its POST asserts through the normal eval_node seam
+        # (`post_asserts`), which resolves any `${producer.output}` head via the pool.
+        start.boundary_asserts = list(lowered.start_pre)
+        start.boundary_assert_texts = dict(lowered.pre_texts)
+        end.post_asserts = list(lowered.end_post)
+        end.assert_texts = dict(lowered.post_texts)
+        # Each synthesized END input is an extra param + a wiring source + a producer edge, so
+        # the value the post-assert reads is present in END's record when eval_node fires it.
+        # EndNode.run() reads only its declared output names, so extra params are inert there.
+        end.params = list(end.params) + list(lowered.synth_params)
+        # Continue the SAME per-(producer, END) counter as the output-edge loop so a producer
+        # feeding both an output and a synth input never mints a colliding edge id. An `${input.X}`
+        # synth is a pure ref -> binding_co_skips True -> optional=False (a required START->END
+        # edge; START always runs). A `${pid.output:-null}` synth -> binding_co_skips False ->
+        # optional=True: END waits for the producer to settle, binding None if it was skipped.
+        for synth_name, src in lowered.synth_wiring.items():
+            optional = not binding_co_skips(src)
+            for producer in _binding_producers(src):
+                i = counts.get((producer, END_ID), 0)
+                counts[(producer, END_ID)] = i + 1
+                end_edges.append(Edge(id=f"{producer}->{END_ID}#{i}", from_=producer, to=END_ID,
+                                      input_group=synth_name, optional=optional))
+        # Render-only field ranges: both START and END carry a base `field_ranges` dict, so
+        # stamp each side's lowered assert -> SourceRange map (keyed by the LOWERED string, the
+        # form eval_node fires). Non-blocking — absent ranges just fall back to the node range.
+        if lowered.pre_ranges:
+            start.field_ranges = {**start.field_ranges, **lowered.pre_ranges}
+        if lowered.post_ranges:
+            end.field_ranges = {**end.field_ranges, **lowered.post_ranges}
+
     # START_ID root edges over the FULL set (body + END_ID producer edges): a body node with no
     # incoming of any kind is a bare root. A 0-output END_ID (no producer edge) is itself a root.
     full = body_edges + end_edges
@@ -97,4 +146,9 @@ def synthesize_boundary_graph(
         START_ID: {d.name: f"${{input.{d.name}}}" for d in input_decls},
         END_ID: {o.name: o.from_ for o in outputs},
     }
+    # Merge each synthesized END param's source so bind_params finds a source per synth param
+    # (key parity with the extra params + edges above). A synth name never collides with an
+    # output name (it is `__assert_`-prefixed; authors cannot write `__` ids).
+    if lowered is not None:
+        boundary_wiring[END_ID].update(lowered.synth_wiring)
     return boundary_nodes, end_edges + root_edges, boundary_wiring

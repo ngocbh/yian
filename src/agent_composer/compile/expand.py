@@ -157,14 +157,11 @@ def clone_child(child, callsite: str, record: dict) -> Flow:
     # The child END_ID is the alias filler (its producer->END_ID edges are already re-keyed above).
     out_id = ns(callsite, child.end_id)
 
-    # Re-home the child's POST asserts onto the cloned child END filler (the dispatcher fires them
-    # at the redirect-commit site). The child BOUNDARY asserts are NOT carried on the Flow: the
-    # engine reads them off the spawner node via `iter_boundary_records` and evaluates them eagerly.
-    asserts = getattr(child, "child_asserts", None)
-    nodes[out_id].post_asserts = [
-        _rens_internal(a, callsite) for a in (asserts.post if asserts is not None else [])
-    ]
-
+    # The child END's POST asserts (the def's flow-level `asserts:` lowered onto END at build) ride
+    # the deep-copied node UNCHANGED — their synth params, re-namespaced wiring (`${<callsite>/pid
+    # .output:-null}`), and re-keyed producer->END edges all survive the clone above, so eval_node
+    # fires them on the cloned END with pool-fallback resolution. No re-homing needed (and none
+    # possible without deleting the structural synth edges that gate the assert on its producer).
     return Flow(nodes=nodes, edges=edges, wiring=wiring, start_id=start_ns, end_id=out_id)
 
 

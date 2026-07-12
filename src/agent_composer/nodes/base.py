@@ -111,6 +111,27 @@ class Grow:
 NodeResult = Union[Output, Route, Pause, Grow]
 
 
+class NodeAssertFailed(Exception):
+    """A node-local `asserts:` clause evaluated false (or errored) — raised by a node's own
+    `run()` when it fires its boundary asserts (StartNode after coercion) instead of relying on
+    the `eval_node` pre/post-assert seam. Carries render-only diagnostics so the run boundary can
+    surface a precise caret:
+
+    - `locator` (`Optional[SourceSpan]`): the failing assert's locator (`node`, `kind="assert"`,
+      `key=<display text>`), or `None`.
+    - `range` (`Optional[SourceRange]`): the assert expr's `SourceRange` in the flow YAML, or `None`.
+
+    The engine catches this at the START-seed site and turns it into a `RunFailed` with
+    `error_type="NodeAssertFailed"`, matching the shape `eval_node` produces for a failed
+    pre/post assert on an ordinary node.
+    """
+
+    def __init__(self, message: str, *, locator: Any = None, range: Any = None) -> None:
+        super().__init__(message)
+        self.locator = locator
+        self.range = range
+
+
 class Node(ABC):
     """
     The base contract every node kind implements: a pure function of its input record.
@@ -219,6 +240,13 @@ class Node(ABC):
         # Empty for most nodes.
         self.pre_asserts: list[str] = []
         self.post_asserts: list[str] = []
+        # Display-text map for a LOWERED assert: `dict[lowered-string -> original author text]`.
+        # A flow-level `asserts:` is lowered onto the boundary nodes in a synth form (`${__assert_
+        # calc} > 100`); this maps each lowered pre/post assert back to what the author wrote
+        # (`calc.output > 100`) so a failure message shows the author's text, never the synth form.
+        # `{}` for an ordinary node whose asserts are already node-local (the fallback is the
+        # assert string itself).
+        self.assert_texts: dict[str, str] = {}
         # Engine-baked commit redirect (see the class docstring): a subflow terminal
         # commits its Output under this spawner id instead of its own id. Stamped by the
         # `_grow_*` expanders; `None` for an ordinary node.

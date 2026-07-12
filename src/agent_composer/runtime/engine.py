@@ -40,6 +40,7 @@ from agent_composer.events import (
     RunResumed,
     RunStarted,
     RunSucceeded,
+    SourceRange,
     SourceSpan,
     NodeExpanded,
     NodeFailed,
@@ -49,7 +50,7 @@ from agent_composer.events import (
 )
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, NodeState
 from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.base import Grow
+from agent_composer.nodes.base import Grow, NodeAssertFailed
 from agent_composer.runtime.eval_node import eval_node
 from agent_composer.runtime.state_manager import StateManager
 from agent_composer.typesys import TypeCheckError
@@ -76,7 +77,9 @@ class NodeExecutionError(RuntimeError):
 
     `locator` is an optional `SourceSpan` pinning the failure to a YAML line — set at
     the typed write boundary (a value that fails its node's declared `output:` Type)
-    so the CLI boxes the `output:` field rather than printing a plain message.
+    so the CLI boxes the `output:` field rather than printing a plain message. `range` is
+    the matching concrete `SourceRange` (the caret span), carried from the NodeFailed event
+    so it survives the wrap to RunFailed.
     """
 
     def __init__(
@@ -86,12 +89,14 @@ class NodeExecutionError(RuntimeError):
         error_type: str = "",
         locator: Optional[SourceSpan] = None,
         traceback: Optional[str] = None,
+        range: Optional["SourceRange"] = None,
     ) -> None:
         super().__init__(f"node {node_id!r} failed: {error}")
         self.node_id = node_id
         self.error = error
         self.error_type = error_type
         self.locator = locator
+        self.range = range
         # Formatted Python traceback of the raising call, carried from the NodeFailed event
         # so run() can attach it to RunFailed (CLI surfaces it under `--engine-trace`).
         self.traceback = traceback
@@ -122,10 +127,9 @@ class FlowEngine:
             that many daemon workers behind a single-writer dispatcher. Clamped to `>=0`.
         run_inputs (`dict`, *optional*, defaults to `None`):
             The flow's run arguments, seeded into the START node once at init. `None` for
-            direct-engine tests that hand-seed the START store entry.
-        boundary_asserts (`list`, *optional*, defaults to `None`):
-            The flow's boundary asserts, fired pool-scoped right after the START seed and
-            before any body node runs.
+            direct-engine tests that hand-seed the START store entry. The flow's boundary
+            (`${input}`) asserts ride the StartNode itself (`start.boundary_asserts`) and fire
+            inside `StartNode.run()` post-coercion — the engine no longer takes an assert list.
     """
 
     def __init__(
@@ -135,7 +139,6 @@ class FlowEngine:
         *,
         num_workers: int = 0,
         run_inputs: Optional[dict] = None,
-        boundary_asserts: Optional[list] = None,
         llm=None,
     ) -> None:
         self.flow = flow
@@ -144,11 +147,10 @@ class FlowEngine:
         self.num_workers = max(0, num_workers)
         # The top-level START_ID is seeded at run init by invoking StartNode.run(run_inputs)
         # ONCE — committed to store[START_ID] WITHOUT scheduling START_ID / emitting NodeSucceeded
-        # ("no node ran" holds for the boundary-assert path). `boundary_asserts` (the flow's
-        # ${inputs}/${system} asserts) fire pool-scoped right after the seed, before any body node.
-        # Both default to None for direct-FlowEngine tests that hand-seed store[START_ID].
+        # ("no node ran" holds for the boundary-assert path). StartNode.run() fires the flow's
+        # boundary asserts itself (post-coercion); a false one raises NodeAssertFailed, caught at
+        # the seed site. `run_inputs` defaults to None for direct-FlowEngine tests that hand-seed.
         self.run_inputs = run_inputs
-        self.boundary_asserts = list(boundary_asserts or [])
         # The LLM-client provider handed to LLM-backed nodes via caps['llm'] (the node no
         # longer imports the factory). Default = the lazy package-lookup thunk so a
         # monkeypatched `model_from_config` is honored on the direct + engine paths alike.
@@ -221,7 +223,7 @@ class FlowEngine:
                 yield RunAborted(); return
             except NodeExecutionError as exc:
                 yield RunFailed(error=exc.error, error_type=exc.error_type, locator=exc.locator,
-                                traceback=exc.traceback); return
+                                traceback=exc.traceback, range=exc.range); return
             if self.paused:
                 yield RunPaused(reasons=[reason for _, reason in self.paused]); return
             yield self._terminal_event(); return
@@ -246,7 +248,7 @@ class FlowEngine:
             terminal = RunAborted()
         except NodeExecutionError as exc:
             terminal = RunFailed(error=exc.error, error_type=exc.error_type, locator=exc.locator,
-                                 traceback=exc.traceback)
+                                 traceback=exc.traceback, range=exc.range)
         finally:
             self._stop.set()
             for w in workers:
@@ -255,37 +257,30 @@ class FlowEngine:
 
     def _seed_start_and_advance(self):
         """The pinned top-level START_ID seeding. Invoke StartNode.run(run_inputs) ONCE
-        (coerce + type-check + defaults), commit store[START_ID] directly — WITHOUT enqueuing START_ID and
-        WITHOUT a NodeSucceeded — then fire the flow's boundary asserts pool-scoped (reading the
-        just-committed store[START_ID]), then mark START_ID done + advance its out-edges. Returns a
-        RunFailed on an input type failure or a false boundary assert (fail-fast before any body
-        node; "no node ran" holds), else None. Direct-FlowEngine tests that hand-seed
-        store[START_ID] pass no `run_inputs` — START_ID is then taken from the pre-seeded store."""
-        from agent_composer.expr import first_failing_assert
-
+        (coerce + type-check + defaults + FIRE the flow's boundary asserts, which START owns
+        post-coercion), commit store[START_ID] directly — WITHOUT enqueuing START_ID and WITHOUT a
+        NodeSucceeded — then mark START_ID done + advance its out-edges. Returns a RunFailed on an
+        input type failure or a false boundary assert (fail-fast before any body node; "no node ran"
+        holds), else None. Direct-FlowEngine tests that hand-seed store[START_ID] pass no
+        `run_inputs` — START_ID is then taken from the pre-seeded store."""
         start_id = self.flow.start_id
         if start_id in self.flow.nodes:
             start = self.flow.nodes[start_id]
             if self.run_inputs is not None:
-                # seed via StartNode.run, funneling a TypeCheckError -> RunFailed.
+                # seed via StartNode.run, funneling a TypeCheckError / a false boundary assert
+                # (NodeAssertFailed, fired inside run() post-coercion) -> RunFailed. Both carry a
+                # locator + concrete range so the CLI boxes the failing input decl / assert line.
                 try:
                     out = start.run(dict(self.run_inputs))
                 except TypeCheckError as exc:
-                    # forwards the StartNode's `input_decl` locator + concrete range (the failing
-                    # input decl's declaration line) so the CLI boxes it precisely.
                     return RunFailed(error=str(exc), error_type="TypeCheckError",
                                      locator=getattr(exc, "locator", None),
                                      range=getattr(exc, "range", None))
+                except NodeAssertFailed as exc:
+                    return RunFailed(error=str(exc), error_type="NodeAssertFailed",
+                                     locator=getattr(exc, "locator", None),
+                                     range=getattr(exc, "range", None))
                 self.pool.set(start_id, out.value)
-            # boundary asserts: pool-scoped, reading store[START_ID]; byte-stable "assert failed".
-            bad = first_failing_assert(self.boundary_asserts, self.pool)
-            if bad is not None:
-                # the concrete range is the flow-assert expr's line, stamped on the StartNode's
-                # field_ranges (keyed by the raw assert string) — the flow-boundary twin of a
-                # node's per-assert ranges.
-                return RunFailed(error=f"assert failed: {bad}", error_type="AssertFailed",
-                                 locator=SourceSpan(node=None, kind="assert", key=bad),
-                                 range=start.field_ranges.get(bad))
             # mark START_ID done + fire its out-edges (input-reader data edges + body-root edges).
             # START_ID is NOT enqueued/run; no NodeSucceeded is emitted for it.
             self.sm.mark_node(start_id, NodeState.TAKEN)
@@ -441,7 +436,7 @@ class FlowEngine:
                 self._apply_command(command)
         except NodeExecutionError as exc:
             yield RunFailed(error=exc.error, error_type=exc.error_type, locator=exc.locator,
-                            traceback=exc.traceback)
+                            traceback=exc.traceback, range=exc.range)
             return
         seed = list(self.deferred) + list(self.ready)
         self.paused = []
@@ -501,7 +496,7 @@ class FlowEngine:
                 self.sm.finish_executing(node_id)
                 raise NodeExecutionError(
                     node_id, event.error, event.error_type, locator=event.locator,
-                    traceback=event.traceback,
+                    traceback=event.traceback, range=event.range,
                 )
             elif isinstance(event, PauseRequested):
                 self._on_pause(node_id, event.reason)
@@ -543,7 +538,8 @@ class FlowEngine:
             elif isinstance(event, NodeFailed):
                 self.sm.finish_executing(event.node_id)
                 raise NodeExecutionError(
-                    event.node_id, event.error, event.error_type, locator=event.locator
+                    event.node_id, event.error, event.error_type, locator=event.locator,
+                    range=event.range,
                 )
             elif isinstance(event, PauseRequested):
                 self._on_pause(event.node_id, event.reason)
@@ -691,13 +687,6 @@ class FlowEngine:
         # a `self.expansions` root. On replay (`record is not None`) the record is already attached
         # (top-level by `_replay_expansions`, nested by deserialization), so this is skipped.
         parent = self._spawner_expansion.get(spawner_id) if record is None else None
-        # Eager boundary asserts (live path only): a subflow spawner's child BOUNDARY asserts are
-        # checked BEFORE the ledger attach (below), so a boundary failure leaves NO orphan expansion
-        # in `self.expansions` (the `eng.expansions == []` invariant). Kind-blind: the node names the
-        # records+labels via `iter_boundary_records` (∅ for AGENT/LOOP -> a no-op). Suppressed on
-        # replay (`schedule=False`) — the paused run already passed the check.
-        if schedule:
-            self._check_boundary_asserts(spawner_id, grow.seed)
         # REF-depth stamping (kind-blind, driven by the `grow_depth_delta` trait): stamp the derived
         # depth on every spawner in the spliced subgraph AND its terminal(s), and bound a positive
         # delta by MAX_REF_DEPTH. A None delta (LOOP, non-REF) is a no-op. Runs before the ledger
@@ -823,34 +812,6 @@ class FlowEngine:
                 self.depth[nid] = d
         for term in self._derived_terminals(sg, spawner_id):
             self.depth[term] = d
-
-    def _check_boundary_asserts(self, spawner_id, seed) -> None:
-        """Kind-blind eager boundary check: for each `(record, label)` the spawner names via
-        `iter_boundary_records(seed)`, evaluate the spawner's child BOUNDARY asserts against a temp
-        pool whose START_ID carries that record's EFFECTIVE inputs (coerce + default — the same view
-        the spliced child START_ID commits). Raises `NodeExecutionError`-free `RuntimeError`
-        `f"{label} boundary assert failed: {bad}"` on the first failing assert (the boundary-wrap in
-        the eval seam turns it into a located NodeFailed). A node with no boundary records (AGENT,
-        LOOP) or no boundary asserts is a no-op."""
-        from agent_composer.expr import first_failing_assert
-        from agent_composer.typesys.seeding import apply_defaults, coerce_inputs
-
-        spawner = self.flow.nodes[spawner_id]
-        records = spawner.iter_boundary_records(seed)
-        if not records:
-            return
-        child_asserts = getattr(spawner.child, "child_asserts", None)
-        boundary_asserts = list(child_asserts.boundary) if child_asserts is not None else []
-        if not boundary_asserts:
-            return
-        decls = spawner.child_inputs
-        for record, label in records:
-            temp = VariablePool()
-            temp.set(START_ID, apply_defaults(decls, coerce_inputs(decls, dict(record))))
-            temp.system = dict(self.pool.system)
-            bad = first_failing_assert(boundary_asserts, temp)
-            if bad is not None:
-                raise RuntimeError(f"{label} boundary assert failed: {bad}")
 
     def _on_success(self, node_id: str, event: NodeSucceeded) -> None:
         # The commit target: `commit_as` redirects a subflow terminal's value under its spawner

@@ -80,8 +80,8 @@ KINDS: dict[str, KindSpec] = {
     "wait": KindSpec(wait.WaitDescriptor, wait.WaitDescriptor.parse, wait.WaitDescriptor.build),
     "human_input": KindSpec(human_input.HumanInputDescriptor, human_input.HumanInputDescriptor.parse, human_input.HumanInputDescriptor.build),
     "case": KindSpec(case.CaseDescriptor, case.CaseDescriptor.parse, case.CaseDescriptor.build),
-    "call": KindSpec(call.CallDescriptor, call.parse, call.build),
-    "map": KindSpec(call.CallDescriptor, map_kind.parse, call.build),
+    "call": KindSpec(call.CallDescriptor, call.CallDescriptor.parse, call.CallDescriptor.build),
+    "map": KindSpec(call.CallDescriptor, map_kind.parse, call.CallDescriptor.build),
     "loop": KindSpec(loop.LoopDescriptor, loop.LoopDescriptor.parse, loop.LoopDescriptor.build),
 }
 
@@ -95,7 +95,7 @@ BINDING_FIELDS: dict[str, tuple[str, ...]] = {
     "wait": wait.WaitDescriptor.binding_fields,
     "human_input": human_input.HumanInputDescriptor.binding_fields,
     "case": case.CaseDescriptor.binding_fields,
-    "call": call.CALL_BINDING_FIELDS,
+    "call": call.CallDescriptor.binding_fields,
     "map": map_kind.MAP_BINDING_FIELDS,
     "loop": loop.LoopDescriptor.binding_fields,
 }

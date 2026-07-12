@@ -1,9 +1,41 @@
+from pathlib import Path
+
+import pytest
+
+from agent_composer.compose.loader import load_flow
+from agent_composer.events import SourceRange
 from agent_composer.nodes.start.node import StartNode
+
+_SEEDS = Path(__file__).resolve().parents[1] / "seeds"
 
 
 def test_node_range_defaults_none():
     n = StartNode("s")
     assert n.range is None and n.field_ranges == {}
+
+
+@pytest.mark.parametrize(
+    "seed, node_id, want_field",
+    [
+        ("25-nested-suspension.yaml", "gate", "call"),  # call
+        ("05-call-map.yaml", "research_each", "over"),  # map
+        ("28-refine-loop.yaml", "polish", "call"),  # loop
+    ],
+)
+def test_call_map_loop_nodes_carry_range(seed, node_id, want_field):
+    """A loader-built call/map/loop node must be stamped with `.range`/`.field_ranges`.
+
+    Regression guard: `_assemble` once called `build_call_node`/`build_loop_node` directly,
+    bypassing the `kinds/*.py::build` wrappers that stamp source metadata — so the funnel's
+    concrete-range resolution silently fell back to the node header for a binding failure on a
+    map's `over:` or a call-arg. Routing through `KINDS[kind].build` restores parity with leaves.
+    """
+    text = (_SEEDS / seed).read_text()
+    loaded = load_flow(text, search_paths=[_SEEDS])
+    node = loaded.compiled.nodes[node_id]
+    assert isinstance(node.range, SourceRange)
+    assert node.field_ranges  # non-empty
+    assert isinstance(node.field_ranges[want_field], SourceRange)
 
 
 # A flow that WAITs (pauses) so `run_flow` produces a checkpoint we can round-trip.

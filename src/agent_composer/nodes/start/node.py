@@ -35,6 +35,10 @@ class StartNode(Node):
             The node's id (`ID` at top level; deep-namespaced in a child).
         input_decls (`list`, *optional*, defaults to `None`):
             The flow's `InputDecl`s; the params (and their defaults/required) derive from these.
+        field_ranges (`dict`, *optional*, defaults to `None`):
+            Render-only boundary field ranges — `input name -> SourceRange` and flow-`asserts:`
+            `expr -> SourceRange` — used to locate a boundary type failure / false assert. `None`
+            for a spanless flow.
         title (`str`, *optional*, defaults to `None`):
             Display title.
     """
@@ -49,9 +53,18 @@ class StartNode(Node):
     ID = "__start__"
 
     def __init__(self, node_id: str, *, input_decls: Optional[list] = None,
+                 field_ranges: Optional[dict] = None,
                  title: Optional[str] = None) -> None:
         super().__init__(node_id, title=title)
         self.input_decls = list(input_decls or [])
+        # Render-only per-boundary-field source ranges (the flow's `input:` decls keyed by input
+        # NAME, and the flow-level `asserts:` exprs keyed by the raw assert string). The base
+        # `self.field_ranges` starts `{}`; the loader stamps these so `run` can attach a precise
+        # `range` to a boundary type failure and the engine can resolve a false-boundary-assert
+        # caret — the flow-boundary twin of a body node's per-field ranges. `{}` for a spanless /
+        # in-memory flow.
+        if field_ranges:
+            self.field_ranges = dict(field_ranges)
         # params = the input names PLUS each input's default/required: eval_node->bind_params reads
         # each source from flow.wiring[START_ID][name] (the seed at top level; the call-arg edges in
         # a child), and for an OMITTED input fills the declared default itself (or fails a required
@@ -85,5 +98,6 @@ class StartNode(Node):
                 # declaration line (node=None: it's the flow boundary, not a body node).
                 new = TypeCheckError(f"input `{decl.name}` — {exc}")
                 new.locator = SourceSpan(node=None, kind="input_decl", key=decl.name)
+                new.range = self.field_ranges.get(decl.name)
                 raise new from exc
         return Output(value=apply_defaults(self.input_decls, coerced))

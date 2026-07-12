@@ -35,60 +35,201 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
+import yaml
+
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
+from agent_composer.events import SourceRange
 from agent_composer.nodes.base import Node
 from agent_composer.typesys.values import TypeCheckError, Type
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
     ChildResolver,
-    build_call_node,
     build_leaf_node,
-    build_loop_node,
-    check_loop_type_contract,
-    check_ref_map_types,
-    check_wiring_parity,
     infer_data_edges,
-    infer_ordering_edges,
     synthesize_boundary_graph,
 )
-from agent_composer.compose.calls import _synth_id_gen, desugar_inline_calls
+from agent_composer.compose.stages.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.cases import (
     CaseDesugar,
     desugar_case,
-    desugar_case_call_targets,
     expand_case_outputs,
     reconcile_case_edges,
 )
 from agent_composer.compose.errors import LoadError
-from agent_composer.compose.human_questions import desugar_adaptive_questions
+from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
+from agent_composer.compose.stages.case_targets import desugar_case_call_targets
+from agent_composer.compose.stages.cycles import reject_cycles
+from agent_composer.compose.stages.human_questions_validate import (
+    validate_human_questions,
+)
+from agent_composer.compose.stages.loop_contract import check_loop_type_contract
+from agent_composer.compose.stages.ordering import infer_ordering_edges
+from agent_composer.compose.stages.ref_map_types import check_ref_map_types
+from agent_composer.compose.stages.references import validate_references
+from agent_composer.compose.stages.wiring_parity import check_wiring_parity
 from agent_composer.compose.uses import parse_uses_ref
+from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.spanloader import load_with_spans
+from agent_composer.compose.stages.parse import parse_nodes
 from agent_composer.compose.parser import (
     CallDescriptor,
     CaseDescriptor,
     LoopDescriptor,
-    code_content_lines,
-    def_node_field_lines,
-    def_node_lines,
-    node_field_lines,
-    node_lines,
-    parse_nodes,
     parse_file,
-    section_lines,
 )
 from agent_composer.compose.types import InputDecl, read_flow_inputs
 from agent_composer.compose.validate import (
     check_case_handles,
-    reject_cycles,
-    validate_human_questions,
     validate_node_asserts,
-    validate_references,
 )
 
 # Name for the single output of a bare whole-string `outputs:` binding. With one
 # `FlowOutput`, `terminal_output` returns the bare resolved value, so the name
 # only labels the carrier.
 _SINGLE_OUTPUT_NAME = "result"
+
+
+def _nodes_reader(text: Optional[str], nodes_section: dict) -> NodeReader:
+    """A `NodeReader` over a flow's `nodes:` mapping for `parse_nodes`.
+
+    Span-aware over the source when `text` carries a `nodes:` mapping (the top-level flow);
+    otherwise a spanless reader over `nodes_section` — a compact flow (its sole node is
+    desugared in-memory, absent from source), a `defs:` sub-flow (nested, already
+    normalized), or an uncomposable document.
+    """
+    if text:
+        try:
+            value, spans, root = load_with_spans(text, return_root=True)
+        except yaml.YAMLError:
+            pass
+        else:
+            if isinstance(value, dict) and isinstance(value.get("nodes"), dict):
+                return NodeReader(value, spans, root).child("nodes")
+    return NodeReader.spanless(nodes_section)
+
+
+def _def_nodes_reader(parent_text: str, name: str) -> NodeReader:
+    """A span-aware `NodeReader` over a `defs:<name>:nodes:` mapping in the parent file.
+
+    A def is BUILT from a spanless reader (its nodes have no baked ranges), so the def's
+    render-only `SourceFrame` sources its node/field ranges here — a separate span parse of
+    the parent file, descended to `defs.<name>.nodes`, where the def's nodes physically live
+    at their absolute lines. Spanless (empty ranges -> frame collapses to the call line) when
+    `parent_text` does not compose or lacks that sub-tree (a single-node / compact def).
+    """
+    if parent_text:
+        try:
+            value, spans, root = load_with_spans(parent_text, return_root=True)
+        except yaml.YAMLError:
+            pass
+        else:
+            defs = value.get("defs") if isinstance(value, dict) else None
+            body = defs.get(name) if isinstance(defs, dict) else None
+            if isinstance(body, dict) and isinstance(body.get("nodes"), dict):
+                return (
+                    NodeReader(value, spans, root)
+                    .child("defs").child(name).child("nodes")
+                )
+    return NodeReader.spanless({})
+
+
+def _boundary_field_ranges(text: Optional[str]) -> dict[str, SourceRange]:
+    """The flow-boundary source map stamped onto the top-level StartNode.
+
+    Keys: each top-level `input:`/`inputs:` decl name -> its declaration value `SourceRange`,
+    plus each flow-level `asserts:` expr string -> its `SourceRange`. Feeds StartNode.field_ranges
+    so a boundary input-type failure (`input <name> — ...`) or a false boundary assert resolves a
+    precise caret. Empty for a spanless / uncomposable flow (compact / in-memory / a def, whose
+    `input:` lives under `defs.<name>` — best-effort, boundary errors there fall back to the node
+    range). Mirrors `_frame_ranges`: render metadata, never raises."""
+    if not text:
+        return {}
+    try:
+        value, spans, root = load_with_spans(text, return_root=True)
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    reader = NodeReader(value, spans, root)
+    out: dict[str, SourceRange] = {}
+    for key in ("input", "inputs"):
+        if isinstance(value.get(key), dict):
+            out.update(reader.mapping_value_ranges(key))
+    out.update(reader.item_ranges("asserts"))
+    return out
+
+
+def _section_lines(text: Optional[str]) -> dict[str, int]:
+    """Map each top-level section key -> its 1-based header line (best-effort).
+
+    Replaces the retired `parser.section_lines`: locates a section-level error (a bad
+    `typedefs:`, an eager `uses:` failure, a dangling `outputs:`/`asserts:` ref) at the
+    section's header line. Derived from the span parse (`load_with_spans` + each section
+    key's own `SourceRange`), consistent with the range-native front end — raw keys are
+    kept (`output`/`outputs` both surface; the loader coalesces). `{}` when the text is
+    absent or PyYAML can't compose it. Render metadata, never the error path — never raises.
+    """
+    if not text:
+        return {}
+    try:
+        value, spans, root = load_with_spans(text, return_root=True)
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    reader = NodeReader(value, spans, root)
+    out: dict[str, int] = {}
+    for key in value:
+        rng = reader.key_range_of(key)
+        if rng is not None:
+            out[str(key)] = rng.start_line
+    return out
+
+
+def _frame_ranges(
+    reader: NodeReader,
+) -> tuple[dict[str, SourceRange], dict[str, dict[str, SourceRange]]]:
+    """The `(node_ranges, field_ranges)` a `SourceFrame` carries, from a best-effort parse.
+
+    Runs `parse_nodes(reader)` and pulls each descriptor's own `.range`/`.field_ranges` — the
+    render-only location maps the CLI's call-traceback boxes. A spanless reader (a compact /
+    single-node def) yields empty maps; a malformed `nodes:` (which the build path rejects with
+    its own located error) is swallowed here to empty maps — this is render metadata, never the
+    error path, so it must not raise.
+    """
+    try:
+        descriptors = parse_nodes(reader)
+    except LoadError:
+        return {}, {}
+    node_ranges: dict[str, SourceRange] = {}
+    field_ranges: dict[str, dict[str, SourceRange]] = {}
+    for nid, desc in descriptors.items():
+        rng = getattr(desc, "range", None)
+        if rng is not None:
+            node_ranges[nid] = rng
+        fr = getattr(desc, "field_ranges", None)
+        if fr:
+            field_ranges[nid] = dict(fr)
+    return node_ranges, field_ranges
+
+
+def top_frame_ranges(
+    text: str,
+) -> tuple[dict[str, SourceRange], dict[str, dict[str, SourceRange]]]:
+    """Best-effort `(node_ranges, field_ranges)` for a top-level flow from its text alone.
+
+    The `(node_id -> header `SourceRange`, node_id -> {field -> `SourceRange`})` maps a
+    `LoadedFlow.source` already carries — recomputed here from `text` for the CLI's error
+    renderer when it does NOT hold the loaded IR (e.g. a `RunResult` handed in on its own).
+    Empty maps when `text` can't be parsed: this is render metadata, never the error path,
+    so it must not raise.
+    """
+    try:
+        cf = parse_file(text)
+    except LoadError:
+        return {}, {}
+    return _frame_ranges(_nodes_reader(text, cf.nodes))
 
 
 @dataclass(frozen=True)
@@ -108,19 +249,19 @@ class SourceFrame:
             The YAML source whose lines the maps below index. For a def this is the
             **parent** file's text (the def's nodes live at absolute lines there); for an
             external flow it is that file's own text.
-        node_lines (`dict[str, int]`):
-            `node_id -> 1-based line in `text`` for the child's nodes. Empty (frame
-            collapses to the call line) for a compact single-node def with no authored
-            inner `nodes:` mapping.
-        field_lines (`dict[str, dict[str, int]]`):
-            `node_id -> {field -> 1-based line}` — the kind-fallback / `output:` precision
+        node_ranges (`dict[str, SourceRange]`):
+            `node_id -> the node body's `SourceRange` in `text`` for the child's nodes.
+            Empty (frame collapses to the call line) for a compact single-node def with no
+            authored inner `nodes:` mapping.
+        field_ranges (`dict[str, dict[str, SourceRange]]`):
+            `node_id -> {field -> `SourceRange`}` — the kind-fallback / `output:` precision
             used when the failing locator is `kind=field`.
     """
 
     label: str
     text: str
-    node_lines: dict[str, int]
-    field_lines: dict[str, dict[str, int]]
+    node_ranges: dict[str, SourceRange]
+    field_ranges: dict[str, dict[str, SourceRange]]
 
     def __deepcopy__(self, memo):
         # Frozen + render-only: every per-callsite `clone_child` deep-copies each child
@@ -371,7 +512,7 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> LoadedFlo
         # coarse: the typesys layer doesn't track source lines, so anchor at the
         # `typedefs:` section line (the box's context still shows the offending name).
         raise LoadError(
-            f"bad typedefs: {exc}", line=section_lines(text).get("typedefs")
+            f"bad typedefs: {exc}", line=_section_lines(text).get("typedefs")
         ) from exc
 
     # `system.paths` is honored only when the file's OWN dir is known (loaded WITH
@@ -401,23 +542,23 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> LoadedFlo
     # Render-only source frame for THIS flow: copied onto child call/map nodes for the
     # nested-error traceback. For an external file (loaded via make_file_resolver) the
     # label is relabeled to the filename in `resolve`.
+    top_node_ranges, top_field_ranges = _frame_ranges(_nodes_reader(text, f.nodes))
     source = SourceFrame(
         label=f.name or "<flow>",
         text=text,
-        node_lines=node_lines(text),
-        field_lines=node_field_lines(text),
+        node_ranges=top_node_ranges,
+        field_ranges=top_field_ranges,
     )
 
     return _assemble(
         inputs_section=f.inputs,
-        nodes_section=f.nodes,
+        nodes_reader=_nodes_reader(text, f.nodes),
         outputs_section=f.outputs,
         asserts_section=f.asserts,
         registry=registry,
         resolver=resolver,
-        n_lines=node_lines(text),
-        s_lines=section_lines(text),
-        code_lines=code_content_lines(text),
+        n_lines={nid: rng.start_line for nid, rng in top_node_ranges.items()},
+        s_lines=_section_lines(text),
         uses_aliases=set(f.uses),
         version=f.version,
         name=f.name,
@@ -425,6 +566,7 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> LoadedFlo
         flow_llm_config=f.llm_config,
         flow_env=f.env,
         source=source,
+        boundary_field_ranges=_boundary_field_ranges(text),
     )
 
 
@@ -511,7 +653,7 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
     other defs / external flows). A **single-node** form (a top-level `kind:`) is deferred
     -> `LoadError`. `parent_text` is the source of the declaring file: the def's nodes
     live at absolute lines there, so its `SourceFrame` indexes them via
-    `def_node_lines(parent_text)[name]` for the nested-error traceback."""
+    `_frame_ranges(_def_nodes_reader(parent_text, name))` for the nested-error traceback."""
     if not isinstance(body, dict):
         raise LoadError(
             f"defs entry {name!r}: body must be a mapping, got {type(body).__name__}"
@@ -530,16 +672,17 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
             f"(allowed: {', '.join(sorted(_DEF_ALLOWED))})"
         )
     # The def's frame indexes its inner nodes at their absolute lines in the parent file.
+    def_node_ranges, def_field_ranges = _frame_ranges(_def_nodes_reader(parent_text, name))
     source = SourceFrame(
         label="defs:" + name,
         text=parent_text,
-        node_lines=def_node_lines(parent_text).get(name, {}),
-        field_lines=def_node_field_lines(parent_text).get(name, {}),
+        node_ranges=def_node_ranges,
+        field_ranges=def_field_ranges,
     )
     try:
         return _assemble(
             inputs_section=body.get("inputs") or {},
-            nodes_section=body["nodes"],
+            nodes_reader=NodeReader.spanless(body["nodes"]),
             outputs_section=body.get("outputs"),
             asserts_section=body.get("asserts") or [],  # enforced at the child seam
             registry=registry,
@@ -580,11 +723,11 @@ def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolv
     node_body["inputs"] = {p: f"${{input.{p}}}" for p in param_types}  # auto-wire by name
     if "outputs" in body:
         node_body["outputs"] = body["outputs"]  # the node's output type = the def codomain
-    source = SourceFrame(label="defs:" + name, text=parent_text, node_lines={}, field_lines={})
+    source = SourceFrame(label="defs:" + name, text=parent_text, node_ranges={}, field_ranges={})
     try:
         return _assemble(
             inputs_section=param_types,
-            nodes_section={name: node_body},
+            nodes_reader=NodeReader.spanless({name: node_body}),
             outputs_section={"result": f"${{{name}.output}}"},  # single value re-export (node-first)
             asserts_section=[],
             registry=registry,
@@ -602,14 +745,13 @@ def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolv
 def _assemble(
     *,
     inputs_section: dict,
-    nodes_section: dict,
+    nodes_reader: NodeReader,
     outputs_section,
     asserts_section: list,
     registry,
     resolver: ChildResolver,
     n_lines: dict,
     s_lines: dict,
-    code_lines: Optional[dict] = None,
     uses_aliases: set = frozenset(),
     version: Optional[str] = None,
     name: Optional[str] = None,
@@ -617,6 +759,7 @@ def _assemble(
     flow_llm_config: Optional[dict] = None,
     flow_env: Optional[dict] = None,
     source: Optional[SourceFrame] = None,
+    boundary_field_ranges: Optional[dict] = None,
 ) -> LoadedFlow:
     """Assemble parsed sections into a `LoadedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
@@ -627,15 +770,15 @@ def _assemble(
       cycles + check if/else handles -> CompiledFlow.from_parts.
 
     `resolver` is the composite call resolver (defs-first); `registry` is the file's
-    `read_typedefs(...)`. `n_lines`/`s_lines`/`code_lines` are the source maps (`{}` for a
-    nested def — its errors are unlocated, and inline CODE there frames body-relative)."""
-    code_lines = code_lines or {}
-    # The flow's file label frames inline-CODE tracebacks; the code_lines map gives each
-    # inline node's content start line. Both are inert for reference-mode CODE.
+    `read_typedefs(...)`. `n_lines`/`s_lines` are the source maps — each node id / top-level
+    section key -> its 1-based HEADER line (`{}` for a nested def, whose errors are unlocated).
+    Inline-CODE traceback anchors are derived from each descriptor's own `code:` range."""
+    # The flow's file label frames inline-CODE tracebacks; each inline node's content start
+    # line is derived from its recorded `code:` range in the CODE build. Inert for reference-mode CODE.
     flow_label = source.label if source is not None else "<inline-code>"
     inputs = read_flow_inputs(inputs_section, registry)
     flow_inputs = {decl.name for decl in inputs}
-    descriptors = parse_nodes(nodes_section, n_lines)
+    descriptors = parse_nodes(nodes_reader)
 
     # A `uses:` alias shares the callable namespace, so it must not collide with a node
     # id (the resolver only sees a bare name; the author conflates them). Checked here, where
@@ -660,7 +803,7 @@ def _assemble(
     # nodes as ordinary `call` nodes (build/edges/validate/DAG run unchanged).
     mint = _synth_id_gen()  # ONE synth-id minter shared by both inline-call desugars (no collision)
     descriptors, outputs_section, asserts_section = desugar_inline_calls(
-        descriptors, outputs_section, asserts_section=asserts_section, node_lines=n_lines,
+        descriptors, outputs_section, asserts_section=asserts_section,
         outputs_line=s_lines.get("output") or s_lines.get("outputs"), asserts_line=s_lines.get("asserts"), next_id=mint,
     )
 
@@ -668,12 +811,12 @@ def _assemble(
     # + the rewritten gate. A descriptor-level pass (the `desugar_inline_calls` precedent
     # above): runs BEFORE the build loop so the synth agent flows through build + prompt-
     # scope validation + ref wiring like any author-written agent.
-    descriptors = desugar_adaptive_questions(descriptors, node_lines=n_lines)
+    descriptors = desugar_adaptive_questions(descriptors)
 
     # `then:/else: ${call}`: a `case` branch target that is an inline call becomes a
     # synth `call` node, the then:/else: rewritten to its id. Runs BEFORE expand_case_outputs
     # (so the synth args + the rewritten then-targets are visible to it) and shares `mint`.
-    descriptors = desugar_case_call_targets(descriptors, mint, node_lines=n_lines)
+    descriptors = desugar_case_call_targets(descriptors, mint)
 
     # Expand `${<case>.output}` value refs to a coalesce over the case's branch targets.
     # Runs after the inline-call desugar (so synth-node bindings are covered too)
@@ -695,13 +838,21 @@ def _assemble(
     # and CASE stay `{}` until relocated.
     leaf: dict[str, Node] = {}
     flow_wiring: dict[str, dict] = {}
+    # Kind-blind build dispatch table (imported lazily: kind modules import build helpers from
+    # `compose.build`, so a top-level import here would risk a cycle — mirrors `build_leaf_node`).
+    from agent_composer.compose.kinds import KINDS
+
     for nid, desc in descriptors.items():
         if isinstance(desc, CaseDescriptor):
             flow_wiring[nid] = {}  # case wiring relocated below
             continue
         if isinstance(desc, CallDescriptor):
             try:
-                node, wiring = build_call_node(desc, resolver)
+                # Route through the kind's own `KindSpec.build` (`desc.kind` is "call"/"map") so
+                # it stamps `.range`/`.field_ranges` uniformly with the leaf path — the funnel's
+                # concrete-range resolution needs a call/map node's `field_ranges` (e.g. an
+                # `over:`/call-arg binding failure) just as much as a leaf's.
+                node, wiring = KINDS[desc.kind].build(desc, registry=registry, resolver=resolver)
             except LoadError as exc:  # locate a resolver failure at the call node's line
                 if exc.line is None:
                     exc.line = n_lines.get(nid)
@@ -710,7 +861,7 @@ def _assemble(
             flow_wiring[nid] = wiring
         elif isinstance(desc, LoopDescriptor):
             try:
-                node, wiring = build_loop_node(desc, resolver)
+                node, wiring = KINDS["loop"].build(desc, registry=registry, resolver=resolver)
             except LoadError as exc:  # locate a resolver / name-set / legality failure at the loop node's line
                 if exc.line is None:
                     exc.line = n_lines.get(nid)
@@ -719,12 +870,10 @@ def _assemble(
             flow_wiring[nid] = wiring
         else:
             try:
+                # Inline-CODE traceback anchors (content start line + `code:` field line)
+                # are derived inside the CODE build from the descriptor's own `code:` range.
                 node, wiring = build_leaf_node(
-                    desc, registry,
-                    source_file=flow_label, code_line=code_lines.get(nid, 1),
-                    # the `code:` field-key line — anchors an inline reject / no-`return`
-                    # load error (which has no interior line) at `code:`, not the node header.
-                    code_field_line=(source.field_lines.get(nid, {}).get("code") if source else None),
+                    desc, registry, source_file=flow_label,
                 )
             except LoadError as exc:  # locate a build failure (e.g. a bad type expr) at the node's line
                 if exc.line is None:
@@ -804,7 +953,7 @@ def _assemble(
     # Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in
     # BEFORE root synthesis so an ordering-only dependent is demoted from root, and into
     # the cycle check below so an ordering cycle is loud.
-    ordering_edges = infer_ordering_edges(descriptors, node_ids := set(descriptors), n_lines)
+    ordering_edges = infer_ordering_edges(descriptors, node_ids := set(descriptors))
 
     # DAG assembly: synthesize the START_ID/END_ID boundary NODES + their edges over the
     # FULL reconciled body-edge set (the __start__/__end__ sentinels retire; the strings
@@ -815,15 +964,19 @@ def _assemble(
     flow_outputs = _flow_outputs(outputs_section)
     structural = reconciled + ordering_edges
     boundary_nodes, boundary_edges, boundary_wiring = synthesize_boundary_graph(
-        inputs, flow_outputs, node_ids, structural
+        inputs, flow_outputs, node_ids, structural, boundary_field_ranges
     )
     nodes.update(boundary_nodes)
     flow_wiring.update(boundary_wiring)
     edges: list[Edge] = structural + boundary_edges
 
-    # A cycle spans nodes; anchor the error on the first stuck node's line. START_ID/END_ID are
-    # acyclic by construction (START_ID has no incoming, END_ID no outgoing).
-    reject_cycles(edges, node_ids, n_lines)
+    # A cycle spans nodes; anchor the error on the first stuck node's range and highlight every
+    # stuck node's line (transitional `n_lines`, retired at Step 8). START_ID/END_ID are acyclic
+    # by construction (START_ID has no incoming, END_ID no outgoing).
+    node_ranges = {
+        nid: d.range for nid, d in descriptors.items() if getattr(d, "range", None)
+    }
+    reject_cycles(edges, node_ids, n_lines, node_ranges)
     check_case_handles(nodes, edges)
 
     compiled = CompiledFlow.from_parts(nodes, edges, outputs=flow_outputs, wiring=flow_wiring,

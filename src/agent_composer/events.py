@@ -215,6 +215,11 @@ class RunFailed:
     # Flow-level precise location (a boundary assert expr, a failed input decl);
     # None when not determinable -> the CLI falls back to a plain message.
     locator: Optional[SourceSpan] = None
+    # The concrete source span resolved ALONGSIDE the symbolic locator (the flow-boundary
+    # twin of NodeFailed.range): the failing input decl's declaration line or the boundary
+    # assert expr's line, looked up on the StartNode's `field_ranges[locator.key]`. None when
+    # no range is recorded for that key. The CLI prefers this over resolving the locator.
+    range: Optional[SourceRange] = None
     # The formatted Python traceback of the originating node failure, if one was captured
     # (carried up from the aborting `NodeFailed`). None for flow-level failures with no
     # exception behind them (boundary assert / input coercion). CLI shows it under

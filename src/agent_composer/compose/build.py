@@ -21,7 +21,6 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Optional
 
 from agent_composer.compile.model import END_ID, START_ID, Edge, FlowOutput
-from agent_composer.compile.validation import types_compatible
 from agent_composer.expr import (
     ExpressionError,
     binding_co_skips,
@@ -109,7 +108,7 @@ def build_leaf_node(
     registry: TypeRegistry,
     *,
     source_file: str = "<inline-code>",
-    code_line: int = 1,
+    code_line: Optional[int] = None,
     code_field_line: Optional[int] = None,
 ) -> tuple[Node, dict[str, Any]]:
     """Build one leaf runtime `Node` (agent/code/model/tool/human_input/wait) + its WIRING.
@@ -120,11 +119,11 @@ def build_leaf_node(
     `"until"` key; an event WAIT's wiring is `{}`. `registry` is the flow's
     `read_typedefs(...)` map. A MODEL node builds with no serving seam (removed as dead).
 
-    `source_file` (the flow's file label) and `code_line` (the `code:` block's content
-    start line) are used only by an inline CODE node, to frame its tracebacks at the
-    absolute YAML line. `code_field_line` (the `code:` field-key line) anchors an inline
-    load error that has no interior line — a reject, or a no-`return` body — at the `code:`
-    field rather than the node header.
+    `source_file` (the flow's file label) frames an inline CODE node's tracebacks at the
+    absolute YAML line. `code_line` (the `code:` block's content start line) and
+    `code_field_line` (the `code:` field-key line, anchoring an inline reject / no-`return`
+    error) are optional caller overrides; when omitted (the range-native loader path) the
+    CODE build derives both from the descriptor's own recorded `code:` `SourceRange`.
     """
     # Two-axis dispatch (#70): every leaf kind (agent/code/model/tool/human_input/wait) builds
     # through its own `KindSpec.build`. Leaf descriptors are 1:1 with their kind, so we match a
@@ -132,10 +131,19 @@ def build_leaf_node(
     # only for call/map/loop). `source_file`/`code_line`/`code_field_line` are inline-CODE
     # traceback anchors — only the CODE build reads them; every other build absorbs them via
     # `**_loader_hints`. Imported lazily: kind modules import build helpers from here, so a
-    # top-level import would cycle. Anything past this loop is not a leaf (case is desugared;
-    # ref/map nodes expand at runtime) — a loud LoadError.
+    # top-level import would cycle. call/map/loop share the table but are not leaves — they
+    # are rejected up front (they need a resolver and route through their own KindSpec). case is
+    # desugared; ref nodes expand at runtime — anything else past the loop is a loud LoadError.
     from agent_composer.compose.kinds import KINDS
 
+    # call/map/loop share this table but need a `resolver` — building them here with
+    # `resolver=None` would fail deep inside `build_call_node` with a confusing message. They
+    # are routed through `KINDS[kind].build` by the loader, never here; reject them up front.
+    if isinstance(desc, (CallDescriptor, LoopDescriptor)):
+        raise LoadError(
+            f"node {desc.id!r}: kind {type(desc).__name__} is not a leaf node "
+            f"(call/map/loop build through their own KindSpec with a resolver)"
+        )
     for spec in KINDS.values():
         if spec.descriptor_cls is type(desc):
             return spec.build(
@@ -342,6 +350,7 @@ def synthesize_boundary_graph(
     outputs: list[FlowOutput],
     node_ids: "set[str]",
     body_edges: list[Edge],
+    start_field_ranges: "Optional[dict]" = None,
 ) -> tuple[dict[str, Node], list[Edge], dict[str, dict[str, Any]]]:
     """Synthesize the `START_ID`/`END_ID` boundary nodes + their edges + wiring.
 
@@ -361,8 +370,14 @@ def synthesize_boundary_graph(
 
     The START_ID-side `${input.X}`-producer DATA edges + the demote-input-reader-from-root
     rule live here too (every input read resolves through the START_ID namespace).
+
+    `start_field_ranges` (optional) is the flow-boundary source map stamped onto the StartNode
+    (`input name -> SourceRange`, flow-`asserts:` `expr -> SourceRange`) — render-only, so a
+    boundary input-type failure / false boundary assert resolves a precise caret. `None` for a
+    spanless flow (compact / in-memory / def).
     """
-    start = StartNode(START_ID, input_decls=list(input_decls))
+    start = StartNode(START_ID, input_decls=list(input_decls),
+                      field_ranges=start_field_ranges)
     end = EndNode.record(END_ID, output_names=[o.name for o in outputs])
     boundary_nodes: dict[str, Node] = {START_ID: start, END_ID: end}
 
@@ -395,47 +410,6 @@ def synthesize_boundary_graph(
         END_ID: {o.name: o.from_ for o in outputs},
     }
     return boundary_nodes, end_edges + root_edges, boundary_wiring
-
-
-def infer_ordering_edges(
-    descriptors: dict[str, NodeDescriptor],
-    node_ids: "set[str]",
-    node_lines: Optional[dict[str, int]] = None,
-) -> list[Edge]:
-    """Run-ordering edges from `depends_on:` (co-skip) and `runs_after:` (pure order).
-
-    An ordering edge carries no data (`ordering=True`); it gates the dependent on the
-    source SETTLING. `depends_on` co-skips (source SKIPPED -> dependent dies, `optional=
-    False`); `runs_after` does not (`optional=True`). An unknown target is a located
-    `LoadError`; cycle rejection is the caller's (the edges join the `reject_cycles` set).
-    Distinct `~>` ids keep an ordering edge from colliding with a data edge on the same pair.
-    """
-    node_lines = node_lines or {}
-    edges: list[Edge] = []
-    counts: dict[tuple[str, str], int] = {}
-    for node_id, desc in descriptors.items():
-        for key, sources, optional in (
-            ("depends_on", desc.depends_on, False),
-            ("runs_after", desc.runs_after, True),
-        ):
-            for src in sources:
-                if src not in node_ids:
-                    raise LoadError(
-                        f"node {node_id!r}: `{key}` references unknown node {src!r}",
-                        line=node_lines.get(node_id),
-                    )
-                i = counts.get((src, node_id), 0)
-                counts[(src, node_id)] = i + 1
-                edges.append(
-                    Edge(
-                        id=f"{src}~>{node_id}#{i}",
-                        from_=src,
-                        to=node_id,
-                        ordering=True,
-                        optional=optional,
-                    )
-                )
-    return edges
 
 
 # --------------------------------------------------------------------------- #
@@ -805,124 +779,6 @@ def build_loop_node(desc: LoopDescriptor, resolver: ChildResolver) -> tuple[Node
     if errors:
         raise LoadError("\n  ".join(errors))
     return node, wiring
-
-
-def check_ref_map_types(
-    nodes: dict,
-    producers: dict[str, Type],
-    flow_input_types: dict[str, Type],
-    flow_wiring: dict[str, dict[str, Any]],
-    node_lines: Optional[dict] = None,
-) -> None:
-    """Cross-flow type check for every `call` binding (a loader post-build pass).
-
-    Each binding's SOURCE `Type` (resolved from its `${<id>.output}`/`${input.X}` ref over
-    the PARENT producers + flow-input types — read from the flow-owned `wiring`) must be
-    structurally compatible with the CHILD input's declared `Type` (`types_compatible`,
-    C-EQUIV). A `${item}`/coalesce/literal/opaque source — or an opaque/absent child input
-    (incl. the reserved `over` key) — stays lenient (skipped). Loud + located at the
-    node's `.yaml` line. Iterates the WIRING (not the params) so a mis-named binding still
-    surfaces here when its child decl is absent rather than being silently skipped."""
-    for nid, node in nodes.items():
-        # CALL/MAP carry `child_inputs` to type-check against; a LOOP also carries a child but
-        # its `'a -> 'a` contract is checked by check_loop_type_contract/carried_types instead.
-        # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy) -> skip
-        # (behavior-identical to the old empty-child_decls loop, which ran zero checks).
-        if node.is_loop or not getattr(node, "child_inputs", None):
-            continue
-        child_decls = {d.name: d for d in node.child_inputs}
-        for param, src in flow_wiring.get(nid, {}).items():
-            decl = child_decls.get(param)
-            if decl is None or decl.type is None:
-                continue  # `over`/name-caught-in-build/opaque child input -> lenient
-            source = _output_value_type(src, producers, flow_input_types)
-            if source is None:
-                continue  # ${item}/coalesce/literal/opaque source -> lenient
-            # A nullable source is fine for a non-nullable child input ONLY when the
-            # binding GUARANTEES a non-null value — a non-null literal escape or a `:?`
-            # required (both fire on null, present-null included). A ref-default `:-${y}`
-            # may itself be null, and the child's own `default:` does NOT cover it: a
-            # present-null source SHADOWS the child default (apply_defaults fills only
-            # OMITTED inputs, never a bound null). `not binding_co_skips` is exactly that
-            # non-null guarantee (a `|` coalesce of refs stays strict).
-            if (
-                source.nullable
-                and not decl.type.nullable
-                and not binding_co_skips(src)
-            ):
-                source = replace(source, nullable=False)
-            if not types_compatible(source, decl.type):
-                raise LoadError(
-                    f"call node {nid!r}: binding {param!r} — child expects "
-                    f"{decl.type.kind.value!r}, source is {source.kind.value!r}",
-                    line=(node_lines or {}).get(nid),
-                )
-
-
-def check_loop_type_contract(
-    nodes: dict,
-    producers: dict[str, Type],
-    flow_input_types: dict[str, Type],
-    flow_wiring: dict[str, dict[str, Any]],
-    node_lines: Optional[dict] = None,
-) -> None:
-    """The TYPE-level half of a `loop`'s `'a -> 'a` contract (a loader post-build pass).
-
-    `build_loop_node` checked only the field-NAME sets (it lacks the resolved carried-record
-    Types — the seed sources' types depend on the parent producers/flow inputs assembled
-    LATER). This pass, run after `check_ref_map_types`, resolves each carried field's Type
-    from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producers +
-    flow-input types, exactly as `check_ref_map_types` via `_output_value_type`) and checks
-    it is structurally compatible (`types_compatible`, C-EQUIV) with the body OUTPUT's
-    same-named field Type (the body `output_type`). A literal/coalesce/opaque seed source,
-    or an opaque body output field, stays lenient (skipped). Loud + located at the loop
-    node's `.yaml` line on a same-names/different-TYPES mismatch."""
-    for nid, node in nodes.items():
-        if not node.is_loop:
-            continue
-        body_out = node.output_type
-        # A non-record / absent body output was already caught by the field-name half in
-        # build_loop_node; nothing typed to compare against here.
-        if body_out is None or body_out.fields is None:
-            continue
-        for field_name, src in flow_wiring.get(nid, {}).items():
-            body_field = body_out.fields.get(field_name)
-            if body_field is None:
-                continue  # name mismatch caught in build; nothing to type-check
-            source = _output_value_type(src, producers, flow_input_types)
-            if source is None:
-                continue  # literal/coalesce/opaque seed source -> lenient
-            if not types_compatible(source, body_field):
-                raise LoadError(
-                    f"loop node {nid!r}: carried field {field_name!r} — body output is "
-                    f"{body_field.kind.value!r}, carried source is "
-                    f"{source.kind.value!r} (the body must return the same 'a it reads)",
-                    line=(node_lines or {}).get(nid),
-                )
-
-
-def check_wiring_parity(
-    nodes: dict, flow_wiring: dict[str, dict[str, Any]], node_lines: Optional[dict] = None
-) -> None:
-    """Load-time key parity: every node's `flow.wiring` keys must equal its declared
-    `params` names PLUS the kind's reserved keys (`until` for a timed WAIT, `over` for a mapped
-    `call`).
-
-    Closes the duplicate-param hole by construction (a nested-dict wiring cannot hold a duplicate
-    param) and turns an orphan source (a wiring key with no param), a missing source (a param with no
-    wiring), or a node absent from `flow.wiring` entirely (silent {} bind -> lost input) into a
-    located `LoadError`. Engine bind-time reserved keys (the mapped-call `over` / WAIT `until` the
-    eval_node seam pre-resolves) are never author wiring and do not appear here."""
-    lines = node_lines or {}
-    for nid, node in nodes.items():
-        expected = {p.name for p in (node.params or [])} | node.reserved_wiring_keys()
-        actual = set(flow_wiring.get(nid, {}))
-        if actual != expected:
-            raise LoadError(
-                f"node {nid!r}: flow.wiring keys {sorted(actual)} != declared params + reserved "
-                f"{sorted(expected)} (wiring/params key parity)",
-                line=lines.get(nid),
-            )
 
 
 def _resolve_child(node_id: str, flow_id: str, resolver: ChildResolver) -> Any:

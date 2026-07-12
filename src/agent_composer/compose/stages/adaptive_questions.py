@@ -1,4 +1,4 @@
-"""`human_input` `adaptive_questions:` block desugar — block → synth agent + gate.
+"""Graph-stage: `human_input` `adaptive_questions:` block desugar — block → synth agent + gate.
 
 A `human_input` node may carry an `adaptive_questions:` nested block instead of a
 static `questions:` list or a free-text `prompt:`. The block IS the spec of an LLM
@@ -22,12 +22,15 @@ that validation entirely.
 
 `__questions` is a reserved input name: the wire from the composer's output into the
 gate's questions input. Authors do not write it.
+
+Located parse metadata: the synth composer agent inherits the gate descriptor's
+`range`/`field_ranges` (so its downstream errors locate at the gate); the rewritten
+gate keeps its own ranges (via `replace`). No `node_lines` map.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Optional
 
 from agent_composer.compose.errors import LoadError
 from agent_composer.compose.parser import (
@@ -44,8 +47,6 @@ QPARAM = "__questions"
 
 def desugar_adaptive_questions(
     descriptors: dict[str, NodeDescriptor],
-    *,
-    node_lines: Optional[dict[str, int]] = None,
 ) -> dict[str, NodeDescriptor]:
     """Lower each `adaptive_questions:` human_input into a synth agent + rewritten gate.
 
@@ -54,9 +55,9 @@ def desugar_adaptive_questions(
     the synth composer agent first (id `<gate>__compose`), then the rewritten gate —
     so the agent precedes the gate in insertion order (build/edge order).
 
-    Raises `LoadError` if the synth id `<gate>__compose` already exists in the map.
+    Raises `LoadError` (located at the gate's `range`) if the synth id `<gate>__compose`
+    already exists in the map.
     """
-    lines = node_lines or {}
     new_descriptors: dict[str, NodeDescriptor] = {}
     for gid, desc in descriptors.items():
         if not (isinstance(desc, HumanInputDescriptor) and desc.adaptive_questions is not None):
@@ -69,11 +70,12 @@ def desugar_adaptive_questions(
             raise LoadError(
                 f"node {gid!r} (kind=human_input): synthesized composer id "
                 f"{synth_id!r} collides with an existing node id",
-                line=lines.get(gid),
+                range=desc.range,
             )
 
         # The block IS the agent spec. Pass optional fields only when present so the
-        # AgentDescriptor defaults (e.g. retries=2, llm_config={}) apply otherwise.
+        # AgentDescriptor defaults (e.g. retries=2, llm_config={}) apply otherwise. The
+        # synth agent inherits the gate's ranges so its downstream errors locate there.
         agent_kwargs = {
             "id": synth_id,
             "prompt": auto["prompt"],
@@ -81,6 +83,8 @@ def desugar_adaptive_questions(
             "output_type_override": question_list_type(),  # the codomain (list[Question])
             "outputs": None,
             "mode": auto.get("mode", "plain"),
+            "range": desc.range,
+            "field_ranges": dict(desc.field_ranges),
         }
         if "llm_config" in auto:
             agent_kwargs["llm_config"] = auto["llm_config"]

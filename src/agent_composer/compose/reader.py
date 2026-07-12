@@ -16,6 +16,11 @@ The three parts must travel together (see `load_with_spans(..., return_root=True
 
 `child(key)` descends to a sub-`NodeReader` over the child's value node, so the whole
 tree can be walked while every accessor stays located.
+
+A **spanless** reader (`NodeReader.spanless(value)`, `yaml_node=None`) wraps a value that
+has no source text to point at — a compact flow's in-memory node, a `defs:` sub-flow's
+already-normalized nodes, or a test's inline dict. Field presence and typing still work off
+`value`; every range accessor returns `None`. Descendants of a spanless reader are spanless.
 """
 
 from __future__ import annotations
@@ -53,10 +58,22 @@ class NodeReader:
         # into `spans`. A `MappingNode` for a mapping.
         self.yaml_node = yaml_node
 
+    @classmethod
+    def spanless(cls, value: Any) -> "NodeReader":
+        """A location-free reader over an already-constructed value (no span tree).
+
+        For inputs with no source text to point at — a compact flow's in-memory node, a
+        `defs:` sub-flow's nested nodes, or a test's inline dict. All range accessors
+        return `None`; field presence/typing still resolve off `value`.
+        """
+        return cls(value, {}, None)
+
     # -- internal ---------------------------------------------------------------
 
     def _own_range(self) -> SourceRange | None:
         """This mapping node's own recorded range (the fallback anchor for a missing field)."""
+        if self.yaml_node is None:
+            return None
         return self.spans.get(id(self.yaml_node))
 
     def _pair(self, key: str):
@@ -64,8 +81,14 @@ class NodeReader:
 
         Returns the pair, or `None` when this node is not a mapping or has no such key.
         Compares against `key_node.value` (the raw scalar text of the key), which for a
-        plain string key equals its constructed value.
+        plain string key equals its constructed value. In spanless mode (`yaml_node is
+        None`) there are no yaml nodes, so presence is synthesized from `self.value` and
+        the pair is `(None, None)` (the range accessors resolve to `None`).
         """
+        if self.yaml_node is None:
+            if isinstance(self.value, dict) and key in self.value:
+                return None, None
+            return None
         pairs = getattr(self.yaml_node, "value", None)
         if not isinstance(pairs, list):
             return None
@@ -91,7 +114,73 @@ class NodeReader:
         the field is missing.
         """
         _key_node, value_node = self._require_pair(key)
+        if value_node is None:
+            return None
         return self.spans.get(id(value_node))
+
+    def key_range_of(self, key: str) -> SourceRange | None:
+        """The `SourceRange` of `key`'s KEY node (the header token, not its value).
+
+        The counterpart of `range_of`: it points at the `key:` scalar itself (e.g. a node's
+        `run:` header line) rather than its value block. `parse_nodes` uses it to anchor a
+        node descriptor's `.range` on the node's HEADER line — the node-level diagnostic
+        anchor (cycles, unresolved refs, a namespaced runtime failure) — mirroring the old
+        `node_lines` map. `None` in spanless mode, when the key is absent, or when the key
+        node has no recorded span. Best-effort: never raises (unlike `range_of`).
+        """
+        pair = self._pair(key)
+        if pair is None:
+            return None
+        key_node, _value_node = pair
+        if key_node is None:
+            return None
+        return self.spans.get(id(key_node))
+
+    def item_ranges(self, key: str) -> dict[str, SourceRange]:
+        """For a SEQUENCE field, map each scalar item's text -> its own `SourceRange`.
+
+        Descends `key`'s value node (a `SequenceNode`) and, for every scalar element,
+        records `element_text -> range`. Used to give each `asserts:` list item its own
+        caret (the runtime keys `node.field_ranges` on the raw assert string). Returns
+        `{}` in spanless mode, when the field is absent, or when it is not a sequence —
+        best-effort, never raising (unlike `range_of`).
+        """
+        pair = self._pair(key)
+        if pair is None:
+            return {}
+        _key_node, value_node = pair
+        if not isinstance(value_node, yaml.SequenceNode):
+            return {}
+        out: dict[str, SourceRange] = {}
+        for item in value_node.value:
+            if isinstance(item, yaml.ScalarNode):
+                rng = self.spans.get(id(item))
+                if rng is not None:
+                    out[item.value] = rng
+        return out
+
+    def mapping_value_ranges(self, key: str) -> dict[str, SourceRange]:
+        """For a MAPPING field, map each child key -> its VALUE node's `SourceRange`.
+
+        Descends `key`'s value node (a `MappingNode`) and, for every `(child_key, child_value)`
+        pair, records `child_key_text -> value_range`. Used to give each `inputs:` binding its
+        own caret (the runtime keys `node.field_ranges` on the param name — eval_node's
+        binding-failure funnel). Returns `{}` in spanless mode, when the field is absent, or
+        when it is not a mapping — best-effort, never raising (mirrors `item_ranges`).
+        """
+        pair = self._pair(key)
+        if pair is None:
+            return {}
+        _key_node, value_node = pair
+        if not isinstance(value_node, yaml.MappingNode):
+            return {}
+        out: dict[str, SourceRange] = {}
+        for child_key, child_value in value_node.value:
+            name = getattr(child_key, "value", None)
+            rng = self.spans.get(id(child_value))
+            if isinstance(name, str) and rng is not None:
+                out[name] = rng
+        return out
 
     # -- typed accessors --------------------------------------------------------
 

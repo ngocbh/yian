@@ -213,9 +213,10 @@ def test_e06_cross_flow_type_mismatch_is_loud():
     ("filename", "substr", "line"),
     [
         ("e09-unknown-top-level-key.yaml", "unknown top-level key 'bogus'", 14),
-        ("e10-unknown-node-kind.yaml", "unknown kind 'llm'", 7),
-        ("e11-field-not-allowed.yaml", "field 'prompt' is not allowed", 7),
-        ("e12-missing-required-field.yaml", "missing required field 'code'", 7),
+        # Per-kind parse anchors these at the precise offending field (not the node body):
+        ("e10-unknown-node-kind.yaml", "unknown kind 'llm'", 8),  # the `kind:` value
+        ("e11-field-not-allowed.yaml", "field 'prompt' is not allowed", 13),  # the stray field
+        ("e12-missing-required-field.yaml", "missing required field 'code'", 8),  # the node body
         ("e13-bad-type-expression.yaml", "bad type expression 'list['", 7),
         ("e14-unknown-system-ambient.yaml", "bogus", 7),
         ("e15-prompt-undeclared-input.yaml", "is not a declared input", 7),
@@ -260,6 +261,30 @@ def test_runtime_error_gallery(filename, inputs, substr):
     result = run_flow(load_flow((_ERRORS / filename).read_text()), inputs)
     assert result.status != "succeeded"          # a failed/aborted run, not a crash
     assert substr in (result.error or "")
+
+
+def test_flow_input_type_failure_carries_range():
+    # e08: `window` is declared `int` on line 20; a non-coercible run value fails the boundary
+    # type check. The flow-level RunFailed/RunResult carries a concrete `range` boxing the
+    # failing input decl line (resolved from the StartNode's per-input-decl field_ranges).
+    result = run_flow(
+        load_flow((_ERRORS / "e08-input-type-mismatch.yaml").read_text()),
+        {"topic": "X", "window": "soon"},
+    )
+    assert result.status == "failed"
+    assert result.range is not None and result.range.start_line == 20
+
+
+def test_false_boundary_assert_carries_range():
+    # e18: the flow-level `asserts:` item `input.window > 0` is on line 15; window <= 0 makes it
+    # false before any node runs. The RunResult carries a concrete `range` boxing that assert
+    # line (resolved from the StartNode's flow-assert field_ranges keyed by the expr string).
+    result = run_flow(
+        load_flow((_ERRORS / "e18-false-boundary-assert.yaml").read_text()),
+        {"window": -5},
+    )
+    assert result.status == "failed"
+    assert result.range is not None and result.range.start_line == 15
 
 
 # --------------------------------------------------------------------------- #

@@ -30,7 +30,15 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 from agent_composer.compile.llm_cascade import resolve_llm_cascade
-from agent_composer.events import RunAborted, RunFailed, RunPaused, RunSucceeded, SourceSpan
+from agent_composer.compile.model import START_ID
+from agent_composer.events import (
+    RunAborted,
+    RunFailed,
+    RunPaused,
+    RunSucceeded,
+    SourceRange,
+    SourceSpan,
+)
 from agent_composer.expr import first_failing_assert
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
@@ -83,6 +91,12 @@ class RunResult:
             when `status == "failed"` AND no `NodeFailed` carries the location (a node-level
             failure puts its locator on the `NodeFailed` event instead). The CLI resolves it
             to a 1-based source line.
+        range (`SourceRange`, *optional*, defaults to `None`):
+            The concrete 1-based source range a flow-level failure boxes — the resolved twin
+            of `locator`, already looked up against the boundary `StartNode`'s per-field
+            ranges (the failing `input:` decl line, or the flow-level `asserts:` expr line).
+            Set alongside `locator` when the range was resolvable; `None` when the flow was
+            parsed spanless. Lets the CLI box the failing line without re-resolving the span.
         traceback (`str`, *optional*, defaults to `None`):
             The formatted Python traceback of the node that aborted the run, when one was
             captured (a code/tool/agent raise). `None` for failures with no exception behind
@@ -107,6 +121,7 @@ class RunResult:
     output: Any = None
     error: Optional[str] = None
     locator: Optional[SourceSpan] = None
+    range: Optional[SourceRange] = None
     traceback: Optional[str] = None
     events: List[Any] = field(default_factory=list)
     checkpoint: Optional[Any] = None
@@ -197,6 +212,7 @@ def run_flow(
     output: Any = None
     error: Optional[str] = None
     result_locator: Optional[SourceSpan] = None  # flow-level location (no NodeFailed behind it)
+    result_range: Optional[SourceRange] = None  # resolved twin of result_locator (concrete range)
     tb: Optional[str] = None  # Python traceback of the aborting node, if one was captured
 
     for event in engine.run():
@@ -211,6 +227,7 @@ def run_flow(
             elif isinstance(event, RunFailed):
                 error = event.error
                 result_locator = event.locator  # boundary assert / input-coercion error
+                result_range = event.range  # concrete range the engine already resolved
                 tb = event.traceback
 
     # A paused run carries the resume handles: the live engine (fast in-process),
@@ -235,10 +252,11 @@ def run_flow(
             status = "failed"
             error = f"assert failed: {bad}"
             result_locator = SourceSpan(node=None, kind="assert", key=bad)
+            result_range = loaded.compiled.nodes[START_ID].field_ranges.get(bad)
 
     return RunResult(
         input=coerced, status=status, output=output, error=error,
-        locator=result_locator, traceback=tb, events=events,
+        locator=result_locator, range=result_range, traceback=tb, events=events,
     )
 
 
@@ -309,6 +327,7 @@ def resume_flow(
     events: List[Any] = []
     status, output, error = "incomplete", None, None
     result_locator: Optional[SourceSpan] = None  # flow-level location (no NodeFailed behind it)
+    result_range: Optional[SourceRange] = None  # resolved twin of result_locator (concrete range)
     tb: Optional[str] = None  # Python traceback of the aborting node, if one was captured
     for event in engine.resume(commands or []):
         if on_event is not None:
@@ -322,6 +341,7 @@ def resume_flow(
             elif isinstance(event, RunFailed):
                 error = event.error
                 result_locator = event.locator
+                result_range = event.range
                 tb = event.traceback
 
     if status == "paused":
@@ -340,10 +360,11 @@ def resume_flow(
         if bad is not None:
             status, error = "failed", f"assert failed: {bad}"
             result_locator = SourceSpan(node=None, kind="assert", key=bad)
+            result_range = loaded.compiled.nodes[START_ID].field_ranges.get(bad)
 
     return RunResult(
         input={}, status=status, output=output, error=error,
-        locator=result_locator, traceback=tb, events=events,
+        locator=result_locator, range=result_range, traceback=tb, events=events,
     )
 
 

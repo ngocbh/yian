@@ -5,6 +5,17 @@ of a node's `outputs:` / a flow's `inputs:` is read directly into one recursive
 `Type` (see `types.read_type`) rather than a flat `list[IOField]`; nested records
 are native.
 
+Organized along two axes (#70): the per-node-kind axis lives in `kinds/<kind>.py`
+(each owns its descriptor + `parse` + `build`, self-registered into the shared `KINDS`
+table), and the cross-node graph-stage axis lives in `stages/` (parse / references /
+cycles / inline-calls). The shared choke points (`stages/parse.py`, `build.py`,
+`bindings.py`) dispatch through `KINDS` kind-blind — there is no per-kind isinstance
+ladder. `parser.py` is now just the YAML text/span front door (`parse_file`).
+
+Errors carry a concrete `SourceRange` (from `events`): a located `NodeReader` records
+each field's range during `parse`, the runtime funnel resolves a failure's range from
+`node.field_ranges`, and the CLI boxes it as a `Diagnostic`.
+
 Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes`; nothing
 in the engine imports `compose`.
 """
@@ -20,7 +31,7 @@ from agent_composer.compose.build import (
     synthesize_boundary_graph,
     synthesize_roots,
 )
-from agent_composer.compose.calls import desugar_inline_calls
+from agent_composer.compose.stages.inline_calls import desugar_inline_calls
 from agent_composer.compose.cases import (
     CaseDesugar,
     desugar_case,
@@ -39,16 +50,14 @@ from agent_composer.compose.parser import (
     NodeDescriptor,
     ToolDescriptor,
     ComposeFile,
-    node_lines,
-    parse_nodes,
     parse_file,
-    section_lines,
 )
+from agent_composer.compose.stages.cycles import reject_cycles
+from agent_composer.compose.stages.parse import parse_nodes
+from agent_composer.compose.stages.references import validate_references
 from agent_composer.compose.types import InputDecl, read_flow_inputs, read_type
 from agent_composer.compose.validate import (
     check_case_handles,
-    reject_cycles,
-    validate_references,
 )
 
 __all__ = [
@@ -56,8 +65,6 @@ __all__ = [
     "ComposeFile",
     "parse_file",
     "parse_nodes",
-    "node_lines",
-    "section_lines",
     "NodeDescriptor",
     "AgentDescriptor",
     "CodeDescriptor",

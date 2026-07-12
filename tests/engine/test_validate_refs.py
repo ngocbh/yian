@@ -30,11 +30,12 @@ from agent_composer.compose.parser import (
     AgentDescriptor,
     CaseDescriptor,
     CodeDescriptor,
-    parse_nodes,
     parse_file,
 )
+from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.stages.parse import parse_nodes
 from agent_composer.compose.types import read_flow_inputs
-from agent_composer.compose.validate import validate_references
+from agent_composer.compose.stages.references import validate_references
 from tests.engine._fakes import derive_wiring, stamp_reads
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -43,7 +44,7 @@ _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 def _load(seed: str):
     """(nodes, flow_inputs, producers, outputs, flow_wiring) for a seed — leaf + desugared cases."""
     f = parse_file((_SEEDS / seed).read_text())
-    descriptors = parse_nodes(f.nodes)
+    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
     built = {
         nid: build_leaf_node(d, {})
         for nid, d in descriptors.items()

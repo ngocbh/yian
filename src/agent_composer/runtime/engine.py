@@ -265,21 +265,27 @@ class FlowEngine:
 
         start_id = self.flow.start_id
         if start_id in self.flow.nodes:
+            start = self.flow.nodes[start_id]
             if self.run_inputs is not None:
                 # seed via StartNode.run, funneling a TypeCheckError -> RunFailed.
                 try:
-                    out = self.flow.nodes[start_id].run(dict(self.run_inputs))
+                    out = start.run(dict(self.run_inputs))
                 except TypeCheckError as exc:
-                    # forwards the StartNode's `input_decl` locator (the failing input's
-                    # declaration line) so the CLI boxes it precisely.
+                    # forwards the StartNode's `input_decl` locator + concrete range (the failing
+                    # input decl's declaration line) so the CLI boxes it precisely.
                     return RunFailed(error=str(exc), error_type="TypeCheckError",
-                                     locator=getattr(exc, "locator", None))
+                                     locator=getattr(exc, "locator", None),
+                                     range=getattr(exc, "range", None))
                 self.pool.set(start_id, out.value)
             # boundary asserts: pool-scoped, reading store[START_ID]; byte-stable "assert failed".
             bad = first_failing_assert(self.boundary_asserts, self.pool)
             if bad is not None:
+                # the concrete range is the flow-assert expr's line, stamped on the StartNode's
+                # field_ranges (keyed by the raw assert string) — the flow-boundary twin of a
+                # node's per-assert ranges.
                 return RunFailed(error=f"assert failed: {bad}", error_type="AssertFailed",
-                                 locator=SourceSpan(node=None, kind="assert", key=bad))
+                                 locator=SourceSpan(node=None, kind="assert", key=bad),
+                                 range=start.field_ranges.get(bad))
             # mark START_ID done + fire its out-edges (input-reader data edges + body-root edges).
             # START_ID is NOT enqueued/run; no NodeSucceeded is emitted for it.
             self.sm.mark_node(start_id, NodeState.TAKEN)

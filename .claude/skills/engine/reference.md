@@ -232,25 +232,35 @@ resolved to a line at the CLI boundary — never a text heuristic.
   seed step and `run.py` stamp `assert` spans for boundary / post-terminal asserts; the
   engine's typed write boundary stamps a `field` span (`key="output"`) on the
   `NodeExecutionError` it raises when a node's value fails its declared `output:` Type.
-- **Resolution:** the parser's sub-line maps (`node_input_lines`, `node_field_lines`,
-  `assert_lines`, `input_decl_lines`) map a span to a 1-based line; the CLI's `_locate`
-  + fallback chain (precise line → node-kind best field, e.g. a code node's `code:` →
-  node header → plain message) boxes it.
+- **Concrete range (resolved at the failure site):** ALONGSIDE the symbolic `locator`, the
+  funnel resolves a concrete **`SourceRange`** (start/end line+col, 1-based; in `events`) by
+  keying the node's recorded `field_ranges` on the locator KEY — kind-blind, never on
+  `node.kind`. It rides `NodeFailed.range` and its flow-level twin `RunResult.range` /
+  `RunFailed.range` (all default `None`; the flow twin is resolved from `StartNode.field_ranges`
+  for node-less failures — an e08 input-decl, an e18 boundary/post assert).
+- **Resolution (CLI boundary):** `cli/run.py` prefers the pre-resolved `nf.range` →
+  `result.range`; only if both are absent does `_resolve_range` map the span itself, via
+  `_top_ranges` (the flow's `SourceFrame` maps, else `loader.top_frame_ranges(text)`): a
+  `field` locator → that field's range, else `_node_range` (node-kind best field, e.g. a code
+  node's `code:`, → node HEADER range). The winning `SourceRange` is boxed via a
+  **`Diagnostic`** (severity + message + primary range + notes) through `render_diagnostic`.
 - **Cross-flow call traceback** — when a failure is inside a *called child*, its node id is
   runtime-NAMESPACED (`gate/approve`, `outer/via/boom`, `gate#0/inner` for a map element).
   A `call`/`map` node bakes its child flow's render-only **`SourceFrame`** (`compose/loader`:
-  label + source text + node→line / field→line maps) onto `child_source` at load — for a
-  `defs:` child the text is the PARENT file (inner nodes at their absolute parent lines, via
-  `def_node_lines`); for an external `uses:` child it is that file's own text, label = its
-  filename. The frame is frozen and `__deepcopy__`-returns-self, so `clone_child`'s per-callsite
-  deep-copy shares the one instance and it is exempt from the node-purity scan (it carries raw
-  `${...}` YAML, but is metadata, not a wiring source). At error time `cli/run.py:_walk_call_frames`
-  splits the namespaced id and walks segment-by-segment through the baked IR
-  (`node.child`/`node.child_source`), collecting one frame per level; `_render_run_error` boxes
-  them stacked, most-recent-call-last (Python-traceback style), falling back to the single-frame
-  box when fewer than two frames resolve. A frame title names WHERE it lives: a top/external file
-  frame is the filename alone, a `defs:` frame is filename-qualified (`<file> defs:<name>`) since
-  its nodes physically live in that file.
+  label + source text + node→`SourceRange` / field→`SourceRange` maps, built by `_frame_ranges`
+  off the parsed descriptors) onto `child_source` at load — for a `defs:` child the text is the
+  PARENT file (inner nodes at their absolute parent lines, via `_def_nodes_reader`); for an
+  external `uses:` child it is that file's own text, label = its filename. The frame is frozen
+  and `__deepcopy__`-returns-self, so `clone_child`'s per-callsite deep-copy shares the one
+  instance and it is exempt from the node-purity scan (it carries raw `${...}` YAML, but is
+  metadata, not a wiring source). At error time `cli/run.py:_walk_call_frames` splits the
+  namespaced id and walks segment-by-segment through the baked IR (`node.child`/
+  `node.child_source`), collecting one frame per level; `_render_frame_stack` boxes them
+  stacked, most-recent-call-last (Python-traceback style), falling back to the single-frame
+  box when fewer than two frames resolve. Each call-chain frame anchors at the node HEADER
+  line; the failing leaf at its precise field / kind-fallback line. A frame title names WHERE
+  it lives: a top/external file frame is the filename alone, a `defs:` frame is
+  filename-qualified (`<file> defs:<name>`) since its nodes physically live in that file.
 
 ## Design-note template (step 3 of the workflow)
 

@@ -17,11 +17,11 @@ from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose import LoadError
 from agent_composer.compose.build import (
     build_leaf_node,
-    check_wiring_parity,
     infer_data_edges,
     synthesize_boundary_graph,
     synthesize_roots,
 )
+from agent_composer.compose.stages.wiring_parity import check_wiring_parity
 from agent_composer.compose.loader import _flow_outputs
 from agent_composer.compose.cases import desugar_case, reconcile_case_edges
 from agent_composer.compose.parser import (
@@ -29,9 +29,10 @@ from agent_composer.compose.parser import (
     CaseDescriptor,
     CodeDescriptor,
     WaitDescriptor,
-    parse_nodes,
     parse_file,
 )
+from agent_composer.compose.reader import NodeReader
+from agent_composer.compose.stages.parse import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -54,7 +55,7 @@ def _all_edges(seed: str):
     _p = (_SEEDS / seed) if (_SEEDS / seed).exists() else (_SEEDS / "_future" / seed)
     f = parse_file(_p.read_text())
     registry = read_typedefs(f.typedefs)
-    descriptors = parse_nodes(f.nodes)
+    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
     flow_wiring = {
         nid: build_leaf_node(d, registry)[1]
         for nid, d in descriptors.items()

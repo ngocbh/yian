@@ -131,11 +131,9 @@ def build(
     anchors inline tracebacks from two line hints, preferring the caller's over the desc's:
 
     - `code_line` — the body's content start line (leading-newline padding frames tracebacks
-      at absolute YAML lines). The loader passes it today (from its `code_content_lines`
-      map); when absent (the standalone/future range-threaded path) it is derived from the
-      recorded `code:` range as `range.start_line + 1` for a multi-line block scalar
-      (algebraically identical to `start_mark.line + 2`), else `1` (a single-line
-      `module:function` ref has no body to pad).
+      at absolute YAML lines). Derived from the recorded `code:` range as `range.start_line + 1`
+      for a multi-line block scalar (algebraically identical to `start_mark.line + 2`), else `1`
+      (a single-line `module:function` ref has no body to pad); a caller may override it.
     - `code_field_line` — the `code:` value's own start line, the anchor for a reject /
       no-`return` load error (which carries no interior line); `range.start_line` when the
       caller does not supply it. `None` -> the loader anchors at the node header.

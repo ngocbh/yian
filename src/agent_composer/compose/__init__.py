@@ -22,10 +22,7 @@ in the engine imports `compose`.
 """
 
 from agent_composer.compose.validate.asserts import AssertSet, classify_asserts
-from agent_composer.compose.build import (
-    synthesize_boundary_graph,
-    synthesize_roots,
-)
+from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.nodes.resolver import (
     ChildResolver,
@@ -74,7 +71,6 @@ __all__ = [
     "ChildSignature",
     "ChildResolver",
     "infer_data_edges",
-    "synthesize_roots",
     "synthesize_boundary_graph",
     "expand_case_outputs",
     "check_case_handles",

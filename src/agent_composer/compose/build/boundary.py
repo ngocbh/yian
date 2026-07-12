@@ -1,9 +1,10 @@
 """DAG boundary synthesis: `START_ID`/`END_ID` nodes + their edges over ALL edges.
 
 The `build_leaf_node` funnel is dissolved: every node kind now builds through
-its own `descriptor.build(ctx) -> BuildResult` (see `compose/nodes/<kind>.py`), and the loader's
-conductor loop drives them kind-blind. What remains here is the boundary synthesis — `synthesize_roots`
-and `synthesize_boundary_graph` — which is representation-neutral graph plumbing, not per-kind build.
+its own `descriptor.build(ctx) -> BuildResult` (see `compose/nodes/<kind>.py`), and the
+conductor loop drives them kind-blind. What remains here is the boundary synthesis —
+`synthesize_boundary_graph` — which is representation-neutral graph plumbing, not per-kind
+build.
 """
 
 from __future__ import annotations
@@ -30,19 +31,6 @@ from agent_composer.compose.edges.producers import _binding_producers
 # coalesce flow-output -> one terminal edge per producer; only the taken branch's
 # value survives, resolved by `terminal_output`).
 # --------------------------------------------------------------------------- #
-
-
-def synthesize_roots(node_ids: "set[str]", edges: list[Edge]) -> list[Edge]:
-    """`START_ID -> root` edges for body nodes with no incoming edge of ANY kind.
-
-    `edges` must be the FULL reconciled edge set (data + control + END_ID producer); a node
-    demoted by a control edge (a `case` branch target) or an END_ID producer is therefore
-    excluded from the roots. The START_ID/END_ID boundary nodes are never roots
-    here (END_ID gets its own bare-root edge in `synthesize_boundary` when 0-output).
-    """
-    has_incoming = {e.to for e in edges}
-    roots = sorted(nid for nid in node_ids if nid not in has_incoming)
-    return [Edge(id=f"{START_ID}->{nid}", from_=START_ID, to=nid) for nid in roots]
 
 
 def synthesize_boundary_graph(

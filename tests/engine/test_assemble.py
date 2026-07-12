@@ -16,13 +16,10 @@ from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose import LoadError
 from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.build import (
-    synthesize_boundary_graph,
-    synthesize_roots,
-)
+from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.validate.wiring_parity import check_wiring_parity
-from agent_composer.compose.loader import _flow_outputs
+from agent_composer.compose.build.pipeline import _flow_outputs
 from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CaseDescriptor,
@@ -72,20 +69,34 @@ def _all_edges(seed: str):
     return node_ids, edges, f
 
 
+def _bare_roots(node_ids, edges):
+    """The set of body nodes `synthesize_boundary_graph` marks as bare roots.
+
+    A bare root is a `START_ID -> nid` edge with no `input_group` (a data-producer edge
+    carries `input_group`; a control edge carries `source_handle`). Filters the boundary
+    edges for `from_ == START_ID and input_group is None and to != END_ID`.
+    """
+    _, all_edges, _ = synthesize_boundary_graph([], [], node_ids, list(edges))
+    return {
+        e.to
+        for e in all_edges
+        if e.from_ == START_ID and e.to != END_ID and e.input_group is None
+    }
+
+
 # --------------------------------------------------------------------------- #
 # 10a — roots / input-producer edges: an ${input.X} reader gets a START_ID->reader
 # DATA edge — NOT a bare root; a case branch target stays control-gated. infer_data_edges now
-# mints the input-producer edges, so `synthesize_roots` (no-incoming) yields no bare body root.
+# mints the input-producer edges, so the boundary synthesis (no-incoming) yields no bare body root.
 # --------------------------------------------------------------------------- #
 
 
 def test_seed01_score_is_input_producer_not_bare_root():
     node_ids, edges, _ = _all_edges("01-structured-agent.yaml")
     # `score` reads ${input.topic} -> a START_ID->score DATA edge (input_group set); it is NOT a
-    # bare root (synthesize_roots, which excludes any node with incoming, yields it no root edge).
+    # bare root (boundary synthesis, which excludes any node with incoming, yields it no bare root edge).
     assert any(e.from_ == START_ID and e.to == "score" and e.input_group is not None for e in edges)
-    starts = synthesize_roots(node_ids, edges)
-    assert "score" not in {e.to for e in starts}
+    assert "score" not in _bare_roots(node_ids, edges)
 
 
 def test_seed02_case_targets_not_bare_roots():
@@ -93,8 +104,7 @@ def test_seed02_case_targets_not_bare_roots():
     # BARE root. (They also read ${input.topic} -> a START_ID data edge, but the control veto
     # still skip-floods the untaken branch.) `score` reads ${input.topic} too -> START_ID data edge.
     node_ids, edges, _ = _all_edges("02-case.yaml")
-    starts = synthesize_roots(node_ids, edges)
-    bare_roots = {e.to for e in starts}
+    bare_roots = _bare_roots(node_ids, edges)
     assert "positive" not in bare_roots and "cautious" not in bare_roots
     assert "gate" not in bare_roots  # gate has the score->gate data edge
 
@@ -108,8 +118,7 @@ def test_seed02_branch_target_has_control_edge():
 
 def test_seed06_notes_not_bare_roots():
     node_ids, edges, _ = _all_edges("06-case-on.yaml")
-    starts = synthesize_roots(node_ids, edges)
-    bare_roots = {e.to for e in starts}
+    bare_roots = _bare_roots(node_ids, edges)
     for note in ("pro_note", "con_note", "choppy_note"):
         assert note not in bare_roots
 

@@ -21,7 +21,7 @@ from agent_composer.compose.build import (
     synthesize_roots,
 )
 from agent_composer.compose.edges.data import infer_data_edges
-from agent_composer.compose.stages.wiring_parity import check_wiring_parity
+from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 from agent_composer.compose.loader import _flow_outputs
 from agent_composer.compose.cases import desugar_case, reconcile_case_edges
 from agent_composer.compose.parse.file import (

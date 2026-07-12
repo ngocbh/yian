@@ -1,6 +1,6 @@
 from agent_composer.compile.expand import clone_child
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
-from agent_composer.compose.asserts import AssertSet
+from agent_composer.compose.validate.asserts import AssertSet
 from agent_composer.compose.helpers.types import InputDecl, read_type
 from agent_composer.events import NodeFailed, NodeSucceeded
 from agent_composer.nodes.base import NodeKind, Output

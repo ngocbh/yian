@@ -20,7 +20,7 @@ Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes`; nothi
 in the engine imports `compose`.
 """
 
-from agent_composer.compose.asserts import AssertSet, classify_asserts
+from agent_composer.compose.validate.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
     build_leaf_node,
     synthesize_boundary_graph,
@@ -52,11 +52,11 @@ from agent_composer.compose.parse.file import (
     ComposeFile,
     parse_file,
 )
-from agent_composer.compose.stages.cycles import reject_cycles
+from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.stages.references import validate_references
+from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose.helpers.types import InputDecl, read_flow_inputs, read_type
-from agent_composer.compose.validate import (
+from agent_composer.compose.validate.handles import (
     check_case_handles,
 )
 

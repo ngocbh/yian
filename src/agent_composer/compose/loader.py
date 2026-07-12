@@ -42,7 +42,7 @@ from agent_composer.events import SourceRange
 from agent_composer.nodes.base import Node
 from agent_composer.typesys.values import TypeCheckError, Type
 from agent_composer.typesys.types import read_typedefs
-from agent_composer.compose.asserts import AssertSet, classify_asserts
+from agent_composer.compose.validate.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
     build_leaf_node,
     synthesize_boundary_graph,
@@ -59,15 +59,15 @@ from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.desugar.case_targets import desugar_case_call_targets
-from agent_composer.compose.stages.cycles import reject_cycles
-from agent_composer.compose.stages.human_questions_validate import (
+from agent_composer.compose.validate.cycles import reject_cycles
+from agent_composer.compose.validate.human_questions import (
     validate_human_questions,
 )
-from agent_composer.compose.stages.loop_contract import check_loop_type_contract
+from agent_composer.compose.validate.loop_types import check_loop_type_contract
 from agent_composer.compose.edges.ordering import infer_ordering_edges
-from agent_composer.compose.stages.ref_map_types import check_ref_map_types
-from agent_composer.compose.stages.references import validate_references
-from agent_composer.compose.stages.wiring_parity import check_wiring_parity
+from agent_composer.compose.validate.call_types import check_ref_map_types
+from agent_composer.compose.validate.references import validate_references
+from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 from agent_composer.compose.helpers.uses import parse_uses_ref
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
@@ -84,10 +84,8 @@ from agent_composer.compose.parse.file import (
     parse_file,
 )
 from agent_composer.compose.helpers.types import InputDecl, read_flow_inputs
-from agent_composer.compose.validate import (
-    check_case_handles,
-    validate_node_asserts,
-)
+from agent_composer.compose.validate.handles import check_case_handles
+from agent_composer.compose.validate.asserts import validate_node_asserts
 
 # Name for the single output of a bare whole-string `outputs:` binding. With one
 # `FlowOutput`, `terminal_output` returns the bare resolved value, so the name

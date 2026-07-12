@@ -19,14 +19,14 @@ from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.desugar.case_targets import desugar_case_call_targets
-from agent_composer.compose.stages.cycles import reject_cycles
+from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.desugar.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
 )
 from agent_composer.compose.edges.ordering import infer_ordering_edges
 from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.stages.references import validate_references
+from agent_composer.compose.validate.references import validate_references
 from agent_composer.events import SourceRange
 
 
@@ -287,7 +287,7 @@ def test_check_ref_map_types_moved():
     # After the relocation the check lives in `stages.ref_map_types`; the LoadError still
     # carries `.line` (additive) AND anchors its `.range` on the call node's `input:` mapping
     # span (`field_ranges["inputs"]`, the coarsest available binding-site span).
-    from agent_composer.compose.stages.ref_map_types import check_ref_map_types
+    from agent_composer.compose.validate.call_types import check_ref_map_types
     from agent_composer.compose.helpers.types import InputDecl
     from agent_composer.nodes.call import CallNode
     from agent_composer.typesys.values import Type, ValueKind
@@ -316,7 +316,7 @@ def test_check_loop_type_contract_moved():
     # output's same-named field Type is loud. After the relocation the check lives in
     # `stages.loop_contract`; the LoadError still carries `.line` (additive) AND anchors its
     # `.range` on the loop node's `input:` mapping span (`field_ranges["inputs"]`).
-    from agent_composer.compose.stages.loop_contract import check_loop_type_contract
+    from agent_composer.compose.validate.loop_types import check_loop_type_contract
     from agent_composer.nodes.loop import LoopNode
     from agent_composer.typesys.values import Type, ValueKind
 
@@ -343,7 +343,7 @@ def test_check_wiring_parity_moved():
     # A node whose `flow.wiring` keys don't match its declared params is loud. After the
     # relocation the check lives in `stages.wiring_parity`; the LoadError still carries `.line`
     # (additive) AND anchors its `.range` on the node's `input:` mapping span (else node.range).
-    from agent_composer.compose.stages.wiring_parity import check_wiring_parity
+    from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 
     node, wiring = build_leaf_node(CodeDescriptor(id="n", code="m:f", inputs={"x": "${input.x}"}), {})
     rng = SourceRange(start_line=3, start_col=5, end_line=4, end_col=20)
@@ -363,7 +363,7 @@ def test_validate_human_questions_diag_has_range():
     # A human_input gate with a structurally-invalid literal `questions:` list is loud. After
     # the relocation the check lives in `stages.human_questions_validate`; the LoadError still
     # carries `.line` (additive) AND anchors its `.range` on the gate's `questions:` field span.
-    from agent_composer.compose.stages.human_questions_validate import (
+    from agent_composer.compose.validate.human_questions import (
         validate_human_questions,
     )
     from agent_composer.nodes.human_input.node import HumanInputNode

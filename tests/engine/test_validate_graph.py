@@ -24,9 +24,9 @@ from agent_composer.compose.parse.file import (
     parse_file,
 )
 from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.stages.cycles import reject_cycles
+from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.validate import check_case_handles
+from agent_composer.compose.validate.handles import check_case_handles
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

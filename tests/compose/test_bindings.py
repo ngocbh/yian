@@ -28,10 +28,10 @@ def test_agent_inputs_rewritten_non_strings_left():
     assert out is not desc
 
 
-def test_tool_args_rewritten():
-    desc = ToolDescriptor(id="t", tool_id="fetch", args={"url": "${u}", "n": 3})
+def test_tool_inputs_rewritten():
+    desc = ToolDescriptor(id="t", tool_id="fetch", inputs={"url": "${u}", "n": 3})
     out = map_binding_strings(desc, _up)
-    assert out.args == {"url": "${U}", "n": 3}
+    assert out.inputs == {"url": "${U}", "n": 3}
 
 
 def test_call_inputs_and_over_rewritten():

@@ -13,8 +13,8 @@ The retired inline `${ f(args) }` form — a FLOW call embedded inside a `${...}
 is a hard-break `LoadError` pointing the author at the `call(...)` directive; a pure
 builtin (`upper`, `join`, …) inside `${...}` stays legal.
 
-Binding positions + the flow `asserts:` section: a node's `inputs:` (agent/code/model/call),
-a TOOL's `args:`, a mapped call's `over:`, the flow `outputs:` bindings, AND each flow
+Binding positions + the flow `asserts:` section: a node's `inputs:` (agent/code/model/tool/call),
+a mapped call's `over:`, the flow `outputs:` bindings, AND each flow
 `asserts:` expression (a whole-value `call(...)` lifts to a synth node so the assert reads
 its output). NOT `when:`/`on:` (the case condition grammar) and NOT a node-local
 `asserts:` (those stay node-local — no inline call). A `case` descriptor carries no walked

@@ -7,6 +7,6 @@ nodes:
   fetch:
     kind: tool
     tool_id: nonesuch_tool       # ERROR at run: no such registered tool
-    args:
+    input:
       topic: ${input.topic}
 output: ${fetch.output}

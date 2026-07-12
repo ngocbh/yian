@@ -179,7 +179,7 @@ verdict:
 news:
   kind: tool
   tool_id: get_facts           # a TOOL_REGISTRY key
-  args:                        # untyped — each value is a ${...} ref or a literal
+  input:                       # untyped — each value is a ${...} ref or a literal
     symbol: ${input.topic}
     limit: 10
 ```
@@ -192,7 +192,7 @@ def get_facts(symbol: str, limit: int = 10) -> list[dict]:
     "Fetch recent facts for a symbol."   # docstring = the description the model sees
     ...
 ```
-Note `tool` uses `tool_id:` + `args:` (not `input:`/`output:`). (`model` —
+Note `tool` uses `tool_id:` + `input:` (a tool declares no `output:`). (`model` —
 `kind: model`, `model_id:` — is a parseable kind but the serving seam isn't wired
 yet; running one raises.)
 

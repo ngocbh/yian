@@ -198,7 +198,7 @@ def test_model_node_run_raises_serving_not_wired():
 
 
 def test_tool_node_built_with_args_bindings():
-    # seed 08 news — tool_id + untyped `args` -> InputBindings.
+    # seed 08 news — tool_id + untyped `inputs` -> InputBindings.
     desc = _seed_nodes("08-tool-news.yaml")["news"]
     node, wiring = build_leaf_node(desc, {})
     assert isinstance(node, ToolNode)
@@ -206,7 +206,7 @@ def test_tool_node_built_with_args_bindings():
     assert node.output_type is None  # no outputs: declared
     assert {p.name for p in node.params} == {"symbol", "limit"}
     assert wiring == {"symbol": "${input.topic}", "limit": 10}
-    # args are untyped sink params.
+    # inputs are untyped sink params.
     assert all(p.type_str is None for p in node.params)
 
 

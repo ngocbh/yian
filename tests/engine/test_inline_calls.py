@@ -329,7 +329,7 @@ def test_inline_call_seed_21_loads():
 
 # --------------------------------------------------------------------------- #
 # Hardening: named-form parity, located outputs errors, and the in-scope binding
-# positions / paths that were implemented but untested (TOOL args:, mapped-call
+# positions / paths that were implemented but untested (TOOL inputs:, mapped-call
 # over:, defs body, multi-site ids, unknown callee, e06 over a synth binding).
 # --------------------------------------------------------------------------- #
 
@@ -382,14 +382,14 @@ output: call(enrich, 30)
     assert exc.value.line is not None  # located at the `outputs:` section line
 
 
-def test_inline_call_in_tool_args_desugars():
-    # the ToolDescriptor `args:` branch (distinct from `inputs:`) desugars too. Unit-level
+def test_inline_call_in_tool_inputs_desugars():
+    # the ToolDescriptor `inputs:` binding surface desugars too. Unit-level
     # (a real TOOL run needs a registered tool); asserts the synth node + rewrite.
     descriptors = {
-        "t": ToolDescriptor(id="t", tool_id="some_tool", args={"q": "call(enrich, x=${input.k})"})
+        "t": ToolDescriptor(id="t", tool_id="some_tool", inputs={"q": "call(enrich, x=${input.k})"})
     }
     new_descriptors, _, _ = desugar_inline_calls(descriptors, "${t.output}")
-    assert new_descriptors["t"].args["q"] == "${__call_0.output}"
+    assert new_descriptors["t"].inputs["q"] == "${__call_0.output}"
     synth = new_descriptors["__call_0"]
     assert synth.call == "enrich"
     assert synth.inputs == {"x": "${input.k}"}

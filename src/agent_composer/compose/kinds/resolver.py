@@ -10,7 +10,7 @@ lives in each kind's own `build` (`call.py`/`loop.py`); this module supplies the
 resolution + signature derivation they both call, plus `_output_value_type` (the ref-to-Type
 resolver the loader graph-stages `ref_map_types`/`loop_contract` also read).
 
-Like `base.py`/`helpers.py` this is a leaf of the kinds package: it imports no `kinds/__init__`
+Like `base.py` this is a leaf of the kinds package: it imports no `kinds/__init__`
 symbol and no other kind module, so `call`/`loop`, the graph-stages, and `compose.__init__`/
 `loader` (the `ChildResolver` seam type) import from it at module top level without cycling.
 """

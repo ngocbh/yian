@@ -71,14 +71,14 @@ def _parse_node(node_id: str, reader: NodeReader) -> Any:
     kind = reader.value.get("kind")
     if kind is None:
         raise LoadError(f"node {node_id!r}: missing `kind`", range=reader._own_range())
-    spec = KINDS.get(kind)
-    if spec is None:
+    cls = KINDS.get(kind)
+    if cls is None:
         raise LoadError(
             f"node {node_id!r}: unknown kind {kind!r} "
             f"(allowed: {', '.join(sorted(KINDS))})",
             range=reader.range_of("kind"),
         )
-    desc = spec.parse(node_id, reader)
+    desc = cls.parse(node_id, reader)
     # Per-item ranges (kind-blind): the runtime keys `node.field_ranges` on a symbolic locator
     # KEY, not a field name (eval_node's failure funnel). Stamp the two keyed-by-content maps
     # alongside the coarse field ranges the kind recorded:

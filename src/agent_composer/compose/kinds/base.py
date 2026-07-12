@@ -19,9 +19,8 @@ Like `nodes/base.py` (which imports `typesys`/`binding` for the `Node` contract)
 imports the deps its methods need — `typesys` (Type/TypeRegistry), `nodes.binding` (ParamDecl),
 `compose.types` (read_type), `compose.errors` (LoadError) and `compose.reader` (NodeReader) for
 the ported parse machinery, `events` (SourceRange) — none of which import back into `kinds`, so
-it stays a leaf of the kinds package: it never imports `helpers.py`, any sibling kind,
-`kinds/__init__`, or `parser.py`. Both `helpers.py` (which derives `_COMMON_FIELDS` from this
-base) and every kind module import it at module top level without cycling; `parser.py`
+it stays a leaf of the kinds package: it never imports any sibling kind, `kinds/__init__`, or
+`parser.py`. Every kind module imports it at module top level without cycling; `parser.py`
 re-exports it as the descriptor base type for its importers.
 """
 
@@ -148,7 +147,7 @@ class NodeDescriptor:
         `call` from `CallDescriptor` plus its own `over`)."""
         return cls.required | frozenset(keys)
 
-    # --- Parse-side machinery (ported from the old `helpers.py` free functions) ---------
+    # --- Parse-side machinery (shared key-legality + common-field reads) ------------------
 
     @classmethod
     def _check_keys(cls, node_id: str, reader: NodeReader) -> None:

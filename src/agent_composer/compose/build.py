@@ -63,33 +63,20 @@ def build_leaf_node(
     CODE build derives both from the descriptor's own recorded `code:` `SourceRange`.
     """
     # Two-axis dispatch (#70): every leaf kind (agent/code/model/tool/human_input/wait) builds
-    # through its own `KindSpec.build`. Leaf descriptors are 1:1 with their kind, so we match a
-    # spec by descriptor class; leaf builds ignore `resolver` (the shared signature carries it
-    # only for call/map/loop). `source_file`/`code_line`/`code_field_line` are inline-CODE
-    # traceback anchors — only the CODE build reads them; every other build absorbs them via
-    # `**_loader_hints`. Imported lazily: kind modules import build helpers from here, so a
-    # top-level import would cycle. call/map/loop share the table but are not leaves — they
-    # are rejected up front (they need a resolver and route through their own KindSpec). case is
-    # desugared; ref nodes expand at runtime — anything else past the loop is a loud LoadError.
-    from agent_composer.compose.kinds import KINDS
-
-    # call/map/loop share this table but need a `resolver` — building them here with
-    # `resolver=None` would fail deep inside their own `build` with a confusing message. They
-    # are routed through `KINDS[kind].build` by the loader, never here; reject them up front.
+    # through its own descriptor's `build` method. Leaf builds ignore `resolver` (the shared
+    # signature carries it only for call/map/loop). `source_file`/`code_line`/`code_field_line`
+    # are inline-CODE traceback anchors — only the CODE build reads them; every other build
+    # absorbs them via `**_loader_hints`. call/map/loop are not leaves — they need a resolver and
+    # route through their own `build` from the loader, so they are rejected up front here. case is
+    # desugared; ref nodes expand at runtime.
     if isinstance(desc, (CallDescriptor, LoopDescriptor)):
         raise LoadError(
             f"node {desc.id!r}: kind {type(desc).__name__} is not a leaf node "
-            f"(call/map/loop build through their own KindSpec with a resolver)"
+            f"(call/map/loop build through their own descriptor with a resolver)"
         )
-    for spec in KINDS.values():
-        if spec.descriptor_cls is type(desc):
-            return spec.build(
-                desc, registry=registry, resolver=None,
-                source_file=source_file, code_line=code_line, code_field_line=code_field_line,
-            )
-    raise LoadError(
-        f"node {desc.id!r}: kind {type(desc).__name__} is not a leaf node "
-        f"(case nodes are desugared; ref/map nodes expand at runtime)"
+    return desc.build(
+        registry=registry, resolver=None,
+        source_file=source_file, code_line=code_line, code_field_line=code_field_line,
     )
 
 

@@ -20,23 +20,17 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from agent_composer.compile.model import END_ID, START_ID, Edge, FlowOutput
-from agent_composer.expr import (
-    ExpressionError,
-    binding_co_skips,
-    condition_refs,
-    expr_refs_of,
-)
+from agent_composer.expr import binding_co_skips
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.compose.parse.file import (
     CallDescriptor,
-    CaseDescriptor,
     NodeDescriptor,
     LoopDescriptor,
-    WaitDescriptor,
 )
 
 
@@ -78,168 +72,6 @@ def build_leaf_node(
         registry=registry, resolver=None,
         source_file=source_file, code_line=code_line, code_field_line=code_field_line,
     )
-
-
-# --------------------------------------------------------------------------- #
-# Data-edge inference
-#
-# The analogue of scope/dependency analysis: a sink binding that reads a free
-# variable `${<id>.output[.…]}` depends on the producing node `<id>`, so we emit a
-# data `Edge(from_=<id>, to=<consumer>, input_group=<sink key>)`. `expr_refs_of`
-# already flattens a coalesce `${a | b}` to BOTH ref paths, so the two alternatives
-# of one sink share that sink's `input_group` (per-input readiness). Refs whose
-# head is not `outputs` (`inputs`/`system`/`item`) are NOT data edges.
-#
-# Root/terminal `__start__`/`__end__` synthesis is a later pass (it must run after the
-# `case` control edges): this pass emits ONLY real-node data edges.
-# --------------------------------------------------------------------------- #
-
-
-def _outputs_producer(path: str) -> Optional[str]:
-    """The producing node id of a `${<id>.output[.…]}` whole-string ref, else None
-    (other head). Only the singular node-first spelling is recognized; legacy
-    `${outputs.<id>}` is rejected at parse time."""
-    parts = path.split(".")
-    if len(parts) >= 2 and parts[1] == "output":
-        return parts[0]
-    return None
-
-
-def _ref_producer(path: str) -> Optional[str]:
-    """The producer node id of a `${...}` reference head (singular):
-    - `<id>.output[.…]`: produce from node `<id>`.
-    - `input.<key>`: produce from the synthesized START_ID, so an `${input.X}`
-      reader gets a `START_ID->reader` data edge.
-    - `system.<key>` is run-global and produces NO edge; `item` is MAP-body-local.
-    Legacy plural heads (`outputs`/`inputs`) are rejected at parse time."""
-    parts = path.split(".")
-    if len(parts) >= 2 and parts[0] == "input":
-        return START_ID
-    if len(parts) >= 2 and parts[1] == "output":
-        return parts[0]
-    return None
-
-
-def _binding_producers(value: Any) -> list[str]:
-    """The producer node ids a binding/expression value reads (in source order).
-
-    `value` may be a `${...}` binding string, a `when:`/`on:` expression template,
-    or a non-string literal (no refs). Coalesce alternatives flatten to several
-    producers — the caller assigns them ALL the one sink `input_group`. An `inputs.X` ref
-    produces from START_ID (the input-reader data edge); `system.X` produces nothing.
-    """
-    if not isinstance(value, str):
-        return []
-    try:
-        refs = expr_refs_of(value)
-    except ExpressionError:
-        return []  # malformed refs surface in the ref-wiring pass, located
-    producers: list[str] = []
-    for ref in refs:
-        producer = _ref_producer(ref)
-        if producer is not None:
-            producers.append(producer)
-    return producers
-
-
-def _condition_producers(value: Any) -> list[str]:
-    """The producer node ids a CONDITION expression reads (in source order).
-
-    A `case` `when:`/`on:` is a whole boolean/value expression, not a template — it is
-    written in any of the three condition spellings (bare `a.output > 5`, mixed
-    `${a.output} > 5`, whole-span `${a.output > 5}`), so refs are extracted via
-    `condition_refs` (which parses the whole expression) rather than `expr_refs_of`
-    (which only sees `${...}` spans and would miss the bare spelling). `system.X`
-    produces nothing; an `input.X` ref produces from START_ID.
-    """
-    if not isinstance(value, str):
-        return []
-    try:
-        refs = condition_refs(value)
-    except ExpressionError:
-        return []  # malformed refs surface in the ref-wiring pass, located
-    producers: list[str] = []
-    for ref in refs:
-        producer = _ref_producer(ref)
-        if producer is not None:
-            producers.append(producer)
-    return producers
-
-
-
-def infer_data_edges(
-    descriptors: dict[str, NodeDescriptor],
-    flow_wiring: dict[str, dict[str, Any]],
-) -> list[Edge]:
-    """Infer the flow's data edges from the flow-owned wiring + descriptors (no sentinels).
-
-    For each consuming node, scan its sources and emit a data `Edge` per `${<id>.output[.…]}`
-    ref, tagged with the `input_group` that identifies WHICH sink it feeds (the param/arg name
-    for a leaf/REF input; `over` for a MAP's `over:`; `until` for a timed WAIT; a provisional
-    `<case>:<n>` key for a `case` `on:`/`when:` ref). A coalesce sink's alternatives share one
-    group. Edges are the **projection of `flow.wiring`** for leaf + WAIT + REF/MAP;
-    CASE sources are still read off `descriptors`.
-
-    `flow_wiring[node_id]` is the `{param -> source}` map (a timed WAIT carries its `until`, a
-    MAP its `over`, under the reserved keys). `descriptors` supplies the CASE `on:`/`when:` refs
-    (a `case` desugars to an `CaseNode`, which reconciles these provisional groups
-    to its `__rN`/`__on` names).
-    """
-    edges: list[Edge] = []
-    counts: dict[tuple[str, str], int] = {}  # (from, to) -> next edge index
-
-    def emit(producer: str, consumer: str, group: str, optional: bool) -> None:
-        i = counts.get((producer, consumer), 0)
-        counts[(producer, consumer)] = i + 1
-        edges.append(
-            Edge(
-                id=f"{producer}->{consumer}#{i}",
-                from_=producer,
-                to=consumer,
-                input_group=group,
-                optional=optional,
-            )
-        )
-
-    def emit_for(value: Any, consumer: str, group: str) -> None:
-        # the whole group's co-skip stance is a property of its binding.
-        optional = not binding_co_skips(value)
-        for producer in _binding_producers(value):
-            emit(producer, consumer, group, optional)
-
-    for node_id, desc in descriptors.items():
-        if isinstance(desc, CaseDescriptor):
-            # case has no built node (the CaseNode is built later). Its data refs
-            # live in `on:` + each `when:`. Provisional per-ref groups (`<case>:<n>`)
-            # — the case desugar reconciles to `__on`/`__rN`. The edge EXISTENCE is the
-            # invariant this pass must satisfy (so `score -> gate` is inferred).
-            ref_index = 0
-            sources = [desc.on] if desc.on is not None else []
-            sources += [c.get("when") for c in desc.cases]
-            for src in sources:
-                for producer in _condition_producers(src):
-                    # provisional case edges (reconciliation drops them); optional
-                    # is recomputed there from the desugared __rN/__on binding.
-                    emit(producer, node_id, f"{node_id}:{ref_index}", False)
-                    ref_index += 1
-            continue
-
-        if isinstance(desc, WaitDescriptor):
-            # A timed `wait` orders after any node its `until:` reads. The `until` SOURCE is
-            # relocated to the flow wiring (reserved key); an event WAIT has no `until`
-            # key. `${input.X}`/`${system.X}` yield no edge.
-            wiring = flow_wiring.get(node_id, {})
-            if "until" in wiring:
-                emit_for(wiring["until"], node_id, "until")
-            continue
-
-        # leaf + REF/MAP: sources are the flow-owned wiring. A MAP's
-        # reserved `over` source rides the `"over"` key (over-then-inputs order); `${item}` is
-        # body-local and yields no edge. CASE/WAIT were handled above.
-        for param, src in flow_wiring.get(node_id, {}).items():
-            emit_for(src, node_id, param)
-
-    return edges
 
 
 # --------------------------------------------------------------------------- #

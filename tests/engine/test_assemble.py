@@ -17,10 +17,10 @@ from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose import LoadError
 from agent_composer.compose.build import (
     build_leaf_node,
-    infer_data_edges,
     synthesize_boundary_graph,
     synthesize_roots,
 )
+from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.stages.wiring_parity import check_wiring_parity
 from agent_composer.compose.loader import _flow_outputs
 from agent_composer.compose.cases import desugar_case, reconcile_case_edges

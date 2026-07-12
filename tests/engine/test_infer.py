@@ -17,7 +17,8 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose.build import build_leaf_node, infer_data_edges
+from agent_composer.compose.build import build_leaf_node
+from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CaseDescriptor,

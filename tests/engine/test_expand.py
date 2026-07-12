@@ -61,7 +61,7 @@ def _with_boundary(nodes: dict, edges: list, outputs: list, input_decls=()) -> t
     # child START_ID carries `input_decls` (so its params == the call-arg names the splice seeds);
     # END_ID is RECORD-mode from the declared outputs; the manual `(.., END_ID)` terminal Edge is
     # replaced by the producer edge (input_group = output name) so the engine reads store[END_ID].
-    from agent_composer.compose.build import _binding_producers
+    from agent_composer.compose.edges.producers import _binding_producers
 
     decls = list(input_decls)
     nodes = dict(nodes)

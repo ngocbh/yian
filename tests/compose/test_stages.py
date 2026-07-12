@@ -24,7 +24,7 @@ from agent_composer.compose.desugar.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
 )
-from agent_composer.compose.stages.ordering import infer_ordering_edges
+from agent_composer.compose.edges.ordering import infer_ordering_edges
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.stages.references import validate_references
 from agent_composer.events import SourceRange

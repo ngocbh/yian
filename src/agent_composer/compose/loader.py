@@ -45,9 +45,9 @@ from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
     build_leaf_node,
-    infer_data_edges,
     synthesize_boundary_graph,
 )
+from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.cases import (
@@ -64,7 +64,7 @@ from agent_composer.compose.stages.human_questions_validate import (
     validate_human_questions,
 )
 from agent_composer.compose.stages.loop_contract import check_loop_type_contract
-from agent_composer.compose.stages.ordering import infer_ordering_edges
+from agent_composer.compose.edges.ordering import infer_ordering_edges
 from agent_composer.compose.stages.ref_map_types import check_ref_map_types
 from agent_composer.compose.stages.references import validate_references
 from agent_composer.compose.stages.wiring_parity import check_wiring_parity

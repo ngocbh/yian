@@ -13,7 +13,8 @@ import pytest
 
 from agent_composer.compile.model import Edge
 from agent_composer.nodes.case import DEFAULT_HANDLE
-from agent_composer.compose.build import build_leaf_node, infer_data_edges
+from agent_composer.compose.build import build_leaf_node
+from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.cases import desugar_case, reconcile_case_edges
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import (

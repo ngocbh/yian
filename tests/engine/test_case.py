@@ -24,7 +24,8 @@ import pytest
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode
 from agent_composer.typesys.values import ValueKind, Type
-from agent_composer.compose.build import build_leaf_node, infer_data_edges
+from agent_composer.compose.build import build_leaf_node
+from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.cases import desugar_case, reconcile_case_edges
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import (

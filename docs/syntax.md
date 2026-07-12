@@ -633,7 +633,10 @@ One `${...}` grammar serves every context — the difference is what each contex
 
 `asserts:` are boolean invariants; a false (or raising) one fails the run loudly.
 A top-level `asserts:` runs over `input.X` (a boundary check, before any node)
-or `node.output` (a post check, after the terminal).
+or `node.output` (a post check, after the terminal). `${system.X}` is **not**
+allowed in a flow-level assert — it is ambient (there is no producer node to draw
+the check's dependency edge from), so it raises a `LoadError` at load time. If you
+need a system-dependent check, put it in a body node's `asserts:` or a `case`.
 
 ```yaml
 asserts:

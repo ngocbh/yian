@@ -54,7 +54,6 @@ base `Node`; a kind overrides only what it needs.
 | `binds_per_item: bool` | read boundary (`eval_node`): bind PER ELEMENT via a `bind_item` cap vs bind `params` once | `False` → `True` on `map` |
 | `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → timed `wait` `{"until": ts}`, `map` `{"over": [...]}` |
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → timed `wait` `{"until"}`, `map` `{"over"}` |
-| `iter_boundary_records(seed) -> [(record,label)]` | growth core (`_apply_grow`): records eager-checked against the child's boundary asserts *before* the ledger attach | `[]` → `call` one, `map` one/element (agent/loop none) |
 | `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` (loop/non-REF, no depth work) → `1` call/map, `0` agent |
 | `grow_restamps_self: bool` | growth core: also stamp `_spawner_expansion` at the spawner's OWN bare id (re-pause nesting) | `False` → `True` on `agent` |
 | `is_loop: bool` | growth core (`_apply_grow`): gate the origin-keyed single-live-record ledger invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior record) | `False` → `True` on `loop` |
@@ -227,17 +226,20 @@ resolved to a line at the CLI boundary — never a text heuristic.
   `RunResult.locator` (flow-level). All default `None`.
 - **Producers:** `BindingError` stamps a node-less `input` span (`bind_params` knows the
   param name, not the node); `eval_node`'s funnel fills the node id via `replace(loc,
-  node=node.id)` and emits an `assert` span at each of its three node-assert yields;
-  `StartNode.run` stamps an `input_decl` span on the e08 `TypeCheckError`; the engine's
-  seed step and `run.py` stamp `assert` spans for boundary / post-terminal asserts; the
-  engine's typed write boundary stamps a `field` span (`key="output"`) on the
+  node=node.id)` and emits an `assert` span at each of its two node-assert yields (pre/post,
+  incl. the flow's post asserts lowered onto the END node);
+  `StartNode.run` stamps an `input_decl` span on the e08 `TypeCheckError` AND an `assert` span
+  for each flow boundary assert it fires post-coercion (the flow's `asserts:` are lowered onto
+  the START/END boundary nodes at build — `run.py` stamps none itself);
+  the engine's typed write boundary stamps a `field` span (`key="output"`) on the
   `NodeExecutionError` it raises when a node's value fails its declared `output:` Type.
 - **Concrete range (resolved at the failure site):** ALONGSIDE the symbolic `locator`, the
   funnel resolves a concrete **`SourceRange`** (start/end line+col, 1-based; in `events`) by
   keying the node's recorded `field_ranges` on the locator KEY — kind-blind, never on
   `node.kind`. It rides `NodeFailed.range` and its flow-level twin `RunResult.range` /
-  `RunFailed.range` (all default `None`; the flow twin is resolved from `StartNode.field_ranges`
-  for node-less failures — an e08 input-decl, an e18 boundary/post assert).
+  `RunFailed.range` (all default `None`; the flow twin is resolved from the boundary node's
+  `field_ranges` — `StartNode.field_ranges` for an e08 input-decl / a boundary assert,
+  `EndNode.field_ranges` for a post assert).
 - **Resolution (CLI boundary):** `cli/run.py` prefers the pre-resolved `nf.range` →
   `result.range`; only if both are absent does `_resolve_range` map the span itself, via
   `_top_ranges` (the flow's `SourceFrame` maps, else `loader.top_frame_ranges(text)`): a

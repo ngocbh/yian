@@ -120,7 +120,7 @@ Most are just the functional model (above) made enforceable:
   registry/metaclass), but the engine core (`runtime/engine.py` + `runtime/eval_node.py`) does NOT
   branch on it. Any kind-specific `match` lives in a node's own `run`; the core dispatches only on
   the closed `Outcome` sum and on node-owned traits/hooks (`binds_per_item`, `bind_reserved`,
-  `iter_boundary_records`, `grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`). A
+  `grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`). A
   ratchet test (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion`
   dispatch count at 0.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler

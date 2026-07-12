@@ -20,7 +20,7 @@ Add a member to the `NodeKind` enum — the single source of the tag. It is a cl
 vocabulary (no registry/metaclass); the engine core does NOT dispatch on it, so a new
 leaf needs no engine change — its behavior is entirely in its own `run` (and, for a
 spawner, the node-owned growth traits/hooks: `binds_per_item`, `bind_reserved`,
-`iter_boundary_records`, `grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`).
+`grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`).
 
 ```python
 class NodeKind(str, Enum):

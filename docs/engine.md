@@ -58,6 +58,15 @@ but **node-configured** — a node declares *how* to bind rather than the engine
 on kind (e.g. `binds_per_item` on `map`, `bind_reserved` for a `wait`'s `until` or a
 `map`'s `over`). The only kind-specific step is `run` itself.
 
+A flow's own top-level `asserts:` are not a separate engine phase: at build they are
+lowered onto the synthesized `__start__`/`__end__` boundary nodes. A boundary assert
+(`${input.X}` only) rides `__start__` and fires *inside* `StartNode.run`, after input
+coercion — a dedicated slot the generic `check(node.pre_asserts)` seam leaves alone, since
+it must see the coerced values. A post assert (`${node.output}`) rides `__end__` as an
+ordinary `node.post_asserts` and fires through the `run_node` recipe above. So `run.py`
+enforces no asserts itself; a false assert comes back as a `NodeFailed`/`RunFailed` event
+like any other node assert.
+
 ## `Outcome` — the whole vocabulary between the two actors
 
 A node returns exactly one of four things, and this closed set is the *only* thing the
@@ -99,10 +108,15 @@ with a single `__start__` and `__end__`**. The engine schedules the `start`, and
 spawner bakes `commit_as=<its own id>` onto the terminal — so however many inner nodes
 run, downstream sees one clean output committed under the spawner's id.
 
-The splice carries a few extra concerns (check the child's boundary asserts, stamp
-recursion depth, loop bookkeeping), but the growth core reads **node-owned traits**
-(`iter_boundary_records`, `grow_depth_delta`, `grow_restamps_self`, `is_loop`) — never
-`node.kind`. `prune` is growth's generic inverse: a self-respawning loop retires the
+The splice carries a few extra concerns (stamp recursion depth, loop bookkeeping),
+but the growth core reads **node-owned traits**
+(`grow_depth_delta`, `grow_restamps_self`, `is_loop`) — never
+`node.kind`. A child's asserts are **not** an engine-side splice concern: a called flow's
+`asserts:` are lowered onto its own `__start__`/`__end__` at build (just like the
+top-level flow, below), and those boundary nodes are cloned into the parent along with the
+rest of the child — so the child's boundary asserts fire through `StartNode.run` and its
+post asserts through `run_node`, on the ordinary node path, identically to the top level.
+`prune` is growth's generic inverse: a self-respawning loop retires the
 iteration it just finished in the same step, so it grows without leaking. Adding a new
 spawner kind means setting traits on its node; the core never gains a branch. Details:
 [Nodes](nodes.md).
@@ -137,7 +151,7 @@ serialized). Only the number of nodes in flight differs.
 | `node.on_failure(...)` | recovery seam (default: re-raise) |
 | `node.is_spawner` | may it return `Grow`? |
 | read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_llm` |
-| growth traits | `iter_boundary_records`, `grow_depth_delta`, `grow_restamps_self`, `is_loop` |
+| growth traits | `grow_depth_delta`, `grow_restamps_self`, `is_loop` |
 
 That is the complete list — a small set of traits/hooks plus `run`. No `NodeKind` is
 visible to the engine.

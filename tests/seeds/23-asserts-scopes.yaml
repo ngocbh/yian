@@ -3,11 +3,15 @@
 # One relevance-desk flow that exercises all THREE assert scopes plus a named-call-node
 # post assert. A false (or raising) assert at any scope fails the run loudly.
 #
-#   - FLOW   asserts: top-level `asserts:` — boundary (${inputs}/${system}, before any
+#   - FLOW   asserts: top-level `asserts:` — boundary (${input.X} only, before any
 #            node) or post (${X.output}, after the terminal); a flow-level post assert
 #            can read a named `call` node's `.output` like any other node's output.
-#   - DEF    asserts: a `defs:` callable's top-level `asserts:` — enforced at the REF/MAP
-#            child seam (boundary before the child runs, post after it terminates).
+#            `${system.X}` is NOT allowed in a flow assert (it is ambient — no producer
+#            to draw an edge from; a `system` ref is a LoadError).
+#   - DEF    asserts: a `defs:` callable's top-level `asserts:` — lowered onto the def's
+#            own START/END, which are cloned into the parent when the def is called, so they
+#            fire on the ordinary node path (boundary before the child runs, post after it
+#            terminates), exactly like the top-level flow's asserts.
 #   - NODE   asserts: a node's `asserts:` — the per-node contract; node-LOCAL refs only:
 #            bare `name` = a declared input (PRE, before _run), `output`/`output.field`
 #            = the node's own output (POST, after _run). Not on a `case` or a mapped `call`;
@@ -94,7 +98,7 @@ output:
   decision: ${take.output | skip.output}
 
 asserts:
-  # FLOW boundary — only ${inputs}/${system}; checked BEFORE any node (fail-fast).
+  # FLOW boundary — only ${input.X} (NOT ${system}); checked BEFORE any node (fail-fast).
   - "input.window >= 5 and input.window <= 252"
   - "input.weight >= 0 and input.weight <= 1"
   # FLOW post — reads <node>.output (a node's output); checked AFTER the terminal.

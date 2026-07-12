@@ -17,7 +17,8 @@ rejecting them.
 
 Like `nodes/base.py` (which imports `typesys`/`binding` for the `Node` contract), this base
 imports the deps its methods need — `typesys` (Type/TypeRegistry), `nodes.binding` (ParamDecl),
-`compose.types` (read_type), `events` (SourceRange) — none of which import back into `kinds`, so
+`compose.types` (read_type), `compose.errors` (LoadError) and `compose.reader` (NodeReader) for
+the ported parse machinery, `events` (SourceRange) — none of which import back into `kinds`, so
 it stays a leaf of the kinds package: it never imports `helpers.py`, any sibling kind,
 `kinds/__init__`, or `parser.py`. Both `helpers.py` (which derives `_COMMON_FIELDS` from this
 base) and every kind module import it at module top level without cycling; `parser.py`
@@ -27,12 +28,14 @@ re-exports it as the descriptor base type for its importers.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.typesys.values import Type
 from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compose.types import read_type
+from agent_composer.compose.errors import LoadError
+from agent_composer.compose.reader import NodeReader
 from agent_composer.events import SourceRange
 
 
@@ -59,6 +62,44 @@ class NodeDescriptor:
     `kw_only=True` (inherited by every subclass) makes all fields keyword-only, so a subclass may
     declare REQUIRED kind fields (`code`, `model_id`, `call`, ...) after these defaulted commons
     without the "non-default follows default" error. Every construction site is keyword-only."""
+
+    # --- Class-level parse/build contract (per-kind overrides, not dataclass fields) ---
+    #
+    # These are `ClassVar`s (lowercase names, `ClassVar[...]`), so the dataclass machinery
+    # excludes them from `__init__`/`__eq__`; each kind subclass overrides them to declare
+    # only what makes that kind different.
+
+    # The kind's surface discriminator (`kind:` in the body). Empty on the abstract base;
+    # every concrete kind sets it (e.g. `"agent"`, `"code"`, `"map"`).
+    kind: ClassVar[str] = ""
+
+    # The COMPLETE set of legal body keys for this kind (surface spelling). Starts as the
+    # keys every node body accepts — the four author-surface commons plus `kind` itself —
+    # so `_check_keys` compares against `cls.allowed` directly (no manual COMMON union).
+    # Each kind EXTENDS it via `allow(...)` with its own keys; `inputs`/`outputs` are opt-in
+    # (a signature-less kind like wait/case never lists them, so it keeps rejecting them).
+    allowed: ClassVar[frozenset[str]] = frozenset(
+        {"kind", "node_name", "depends_on", "runs_after", "env"}
+    )
+
+    # The body keys this kind REQUIRES (surface spelling). Empty on the base — no key is
+    # required by every kind (`kind` is resolved by dispatch before `parse`, never checked
+    # here). Each kind extends it via `require(...)` (e.g. `code` requires `code`).
+    required: ClassVar[frozenset[str]] = frozenset()
+
+    # The descriptor FIELD names carrying `${...}` binding strings, consumed by the
+    # kind-blind ref walk in `bindings.py`. Empty on the base; a value-shaped kind sets it
+    # (e.g. `("inputs",)`).
+    binding_fields: ClassVar[tuple[str, ...]] = ()
+
+    # Surface keys that collide with Python keywords -> a trailing-underscore field name:
+    # `else:`->`else_` (case), `while:`/`until:`->`while_`/`until_` (loop). Harmless for
+    # the kinds that carry none of them, so the template `parse` applies it uniformly.
+    keyword_remap: ClassVar[dict[str, str]] = {
+        "else": "else_",
+        "while": "while_",
+        "until": "until_",
+    }
 
     id: str
     node_name: Optional[str] = None
@@ -88,3 +129,169 @@ class NodeDescriptor:
         """This descriptor's `inputs:` map -> the flow-owned wiring (`param -> source`).
         The source half of the split; the same dict `sink_params` reads the names from."""
         return dict(self.inputs or {})
+
+    # --- Key-set extension helpers ------------------------------------------------------
+
+    @classmethod
+    def allow(cls, *keys: str) -> frozenset[str]:
+        """`cls.allowed` unioned with `keys` — the idiom a kind uses to add its OWN body keys.
+
+        Unions THIS class's allowed set (already carrying the commons + `kind`, plus any keys
+        added by ancestors) with the extra surface keys, so a subclass inherits its parent's
+        keys and lists only its additions (e.g. `CallDescriptor.allow("over", "parallel")`)."""
+        return cls.allowed | frozenset(keys)
+
+    @classmethod
+    def require(cls, *keys: str) -> frozenset[str]:
+        """`cls.required` unioned with `keys` — the idiom a kind uses to add REQUIRED body keys.
+
+        Mirror of `allow` for the required set: unions this class's required keys with the
+        extras, so a subclass extends its parent's requirements (e.g. `MapDescriptor` requires
+        `call` from `CallDescriptor` plus its own `over`)."""
+        return cls.required | frozenset(keys)
+
+    # --- Parse-side machinery (ported from the old `helpers.py` free functions) ---------
+
+    @classmethod
+    def _check_keys(cls, node_id: str, reader: NodeReader) -> None:
+        """Legality check for a node body's surface keys, run by the template `parse`.
+
+        Rejects any body key not in `cls.allowed` (the COMPLETE legal key set for this kind —
+        the commons + `kind` + the kind's own keys, so no manual union is needed), then requires
+        every key in `cls.required`. Raises a located `LoadError` for the first offense — an
+        unknown key caret-points at that key's value, a missing key at the node body. Reads
+        nothing into the descriptor (that is `_read_common_fields` + the template's own-key loop)."""
+        allowed_keys = cls.allowed
+        body = reader.value
+        for key in body:
+            if key not in allowed_keys:
+                raise LoadError(
+                    f"node {node_id!r} (kind={cls.kind}): field {key!r} is not allowed "
+                    f"(allowed: {', '.join(sorted(allowed_keys))})",
+                    range=reader.range_of(key),
+                )
+        for key in cls.required:
+            if key not in body:
+                raise LoadError(
+                    f"node {node_id!r} (kind={cls.kind}): missing required field {key!r}",
+                    range=reader._own_range(),
+                )
+
+    @classmethod
+    def _read_common_fields(
+        cls,
+        node_id: str,
+        reader: NodeReader,
+        kwargs: dict[str, Any],
+        ranges: dict[str, SourceRange],
+    ) -> None:
+        """Lift the four common author-surface fields into the template `parse` accumulators.
+
+        Reads `node_name`/`depends_on`/`runs_after`/`env` from the node body (`reader.value`)
+        into `kwargs`, recording each present field's `SourceRange` into `ranges`; both dicts
+        are mutated IN PLACE (the accumulators the template passes to the descriptor
+        constructor). `env:` is validated to be a mapping with string keys — a bad shape raises
+        a located `LoadError` naming `cls.kind`. The other three are copied through untouched
+        (their per-field shape is checked later by the loader edge pass)."""
+        body = reader.value
+        for key in ("node_name", "depends_on", "runs_after"):
+            if key in body:
+                kwargs[key] = body[key]
+                rng = reader.range_of(key)
+                if rng is not None:
+                    ranges[key] = rng
+        if "env" in body:
+            env = body["env"]
+            if not isinstance(env, dict) or not all(isinstance(k, str) for k in env):
+                raise LoadError(
+                    f"node {node_id!r} (kind={cls.kind}): `env:` must be a mapping "
+                    f"with string keys",
+                    range=reader.range_of("env"),
+                )
+            kwargs["env"] = env
+            rng = reader.range_of("env")
+            if rng is not None:
+                ranges["env"] = rng
+
+    @classmethod
+    def parse(cls, node_id: str, reader: NodeReader) -> "NodeDescriptor":
+        """The template `parse` — the whole parse skeleton every kind shares.
+
+        Runs, in order: `_normalize_reader` (pre-check fixup hook), `_check_keys` (key
+        legality), the OWN-KEY loop (`cls.allowed - NodeDescriptor.allowed` yields exactly
+        this kind's own keys — the commons + `kind` live on the base's set, so the loop never
+        touches them; each present key is read into `kwargs` under its `keyword_remap`ped name,
+        its `SourceRange` recorded), `_validate_fields` (kind-specific legality hook, default:
+        the asserts-list check), then `_read_common_fields` (the four commons with `env`
+        validation). Finally constructs `cls(**kwargs, range=..., field_ranges=...)`.
+
+        A kind customizes only the two hooks; 8 of 10 kinds inherit this untouched. Returns
+        the fully-populated descriptor instance (`cls`, never the abstract base)."""
+        cls._normalize_reader(reader)
+        cls._check_keys(node_id, reader)
+        body = reader.value
+        ranges: dict[str, SourceRange] = {}
+        kwargs: dict[str, Any] = {"id": node_id}
+        for key in cls.allowed - NodeDescriptor.allowed:  # this kind's OWN keys only
+            if key not in body:
+                continue
+            rng = reader.range_of(key)
+            if rng is not None:
+                ranges[key] = rng
+            kwargs[cls.keyword_remap.get(key, key)] = body[key]
+        cls._validate_fields(node_id, kwargs, ranges)
+        cls._read_common_fields(node_id, reader, kwargs, ranges)
+        return cls(**kwargs, range=reader._own_range(), field_ranges=ranges)
+
+    @classmethod
+    def _normalize_reader(cls, reader: NodeReader) -> None:
+        """Pre-`_check_keys` fixup of `reader.value`. Default: nothing to fix.
+
+        A hook the template `parse` calls first, before any key is inspected. Only `case`
+        overrides it (to undo YAML 1.1's `on:`->`True` key coercion); every other kind
+        inherits this no-op."""
+
+    @classmethod
+    def _validate_fields(
+        cls,
+        node_id: str,
+        kwargs: dict[str, Any],
+        ranges: dict[str, SourceRange],
+    ) -> None:
+        """Kind-specific field legality, run by the template `parse` after the own-key loop.
+
+        Receives `kwargs` (already remapped/populated by the loop), not the raw body. Default:
+        if an `asserts:` field is present, it must be a `list` of `str` — a bad shape raises a
+        located `LoadError` naming `cls.kind`. Presence-guarded: absent `asserts` is a no-op,
+        so kinds that never author `asserts` are unaffected. Only `human_input` overrides this
+        (calling `super()` first for the asserts check)."""
+        asserts = kwargs.get("asserts")
+        if asserts is not None and not (
+            isinstance(asserts, list) and all(isinstance(a, str) for a in asserts)
+        ):
+            raise LoadError(
+                f"node {node_id!r} (kind={cls.kind}): `asserts:` must be a list of strings",
+                range=ranges.get("asserts"),
+            )
+
+    # --- Build-side machinery -----------------------------------------------------------
+
+    def build(self, *, registry=None, resolver=None, **hints):
+        """Build this descriptor into a runtime `Node` (+ its flow-owned wiring).
+
+        Abstract on the base — each concrete kind overrides it, returning `(node, wiring)`
+        (typically ending in `self._finish(node, wiring)`). Keyword-only params: `registry`
+        (the `TypeRegistry` for `output_type`), `resolver` (the child-flow resolver for
+        call/map/loop), and `**hints` (loader-supplied extras such as `source_file`/`code_line`
+        for the code kind). `case` overrides this to raise (it is desugared, never a leaf)."""
+        raise NotImplementedError(f"{type(self).__name__} has no build")
+
+    def _finish(self, node, wiring):
+        """Stamp parse metadata onto a freshly-built `node` and return `(node, wiring)`.
+
+        The tail helper every `build` ends with: copies this descriptor's `range` and a COPY of
+        its `field_ranges` onto the runtime node (so diagnostics after build still caret back to
+        the source), then returns the `(node, wiring)` pair the loader/build sites expect."""
+        node.range = self.range
+        node.field_ranges = dict(self.field_ranges)
+        return node, wiring

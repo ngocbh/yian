@@ -28,9 +28,15 @@ def _descriptor_kind(desc: Any) -> Optional[str]:
     A `CallDescriptor` serves two kinds (`call`/`map`) so it carries its own `.kind`;
     every other descriptor class is 1:1 with a kind, resolved by reverse-lookup of
     `type(desc)` in `KINDS`. Returns `None` for an unregistered descriptor (walked as
-    having no binding fields — a safe pass-through)."""
+    having no binding fields — a safe pass-through).
+
+    A descriptor carrying only the `NodeDescriptor` base's empty-string `kind` ClassVar
+    default (a kind not yet converted to declare its own `kind` class attr) counts as
+    "no kind set" and falls through to the reverse-lookup — so this stays correct through
+    the incremental kind-by-kind conversion, then collapses to `return desc.kind` once
+    every kind sets its class attr (see the plan's Step 14)."""
     kind = getattr(desc, "kind", None)
-    if kind is not None:
+    if kind:
         return kind
     for name, spec in KINDS.items():
         if spec.descriptor_cls is type(desc):

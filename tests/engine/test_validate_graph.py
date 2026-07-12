@@ -13,16 +13,10 @@ import pytest
 
 from agent_composer.compile.model import Edge
 from agent_composer.nodes.case import DEFAULT_HANDLE
-from agent_composer.compose.build import build_leaf_node
+from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.edges.data import infer_data_edges
-from agent_composer.compose.cases import desugar_case, reconcile_case_edges
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parse.file import (
-    AgentDescriptor,
-    CaseDescriptor,
-    CodeDescriptor,
-    parse_file,
-)
+from agent_composer.compose.parse.file import parse_file
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.parse.nodes import parse_nodes
@@ -32,25 +26,24 @@ _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
 
 def _build(seed: str):
+    """(node_ids, reconciled_edges, nodes) for a seed — every descriptor built kind-blind.
+
+    Mirrors the loader's conductor loop: build each descriptor via `desc.build(BuildContext(...))`,
+    collect its `BuildResult` (node + wiring + edges). A leaf's `.edges` is empty; a `case`'s
+    `.edges` already carries its own reconciled data + control edges (its lowering is its build).
+    `reconciled = infer_data_edges(leaf wiring) + all BuildResult.edges` (case edges last)."""
     f = parse_file((_SEEDS / seed).read_text())
     descriptors = parse_nodes(NodeReader.spanless(f.nodes))
-    built = {
-        nid: build_leaf_node(d, {})
-        for nid, d in descriptors.items()
-        if isinstance(d, (AgentDescriptor, CodeDescriptor))
-    }  # {nid: (node, wiring)}
-    leaf = {nid: n for nid, (n, _) in built.items()}
-    flow_wiring = {nid: w for nid, (_, w) in built.items()}
-    step8 = infer_data_edges(descriptors, flow_wiring)
-    desugars = {
-        nid: desugar_case(d, {})
-        for nid, d in descriptors.items()
-        if isinstance(d, CaseDescriptor)
-    }
-    edges = reconcile_case_edges(step8, desugars)
-    nodes = dict(leaf)
-    for nid, d in desugars.items():
-        nodes[nid] = d.node
+    nodes: dict = {}
+    flow_wiring: dict = {}
+    case_edges: list = []
+    for nid, d in descriptors.items():
+        result = d.build(BuildContext({}))
+        nodes[nid] = result.node
+        flow_wiring[nid] = result.wiring
+        case_edges.extend(result.edges)
+    data_edges = infer_data_edges(descriptors, flow_wiring)
+    edges = data_edges + case_edges
     return set(descriptors), edges, nodes
 
 

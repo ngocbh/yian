@@ -298,22 +298,26 @@ class NodeDescriptor:
 
     # --- Build-side machinery -----------------------------------------------------------
 
-    def build(self, *, registry=None, resolver=None, **hints):
-        """Build this descriptor into a runtime `Node` (+ its flow-owned wiring).
+    def build(self, ctx: BuildContext) -> BuildResult:
+        """Build this descriptor into a runtime `Node` (+ its flow-owned wiring), returning a
+        `BuildResult`.
 
-        Abstract on the base — each concrete kind overrides it, returning `(node, wiring)`
-        (typically ending in `self._finish(node, wiring)`). Keyword-only params: `registry`
-        (the `TypeRegistry` for `output_type`), `resolver` (the child-flow resolver for
-        call/map/loop), and `**hints` (loader-supplied extras such as `source_file`/`code_line`
-        for the code kind). `case` overrides this to raise (it is desugared, never a leaf)."""
+        Abstract on the base — each concrete kind overrides it, returning a `BuildResult`
+        (typically via `self._finish(node, wiring)`; `case` also passes `edges=`). Its one input
+        is the immutable `BuildContext`: `ctx.registry` (the `TypeRegistry` for `output_type`),
+        `ctx.resolver` (the child-flow resolver for call/map/loop), and the inline-CODE traceback
+        anchors `ctx.source_file`/`ctx.code_line`/`ctx.code_field_line` (only the CODE build reads
+        them). A leaf kind reads only `ctx.registry`; call/map/loop also read `ctx.resolver`."""
         raise NotImplementedError(f"{type(self).__name__} has no build")
 
-    def _finish(self, node, wiring):
-        """Stamp parse metadata onto a freshly-built `node` and return `(node, wiring)`.
+    def _finish(self, node, wiring, edges=()) -> BuildResult:
+        """Stamp parse metadata onto a freshly-built `node` and wrap it in a `BuildResult`.
 
-        The tail helper every `build` ends with: copies this descriptor's `range` and a COPY of
-        its `field_ranges` onto the runtime node (so diagnostics after build still caret back to
-        the source), then returns the `(node, wiring)` pair the loader/build sites expect."""
+        The tail helper every `build` ends with — the ONE place the two range stamps live, so
+        they cannot drift across the per-kind builds: copies this descriptor's `range` and a COPY
+        of its `field_ranges` onto the runtime node (so diagnostics after build still caret back
+        to the source), then returns the `BuildResult(node, wiring, edges)`. `edges` defaults to
+        `()` (leaf/call/loop own no edges); `case` passes its data+control edges."""
         node.range = self.range
         node.field_ranges = dict(self.field_ranges)
-        return node, wiring
+        return BuildResult(node=node, wiring=wiring, edges=tuple(edges))

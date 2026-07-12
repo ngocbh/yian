@@ -82,7 +82,7 @@ _DESCRIPTORS = (
 )
 ```
 
-The shared dispatch (`stages/parse.py::_parse_node`, `build.build_leaf_node`,
+The shared dispatch (`parse/`, `loader._assemble`'s build loop,
 `bindings.py`) looks the class up in `KINDS` and calls `cls.parse(...)` / `desc.build(...)`
 kind-blind — no isinstance branch to add.
 

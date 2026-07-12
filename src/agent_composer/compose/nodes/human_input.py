@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.nodes.base import NodeDescriptor
+from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.events import SourceRange
 from agent_composer.expr.template import prompt_refs
 from agent_composer.nodes.human_input import HumanInputNode
@@ -139,18 +139,18 @@ class HumanInputDescriptor(NodeDescriptor):
             )
         return HumanInputNode(self.id, prompt=self.prompt or "", title=self.node_name)
 
-    def build(self, *, registry=None, resolver=None, **_loader_hints):
+    def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `HumanInputNode` (+ wiring) for this `HumanInputDescriptor`.
 
         Mirrors the legacy `build.build_leaf_node` human_input path: build the gate (one of three
         question forms), derive `output_type` from `outputs:` (a questions gate with none defaults
         to a bare open OBJECT — the host returns a free-form answer record), compute the
         `answer_schema`, and wire node-side `params` + flow-owned `inputs`. Stamps `.range`/
-        `.field_ranges` via `_finish`. `resolver` is unused (leaf kind) and `_loader_hints`
-        absorbs the inline-CODE traceback anchors that only the CODE build reads.
+        `.field_ranges` via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is
+        unused (leaf kind) and the inline-CODE anchors on `ctx` are read only by the CODE build.
         """
         node = self._build_gate()
-        node.output_type = self.output_type(registry)
+        node.output_type = self.output_type(ctx.registry)
         # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT (the host
         # returns a free-form answer record). Legacy gates derive their schema from the (possibly
         # absent) declared output type.

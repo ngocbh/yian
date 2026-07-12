@@ -11,7 +11,7 @@ import pytest
 
 import agent_composer.compose.stages as stages
 from agent_composer.compile.model import Edge
-from agent_composer.compose.build import build_leaf_node
+from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.agent import AgentDescriptor
 from agent_composer.compose.nodes.code import CodeDescriptor
@@ -238,6 +238,12 @@ def test_reject_cycles_no_ranges_leaves_range_none():
 # ---------- 7.7 validate_references: a dangling ref carries the field's range ----------
 
 
+def _node_wiring(desc):
+    """Build a leaf descriptor -> the `(node, wiring)` pair (unwrapping the BuildResult)."""
+    result = desc.build(BuildContext({}))
+    return result.node, result.wiring
+
+
 def _built_flow(text):
     """Build leaf nodes + flow wiring + producers from a flow's `nodes:` (span-aware).
 
@@ -249,7 +255,7 @@ def _built_flow(text):
     reader = NodeReader(value, spans, root).child("nodes")
     descriptors = parse_nodes(reader)
     built = {
-        nid: build_leaf_node(d, {})
+        nid: _node_wiring(d)
         for nid, d in descriptors.items()
         if isinstance(d, (AgentDescriptor, CodeDescriptor))
     }
@@ -345,7 +351,7 @@ def test_check_wiring_parity_moved():
     # (additive) AND anchors its `.range` on the node's `input:` mapping span (else node.range).
     from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 
-    node, wiring = build_leaf_node(CodeDescriptor(id="n", code="m:f", inputs={"x": "${input.x}"}), {})
+    node, wiring = _node_wiring(CodeDescriptor(id="n", code="m:f", inputs={"x": "${input.x}"}))
     rng = SourceRange(start_line=3, start_col=5, end_line=4, end_col=20)
     node.field_ranges = {"inputs": rng}
     with pytest.raises(LoadError) as exc:

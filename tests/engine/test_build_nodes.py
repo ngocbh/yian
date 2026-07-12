@@ -1,13 +1,14 @@
-"""Unit tests for build_leaf_node — the leaf runtime Node builder.
+"""Unit tests for the per-kind `descriptor.build(ctx)` — the leaf runtime Node builder.
 
-A leaf descriptor (agent/code/model/tool) + a typedefs registry build the
+A leaf descriptor (agent/code/model/tool) + a typedefs registry (via `BuildContext`) build the
 matching runtime `Node`, stamped with:
   - `output_type = read_type(descriptor.outputs, registry)` (None if no outputs),
   - `inputs = [InputBinding(name=k, source=v)]` from the descriptor's `inputs:`
     map (sink bindings — `type_str`/`type` lenient/None; the type is carried by the
     source); a TOOL's `args` map binds the same way (untyped).
 
-Mirrors the per-kind ctor args. case/ref/map are later steps.
+`desc.build(ctx)` returns a `BuildResult` (`.node`/`.wiring`/`.edges`). Mirrors the per-kind
+ctor args.
 """
 
 from pathlib import Path
@@ -22,12 +23,21 @@ from agent_composer.llm_clients import LLMConfig
 from agent_composer.typesys.values import ValueKind
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose import LoadError
-from agent_composer.compose.build import build_leaf_node
+from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.parse.file import parse_file
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
+
+
+def _build(desc, registry=None):
+    """Build a leaf descriptor and return the legacy `(node, wiring)` pair.
+
+    Wraps `desc.build(BuildContext(registry))` (which returns a `BuildResult`) so these unit
+    tests read the node/wiring the way they did against the old `build_leaf_node` tuple."""
+    result = desc.build(BuildContext(registry if registry is not None else {}))
+    return result.node, result.wiring
 
 
 def _seed_nodes(name: str):
@@ -41,7 +51,7 @@ def _seed_nodes(name: str):
 def test_agent_node_built_with_type_and_bindings():
     # seed 00 — a scalar (str) output, one ${input.topic} sink binding.
     desc = _seed_nodes("00-hello-agent.yaml")["note"]
-    node, wiring = build_leaf_node(desc, {})
+    node, wiring = _build(desc)
     assert isinstance(node, AgentNode)
     assert node.id == "note"
     assert node.output_type.kind == ValueKind.STRING
@@ -55,7 +65,7 @@ def test_agent_node_built_with_type_and_bindings():
 def test_agent_node_object_output():
     # seed 01 score — an object {rating, rationale} output.
     desc = _seed_nodes("01-structured-agent.yaml")["score"]
-    node, _ = build_leaf_node(desc, {})
+    node, _ = _build(desc)
     assert isinstance(node, AgentNode)
     assert node.output_type.kind == ValueKind.OBJECT
     assert node.output_type.fields["rating"].kind == ValueKind.NUMBER
@@ -73,13 +83,13 @@ def test_agent_unknown_mode_is_loud_loaderror():
     )
     desc = parse_nodes(NodeReader.spanless(parse_file(text).nodes))["note"]
     with pytest.raises(LoadError, match="unknown mode"):
-        build_leaf_node(desc, {})
+        _build(desc)
 
 
 def test_agent_bad_mode_loaderror_is_located_via_load_flow():
     # Through the full load path the loader stamps the node's source line onto the
-    # build-time LoadError (build_leaf_node raises it line-less; loader locates it),
-    # so an invalid mode:/controls: points the author at the offending node.
+    # build-time LoadError (`desc.build(ctx)` raises it line-less; the loader's conductor
+    # loop locates it), so an invalid mode:/controls: points the author at the offending node.
     from agent_composer.compose.loader import load_flow
 
     bad_mode = (
@@ -113,7 +123,7 @@ def test_agent_bad_mode_loaderror_is_located_via_load_flow():
 def test_agent_node_knobs():
     # seed 14 — mode / tools / controls / llm_config carried onto the AgentNode.
     desc = _seed_nodes("14-agent-tools.yaml")["reviewer"]
-    node, _ = build_leaf_node(desc, {})
+    node, _ = _build(desc)
     assert isinstance(node, AgentNode)
     assert node.mode == "tool_calling"
     assert node.tools == ["get_web_data", "web_search"]
@@ -130,9 +140,9 @@ def test_agent_node_knobs():
 def test_node_name_becomes_title():
     # node_name -> the Node title; absent -> None. A constructed descriptor pins
     # the node_name -> title mapping (seed leaf nodes carry no node_name).
-    note, _ = build_leaf_node(_seed_nodes("00-hello-agent.yaml")["note"], {})
+    note, _ = _build(_seed_nodes("00-hello-agent.yaml")["note"])
     assert note.title is None
-    named, _ = build_leaf_node(
+    named, _ = _build(
         parse_nodes(
             NodeReader.spanless(
                 {
@@ -146,7 +156,6 @@ def test_node_name_becomes_title():
                 }
             )
         )["n"],
-        {},
     )
     assert named.title == "Format verdict"
 
@@ -157,7 +166,7 @@ def test_node_name_becomes_title():
 def test_code_node_built():
     # seed 01 verdict — a CODE node (module:function ref).
     desc = _seed_nodes("01-structured-agent.yaml")["verdict"]
-    node, wiring = build_leaf_node(desc, {})
+    node, wiring = _build(desc)
     assert isinstance(node, CodeNode)
     assert node.ref == "tests.seeds.fns:one_line_summary"
     assert node.output_type.kind == ValueKind.STRING
@@ -174,7 +183,7 @@ def test_code_node_built():
 def test_model_node_built():
     # seed 07 predict — model_id / weights_uri / runtime, object output.
     desc = _seed_nodes("07-model-rating.yaml")["predict"]
-    node, wiring = build_leaf_node(desc, {})
+    node, wiring = _build(desc)
     assert isinstance(node, ModelNode)
     assert node.model_id == "topic-ranker-v1"
     assert node.weights_uri == "manifold://calpha/models/topic-ranker-v1.pt"
@@ -189,7 +198,7 @@ def test_model_node_run_raises_serving_not_wired():
     # The model_runtime seam was removed (dead plumbing); the MODEL kind still builds,
     # but running one is loud until ML serving is re-added.
     desc = _seed_nodes("07-model-rating.yaml")["predict"]
-    node, _ = build_leaf_node(desc, {})
+    node, _ = _build(desc)
     with pytest.raises(NotImplementedError, match="not wired"):
         node.run({})
 
@@ -200,7 +209,7 @@ def test_model_node_run_raises_serving_not_wired():
 def test_tool_node_built_with_args_bindings():
     # seed 08 news — tool_id + untyped `inputs` -> InputBindings.
     desc = _seed_nodes("08-tool-news.yaml")["news"]
-    node, wiring = build_leaf_node(desc, {})
+    node, wiring = _build(desc)
     assert isinstance(node, ToolNode)
     assert node.tool_id == "get_facts"
     assert node.output_type is None  # no outputs: declared
@@ -213,10 +222,11 @@ def test_tool_node_built_with_args_bindings():
 # ---------- registry-resolved output type ----------
 
 
-def test_call_loop_descriptors_rejected_as_non_leaf():
-    # call/map/loop share the KINDS table but need a resolver — `build_leaf_node` (the
-    # leaf-only, resolver=None path) must reject them up front rather than build with a
-    # missing resolver and fail with a confusing message deep in `build_call_node`.
+def test_call_loop_descriptors_need_a_resolver():
+    # call/map/loop share the kind-blind `desc.build(ctx)` path but resolve a CHILD via
+    # `ctx.resolver`. A leaf-only `BuildContext` (resolver=None, the default) can't resolve
+    # the callable, so building one is loud — a `LoadError` naming the unresolvable callable,
+    # not a bare `TypeError` leaking from the `None(...)` resolver call.
     from agent_composer.compose.parse.file import CallDescriptor, MapDescriptor, LoopDescriptor
 
     for desc in (
@@ -224,8 +234,8 @@ def test_call_loop_descriptors_rejected_as_non_leaf():
         MapDescriptor(id="m", call="child", over="${input.xs}"),
         LoopDescriptor(id="p", call="body", times=3),
     ):
-        with pytest.raises(LoadError, match="is not a leaf node"):
-            build_leaf_node(desc, {})
+        with pytest.raises(LoadError, match="could not resolve callable"):
+            _build(desc)
 
 
 def test_output_type_resolves_registry_name():
@@ -243,7 +253,7 @@ def test_output_type_resolves_registry_name():
             }
         )
     )
-    node, _ = build_leaf_node(nodes["synth"], registry)
+    node, _ = _build(nodes["synth"], registry)
     assert isinstance(node, AgentNode)
     assert node.output_type.kind == ValueKind.OBJECT
     assert node.output_type.fields["category"].kind == ValueKind.STRING

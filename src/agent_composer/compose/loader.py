@@ -4,10 +4,11 @@ The integration that wires every prior slice into one `CompiledFlow`. The
 post-parse pipeline is `_assemble`, shared by the top-level flow AND every in-file
 `defs:` callable:
 
-  parse -> typedefs registry -> [build defs] -> flow-input decls -> build
-  leaf nodes + desugar cases -> infer data edges -> reconcile case edges
-  -> validate references + classify asserts -> synthesize roots/terminals over
-  ALL edges -> reject cycles + check if/else handles -> CompiledFlow.from_parts.
+  parse -> typedefs registry -> [build defs] -> flow-input decls -> build every
+  node kind-blind (`desc.build(ctx)`; a case lowers in its own build) -> infer data
+  edges + append each case's own edges -> validate references + classify asserts
+  -> synthesize roots/terminals over ALL edges -> reject cycles + check if/else
+  handles -> CompiledFlow.from_parts.
 
 `call` resolution is **defs-first**: a `call:` names an in-file `defs:` callable (built
 in-loader by the same `_assemble`) or, failing that, an external flow via the
@@ -33,7 +34,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import yaml
 
@@ -44,21 +45,17 @@ from agent_composer.typesys.values import TypeCheckError, Type
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.validate.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
-    build_leaf_node,
     synthesize_boundary_graph,
 )
 from agent_composer.compose.edges.data import infer_data_edges
+from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
-from agent_composer.compose.cases import (
-    CaseDesugar,
-    desugar_case,
-    reconcile_case_edges,
-)
 from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.desugar.case_targets import desugar_case_call_targets
+from agent_composer.compose.validate.case_exhaustive import check_case_exhaustive
 from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.validate.human_questions import (
     validate_human_questions,
@@ -78,9 +75,6 @@ from agent_composer.compose.helpers.source import (
 )
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.parse.file import (
-    CallDescriptor,
-    CaseDescriptor,
-    LoopDescriptor,
     parse_file,
 )
 from agent_composer.compose.helpers.types import InputDecl, read_flow_inputs
@@ -676,10 +670,11 @@ def _assemble(
     """Assemble parsed sections into a `LoadedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
 
-      flow-input decls -> build leaf + `call` nodes -> cross-flow type check
-      -> desugar cases -> infer data edges -> reconcile case edges -> validate
-      references + classify asserts -> synthesize roots/terminals -> reject
-      cycles + check if/else handles -> CompiledFlow.from_parts.
+      flow-input decls -> build every node kind-blind (`desc.build(ctx)`; a case lowers
+      in its own build) -> cross-flow type check + case exhaustiveness -> infer data
+      edges + append each case's own edges -> validate references + classify asserts
+      -> synthesize roots/terminals -> reject cycles + check if/else handles
+      -> CompiledFlow.from_parts.
 
     `resolver` is the composite call resolver (defs-first); `registry` is the file's
     `read_typedefs(...)`. `n_lines`/`s_lines` are the source maps — each node id / top-level
@@ -742,102 +737,63 @@ def _assemble(
         asserts_line=s_lines.get("asserts"),
     )
 
-    # Build leaf runtime nodes (agent/code/model/tool) + `call` nodes (REF/MAP, via the
-    # resolver); cases desugar separately.
-    # Flow-owned wiring (the split): `flow_wiring[node_id][param] -> source`. A `{}`
-    # entry for EVERY node (params-bearing or not) so a relocated node never falls through and
-    # the key-parity check can range over all nodes. Leaf + WAIT are populated here; REF/MAP
-    # and CASE stay `{}` until relocated.
-    leaf: dict[str, Node] = {}
+    # Build EVERY node kind-blind through its own descriptor's `build(ctx)` — leaf, call/map
+    # (MapDescriptor rides CallDescriptor, no branch), loop, AND case (which lowers in its own
+    # `.build()`, returning its data+control edges in `BuildResult.edges`). The conductor never
+    # branches on the descriptor kind. Flow-owned wiring (the split): `flow_wiring[node_id][param]
+    # -> source`, a `{}` entry for every node so the key-parity check ranges over all nodes.
+    ctx_base = BuildContext(registry=registry, resolver=resolver, source_file=flow_label)
+    nodes_built: dict[str, Node] = {}
     flow_wiring: dict[str, dict] = {}
-
+    case_edges: list[Edge] = []  # a case's own data+control edges; () for every other kind
     for nid, desc in descriptors.items():
-        if isinstance(desc, CaseDescriptor):
-            flow_wiring[nid] = {}  # case wiring relocated below
-            continue
-        if isinstance(desc, CallDescriptor):
-            try:
-                # Build through the descriptor's own `build` (call/map) so it stamps
-                # `.range`/`.field_ranges` uniformly with the leaf path — the funnel's
-                # concrete-range resolution needs a call/map node's `field_ranges` (e.g. an
-                # `over:`/call-arg binding failure) just as much as a leaf's.
-                node, wiring = desc.build(registry=registry, resolver=resolver)
-            except LoadError as exc:  # locate a resolver failure at the call node's line
-                if exc.line is None:
-                    exc.line = n_lines.get(nid)
-                raise
-            leaf[nid] = node
-            flow_wiring[nid] = wiring
-        elif isinstance(desc, LoopDescriptor):
-            try:
-                node, wiring = desc.build(registry=registry, resolver=resolver)
-            except LoadError as exc:  # locate a resolver / name-set / legality failure at the loop node's line
-                if exc.line is None:
-                    exc.line = n_lines.get(nid)
-                raise
-            leaf[nid] = node
-            flow_wiring[nid] = wiring
-        else:
-            try:
-                # Inline-CODE traceback anchors (content start line + `code:` field line)
-                # are derived inside the CODE build from the descriptor's own `code:` range.
-                node, wiring = build_leaf_node(
-                    desc, registry, source_file=flow_label,
-                )
-            except LoadError as exc:  # locate a build failure (e.g. a bad type expr) at the node's line
-                if exc.line is None:
-                    exc.line = n_lines.get(nid)
-                raise
-            leaf[nid] = node
-            flow_wiring[nid] = wiring
+        try:
+            result = desc.build(ctx_base)
+        except LoadError as exc:  # locate a build failure (resolver/legality/type expr) at the node's line
+            if exc.line is None:
+                exc.line = n_lines.get(nid)
+            raise
+        nodes_built[nid] = result.node
+        flow_wiring[nid] = result.wiring
+        case_edges.extend(result.edges)
     # Stamp each built node's effective static config: the flow-level `env:` default merged
     # under the node's own `env:` (node override wins), flow-local (a called child flow has its
     # own flow env). The engine core never reads `Node.env` — only a node's own `run()` does.
     _flow_env = flow_env or {}
-    for nid, node in leaf.items():
+    for nid, node in nodes_built.items():
         node.env = {**_flow_env, **getattr(descriptors[nid], "env", {})}
     # producers: each built node's declared output_type (drives the case `on:` enum
-    # exhaustiveness + the dotted-field walk in ref/assert validation).
+    # exhaustiveness + the dotted-field walk in ref/assert validation). A case node has no
+    # output_type, so it is naturally excluded by the filter.
     producers: dict[str, Type] = {
         nid: node.output_type
-        for nid, node in leaf.items()
+        for nid, node in nodes_built.items()
         if node.output_type is not None
     }
 
     # cross-flow type check: each `call` binding's source type vs the callable
-    # input type (needs producers, so it runs after all leaf/call nodes are built).
+    # input type (needs producers, so it runs after all nodes are built).
     flow_input_types = {decl.name: decl.type for decl in inputs}
-    check_ref_map_types(leaf, producers, flow_input_types, flow_wiring, n_lines)
+    check_ref_map_types(nodes_built, producers, flow_input_types, flow_wiring, n_lines)
     # loop `'a -> 'a` type contract (types): each carried field's seed-source Type vs the
     # body output's same-named field Type (needs producers, so it runs alongside the
     # cross-flow call/map type check above).
-    check_loop_type_contract(leaf, producers, flow_input_types, flow_wiring, n_lines)
+    check_loop_type_contract(nodes_built, producers, flow_input_types, flow_wiring, n_lines)
+    # case `on:` enum-exhaustiveness (a validate-phase check — needs the assembled producer
+    # types). Runs right after the type contracts, the same phase-position as the old
+    # desugar-time check, so error ordering is preserved.
+    check_case_exhaustive(descriptors, producers, node_lines=n_lines)
 
-    # Desugar each `case` to an CaseNode + its data/control edges.
-    desugars: dict[str, CaseDesugar] = {}
-    for nid, desc in descriptors.items():
-        if not isinstance(desc, CaseDescriptor):
-            continue
-        try:
-            desugars[nid] = desugar_case(desc, producers)
-        except LoadError as exc:  # locate a malformed/non-exhaustive case at the case node's line
-            if exc.line is None:
-                exc.line = n_lines.get(nid)
-            raise
-
-    nodes: dict[str, Node] = dict(leaf)
-    for nid, desugar in desugars.items():
-        nodes[nid] = desugar.node
-        flow_wiring[nid] = desugar.wiring  # case (CaseNode) wiring relocated to the flow
+    nodes: dict[str, Node] = dict(nodes_built)
 
     # flow.wiring/params key parity over EVERY node (catches an orphan/
     # missing source or a node absent from the wiring). Runs once the wiring is complete.
     check_wiring_parity(nodes, flow_wiring, n_lines)
 
-    # Data edges — the projection of flow.wiring (leaf + WAIT) + descriptor sources
-    # (REF/MAP/CASE) — reconciled with the case desugars' edges.
+    # Data edges — the projection of flow.wiring (leaf + WAIT + REF/MAP); a case owns its own
+    # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended here.
     data_edges = infer_data_edges(descriptors, flow_wiring)
-    reconciled = reconcile_case_edges(data_edges, desugars)
+    reconciled = data_edges + case_edges
 
     # Reference + assert validation over the built flow. Errors locate
     # at the node's line (a bad node-input ref) or the `outputs:` section line (a
@@ -856,7 +812,7 @@ def _assemble(
     validate_human_questions(nodes, node_lines=n_lines)
     # Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post +
     # stamp onto each built leaf/call node. Shared by defs (a def's internal nodes too).
-    validate_node_asserts(leaf, descriptors, n_lines)
+    validate_node_asserts(nodes_built, descriptors, n_lines)
     asserts = classify_asserts(asserts_section, flow_inputs, set(descriptors), producers)
 
     # Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in

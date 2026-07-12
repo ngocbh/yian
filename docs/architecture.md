@@ -46,9 +46,10 @@ stages: **parse → desugar → wire → check → freeze.**
   │  parse_nodes           tree      -> one frozen *descriptor* per node (kind-specific)
   │  desugar_*             rewrite sugar into core nodes:
   │                          inline ${f(x)} calls, adaptive questions, case targets, cases
-  │  build (per kind)      each descriptor -> a runtime Node  (+ its flow-owned wiring)
+  │  build (per kind)      each descriptor -> a runtime Node  (+ its flow-owned wiring;
+  │                          a case lowers in its own build, emitting its branch edges)
   │  infer_data_edges      read every ${...} -> draw the edges NOBODY drew by hand
-  │  reconcile_case_edges  make branch edges agree with the case graph
+  │                          (+ append each case's own data+control edges)
   │  validate_references   every ${...} points at something real & type-compatible
   │  reject_cycles         the graph must be a DAG
   │  check_case_handles    every branch has a home

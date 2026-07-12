@@ -1,21 +1,22 @@
 """The per-kind axis of the Compose front end: one handle per author-written `kind:`.
 
 Issue #70 splits `compose/` along two axes: the *node-kind* axis lives here
-(`compose/nodes/<kind>.py`), and the cross-node *graph-stage* axis lives in
-`compose/stages/`. Each kind module owns the three things that used to be scattered
-across `parse/file.py` (its descriptor + the `_KIND_SPECS` row) and `build.py` (its branch
-of the `build_leaf_node` isinstance ladder):
+(`compose/nodes/<kind>.py`), and the cross-node *graph-stage* axis lives in the
+`compose/parse/`, `compose/desugar/`, `compose/edges/`, and `compose/validate/` phases.
+Each kind module owns the three things that used to be scattered across `parse/file.py`
+(its descriptor + the `_KIND_SPECS` row) and `build.py` (its branch of the old
+`build_leaf_node` isinstance ladder, now dissolved):
 
 - its frozen **descriptor** dataclass (subclassing `NodeDescriptor`),
 - **`parse(id, reader)`** — a classmethod that reads one node body via a located
   `NodeReader`, recording each field's `SourceRange` into the descriptor's `field_ranges`, and
-- **`build(*, registry, resolver)`** — a method that constructs the runtime `Node`
-  (+ wiring), stamping `.range`/`.field_ranges` onto it.
+- **`build(ctx: BuildContext) -> BuildResult`** — a method that constructs the runtime `Node`
+  (+ wiring, + any edges a `case` owns), stamping `.range`/`.field_ranges` onto it.
 
 `parse`/`build` ride on the descriptor class itself, so `KINDS` maps the surface `kind:`
 string straight to the descriptor class — no bundling wrapper. The shared dispatch sites
-(`parse/nodes.py::_parse_node`, `build.build_leaf_node`, `loader.py`) look the class up and
-call `cls.parse(...)` / `desc.build(...)`, so adding/altering a kind is a local edit here —
+(`parse/nodes.py::_parse_node`, the loader's conductor loop) look the class up and
+call `cls.parse(...)` / `desc.build(ctx)`, so adding/altering a kind is a local edit here —
 the engine core never sees any of it (kind-blind invariant, `tests/engine/test_kind_census.py`).
 
 `BINDING_FIELDS` is the sibling trait table: per kind, the descriptor fields that carry
@@ -66,7 +67,7 @@ _DESCRIPTORS = (
 )
 
 # Surface `kind:` string -> its descriptor class; the shared dispatch (`parse/nodes.py`,
-# `build.build_leaf_node`, `loader.py`) looks up the class and calls its `parse`/`build`.
+# the loader's conductor loop) looks up the class and calls its `parse`/`build`.
 KINDS: dict[str, type] = {d.kind: d for d in _DESCRIPTORS}
 
 # Surface `kind:` string -> the descriptor field names that carry `${...}` binding strings.

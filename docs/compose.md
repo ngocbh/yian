@@ -25,9 +25,10 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ expand_case_outputs         ┘
   │
   ├─ build (per kind, via KINDS) → a runtime NODE + its flow-owned WIRING
+  │                                (a case lowers in its own build, returning its edges)
   │
-  ├─ infer_data_edges       → read every ${...} → draw the edges (nobody draws them by hand)
-  ├─ reconcile_case_edges   → branch edges agree with the case graph
+  ├─ infer_data_edges       → read every ${...} → draw the edges (nobody draws them by hand);
+  │                            append each case's own data+control edges from its build
   ├─ validate_references    → every ${...} resolves & type-checks; classify asserts
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
@@ -67,7 +68,9 @@ clean and generic.
   contract; each kind carries:
   - **`parse(node_id, reader)`** — a classmethod (the base template) that reads one node body,
     recording each field's `SourceRange`,
-  - **`build(*, registry, resolver, …)`** — a method that constructs the runtime `Node` + wiring.
+  - **`build(ctx: BuildContext) -> BuildResult`** — a method that constructs the runtime
+    `Node` + its flow-owned wiring (and, for a `case`, its own data+control edges). `ctx`
+    carries the shared build inputs (`registry`, `resolver`, inline-CODE source hints).
 
   `compose/nodes/__init__.py` derives the `KINDS` table from a single `_DESCRIPTORS` tuple —
   each kind maps its `kind` string to its descriptor class:
@@ -76,7 +79,7 @@ clean and generic.
   KINDS = {d.kind: d for d in _DESCRIPTORS}   # kind string -> descriptor class
   ```
   Adding or changing a kind is one file plus one entry here. The shared dispatch sites
-  (`stages/parse.py`, `build.build_leaf_node`, `loader.py`) look the class up in `KINDS`
+  (`parse/`, `loader._assemble`) look the class up in `KINDS`
   and call `cls.parse(...)` / `desc.build(...)` — they never grow an `if kind == …` ladder.
 
 - **Cross-node graph passes** → `compose/stages/`. These operate on the *whole* set of
@@ -92,10 +95,11 @@ ladder.
 
 ## Build: descriptor → node + wiring
 
-`build()` produces **two** things, and the split is deliberate:
+`build()` produces a `BuildResult` bundling **three** things, and the split is deliberate:
 
 ```python
-node, wiring = desc.build(registry=registry, resolver=resolver)
+result = desc.build(BuildContext(registry=registry, resolver=resolver))
+node, wiring, edges = result.node, result.wiring, result.edges
 ```
 
 - the **node** carries only what it needs to run: its `output_type` (resolved against
@@ -104,8 +108,10 @@ node, wiring = desc.build(registry=registry, resolver=resolver)
 - the **wiring** is *flow-owned*: `{param → "${source}"}`. The node knows its parameter
   *names*; the flow knows where each one is *sourced from*. This is why a node is
   reusable and why the flow, not the node, owns the graph.
+- the **edges** are empty (`()`) for every kind EXCEPT `case`, which lowers to a
+  `CaseNode` in its own `build()` and returns its data+control branch edges here.
 
-Leaf kinds (`agent`/`code`/`model`/`tool`) ignore `resolver`; `call`/`map`/`loop` use
+Leaf kinds (`agent`/`code`/`model`/`tool`) ignore `ctx.resolver`; `call`/`map`/`loop` use
 it to resolve the child flow they expand into.
 
 ---

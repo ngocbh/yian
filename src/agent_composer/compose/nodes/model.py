@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from agent_composer.compose.nodes.base import NodeDescriptor
+from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.nodes.model import ModelNode
 
 
@@ -44,14 +44,13 @@ class ModelDescriptor(NodeDescriptor):
     runtime: Optional[str] = None
     asserts: list[str] = field(default_factory=list)
 
-    def build(self, *, registry=None, resolver=None, **_loader_hints):
+    def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `ModelNode` (+ wiring) for this `ModelDescriptor`.
 
         Mirrors the legacy `build.build_leaf_node` model path (node-side `params` + flow-owned
         `inputs` wiring, `output_type` from `outputs:`) and stamps `.range`/`.field_ranges` from
-        the descriptor via `_finish`. `resolver` is unused (leaf kind) and `_loader_hints`
-        absorbs the inline-CODE traceback anchors that only the CODE build reads; both ride the
-        shared build signature.
+        the descriptor via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is
+        unused (leaf kind) and the inline-CODE anchors on `ctx` are read only by the CODE build.
         """
         node = ModelNode(
             self.id,
@@ -60,7 +59,7 @@ class ModelDescriptor(NodeDescriptor):
             runtime=self.runtime,
             title=self.node_name,
         )
-        node.output_type = self.output_type(registry)
+        node.output_type = self.output_type(ctx.registry)
         node.params = self.sink_params()
         wiring = self.sink_wiring()
         return self._finish(node, wiring)

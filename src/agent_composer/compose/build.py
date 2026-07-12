@@ -1,18 +1,9 @@
-"""Build leaf runtime `Node`s from node descriptors.
+"""DAG boundary synthesis: `START_ID`/`END_ID` nodes + their edges over ALL edges.
 
-The analogue of `compiler._build_node` + `_declared_inputs` + `_io_binding`,
-working from the parsed `NodeDescriptor`s (flat keyed-map bodies) instead of the
-legacy `FlowNode`/`IOField`. For each LEAF kind (agent/code/model/tool) it:
-
-- instantiates the matching runtime `Node` per-kind (mirroring `_build_node`'s
-  ctor args), with `node_name` -> the Node `title`;
-- stamps `output_type = read_type(descriptor.outputs, registry)` (the source
-  reader), or `None` when the descriptor declares no `outputs:`;
-- stamps `params` (the node-side signature, names only) from the descriptor's `inputs:`
-  map (a TOOL's `args:`) and returns the flow-owned `wiring` (`param -> source`) — the
-  split: the node holds no source, the flow owns it (the type travels with it).
-
-CASE desugar, REF/MAP build happen elsewhere — only leaf kinds here.
+The `build_leaf_node` funnel is DISSOLVED (#70, Step 6): every node kind now builds through
+its own `descriptor.build(ctx) -> BuildResult` (see `compose/nodes/<kind>.py`), and the loader's
+conductor loop drives them kind-blind. What remains here is the boundary synthesis — `synthesize_roots`
+and `synthesize_boundary_graph` — which is representation-neutral graph plumbing, not per-kind build.
 """
 
 from __future__ import annotations
@@ -24,54 +15,7 @@ from agent_composer.expr import binding_co_skips
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
-from agent_composer.typesys.types import TypeRegistry
-from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.edges.producers import _binding_producers
-from agent_composer.compose.parse.file import (
-    CallDescriptor,
-    NodeDescriptor,
-    LoopDescriptor,
-)
-
-
-def build_leaf_node(
-    desc: NodeDescriptor,
-    registry: TypeRegistry,
-    *,
-    source_file: str = "<inline-code>",
-    code_line: Optional[int] = None,
-    code_field_line: Optional[int] = None,
-) -> tuple[Node, dict[str, Any]]:
-    """Build one leaf runtime `Node` (agent/code/model/tool/human_input/wait) + its WIRING.
-
-    Returns `(node, wiring)` where `wiring` is the flow-owned `{param -> source}` map (the
-    split: the node carries only `params`, the flow owns the sources in
-    `CompiledFlow.wiring`). A timed WAIT's reserved `until` source rides the wiring under the
-    `"until"` key; an event WAIT's wiring is `{}`. `registry` is the flow's
-    `read_typedefs(...)` map. A MODEL node builds with no serving seam (removed as dead).
-
-    `source_file` (the flow's file label) frames an inline CODE node's tracebacks at the
-    absolute YAML line. `code_line` (the `code:` block's content start line) and
-    `code_field_line` (the `code:` field-key line, anchoring an inline reject / no-`return`
-    error) are optional caller overrides; when omitted (the range-native loader path) the
-    CODE build derives both from the descriptor's own recorded `code:` `SourceRange`.
-    """
-    # Two-axis dispatch (#70): every leaf kind (agent/code/model/tool/human_input/wait) builds
-    # through its own descriptor's `build` method. Leaf builds ignore `resolver` (the shared
-    # signature carries it only for call/map/loop). `source_file`/`code_line`/`code_field_line`
-    # are inline-CODE traceback anchors — only the CODE build reads them; every other build
-    # absorbs them via `**_loader_hints`. call/map/loop are not leaves — they need a resolver and
-    # route through their own `build` from the loader, so they are rejected up front here. case is
-    # desugared; ref nodes expand at runtime.
-    if isinstance(desc, (CallDescriptor, LoopDescriptor)):
-        raise LoadError(
-            f"node {desc.id!r}: kind {type(desc).__name__} is not a leaf node "
-            f"(call/map/loop build through their own descriptor with a resolver)"
-        )
-    return desc.build(
-        registry=registry, resolver=None,
-        source_file=source_file, code_line=code_line, code_field_line=code_field_line,
-    )
 
 
 # --------------------------------------------------------------------------- #

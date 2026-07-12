@@ -11,10 +11,9 @@ at import so the shared dispatch routes here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.nodes.base import NodeDescriptor
+from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.nodes.code import CodeNode
 
 
@@ -41,34 +40,29 @@ class CodeDescriptor(NodeDescriptor):
     code: str
     asserts: list[str] = field(default_factory=list)
 
-    def build(
-        self,
-        *,
-        registry=None,
-        resolver=None,
-        source_file: str = "<inline-code>",
-        code_line: Optional[int] = None,
-        code_field_line: Optional[int] = None,
-        **_loader_hints,
-    ):
+    def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `CodeNode` (+ wiring) for this `CodeDescriptor`.
 
         Mirrors the legacy `build.build_leaf_node` code path (classify + syntax/return gates,
         node-side `params` + flow-owned `inputs` wiring, `output_type` from `outputs:`) and
-        anchors inline tracebacks from two line hints, preferring the caller's over the desc's:
+        anchors inline tracebacks from two line hints on `ctx`, preferring the caller's over the
+        desc's:
 
-        - `code_line` — the body's content start line (leading-newline padding frames tracebacks
-          at absolute YAML lines). Derived from the recorded `code:` range as `range.start_line + 1`
-          for a multi-line block scalar (algebraically identical to `start_mark.line + 2`), else `1`
-          (a single-line `module:function` ref has no body to pad); a caller may override it.
-        - `code_field_line` — the `code:` value's own start line, the anchor for a reject /
+        - `ctx.code_line` — the body's content start line (leading-newline padding frames
+          tracebacks at absolute YAML lines). Derived from the recorded `code:` range as
+          `range.start_line + 1` for a multi-line block scalar (algebraically identical to
+          `start_mark.line + 2`), else `1` (a single-line `module:function` ref has no body to
+          pad); a caller may override it.
+        - `ctx.code_field_line` — the `code:` value's own start line, the anchor for a reject /
           no-`return` load error (which carries no interior line); `range.start_line` when the
           caller does not supply it. `None` -> the loader anchors at the node header.
 
-        `source_file` (the flow's file label) frames inline tracebacks at the flow filename.
-        All three ride the shared build call from `build_leaf_node` as `**hints`. `resolver` is
-        unused (leaf kind); it rides the shared signature for call/map/loop.
+        `ctx.source_file` (the flow's file label) frames inline tracebacks at the flow filename.
+        `ctx.resolver` is unused (leaf kind); it rides the shared context for call/map/loop.
         """
+        source_file = ctx.source_file
+        code_line = ctx.code_line
+        code_field_line = ctx.code_field_line
         # Prefer the caller's explicit hints (the loader's source maps today); otherwise derive
         # them from the recorded `code:` range (the standalone / Step-7 range-threaded path).
         code_rng = self.field_ranges.get("code")
@@ -102,7 +96,7 @@ class CodeDescriptor(NodeDescriptor):
                 line = code_field_line
             raise LoadError(f"node {self.id!r}: {exc}", line=line) from exc
 
-        node.output_type = self.output_type(registry)
+        node.output_type = self.output_type(ctx.registry)
         node.params = self.sink_params()
         wiring = self.sink_wiring()
         return self._finish(node, wiring)

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agent_composer.compose.nodes.base import NodeDescriptor
+from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.nodes.wait import WaitNode
 
 
@@ -36,15 +36,14 @@ class WaitDescriptor(NodeDescriptor):
 
     until: str
 
-    def build(self, *, registry=None, resolver=None, **_loader_hints):
+    def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `WaitNode` (+ wiring) for this `WaitDescriptor`.
 
         Mirrors the legacy `build.build_leaf_node` wait path: a timed WAIT's `until` SOURCE rides
         the reserved wiring key (`{"until": self.until}`), never a node-side param, and the node
         carries only the `is_timed` residual. Stamps `.range`/`.field_ranges` from the descriptor
-        via `_finish`. `resolver` is unused (leaf kind) and `_loader_hints` absorbs the
-        inline-CODE traceback anchors that only the CODE build reads; both ride the shared build
-        signature.
+        via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is unused (leaf kind)
+        and the inline-CODE anchors on `ctx` are read only by the CODE build.
         """
         node = WaitNode(self.id, is_timed=self.until is not None, title=self.node_name)
         node.params = []

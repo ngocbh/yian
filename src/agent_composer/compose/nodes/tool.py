@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from agent_composer.compose.nodes.base import NodeDescriptor
+from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.nodes.tool import ToolNode
 
 
@@ -39,15 +39,15 @@ class ToolDescriptor(NodeDescriptor):
     tool_id: str
     asserts: list[str] = field(default_factory=list)
 
-    def build(self, *, registry=None, resolver=None, **_loader_hints):
+    def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `ToolNode` (+ wiring) for this `ToolDescriptor`.
 
         Node-side `params` (the sink NAMES) + flow-owned `inputs` wiring; a tool declares no
         `outputs:`, so `output_type` stays unset. Stamps `.range`/`.field_ranges` from the
-        descriptor via `_finish`. The sink surface is the base's `inputs` map, so it uses the
-        inherited `self.sink_params()`/`self.sink_wiring()`. `resolver` is unused (leaf kind)
-        and `_loader_hints` absorbs the inline-CODE traceback anchors that only the CODE build
-        reads; both ride the shared build signature.
+        descriptor via `_finish` (which wraps them in a `BuildResult`). The sink surface is the
+        base's `inputs` map, so it uses the inherited `self.sink_params()`/`self.sink_wiring()`.
+        `ctx.resolver` is unused (leaf kind) and the inline-CODE anchors on `ctx` are read only
+        by the CODE build.
         """
         node = ToolNode(self.id, tool_id=self.tool_id, title=self.node_name)
         node.params = self.sink_params()

@@ -19,7 +19,7 @@ from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.nodes.base import NodeDescriptor
+from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.resolver import (
     ChildSignature,
     _resolve_child,
@@ -76,22 +76,22 @@ class CallDescriptor(NodeDescriptor):
     parallel: bool = False
     asserts: list[str] = field(default_factory=list)
 
-    def build(self, *, registry=None, resolver=None, **_loader_hints):
+    def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `CallNode`/`MapNode` (+ wiring) for this descriptor —
         REF's `CallNode` (single application) or MAP's `MapNode` (`kind: map` + `over:`, mapped
         iteration) — resolve-and-bake, then stamp `.range`/`.field_ranges` via `_finish`.
 
-        Returns `(node, wiring)` (the split): the node carries `params`; the flow owns the sources
+        Returns a `BuildResult` (the split): the node carries `params`; the flow owns the sources
         in `wiring`. A MAP's reserved `over:` iteration source rides the wiring under the `"over"`
         key (over-then-inputs order); a REF's wiring is just its `inputs:`. Resolves the callable
-        via `resolver`, derives its `ChildSignature`, stamps `output_type` (REF re-exports the
+        via `ctx.resolver`, derives its `ChildSignature`, stamps `output_type` (REF re-exports the
         codomain; MAP wraps it in `list[U]`), name/arity-checks the params, and BAKES the child's
         compiled flow onto the node. The REF/MAP discriminator is the descriptor CLASS
-        (`MapDescriptor` -> `MapNode`, else `CallNode`). `registry` is unused (call/map resolve
-        their output type from the child signature, not the flow typedefs); `_loader_hints` absorbs
-        the inline-CODE traceback anchors that only the CODE build reads — both ride the shared
-        build signature.
+        (`MapDescriptor` -> `MapNode`, else `CallNode`). `ctx.registry` is unused (call/map resolve
+        their output type from the child signature, not the flow typedefs); the inline-CODE anchors
+        on `ctx` are read only by the CODE build.
         """
+        resolver = ctx.resolver
         # The construction boundary: this reads the descriptor CLASS (not a compiled kind enum)
         # to pick the runtime class. `MapDescriptor` is imported locally to avoid a module-top
         # cycle (map.py imports CallDescriptor from here). Kind identity is BORN here — downstream

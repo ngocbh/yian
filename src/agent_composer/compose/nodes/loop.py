@@ -16,7 +16,7 @@ from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.typesys.values import Type
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.nodes.base import NodeDescriptor
+from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.resolver import (
     _resolve_child,
     child_signature,
@@ -60,22 +60,24 @@ class LoopDescriptor(NodeDescriptor):
     max: Optional[int] = None
     asserts: list[str] = field(default_factory=list)
 
-    def build(self, *, registry=None, resolver, **_loader_hints):
+    def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `LoopNode` (+ wiring) for this `LoopDescriptor` — a
         `('a -> 'a) -> 'a -> 'a` driver — resolve-and-bake, then stamp `.range`/`.field_ranges`
         via `_finish`.
 
         `loop` is a higher-order driver: the body subflow (`call:`) reads a subset of the
-        carried record (`inputs:`) and returns the WHOLE next carried record. Returns
-        `(node, wiring)` (the split): the node carries `params`; the flow owns the carried-record
-        seed sources in `wiring`. Resolves the callable, derives its `ChildSignature`, bakes the
-        compiled child + input decls, stamps `output_type` (the body codomain, which IS the
-        carried record type), and enforces the FIELD-NAME half of the contract + slice legality
-        (`while:` present, `max:` present). The deep TYPE-level half (body output Type == carried
-        record Type) is the loader pass `check_loop_type_contract`, which needs the assembled
-        parent producers/flow-input types. `registry` is unused (loop resolves its output type
-        from the body signature); `_loader_hints` absorbs the inline-CODE anchors only CODE reads.
+        carried record (`inputs:`) and returns the WHOLE next carried record. Returns a
+        `BuildResult` (the split): the node carries `params`; the flow owns the carried-record
+        seed sources in `wiring`. Resolves the callable through `ctx.resolver` (required — a loop
+        is higher-order), derives its `ChildSignature`, bakes the compiled child + input decls,
+        stamps `output_type` (the body codomain, which IS the carried record type), and enforces
+        the FIELD-NAME half of the contract + slice legality (`while:` present, `max:` present).
+        The deep TYPE-level half (body output Type == carried record Type) is the loader pass
+        `check_loop_type_contract`, which needs the assembled parent producers/flow-input types.
+        `ctx.registry` is unused (loop resolves its output type from the body signature); the
+        inline-CODE anchors on `ctx` are read only by the CODE build.
         """
+        resolver = ctx.resolver
         child = _resolve_child(self.id, self.call, resolver)
         sig = child_signature(child)
         # Stamp the child's AssertSet onto its compiled flow (the Grow subgraph body), exactly as

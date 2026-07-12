@@ -7,11 +7,33 @@ whose surface carries a key YAML 1.1 coerces (`on:`->`True`), so it undoes that 
 the template's key-legality check runs. Registered into `KINDS`/`BINDING_FIELDS` at import so the
 shared dispatch routes here.
 
-A `case` is DESUGARED (into a `CaseNode` + call targets) by the graph-stage pass in
-`compose/cases.py`; it never becomes a leaf runtime node. So `build` here is unreachable
-in the normal load path (the loader desugars case before `build_leaf_node`) and exists only
-to satisfy the dispatch contract — it raises the same "case is desugared" guard the old
-`build_leaf_node` fall-through raised.
+Unlike the leaf kinds, a `case` LOWERS in its own `.build()`: pattern-match compilation (the
+OCaml analogue of lowering `match e with | p -> e1 | _ -> e2` to nested conditionals). A `case`
+carries no inputs and no leaf Node; `.build()` returns a `BuildResult` whose `node` is the strict
+`CaseNode` and whose flat `edges` tuple is the case's DATA edges followed by its CONTROL edges —
+no new node kind. Two surface forms:
+
+- **searched** (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): scan each `when:` for its
+  distinct `${...}` refs -> allocate one `CaseNode` input `__rN` per distinct ref -> rewrite the
+  `when:` to the bare local `${__rN}`. Each case routes to its `then:` (the edge handle); `else:`
+  routes to the shipped internal `default` handle.
+
+- **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`;
+  each `when: <value>` becomes `${__on} == "<value>"`.
+
+Because the desugared `when:`s interpolate ONLY the node-local `__rN`/`__on` names, the strict
+`CaseNode` evaluates them via the EXISTING `evaluate_when_record` against its bound input record —
+no new evaluator, and the strict declared-input check accepts them.
+
+**Exhaustiveness is a SEPARATE validate-phase check** (`validate/case_exhaustive.py`): it needs
+the flow's producer types, which are only assembled after every node is built, so it never lives
+in `.build()`. `.build()` lowers unconditionally; the loader runs `check_case_exhaustive` in the
+validate phase.
+
+Imports flow down/peer only: `expr` (ref scan/rewrite), `nodes` (Case/CaseNode/ParamDecl),
+`compile.model` (Edge), and the compose peer `helpers.errors`/`helpers.reader`/`nodes.base`.
+It imports NOTHING from parse/desugar/edges/validate/build/loader (the ladder), so it stays a
+leaf of the nodes package.
 """
 
 from __future__ import annotations
@@ -19,9 +41,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from agent_composer.compile.model import Edge
+from agent_composer.expr import (
+    ExpressionError,
+    binding_co_skips,
+    condition_refs,
+    expr_refs_of,
+    rewrite_condition_refs,
+)
+from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.case import DEFAULT_HANDLE, Case, CaseNode
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.nodes.base import NodeDescriptor
+from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 
 # YAML 1.1 (PyYAML `safe_load`) coerces the bare key `on:` to the boolean `True` (likewise
 # `off`/`yes`/`no`). The case-node surface key `on:` is the only such key in any node body, so
@@ -41,7 +73,7 @@ def _normalize_keys(body: dict) -> dict:
 class CaseDescriptor(NodeDescriptor):
     """kind=case — branch routing (searched `when:` or `on:`-value form).
 
-    A `case` routes only — it carries NO `inputs:` (the desugar maps it onto the
+    A `case` routes only — it carries NO `inputs:` (the lowering maps it onto the
     inputs-bearing `CaseNode`). `else_` is the `else:` fallback.
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
@@ -56,7 +88,7 @@ class CaseDescriptor(NodeDescriptor):
     `keyword_remap` is case-owned (the base's is empty): `else` is a Python keyword, so the
     template `parse` reads the surface `else:` into the `else_` descriptor field.
 
-    `asserts` stays a declared field (the desugar path may set it) but is deliberately NOT in
+    `asserts` stays a declared field (the lowering path may set it) but is deliberately NOT in
     `allowed` — a `case` never authors `asserts`, so the surface key stays rejected.
     """
 
@@ -83,14 +115,215 @@ class CaseDescriptor(NodeDescriptor):
         still resolve because `NodeReader` matches the RAW key text (`"on"`)."""
         reader.value = _normalize_keys(reader.value)
 
-    def build(self, *, registry=None, resolver=None, **_loader_hints):
-        """A `case` is not a leaf node — it is desugared (see the module docstring).
+    def build(self, ctx: BuildContext) -> BuildResult:
+        """Lower this `case` to a strict `CaseNode` + its control + data edges.
 
-        Unreachable in the normal load path (the loader desugars case before dispatching to a
-        kind's `build`). Present only to satisfy the dispatch contract; raises the same guard
-        the old `build_leaf_node` fall-through raised, so a stray call fails loud.
+        The case's `.build()` is a pattern-match compilation, not a leaf instantiation: it
+        dispatches on the surface form (`on:` vs searched), builds the `CaseNode` + the
+        flow-owned `{__rN|__on -> source}` wiring, and returns a `BuildResult` whose flat `edges`
+        tuple is the DATA edges (per `${<id>.output}` ref a `__rN`/`__on` source reads, keyed by
+        the param name) FOLLOWED BY the CONTROL edges (`gate -> <then|else target>`, keyed by the
+        branch handle). Exhaustiveness is NOT checked here — it is the loader's separate
+        `check_case_exhaustive` validate pass (it needs the assembled producer types). `ctx` is
+        unused (a case resolves nothing and reads no typedefs); it rides the shared contract.
         """
-        raise LoadError(
-            f"node {self.id!r}: kind case is not a leaf node "
-            f"(case nodes are desugared; ref/map nodes expand at runtime)"
+        if self.on is not None:
+            case_node, wiring, data_edges, control_edges = _desugar_on(self)
+        else:
+            case_node, wiring, data_edges, control_edges = _desugar_searched(self)
+        return self._finish(
+            case_node, wiring, edges=tuple(data_edges) + tuple(control_edges)
         )
+
+
+def _outputs_producer(ref: str) -> Optional[str]:
+    """The producing node id of a ref path. Singular only: accepts
+    `<id>.output[.…]`. Legacy `outputs.<id>` is rejected at parse time."""
+    parts = ref.split(".")
+    if len(parts) >= 2 and parts[1] == "output":
+        return parts[0]
+    return None
+
+
+def _refs_in(expr: str) -> list[str]:
+    """The distinct reference paths a `when:` expression reads, in first-seen order.
+
+    Routes through `condition_refs` (parse the WHOLE `when:` value, all three spellings —
+    bare / mixed / whole-span) so it agrees with `_rewrite_when`, which rewrites the same
+    parsed leaves. Raises `ExpressionError` on a malformed `when:` (the caller frames it
+    as a located `LoadError`)."""
+    out: list[str] = []
+    for path in condition_refs(expr):
+        if path not in out:
+            out.append(path)
+    return out
+
+
+def _quote(value: str) -> str:
+    """A `when:` match value quoted as a string literal for `${__on} == "<v>"`.
+
+    The `when:`/`asserts:` grammar's STRING terminal is `/"[^"]*"/ | /'[^']*'/` with
+    NO escape support (the evaluator strips the outer quotes verbatim), so we cannot
+    escape — we pick the quote style the value allows: double-quote when it has no `"`,
+    single-quote when it has no `'`. A value containing BOTH quote characters is
+    unrepresentable in this grammar → a loud, located load error rather than a
+    route-time crash. (Backslashes pass through `[^"]*` fine — no escaping needed.)
+    """
+    s = str(value)
+    if '"' not in s:
+        return f'"{s}"'
+    if "'" not in s:
+        return f"'{s}'"
+    raise LoadError(
+        f"case `on:` match value {s!r} contains both ' and \" — unrepresentable in a "
+        f"`when:` string literal (no escape support); rename the matched value"
+    )
+
+
+def _data_edges(node_id: str, wiring: dict[str, Any]) -> list[Edge]:
+    """Reconciled data edges: one per `${<id>.output}` ref a `__rN`/`__on` source reads.
+
+    Reads the flow-owned `wiring` (`{__rN|__on -> source}`); the `input_group` is the
+    param name (`__rN`/`__on`) so per-input readiness keys on the desugared input. Each edge
+    carries `input_group=name` and leaves `source_handle=None` — the invariant that keeps the
+    flat `BuildResult.edges` split back into data-vs-control by attribute (paired with
+    `_control_edges`, which sets `source_handle` and leaves `input_group=None`).
+    """
+    edges: list[Edge] = []
+    counts: dict[str, int] = {}
+    for name, source in wiring.items():
+        if not isinstance(source, str):
+            continue
+        try:
+            refs = expr_refs_of(source)
+        except ExpressionError:
+            continue  # malformed refs surface, located, in the ref-wiring pass
+        for ref in refs:
+            producer = _outputs_producer(ref)
+            if producer is None:
+                continue
+            i = counts.get(producer, 0)
+            counts[producer] = i + 1
+            edges.append(
+                Edge(
+                    id=f"{producer}->{node_id}#{i}",
+                    from_=producer,
+                    to=node_id,
+                    input_group=name,
+                    # a `when:`/`on:` ref can carry an escape (`:-`/`:?`); a
+                    # co-skipping condition would otherwise wrongly skip-flood the gate.
+                    optional=not binding_co_skips(source),
+                )
+            )
+    return edges
+
+
+def _control_edges(node_id: str, handle_targets: list[tuple[str, str]]) -> list[Edge]:
+    """`gate -> target` edges, each carrying its `source_handle` (case id or default).
+
+    Each edge sets `source_handle=handle` and leaves `input_group=None` — the invariant that
+    keeps the flat `BuildResult.edges` split back into data-vs-control by attribute (paired with
+    `_data_edges`, which sets `input_group` and leaves `source_handle=None`).
+    """
+    edges: list[Edge] = []
+    counts: dict[str, int] = {}
+    for handle, target in handle_targets:
+        i = counts.get(target, 0)
+        counts[target] = i + 1
+        edges.append(
+            Edge(
+                id=f"{node_id}->{target}#{i}",
+                from_=node_id,
+                to=target,
+                source_handle=handle,
+            )
+        )
+    return edges
+
+
+def _desugar_on(
+    desc: CaseDescriptor,
+) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge]]:
+    """`on: ${ref}` form -> one `__on` param + a `${__on} == "<value>"` per case.
+
+    Returns `(node, wiring, data_edges, control_edges)`."""
+    cases: list[Case] = []
+    handle_targets: list[tuple[str, str]] = []
+    for c in desc.cases:
+        value = c.get("when")
+        then = c.get("then")
+        if value is None or then is None:
+            raise LoadError(
+                f"case node {desc.id!r}: each on:-form case needs a `when:` value and a `then:`"
+            )
+        cases.append(Case(handle=then, when=f'${{__on}} == {_quote(value)}'))
+        handle_targets.append((then, then))
+    if desc.else_ is not None:
+        handle_targets.append((DEFAULT_HANDLE, desc.else_))
+    node = CaseNode(desc.id, cases, title=desc.node_name)
+    node.params = [ParamDecl(name="__on")]
+    wiring = {"__on": desc.on}
+    return (
+        node,
+        wiring,
+        _data_edges(desc.id, wiring),
+        _control_edges(desc.id, handle_targets),
+    )
+
+
+def _desugar_searched(
+    desc: CaseDescriptor,
+) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge]]:
+    """Searched form -> one `__rN` input per distinct `${...}` ref; `when:` rewritten.
+
+    Returns `(node, wiring, data_edges, control_edges)`."""
+    # Allocate one local per distinct ref across ALL when:s (first-seen order).
+    ref_to_local: dict[str, str] = {}
+    for c in desc.cases:
+        when = c.get("when")
+        if not isinstance(when, str):
+            raise LoadError(
+                f"case node {desc.id!r}: each searched case needs a string `when:` expression"
+            )
+        try:
+            refs = _refs_in(when)
+        except ExpressionError as exc:
+            raise LoadError(
+                f"case node {desc.id!r}: `when:` {when!r} is not a valid boolean expression: {exc}"
+            ) from exc
+        for ref in refs:
+            if ref not in ref_to_local:
+                ref_to_local[ref] = f"__r{len(ref_to_local)}"
+
+    wiring = {local: f"${{{ref}}}" for ref, local in ref_to_local.items()}
+
+    cases: list[Case] = []
+    handle_targets: list[tuple[str, str]] = []
+    for c in desc.cases:
+        when = c["when"]
+        then = c.get("then")
+        if then is None:
+            raise LoadError(f"case node {desc.id!r}: each searched case needs a `then:`")
+        rewritten = _rewrite_when(when, ref_to_local)
+        cases.append(Case(handle=then, when=rewritten))
+        handle_targets.append((then, then))
+    if desc.else_ is not None:
+        handle_targets.append((DEFAULT_HANDLE, desc.else_))
+
+    node = CaseNode(desc.id, cases, title=desc.node_name)
+    node.params = [ParamDecl(name=local) for local in ref_to_local.values()]
+    return (
+        node,
+        wiring,
+        _data_edges(desc.id, wiring),
+        _control_edges(desc.id, handle_targets),
+    )
+
+
+def _rewrite_when(when: str, ref_to_local: dict[str, str]) -> str:
+    """Rewrite each reference in `when` to its bare local `__rN`, honouring all three
+    condition spellings. A `${<ref>}` (mixed) becomes `${__rN}`, a bare `<ref>`
+    (whole-span / bare) becomes `__rN`; the surrounding expression is preserved. A ref
+    with no allocated local is left untouched. Shares `rewrite_condition_refs` with
+    `_refs_in`, so extraction and rewrite parse the SAME leaves."""
+    return rewrite_condition_refs(when, lambda path: ref_to_local.get(path))

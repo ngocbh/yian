@@ -23,14 +23,10 @@ import pytest
 
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.typesys.values import ValueKind, Type
-from agent_composer.compose.build import build_leaf_node
-from agent_composer.compose.edges.data import infer_data_edges
-from agent_composer.compose.cases import desugar_case, reconcile_case_edges
+from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import (
-    AgentDescriptor,
     CaseDescriptor,
-    CodeDescriptor,
     parse_file,
 )
 from agent_composer.compose.helpers.reader import NodeReader
@@ -43,26 +39,26 @@ _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
 
 def _load(seed: str):
-    """(nodes, flow_inputs, producers, outputs, flow_wiring) for a seed — leaf + desugared cases."""
+    """(nodes, flow_inputs, producers, outputs, flow_wiring) for a seed — every descriptor
+    built kind-blind via `desc.build(...)`. A `case`'s lowering (its `__rN`/`__on` split) is
+    part of its own build, so its rewritten `.node`/`.wiring` come out of the same call."""
     f = parse_file((_SEEDS / seed).read_text())
     descriptors = parse_nodes(NodeReader.spanless(f.nodes))
-    built = {
-        nid: build_leaf_node(d, {})
-        for nid, d in descriptors.items()
-        if isinstance(d, (AgentDescriptor, CodeDescriptor))
-    }
-    leaf = {nid: n for nid, (n, _) in built.items()}
-    flow_wiring = {nid: w for nid, (_, w) in built.items()}
-    producers = {nid: n.output_type for nid, n in leaf.items() if n.output_type is not None}
-    desugars = {
-        nid: desugar_case(d, producers)
-        for nid, d in descriptors.items()
-        if isinstance(d, CaseDescriptor)
-    }
-    nodes = dict(leaf)
-    for nid, d in desugars.items():
-        nodes[nid] = d.node
-        flow_wiring[nid] = d.wiring
+    # First pass: build leaf nodes to learn the producer output types the case build reads.
+    nodes: dict = {}
+    flow_wiring: dict = {}
+    for nid, d in descriptors.items():
+        if not isinstance(d, CaseDescriptor):
+            result = d.build(BuildContext({}))
+            nodes[nid] = result.node
+            flow_wiring[nid] = result.wiring
+    producers = {nid: n.output_type for nid, n in nodes.items() if n.output_type is not None}
+    # Second pass: build the cases (their on:/when: type-legality reads producers).
+    for nid, d in descriptors.items():
+        if isinstance(d, CaseDescriptor):
+            result = d.build(BuildContext(producers))
+            nodes[nid] = result.node
+            flow_wiring[nid] = result.wiring
     flow_inputs = {decl.name for decl in read_flow_inputs(f.inputs, {})}
     return nodes, flow_inputs, producers, f.outputs, flow_wiring
 
@@ -153,11 +149,11 @@ def test_prompt_l1_declared_input_passes():
 
 
 def _desugared_case_nodes(when_or_on: dict):
-    """Build a tiny flow: a `gate` case whose desugared __rN/__on source is dangling.
+    """Build a tiny flow: a `gate` case whose lowered __rN/__on source is dangling.
     Returns (nodes, flow_wiring) — the gate's __rN sources live on flow.wiring now."""
     desc = CaseDescriptor(id="gate", **when_or_on)
-    desugar = desugar_case(desc, {})
-    return {"gate": desugar.node}, {"gate": desugar.wiring}
+    result = desc.build(BuildContext({}))
+    return {"gate": result.node}, {"gate": result.wiring}
 
 
 def test_case_dangling_data_ref_is_loud():

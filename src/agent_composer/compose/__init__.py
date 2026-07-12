@@ -6,11 +6,12 @@ of a node's `outputs:` / a flow's `inputs:` is read directly into one recursive
 are native.
 
 Organized along two axes (#70): the per-node-kind axis lives in `nodes/<kind>.py`
-(each owns its descriptor + `parse` + `build` methods; `nodes/__init__.py` derives the shared
-`KINDS` table from those classes), and the cross-node graph-stage axis lives in `stages/`
-(parse / references / cycles / inline-calls). The shared choke points (`stages/parse.py`,
-`build.py`, `bindings.py`) dispatch through `KINDS` kind-blind — there is no per-kind isinstance
-ladder. `parser.py` is now just the YAML text/span front door (`parse_file`).
+(each owns its descriptor + `parse` + `build(ctx) -> BuildResult` methods; `nodes/__init__.py`
+derives the shared `KINDS` table from those classes), and the cross-node graph-stage axis lives
+in the `parse/`, `desugar/`, `edges/`, and `validate/` phases. The shared choke points
+(`parse/nodes.py`, the loader's conductor loop, `nodes/bindings.py`) dispatch through `KINDS`
+kind-blind — there is no per-kind isinstance ladder. `parse/file.py` is the YAML text/span
+front door (`parse_file`).
 
 Errors carry a concrete `SourceRange` (from `events`): a located `NodeReader` records
 each field's range during `parse`, the runtime funnel resolves a failure's range from
@@ -22,7 +23,6 @@ in the engine imports `compose`.
 
 from agent_composer.compose.validate.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build import (
-    build_leaf_node,
     synthesize_boundary_graph,
     synthesize_roots,
 )
@@ -33,11 +33,6 @@ from agent_composer.compose.nodes.resolver import (
     child_signature,
 )
 from agent_composer.compose.desugar.inline_calls import desugar_inline_calls
-from agent_composer.compose.cases import (
-    CaseDesugar,
-    desugar_case,
-    reconcile_case_edges,
-)
 from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import LoadedFlow, load_flow
@@ -75,17 +70,13 @@ __all__ = [
     "InputDecl",
     "read_flow_inputs",
     "read_type",
-    "build_leaf_node",
     "child_signature",
     "ChildSignature",
     "ChildResolver",
     "infer_data_edges",
     "synthesize_roots",
     "synthesize_boundary_graph",
-    "desugar_case",
-    "CaseDesugar",
     "expand_case_outputs",
-    "reconcile_case_edges",
     "check_case_handles",
     "reject_cycles",
     "validate_references",

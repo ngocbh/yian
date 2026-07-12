@@ -13,12 +13,11 @@ retries?}`. This pass lowers that single descriptor into TWO ordinary descriptor
    questions from the composer: `questions: "${__questions}"`, with the composer's
    output wired into the reserved `__questions` input.
 
-WHY a descriptor-level pass (modeled on `desugar_inline_calls`, NOT `desugar_case`):
-it runs BEFORE the build loop, so the synth agent flows through `build_leaf_node` +
-prompt-scope validation + ref wiring exactly like any author-written agent. A brief
-that references an undeclared `${...}` is therefore caught by the same prompt-scope
-check that guards every agent. A post-build pass (like `desugar_case`) would skip
-that validation entirely.
+WHY a descriptor-level pass (modeled on `desugar_inline_calls`): it runs BEFORE the build
+loop, so the synth agent flows through the kind-blind `desc.build(ctx)` + prompt-scope
+validation + ref wiring exactly like any author-written agent. A brief that references an
+undeclared `${...}` is therefore caught by the same prompt-scope check that guards every agent.
+A post-build pass would skip that validation entirely.
 
 `__questions` is a reserved input name: the wire from the composer's output into the
 gate's questions input. Authors do not write it.

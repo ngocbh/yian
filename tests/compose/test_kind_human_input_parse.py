@@ -5,6 +5,7 @@ questions config + derived answer_schema, with wiring from `inputs` and stamped 
 import pytest
 
 from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.human_input import HumanInputDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
@@ -54,7 +55,8 @@ def test_human_input_parse_matches_descriptor_and_records_ranges():
 def test_human_input_build_returns_gate_and_wires_inputs():
     reader = _reader_for(_FLOW, "ask")
     desc = HumanInputDescriptor.parse("ask", reader)
-    node, wiring = desc.build(registry={}, resolver=None)
+    result = desc.build(BuildContext({}))
+    node, wiring = result.node, result.wiring
 
     from agent_composer.nodes.human_input import HumanInputNode
 
@@ -67,7 +69,8 @@ def test_human_input_build_returns_gate_and_wires_inputs():
 def test_human_input_build_questions_gate_defaults_to_open_object():
     reader = _reader_for(_QUESTIONS_FLOW, "ask")
     desc = HumanInputDescriptor.parse("ask", reader)
-    node, wiring = desc.build(registry={}, resolver=None)
+    result = desc.build(BuildContext({}))
+    node = result.node
 
     from agent_composer.nodes.human_input import HumanInputNode
     from agent_composer.typesys.values import ValueKind

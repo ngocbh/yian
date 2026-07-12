@@ -17,7 +17,7 @@ from typing import Any
 
 from agent_composer.compile.model import Edge
 from agent_composer.expr import binding_co_skips
-from agent_composer.compose.edges.producers import _binding_producers, _condition_producers
+from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.compose.parse.file import CaseDescriptor, NodeDescriptor, WaitDescriptor
 
 
@@ -29,15 +29,14 @@ def infer_data_edges(
 
     For each consuming node, scan its sources and emit a data `Edge` per `${<id>.output[.…]}`
     ref, tagged with the `input_group` that identifies WHICH sink it feeds (the param/arg name
-    for a leaf/REF input; `over` for a MAP's `over:`; `until` for a timed WAIT; a provisional
-    `<case>:<n>` key for a `case` `on:`/`when:` ref). A coalesce sink's alternatives share one
-    group. Edges are the **projection of `flow.wiring`** for leaf + WAIT + REF/MAP;
-    CASE sources are still read off `descriptors`.
+    for a leaf/REF input; `over` for a MAP's `over:`; `until` for a timed WAIT). A coalesce
+    sink's alternatives share one group. Edges are the **projection of `flow.wiring`** for
+    leaf + WAIT + REF/MAP.
 
     `flow_wiring[node_id]` is the `{param -> source}` map (a timed WAIT carries its `until`, a
-    MAP its `over`, under the reserved keys). `descriptors` supplies the CASE `on:`/`when:` refs
-    (a `case` desugars to an `CaseNode`, which reconciles these provisional groups
-    to its `__rN`/`__on` names).
+    MAP its `over`, under the reserved keys). A `case` node is SKIPPED here — `CaseDescriptor.build`
+    owns the case's data + control edges (returned in its `BuildResult.edges`), so no provisional
+    into-case edge is inferred.
     """
     edges: list[Edge] = []
     counts: dict[tuple[str, str], int] = {}  # (from, to) -> next edge index
@@ -63,19 +62,9 @@ def infer_data_edges(
 
     for node_id, desc in descriptors.items():
         if isinstance(desc, CaseDescriptor):
-            # case has no built node (the CaseNode is built later). Its data refs
-            # live in `on:` + each `when:`. Provisional per-ref groups (`<case>:<n>`)
-            # — the case desugar reconciles to `__on`/`__rN`. The edge EXISTENCE is the
-            # invariant this pass must satisfy (so `score -> gate` is inferred).
-            ref_index = 0
-            sources = [desc.on] if desc.on is not None else []
-            sources += [c.get("when") for c in desc.cases]
-            for src in sources:
-                for producer in _condition_producers(src):
-                    # provisional case edges (reconciliation drops them); optional
-                    # is recomputed there from the desugared __rN/__on binding.
-                    emit(producer, node_id, f"{node_id}:{ref_index}", False)
-                    ref_index += 1
+            # A `case` owns its edges: `CaseDescriptor.build` returns them (data + control) in
+            # its `BuildResult.edges`, so this inference pass emits NOTHING for a case node
+            # (no provisional into-case edges to reconcile).
             continue
 
         if isinstance(desc, WaitDescriptor):

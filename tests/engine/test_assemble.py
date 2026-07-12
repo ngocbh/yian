@@ -15,15 +15,14 @@ import pytest
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose import LoadError
+from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.build import (
-    build_leaf_node,
     synthesize_boundary_graph,
     synthesize_roots,
 )
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 from agent_composer.compose.loader import _flow_outputs
-from agent_composer.compose.cases import desugar_case, reconcile_case_edges
 from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CaseDescriptor,
@@ -47,28 +46,29 @@ def _end_edges(f, node_ids, edges):
 
 
 def _all_edges(seed: str):
-    """Data edges reconciled with the case desugars' control edges.
+    """Data edges reconciled with the case builds' control edges.
 
-    Returns (node_ids, edges) — `node_ids` is the runtime node-id set (case nodes
-    desugar to an CaseNode under the SAME id), `edges` is every real-node edge.
+    Returns (node_ids, edges) — `node_ids` is the runtime node-id set (a `case` builds to a
+    CaseNode under the SAME id), `edges` is every real-node edge. Leaf wiring is built for
+    the data-edge inference; a `case`'s own `build` emits its reconciled data+control edges
+    (its `BuildResult.edges`), appended after the leaf data edges — mirrors the loader.
     """
     _p = (_SEEDS / seed) if (_SEEDS / seed).exists() else (_SEEDS / "_future" / seed)
     f = parse_file(_p.read_text())
     registry = read_typedefs(f.typedefs)
     descriptors = parse_nodes(NodeReader.spanless(f.nodes))
     flow_wiring = {
-        nid: build_leaf_node(d, registry)[1]
+        nid: d.build(BuildContext(registry)).wiring
         for nid, d in descriptors.items()
         if isinstance(d, (AgentDescriptor, CodeDescriptor))
     }
     data_edges = infer_data_edges(descriptors, flow_wiring)
-    desugars = {
-        nid: desugar_case(d, {})
-        for nid, d in descriptors.items()
-        if isinstance(d, CaseDescriptor)
-    }
-    edges = reconcile_case_edges(data_edges, desugars)
-    node_ids = set(descriptors)  # case node id == its desugared CaseNode id
+    case_edges = []
+    for nid, d in descriptors.items():
+        if isinstance(d, CaseDescriptor):
+            case_edges.extend(d.build(BuildContext(registry)).edges)
+    edges = data_edges + case_edges
+    node_ids = set(descriptors)  # a case's node id == its built CaseNode id
     return node_ids, edges, f
 
 
@@ -183,7 +183,8 @@ def test_assembled_edges_have_start_and_end():
 
 
 def _leaf(name="n", **inputs):
-    return build_leaf_node(CodeDescriptor(id=name, code="m:f", inputs=inputs), {})
+    result = CodeDescriptor(id=name, code="m:f", inputs=inputs).build(BuildContext({}))
+    return result.node, result.wiring
 
 
 def test_wiring_parity_accepts_matched_keys():
@@ -192,7 +193,8 @@ def test_wiring_parity_accepts_matched_keys():
 
 
 def test_wiring_parity_accepts_timed_wait_reserved_until():
-    node, wiring = build_leaf_node(WaitDescriptor(id="w", until="${input.t}"), {})
+    result = WaitDescriptor(id="w", until="${input.t}").build(BuildContext({}))
+    node, wiring = result.node, result.wiring
     check_wiring_parity({"w": node}, {"w": wiring})  # {"until"} reserved key accepted
 
 

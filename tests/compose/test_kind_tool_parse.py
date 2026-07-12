@@ -1,6 +1,7 @@
 """6.4 — the `tool` kind handle: parse records field ranges into the descriptor; build
 returns a runtime ToolNode with `inputs` wiring (the tool's sink surface) and stamped ranges."""
 
+from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.tool import ToolDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
@@ -40,7 +41,8 @@ def test_tool_parse_matches_descriptor_and_records_ranges():
 def test_tool_build_returns_tool_node_and_wires_inputs():
     reader = _reader_for(_FLOW, "fetch")
     desc = ToolDescriptor.parse("fetch", reader)
-    node, wiring = desc.build(registry={}, resolver=None)
+    result = desc.build(BuildContext({}))
+    node, wiring = result.node, result.wiring
 
     from agent_composer.nodes.tool import ToolNode
 

@@ -10,10 +10,9 @@ The kinds-package-internal shared layer: the machinery each `compose/kinds/<kind
   lifts the four author-surface commons (`node_name`/`depends_on`/`runs_after`/`env`) into its
   kwargs. `_COMMON_FIELDS` (derived from the base's fields) and the surface->field keyword remap
   are private details of those helpers. All of this is consumed only by the kind `parse`s.
-- **Sink helpers** (`_output_type`, `_sink_params`, `_sink_wiring`, `_validate_llm_config`) —
-  the leaf kinds (agent/code/model/tool/human_input) call these to stamp a node's
-  `output_type`/`params` and the flow-owned wiring (the split: the node holds only param
-  NAMES, the flow owns the sources).
+- **Sink helpers** (`_output_type`, `_sink_params`, `_sink_wiring`) — the leaf kinds
+  (code/model/tool/human_input) call these to stamp a node's `output_type`/`params` and the
+  flow-owned wiring (the split: the node holds only param NAMES, the flow owns the sources).
 
 The child resolve-and-signature cluster (`ChildSignature`/`ChildResolver`, `child_signature`,
 `_resolve_child`, `_output_value_type`) that `call`/`map`/`loop` and the graph-stages share
@@ -32,7 +31,6 @@ from dataclasses import fields
 from typing import Any, Optional
 
 from agent_composer.nodes.binding import ParamDecl
-from agent_composer.llm_clients import LLMConfig
 from agent_composer.typesys.values import Type
 from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compose.errors import LoadError
@@ -160,25 +158,4 @@ def _sink_wiring(mapping: dict[str, Any]) -> dict[str, Any]:
     """A descriptor's `inputs:`/`args:` map -> the flow-owned wiring (`param -> source`).
     The source half of the split; the same dict `_sink_params` reads the names from."""
     return dict(mapping or {})
-
-
-def _validate_llm_config(
-    cfg: dict[str, Any] | None, node_id: str
-) -> tuple[dict[str, Any], bool]:
-    """Validate a raw llm_config dict at LOAD time and split off the reserved `inherit` key.
-
-    `inherit` (whole-node cascade opt-out, default True) is NOT an `LLMConfig` field, so it
-    must be popped before the `extra="forbid"` round-trip that fires on typo'd keys (e.g.
-    `temparature`). Returns `(config_without_inherit, inherit)`. Raises `LoadError` (not
-    pydantic ValidationError) so the surface speaks one error type.
-    """
-    if not cfg:
-        return {}, True
-    cfg = dict(cfg)
-    inherit = bool(cfg.pop("inherit", True))
-    try:
-        LLMConfig(**cfg)
-    except Exception as exc:
-        raise LoadError(f"node {node_id!r}: llm_config: {exc}") from exc
-    return cfg, inherit
 

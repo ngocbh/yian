@@ -73,7 +73,7 @@ class KindSpec:
 # `build.build_leaf_node`) consults this. `map` reuses `call`'s `CallDescriptor` + build
 # (a map IS a call with an `over:` iteration source), with its own `over`-aware `parse`.
 KINDS: dict[str, KindSpec] = {
-    "agent": KindSpec(agent.AgentDescriptor, agent.parse, agent.build),
+    "agent": KindSpec(agent.AgentDescriptor, agent.AgentDescriptor.parse, agent.AgentDescriptor.build),
     "code": KindSpec(code.CodeDescriptor, code.CodeDescriptor.parse, code.CodeDescriptor.build),
     "model": KindSpec(model.ModelDescriptor, model.ModelDescriptor.parse, model.ModelDescriptor.build),
     "tool": KindSpec(tool.ToolDescriptor, tool.ToolDescriptor.parse, tool.ToolDescriptor.build),
@@ -88,7 +88,7 @@ KINDS: dict[str, KindSpec] = {
 # Surface `kind:` string -> the descriptor field names that carry `${...}` binding strings.
 # Consumed by the kind-blind walk in `compose/bindings.py`.
 BINDING_FIELDS: dict[str, tuple[str, ...]] = {
-    "agent": agent.AGENT_BINDING_FIELDS,
+    "agent": agent.AgentDescriptor.binding_fields,
     "code": code.CodeDescriptor.binding_fields,
     "model": model.ModelDescriptor.binding_fields,
     "tool": tool.ToolDescriptor.binding_fields,

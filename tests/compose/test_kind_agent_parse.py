@@ -1,6 +1,6 @@
 """6.1 — the `agent` kind handle: parse records field ranges; descriptor unchanged."""
 
-from agent_composer.compose.kinds.agent import AgentDescriptor, parse
+from agent_composer.compose.kinds.agent import AgentDescriptor
 from agent_composer.compose.reader import NodeReader
 from agent_composer.compose.spanloader import load_with_spans
 from agent_composer.events import SourceRange
@@ -25,7 +25,7 @@ def _reader_for(text, node_id):
 
 def test_agent_parse_matches_today_descriptor_and_stamps_ranges():
     reader = _reader_for(_FLOW, "writer")
-    desc = parse("writer", reader)
+    desc = AgentDescriptor.parse("writer", reader)
 
     # The descriptor is exactly today's AgentDescriptor (field_ranges excluded from ==).
     assert desc == AgentDescriptor(

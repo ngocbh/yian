@@ -49,16 +49,16 @@ from agent_composer.compose.build import (
     synthesize_boundary_graph,
 )
 from agent_composer.compose.nodes.resolver import ChildResolver
-from agent_composer.compose.stages.inline_calls import _synth_id_gen, desugar_inline_calls
+from agent_composer.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.cases import (
     CaseDesugar,
     desugar_case,
-    expand_case_outputs,
     reconcile_case_edges,
 )
+from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
-from agent_composer.compose.stages.case_targets import desugar_case_call_targets
+from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
+from agent_composer.compose.desugar.case_targets import desugar_case_call_targets
 from agent_composer.compose.stages.cycles import reject_cycles
 from agent_composer.compose.stages.human_questions_validate import (
     validate_human_questions,

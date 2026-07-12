@@ -3,7 +3,8 @@
 A node descriptor carries `${...}` binding strings in kind-specific fields (an
 agent/code/model's `inputs:`, a tool's `inputs:`, a mapped call's `inputs:`/`over:`).
 Two passes need to rewrite those strings in place: inline-call desugar
-(`compose.stages.inline_calls`) and case-output expansion (`compose.cases`). Both
+(`compose.desugar.inline_calls`) and case-output expansion
+(`compose.desugar.case_outputs`). Both
 used to reach for the same isinstance ladder (the old
 `calls.map_binding_strings_in_descriptor`); this module replaces it with a
 table-driven walk over `BINDING_FIELDS[kind]`, so adding or altering a kind's
@@ -11,8 +12,8 @@ binding surface is a local edit in `compose/nodes/<kind>.py` (its
 `binding_fields`) — not a new ladder arm here.
 
 Layer: sits inside `compose.nodes` (reads its sibling `BINDING_FIELDS` table) and is
-imported by the `compose.stages.inline_calls` + `compose.cases` peers; it never imports
-either back.
+imported by the `compose.desugar.inline_calls` + `compose.desugar.case_outputs` peers;
+it never imports either back.
 """
 
 from __future__ import annotations

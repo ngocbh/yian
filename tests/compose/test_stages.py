@@ -17,10 +17,10 @@ from agent_composer.compose.nodes.agent import AgentDescriptor
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
-from agent_composer.compose.stages.adaptive_questions import desugar_adaptive_questions
-from agent_composer.compose.stages.case_targets import desugar_case_call_targets
+from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
+from agent_composer.compose.desugar.case_targets import desugar_case_call_targets
 from agent_composer.compose.stages.cycles import reject_cycles
-from agent_composer.compose.stages.inline_calls import (
+from agent_composer.compose.desugar.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
 )

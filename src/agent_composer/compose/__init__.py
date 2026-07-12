@@ -32,13 +32,13 @@ from agent_composer.compose.nodes.resolver import (
     ChildSignature,
     child_signature,
 )
-from agent_composer.compose.stages.inline_calls import desugar_inline_calls
+from agent_composer.compose.desugar.inline_calls import desugar_inline_calls
 from agent_composer.compose.cases import (
     CaseDesugar,
     desugar_case,
-    expand_case_outputs,
     reconcile_case_edges,
 )
+from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import LoadedFlow, load_flow
 from agent_composer.compose.parse.file import (

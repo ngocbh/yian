@@ -1,0 +1,21 @@
+"""The desugar phase: FLOW-LEVEL rewrites that run BEFORE the build loop.
+
+A desugar pass takes a flow's parsed descriptors (and its `outputs:`/`asserts:`
+sections) and rewrites them into ordinary descriptors + bindings that the build
+loop then sees as author-written — pure load-time sugar, no new runtime kind. The
+passes:
+
+- `inline_calls` — whole-value `call(<flow-id>, kw=...)` directives in any binding
+  position mint a synth `call` node and rewrite the binding to `${<synth>.output}`.
+- `adaptive_questions` — a `human_input` `adaptive_questions:` block lowers to a
+  synth composer agent + a rewritten gate.
+- `case_targets` — a `case` then:/else: whole-value `call(...)` route target mints a
+  synth call node and rewrites the route target to its id.
+- `case_outputs` — every `${<case>.output}` binding ref expands to a coalesce over
+  the case's branch leaf targets.
+
+Ladder position: desugar imports DOWN/peer only — `helpers`, `nodes`, `parse`, and
+the engine core (`expr`, `events`, `compile`, `nodes.*`). It NEVER imports the
+later phases (`edges`, `validate`, `build`, `loader`, `cases`); nothing earlier
+imports it back. Only the loader (and the later phases) import this package.
+"""

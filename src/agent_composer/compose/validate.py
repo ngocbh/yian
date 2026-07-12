@@ -23,7 +23,7 @@ from agent_composer.compile.model import Edge
 from agent_composer.compile.validation import _walk_record_fields
 from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.expr.template import flow_call_callees_in_spans
-from agent_composer.compose.stages.inline_calls import desugar_call_directives
+from agent_composer.compose.desugar.inline_calls import desugar_call_directives
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode
 from agent_composer.typesys.values import ValueKind

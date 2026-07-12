@@ -2,7 +2,7 @@ import pytest
 
 from agent_composer.expr.grammar import parse_expr
 from agent_composer.expr.expressions import ExpressionError
-from agent_composer.compose.cases import _CASE_OUTPUT_INTERIOR
+from agent_composer.compose.desugar.case_outputs import _CASE_OUTPUT_INTERIOR
 
 
 def test_namespaced_path_parses():

@@ -130,7 +130,7 @@ def desugar_inline_calls(
 
 # --------------------------------------------------------------------------- #
 # The flow `outputs:` binding walk (used by this pass AND the case-value
-# expansion in `compose.cases`). Descriptor binding fields go through the
+# expansion in `compose.desugar.case_outputs`). Descriptor binding fields go through the
 # kind-blind `compose.nodes.bindings.map_binding_strings` instead.
 # --------------------------------------------------------------------------- #
 

@@ -18,7 +18,7 @@ Located parse metadata: each error anchors on the referencing field's `SourceRan
 off the built node's `field_ranges` (the coarse per-field span — e.g. the node's `input:`
 mapping for an input-binding ref, its `prompt:` for a prompt ref). The transitional
 `node_lines`/`outputs_line` line-maps still feed `LoadError.line` for the line-based CLI
-renderer; Step 8 retires them for the range.
+renderer; a later renderer collapse retires them for the range.
 
 Imports flow down only: `compile.validation` (the leaf ref checker), `expr` (the binding
 parser), `nodes` (Node/AgentNode/WaitNode discrimination), `typesys` (Type), `compose.errors`.
@@ -187,8 +187,8 @@ def validate_references(
 
     # Flow outputs (the codomain): each binding `from:` checked like a node input —
     # located at the `outputs:` section line (dangling-head/dotted-field errors point here).
-    # No built node owns the flow `outputs:` block, so no range is available yet (Step 8
-    # resolves it from the section span); the `outputs_line` still locates it.
+    # No built node owns the flow `outputs:` block, so no range is available yet (a later
+    # renderer collapse resolves it from the section span); the `outputs_line` still locates it.
     for value in _output_bindings(outputs):
         scan(value, "flow output from", outputs_line, None)
 

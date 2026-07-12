@@ -8,7 +8,7 @@ discriminates by KIND (`NodeKind.MAP`), carries NO `over` attribute, and the ite
 END fan-in) for the engine's generic `_apply_grow` to splice into the live graph.
 
 Imports flow one way: `nodes.base` (peer) + a deferred `typesys.seeding` import inside `run`
-(matching `nodes.call`, keeping the ladder clean). `compose.kinds.call.build` is the caller.
+(matching `nodes.call`, keeping the ladder clean). `compose.nodes.map.build` is the caller.
 """
 
 from agent_composer.nodes.map.node import MapNode

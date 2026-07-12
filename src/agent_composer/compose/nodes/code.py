@@ -64,7 +64,7 @@ class CodeDescriptor(NodeDescriptor):
         code_line = ctx.code_line
         code_field_line = ctx.code_field_line
         # Prefer the caller's explicit hints (the loader's source maps today); otherwise derive
-        # them from the recorded `code:` range (the standalone / Step-7 range-threaded path).
+        # them from the recorded `code:` range (the standalone range-threaded path).
         code_rng = self.field_ranges.get("code")
         if code_field_line is None and code_rng is not None:
             code_field_line = code_rng.start_line

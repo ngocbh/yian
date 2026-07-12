@@ -1,6 +1,6 @@
 """Shared producer helpers: the node ids a `${...}` reference reads from.
 
-The four functions here map a binding/condition value to the producer node ids it
+The three functions here map a binding/condition value to the producer node ids it
 depends on — the primitive the edges phase (`edges/data.py`) and the later boundary
 synthesis (`build/boundary.py`, via `synthesize_boundary_graph`) both build on. A ref
 head of `<id>.output[.…]` produces from node `<id>`; an `input.X` ref produces from
@@ -13,16 +13,6 @@ from typing import Any, Optional
 
 from agent_composer.compile.model import START_ID
 from agent_composer.expr import ExpressionError, condition_refs, expr_refs_of
-
-
-def _outputs_producer(path: str) -> Optional[str]:
-    """The producing node id of a `${<id>.output[.…]}` whole-string ref, else None
-    (other head). Only the singular node-first spelling is recognized; legacy
-    `${outputs.<id>}` is rejected at parse time."""
-    parts = path.split(".")
-    if len(parts) >= 2 and parts[1] == "output":
-        return parts[0]
-    return None
 
 
 def _ref_producer(path: str) -> Optional[str]:

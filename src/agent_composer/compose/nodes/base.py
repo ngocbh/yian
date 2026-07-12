@@ -17,16 +17,16 @@ rejecting them.
 
 Like `nodes/base.py` (which imports `typesys`/`binding` for the `Node` contract), this base
 imports the deps its methods need — `typesys` (Type/TypeRegistry), `nodes.binding` (ParamDecl),
-`compose.types` (read_type), `compose.errors` (LoadError) and `compose.reader` (NodeReader) for
-the ported parse machinery, `events` (SourceRange) — none of which import back into `kinds`, so
-it stays a leaf of the nodes package: it never imports any sibling kind, `nodes/__init__`, or
-`parser.py`. Every kind module imports it at module top level without cycling; `parser.py`
-re-exports it as the descriptor base type for its importers.
+`compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError) and
+`compose.helpers.reader` (NodeReader) for the parse machinery, `events` (SourceRange) — all
+earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
+sibling kind or `nodes/__init__`. Every kind module imports it at module top level without
+cycling; `parse/file.py` re-exports it as the descriptor base type for its importers.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from typing import Any, ClassVar, Optional
 
 from agent_composer.nodes.base import Node

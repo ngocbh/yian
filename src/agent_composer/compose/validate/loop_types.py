@@ -1,6 +1,6 @@
 """Graph-stage: the TYPE-level half of a `loop`'s `'a -> 'a` contract.
 
-A loader post-build pass (run after `check_ref_map_types`). `kinds.loop.build` checked only the
+A loader post-build pass (run after `check_ref_map_types`). `nodes.loop.build` checked only the
 carried field-NAME sets — it lacks the resolved carried-record Types, which depend on the parent
 producers/flow inputs assembled LATER. This pass resolves each carried field's Type from its
 bound seed source (`${<id>.output}`/`${input.X}` over the parent producers + flow-input types,
@@ -35,7 +35,7 @@ def check_loop_type_contract(
 ) -> None:
     """The TYPE-level half of a `loop`'s `'a -> 'a` contract (a loader post-build pass).
 
-    `kinds.loop.build` checked only the field-NAME sets (it lacks the resolved carried-record
+    `nodes.loop.build` checked only the field-NAME sets (it lacks the resolved carried-record
     Types — the seed sources' types depend on the parent producers/flow inputs assembled
     LATER). This pass, run after `check_ref_map_types`, resolves each carried field's Type
     from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producers +
@@ -51,7 +51,7 @@ def check_loop_type_contract(
             continue
         body_out = node.output_type
         # A non-record / absent body output was already caught by the field-name half in
-        # kinds.loop.build; nothing typed to compare against here.
+        # nodes.loop.build; nothing typed to compare against here.
         if body_out is None or body_out.fields is None:
             continue
         for field_name, src in flow_wiring.get(nid, {}).items():

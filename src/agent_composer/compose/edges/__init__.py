@@ -4,7 +4,7 @@ Given the parsed/desugared descriptors and the flow-owned wiring, this package
 derives the graph's edges:
 
 - `producers.py` — the SHARED producer helpers (`_ref_producer`,
-  `_binding_producers`, `_condition_producers`, `_outputs_producer`): the node ids a
+  `_binding_producers`, `_condition_producers`): the node ids a
   `${...}` reference reads from.
 - `data.py` — `infer_data_edges`: a data `Edge` per `${<id>.output[.…]}` ref.
 - `ordering.py` — `infer_ordering_edges`: `depends_on:`/`runs_after:` ordering gates.

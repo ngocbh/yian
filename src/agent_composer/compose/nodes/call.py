@@ -2,7 +2,7 @@
 
 One of the two-axis `compose/nodes/<kind>.py` modules. `call` and `map` share the resolve-and-bake
 `build` (which branches on `isinstance(self, MapDescriptor)`: a `map` -> `MapNode`, else `CallNode`);
-`kinds/map.py`'s `MapDescriptor` subclasses `CallDescriptor`, adding only the map field surface
+`map.py`'s `MapDescriptor` subclasses `CallDescriptor`, adding only the map field surface
 (`over`/`parallel`) and the `kind="map"` class attr. Both inherit the template `parse` from
 `NodeDescriptor`. Registered into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes
 here.
@@ -49,7 +49,7 @@ class CallDescriptor(NodeDescriptor):
     are the (per-element) call-arg bindings.
 
     The REF/MAP discriminator is the descriptor CLASS: a plain `CallDescriptor` is a REF (built
-    as a `CallNode`); a `MapDescriptor` (its subclass, in `kinds/map.py`) is a MAP (built as a
+    as a `CallNode`); a `MapDescriptor` (its subclass, in `map.py`) is a MAP (built as a
     `MapNode`). `build` branches on `isinstance(self, MapDescriptor)`. The `kind` CLASS ATTR
     (`"call"` here, `"map"` on the subclass) is the surface string for dispatch/diagnostics; it is
     no longer an instance field. The two SYNTH paths (inline-call + case desugar) mint plain

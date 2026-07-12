@@ -10,8 +10,8 @@ passing the fully-assembled edge set is fine.
 Located parse metadata: the caller passes `node_ranges` (node id -> `SourceRange`); the
 cycle error anchors its `range` on the first (sorted) stuck node that has one. Transitionally
 it also passes `node_lines` (node id -> 1-based key line) so the still-line-based CLI renderer
-can highlight *every* stuck node (`flow.yaml:4,9`) via `LoadError.lines`; Step 8's renderer
-collapse retires that map in favour of the single `range`. The error also carries a "why"
+can highlight *every* stuck node (`flow.yaml:4,9`) via `LoadError.lines`; a later renderer
+collapse to the single `range` will retire that map. The error also carries a "why"
 legend (`LoadError.notes`): one line per dependency edge inside the loop, so the author sees
 which `${...}` reference closes the cycle.
 
@@ -47,7 +47,7 @@ def reject_cycles(
     the error's `.range` is the first (sorted) stuck node's range. Absent it, `.range` is
     None. `node_lines` (node id -> 1-based key line) is the transitional line-map the
     line-based CLI renderer still reads: every stuck node's line lands in `LoadError.lines`
-    so the frame highlights the whole loop. Step 8 retires `node_lines` for `range`.
+    so the frame highlights the whole loop. A later renderer collapse retires `node_lines` for `range`.
 
     The error also carries a "why" legend (`LoadError.notes`): one line per dependency edge
     *inside* the loop — "<consumer> depends on <producer> (<consumer>.input.<group>)" — so the

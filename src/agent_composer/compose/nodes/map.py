@@ -2,7 +2,7 @@
 
 The second of the two REF/MAP kinds. A `map` is `kind: map` + `over: ${list}` — iteration with
 `${item}` in element scope, built as a `MapNode` (`parallel:` overlaps the element runs).
-`MapDescriptor` subclasses `CallDescriptor` (in `kinds/call.py`), adding only the map FIELD
+`MapDescriptor` subclasses `CallDescriptor` (in `call.py`), adding only the map FIELD
 SURFACE (`over`/`parallel` join call's `call`/`inputs`) via `allowed`/`required`; it inherits the
 template `parse`, the resolve-and-bake `build` (which builds a `MapNode` because the descriptor is
 a `MapDescriptor`), and every field (`over`/`parallel` live on the shared base class). Registered

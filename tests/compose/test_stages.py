@@ -284,7 +284,7 @@ def test_validate_references_diag_has_range():
 
 def test_check_ref_map_types_moved():
     # A `call` binding whose SOURCE Type mismatches the child input's declared Type is loud.
-    # After the relocation the check lives in `stages.ref_map_types`; the LoadError still
+    # After the relocation the check lives in `validate.call_types`; the LoadError still
     # carries `.line` (additive) AND anchors its `.range` on the call node's `input:` mapping
     # span (`field_ranges["inputs"]`, the coarsest available binding-site span).
     from agent_composer.compose.validate.call_types import check_ref_map_types
@@ -314,7 +314,7 @@ def test_check_ref_map_types_moved():
 def test_check_loop_type_contract_moved():
     # A `loop` whose carried field is SEEDED from a source Type that mismatches the body
     # output's same-named field Type is loud. After the relocation the check lives in
-    # `stages.loop_contract`; the LoadError still carries `.line` (additive) AND anchors its
+    # `validate.loop_types`; the LoadError still carries `.line` (additive) AND anchors its
     # `.range` on the loop node's `input:` mapping span (`field_ranges["inputs"]`).
     from agent_composer.compose.validate.loop_types import check_loop_type_contract
     from agent_composer.nodes.loop import LoopNode
@@ -341,7 +341,7 @@ def test_check_loop_type_contract_moved():
 
 def test_check_wiring_parity_moved():
     # A node whose `flow.wiring` keys don't match its declared params is loud. After the
-    # relocation the check lives in `stages.wiring_parity`; the LoadError still carries `.line`
+    # relocation the check lives in `validate.wiring_parity`; the LoadError still carries `.line`
     # (additive) AND anchors its `.range` on the node's `input:` mapping span (else node.range).
     from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 
@@ -361,7 +361,7 @@ def test_check_wiring_parity_moved():
 
 def test_validate_human_questions_diag_has_range():
     # A human_input gate with a structurally-invalid literal `questions:` list is loud. After
-    # the relocation the check lives in `stages.human_questions_validate`; the LoadError still
+    # the relocation the check lives in `validate.human_questions`; the LoadError still
     # carries `.line` (additive) AND anchors its `.range` on the gate's `questions:` field span.
     from agent_composer.compose.validate.human_questions import (
         validate_human_questions,

@@ -34,7 +34,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from agent_composer.compile.model import Edge
 from agent_composer.compile.validation import _classify_path, _walk_record_fields
 from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.expr.template import flow_call_callees_in_spans

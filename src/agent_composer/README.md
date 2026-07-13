@@ -16,7 +16,10 @@ shape of it:
   not a monolith.
 - Computation is **pure at the boundary**: a node *returns* its outputs and the
   engine *binds* them; a node never reaches in and mutates shared state. Outputs
-  are immutable, typed, losslessly serializable values. A flow's own `asserts:` are
+  are immutable, typed, losslessly serializable values. Each kind implements
+  `_run_impl`; the base `Node.run` is a template method the engine drives that fires
+  the node's asserts (record-only, no pool) around the body — so assert firing is
+  **node-owned** and uniform. A flow's own `asserts:` are
   lowered onto its synthesized `start`/`end` boundary nodes (boundary checks ride
   `start`'s `post_asserts` — `${input.X}` rewritten to `${output.X}` — and fire against
   START's coerced output; post checks ride `end`), both on the ordinary node path,

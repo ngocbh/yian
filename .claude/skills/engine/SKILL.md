@@ -118,14 +118,14 @@ Most are just the functional model (above) made enforceable:
   namespace is generic.
 - **Closed `NodeKind` vocabulary; the core is kind-BLIND** — `NodeKind` stays a closed enum (no
   registry/metaclass), but the engine core (`runtime/engine.py` + `runtime/eval_node.py`) does NOT
-  branch on it. Any kind-specific `match` lives in a node's own `run`; the core dispatches only on
+  branch on it. Any kind-specific `match` lives in a node's own `_run_impl`; the core dispatches only on
   the closed `Outcome` sum and on node-owned traits/hooks (`binds_per_item`, `bind_reserved`,
   `grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`). A
   ratchet test (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion`
   dispatch count at 0.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
-  only a node's own `run()` interprets known keys (e.g. AGENT's `max_tool_iterations`). It is the
+  only a node's own `_run_impl()` interprets known keys (e.g. AGENT's `max_tool_iterations`). It is the
   kind-blind knob for "tune this node" — add a key by having the node read it, never by an engine
   branch. A resumed AGENT keeps its cap by threading `env` onto the rebuilt resume node.
 - **Single-writer invariant** — workers are pure executors; the dispatcher is the

@@ -17,8 +17,13 @@ the authoring surface is [`docs/syntax.md`](../../../docs/syntax.md).
 
 ## The node contract (the most portable idea)
 
-A node is a **pure function of its bound input record**. It implements
-`run(inputs, **caps) -> NodeResult` and returns ONE of the closed sum:
+A node is a **pure function of its bound input record**. A kind implements
+`_run_impl(inputs, **caps) -> NodeResult`; the base `Node.run` is a concrete
+**template method** the engine drives — it fires the node's asserts around the body:
+`apply_defaults(record) → pre_asserts(record) → _run_impl(record, **caps) →
+post_asserts({**record, "output": value})`. Assert firing is **record-only** (no pool),
+so it preserves node purity, and it happens **exactly once** here in the node (not in
+`eval_node`). `_run_impl` returns ONE of the closed sum:
 
 | Return | Meaning |
 |--------|---------|
@@ -63,9 +68,14 @@ The rest of the splice (add subgraph, enforce `MAX_TOTAL_NODES`, mint one unifor
 finish/mark the spawner, apply the origin `commit_as` to the derived terminal, schedule the
 subgraph's `start_id`) is
 uniform. The old per-kind `_grow_*_residual` switch is gone. Success-path routing (CASE branch/skip,
-subflow commit-under-spawner) rides `Outcome` data (`Route.handle`, `Output.commit_as`); a spawner's
-`post_asserts` are re-checked at the **commit site** when a terminal commits under a different id —
-not rehomed onto the terminal.
+subflow commit-under-spawner) rides `Outcome` data (`Route.handle`, `Output.commit_as`). A
+spawner's own `post_asserts` (a `call` node's `asserts:`) are **lowered onto the cloned child
+`END`** at grow time (`expand._lower_spawner_post_asserts`): `${output}` stays; a declared input
+`${X}` becomes a synth END param wired off the cloned child START's coerced output, so the assert
+fires through the child END's ordinary `run` wrapper — not re-checked at any commit site. This
+lowering runs in BOTH the live grow path AND `replay_grow`, so a resumed CALL fires the same
+post-asserts (dropping it in `replay_grow` would silently skip the assert on resume). The moved
+assert's failure names the **child END id**, not the spawner.
 
 ## `NodeKind` (closed vocabulary)
 
@@ -225,12 +235,12 @@ resolved to a line at the CLI boundary — never a text heuristic.
 - **Carriers:** `NodeFailed.locator` (node-level) and `RunFailed.locator` /
   `RunResult.locator` (flow-level). All default `None`.
 - **Producers:** `BindingError` stamps a node-less `input` span (`bind_params` knows the
-  param name, not the node); `eval_node`'s funnel fills the node id via `replace(loc,
-  node=node.id)` and emits an `assert` span at each of its two node-assert yields (pre/post,
-  incl. the flow's boundary asserts lowered onto the START node's `post_asserts` and its post
-  asserts lowered onto the END node);
-  `StartNode.run` stamps an `input_decl` span on the e08 `TypeCheckError` (the flow's boundary
-  `asserts:` are lowered onto START's `post_asserts` and fire through the same `eval_node` funnel
+  param name, not the node); the node's `run` wrapper raises `NodeAssertFailed` carrying an
+  `assert` span when a pre/post assert fails (incl. the flow's boundary asserts lowered onto the
+  START node's `post_asserts` and its post asserts lowered onto the END node), and `eval_node`'s
+  funnel fills any missing node id via `replace(loc, node=node.id)`;
+  `StartNode._run_impl` stamps an `input_decl` span on the e08 `TypeCheckError` (the flow's boundary
+  `asserts:` are lowered onto START's `post_asserts` and fire through the same `run` wrapper
   — `run.py` stamps none itself);
   the engine's typed write boundary stamps a `field` span (`key="output"`) on the
   `NodeExecutionError` it raises when a node's value fails its declared `output:` Type.

@@ -2,9 +2,10 @@
 
 A post-terminal assert (`${id.output} ...`) is lowered onto the END node and fired through
 `eval_node`, so its locator names `__end__` (the boundary node it rides) with the author's
-original assert text as the key. A boundary assert (`${input.X} ...`) is lowered onto START and
-fired inside `StartNode.run()`; it has no body node behind it, so its locator's `node` is None.
-An input-coercion failure at the boundary sets an `input_decl` locator (node None).
+original assert text as the key. A boundary assert (`${input.X} ...`) is lowered onto START's
+ordinary `post_asserts` (rewritten to `${output.X}`) and fired through `eval_node` when START
+runs, so its locator names `__start__`. An input-coercion failure at the boundary sets an
+`input_decl` locator, likewise stamped with `__start__` by the eval_node funnel.
 """
 
 from pathlib import Path
@@ -33,7 +34,7 @@ def test_input_coercion_sets_input_decl_locator():
     result = run_flow(load_flow(text), {"topic": "X", "window": "soon"})
     assert result.status == "failed"
     assert result.locator is not None and result.locator.kind == "input_decl"
-    assert result.locator.node is None
+    assert result.locator.node == "__start__"          # eval_node funnel fills START's id
     assert result.locator.key == "window"
 
 
@@ -42,7 +43,7 @@ def test_boundary_assert_sets_assert_locator():
     result = run_flow(load_flow(text), {"window": -5})
     assert result.status == "failed"
     assert result.locator is not None and result.locator.kind == "assert"
-    assert result.locator.node is None
+    assert result.locator.node == "__start__"          # boundary assert rides START's post_asserts
     assert result.locator.key == "input.window > 0"
 
 

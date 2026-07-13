@@ -17,9 +17,10 @@ shape of it:
 - Computation is **pure at the boundary**: a node *returns* its outputs and the
   engine *binds* them; a node never reaches in and mutates shared state. Outputs
   are immutable, typed, losslessly serializable values. A flow's own `asserts:` are
-  lowered onto its synthesized `start`/`end` boundary nodes (boundary checks fire in
-  `StartNode.run` after coercion; post checks ride `end` and fire on the ordinary node
-  path), so every assert — top-level or in a called child — runs through one node path.
+  lowered onto its synthesized `start`/`end` boundary nodes (boundary checks ride
+  `start`'s `post_asserts` — `${input.X}` rewritten to `${output.X}` — and fire against
+  START's coerced output; post checks ride `end`), both on the ordinary node path,
+  so every assert — top-level or in a called child — runs through one node path.
 - The **program's structure is fixed by the author**, the way a function's call
   graph is fixed by its source. The LLM fills leaf boxes; it does **not** rewrite
   the graph at runtime. That referential transparency is what makes runs

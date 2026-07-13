@@ -33,19 +33,19 @@ def _lower(asserts, **kw):
     )
 
 
-# ---- PRE (boundary) asserts: drop the `input.` prefix ---------------------------
+# ---- PRE (boundary) asserts: rewrite `input.` -> `output.` (START's coerced output) ------
 
-def test_pre_mixed_spelling_drops_input_prefix():
+def test_pre_mixed_spelling_rewrites_input_to_output():
     r = _lower(["${input.age} >= 18"])
-    assert r.start_pre == ["${age} >= 18"]
+    assert r.start_pre == ["${output.age} >= 18"]
     assert r.end_post == []
     assert r.synth_params == []
     assert r.synth_wiring == {}
 
 
-def test_pre_bare_spelling_drops_input_prefix():
+def test_pre_bare_spelling_rewrites_input_to_output():
     r = _lower(["input.age >= 18"])
-    assert r.start_pre == ["age >= 18"]
+    assert r.start_pre == ["output.age >= 18"]
     assert r.synth_params == []
 
 
@@ -158,7 +158,7 @@ def test_ranges_are_keyed_by_lowered_string():
         ["${input.age} >= 18", "emit.output.n >= 1"],
         assert_ranges={"${input.age} >= 18": rng, "emit.output.n >= 1": rng},
     )
-    assert r.pre_ranges == {"${age} >= 18": rng}
+    assert r.pre_ranges == {"${output.age} >= 18": rng}
     assert r.post_ranges == {"__assert_emit.n >= 1": rng}
 
 

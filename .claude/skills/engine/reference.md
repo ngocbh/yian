@@ -227,10 +227,11 @@ resolved to a line at the CLI boundary — never a text heuristic.
 - **Producers:** `BindingError` stamps a node-less `input` span (`bind_params` knows the
   param name, not the node); `eval_node`'s funnel fills the node id via `replace(loc,
   node=node.id)` and emits an `assert` span at each of its two node-assert yields (pre/post,
-  incl. the flow's post asserts lowered onto the END node);
-  `StartNode.run` stamps an `input_decl` span on the e08 `TypeCheckError` AND an `assert` span
-  for each flow boundary assert it fires post-coercion (the flow's `asserts:` are lowered onto
-  the START/END boundary nodes at build — `run.py` stamps none itself);
+  incl. the flow's boundary asserts lowered onto the START node's `post_asserts` and its post
+  asserts lowered onto the END node);
+  `StartNode.run` stamps an `input_decl` span on the e08 `TypeCheckError` (the flow's boundary
+  `asserts:` are lowered onto START's `post_asserts` and fire through the same `eval_node` funnel
+  — `run.py` stamps none itself);
   the engine's typed write boundary stamps a `field` span (`key="output"`) on the
   `NodeExecutionError` it raises when a node's value fails its declared `output:` Type.
 - **Concrete range (resolved at the failure site):** ALONGSIDE the symbolic `locator`, the

@@ -8,9 +8,10 @@ A host-agnostic run boundary that drives a loaded `LoadedFlow` through the
 - drive the engine to a terminal, mapping engine events to a `RunResult`.
 
 The flow's `asserts:` are NOT enforced here: they are lowered onto the synthesized
-boundary nodes at build (PRE/boundary asserts -> `StartNode.boundary_asserts`, fired
-inside `StartNode.run()` post-coercion; POST-terminal asserts -> `end.post_asserts`,
-fired uniformly through `eval_node`). A false assert therefore comes back as a
+boundary nodes at build (PRE/boundary asserts -> `StartNode.post_asserts` with each
+`${input.X}` rewritten to `${output.X}`, fired against START's COERCED output through
+`eval_node`; POST-terminal asserts -> `end.post_asserts`, fired uniformly through
+`eval_node`). A false assert therefore comes back as a
 `RunFailed` engine event, exactly like a body node's node-local assert — run.py just
 forwards it. This unifies top-level and child (subflow) asserts on one firing path.
 
@@ -151,8 +152,9 @@ def run_flow(
     exception). Compile-time errors of a bad flow surface earlier, in
     [`load_flow`][agent_composer.load_flow]. Asserts are NOT enforced here: a flow's
     `asserts:` are lowered at build onto the synthesized boundary nodes — boundary asserts
-    (`${input}`-only) ride `StartNode.boundary_asserts` and fire inside `StartNode.run()`
-    post-coercion (a false one returns `status="failed"` before any body node); post-terminal
+    (`${input}`-only) ride `StartNode.post_asserts` (rewritten to read `${output.X}`) and fire
+    against START's coerced output through `eval_node` when START runs (a false one returns
+    `status="failed"` before any body node); post-terminal
     asserts (`${<id>.output}`) ride `end.post_asserts` and fire through `eval_node` when END
     runs (flipping an otherwise-succeeded run to `"failed"`). This unifies top-level and child
     (subflow) asserts on one firing path.

@@ -7,17 +7,17 @@ child: the call-arg edges). `run(record)` = coerce_inputs + declared-type check 
 returning the bound input record as ONE object keyed by input name -> store[<start id>], the
 `inputs`-namespace replacement (binding at the boundary, not the driver).
 
-The flow's PRE `asserts:` are lowered onto START (`boundary_asserts`) and fired by `run()` AFTER
-coercion + defaulting — NOT via the generic eval_node pre-assert seam, which fires against the raw
-pre-coercion record. This unifies top-level and child (subflow) boundary asserts: both flow through
-StartNode.run(). NOT START_ID's job: system/clock/run_id. Hidden from authors: a reserved
-__-prefixed id, never parseable.
+The flow's PRE `asserts:` are lowered onto START's ordinary `post_asserts` (each `${input.X}`
+rewritten to `${output.X}`) and fire through the generic wrapper/`eval_node` seam against START's
+COERCED output record — START is an ordinary scheduled node, not a bypass. This unifies top-level
+and child (subflow) boundary asserts: both flow through the same post-assert seam. NOT START_ID's
+job: system/clock/run_id. Hidden from authors: a reserved __-prefixed id, never parseable.
 """
 
 from typing import Optional
 
 from agent_composer.events import SourceSpan
-from agent_composer.nodes.base import NodeAssertFailed, Node, NodeKind, Output
+from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.typesys import TypeCheckError, build_value_as
 from agent_composer.typesys.seeding import apply_defaults, coerce_inputs
@@ -79,20 +79,14 @@ class StartNode(Node):
             ParamDecl(name=d.name, required=d.required, default=d.default)
             for d in self.input_decls
         ]
-        # The flow's PRE `asserts:` lowered onto START — fired by run() AFTER coercion +
-        # defaulting, NOT via the generic `eval_node` pre-assert seam (`node.pre_asserts`).
-        # The seam fires against the RAW bound record before run(); a boundary assert must see
-        # the COERCED, defaulted record (`window > 0` over an int, not the wire string). So START
-        # owns a dedicated slot the seam ignores, keeping eval_node kind-blind. Empty for a flow
-        # with no `asserts:`. `boundary_assert_texts`: `dict[lowered -> original author text]`,
-        # so a failure shows what the author wrote (`window > 0`), not the lowered node-local form.
-        self.boundary_asserts: list[str] = []
-        self.boundary_assert_texts: dict[str, str] = {}
 
     def _run_impl(self, inputs: dict) -> Output:
         # The seeding.py pipeline lifted onto the node: coerce the wired args to the
         # declared types, type-check each, then fill each declared default for an OMITTED
-        # input. Returns the bound record as ONE object keyed by input name.
+        # input. Returns the bound record as ONE object keyed by input name. The flow's
+        # boundary `asserts:` are NOT fired here — they ride START's ordinary `post_asserts`
+        # (lowered to read `${output.X}`) and fire through the generic wrapper/eval_node seam
+        # against START's coerced output, so START is an ordinary scheduled node.
         coerced = coerce_inputs(self.input_decls, inputs)
         # Enforce each value against its declared type, raising the byte-stable located
         # message. A raise -> NodeFailed at the engine boundary.
@@ -112,16 +106,4 @@ class StartNode(Node):
                 new.range = self.field_ranges.get(decl.name)
                 raise new from exc
         final = apply_defaults(self.input_decls, coerced)
-        # Fire the flow's PRE `asserts:` against the coerced, defaulted record (record-scoped,
-        # like a body node's node-local asserts). A false/erroring assert -> NodeAssertFailed, which
-        # the engine turns into a RunFailed the same shape eval_node produces for a body node's
-        # pre-assert. Display the author's ORIGINAL text; carry a locator + range for the caret.
-        for a in self.boundary_asserts:
-            if not self._assert_holds(a, final):
-                display = self.boundary_assert_texts.get(a, a)
-                raise NodeAssertFailed(
-                    f"node {self.id!r} pre-assert failed: {display}",
-                    locator=SourceSpan(node=None, kind="assert", key=display),
-                    range=self.field_ranges.get(a),
-                )
         return Output(value=final)

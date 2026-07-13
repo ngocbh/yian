@@ -79,8 +79,11 @@ class RunResult:
 
     Attributes:
         input (`dict[str, Any]`):
-            The coerced run-argument dict (singular, for symmetry across surfaces).
-            Empty `{}` on a resume, which carries no fresh run arguments.
+            The caller's run arguments COERCED to declared scalar types (singular, for symmetry
+            across surfaces) — but NOT defaulted: an omitted input is absent here, since
+            omitted-input defaulting lives in START's wrapper, not the run boundary (so this
+            surface reflects what the caller supplied). Empty `{}` on a resume, which carries no
+            fresh run arguments.
         status (`str`):
             The terminal state: one of `"succeeded"`, `"failed"`, `"paused"`, or
             `"aborted"`.
@@ -196,8 +199,9 @@ def run_flow(
         ```
     """
     # Coerce the caller-passed args to declared scalar types (int/float/bool) but do NOT
-    # fill declared defaults here — omitted-input defaulting lives solely in START's wrapper
-    # (Node.run -> apply_defaults), so the boundary has exactly one defaulting authority.
+    # fill declared defaults here — omitted-input defaulting lives solely in START (its
+    # `_run_impl` runs apply_defaults; pre-Step-8 eval_node drives `_run_impl` directly), so
+    # the boundary has exactly one defaulting authority.
     coerced = coerce_inputs(loaded.input, inputs)
 
     # Resolve the per-agent effective llm_config before the engine reads the graph: the CLI
@@ -209,11 +213,13 @@ def run_flow(
     # ${system.run_id} — host-injected, else a freshly minted id; child-inherited like the clock.
     pool.add_system("run_id", run_id if run_id is not None else default_run_id())
 
-    # The engine seeds store[START_ID] at run init (StartNode.run -> coerce/type-check/defaults +
-    # FIRE the flow's boundary asserts post-coercion), then advances START_ID. The flow's
-    # post-terminal asserts ride the END node (`end.post_asserts`, lowered onto it at build) and
-    # fire uniformly through eval_node — so run.py enforces NO asserts itself; the input
-    # TypeCheckError + a false boundary/post assert all come back as a RunFailed engine event.
+    # The engine schedules START_ID through eval_node at run init: START coerces/type-checks/
+    # fills defaults inside its `_run_impl`, and the flow's boundary (`${input}`) asserts — lowered
+    # onto START's `post_asserts` (rewritten to read `${output.X}`) — FIRE through eval_node's
+    # ordinary post-assert seam against START's coerced output. The flow's post-terminal asserts
+    # ride the END node (`end.post_asserts`, lowered onto it at build) and fire the same way — so
+    # run.py enforces NO asserts itself; the input TypeCheckError + a false boundary/post assert
+    # all come back as a RunFailed engine event.
     engine = FlowEngine(
         loaded.compiled, pool,
         num_workers=num_workers,

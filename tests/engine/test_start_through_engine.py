@@ -81,9 +81,9 @@ output: ${echo.output}
 
 
 def test_string_defaulted_int_coerces_when_omitted():
-    # C-2 regression: the caller OMITS `n`; START's wrapper apply_defaults fills the RAW
-    # string `"5"` (START params carry default but no type), and START's _run_impl
-    # coerce_inputs coerces it to the integer 5. The whole path runs through eval_node now.
+    # C-2 regression: the caller OMITS `n`; bind_params fills START's declared default (the RAW
+    # string "5" — START params carry default but no type), and START's _run_impl coerce_inputs
+    # coerces it to the integer 5. The whole path runs through eval_node now.
     loaded = load_flow(_DEFAULT_FLOW)
     eng = FlowEngine(loaded.compiled, run_inputs={})
     events = list(eng.run())
@@ -201,3 +201,52 @@ def test_child_boundary_assert_satisfied_succeeds(num_workers):
     res = run_flow(load_flow(_CHILD_ASSERT_FLOW), {"v": 5}, num_workers=num_workers)
     assert res.status == "succeeded"
     assert res.output == 10
+
+
+# --- fix-B guard: a LoadedFlow is REUSABLE across runs with different input key sets --------- #
+# START's per-run `${input.X}` narrowing rides a per-ENGINE `wiring_overrides` dict, NOT the
+# shared compiled `flow.wiring[START_ID]`. This test would FAIL if the engine reverted to
+# mutating the shared IR (run 1 would narrow it to {topic,window}, then run 2 with `window`
+# omitted would leave it narrowed to {topic}, discarding the loader's full wiring).
+_REUSE_FLOW = """
+id: reuse
+name: reuse
+input:
+  topic: str
+  window: int = 30
+nodes:
+  emit:
+    kind: code
+    input:
+      topic: ${input.topic}
+      window: ${input.window}
+    output:
+      report: str
+      n: int
+    code: tests.engine._compose_codefns:make_report
+output:
+  report: ${emit.output.report}
+  n: ${emit.output.n}
+"""
+
+
+def test_loadedflow_reusable_across_runs_shared_ir_untouched():
+    loaded = load_flow(_REUSE_FLOW)
+    full_wiring = dict(loaded.compiled.wiring[START_ID])  # {topic, window} sources
+    assert set(full_wiring) == {"topic", "window"}
+
+    # Run 1: BOTH keys present (an explicit non-default window).
+    r1 = run_flow(loaded, {"topic": "A", "window": 10})
+    assert r1.status == "succeeded"
+    assert r1.input == {"topic": "A", "window": 10}
+    # The shared compiled START wiring is UNCHANGED (no per-run narrowing leaked into the IR).
+    assert loaded.compiled.wiring[START_ID] == full_wiring
+
+    # Run 2: a DIFFERENT key set (window omitted -> START fills the default 30, so the run still
+    # succeeds even though `emit` binds `${input.window}`).
+    r2 = run_flow(loaded, {"topic": "B"})
+    assert r2.status == "succeeded"
+    assert r2.input == {"topic": "B"}          # caller-passed, coerced (default not re-surfaced)
+    assert r2.output == {"report": "report for B", "n": 1}  # make_report: n = len(topic)
+    # Still unchanged after a second run with an omitted key — the fix-B guarantee.
+    assert loaded.compiled.wiring[START_ID] == full_wiring

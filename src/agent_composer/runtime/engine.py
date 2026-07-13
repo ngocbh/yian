@@ -284,7 +284,8 @@ class FlowEngine:
         if self.run_inputs is not None:
             # Prime store[START_ID] with the raw run args so `${input.X}` resolves for START's own
             # bind, and narrow the wiring (per-engine override, NOT the shared IR) to the passed
-            # keys so an omitted input binds absent -> START's wrapper fills its declared default.
+            # keys so an omitted input binds absent -> bind_params fills START's declared default
+            # (its ParamDecls carry the default), which START's `_run_impl` then coerces/type-checks.
             self.pool.set(start_id, dict(self.run_inputs))
             self.wiring_overrides[start_id] = {
                 k: f"${{input.{k}}}" for k in self.run_inputs

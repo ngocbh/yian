@@ -143,9 +143,11 @@ def synthesize_boundary_graph(
         root_edges.append(Edge(id=f"{START_ID}->{END_ID}", from_=START_ID, to=END_ID))
 
     boundary_wiring: dict[str, dict[str, Any]] = {
-        # START_ID wiring: input names -> `${input.X}` sources. Provisional in the wiring
-        # table (parity check) — at runtime the engine seeds store[START_ID] directly
-        # from the run-args record (START_ID is never scheduled as a regular node).
+        # START_ID wiring: input names -> `${input.X}` sources. At runtime the engine schedules
+        # START through eval_node, priming store[START_ID] with the raw run-args record and
+        # consulting a PER-ENGINE override that narrows this compiled wiring to only the passed
+        # keys (an omitted input then binds absent so START's wrapper fills its declared default).
+        # This compiled entry is what a direct-driver / hand-seed test (no run_inputs) reads.
         START_ID: {d.name: f"${{input.{d.name}}}" for d in input_decls},
         END_ID: {o.name: o.from_ for o in outputs},
     }

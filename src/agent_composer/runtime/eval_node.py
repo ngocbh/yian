@@ -109,7 +109,7 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
 
     `wiring_override` is a per-run wiring dict the engine may supply for THIS node instead of
     the compiled `flow.wiring[node.id]` — used to narrow top-level START's `${input.X}` sources
-    to only the passed run args (so an OMITTED input binds absent and START's wrapper fills its
+    to only the passed run args (so an OMITTED input binds absent and bind_params fills START's
     declared default) WITHOUT mutating the shared compiled IR. `None` falls back to flow.wiring."""
     yield NodeStarted(node.id)
     try:

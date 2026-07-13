@@ -100,19 +100,28 @@ def _default_llm(config):
     return model_from_config(config)
 
 
-def eval_node(node, flow, pool: VariablePool, llm=_default_llm):
+def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_override=None):
     """Evaluate one node through the engine read/dispatch seam; yield its event stream.
 
     `llm` is the engine-owned LLM-client provider (a `model_from_config`-shaped callable)
     handed to LLM-backed nodes via `caps['llm']` (gated on `node.needs_llm`); it defaults to
-    the lazy package-lookup thunk so a monkeypatched factory is honored on the direct path."""
+    the lazy package-lookup thunk so a monkeypatched factory is honored on the direct path.
+
+    `wiring_override` is a per-run wiring dict the engine may supply for THIS node instead of
+    the compiled `flow.wiring[node.id]` — used to narrow top-level START's `${input.X}` sources
+    to only the passed run args (so an OMITTED input binds absent and START's wrapper fills its
+    declared default) WITHOUT mutating the shared compiled IR. `None` falls back to flow.wiring."""
     yield NodeStarted(node.id)
     try:
         # The flow-owned wiring for this node (the node/flow split): every kind's sources live here
         # (leaf/WAIT, CALL, CASE). The node holds NO source. A direct-driver must supply a
         # stub `flow.wiring` with the reserved keys; `flow is None` gives empty wiring, so a timed
         # WAIT / mapped call driven that way would KeyError on `until`/`over` (caught as NodeFailed).
-        node_wiring = {} if flow is None else flow.wiring.get(node.id, {})
+        # A `wiring_override` (engine-supplied, per-run) wins over the compiled entry.
+        if wiring_override is not None:
+            node_wiring = wiring_override
+        else:
+            node_wiring = {} if flow is None else flow.wiring.get(node.id, {})
         # Read boundary (pure): bind the node from its `params` + the flow-owned
         # wiring — never the node's own `inputs`. A per-item node (MAP) binds per-element via
         # bind_item, so its record starts empty. (`params or []` covers a no-input node / a

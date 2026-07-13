@@ -128,8 +128,9 @@ class FlowEngine:
         run_inputs (`dict`, *optional*, defaults to `None`):
             The flow's run arguments. START is scheduled as an ordinary node at run init; the
             engine primes `store[START_ID]` with these raw args (so START's `${input.X}` wiring
-            resolves) and narrows the wiring to the passed keys. `None` for direct-engine tests
-            that hand-seed the START store entry (the compiled `${input.X}` wiring reads it). The
+            resolves) and narrows START's wiring to the passed keys via a per-engine override
+            (`self.wiring_overrides`, NOT the shared IR). `None` for direct-engine tests that
+            hand-seed the START store entry (the compiled `${input.X}` wiring reads it). The
             flow's boundary (`${input}`) asserts ride START's ordinary `post_asserts` and fire
             through eval_node against START's coerced output — the engine takes no assert list.
     """
@@ -149,10 +150,16 @@ class FlowEngine:
         self.num_workers = max(0, num_workers)
         # The top-level START_ID is scheduled as an ordinary node at run init (`_seed_start_and_
         # advance`): the engine primes store[START_ID] with the raw run args + narrows START's
-        # wiring to the passed keys, then enqueues START so it runs through eval_node (emitting
-        # NodeStarted/NodeSucceeded, coercing, and firing the flow's boundary asserts via its own
-        # post_asserts). `run_inputs` defaults to None for direct-FlowEngine tests that hand-seed.
+        # wiring to the passed keys (via `self.wiring_overrides`, not the shared IR), then enqueues
+        # START so it runs through eval_node (emitting NodeStarted/NodeSucceeded, coercing, and
+        # firing the flow's boundary asserts via its own post_asserts). `run_inputs` defaults to
+        # None for direct-FlowEngine tests that hand-seed.
         self.run_inputs = run_inputs
+        # Per-engine, per-run wiring overrides (`node_id -> wiring`) consulted by eval_node in
+        # place of the shared compiled `flow.wiring[node_id]`. Populated for top-level START by
+        # `_seed_start_and_advance` to narrow `${input.X}` to only the passed run args WITHOUT
+        # mutating the shared IR (a LoadedFlow is reusable across runs). Empty otherwise.
+        self.wiring_overrides: dict[str, dict] = {}
         # The LLM-client provider handed to LLM-backed nodes via caps['llm'] (the node no
         # longer imports the factory). Default = the lazy package-lookup thunk so a
         # monkeypatched `model_from_config` is honored on the direct + engine paths alike.
@@ -266,17 +273,20 @@ class FlowEngine:
         Seeding: `store[START_ID]` is primed with the RAW `run_inputs` so START's `${input.X}`
         wiring resolves (it self-references `store[START_ID]`); the wiring is narrowed to ONLY the
         passed keys so an OMITTED input is ABSENT (bind_params then fills START's declared default
-        instead of binding a self-referential null). START's own eval_node run re-commits the
-        COERCED record under START_ID. Direct-FlowEngine tests that hand-seed `store[START_ID]`
+        instead of binding a self-referential null). The narrowed wiring is a PER-ENGINE override
+        (`self.wiring_overrides`) consulted by eval_node — the shared compiled `flow.wiring` is
+        NOT mutated (a LoadedFlow is reusable across runs). START's own eval_node run re-commits
+        the COERCED record under START_ID. Direct-FlowEngine tests that hand-seed `store[START_ID]`
         pass no `run_inputs`; the compiled `${input.X}` wiring reads that hand-seeded record."""
         start_id = self.flow.start_id
         if start_id not in self.flow.nodes:
             return
         if self.run_inputs is not None:
             # Prime store[START_ID] with the raw run args so `${input.X}` resolves for START's own
-            # bind, and narrow the wiring to the passed keys (omitted -> absent -> default fills).
+            # bind, and narrow the wiring (per-engine override, NOT the shared IR) to the passed
+            # keys so an omitted input binds absent -> START's wrapper fills its declared default.
             self.pool.set(start_id, dict(self.run_inputs))
-            self.flow.wiring[start_id] = {
+            self.wiring_overrides[start_id] = {
                 k: f"${{input.{k}}}" for k in self.run_inputs
             }
         self._schedule(start_id)
@@ -479,7 +489,8 @@ class FlowEngine:
         node = self.flow.nodes[node_id]
         succeeded: Optional[NodeSucceeded] = None
         routed: Optional[NodeRouted] = None
-        for event in eval_node(node, self.flow, self.pool, self.llm):
+        for event in eval_node(node, self.flow, self.pool, self.llm,
+                               wiring_override=self.wiring_overrides.get(node_id)):
             yield event
             if isinstance(event, NodeSucceeded):
                 succeeded = event
@@ -556,7 +567,8 @@ class FlowEngine:
                 continue
             node = self.flow.nodes[node_id]
             try:
-                for event in eval_node(node, self.flow, self.pool, self.llm):
+                for event in eval_node(node, self.flow, self.pool, self.llm,
+                                       wiring_override=self.wiring_overrides.get(node_id)):
                     self.event_q.put(event)
             except Exception as exc:  # noqa: BLE001 — never let a worker die silently
                 self.event_q.put(NodeFailed(node_id, str(exc), type(exc).__name__))

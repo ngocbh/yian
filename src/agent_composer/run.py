@@ -16,7 +16,7 @@ boundary nodes at build (PRE/boundary asserts -> `StartNode.post_asserts` with e
 forwards it. This unifies top-level and child (subflow) asserts on one firing path.
 
 `RunResult` (the surface-agnostic run outcome) lives here, beside `run_flow`. The
-seeding fns (`coerce_inputs`/`apply_defaults`/`seed_system_clock`) come from
+seeding fns (`coerce_inputs`/`seed_system_clock`) come from
 `typesys.seeding`; the run's clock is the `${system.today}`/`${system.now}` ambients
 (a flow reads "as of" via `Optional[date]` + `:-`/`${system.today}`).
 
@@ -49,7 +49,6 @@ from agent_composer.events import (
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.seeding import (
-    apply_defaults,
     coerce_inputs,
     default_run_id,
     seed_system_clock,
@@ -196,9 +195,10 @@ def run_flow(
         print(result.status, result.output)  # succeeded ...
         ```
     """
-    coerced = apply_defaults(
-        loaded.input, coerce_inputs(loaded.input, inputs)
-    )
+    # Coerce the caller-passed args to declared scalar types (int/float/bool) but do NOT
+    # fill declared defaults here — omitted-input defaulting lives solely in START's wrapper
+    # (Node.run -> apply_defaults), so the boundary has exactly one defaulting authority.
+    coerced = coerce_inputs(loaded.input, inputs)
 
     # Resolve the per-agent effective llm_config before the engine reads the graph: the CLI
     # layer (llm_config) is the outermost gap-fill layer of the cascade. See resolve_llm_cascade.

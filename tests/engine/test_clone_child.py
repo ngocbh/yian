@@ -132,8 +132,11 @@ def test_clone_child_lowered_post_asserts_survive_clone():
 # expand must resolve POOL-scoped (not the record-scoped path, which would resolve it to None and
 # false-fail). This is the pool-fallback in `_first_failing_assert`.
 def _run_end(end, pool):
-    flow = type("F", (), {"wiring": {end.id: {}}})()  # END_ID takes its inputs as bound record
-    return list(drive(end, pool, flow))
+    # END_ID binds its declared params from its wiring, exactly like a real flow (the loader
+    # wires each output param to `${producer.output}`). We derive the wiring from the node's
+    # stamped reads so `out` resolves POOL-scoped from the pool (an EMPTY wiring would leave the
+    # param ABSENT and `_run_impl` would KeyError). The post-assert still fires POOL-scoped.
+    return list(drive(end, pool))
 
 
 def test_child_end_satisfied_pool_scoped_post_assert_succeeds():

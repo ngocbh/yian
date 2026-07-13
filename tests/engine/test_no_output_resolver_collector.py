@@ -40,12 +40,15 @@ def test_child_end_pool_scoped_post_assert_fires_through_the_rekeyed_end_branch(
     pool = VariablePool()
 
     pool.set("each/tail", "ok")
-    flow = type("F", (), {"wiring": {end.id: {}}})()
-    ok = list(drive(stamp_reads(end, {"out": "${each/tail.output}"}), pool, flow))
+    # END_ID binds its `out` param from its wiring (a real flow wires each output param to
+    # `${producer.output}`); derive that wiring from the stamped reads so `out` resolves
+    # POOL-scoped (an EMPTY wiring would leave it ABSENT and `_run_impl` would KeyError). The
+    # namespaced post-assert still fires POOL-scoped through the re-keyed NodeKind.END branch.
+    ok = list(drive(stamp_reads(end, {"out": "${each/tail.output}"}), pool))
     assert any(isinstance(e, NodeSucceeded) for e in ok)
 
     bad = EndNode.record("each/__end__", output_names=["out"])
     bad.post_asserts = ["${each/tail.output} != ''"]
     pool.set("each/tail", "")
-    failed = list(drive(stamp_reads(bad, {"out": "${each/tail.output}"}), pool, flow))
+    failed = list(drive(stamp_reads(bad, {"out": "${each/tail.output}"}), pool))
     assert any(isinstance(e, NodeFailed) and "post-assert" in e.error for e in failed)

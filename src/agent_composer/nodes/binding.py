@@ -139,7 +139,13 @@ def bind_params(
                     value = p.default
                 elif not present and p.required:
                     raise BindingError(f"required input {p.name!r} is unbound (from={source!r})")
+                elif not present:
+                    # Truly OMITTED, no default, not required -> leave the key ABSENT so the
+                    # wrapper's apply_default can fill it (or the render raises on unbound).
+                    continue
                 else:
+                    # PRESENT but resolved to None -> a caller's explicit bound-null. Keep it
+                    # None to SHADOW any default (`f(x=None)`); the wrapper must NOT re-fill it.
                     record[p.name] = None
                     continue
             typ = p.type

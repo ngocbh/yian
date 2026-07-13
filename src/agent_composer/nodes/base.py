@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.binding import ParamDecl
+from agent_composer.typesys.seeding import apply_defaults
 from agent_composer.typesys.values import Type
 
 if TYPE_CHECKING:
@@ -274,15 +275,23 @@ class Node(ABC):
         self.field_ranges: dict[str, "SourceRange"] = {}
 
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
-        """Template method: fire pre-asserts (record-only), run the kind's `_run_impl`,
-        then fire post-asserts (record-only) against `{**inputs, output}`.
+        """Template method: fill declared defaults for omitted inputs, fire pre-asserts
+        (record-only), run the kind's `_run_impl`, then fire post-asserts (record-only)
+        against `{**inputs, output}`.
+
+        Default-fill runs FIRST — before the pre-asserts — so a pre-assert may read an
+        input the caller OMITTED but the node declares a default for. `apply_defaults`
+        fills only omitted keys (a caller's explicit bound-null SHADOWS the default,
+        `f(x=None)`), so it never overrides a present key; running it here is a no-op for
+        body nodes (their ParamDecls carry no default yet) and idempotent for START
+        (whose `_run_impl` also defaults — the second fill is inert).
 
         Firing reads ONLY the bound `inputs` record — never the pool — so node purity is
         preserved. The message format + `NodeAssertFailed` locator/range match what the
         `eval_node` seam produces today; parity holds because every post-assert reaching a
         node is node-local after the #92 lowering (the record-first/pool-fallback in
         `eval_node` is dead — see the Step 1 verification), so record-only firing is
-        equivalent when the wrapper takes over in a later step. (`apply_default` too.)
+        equivalent when the wrapper takes over in a later step.
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
@@ -291,6 +300,7 @@ class Node(ABC):
         `NodeFailed`."""
         from agent_composer.events import SourceSpan
 
+        inputs = apply_defaults(self.params or [], inputs)
         bad = next((a for a in self.pre_asserts if not self._assert_holds(a, inputs)), None)
         if bad is not None:
             display = self.assert_texts.get(bad, bad)

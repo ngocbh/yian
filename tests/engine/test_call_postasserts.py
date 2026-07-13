@@ -1,16 +1,18 @@
-"""A `call` node's node-local POST `asserts:` must fire — at the alias-commit site.
+"""A `call` node's node-level POST `asserts:` must fire — on the CLONED CHILD END.
 
 A `call` is a spawner: it returns a `Grow` (eval_node returns BEFORE the post-assert
-block), and its `${output}` is committed LATER, in `engine._on_success`'s alias branch when
-the cloned child's END filler finishes. So the call's `${output}` post-asserts can ONLY run
-there; eval_node's post-assert block never sees them. Before the fix they were silently
-dropped — a false one passed quietly, violating "a false assert fails the run loudly".
+block), and its `${output}` is committed LATER, when the cloned child's END filler finishes
+(`commit_as=callsite`). Its node-level POST asserts are LOWERED onto that cloned child END (in
+`call_subgraph`), so they fire through the ORDINARY `eval_node` post-assert seam — NOT a bespoke
+redirect-commit site in the engine. A false one therefore fails the run LOUDLY, naming the CHILD
+END id (e.g. `research/__end__`), not the spawner. Before this branch they fired from the
+redirect-commit site (naming the spawner); before an earlier fix they were silently dropped.
 
 These pin: a true call post-assert passes, a false one fails the run LOUDLY (RunFailed,
-error_type "NodeAssertFailed", a non-null locator at the assert), a post-assert reading BOTH
-a declared call input AND `${output}` fires correctly, and (durability) the input record the
-assert reads is recovered from the persisted `GrowRecord.seed` after a checkpoint
-round-trip — no new checkpoint field.
+error_type "NodeAssertFailed", a non-null locator at the assert on the child END), a post-assert
+reading BOTH a declared call input AND `${output}` fires correctly (the input mapped onto the
+cloned child START's coerced output), and (durability) the lowered assert survives a checkpoint
+round-trip — `replay_grow` re-lowers it onto the rebuilt child END, no new checkpoint field.
 """
 
 from agent_composer.compose import load_flow
@@ -90,8 +92,9 @@ def test_call_post_assert_true_passes():
 
 def test_call_post_assert_false_fails_loudly():
     # a false `${output}` post-assert -> RunFailed, error_type NodeAssertFailed, a non-null
-    # locator pinned at the assert on the call node. (Before the fix this passed SILENTLY:
-    # the run succeeded and this assert would fail by NOT failing.)
+    # locator pinned at the assert on the CLONED CHILD END (`research/__end__`), where the
+    # lowered assert now rides. (Before this branch it named the spawner `research`; before an
+    # earlier fix this passed SILENTLY.)
     loaded = _load("      - ${output.n} == 999")
     res = run_flow(loaded, {})
     assert res.status == "failed"
@@ -99,7 +102,7 @@ def test_call_post_assert_false_fails_loudly():
     assert failed and failed[0].error_type == "NodeAssertFailed"
     loc = res.locator
     assert loc is not None
-    assert loc.node == "research" and loc.kind == "assert"
+    assert loc.node == "research/__end__" and loc.kind == "assert"
     assert loc.key == "${output.n} == 999"
 
 
@@ -122,7 +125,7 @@ def test_call_post_assert_reads_input_and_output_false():
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
     assert failed and failed[0].error_type == "NodeAssertFailed"
-    assert res.locator is not None and res.locator.node == "research"
+    assert res.locator is not None and res.locator.node == "research/__end__"
 
 
 def test_call_post_assert_reads_input_true():
@@ -209,4 +212,4 @@ def test_call_post_assert_survives_resume_false():
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
     assert failed and failed[0].error_type == "NodeAssertFailed"
-    assert res.locator is not None and res.locator.node == "gate" and res.locator.kind == "assert"
+    assert res.locator is not None and res.locator.node == "gate/__end__" and res.locator.kind == "assert"

@@ -845,28 +845,12 @@ class FlowEngine:
                 locator=SourceSpan(node=target, kind="field", key="output"),
             )
         # A spawner whose value is committed HERE (at the filler/redirect site), not in eval_node —
-        # the spawner only yielded a Grow. So its node-local POST asserts (which read `${output}`)
-        # must fire HERE, against {**inputs, "output": value}. The input record is recovered
-        # from the persisted GrowRecord (its `seed` is the input record), looked up by the FILLER
-        # `node_id` (only that id is stamped in `_spawner_expansion` for a CALL — a bare spawner
-        # id is never a key there; keying off `target` would miss the record). Leaf post-asserts
-        # still fire in eval_node. This is kind-blind: any redirect-commit spawner carrying
-        # `post_asserts` fires here. Today only CALL does — MAP is rejected `asserts:` at load
-        # (compose/validate.py), and a LOOP body-END carries no `commit_as` on a CONTINUE (it feeds
-        # the next driver by wiring) while a STOP commits directly from `run` — so only CALL reaches
-        # this redirect-commit post-assert path, byte-identical to before.
-        if target != node_id and target_node.post_asserts:
-            desc = self._spawner_expansion.get(node_id)
-            record = desc.seed if isinstance(desc, GrowRecord) else {}
-            post_record = {**record, "output": event.output}
-            for a in target_node.post_asserts:
-                if not target_node._assert_holds(a, post_record):
-                    self.sm.finish_executing(node_id)
-                    raise NodeExecutionError(
-                        node_id, f"node {target!r} post-assert failed: {a}",
-                        "NodeAssertFailed",
-                        locator=SourceSpan(node=target, kind="assert", key=a),
-                    )
+        # the spawner only yielded a Grow. Its node-local POST asserts (which read `${output}`) do
+        # NOT fire here: a CALL lowers them onto the cloned child END (in `call_subgraph`), so they
+        # fire through the ordinary `eval_node` post-assert seam on that END (naming the child END on
+        # failure). MAP rejects `asserts:` at load; a LOOP body-END carries no `commit_as` on a
+        # CONTINUE (it feeds the next driver by wiring) while a STOP commits directly from `run` and
+        # fires its post_asserts in eval_node — so no redirect-commit spawner needs a firing site here.
         self.sm.finish_executing(node_id)
         for nid in self._advance(target):
             self._schedule(nid)

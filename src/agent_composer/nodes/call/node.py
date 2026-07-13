@@ -71,11 +71,25 @@ class CallNode(Node):
         # params carry default/required), so the driver no longer pre-defaults. `run` is
         # self-describing — it builds the child subgraph and returns a `Grow` for the engine to
         # splice generically; `seed=record` is the durable builder input (a resumed run rebuilds
-        # the same subgraph via `call_subgraph(child, self.id, record)`).
+        # the same subgraph via `call_subgraph(child, self.id, record, ...)`).
+        #
+        # The CALL's OWN node-level POST `asserts:` (reading `${output}` + declared inputs) are
+        # lowered onto the cloned child END inside `call_subgraph`, so they fire through the
+        # ordinary eval_node post-assert seam — NOT a bespoke redirect-commit site. `replay_grow`
+        # passes the IDENTICAL trio so a resumed run's rebuilt END carries the same lowered asserts.
         record = dict(inputs)
-        return Grow(call_subgraph(self.child, callsite=self.id, record=record), seed=record)
+        return Grow(call_subgraph(self.child, callsite=self.id, record=record,
+                                  post_asserts=self.post_asserts,
+                                  assert_texts=self.assert_texts,
+                                  input_names={p.name for p in (self.params or [])}),
+                    seed=record)
 
     def replay_grow(self, seed: Any):
         """Durable-replay inverse of `run`: rebuild the CALL child subgraph from the persisted
-        call-arg record (`seed`) via the SAME `call_subgraph` builder — no body re-run."""
-        return call_subgraph(self.child, callsite=self.id, record=dict(seed))
+        call-arg record (`seed`) via the SAME `call_subgraph` builder — no body re-run. Passes the
+        IDENTICAL `post_asserts`/`assert_texts`/`input_names` trio as `_run_impl` so the rebuilt
+        child END carries the same lowered spawner post-asserts (resume-safety)."""
+        return call_subgraph(self.child, callsite=self.id, record=dict(seed),
+                             post_asserts=self.post_asserts,
+                             assert_texts=self.assert_texts,
+                             input_names={p.name for p in (self.params or [])})

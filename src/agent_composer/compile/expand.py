@@ -26,9 +26,16 @@ from typing import Any, Optional
 
 from agent_composer.compile.model import Edge, END_ID, Flow, START_ID
 from agent_composer.expr import rewrite_template_refs
-from agent_composer.nodes.base import Node
+from agent_composer.expr.expressions import rewrite_condition_refs
+from agent_composer.nodes.base import Node, ParamDecl
 from agent_composer.nodes.end.node import EndNode
 from agent_composer.nodes.start.node import StartNode
+
+# Reserved prefix for END params synthesized from a lowered spawner post-assert. Mirrors the
+# BUILD-time `_SYNTH_PREFIX` in `compose/validate/asserts.py` — kept a separate literal here
+# because the layer ladder forbids `compile` importing from `compose`. Authors cannot write
+# `__`-prefixed ids, so a synth name never collides with an author id.
+_SYNTH_PREFIX = "__assert_"
 
 
 def ns(callsite: str, child_id: str) -> str:
@@ -96,14 +103,95 @@ def _rens_internal(src: Any, callsite: str) -> Any:
     return rewrite_template_refs(src, _rename)
 
 
-def clone_child(child, callsite: str, record: dict) -> Flow:
+def _lower_spawner_post_asserts(
+    end: Node,
+    end_wiring: dict[str, Any],
+    end_edges: list[Edge],
+    *,
+    callsite: str,
+    post_asserts: list[str],
+    assert_texts: dict[str, str],
+    input_names: "set[str]",
+) -> None:
+    """Stamp a spawner's node-level POST `asserts:` onto the CLONED CHILD END, in place.
+
+    A `call` spawner may carry node-level `asserts:` reading `${output}` (its own committed
+    output) and its declared call inputs (bare `${X}`). Since `run()` returns a `Grow`, the
+    spawner's `${output}` is only known when the cloned child END commits under the callsite —
+    so its POST asserts must ride that END and fire through the ordinary `eval_node` seam. This
+    LOWERS each post-assert onto `end` (its `post_asserts`/`assert_texts`), mirroring build-time
+    flow-assert lowering:
+
+    - `${output}` / `${output.field}` is kept unchanged — the cloned END's own record value
+      (== the spawner's committed output) is what eval_node injects as `{"output": value}`.
+    - each declared call input `${X}` becomes a synth END param (`__assert_input_<X>`) wired
+      off the cloned child START's coerced output (`${<callsite>/__start__.output.X:-null}`),
+      with a structural `<callsite>/__start__ -> <callsite>/__end__` edge — the SAME shape the
+      build-time producer/input lowering uses (see `compose/validate/asserts.py`). Repeated
+      refs to the same input SHARE one synth param.
+
+    Args:
+        end: the cloned child END node (deep-copied, namespaced) — mutated in place.
+        end_wiring: the cloned END's wiring dict (`param -> ${...}` source) — mutated in place.
+        end_edges: the flow's edge list — synth producer edges are appended.
+        callsite: the spawner id (== the clone namespace).
+        post_asserts: the spawner's `${output}`-reading node-level asserts (may be empty).
+        assert_texts: the spawner's `{lowered-assert -> display text}` (node-local asserts map
+            the raw string to itself; used to carry the author display text onto the END).
+        input_names: the spawner's declared call-input names (its param names).
+    """
+    if not post_asserts:
+        return
+    start_ns = ns(callsite, START_ID)
+    synth_for_input: dict[str, str] = {}       # input name -> allocated synth END param
+
+    def _rename(path: str) -> "str | None":
+        # Keep `${output[.field]}` (the END's own value); map a declared input `${X[.rest]}` to a
+        # synth param bound off the cloned child START's coerced output.
+        segs = path.split(".")
+        head = segs[0]
+        if head == "output":
+            return None                        # the END's own output — unchanged
+        if head in input_names:
+            synth = synth_for_input.get(head)
+            if synth is None:
+                synth = f"{_SYNTH_PREFIX}input_{head}"
+                synth_for_input[head] = synth
+                end.params.append(ParamDecl(name=synth))
+                # `:-null` keeps the END input edge OPTIONAL so END waits for START to settle
+                # and binds None if the value was omitted, instead of co-skipping END to dead
+                # (the SAME structural shape build-time flow-assert lowering uses).
+                end_wiring[synth] = f"${{{start_ns}.output.{head}:-null}}"
+                end_edges.append(Edge(
+                    id=f"{start_ns}->{end.id}#{synth}",
+                    from_=start_ns, to=end.id, input_group=synth, optional=True))
+            return ".".join([synth, *segs[1:]])
+        return None                            # anything else — unchanged
+
+    for a in post_asserts:
+        lowered = rewrite_condition_refs(a, _rename)
+        end.post_asserts.append(lowered)
+        # Carry the author display text so a failure names the ORIGINAL assert, not the synth form.
+        end.assert_texts[lowered] = assert_texts.get(a, a)
+
+
+def clone_child(child, callsite: str, record: dict, *,
+                post_asserts: "list[str] | None" = None,
+                assert_texts: "dict[str, str] | None" = None,
+                input_names: "set[str] | None" = None) -> Flow:
     """Splice a child `CompiledFlow`'s `START_ID..END_ID` at `callsite`. Every child node
     (incl. its `START_ID`/`END_ID`) is cloned deep-namespaced; the child `START_ID` is SEEDED with the
     call-args as edges (no baking); the child `END_ID` is the alias filler. Pure — the dispatcher
     performs the impure `add_subgraph`/`register`/seed.
 
     Returns a `Flow` whose `start_id` is the namespaced child START (the sole seed point) and whose
-    `end_id` is the namespaced child END (the alias filler for REF / one element input for MAP)."""
+    `end_id` is the namespaced child END (the alias filler for REF / one element input for MAP).
+
+    `post_asserts`/`assert_texts`/`input_names` (default empty) carry a SPAWNER's node-level POST
+    `asserts:` — a `call` node may declare `asserts:` reading `${output}` (its committed output)
+    and its declared inputs. They are LOWERED onto the cloned child END (via
+    `_lower_spawner_post_asserts`) so they fire through the ordinary `eval_node` post-assert seam,
+    NOT a bespoke redirect-commit site. Empty for MAP/LOOP and for a CALL without node asserts."""
     nodes: dict[str, Node] = {}
     for nid, node in child.nodes.items():
         clone = copy.deepcopy(node)
@@ -162,6 +250,18 @@ def clone_child(child, callsite: str, record: dict) -> Flow:
     # .output:-null}`), and re-keyed producer->END edges all survive the clone above, so eval_node
     # fires them on the cloned END with pool-fallback resolution. No re-homing needed (and none
     # possible without deleting the structural synth edges that gate the assert on its producer).
+    #
+    # A SPAWNER's OWN node-level POST asserts (a `call` node's `asserts:`) are LOWERED onto the
+    # cloned END here (net-new — the child does not carry them): `${output}` stays, a declared call
+    # input `${X}` becomes a synth END param wired off the cloned child START's coerced output. They
+    # then fire through the SAME eval_node post-assert seam as the def's own asserts.
+    _lower_spawner_post_asserts(
+        nodes[out_id], wiring.setdefault(out_id, {}), edges,
+        callsite=callsite,
+        post_asserts=post_asserts or [],
+        assert_texts=assert_texts or {},
+        input_names=set(input_names or ()),
+    )
     return Flow(nodes=nodes, edges=edges, wiring=wiring, start_id=start_ns, end_id=out_id)
 
 
@@ -177,7 +277,10 @@ def _producer_of(src: str) -> Optional[str]:
     return None
 
 
-def call_subgraph(child, callsite: str, record: dict) -> Flow:
+def call_subgraph(child, callsite: str, record: dict, *,
+                  post_asserts: "list[str] | None" = None,
+                  assert_texts: "dict[str, str] | None" = None,
+                  input_names: "set[str] | None" = None) -> Flow:
     """The pure CALL builder: the self-describing fragment a CALL spawner grows into.
 
     Wraps `clone_child` (the deep-namespaced clone of the child's `START_ID..END_ID` at `callsite`,
@@ -186,8 +289,17 @@ def call_subgraph(child, callsite: str, record: dict) -> Flow:
     is the single cloned child START and whose `end_id` is the cloned child END filler. The child's
     asserts (a def's `asserts:` lowered onto its START/END at build) ride the cloned boundary nodes
     and fire through the ordinary node path — boundary asserts in the cloned `StartNode.run()` (post
-    coercion), post asserts on the cloned END via `eval_node` — exactly like the top-level flow."""
-    cloned = clone_child(child, callsite=callsite, record=record)
+    coercion), post asserts on the cloned END via `eval_node` — exactly like the top-level flow.
+
+    `post_asserts`/`assert_texts`/`input_names` carry the SPAWNER's OWN node-level POST `asserts:`
+    (a `call` node's `asserts:` reading `${output}` + declared inputs). They are lowered onto the
+    cloned child END by `clone_child`, so they fire through the SAME eval_node post-assert seam —
+    NOT a bespoke redirect-commit site. The CALL node passes `self.post_asserts`, `self.assert_texts`,
+    and its declared-input (param) names; `replay_grow` passes the identical trio so a resumed run's
+    rebuilt child END carries the same lowered asserts."""
+    cloned = clone_child(child, callsite=callsite, record=record,
+                         post_asserts=post_asserts, assert_texts=assert_texts,
+                         input_names=input_names)
     cloned.nodes[cloned.end_id].commit_as = callsite
     return Flow(nodes=cloned.nodes, edges=cloned.edges, wiring=cloned.wiring,
                 start_id=cloned.start_id, end_id=cloned.end_id)

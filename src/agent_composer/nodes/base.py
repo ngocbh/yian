@@ -339,10 +339,9 @@ class Node(ABC):
         """Execute the node as a pure function of its bound input record (the per-kind body
         the `run` template method wraps).
 
-        Not `@abstractmethod` this step: the kinds still define their own `run` (which shadows
-        the template method), so making `_run_impl` abstract would render every kind
-        uninstantiable. A later step renames each kind's `run` -> `_run_impl` and wires
-        `eval_node` to the template method; until then this default is a loud error.
+        Every concrete kind defines this method; `eval_node` drives the `run` wrapper, which fires
+        asserts around this body exactly once. Not `@abstractmethod` only because the base `Node`
+        is instantiated directly in a few tests/fakes; a kind that omits it raises this loud error.
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
@@ -350,8 +349,7 @@ class Node(ABC):
         `inputs`. A failure is a `raise`, not a variant — the engine boundary turns it into
         `NodeFailed`."""
         raise NotImplementedError(
-            f"node {self.id!r} ({type(self).__name__}) defines no _run_impl "
-            f"(a later step renames each kind's run -> _run_impl)"
+            f"node {self.id!r} ({type(self).__name__}) defines no _run_impl"
         )
 
     def on_failure(self, exc: Exception, inputs: dict[str, Any], **caps: Any) -> "NodeResult":

@@ -99,12 +99,14 @@ def synthesize_boundary_graph(
     # validate_node_asserts mutates the assert slots the same way).
     if lowered is not None:
         # START fires its boundary asserts through the ORDINARY `post_asserts` seam: the lowered
-        # PRE asserts read `${output.X}` (see asserts._pre_rename), so eval_node/the wrapper fires
+        # PRE asserts read `${output.X}` (see asserts._pre_rename), so the node's `run` wrapper fires
         # them against `{**inputs, "output": <START's coerced record>}` — the coerced/defaulted
         # value, not the wire string. This unifies START with every other node (no bespoke slot);
-        # eval_node stays kind-blind. END fires its POST asserts through the same seam, resolving
-        # any `${producer.output}` head via the pool. Extend-safe: START carries no post_asserts
-        # today, but merge rather than assign so a future START-owned post-assert is not clobbered.
+        # eval_node stays kind-blind. END fires its POST asserts through the same seam; any
+        # `${producer.output}` head is lowered to a synth END param (see below) that binds the
+        # producer's value INTO END's record, so the assert fires record-only. Extend-safe: START
+        # carries no post_asserts today, but merge rather than assign so a future START-owned
+        # post-assert is not clobbered.
         start.post_asserts = list(start.post_asserts) + list(lowered.start_pre)
         start.assert_texts = {**start.assert_texts, **lowered.pre_texts}
         end.post_asserts = list(lowered.end_post)

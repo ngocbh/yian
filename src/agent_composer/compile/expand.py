@@ -269,14 +269,16 @@ def clone_child(child, callsite: str, record: dict, *,
 
     # The child END's POST asserts (the def's flow-level `asserts:` lowered onto END at build) ride
     # the deep-copied node UNCHANGED — their synth params, re-namespaced wiring (`${<callsite>/pid
-    # .output:-null}`), and re-keyed producer->END edges all survive the clone above, so eval_node
-    # fires them on the cloned END with pool-fallback resolution. No re-homing needed (and none
-    # possible without deleting the structural synth edges that gate the assert on its producer).
+    # .output:-null}`), and re-keyed producer->END edges all survive the clone above. Each synth
+    # param binds its producer's value INTO the cloned END's record (the assert string reads the
+    # node-local `${__assert_*}` head), so the END wrapper fires them record-only. No re-homing
+    # needed (and none possible without deleting the structural synth edges that gate the assert on
+    # its producer).
     #
     # A SPAWNER's OWN node-level POST asserts (a `call` node's `asserts:`) are LOWERED onto the
     # cloned END here (net-new — the child does not carry them): `${output}` stays, a declared call
     # input `${X}` becomes a synth END param wired off the cloned child START's coerced output. They
-    # then fire through the SAME eval_node post-assert seam as the def's own asserts.
+    # then fire through the SAME END post-assert seam (the node's `run` wrapper) as the def's own asserts.
     _lower_spawner_post_asserts(
         nodes[out_id], wiring.setdefault(out_id, {}), edges,
         callsite=callsite,

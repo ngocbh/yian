@@ -279,8 +279,10 @@ class Node(ABC):
 
         Firing reads ONLY the bound `inputs` record — never the pool — so node purity is
         preserved. The message format + `NodeAssertFailed` locator/range match what the
-        `eval_node` seam produces today, so behavior is identical when the wrapper takes
-        over firing in a later step. (`apply_default` is added in a later step.)
+        `eval_node` seam produces today; parity holds because every post-assert reaching a
+        node is node-local after the #92 lowering (the record-first/pool-fallback in
+        `eval_node` is dead — see the Step 1 verification), so record-only firing is
+        equivalent when the wrapper takes over in a later step. (`apply_default` too.)
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful

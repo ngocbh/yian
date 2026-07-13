@@ -165,7 +165,8 @@ def agent_step(
             return Grow(
                 agent_segment_subgraph([human_input, resume], callsite=ctx.node_id,
                                        output_type=ctx.output_type, retries=ctx.retries,
-                                       max_tool_iterations=ctx.max_tool_iterations),
+                                       max_tool_iterations=ctx.max_tool_iterations,
+                                       post_asserts=ctx.post_asserts, assert_texts=ctx.assert_texts),
                 seed={"hi_desc": human_input, "resume_desc": resume},
             )
 

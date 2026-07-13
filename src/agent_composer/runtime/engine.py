@@ -50,7 +50,7 @@ from agent_composer.events import (
 )
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, NodeState
 from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.base import Grow, NodeAssertFailed
+from agent_composer.nodes.base import Grow
 from agent_composer.runtime.eval_node import eval_node
 from agent_composer.runtime.state_manager import StateManager
 from agent_composer.typesys import TypeCheckError
@@ -126,10 +126,13 @@ class FlowEngine:
             `0` runs the deterministic inline drain on the caller's thread; `>=1` spawns
             that many daemon workers behind a single-writer dispatcher. Clamped to `>=0`.
         run_inputs (`dict`, *optional*, defaults to `None`):
-            The flow's run arguments, seeded into the START node once at init. `None` for
-            direct-engine tests that hand-seed the START store entry. The flow's boundary
-            (`${input}`) asserts ride the StartNode itself (`start.boundary_asserts`) and fire
-            inside `StartNode.run()` post-coercion — the engine no longer takes an assert list.
+            The flow's run arguments. START is scheduled as an ordinary node at run init; the
+            engine primes `store[START_ID]` with these raw args (so START's `${input.X}` wiring
+            resolves) and narrows START's wiring to the passed keys via a per-engine override
+            (`self.wiring_overrides`, NOT the shared IR). `None` for direct-engine tests that
+            hand-seed the START store entry (the compiled `${input.X}` wiring reads it). The
+            flow's boundary (`${input}`) asserts ride START's ordinary `post_asserts` and fire
+            through eval_node against START's coerced output — the engine takes no assert list.
     """
 
     def __init__(
@@ -145,12 +148,18 @@ class FlowEngine:
         self.pool = pool if pool is not None else VariablePool()
         self.sm = StateManager(flow)
         self.num_workers = max(0, num_workers)
-        # The top-level START_ID is seeded at run init by invoking StartNode.run(run_inputs)
-        # ONCE — committed to store[START_ID] WITHOUT scheduling START_ID / emitting NodeSucceeded
-        # ("no node ran" holds for the boundary-assert path). StartNode.run() fires the flow's
-        # boundary asserts itself (post-coercion); a false one raises NodeAssertFailed, caught at
-        # the seed site. `run_inputs` defaults to None for direct-FlowEngine tests that hand-seed.
+        # The top-level START_ID is scheduled as an ordinary node at run init (`_seed_start_and_
+        # advance`): the engine primes store[START_ID] with the raw run args + narrows START's
+        # wiring to the passed keys (via `self.wiring_overrides`, not the shared IR), then enqueues
+        # START so it runs through eval_node (emitting NodeStarted/NodeSucceeded, coercing, and
+        # firing the flow's boundary asserts via its own post_asserts). `run_inputs` defaults to
+        # None for direct-FlowEngine tests that hand-seed.
         self.run_inputs = run_inputs
+        # Per-engine, per-run wiring overrides (`node_id -> wiring`) consulted by eval_node in
+        # place of the shared compiled `flow.wiring[node_id]`. Populated for top-level START by
+        # `_seed_start_and_advance` to narrow `${input.X}` to only the passed run args WITHOUT
+        # mutating the shared IR (a LoadedFlow is reusable across runs). Empty otherwise.
+        self.wiring_overrides: dict[str, dict] = {}
         # The LLM-client provider handed to LLM-backed nodes via caps['llm'] (the node no
         # longer imports the factory). Default = the lazy package-lookup thunk so a
         # monkeypatched `model_from_config` is honored on the direct + engine paths alike.
@@ -201,13 +210,12 @@ class FlowEngine:
         deterministic path); `num_workers>=1` spawns the worker pool + dispatcher.
         """
         yield RunStarted()
-        # Init: seed store[START_ID] (StartNode.run ONCE, not scheduled), fire the
-        # top-level boundary asserts pool-scoped, then advance START_ID's out-edges. A failure here
-        # (input type / boundary assert) yields RunFailed before any body node ("no node ran").
-        failure = self._seed_start_and_advance()
-        if failure is not None:
-            yield failure
-            return
+        # Init: schedule START_ID as an ordinary node (seeded from run_inputs), then drive to a
+        # terminal. START runs through eval_node — it emits NodeStarted/NodeSucceeded, coerces +
+        # type-checks + defaults its inputs, and fires the flow's boundary asserts through its
+        # ordinary `post_asserts` seam. An input-type / boundary-assert failure surfaces as an
+        # ordinary NodeFailed on START -> RunFailed (no body node ran), preserving "no node ran".
+        self._seed_start_and_advance()
         yield from self._drive_to_terminal()
 
     def _drive_to_terminal(self):
@@ -256,37 +264,33 @@ class FlowEngine:
         yield terminal
 
     def _seed_start_and_advance(self):
-        """The pinned top-level START_ID seeding. Invoke StartNode.run(run_inputs) ONCE
-        (coerce + type-check + defaults + FIRE the flow's boundary asserts, which START owns
-        post-coercion), commit store[START_ID] directly — WITHOUT enqueuing START_ID and WITHOUT a
-        NodeSucceeded — then mark START_ID done + advance its out-edges. Returns a RunFailed on an
-        input type failure or a false boundary assert (fail-fast before any body node; "no node ran"
-        holds), else None. Direct-FlowEngine tests that hand-seed store[START_ID] pass no
-        `run_inputs` — START_ID is then taken from the pre-seeded store."""
+        """Schedule the top-level START_ID as an ordinary node.
+
+        START now runs through `eval_node` like any other node: it emits NodeStarted/NodeSucceeded,
+        binds its inputs, coerces + type-checks + defaults them, and fires the flow's boundary
+        asserts through its ordinary `post_asserts` seam (a false one -> NodeFailed -> RunFailed).
+
+        Seeding: `store[START_ID]` is primed with the RAW `run_inputs` so START's `${input.X}`
+        wiring resolves (it self-references `store[START_ID]`); the wiring is narrowed to ONLY the
+        passed keys so an OMITTED input is ABSENT (bind_params then fills START's declared default
+        instead of binding a self-referential null). The narrowed wiring is a PER-ENGINE override
+        (`self.wiring_overrides`) consulted by eval_node — the shared compiled `flow.wiring` is
+        NOT mutated (a LoadedFlow is reusable across runs). START's own eval_node run re-commits
+        the COERCED record under START_ID. Direct-FlowEngine tests that hand-seed `store[START_ID]`
+        pass no `run_inputs`; the compiled `${input.X}` wiring reads that hand-seeded record."""
         start_id = self.flow.start_id
-        if start_id in self.flow.nodes:
-            start = self.flow.nodes[start_id]
-            if self.run_inputs is not None:
-                # seed via StartNode.run, funneling a TypeCheckError / a false boundary assert
-                # (NodeAssertFailed, fired inside run() post-coercion) -> RunFailed. Both carry a
-                # locator + concrete range so the CLI boxes the failing input decl / assert line.
-                try:
-                    out = start.run(dict(self.run_inputs))
-                except TypeCheckError as exc:
-                    return RunFailed(error=str(exc), error_type="TypeCheckError",
-                                     locator=getattr(exc, "locator", None),
-                                     range=getattr(exc, "range", None))
-                except NodeAssertFailed as exc:
-                    return RunFailed(error=str(exc), error_type="NodeAssertFailed",
-                                     locator=getattr(exc, "locator", None),
-                                     range=getattr(exc, "range", None))
-                self.pool.set(start_id, out.value)
-            # mark START_ID done + fire its out-edges (input-reader data edges + body-root edges).
-            # START_ID is NOT enqueued/run; no NodeSucceeded is emitted for it.
-            self.sm.mark_node(start_id, NodeState.TAKEN)
-            for nid in self._advance(start_id):
-                self._schedule(nid)
-        return None
+        if start_id not in self.flow.nodes:
+            return
+        if self.run_inputs is not None:
+            # Prime store[START_ID] with the raw run args so `${input.X}` resolves for START's own
+            # bind, and narrow the wiring (per-engine override, NOT the shared IR) to the passed
+            # keys so an omitted input binds absent -> bind_params fills START's declared default
+            # (its ParamDecls carry the default), which START's `_run_impl` then coerces/type-checks.
+            self.pool.set(start_id, dict(self.run_inputs))
+            self.wiring_overrides[start_id] = {
+                k: f"${{input.{k}}}" for k in self.run_inputs
+            }
+        self._schedule(start_id)
 
     def _terminal_event(self):
         """The terminal event for a completed (non-paused/aborted/failed) run: the
@@ -486,7 +490,8 @@ class FlowEngine:
         node = self.flow.nodes[node_id]
         succeeded: Optional[NodeSucceeded] = None
         routed: Optional[NodeRouted] = None
-        for event in eval_node(node, self.flow, self.pool, self.llm):
+        for event in eval_node(node, self.flow, self.pool, self.llm,
+                               wiring_override=self.wiring_overrides.get(node_id)):
             yield event
             if isinstance(event, NodeSucceeded):
                 succeeded = event
@@ -563,7 +568,8 @@ class FlowEngine:
                 continue
             node = self.flow.nodes[node_id]
             try:
-                for event in eval_node(node, self.flow, self.pool, self.llm):
+                for event in eval_node(node, self.flow, self.pool, self.llm,
+                                       wiring_override=self.wiring_overrides.get(node_id)):
                     self.event_q.put(event)
             except Exception as exc:  # noqa: BLE001 — never let a worker die silently
                 self.event_q.put(NodeFailed(node_id, str(exc), type(exc).__name__))
@@ -839,28 +845,12 @@ class FlowEngine:
                 locator=SourceSpan(node=target, kind="field", key="output"),
             )
         # A spawner whose value is committed HERE (at the filler/redirect site), not in eval_node —
-        # the spawner only yielded a Grow. So its node-local POST asserts (which read `${output}`)
-        # must fire HERE, against {**inputs, "output": value}. The input record is recovered
-        # from the persisted GrowRecord (its `seed` is the input record), looked up by the FILLER
-        # `node_id` (only that id is stamped in `_spawner_expansion` for a CALL — a bare spawner
-        # id is never a key there; keying off `target` would miss the record). Leaf post-asserts
-        # still fire in eval_node. This is kind-blind: any redirect-commit spawner carrying
-        # `post_asserts` fires here. Today only CALL does — MAP is rejected `asserts:` at load
-        # (compose/validate.py), and a LOOP body-END carries no `commit_as` on a CONTINUE (it feeds
-        # the next driver by wiring) while a STOP commits directly from `run` — so only CALL reaches
-        # this redirect-commit post-assert path, byte-identical to before.
-        if target != node_id and target_node.post_asserts:
-            desc = self._spawner_expansion.get(node_id)
-            record = desc.seed if isinstance(desc, GrowRecord) else {}
-            post_record = {**record, "output": event.output}
-            for a in target_node.post_asserts:
-                if not target_node._assert_holds(a, post_record):
-                    self.sm.finish_executing(node_id)
-                    raise NodeExecutionError(
-                        node_id, f"node {target!r} post-assert failed: {a}",
-                        "NodeAssertFailed",
-                        locator=SourceSpan(node=target, kind="assert", key=a),
-                    )
+        # the spawner only yielded a Grow. Its node-local POST asserts (which read `${output}`) do
+        # NOT fire here: a CALL lowers them onto the cloned child END (in `call_subgraph`), so they
+        # fire through the ordinary `eval_node` post-assert seam on that END (naming the child END on
+        # failure). MAP rejects `asserts:` at load; a LOOP body-END carries no `commit_as` on a
+        # CONTINUE (it feeds the next driver by wiring) while a STOP commits directly from `run` and
+        # fires its post_asserts in eval_node — so no redirect-commit spawner needs a firing site here.
         self.sm.finish_executing(node_id)
         for nid in self._advance(target):
             self._schedule(nid)

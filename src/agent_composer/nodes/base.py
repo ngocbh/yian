@@ -17,7 +17,8 @@ Invariant: a node never writes the pool. It *describes* its one output value as
 `Output(value)`; the engine performs the write under `node_id`. Keeps nodes pure.
 """
 
-from abc import ABC, abstractmethod
+import copy
+from abc import ABC
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from enum import Enum
@@ -26,6 +27,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.binding import ParamDecl
+from agent_composer.typesys.seeding import apply_defaults
 from agent_composer.typesys.values import Type
 
 if TYPE_CHECKING:
@@ -273,14 +275,82 @@ class Node(ABC):
         self.range: Optional["SourceRange"] = None
         self.field_ranges: dict[str, "SourceRange"] = {}
 
-    @abstractmethod
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
-        """Execute the node as a pure function of its bound input record.
+        """Template method: fill declared defaults for omitted inputs, fire pre-asserts
+        (record-only), run the kind's `_run_impl`, then fire post-asserts (record-only)
+        against `{**inputs, output}`.
+
+        Default-fill runs FIRST — before the pre-asserts — so a pre-assert may read an
+        input the caller OMITTED but the node declares a default for. `apply_defaults`
+        fills only omitted keys (a caller's explicit bound-null SHADOWS the default,
+        `f(x=None)`), so it never overrides a present key; running it here is a no-op for
+        body nodes (their ParamDecls carry no default yet) and idempotent for START
+        (whose `_run_impl` also defaults — the second fill is inert).
+
+        Firing reads ONLY the bound `inputs` record — never the pool — so node purity is
+        preserved. `eval_node` drives this wrapper (not `_run_impl`), so firing happens
+        EXACTLY ONCE, owned by the node. Record-only is sufficient because every assert
+        reaching a node is node-local after the ref lowering (build-time flow-asserts + the
+        grow-path spawner-asserts): a cross-node/namespaced ref is lowered to a synth param
+        that `bind_params` binds INTO the record, so there is no pool ref left to fall back to.
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
-        cap left is a mapped `call`'s `bind_item` (keyword-only); every other kind takes only `inputs`. A
-        failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
+        cap left is a mapped `call`'s `bind_item` (keyword-only); every other kind takes only
+        `inputs`. A failure is a `raise`, not a variant — the engine boundary turns it into
+        `NodeFailed`."""
+        from agent_composer.events import SourceSpan
+
+        inputs = apply_defaults(self.params or [], inputs)
+        bad = next((a for a in self.pre_asserts if not self._assert_holds(a, inputs)), None)
+        if bad is not None:
+            display = self.assert_texts.get(bad, bad)
+            raise NodeAssertFailed(
+                f"node {self.id!r} pre-assert failed: {display}",
+                locator=SourceSpan(self.id, "assert", display),
+                range=self.field_ranges.get(bad),
+            )
+        # Pristine snapshot for the post-asserts, taken BEFORE `_run_impl` runs: a leaf may
+        # mutate the dict it receives (a CODE body transforming its input in place), which must
+        # not corrupt the post-assert scope — the contract check has to see the inputs as bound,
+        # not as the body left them. Only paid when this node declares post-asserts.
+        post_input = copy.deepcopy(inputs) if self.post_asserts else None
+        result = self._run_impl(inputs, **caps)
+        # Post-asserts fire ONLY for an `Output` result — never Route/Pause/Grow. A spawner's
+        # Grow post-asserts are handled in a later step. A generator (streaming) result also
+        # falls through the guard untouched — the DORMANT streaming path: the wrapper must not
+        # fire post on it; it is returned unchanged for `eval_node` to drain. No node kind
+        # returns a generator today.
+        if isinstance(result, Output) and self.post_asserts:
+            post_record = {**post_input, "output": result.value}
+            bad = next(
+                (a for a in self.post_asserts if not self._assert_holds(a, post_record)), None
+            )
+            if bad is not None:
+                display = self.assert_texts.get(bad, bad)
+                raise NodeAssertFailed(
+                    f"node {self.id!r} post-assert failed: {display}",
+                    locator=SourceSpan(self.id, "assert", display),
+                    range=self.field_ranges.get(bad),
+                )
+        return result
+
+    def _run_impl(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
+        """Execute the node as a pure function of its bound input record (the per-kind body
+        the `run` template method wraps).
+
+        Every concrete kind defines this method; `eval_node` drives the `run` wrapper, which fires
+        asserts around this body exactly once. Not `@abstractmethod` only because the base `Node`
+        is instantiated directly in a few tests/fakes; a kind that omits it raises this loud error.
+
+        Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
+        a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
+        cap left is a mapped `call`'s `bind_item` (keyword-only); every other kind takes only
+        `inputs`. A failure is a `raise`, not a variant — the engine boundary turns it into
+        `NodeFailed`."""
+        raise NotImplementedError(
+            f"node {self.id!r} ({type(self).__name__}) defines no _run_impl"
+        )
 
     def on_failure(self, exc: Exception, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Recovery seam: called by the engine wrapper when run() raises. Default: re-raise."""

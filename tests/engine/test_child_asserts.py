@@ -1,12 +1,13 @@
 """A def's / child's `asserts:` enforced through the child's boundary nodes.
 
 A `def` may declare `asserts:`. At build these are lowered onto the def's synthesized
-START/END nodes (PRE/boundary -> `START.boundary_asserts`, POST -> `END.post_asserts`).
-When the def runs via a `call` (REF once, MAP per element), the child START/END are cloned
-into the parent and fire their asserts through the ordinary `eval_node` path — the child
-START fires the boundary asserts post-coercion, the child END fires the post asserts. A
-failed child assert fails the child node -> the parent run fails. This is the SAME firing
-path as a top-level flow's asserts (the whole point of the merge).
+START/END nodes (PRE/boundary -> `START.post_asserts` with each `${input.X}` rewritten to
+`${output.X}`, POST -> `END.post_asserts`). When the def runs via a `call` (REF once, MAP per
+element), the child START/END are cloned into the parent and fire their asserts through the
+ordinary `eval_node` path — the child START fires the boundary asserts (as post-asserts against
+its COERCED output), the child END fires the post asserts. A failed child assert fails the child
+node -> the parent run fails. This is the SAME firing path as a top-level flow's asserts (the
+whole point of the merge).
 """
 
 import pytest
@@ -110,35 +111,33 @@ def test_map_child_assert_one_violating_element_fails():
 
 
 # --- a failing child boundary assert fails the run through the cloned child START ---------- #
-# A def's boundary asserts are lowered onto its START node; the cloned child START fires them
-# through `eval_node` post-coercion (AFTER the subgraph is spliced + the GrowRecord attached, not
-# eagerly inside `_apply_grow`). So a boundary failure now surfaces as an ordinary NodeFailed on
-# the child START -> RunFailed, and the expansion IS attached (the child ran far enough to fire
-# its START). The user-facing guarantee is the failure + message; the ledger attach is normal.
-# Driven via FlowEngine directly to mirror the prior tests.
-from agent_composer.compile.model import START_ID
+# A def's boundary asserts are lowered onto its START node's `post_asserts` (each `${input.X}`
+# rewritten to `${output.X}`); the cloned child START fires them through `eval_node` against its
+# COERCED output (AFTER the subgraph is spliced + the GrowRecord attached, not eagerly inside
+# `_apply_grow`). So a boundary failure now surfaces as an ordinary NodeFailed on the child START
+# -> RunFailed, and the expansion IS attached (the child ran far enough to fire its START). The
+# user-facing guarantee is the failure + message; the ledger attach is normal. Driven via
+# FlowEngine with `run_inputs=` (the parent flow declares `v`/`vs`) so the top-level START is an
+# ordinary scheduled node.
 from agent_composer.events import RunFailed
 from agent_composer.runtime.engine import FlowEngine
-from agent_composer.typesys.pool import VariablePool
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_ref_boundary_failure_fails_run(num_workers):
     loaded = load_flow(_REF_FLOW)
-    pool = VariablePool()
-    pool.set(START_ID, {"v": -1})                       # violates n >= 0 on the cloned child START
-    eng = FlowEngine(loaded.compiled, pool, num_workers=num_workers)
+    eng = FlowEngine(loaded.compiled, run_inputs={"v": -1},   # violates n >= 0 on the cloned child START
+                     num_workers=num_workers)
     events = list(eng.run())
     assert isinstance(events[-1], RunFailed)
-    assert "pre-assert failed" in events[-1].error     # fired by the cloned child StartNode.run()
+    assert "post-assert failed" in events[-1].error    # fired by the cloned child StartNode post-asserts
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_map_boundary_failure_fails_run(num_workers):
     loaded = load_flow(_MAP_FLOW)
-    pool = VariablePool()
-    pool.set(START_ID, {"vs": [1, -1]})                 # element 1 violates n >= 0 on its child START
-    eng = FlowEngine(loaded.compiled, pool, num_workers=num_workers)
+    eng = FlowEngine(loaded.compiled, run_inputs={"vs": [1, -1]},  # element 1 violates n >= 0 on its child START
+                     num_workers=num_workers)
     events = list(eng.run())
     assert isinstance(events[-1], RunFailed)
-    assert "pre-assert failed" in events[-1].error
+    assert "post-assert failed" in events[-1].error

@@ -45,7 +45,7 @@ class _CommitAsNode(Node):
         super().__init__(node_id)
         self._out = out
 
-    def run(self, inputs, **caps):
+    def _run_impl(self, inputs, **caps):
         return self._out
 
 
@@ -113,14 +113,14 @@ class _NonSpawnerGrowNode(Node):
 
     kind = NodeKind.CODE
 
-    def run(self, inputs):
+    def _run_impl(self, inputs):
         return Grow(Flow(nodes={}, edges=[], wiring={}, start_id="", end_id=""))
 
 
 class _BadReturnNode(Node):
     kind = NodeKind.CODE
 
-    def run(self, inputs):
+    def _run_impl(self, inputs):
         return {"not": "a NodeResult"}  # neither a NodeResult nor a generator
 
 
@@ -133,7 +133,7 @@ class _MutatingNode(Node):
         super().__init__(node_id)
         stamp_reads(self, {"x": "${input.x}"})
 
-    def run(self, inputs):
+    def _run_impl(self, inputs):
         inputs["x"] = 999  # must NOT leak into this node's own post-assert
         return Output(value="done")
 

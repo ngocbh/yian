@@ -127,30 +127,43 @@ def test_clone_child_lowered_post_asserts_survive_clone():
                and e.input_group == "__assert_tail" for e in cloned.edges)
 
 
-# --- firing contract: eval_node resolves an END node's post-assert POOL-scoped when its ref head
-# is not in the bound record. A namespaced cross-node ref (`${<callsite>/X.output}`) riding END from
-# expand must resolve POOL-scoped (not the record-scoped path, which would resolve it to None and
-# false-fail). This is the pool-fallback in `_first_failing_assert`.
+# --- firing contract: eval_node drives the node's `run` wrapper, which fires an END's post-assert
+# RECORD-scoped. This is the production shape after ref lowering: a cross-node ref
+# (`${<callsite>/X.output}`) becomes a synth PARAM (`__assert_tail`) fed by a `${.../X.output:-null}`
+# wiring + a producer->END edge, so bind_params binds the value INTO the record — the assert reads
+# `${__assert_tail}` node-locally. There is no pool-fallback (it was retired); an unbound ref would
+# be absent from the record, not silently read from the pool.
 def _run_end(end, pool):
-    flow = type("F", (), {"wiring": {end.id: {}}})()  # END_ID takes its inputs as bound record
-    return list(drive(end, pool, flow))
+    # END binds its declared params (including the synth `__assert_tail`) from its wiring, exactly
+    # like a real flow. We derive the wiring from the node's stamped reads so both `out` and the
+    # synth param resolve from the pool INTO the record; the post-assert then fires record-scoped.
+    return list(drive(end, pool))
 
 
-def test_child_end_satisfied_pool_scoped_post_assert_succeeds():
+def _tail_assert_end():
+    # An END whose post-assert reads a SYNTH PARAM bound into the record from `${each/tail.output}`,
+    # modeled on the lowered shape in test_clone_child_lowered_post_asserts_survive_clone above.
     end = EndNode.record("each/__end__", output_names=["out"])
-    end.post_asserts = ["${each/tail.output} != ''"]
+    end.post_asserts = ["${__assert_tail} != ''"]
+    end.assert_texts = {"${__assert_tail} != ''": "${each/tail.output} != ''"}
+    end.params.append(ParamDecl(name="__assert_tail"))
+    return stamp_reads(
+        end,
+        {"out": "${each/tail.output}", "__assert_tail": "${each/tail.output:-null}"},
+    )
+
+
+def test_child_end_satisfied_synth_param_post_assert_succeeds():
     pool = VariablePool()
-    pool.set("each/tail", "ok")                 # the re-homed ref resolves POOL-scoped
-    events = _run_end(stamp_reads(end, {"out": "${each/tail.output}"}), pool)
+    pool.set("each/tail", "ok")                 # binds `__assert_tail` = "ok" into the record
+    events = _run_end(_tail_assert_end(), pool)
     assert any(isinstance(e, NodeSucceeded) for e in events)
     assert not any(isinstance(e, NodeFailed) for e in events)
 
 
-def test_child_end_violated_pool_scoped_post_assert_fails():
-    end = EndNode.record("each/__end__", output_names=["out"])
-    end.post_asserts = ["${each/tail.output} != ''"]
+def test_child_end_violated_synth_param_post_assert_fails():
     pool = VariablePool()
-    pool.set("each/tail", "")                    # violates the post-assert (empty string)
-    events = _run_end(stamp_reads(end, {"out": "${each/tail.output}"}), pool)
+    pool.set("each/tail", "")                    # binds `__assert_tail` = "" -> violates the assert
+    events = _run_end(_tail_assert_end(), pool)
     failed = [e for e in events if isinstance(e, NodeFailed)]
     assert failed and "post-assert" in failed[0].error

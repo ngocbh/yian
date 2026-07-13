@@ -8,14 +8,15 @@ A host-agnostic run boundary that drives a loaded `LoadedFlow` through the
 - drive the engine to a terminal, mapping engine events to a `RunResult`.
 
 The flow's `asserts:` are NOT enforced here: they are lowered onto the synthesized
-boundary nodes at build (PRE/boundary asserts -> `StartNode.boundary_asserts`, fired
-inside `StartNode.run()` post-coercion; POST-terminal asserts -> `end.post_asserts`,
-fired uniformly through `eval_node`). A false assert therefore comes back as a
+boundary nodes at build (PRE/boundary asserts -> `StartNode.post_asserts` with each
+`${input.X}` rewritten to `${output.X}`, fired against START's COERCED output through
+`eval_node`; POST-terminal asserts -> `end.post_asserts`, fired uniformly through
+`eval_node`). A false assert therefore comes back as a
 `RunFailed` engine event, exactly like a body node's node-local assert — run.py just
 forwards it. This unifies top-level and child (subflow) asserts on one firing path.
 
 `RunResult` (the surface-agnostic run outcome) lives here, beside `run_flow`. The
-seeding fns (`coerce_inputs`/`apply_defaults`/`seed_system_clock`) come from
+seeding fns (`coerce_inputs`/`seed_system_clock`) come from
 `typesys.seeding`; the run's clock is the `${system.today}`/`${system.now}` ambients
 (a flow reads "as of" via `Optional[date]` + `:-`/`${system.today}`).
 
@@ -48,7 +49,6 @@ from agent_composer.events import (
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.seeding import (
-    apply_defaults,
     coerce_inputs,
     default_run_id,
     seed_system_clock,
@@ -79,8 +79,11 @@ class RunResult:
 
     Attributes:
         input (`dict[str, Any]`):
-            The coerced run-argument dict (singular, for symmetry across surfaces).
-            Empty `{}` on a resume, which carries no fresh run arguments.
+            The caller's run arguments COERCED to declared scalar types (singular, for symmetry
+            across surfaces) — but NOT defaulted: an omitted input is absent here, since
+            omitted-input defaulting lives in START's wrapper, not the run boundary (so this
+            surface reflects what the caller supplied). Empty `{}` on a resume, which carries no
+            fresh run arguments.
         status (`str`):
             The terminal state: one of `"succeeded"`, `"failed"`, `"paused"`, or
             `"aborted"`.
@@ -151,8 +154,9 @@ def run_flow(
     exception). Compile-time errors of a bad flow surface earlier, in
     [`load_flow`][agent_composer.load_flow]. Asserts are NOT enforced here: a flow's
     `asserts:` are lowered at build onto the synthesized boundary nodes — boundary asserts
-    (`${input}`-only) ride `StartNode.boundary_asserts` and fire inside `StartNode.run()`
-    post-coercion (a false one returns `status="failed"` before any body node); post-terminal
+    (`${input}`-only) ride `StartNode.post_asserts` (rewritten to read `${output.X}`) and fire
+    against START's coerced output through `eval_node` when START runs (a false one returns
+    `status="failed"` before any body node); post-terminal
     asserts (`${<id>.output}`) ride `end.post_asserts` and fire through `eval_node` when END
     runs (flipping an otherwise-succeeded run to `"failed"`). This unifies top-level and child
     (subflow) asserts on one firing path.
@@ -194,9 +198,11 @@ def run_flow(
         print(result.status, result.output)  # succeeded ...
         ```
     """
-    coerced = apply_defaults(
-        loaded.input, coerce_inputs(loaded.input, inputs)
-    )
+    # Coerce the caller-passed args to declared scalar types (int/float/bool) but do NOT
+    # fill declared defaults here — omitted-input defaulting lives solely in START (its
+    # `_run_impl` runs apply_defaults; pre-Step-8 eval_node drives `_run_impl` directly), so
+    # the boundary has exactly one defaulting authority.
+    coerced = coerce_inputs(loaded.input, inputs)
 
     # Resolve the per-agent effective llm_config before the engine reads the graph: the CLI
     # layer (llm_config) is the outermost gap-fill layer of the cascade. See resolve_llm_cascade.
@@ -207,11 +213,13 @@ def run_flow(
     # ${system.run_id} — host-injected, else a freshly minted id; child-inherited like the clock.
     pool.add_system("run_id", run_id if run_id is not None else default_run_id())
 
-    # The engine seeds store[START_ID] at run init (StartNode.run -> coerce/type-check/defaults +
-    # FIRE the flow's boundary asserts post-coercion), then advances START_ID. The flow's
-    # post-terminal asserts ride the END node (`end.post_asserts`, lowered onto it at build) and
-    # fire uniformly through eval_node — so run.py enforces NO asserts itself; the input
-    # TypeCheckError + a false boundary/post assert all come back as a RunFailed engine event.
+    # The engine schedules START_ID through eval_node at run init: START coerces/type-checks/
+    # fills defaults inside its `_run_impl`, and the flow's boundary (`${input}`) asserts — lowered
+    # onto START's `post_asserts` (rewritten to read `${output.X}`) — FIRE through eval_node's
+    # ordinary post-assert seam against START's coerced output. The flow's post-terminal asserts
+    # ride the END node (`end.post_asserts`, lowered onto it at build) and fire the same way — so
+    # run.py enforces NO asserts itself; the input TypeCheckError + a false boundary/post assert
+    # all come back as a RunFailed engine event.
     engine = FlowEngine(
         loaded.compiled, pool,
         num_workers=num_workers,

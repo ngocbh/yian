@@ -234,7 +234,7 @@ def test_seed18_post_terminal_assert_against_view():
     # Validated against the View record (load succeeds, not lenient-skipped).
     start = loaded.compiled.nodes[START_ID]
     end = loaded.compiled.nodes[END_ID]
-    assert start.boundary_asserts == []
+    assert start.post_asserts == []
     assert end.post_asserts != []
     # `confidence` survives on the lowered assert or its original author text.
     end_texts = list(end.post_asserts) + list(end.assert_texts.values())
@@ -248,11 +248,11 @@ def test_seed18_post_terminal_assert_against_view():
 
 def test_seed10_asserts_are_boundary():
     loaded = _load("10")
-    # all four asserts read only ${input.X} -> boundary, so they are LOWERED onto the START node
-    # (`boundary_asserts`); END carries no post asserts.
+    # all four asserts read only ${input.X} -> boundary, so they ride START's ordinary
+    # `post_asserts` (rewritten to `${output.X}`); END carries no post asserts.
     start = loaded.compiled.nodes[START_ID]
     end = loaded.compiled.nodes[END_ID]
-    assert start.boundary_asserts != []
+    assert start.post_asserts != []
     assert end.post_asserts == []
 
 

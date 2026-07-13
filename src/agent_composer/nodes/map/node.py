@@ -94,7 +94,7 @@ class MapNode(Node):
         """A MAP reserves `over` (its iteration-source author-wiring key)."""
         return {"over"}
 
-    def run(self, inputs: dict, *, bind_item: Optional[Callable[[Any], dict]] = None):
+    def _run_impl(self, inputs: dict, *, bind_item: Optional[Callable[[Any], dict]] = None):
         if self.child is None:
             raise RuntimeError(f"MAP node {self.id!r}: child flow {self.flow_id!r} not baked")
         # Per-element call-args RAW (no driver pre-default): the spliced child START_ID fills omitted

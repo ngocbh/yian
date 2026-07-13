@@ -29,7 +29,6 @@ from pathlib import Path
 
 import pytest
 
-from agent_composer.compile.model import START_ID
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.nodes.base import NodeKind
@@ -96,9 +95,7 @@ def _run_map(topics):
     """Drive a MAP run via FlowEngine directly (run_flow only attaches .engine on pause),
     returning (engine, events) so a test can inspect the GROWN live graph."""
     parent = load_flow(_MAP, child_resolver=_resolver(**{"child-one": _CHILD}))
-    pool = VariablePool()
-    pool.set(START_ID, {"topics": topics})
-    eng = FlowEngine(parent.compiled, pool)
+    eng = FlowEngine(parent.compiled, run_inputs={"topics": topics})
     events = list(eng.run())
     return eng, events
 
@@ -136,9 +133,7 @@ def test_no_node_attr_or_method_reads_scratch():
 
 def test_live_graph_grows_under_a_map_run():
     parent = load_flow(_MAP, child_resolver=_resolver(**{"child-one": _CHILD}))
-    pool = VariablePool()
-    pool.set(START_ID, {"topics": ["ACME", "BETA"]})
-    eng = FlowEngine(parent.compiled, pool)
+    eng = FlowEngine(parent.compiled, run_inputs={"topics": ["ACME", "BETA"]})
     before = len(eng.flow.nodes)
     events = list(eng.run())
     assert isinstance(events[-1], RunSucceeded)
@@ -246,9 +241,7 @@ output: ${d.output}
 
 def test_checkpoint_roundtrip_non_paused():
     loaded = load_flow(_CODE_FLOW)
-    pool = VariablePool()
-    pool.set(START_ID, {"x": 5})
-    eng = FlowEngine(loaded.compiled, pool)
+    eng = FlowEngine(loaded.compiled, run_inputs={"x": 5})
     events = list(eng.run())
     assert isinstance(events[-1], RunSucceeded) and events[-1].output == 10
     snap = eng.snapshot()

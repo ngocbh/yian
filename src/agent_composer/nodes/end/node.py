@@ -80,7 +80,7 @@ class EndNode(Node):
         """Build a LIST-mode terminal — `n` params (`e0..e{n-1}`) joined as a MAP fan-in."""
         return cls(node_id, n=n, title=title)
 
-    def run(self, inputs: dict) -> Output:
+    def _run_impl(self, inputs: dict) -> Output:
         if self._mode == "record":
             # terminal arity rule: 0 -> None; 1 -> bare; >=2 -> keyed object.
             if not self._names:

@@ -26,9 +26,16 @@ from typing import Any, Optional
 
 from agent_composer.compile.model import Edge, END_ID, Flow, START_ID
 from agent_composer.expr import rewrite_template_refs
-from agent_composer.nodes.base import Node
+from agent_composer.expr.expressions import rewrite_condition_refs
+from agent_composer.nodes.base import Node, ParamDecl
 from agent_composer.nodes.end.node import EndNode
 from agent_composer.nodes.start.node import StartNode
+
+# Reserved prefix for END params synthesized from a lowered spawner post-assert. Mirrors the
+# BUILD-time `_SYNTH_PREFIX` in `compose/validate/asserts.py` — kept a separate literal here
+# because the layer ladder forbids `compile` importing from `compose`. Authors cannot write
+# `__`-prefixed ids, so a synth name never collides with an author id.
+_SYNTH_PREFIX = "__assert_"
 
 
 def ns(callsite: str, child_id: str) -> str:
@@ -96,14 +103,117 @@ def _rens_internal(src: Any, callsite: str) -> Any:
     return rewrite_template_refs(src, _rename)
 
 
-def clone_child(child, callsite: str, record: dict) -> Flow:
+def _lower_spawner_post_asserts(
+    end: Node,
+    end_wiring: dict[str, Any],
+    end_edges: list[Edge],
+    *,
+    callsite: str,
+    post_asserts: list[str],
+    assert_texts: dict[str, str],
+    input_names: "set[str]",
+) -> None:
+    """Stamp a spawner's node-level POST `asserts:` onto the CLONED CHILD END, in place.
+
+    A `call` spawner may carry node-level `asserts:` reading `${output}` (its own committed
+    output) and its declared call inputs (bare `${X}`). Since `run()` returns a `Grow`, the
+    spawner's `${output}` is only known when the cloned child END commits under the callsite —
+    so its POST asserts must ride that END and fire through the ordinary `eval_node` seam. This
+    LOWERS each post-assert onto `end` (its `post_asserts`/`assert_texts`), mirroring build-time
+    flow-assert lowering:
+
+    - `${output}` / `${output.field}` is kept unchanged — the cloned END's own record value
+      (== the spawner's committed output) is what eval_node injects as `{"output": value}`.
+    - each declared call input `${X}` becomes a synth END param (`__assert_input_<X>`) wired
+      off the cloned child START's coerced output (`${<callsite>/__start__.output.X:-null}`),
+      with a structural `<callsite>/__start__ -> <callsite>/__end__` edge — the SAME shape the
+      build-time producer/input lowering uses (see `compose/validate/asserts.py`). Repeated
+      refs to the same input SHARE one synth param.
+
+    The synth name is allocated COLLISION-FREE against names already on the cloned END: the
+    child def's OWN flow-level post-asserts (lowered at build) may already occupy
+    `__assert_input_<X>` on the deep-copied END (via its `params`/`end_wiring`). Mirroring
+    build-time `_alloc`, a taken base bumps to `<base>_1`, `<base>_2`, ... so the spawner's
+    synth never duplicates a child param decl or its producer->END edge's `input_group`.
+
+    Args:
+        end: the cloned child END node (deep-copied, namespaced) — mutated in place.
+        end_wiring: the cloned END's wiring dict (`param -> ${...}` source) — mutated in place.
+        end_edges: the flow's edge list — synth producer edges are appended.
+        callsite: the spawner id (== the clone namespace).
+        post_asserts: the spawner's `${output}`-reading node-level asserts (may be empty).
+        assert_texts: the spawner's `{lowered-assert -> display text}` (node-local asserts map
+            the raw string to itself; used to carry the author display text onto the END).
+        input_names: the spawner's declared call-input names (its param names).
+    """
+    if not post_asserts:
+        return
+    start_ns = ns(callsite, START_ID)
+    synth_for_input: dict[str, str] = {}       # input name -> allocated synth END param
+    # Names ALREADY on the cloned END (survivors of the deep-copy: the child def's own lowered
+    # synth params + record params) — the spawner's synth must not collide with any of them, nor
+    # with a name allocated earlier in THIS pass. Mirrors build-time `_alloc`'s collision guard.
+    taken: set[str] = {p.name for p in end.params} | set(end_wiring.keys())
+
+    def _alloc(base: str) -> str:
+        """Allocate a collision-free synth name from `base`: bump `<base>_1`, `<base>_2`, ...
+        until it is free of every name already on the cloned END (and this pass), then reserve
+        it. Mirrors the build-time `_alloc` in `compose/validate/asserts.py`."""
+        name = base
+        i = 1
+        while name in taken:
+            name = f"{base}_{i}"
+            i += 1
+        taken.add(name)
+        return name
+
+    def _rename(path: str) -> "str | None":
+        # Keep `${output[.field]}` (the END's own value); map a declared input `${X[.rest]}` to a
+        # synth param bound off the cloned child START's coerced output.
+        segs = path.split(".")
+        head = segs[0]
+        if head == "output":
+            return None                        # the END's own output — unchanged
+        if head in input_names:
+            synth = synth_for_input.get(head)
+            if synth is None:
+                synth = _alloc(f"{_SYNTH_PREFIX}input_{head}")
+                synth_for_input[head] = synth
+                end.params.append(ParamDecl(name=synth))
+                # `:-null` keeps the END input edge OPTIONAL so END waits for START to settle
+                # and binds None if the value was omitted, instead of co-skipping END to dead
+                # (the SAME structural shape build-time flow-assert lowering uses).
+                end_wiring[synth] = f"${{{start_ns}.output.{head}:-null}}"
+                end_edges.append(Edge(
+                    id=f"{start_ns}->{end.id}#{synth}",
+                    from_=start_ns, to=end.id, input_group=synth, optional=True))
+            return ".".join([synth, *segs[1:]])
+        return None                            # anything else — unchanged
+
+    for a in post_asserts:
+        lowered = rewrite_condition_refs(a, _rename)
+        end.post_asserts.append(lowered)
+        # Carry the author display text so a failure names the ORIGINAL assert, not the synth form.
+        end.assert_texts[lowered] = assert_texts.get(a, a)
+
+
+def clone_child(child, callsite: str, record: dict, *,
+                post_asserts: "list[str] | None" = None,
+                assert_texts: "dict[str, str] | None" = None,
+                input_names: "set[str] | None" = None) -> Flow:
     """Splice a child `CompiledFlow`'s `START_ID..END_ID` at `callsite`. Every child node
     (incl. its `START_ID`/`END_ID`) is cloned deep-namespaced; the child `START_ID` is SEEDED with the
     call-args as edges (no baking); the child `END_ID` is the alias filler. Pure — the dispatcher
     performs the impure `add_subgraph`/`register`/seed.
 
     Returns a `Flow` whose `start_id` is the namespaced child START (the sole seed point) and whose
-    `end_id` is the namespaced child END (the alias filler for REF / one element input for MAP)."""
+    `end_id` is the namespaced child END (the alias filler for REF / one element input for MAP).
+
+    `post_asserts`/`assert_texts`/`input_names` (default empty) carry a SPAWNER's node-level POST
+    `asserts:` — a `call` node may declare `asserts:` reading `${output}` (its committed output)
+    and its declared inputs. They are LOWERED onto the cloned child END (via
+    `_lower_spawner_post_asserts`) so they fire through the ordinary `eval_node` post-assert seam,
+    NOT a bespoke redirect-commit site. Empty for MAP/LOOP and for a CALL without node asserts."""
     nodes: dict[str, Node] = {}
     for nid, node in child.nodes.items():
         clone = copy.deepcopy(node)
@@ -159,9 +269,23 @@ def clone_child(child, callsite: str, record: dict) -> Flow:
 
     # The child END's POST asserts (the def's flow-level `asserts:` lowered onto END at build) ride
     # the deep-copied node UNCHANGED — their synth params, re-namespaced wiring (`${<callsite>/pid
-    # .output:-null}`), and re-keyed producer->END edges all survive the clone above, so eval_node
-    # fires them on the cloned END with pool-fallback resolution. No re-homing needed (and none
-    # possible without deleting the structural synth edges that gate the assert on its producer).
+    # .output:-null}`), and re-keyed producer->END edges all survive the clone above. Each synth
+    # param binds its producer's value INTO the cloned END's record (the assert string reads the
+    # node-local `${__assert_*}` head), so the END wrapper fires them record-only. No re-homing
+    # needed (and none possible without deleting the structural synth edges that gate the assert on
+    # its producer).
+    #
+    # A SPAWNER's OWN node-level POST asserts (a `call` node's `asserts:`) are LOWERED onto the
+    # cloned END here (net-new — the child does not carry them): `${output}` stays, a declared call
+    # input `${X}` becomes a synth END param wired off the cloned child START's coerced output. They
+    # then fire through the SAME END post-assert seam (the node's `run` wrapper) as the def's own asserts.
+    _lower_spawner_post_asserts(
+        nodes[out_id], wiring.setdefault(out_id, {}), edges,
+        callsite=callsite,
+        post_asserts=post_asserts or [],
+        assert_texts=assert_texts or {},
+        input_names=set(input_names or ()),
+    )
     return Flow(nodes=nodes, edges=edges, wiring=wiring, start_id=start_ns, end_id=out_id)
 
 
@@ -177,7 +301,10 @@ def _producer_of(src: str) -> Optional[str]:
     return None
 
 
-def call_subgraph(child, callsite: str, record: dict) -> Flow:
+def call_subgraph(child, callsite: str, record: dict, *,
+                  post_asserts: "list[str] | None" = None,
+                  assert_texts: "dict[str, str] | None" = None,
+                  input_names: "set[str] | None" = None) -> Flow:
     """The pure CALL builder: the self-describing fragment a CALL spawner grows into.
 
     Wraps `clone_child` (the deep-namespaced clone of the child's `START_ID..END_ID` at `callsite`,
@@ -186,8 +313,17 @@ def call_subgraph(child, callsite: str, record: dict) -> Flow:
     is the single cloned child START and whose `end_id` is the cloned child END filler. The child's
     asserts (a def's `asserts:` lowered onto its START/END at build) ride the cloned boundary nodes
     and fire through the ordinary node path — boundary asserts in the cloned `StartNode.run()` (post
-    coercion), post asserts on the cloned END via `eval_node` — exactly like the top-level flow."""
-    cloned = clone_child(child, callsite=callsite, record=record)
+    coercion), post asserts on the cloned END via `eval_node` — exactly like the top-level flow.
+
+    `post_asserts`/`assert_texts`/`input_names` carry the SPAWNER's OWN node-level POST `asserts:`
+    (a `call` node's `asserts:` reading `${output}` + declared inputs). They are lowered onto the
+    cloned child END by `clone_child`, so they fire through the SAME eval_node post-assert seam —
+    NOT a bespoke redirect-commit site. The CALL node passes `self.post_asserts`, `self.assert_texts`,
+    and its declared-input (param) names; `replay_grow` passes the identical trio so a resumed run's
+    rebuilt child END carries the same lowered asserts."""
+    cloned = clone_child(child, callsite=callsite, record=record,
+                         post_asserts=post_asserts, assert_texts=assert_texts,
+                         input_names=input_names)
     cloned.nodes[cloned.end_id].commit_as = callsite
     return Flow(nodes=cloned.nodes, edges=cloned.edges, wiring=cloned.wiring,
                 start_id=cloned.start_id, end_id=cloned.end_id)
@@ -307,7 +443,9 @@ def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) ->
 
 
 def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: int = 2,
-                            max_tool_iterations: Optional[int] = None) -> Flow:
+                            max_tool_iterations: Optional[int] = None,
+                            post_asserts: "list[str] | None" = None,
+                            assert_texts: "dict[str, str] | None" = None) -> Flow:
     """Materialize the agent-pause continuation PAIR namespaced at `callsite`.
 
     `pair` is `[human_input_desc, resume_desc]` from `agent_step`'s continuation `Grow`. The
@@ -328,7 +466,15 @@ def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: i
 
     `max_tool_iterations` carries the spawner's per-node tool-iteration cap (from its `env:`)
     onto the resume node's own `env` so a resumed agent keeps the same cap across the pause; a
-    `None` falls back to the module default `MAX_TOOL_ITERATIONS`."""
+    `None` falls back to the module default `MAX_TOOL_ITERATIONS`.
+
+    `post_asserts`/`assert_texts` carry the SPAWNER's node-level POST `asserts:` reading `${output}`
+    onto the resume terminal (its `post_asserts`/`assert_texts`). A pause defers the agent's
+    committed output to this resume node, so its `${output}` post-asserts fire through the resume
+    node's own `run` wrapper when it produces the final answer (`{**record, "output": value}`) —
+    the SAME node-owned seam CALL uses on the cloned child END, NOT a bespoke redirect-commit site.
+    Kept `${output}`-only: the resume node's record holds just `answer` (the agent's declared inputs
+    are gone after the first turn), matching main's paused-agent firing scope."""
     from agent_composer.nodes.agent.node import AgentNode, Resume
     from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
     from agent_composer.nodes.human_input import HumanInputNode
@@ -358,6 +504,11 @@ def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: i
     resume_node.output_type = output_type
     # Carry the per-node tool-iteration cap forward so the resumed loop uses the same bound.
     resume_node.env = {"max_tool_iterations": max_tool_iterations}
+    # Carry the spawner's node-level `${output}` POST asserts onto the resume terminal so its own
+    # `run` wrapper fires them when it commits the final answer (record-only, `{"output": value}`).
+    # A re-pausing resume node propagates them to the next segment via `_ctx` (it reads these).
+    resume_node.post_asserts = list(post_asserts or [])
+    resume_node.assert_texts = dict(assert_texts or {})
 
     # Rewrite the answer forward-ref to the NAMESPACED node-first ref.
     answer_ref = f"${{{hi_id}.output}}"
@@ -380,7 +531,9 @@ def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: i
 
 
 def agent_segment_subgraph(pair, callsite: str, *, output_type=None, retries: int = 2,
-                           max_tool_iterations: Optional[int] = None) -> Flow:
+                           max_tool_iterations: Optional[int] = None,
+                           post_asserts: "list[str] | None" = None,
+                           assert_texts: "dict[str, str] | None" = None) -> Flow:
     """The pure AGENT-pause builder: the continuation fragment an AGENT grows into when it pauses.
 
     Wraps `clone_continuation_pair` (the deep-namespaced clone of the `[human_input, resume]` PAIR
@@ -400,9 +553,16 @@ def agent_segment_subgraph(pair, callsite: str, *, output_type=None, retries: in
     the resume node (see `clone_continuation_pair`), so a resumed agent with a non-text `output:`
     still emits the declared type on its final turn and the type propagates segment to segment.
     `max_tool_iterations` carries the spawner's per-node tool-iteration cap the same way, so the
-    resumed loop keeps the same bound across the pause."""
+    resumed loop keeps the same bound across the pause.
+
+    `post_asserts`/`assert_texts` carry the SPAWNER's node-level `${output}` POST `asserts:` onto
+    the resume terminal (see `clone_continuation_pair`), so a pausing agent's `${output}` asserts
+    still fire — record-only, through the resume node's own `run` wrapper — on the resumed final
+    answer. The live pause passes `ctx.post_asserts`/`ctx.assert_texts`; `replay_grow` passes the
+    identical pair off THIS node so a resumed run re-lowers the same asserts."""
     cloned = clone_continuation_pair(pair, callsite=callsite, output_type=output_type, retries=retries,
-                                     max_tool_iterations=max_tool_iterations)
+                                     max_tool_iterations=max_tool_iterations,
+                                     post_asserts=post_asserts, assert_texts=assert_texts)
     cloned.nodes[cloned.end_id].commit_as = callsite   # PROVISIONAL: the engine residual overrides it to the true origin
     return Flow(nodes=cloned.nodes, edges=cloned.edges, wiring=cloned.wiring,
                 start_id=cloned.start_id, end_id=cloned.end_id)

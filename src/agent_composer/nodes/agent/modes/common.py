@@ -36,6 +36,11 @@ class AgentRunContext:
     output_type: Any = None  # the node's declared output Type; None = text passthrough
     retries: int = 2  # structured-generation self-correction cap (extra attempts)
     max_tool_iterations: int = -1  # model turns before AgentLoopError; -1 = no cap (default)
+    # The node's node-level POST `asserts:` reading `${output}` and their display texts. A pause
+    # defers the agent's committed output to the resume terminal, so these ride that terminal (via
+    # `agent_segment_subgraph`) and fire through its `run` wrapper — see `clone_continuation_pair`.
+    post_asserts: list[str] = field(default_factory=list)
+    assert_texts: dict = field(default_factory=dict)
 
 
 # A mode: a pure function of its context returning a NodeResult (Output | Grow) — the

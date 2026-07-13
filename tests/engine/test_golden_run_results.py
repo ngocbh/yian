@@ -252,11 +252,13 @@ output:
 
 def test_golden_inputs_defaults_and_multi_output_surface():
     loaded = load_flow(_SURFACE)
-    # input: default fills when OMITTED, coerced to the declared type (window omitted -> 30).
-    # This is the coerce+apply_defaults lifted onto StartNode.run.
+    # The declared default fills when OMITTED, coerced to the declared type, INSIDE START's wrapper
+    # (window omitted -> 30) — proven by the terminal output below (n=4 uses window=30). This is the
+    # coerce+apply_defaults lifted onto StartNode.run. `RunResult.input` is the caller-passed args
+    # coerced (defaulting lives in START, not the run boundary), so window is NOT re-surfaced here.
     res = run_flow(loaded, {"topic": "ACME"})
     assert res.status == "succeeded"
-    assert res.input == {"topic": "ACME", "window": 30}
+    assert res.input == {"topic": "ACME"}
     # >=2 declared outputs -> a record keyed by name (the END_ID record-mode arity).
     assert res.output == {"report": "report for ACME", "n": 4}
 

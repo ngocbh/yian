@@ -18,9 +18,11 @@ next step** (CLAUDE.md).
 
 Add a member to the `NodeKind` enum — the single source of the tag. It is a closed
 vocabulary (no registry/metaclass); the engine core does NOT dispatch on it, so a new
-leaf needs no engine change — its behavior is entirely in its own `run` (and, for a
+leaf needs no engine change — its behavior is entirely in its own `_run_impl` (and, for a
 spawner, the node-owned growth traits/hooks: `binds_per_item`, `bind_reserved`,
-`grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`).
+`grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`). The base `Node.run` is a
+concrete template method that fires the node's asserts around `_run_impl` — a leaf never
+overrides `run`.
 
 ```python
 class NodeKind(str, Enum):
@@ -31,7 +33,8 @@ class NodeKind(str, Enum):
 ## 2. `nodes/xxx/` — the Node subclass + charter
 
 - `nodes/xxx/node.py` — copy `node.py.template`, rename `XxxNode`, set
-  `kind = NodeKind.XXX`, implement `run`.
+  `kind = NodeKind.XXX`, implement `_run_impl` (the base `Node.run` wrapper fires asserts
+  around it — do not override `run`).
 - `nodes/xxx/__init__.py` — copy `__init__.py.template` (re-export only; the
   package charter per the `structure` skill).
 
@@ -94,7 +97,7 @@ If anything outside `compose/` references `XxxDescriptor`, add it to the imports
 
 ## 6. `tests/engine/test_xxx.py` — prove it
 
-Copy `test_node.py.template`. At minimum: a direct `run()` unit test and one
+Copy `test_node.py.template`. At minimum: a direct `_run_impl()` unit test and one
 `load_flow` + `run_flow` end-to-end. Run:
 
 ```bash

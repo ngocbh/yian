@@ -45,48 +45,62 @@ def test_end_list_params_are_e0_to_en():
     assert [p.name for p in node.params] == ["e0", "e1"]
 
 
-def test_end_post_asserts_fire_pool_scoped_through_eval_node():
+def test_end_post_asserts_fire_record_scoped_through_eval_node():
+    """An END post-assert fires RECORD-scoped through eval_node's `run` wrapper: the producer
+    ref is LOWERED to a synth param (`__assert_emit`) fed by a `${emit.output.n:-null}` wiring, so
+    bind_params binds it INTO the record and the assert reads `${__assert_emit}` node-locally. This
+    is the production shape after ref lowering (the pool-fallback in eval_node was retired)."""
     from types import SimpleNamespace
 
     from agent_composer.events import NodeFailed, NodeSucceeded
+    from agent_composer.nodes.base import ParamDecl
     from agent_composer.runtime.eval_node import eval_node
     from agent_composer.typesys.pool import VariablePool
 
-    node = EndNode.record("__end__", output_names=["n"])
-    node.post_asserts = ["${emit.output.n} > 0"]  # a ${X.output} ref -> needs POOL scope
     pool = VariablePool()
-    pool.set("emit", {"n": 4})  # the producer value the pool-scoped assert reads
-    flow = SimpleNamespace(wiring={"__end__": {"n": "${emit.output.n}"}})
+    pool.set("emit", {"n": 4})  # the producer value bound into the record via the synth param
+
+    node = EndNode.record("__end__", output_names=["n"])
+    node.post_asserts = ["${__assert_emit} > 0"]  # node-local synth-param ref (lowered shape)
+    node.params.append(ParamDecl(name="__assert_emit"))
+    flow = SimpleNamespace(wiring={"__end__": {"n": "${emit.output.n}",
+                                              "__assert_emit": "${emit.output.n:-null}"}})
     ok = list(eval_node(node, flow, pool))
     assert any(isinstance(e, NodeSucceeded) for e in ok)
 
     bad = EndNode.record("__end__", output_names=["n"])
-    bad.post_asserts = ["${emit.output.n} > 100"]
+    bad.post_asserts = ["${__assert_emit} > 100"]
+    bad.params.append(ParamDecl(name="__assert_emit"))
     failed = list(eval_node(bad, flow, pool))
     assert any(isinstance(e, NodeFailed) and "post-assert failed" in e.error for e in failed)
 
 
-def test_end_post_asserts_resolve_namespaced_cross_node_ref_from_pool():
+def test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param():
     """A flow terminal's END post-assert reading a NAMESPACED cross-node ref
-    (`${each#0/n.output.X}`, the shape expand bakes onto a fanned-in child END) resolves
-    from the pool through the generic assert binder — holds/fails identically with no END
-    special case (P5.2: the `node.kind == NodeKind.END` post-assert branch is gone)."""
+    (`${each#0/n.output.X}`, the shape expand produces on a fanned-in child END) is LOWERED to a
+    synth param bound into the record: the assert holds/fails record-scoped with no END special
+    case and no `node.kind` read (the pool-fallback firing path is gone)."""
     from types import SimpleNamespace
 
     from agent_composer.events import NodeFailed, NodeSucceeded
+    from agent_composer.nodes.base import ParamDecl
     from agent_composer.runtime.eval_node import eval_node
     from agent_composer.typesys.pool import VariablePool
 
     pool = VariablePool()
-    pool.set("each#0/n", {"score": 7})           # a namespaced child value only the pool holds
-    flow = SimpleNamespace(wiring={"__end__": {"n": "${each#0/n.output.score}"}})
+    pool.set("each#0/n", {"score": 7})           # a namespaced child value bound in via the param
+    wiring = {"__end__": {"n": "${each#0/n.output.score}",
+                          "__assert_score": "${each#0/n.output.score:-null}"}}
+    flow = SimpleNamespace(wiring=wiring)
 
     ok_node = EndNode.record("__end__", output_names=["n"])
-    ok_node.post_asserts = ["${each#0/n.output.score} > 0"]   # pool head with `/` and `#`
+    ok_node.post_asserts = ["${__assert_score} > 0"]
+    ok_node.params.append(ParamDecl(name="__assert_score"))
     ok = list(eval_node(ok_node, flow, pool))
     assert any(isinstance(e, NodeSucceeded) for e in ok)
 
     bad_node = EndNode.record("__end__", output_names=["n"])
-    bad_node.post_asserts = ["${each#0/n.output.score} > 100"]
+    bad_node.post_asserts = ["${__assert_score} > 100"]
+    bad_node.params.append(ParamDecl(name="__assert_score"))
     failed = list(eval_node(bad_node, flow, pool))
     assert any(isinstance(e, NodeFailed) and "post-assert failed" in e.error for e in failed)

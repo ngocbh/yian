@@ -71,11 +71,12 @@ def synthesize_boundary_graph(
     spanless flow (compact / in-memory / def).
 
     `lowered` (optional) is the flow's `asserts:` lowered into node-local asserts (Step 2's
-    `LoweredAsserts`). When given, its PRE asserts are stamped on START (`start.pre_asserts`), its
-    POST asserts on END (`end.post_asserts`), each synthesized END input becomes an extra
-    `ParamDecl` on END plus a wiring entry and a producer edge — so a cross-node post assert's
-    `${producer.output}` dependency is STRUCTURAL (a real END input) and survives child cloning.
-    `None` leaves the boundary nodes assert-free (a def / in-memory flow with no flow-level asserts).
+    `LoweredAsserts`). When given, its PRE (boundary) asserts are stamped on START's ordinary
+    `post_asserts` (they read `${output.X}` — START's coerced output), its POST asserts on END
+    (`end.post_asserts`), each synthesized END input becomes an extra `ParamDecl` on END plus a
+    wiring entry and a producer edge — so a cross-node post assert's `${producer.output}`
+    dependency is STRUCTURAL (a real END input) and survives child cloning. `None` leaves the
+    boundary nodes assert-free (a def / in-memory flow with no flow-level asserts).
     """
     start = StartNode(START_ID, input_decls=list(input_decls),
                       field_ranges=start_field_ranges)
@@ -97,13 +98,17 @@ def synthesize_boundary_graph(
     # Stamp the lowered flow-level asserts onto the boundary nodes (Node is not frozen —
     # validate_node_asserts mutates the assert slots the same way).
     if lowered is not None:
-        # START fires its PRE asserts from a DEDICATED slot (`boundary_asserts`), NOT the generic
-        # `pre_asserts` seam: eval_node fires `pre_asserts` against the RAW pre-coercion record, but
-        # a boundary assert must see the coerced/defaulted record, so StartNode.run() fires these
-        # itself post-coercion. END fires its POST asserts through the normal eval_node seam
-        # (`post_asserts`), which resolves any `${producer.output}` head via the pool.
-        start.boundary_asserts = list(lowered.start_pre)
-        start.boundary_assert_texts = dict(lowered.pre_texts)
+        # START fires its boundary asserts through the ORDINARY `post_asserts` seam: the lowered
+        # PRE asserts read `${output.X}` (see asserts._pre_rename), so the node's `run` wrapper fires
+        # them against `{**inputs, "output": <START's coerced record>}` — the coerced/defaulted
+        # value, not the wire string. This unifies START with every other node (no bespoke slot);
+        # eval_node stays kind-blind. END fires its POST asserts through the same seam; any
+        # `${producer.output}` head is lowered to a synth END param (see below) that binds the
+        # producer's value INTO END's record, so the assert fires record-only. Extend-safe: START
+        # carries no post_asserts today, but merge rather than assign so a future START-owned
+        # post-assert is not clobbered.
+        start.post_asserts = list(start.post_asserts) + list(lowered.start_pre)
+        start.assert_texts = {**start.assert_texts, **lowered.pre_texts}
         end.post_asserts = list(lowered.end_post)
         end.assert_texts = dict(lowered.post_texts)
         # Each synthesized END input is an extra param + a wiring source + a producer edge, so
@@ -140,9 +145,11 @@ def synthesize_boundary_graph(
         root_edges.append(Edge(id=f"{START_ID}->{END_ID}", from_=START_ID, to=END_ID))
 
     boundary_wiring: dict[str, dict[str, Any]] = {
-        # START_ID wiring: input names -> `${input.X}` sources. Provisional in the wiring
-        # table (parity check) — at runtime the engine seeds store[START_ID] directly
-        # from the run-args record (START_ID is never scheduled as a regular node).
+        # START_ID wiring: input names -> `${input.X}` sources. At runtime the engine schedules
+        # START through eval_node, priming store[START_ID] with the raw run-args record and
+        # consulting a PER-ENGINE override that narrows this compiled wiring to only the passed
+        # keys (an omitted input then binds absent so START's wrapper fills its declared default).
+        # This compiled entry is what a direct-driver / hand-seed test (no run_inputs) reads.
         START_ID: {d.name: f"${{input.{d.name}}}" for d in input_decls},
         END_ID: {o.name: o.from_ for o in outputs},
     }

@@ -121,13 +121,16 @@ output:
 
 
 def test_inputs_default_resolves_via_start_d_b_closed():
-    # the default binds at the synthesized START_ID (not the driver). Omitting `window`
-    # fills 30 and `${input.window}` reads it from START_ID's output.
+    # The default binds at the synthesized START_ID's wrapper (not the driver, not run.py).
+    # Omitting `window` fills 30 INSIDE START, and `${input.window}` reads it from START_ID's
+    # output — proven by the terminal output. `RunResult.input` is the caller-passed args coerced
+    # (NOT defaulted): defaulting now lives solely in START's wrapper, so the boundary surface
+    # reflects what the caller supplied, while the flow behavior reflects the filled default.
     loaded = load_flow(_DEFAULTED)
-    res = run_flow(loaded, {"topic": "ACME"})  # window omitted -> default 30
+    res = run_flow(loaded, {"topic": "ACME"})  # window omitted -> START fills default 30
     assert res.status == "succeeded"
-    assert res.input == {"topic": "ACME", "window": 30}
-    assert res.output == {"report": "report for ACME", "n": 4}
+    assert res.input == {"topic": "ACME"}  # caller-passed, coerced (default NOT re-surfaced here)
+    assert res.output == {"report": "report for ACME", "n": 4}  # window=30 default used in-flow
 
 
 # --- (4) author-identical seeds: the recorded run-result goldens still hold -------------- #

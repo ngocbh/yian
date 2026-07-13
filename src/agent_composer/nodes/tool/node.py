@@ -33,7 +33,7 @@ class ToolNode(Node):
         super().__init__(node_id, title=title)
         self.tool_id = tool_id
 
-    def run(self, inputs: dict) -> Output:
+    def _run_impl(self, inputs: dict) -> Output:
         from agent_composer.tools import TOOL_REGISTRY
 
         if self.tool_id not in TOOL_REGISTRY:

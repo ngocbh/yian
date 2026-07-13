@@ -10,15 +10,14 @@ by the engine's `eval_node` before `run`.
 `run` returns one `Grow(Flow)` — self-describing expansion: it builds the whole MAP fan-in
 subgraph (`map_subgraph` — N per-element child clones PLUS a synthesized `EndNode.list_` fan-in over
 the child ENDs) and the engine's generic `_apply_grow` splices it into the live graph, with a
-per-kind MAP residual (depth/refdepth/finish-mark + the transitional per-element
-boundary-assert/ledger). The `Grow.seed` is the raw list of per-element records (the durable builder
-input); an empty `over` -> a subgraph whose sole node is the list-`END` (it emits `[]`). The
-per-element call-args go RAW: the spliced child START_ID owns omitted-input defaulting (its params
-carry default/required), so the driver no longer pre-defaults. `child`/`child_inputs`/`child_asserts`
-are baked at load by `compose.nodes.map.build`; `child_inputs` is read by compile
-validation (`check_ref_map_types`) AND at runtime by the engine's per-element boundary-assert temp
-pool (to mirror START_ID's coerce+default view). `parallel` is inert (concurrency is the engine's
-`num_workers`); it is carried for the over case.
+per-kind MAP residual (depth/refdepth/finish-mark). The `Grow.seed` is the raw list of per-element
+records (the durable builder input); an empty `over` -> a subgraph whose sole node is the list-`END`
+(it emits `[]`). The per-element call-args go RAW: the spliced child START_ID owns omitted-input
+defaulting (its params carry default/required), so the driver no longer pre-defaults.
+`child`/`child_inputs` are baked at load by `compose.nodes.map.build`; `child_inputs` is read by
+compile validation (`check_ref_map_types`). The child's asserts ride its own compiled boundary
+nodes and survive the `clone_child` deep-copy per element. `parallel` is inert (concurrency is the
+engine's `num_workers`); it is carried for the over case.
 """
 
 from typing import Any, Callable, ClassVar, Optional
@@ -51,9 +50,7 @@ class MapNode(Node):
         child (`Any`, *optional*, defaults to `None`):
             The baked child flow (stamped at load); a `None` child raises at run time.
         child_inputs (`list`, *optional*, defaults to `None`):
-            The child's input decls, read by compile validation and the per-element temp pool.
-        child_asserts (`Any`, *optional*, defaults to `None`):
-            The child's baked boundary asserts.
+            The child's input decls, read by compile validation.
         child_source (`Any`, *optional*, defaults to `None`):
             The child flow's render-only `SourceFrame` (label + node-line maps). Carried
             for the CLI's nested-error traceback only; `run` ignores it entirely.
@@ -68,7 +65,7 @@ class MapNode(Node):
 
     def __init__(self, node_id: str, *, flow_id: str, parallel: bool = False,
                  flow_version: Optional[int] = None, child: Any = None,
-                 child_inputs: Optional[list] = None, child_asserts: Any = None,
+                 child_inputs: Optional[list] = None,
                  child_source: Any = None, title: Optional[str] = None) -> None:
         super().__init__(node_id, title=title)
         self.flow_id = flow_id
@@ -76,7 +73,6 @@ class MapNode(Node):
         self.parallel = parallel    # inert (the engine's num_workers)
         self.child = child
         self.child_inputs = child_inputs or []
-        self.child_asserts = child_asserts
         # Render-only: the child's SourceFrame for the CLI error traceback. `run` never reads it.
         self.child_source = child_source
 
@@ -114,9 +110,3 @@ class MapNode(Node):
         per-element records (`seed`) via the SAME `map_subgraph` builder — no body re-run. The
         resolved `over:` list is captured on the seed, so replay needs no re-binding."""
         return map_subgraph(self.child, spawner_id=self.id, records=[dict(r) for r in seed])
-
-    def iter_boundary_records(self, seed: Any) -> list:
-        """One boundary record PER ELEMENT: each per-element record from `seed`, labelled
-        `MAP child <id> element <i>`. The engine checks each element's effective inputs against the
-        child's boundary asserts before attaching the grow."""
-        return [(dict(rec), f"MAP child {self.id!r} element {i}") for i, rec in enumerate(seed)]

@@ -323,7 +323,10 @@ One `${...}` grammar; the context decides what happens to the result:
   directive, not a `${...}` span.
 - **`when:` / `asserts:`**: **tested** as a boolean — `== != < <= > >=`,
   `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Bare or
-  `${...}`-wrapped are equivalent.
+  `${...}`-wrapped are equivalent. A flow-level `asserts:` reads `input.X`
+  (boundary, before any node) or `node.output` (post, after the terminal) —
+  `${system.X}` is **not** allowed there (it is ambient; a `system` ref is a
+  LoadError — move the check into a body node).
 - **Prompts**: free text with embedded `${...}` spans (each stringified).
 
 > Bindings wire, conditions test, nodes compute.

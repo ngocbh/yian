@@ -1,14 +1,18 @@
 """`run_flow(loaded, inputs) -> RunResult` — the run entrypoint.
 
 A host-agnostic run boundary that drives a loaded `LoadedFlow` through the
-`FlowEngine` and enforces its `asserts:` in two phases. It owns the run-input
-concerns the pure graph engine doesn't:
+`FlowEngine`. It owns the run-input concerns the pure graph engine doesn't:
 
 - coerce + default the run arguments against the flow's `InputDecl`s,
-- seed the `input` namespace + the host-ambient `system` clock,
-- fire the BOUNDARY asserts (`${input}`/`${system}`-only) BEFORE any node runs
-  (fail-fast), and the POST-TERMINAL asserts (`${<id>.output}`) AFTER the run
-  reaches a terminal — flipping a succeeded run to `failed` on a false post assert.
+- seed the `input` namespace + the host-ambient `system` clock, and
+- drive the engine to a terminal, mapping engine events to a `RunResult`.
+
+The flow's `asserts:` are NOT enforced here: they are lowered onto the synthesized
+boundary nodes at build (PRE/boundary asserts -> `StartNode.boundary_asserts`, fired
+inside `StartNode.run()` post-coercion; POST-terminal asserts -> `end.post_asserts`,
+fired uniformly through `eval_node`). A false assert therefore comes back as a
+`RunFailed` engine event, exactly like a body node's node-local assert — run.py just
+forwards it. This unifies top-level and child (subflow) asserts on one firing path.
 
 `RunResult` (the surface-agnostic run outcome) lives here, beside `run_flow`. The
 seeding fns (`coerce_inputs`/`apply_defaults`/`seed_system_clock`) come from
@@ -33,7 +37,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 from agent_composer.compile.llm_cascade import resolve_llm_cascade
-from agent_composer.compile.model import START_ID
 from agent_composer.events import (
     RunAborted,
     RunFailed,
@@ -42,7 +45,6 @@ from agent_composer.events import (
     SourceRange,
     SourceSpan,
 )
-from agent_composer.expr import first_failing_assert
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.seeding import (
@@ -142,20 +144,24 @@ def run_flow(
     num_workers: int = 0,
 ) -> RunResult:
     """
-    Coerce inputs, seed the variable pool, enforce asserts, and drive the flow to a terminal.
+    Coerce inputs, seed the variable pool, and drive the flow to a terminal.
 
     Never raises on a flow failure: a failed, paused, or aborted run is returned as a
     `RunResult` with a non-`"succeeded"` status (a `RunFailed` is an engine event, not an
     exception). Compile-time errors of a bad flow surface earlier, in
-    [`load_flow`][agent_composer.load_flow]. Asserts run in two phases — boundary asserts
-    (`${input}`/`${system}`-only) fire *before* any node runs and return `status="failed"`
-    on a false one; post-terminal asserts (`${<id>.output}`) run *after* the flow reaches a
-    terminal and flip an otherwise-succeeded run to `"failed"`.
+    [`load_flow`][agent_composer.load_flow]. Asserts are NOT enforced here: a flow's
+    `asserts:` are lowered at build onto the synthesized boundary nodes — boundary asserts
+    (`${input}`-only) ride `StartNode.boundary_asserts` and fire inside `StartNode.run()`
+    post-coercion (a false one returns `status="failed"` before any body node); post-terminal
+    asserts (`${<id>.output}`) ride `end.post_asserts` and fire through `eval_node` when END
+    runs (flipping an otherwise-succeeded run to `"failed"`). This unifies top-level and child
+    (subflow) asserts on one firing path.
 
     Args:
         loaded (`LoadedFlow`):
             A compiled, validated flow from [`load_flow`][agent_composer.load_flow].
-            Carries the IR, the declared input schema, and the assert sets.
+            Carries the IR (asserts lowered onto its boundary nodes) and the declared
+            input schema.
         inputs (`dict[str, Any]`):
             Run arguments keyed by declared input name. Each value is coerced to its
             declared type; names omitted here fall back to their declared defaults.
@@ -201,14 +207,15 @@ def run_flow(
     # ${system.run_id} — host-injected, else a freshly minted id; child-inherited like the clock.
     pool.add_system("run_id", run_id if run_id is not None else default_run_id())
 
-    # The engine seeds store[START_ID] at run init (StartNode.run -> coerce/type-check/defaults),
-    # fires the boundary asserts pool-scoped (reading store[START_ID]), then advances START_ID. The
-    # `inputs` namespace + run.py's add_inputs/type-check/boundary-assert blocks are retired; the
-    # input TypeCheckError + the false-boundary-assert both come back as a RunFailed engine event.
+    # The engine seeds store[START_ID] at run init (StartNode.run -> coerce/type-check/defaults +
+    # FIRE the flow's boundary asserts post-coercion), then advances START_ID. The flow's
+    # post-terminal asserts ride the END node (`end.post_asserts`, lowered onto it at build) and
+    # fire uniformly through eval_node — so run.py enforces NO asserts itself; the input
+    # TypeCheckError + a false boundary/post assert all come back as a RunFailed engine event.
     engine = FlowEngine(
         loaded.compiled, pool,
         num_workers=num_workers,
-        run_inputs=coerced, boundary_asserts=loaded.asserts.boundary,
+        run_inputs=coerced,
     )
     events: List[Any] = []
     status = "incomplete"
@@ -247,16 +254,8 @@ def run_flow(
             pause_reasons=paused[0].reasons if paused else [],
         )
 
-    # Second assert phase — post-terminal asserts (${<id>.output[.X]}): only meaningful on a succeeded run;
-    # a false one flips success to failure. Skipped if the run didn't succeed.
-    if status == "succeeded":
-        bad = first_failing_assert(loaded.asserts.post, pool)
-        if bad is not None:
-            status = "failed"
-            error = f"assert failed: {bad}"
-            result_locator = SourceSpan(node=None, kind="assert", key=bad)
-            result_range = loaded.compiled.nodes[START_ID].field_ranges.get(bad)
-
+    # Post-terminal asserts ride the END node (`end.post_asserts`) and fire through eval_node,
+    # so a false one already comes back as a RunFailed event above — no second phase here.
     return RunResult(
         input=coerced, status=status, output=output, error=error,
         locator=result_locator, range=result_range, traceback=tb, events=events,
@@ -358,13 +357,8 @@ def resume_flow(
             pause_reasons=paused[0].reasons if paused else [],
         )
 
-    if status == "succeeded":
-        bad = first_failing_assert(loaded.asserts.post, engine.pool)
-        if bad is not None:
-            status, error = "failed", f"assert failed: {bad}"
-            result_locator = SourceSpan(node=None, kind="assert", key=bad)
-            result_range = loaded.compiled.nodes[START_ID].field_ranges.get(bad)
-
+    # Post-terminal asserts ride the END node and fire through eval_node (see run_flow) — a
+    # false one already surfaces as a RunFailed event above, so no second phase on resume either.
     return RunResult(
         input={}, status=status, output=output, error=error,
         locator=result_locator, range=result_range, traceback=tb, events=events,

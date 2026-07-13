@@ -33,7 +33,7 @@ def test_map_node_run_builds_grow_fan_in_per_element():
 
     child = _child_flow()
     n = MapNode("m", flow_id="child", child=child,
-                child_inputs=[], child_asserts=None)
+                child_inputs=[])
     grow = n.run({"over": [1, 2, 3]}, bind_item=lambda el: {"x": el})
     assert isinstance(grow, Grow)
     assert grow.seed == [{"x": 1}, {"x": 2}, {"x": 3}]

@@ -1,9 +1,8 @@
 from agent_composer.compile.expand import clone_child
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
-from agent_composer.compose.validate.asserts import AssertSet
 from agent_composer.compose.helpers.types import InputDecl, read_type
 from agent_composer.events import NodeFailed, NodeSucceeded
-from agent_composer.nodes.base import NodeKind, Output
+from agent_composer.nodes.base import NodeKind, Output, ParamDecl
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.typesys.pool import VariablePool
@@ -14,7 +13,7 @@ def _decl(name: str, type_: str = "str") -> InputDecl:
     return InputDecl(name, type_, None, True, read_type(type_, {}))
 
 
-def _child(outputs, *, tail_reads=None, asserts=None, inputs=("topic",)) -> CompiledFlow:
+def _child(outputs, *, tail_reads=None, inputs=("topic",)) -> CompiledFlow:
     # A child shaped START_ID -> head (reads ${input.topic}) -> tail (reads ${head.output.r}) -> END_ID.
     head = stamp_reads(FuncNode("head", lambda i: {"r": i["topic"]}),
                        {"topic": "${input.topic}"})
@@ -37,7 +36,6 @@ def _child(outputs, *, tail_reads=None, asserts=None, inputs=("topic",)) -> Comp
     wiring[START_ID] = {d.name: f"${{input.{d.name}}}" for d in decls}
     wiring[END_ID] = {o.name: o.from_ for o in outputs}
     flow = CompiledFlow.from_parts(nodes=nodes, edges=edges, outputs=outputs, wiring=wiring)
-    flow.child_asserts = asserts  # clone_child reads the carried AssertSet off the cloned child
     return flow
 
 
@@ -99,20 +97,40 @@ def test_clone_child_end_carries_producer_edges():
     }
 
 
-def test_clone_child_rehomes_post_asserts_onto_child_end():
-    child = _child([FlowOutput(name="out", from_="${tail.output}")],
-                   asserts=AssertSet(boundary=["${input.topic} != ''"],
-                                     post=["${tail.output} != ''"]))
+def test_clone_child_lowered_post_asserts_survive_clone():
+    # A def's flow-level `asserts:` are LOWERED onto its END at build: each `${producer.output}`
+    # post-assert becomes a synth END param (`__assert_<pid>`) fed by a `${pid.output:-null}`
+    # wiring + a producer->END edge, and the post-assert is rewritten node-local (`${__assert_<pid>}`).
+    # clone_child deep-copies the END, re-namespaces its wiring, and re-keys its edges — so the whole
+    # structural dependency SURVIVES the clone (the C2 fix: no re-homing needed, and none possible
+    # without deleting the synth edge that gates the assert on its producer).
+    child = _child([FlowOutput(name="out", from_="${tail.output}")])
+    end = child.nodes[END_ID]
+    # Lower `${tail.output} != ''` onto END exactly as boundary synthesis does.
+    end.post_asserts = ["${__assert_tail} != ''"]
+    end.assert_texts = {"${__assert_tail} != ''": "${tail.output} != ''"}
+    end.params.append(ParamDecl(name="__assert_tail"))
+    child.wiring[END_ID]["__assert_tail"] = "${tail.output:-null}"
+    child.edges.append(Edge(id=f"tail->{END_ID}#assert", from_="tail", to=END_ID,
+                            input_group="__assert_tail", optional=True))
+
     cloned = clone_child(child, callsite="each", record={"topic": "ACME"})
-    # boundary asserts are NOT carried on the Flow — the engine reads them off the spawner node
-    # via `iter_boundary_records` and evaluates them eagerly in `_apply_grow`.
-    # post-assert re-namespaced under the callsite via the node-first shape.
-    assert cloned.nodes["each/__end__"].post_asserts == ["${each/tail.output} != ''"]
+    ce = cloned.nodes["each/__end__"]
+    # the lowered post-assert is node-local (it names a synth PARAM, not a node) -> UNCHANGED.
+    assert ce.post_asserts == ["${__assert_tail} != ''"]
+    # the author's ORIGINAL text rides along so a failure message shows `${tail.output} != ''`.
+    assert ce.assert_texts == {"${__assert_tail} != ''": "${tail.output} != ''"}
+    # the synth wiring feeding the param is re-namespaced under the callsite.
+    assert cloned.wiring["each/__end__"]["__assert_tail"] == "${each/tail.output:-null}"
+    # the producer->END synth edge is re-keyed under the callsite (gates the assert on its producer).
+    assert any(e.from_ == "each/tail" and e.to == "each/__end__"
+               and e.input_group == "__assert_tail" for e in cloned.edges)
 
 
-# --- firing contract: eval_node fires an END_ID node's re-homed post-asserts POOL-scoped --
-# An ${<callsite>/X.output} post-assert re-homed onto the child END_ID must fire POOL-scoped (not
-# the record-scoped generic path, which would resolve the ref to None and false-fail).
+# --- firing contract: eval_node resolves an END node's post-assert POOL-scoped when its ref head
+# is not in the bound record. A namespaced cross-node ref (`${<callsite>/X.output}`) riding END from
+# expand must resolve POOL-scoped (not the record-scoped path, which would resolve it to None and
+# false-fail). This is the pool-fallback in `_first_failing_assert`.
 def _run_end(end, pool):
     flow = type("F", (), {"wiring": {end.id: {}}})()  # END_ID takes its inputs as bound record
     return list(drive(end, pool, flow))

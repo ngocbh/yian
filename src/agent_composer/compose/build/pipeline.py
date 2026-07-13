@@ -24,7 +24,7 @@ from typing import Optional
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
 from agent_composer.nodes.base import Node
 from agent_composer.typesys.values import Type
-from agent_composer.compose.validate.asserts import AssertSet, classify_asserts
+from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.nodes.base import BuildContext
@@ -70,9 +70,6 @@ class LoadedFlow:
         input (`list[InputDecl]`):
             The declared flow inputs `run_flow` coerces and defaults run arguments
             against. Singular for symmetry with the `input:` YAML keyword.
-        asserts (`AssertSet`):
-            The boundary / post-terminal assert split `run_flow` enforces in two phases
-            (boundary before any node runs, post after the flow terminates).
         version (`str`, *optional*, defaults to `None`):
             The flow's declared `version:`, or `None` if unversioned. Used to validate a
             `uses: ref@<version>` pin against the resolved file.
@@ -92,7 +89,6 @@ class LoadedFlow:
 
     compiled: CompiledFlow
     input: list[InputDecl]
-    asserts: AssertSet
     version: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
@@ -285,7 +281,15 @@ def _assemble(
     # Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post +
     # stamp onto each built leaf/call node. Shared by defs (a def's internal nodes too).
     validate_node_asserts(nodes_built, descriptors, n_lines)
-    asserts = classify_asserts(asserts_section, flow_inputs, set(descriptors), producers)
+    # Lower the flow-level `asserts:` into node-local asserts stamped on the synthesized
+    # START/END. Fires uniformly via eval_node — a cross-node post
+    # assert's `${producer.output}` becomes a real END input edge, so it survives child cloning.
+    # `boundary_field_ranges` is keyed by the raw assert string (among input names, which the
+    # lookup ignores), so it doubles as the render-only per-assert source map; `None` when spanless.
+    lowered = lower_flow_asserts(
+        asserts_section, flow_inputs, set(descriptors), producers,
+        assert_ranges=boundary_field_ranges,
+    )
 
     # Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in
     # BEFORE root synthesis so an ordering-only dependent is demoted from root, and into
@@ -301,7 +305,7 @@ def _assemble(
     flow_outputs = _flow_outputs(outputs_section)
     structural = reconciled + ordering_edges
     boundary_nodes, boundary_edges, boundary_wiring = synthesize_boundary_graph(
-        inputs, flow_outputs, node_ids, structural, boundary_field_ranges
+        inputs, flow_outputs, node_ids, structural, boundary_field_ranges, lowered=lowered
     )
     nodes.update(boundary_nodes)
     flow_wiring.update(boundary_wiring)
@@ -319,6 +323,6 @@ def _assemble(
     compiled = CompiledFlow.from_parts(nodes, edges, outputs=flow_outputs, wiring=flow_wiring,
                                        flow_llm_config=flow_llm_config or {})
     return LoadedFlow(
-        compiled=compiled, input=inputs, asserts=asserts,
+        compiled=compiled, input=inputs,
         version=version, name=name, description=description, source=source,
     )

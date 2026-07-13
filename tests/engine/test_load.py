@@ -229,11 +229,16 @@ def test_seed18_multi_output_with_coalesce():
 
 def test_seed18_post_terminal_assert_against_view():
     loaded = _load("18")
-    # the confidence-range assert reads ${synth.output.confidence} -> post-terminal,
-    # validated against the View record (load succeeds, not lenient-skipped).
-    assert loaded.asserts.boundary == []
-    assert len(loaded.asserts.post) == 1
-    assert "confidence" in loaded.asserts.post[0]
+    # the confidence-range assert reads ${synth.output.confidence} -> post-terminal, so it is
+    # LOWERED onto the END node (`post_asserts`), not START; the START carries no boundary asserts.
+    # Validated against the View record (load succeeds, not lenient-skipped).
+    start = loaded.compiled.nodes[START_ID]
+    end = loaded.compiled.nodes[END_ID]
+    assert start.boundary_asserts == []
+    assert end.post_asserts != []
+    # `confidence` survives on the lowered assert or its original author text.
+    end_texts = list(end.post_asserts) + list(end.assert_texts.values())
+    assert any("confidence" in t for t in end_texts)
 
 
 # --------------------------------------------------------------------------- #
@@ -243,9 +248,12 @@ def test_seed18_post_terminal_assert_against_view():
 
 def test_seed10_asserts_are_boundary():
     loaded = _load("10")
-    # all four asserts read only ${input.X} -> boundary (none post-terminal).
-    assert len(loaded.asserts.boundary) == 4
-    assert loaded.asserts.post == []
+    # all four asserts read only ${input.X} -> boundary, so they are LOWERED onto the START node
+    # (`boundary_asserts`); END carries no post asserts.
+    start = loaded.compiled.nodes[START_ID]
+    end = loaded.compiled.nodes[END_ID]
+    assert start.boundary_asserts != []
+    assert end.post_asserts == []
 
 
 # --------------------------------------------------------------------------- #

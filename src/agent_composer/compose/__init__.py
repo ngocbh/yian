@@ -21,7 +21,6 @@ Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes`; nothi
 in the engine imports `compose`.
 """
 
-from agent_composer.compose.validate.asserts import AssertSet, classify_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.nodes.resolver import (
@@ -77,8 +76,6 @@ __all__ = [
     "reject_cycles",
     "validate_references",
     "desugar_inline_calls",
-    "AssertSet",
-    "classify_asserts",
     "LoadedFlow",
     "load_flow",
 ]

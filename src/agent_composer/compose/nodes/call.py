@@ -108,10 +108,9 @@ class CallDescriptor(NodeDescriptor):
             )
         child = _resolve_child(self.id, self.call, resolver)
         sig = child_signature(child)
-        # Stamp the child's AssertSet onto its compiled flow: the Grow subgraph body is `child.compiled`,
-        # and `expand.clone_child` reads `child_asserts` off the cloned child to carry the
-        # boundary asserts (eval'd eagerly in the CALL grow residual) + re-home the post asserts onto __out.
-        child.compiled.child_asserts = child.asserts
+        # The child's asserts ride its compiled boundary nodes (lowered at the child's own
+        # build): PRE/boundary asserts on its START, POST-terminal on its END. `clone_child`
+        # deep-copies the whole child subgraph, so those lowered asserts survive the splice.
         errors: list[str] = []
         if is_map:
             node: Node = MapNode(
@@ -120,7 +119,6 @@ class CallDescriptor(NodeDescriptor):
                 flow_version=None,
                 child=child.compiled,
                 child_inputs=child.input,
-                child_asserts=child.asserts,
                 child_source=child.source,        # render-only; the CLI nested-error traceback
                 parallel=self.parallel,           # inert; carried for the over case only
                 title=self.node_name,
@@ -141,7 +139,6 @@ class CallDescriptor(NodeDescriptor):
                 flow_version=None,
                 child=child.compiled,
                 child_inputs=child.input,
-                child_asserts=child.asserts,
                 child_source=child.source,        # render-only; the CLI nested-error traceback
                 title=self.node_name,
             )

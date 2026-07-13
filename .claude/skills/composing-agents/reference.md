@@ -192,6 +192,13 @@ passthrough or a concatenating template. This is the shape `ac chat` runs; see `
   includes a `call` node: its POST asserts may read `${output}` **and** the call's
   declared inputs (`${name}`), like a leaf node. `map` nodes reject node-local
   `asserts:` at load time — assert a `map`'s result with a flow-level/downstream check.
+- **Flow-level `asserts:` read `input.X` (boundary, before any node) or `node.output`
+  (post, after the terminal).** `${system.X}` is **not** allowed — it is ambient (no
+  producer node to draw the check's dependency edge from), so a `system` ref is a
+  LoadError; put a system-dependent check in a body node's `asserts:` or a `case`.
+  A flow's `asserts:` are lowered onto its synthesized `start`/`end` boundary nodes and
+  fire on the ordinary node path (`start` post-coercion, `end` post-terminal), so a
+  called `defs:`/`uses:` child's asserts fire identically to the top-level flow's.
 
 ## Model selection — the `llm_config` cascade
 

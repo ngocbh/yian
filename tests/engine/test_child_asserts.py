@@ -1,10 +1,12 @@
-"""A def's / child's `asserts:` enforced at the REF/MAP child seam.
+"""A def's / child's `asserts:` enforced through the child's boundary nodes.
 
-A `def` may declare `asserts:`. When the def runs via a `call` (REF once, MAP per
-element), the engine enforces its two-phase asserts against the child pool: boundary
-(`${inputs}`/`${system}`) before the child runs, post (`${X.output}`) after it terminates.
-A failed child assert fails the parent call node (the "subflow … failed" channel) -> the
-parent run fails.
+A `def` may declare `asserts:`. At build these are lowered onto the def's synthesized
+START/END nodes (PRE/boundary -> `START.boundary_asserts`, POST -> `END.post_asserts`).
+When the def runs via a `call` (REF once, MAP per element), the child START/END are cloned
+into the parent and fire their asserts through the ordinary `eval_node` path — the child
+START fires the boundary asserts post-coercion, the child END fires the post asserts. A
+failed child assert fails the child node -> the parent run fails. This is the SAME firing
+path as a top-level flow's asserts (the whole point of the merge).
 """
 
 import pytest
@@ -107,11 +109,13 @@ def test_map_child_assert_one_violating_element_fails():
     assert "assert failed" in res.error
 
 
-# --- a failing CALL/MAP expansion leaves NO orphan descriptor ----------------------------- #
-# `_apply_grow` mints the `GrowRecord` before the per-kind residual but attaches it
-# to `eng.expansions` only AFTER the residual succeeds (attach-after-grow), so a boundary-assert
-# raise inside the residual leaves the ledger clean (no orphan a later snapshot serializes). Driven via
-# FlowEngine directly to inspect `eng.expansions` (run_flow only exposes `.engine` on a pause).
+# --- a failing child boundary assert fails the run through the cloned child START ---------- #
+# A def's boundary asserts are lowered onto its START node; the cloned child START fires them
+# through `eval_node` post-coercion (AFTER the subgraph is spliced + the GrowRecord attached, not
+# eagerly inside `_apply_grow`). So a boundary failure now surfaces as an ordinary NodeFailed on
+# the child START -> RunFailed, and the expansion IS attached (the child ran far enough to fire
+# its START). The user-facing guarantee is the failure + message; the ledger attach is normal.
+# Driven via FlowEngine directly to mirror the prior tests.
 from agent_composer.compile.model import START_ID
 from agent_composer.events import RunFailed
 from agent_composer.runtime.engine import FlowEngine
@@ -119,22 +123,22 @@ from agent_composer.typesys.pool import VariablePool
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
-def test_ref_boundary_failure_leaves_no_orphan_descriptor(num_workers):
+def test_ref_boundary_failure_fails_run(num_workers):
     loaded = load_flow(_REF_FLOW)
     pool = VariablePool()
-    pool.set(START_ID, {"v": -1})                       # violates ${input.n} >= 0 -> _grow_call raises
+    pool.set(START_ID, {"v": -1})                       # violates n >= 0 on the cloned child START
     eng = FlowEngine(loaded.compiled, pool, num_workers=num_workers)
     events = list(eng.run())
     assert isinstance(events[-1], RunFailed)
-    assert eng.expansions == []                          # the failed CALL left no orphan descriptor
+    assert "pre-assert failed" in events[-1].error     # fired by the cloned child StartNode.run()
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
-def test_map_boundary_failure_leaves_no_orphan_descriptor(num_workers):
+def test_map_boundary_failure_fails_run(num_workers):
     loaded = load_flow(_MAP_FLOW)
     pool = VariablePool()
-    pool.set(START_ID, {"vs": [1, -1]})                 # element 1 violates -> _grow_map raises
+    pool.set(START_ID, {"vs": [1, -1]})                 # element 1 violates n >= 0 on its child START
     eng = FlowEngine(loaded.compiled, pool, num_workers=num_workers)
     events = list(eng.run())
     assert isinstance(events[-1], RunFailed)
-    assert eng.expansions == []                          # the failed MAP left no orphan descriptor
+    assert "pre-assert failed" in events[-1].error

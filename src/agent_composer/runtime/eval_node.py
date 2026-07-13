@@ -128,9 +128,10 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm):
         record.update(node.bind_reserved(node_wiring, pool))
         bad = _first_failing_assert(node.pre_asserts, record, pool)
         if bad is not None:
-            yield NodeFailed(node.id, error=f"node {node.id!r} pre-assert failed: {bad}",
+            display = node.assert_texts.get(bad, bad)
+            yield NodeFailed(node.id, error=f"node {node.id!r} pre-assert failed: {display}",
                              error_type="NodeAssertFailed",
-                             locator=SourceSpan(node.id, "assert", bad),
+                             locator=SourceSpan(node.id, "assert", display),
                              range=node.field_ranges.get(bad))
             return
         # Per-kind narrow caps, built by the engine — never the pool itself.
@@ -180,10 +181,14 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm):
         loc = getattr(exc, "locator", None)
         if loc is not None and loc.node is None:
             loc = replace(loc, node=node.id)
-        # Dual-path: ALONGSIDE the symbolic locator, resolve a concrete SourceRange by keying
-        # the node's recorded `field_ranges` on the locator KEY (an input name / assert expr) —
-        # NOT on `node.kind`. None when no locator or no range is recorded for that key.
-        rng = node.field_ranges.get(loc.key) if loc is not None else None
+        # Dual-path: ALONGSIDE the symbolic locator, resolve a concrete SourceRange. An exception
+        # that already carries its own `range` (a child START's NodeAssertFailed, which fires the
+        # boundary asserts itself and knows the assert's span) wins; otherwise key the node's
+        # recorded `field_ranges` on the locator KEY (an input name / assert expr) — NOT on
+        # `node.kind`. None when neither is present.
+        rng = getattr(exc, "range", None)
+        if rng is None and loc is not None:
+            rng = node.field_ranges.get(loc.key)
         # Capture the full formatted traceback here, while the exception is live, so the CLI
         # can surface the raising call's Python stack under `--engine-trace`. The terse
         # default (message + boxed YAML frame) never shows it.
@@ -209,9 +214,10 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm):
         post_record = {**post_input, "output": result.value}
         bad = _first_failing_assert(node.post_asserts, post_record, pool)
         if bad is not None:
-            yield NodeFailed(node.id, error=f"node {node.id!r} post-assert failed: {bad}",
+            display = node.assert_texts.get(bad, bad)
+            yield NodeFailed(node.id, error=f"node {node.id!r} post-assert failed: {display}",
                              error_type="NodeAssertFailed",
-                             locator=SourceSpan(node.id, "assert", bad),
+                             locator=SourceSpan(node.id, "assert", display),
                              range=node.field_ranges.get(bad))
             return
     # Fold the commit redirect onto the terminal: a node-chosen `Output.commit_as` (roadmap)

@@ -139,8 +139,7 @@ def test_engine_seeds_store_start_without_scheduling_start_or_emitting_succeeded
 
     loaded = load_flow(_FLOW)
     pool = VariablePool()
-    eng = FlowEngine(loaded.compiled, pool, run_inputs={"x": "ACME"},
-                     boundary_asserts=loaded.asserts.boundary)
+    eng = FlowEngine(loaded.compiled, pool, run_inputs={"x": "ACME"})
     events = list(eng.run())
     assert not any(isinstance(e, NodeSucceeded) and e.node_id == START_ID for e in events)
     assert pool.get(START_ID) == {"x": "ACME"}        # START_ID's bound record committed at init

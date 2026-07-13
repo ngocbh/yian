@@ -109,7 +109,6 @@ branching on kind.
 | `binds_per_item` | map | bind inputs per element via `caps["bind_item"]`, not once up front |
 | `bind_reserved` / `reserved_wiring_keys` | wait, map | reserved keys resolved before `run` (`until`, `over`); the names for load-time checks |
 | `needs_llm` | agent | build the `caps["llm"]` model factory |
-| `iter_boundary_records` | call, map | records to boundary-check before splicing |
 | `grow_depth_delta` / `grow_restamps_self` / `is_loop` | spawners | recursion-depth stamp; agent re-pause nesting; loop bookkeeping |
 
 ## Why this shape

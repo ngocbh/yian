@@ -1,8 +1,10 @@
 """Flow-level failures carry a `SourceSpan` on `RunResult.locator`.
 
-A post-terminal assert (`${id.output} ...`) sets an `assert` locator; an input-coercion
-failure at the boundary sets an `input_decl` locator (Step 8). Both flow-level paths have
-no node behind them, so the locator rides the `RunResult`, not a `NodeFailed`.
+A post-terminal assert (`${id.output} ...`) is lowered onto the END node and fired through
+`eval_node`, so its locator names `__end__` (the boundary node it rides) with the author's
+original assert text as the key. A boundary assert (`${input.X} ...`) is lowered onto START and
+fired inside `StartNode.run()`; it has no body node behind it, so its locator's `node` is None.
+An input-coercion failure at the boundary sets an `input_decl` locator (node None).
 """
 
 from pathlib import Path
@@ -20,7 +22,9 @@ def test_post_assert_sets_run_result_locator():
     result = run_flow(load_flow(text), {"topic": "X"})
     assert result.status == "failed"
     assert result.locator is not None and result.locator.kind == "assert"
-    assert result.locator.node is None
+    # The post assert now rides the END node (lowered onto `end.post_asserts`), so its locator
+    # names `__end__` — the key stays the author's ORIGINAL text (not the lowered synth form).
+    assert result.locator.node == "__end__"
     assert result.locator.key == "calc.output > 100"
 
 

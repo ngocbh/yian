@@ -123,6 +123,8 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
             # `_apply_grow` via NodeExpanded. Any non-spawner kind returning a Grow is a clear error
             # (the graph only grows from spawners).
             if not node.is_spawner:
+                # `node.kind.value` here is MESSAGE-ONLY (a diagnostic string), not dispatch —
+                # the gate is the kind-blind `is_spawner` trait, so the census stays 0.
                 raise RuntimeError(
                     f"node {node.id!r} (kind {node.kind.value}) returned a Grow but is "
                     f"not a spawner (CALL/MAP/AGENT/LOOP); only spawner kinds may grow the graph"

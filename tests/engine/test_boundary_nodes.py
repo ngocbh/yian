@@ -129,19 +129,19 @@ def test_input_reader_is_not_also_a_bare_root():
     assert len(start_to_n) == 1 and start_to_n[0].input_group == "x"
 
 
-def test_engine_seeds_store_start_without_scheduling_start_or_emitting_succeeded():
-    # the engine invokes StartNode.run(run-args) ONCE at init, commits store[START_ID],
-    # and does NOT enqueue START_ID / emit a NodeSucceeded for START_ID. The run succeeds and the value
-    # came from the seed, not from START_ID being scheduled.
-    from agent_composer.events import NodeSucceeded
+def test_engine_schedules_start_and_emits_succeeded():
+    # START is now an ORDINARY scheduled node: the engine primes store[START_ID] with the raw
+    # run-args, schedules START_ID, and START runs through eval_node — emitting NodeStarted +
+    # NodeSucceeded like any node and committing its COERCED bound record. The run succeeds and
+    # the value flows from the scheduled START, not a hand-seed bypass.
+    from agent_composer.events import NodeStarted, NodeSucceeded
     from agent_composer.runtime.engine import FlowEngine
-    from agent_composer.typesys.pool import VariablePool
 
     loaded = load_flow(_FLOW)
-    pool = VariablePool()
-    eng = FlowEngine(loaded.compiled, pool, run_inputs={"x": "ACME"})
+    eng = FlowEngine(loaded.compiled, run_inputs={"x": "ACME"})
     events = list(eng.run())
-    assert not any(isinstance(e, NodeSucceeded) and e.node_id == START_ID for e in events)
-    assert pool.get(START_ID) == {"x": "ACME"}        # START_ID's bound record committed at init
+    assert any(isinstance(e, NodeStarted) and e.node_id == START_ID for e in events)
+    assert any(isinstance(e, NodeSucceeded) and e.node_id == START_ID for e in events)
+    assert eng.pool.get(START_ID) == {"x": "ACME"}    # START_ID's bound record committed by eval_node
     res = run_flow(load_flow(_FLOW), {"x": "ACME"})
     assert res.status == "succeeded" and res.output == "ACME"

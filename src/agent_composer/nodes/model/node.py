@@ -54,7 +54,7 @@ class ModelNode(Node):
         self.weights_uri = weights_uri
         self.runtime_name = runtime
 
-    def run(self, inputs: dict) -> Output:
+    def _run_impl(self, inputs: dict) -> Output:
         """Always raises — the ML-serving seam was removed as dead plumbing (see the class docstring)."""
         raise NotImplementedError(
             f"MODEL node {self.id!r}: ML serving is not wired yet — the model_runtime "

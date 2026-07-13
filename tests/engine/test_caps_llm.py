@@ -20,7 +20,7 @@ def test_eval_node_passes_llm_cap_to_needs_llm_node():
     seen = {}
 
     class Fake(AgentNode):
-        def run(self, inputs, **caps):
+        def _run_impl(self, inputs, **caps):
             seen["llm"] = caps.get("llm")
             return Output(value="ok")
 
@@ -37,7 +37,7 @@ def test_eval_node_omits_llm_cap_for_plain_node():
     class Plain(Node):
         kind = NodeKind.CODE  # any concrete kind; needs_llm stays False (base default)
 
-        def run(self, inputs, **caps):
+        def _run_impl(self, inputs, **caps):
             seen["caps"] = dict(caps)
             return Output(value="ok")
 

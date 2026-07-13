@@ -89,3 +89,69 @@ def test_assert_texts_used_in_message():
         node.run({"__assert_calc": 5})
 
     assert "calc.output > 100" in str(excinfo.value)
+
+
+# --- After the Step 3 rename (each kind's `run` -> `_run_impl`), the INHERITED base
+# `Node.run` wrapper is the entry point for real/fake kinds: calling `node.run(...)`
+# (with no asserts set) must delegate to the kind's `_run_impl` and return its result
+# unchanged, once per result category (Output / Route / Pause / Grow). These prove the
+# wrapper correctly finds the renamed `_run_impl` — they FAIL before the rename because
+# the kinds still shadow `run` (so `run` is the kind body, not the wrapper), and the base
+# `_run_impl` stub raises NotImplementedError.
+
+
+def test_wrapper_delegates_to_real_code_node_run_impl():
+    """A real CodeNode (leaf -> Output): its `run` is the INHERITED base wrapper (it no
+    longer shadows it), and the wrapper delegates to the kind's `_run_impl`."""
+    from agent_composer.nodes.code import CodeNode
+
+    node = CodeNode("c", code="return inputs['v']", code_line=1)
+    # After the rename the kind defines no `run`, so `run` resolves to the base wrapper.
+    assert type(node).run is Node.run
+    result = node.run({"v": "hi"})
+
+    assert isinstance(result, Output)
+    assert result.value == "hi"
+
+
+def test_wrapper_delegates_for_route_kind():
+    """A CASE fake (-> Route): `run` is the inherited wrapper and returns the Route from `_run_impl`."""
+    from agent_composer.nodes.base import Route
+
+    from tests.engine._fakes import BranchNode
+
+    node = BranchNode("b", handle="yes")
+    assert type(node).run is Node.run
+    result = node.run({})
+
+    assert isinstance(result, Route)
+    assert result.handle == "yes"
+
+
+def test_wrapper_delegates_for_pause_kind():
+    """A HUMAN_INPUT fake (-> Pause): `run` is the inherited wrapper and returns the Pause."""
+    from agent_composer.nodes.base import Pause
+
+    from tests.engine._fakes import PauseNode
+
+    node = PauseNode("p", reason="needs-input")
+    assert type(node).run is Node.run
+    result = node.run({})
+
+    assert isinstance(result, Pause)
+    assert result.reason == "needs-input"
+
+
+def test_wrapper_delegates_for_grow_kind():
+    """A spawner (CALL -> Grow): `run` is the inherited wrapper and returns the Grow from `_run_impl`."""
+    from agent_composer.nodes.base import Grow
+    from agent_composer.nodes.call import CallNode
+
+    from tests.engine.test_expand import _child_flow
+
+    node = CallNode("r", flow_id="c", child=_child_flow(), child_inputs=[])
+    assert type(node).run is Node.run
+    result = node.run({"topic": "ACME"})
+
+    assert isinstance(result, Grow)
+    assert result.seed == {"topic": "ACME"}

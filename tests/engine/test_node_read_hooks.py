@@ -17,7 +17,7 @@ class _PlainNode(Node):
 
     kind = NodeKind.CODE
 
-    def run(self, inputs, **caps):  # pragma: no cover — never run here
+    def _run_impl(self, inputs, **caps):  # pragma: no cover — never run here
         return None
 
 

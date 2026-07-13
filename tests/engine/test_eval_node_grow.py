@@ -21,7 +21,7 @@ class _FakeSpawner(Node):
     kind = NodeKind.CODE
     is_spawner = True
 
-    def run(self, inputs, **caps):
+    def _run_impl(self, inputs, **caps):
         return _grow()
 
 
@@ -31,7 +31,7 @@ class _FakeLeaf(Node):
     kind = NodeKind.CODE
     is_spawner = False
 
-    def run(self, inputs, **caps):
+    def _run_impl(self, inputs, **caps):
         return _grow()
 
 

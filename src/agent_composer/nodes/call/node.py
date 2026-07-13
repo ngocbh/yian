@@ -64,7 +64,7 @@ class CallNode(Node):
         # Render-only: the child's SourceFrame for the CLI error traceback. `run` never reads it.
         self.child_source = child_source
 
-    def run(self, inputs: dict, **caps: Any):
+    def _run_impl(self, inputs: dict, **caps: Any):
         if self.child is None:
             raise RuntimeError(f"CALL node {self.id!r}: child flow {self.flow_id!r} not baked")
         # Pass the call-args RAW: the spliced child START_ID owns omitted-input defaulting now (its

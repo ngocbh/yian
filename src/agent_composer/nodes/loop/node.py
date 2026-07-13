@@ -83,7 +83,7 @@ class LoopNode(Node):
         # The compiled `L` sets origin_id == self.id (uniform); a clone `L~k` carries the origin.
         self.origin_id = origin_id or node_id
 
-    def run(self, inputs: dict[str, Any], **caps: Any):
+    def _run_impl(self, inputs: dict[str, Any], **caps: Any):
         """Own the WHOLE loop policy (no engine `_loop_step`): decide continue-vs-stop on the
         carried record, and on continue emit a self-respawning `Grow` (body_k + a fresh `L~(k+1)`
         driver) that self-prunes this driver + the previous body.

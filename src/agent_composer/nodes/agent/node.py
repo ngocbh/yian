@@ -213,9 +213,9 @@ class AgentNode(Node):
             max_tool_iterations=self._max_tool_iterations(),
         )
 
-    def run(self, inputs: dict, **caps: Any) -> NodeResult:
+    def _run_impl(self, inputs: dict, **caps: Any) -> NodeResult:
         # caps['llm'] is the engine-owned model factory (the needs_llm gate). Fall back to the
-        # lazy package thunk for a direct node.run(...) with no caps (direct-driver tests). The
+        # lazy package thunk for a direct node._run_impl(...) with no caps (direct-driver tests). The
         # import is lazy to avoid an import cycle (runtime.eval_node imports nodes.base).
         llm = caps.get("llm")
         if llm is None:

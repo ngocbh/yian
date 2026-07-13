@@ -34,7 +34,7 @@ class EchoNode(Node):
         super().__init__(node_id)
         stamp_reads(self, {"value": f"${{{source}.output}}"})
 
-    def run(self, inputs: dict) -> Output:
+    def _run_impl(self, inputs: dict) -> Output:
         return Output(value=inputs["value"])
 
 

@@ -179,7 +179,7 @@ class CodeNode(Node):
         if not _returns_in_scope(main_fn.body):
             raise ValueError("inline `code:` has no `return` (the body must return a value)")
 
-    def run(self, inputs: dict) -> Output:
+    def _run_impl(self, inputs: dict) -> Output:
         if self._mode == "reference":
             module_name, _, func_name = self.ref.partition(":")
             module = importlib.import_module(module_name)

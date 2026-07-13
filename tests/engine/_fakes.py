@@ -53,7 +53,7 @@ class FuncNode(Node):
         self.fn = fn
         stamp_reads(self, reads)
 
-    def run(self, inputs: dict) -> Output:
+    def _run_impl(self, inputs: dict) -> Output:
         return Output(value=self.fn(inputs))
 
 
@@ -77,7 +77,7 @@ class StreamNode(Node):
         super().__init__(node_id, **kw)
         self.chunks = chunks
 
-    def run(self, inputs: dict):
+    def _run_impl(self, inputs: dict):
         text = ""
         for c in self.chunks:
             text += c
@@ -92,7 +92,7 @@ class FailNode(Node):
         super().__init__(node_id, **kw)
         self.message = message
 
-    def run(self, inputs: dict) -> Output:
+    def _run_impl(self, inputs: dict) -> Output:
         raise RuntimeError(self.message)
 
 
@@ -103,7 +103,7 @@ class Policy(Exception):
 class ReturnsFailedNode(Node):
     kind = NodeKind.CODE
 
-    def run(self, inputs: dict) -> Output:
+    def _run_impl(self, inputs: dict) -> Output:
         raise Policy("declined")
 
 
@@ -116,7 +116,7 @@ class BranchNode(Node):
         super().__init__(node_id, **kw)
         self.handle = handle
 
-    def run(self, inputs: dict) -> Route:
+    def _run_impl(self, inputs: dict) -> Route:
         return Route(self.handle)
 
 
@@ -131,7 +131,7 @@ class PauseNode(Node):
         super().__init__(node_id, **kw)
         self.reason = reason
 
-    def run(self, inputs: dict) -> Pause:
+    def _run_impl(self, inputs: dict) -> Pause:
         return Pause(self.reason)
 
 

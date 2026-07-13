@@ -60,7 +60,7 @@ class CaseNode(Node):
         super().__init__(node_id, title=title)
         self.cases = cases
 
-    def run(self, inputs: dict) -> Route:
+    def _run_impl(self, inputs: dict) -> Route:
         # Strict CASE: route on the bound input record only — each `when:`
         # interpolates this node's declared inputs as bare `${name}`, not the pool.
         # Routing-only: returns a Route carrying the chosen case handle (no value).

@@ -99,7 +99,7 @@ class WaitNode(Node):
         """A timed WAIT reserves `until` (its author-wiring source); event mode reserves nothing."""
         return {"until"} if self.is_timed else set()
 
-    def run(self, inputs: dict):
+    def _run_impl(self, inputs: dict):
         # The engine pre-resolves a timed `until` into inputs["until"] (a concrete ISO ts);
         # its presence is the timed/event discriminator. `resolve_until` is the bind's job now.
         if "until" in inputs:  # timed mode

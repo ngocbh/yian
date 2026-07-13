@@ -154,7 +154,11 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm):
         # A kind-blind watchdog logs (does not kill) a node whose run overruns a soft
         # budget — so a runaway in-process CODE body is diagnosed, not a silent hang.
         with node_watchdog(node.id):
-            outcome = node.run(record, **caps)
+            # Transition: eval_node calls _run_impl directly + fires asserts itself (the pre
+            # block above, the post block below) through Step 7; Step 8 flips this to node.run
+            # (the base wrapper) and deletes these firing blocks atomically. Calling _run_impl
+            # here bypasses the dormant wrapper so asserts fire EXACTLY ONCE.
+            outcome = node._run_impl(record, **caps)
             if isinstance(outcome, (Output, Route, Pause, Grow)):
                 result = outcome
             elif inspect.isgenerator(outcome):  # a streaming kind: yields StreamChunk, returns a NodeResult

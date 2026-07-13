@@ -89,7 +89,7 @@ class StartNode(Node):
         self.boundary_asserts: list[str] = []
         self.boundary_assert_texts: dict[str, str] = {}
 
-    def run(self, inputs: dict) -> Output:
+    def _run_impl(self, inputs: dict) -> Output:
         # The seeding.py pipeline lifted onto the node: coerce the wired args to the
         # declared types, type-check each, then fill each declared default for an OMITTED
         # input. Returns the bound record as ONE object keyed by input name.

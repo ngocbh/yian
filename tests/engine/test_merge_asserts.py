@@ -238,8 +238,8 @@ def test_c3_braced_boundary_assert_fail_fast_and_pass():
 
 @pytest.mark.xfail(
     reason="C3: the record-scoped BARE boundary form `age >= 18` is an 'unknown "
-    "namespace' LoadError today; the refactor resolves it against the START "
-    "record. Pass-after.",
+    "namespace' LoadError today; resolving it against the START record is deferred "
+    "to a follow-up (ngocbh/agent-composer#93). The braced `${input.age}` form works.",
     strict=False,
 )
 def test_c3_bare_record_scoped_boundary_assert_fail_fast_and_pass():

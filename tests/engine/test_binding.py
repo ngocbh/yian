@@ -75,6 +75,14 @@ def test_bind_present_null_shadows_param_default():
     assert rec == {"w": None}
 
 
+def test_bind_omitted_no_default_is_absent():
+    # A truly OMITTED optional input with NO default leaves its key ABSENT from the record (not
+    # present-as-None) so the wrapper's `apply_default` can fill it (or the strict render raises
+    # on unbound). This is the omit vs bound-null split — contrast `test_bind_optional_missing_is_none`,
+    # where a PRESENT edge resolving to null lands as `{"t": None}`.
+    assert bind_inputs([InputBinding(name="x", type="int")], _pool()) == {}  # no source -> absent
+
+
 def test_bind_required_omitted_raises():
     # Param `required` is presence-based too: an OMITTED required input (no edge) fails loud.
     with pytest.raises(BindingError):

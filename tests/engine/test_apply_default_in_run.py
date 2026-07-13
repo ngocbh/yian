@@ -11,13 +11,12 @@ defaulted input).
 truly OMITTED input (key absent from the record) gets its default.
 
 These tests exercise the wrapper directly (NOT through `eval_node`). We build
-nodes with ParamDecls that carry a `default` by hand, because the loader does
-not populate body-node defaults until Step 5.
+nodes with ParamDecls that carry a `default` by hand: the loader only ever mints
+`default`-bearing ParamDecls on START (from the flow-level `input:` block); a body
+node's `input:` block is pure wiring, so its params carry no default.
 """
 
 from typing import Any
-
-import pytest
 
 from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.binding import ParamDecl
@@ -67,17 +66,20 @@ def test_bound_null_shadows_default():
     assert result.value == {"x": None}
 
 
-@pytest.mark.xfail(reason="needs Step 5 type_str on body ParamDecl", strict=False)
 def test_string_default_coerced_to_declared_type():
-    """A declared `int` input with `default: "30"`, OMITTED -> the record should
-    carry the INTEGER 30 (coerced via type_str), not the string "30".
+    """A ParamDecl carrying BOTH `type_str="int"` and a string `default="30"`,
+    OMITTED -> the wrapper's default-fill coerces it to the INTEGER 30 (via
+    `apply_defaults` -> `coerce_param`, which reads `type_str`), not the string "30".
 
-    `coerce_param` reads ONLY `type_str`, and Step 5 is what threads `type_str`
-    onto body-node ParamDecls (the loader does not populate it today). Without it
-    the default stays the string "30", so this xfails until Step 5; we mirror that
-    by leaving `type_str=None` on this hand-built decl (as the loader does today)."""
+    This pins the wrapper's coerce-on-fill capability directly. Note the loader
+    never mints a BODY-node ParamDecl carrying a default (body `input:` blocks are
+    pure wiring, no `TYPE = default` syntax — that lives only on the flow-level
+    `input:` block, i.e. START's params), and START's params deliberately carry
+    `default` WITHOUT `type_str` (`start/node.py`: run() is the sole type authority,
+    so `bind_params` must not type-check first). So the type_str+default pairing is
+    exercised here against the wrapper as a unit, not via a loader path."""
     node = _ImplNode("n")
-    node.params = [ParamDecl(name="x", type_str=None, required=False, default="30")]
+    node.params = [ParamDecl(name="x", type_str="int", required=False, default="30")]
 
     result = node.run({})  # x omitted
 

@@ -443,7 +443,9 @@ def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) ->
 
 
 def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: int = 2,
-                            max_tool_iterations: Optional[int] = None) -> Flow:
+                            max_tool_iterations: Optional[int] = None,
+                            post_asserts: "list[str] | None" = None,
+                            assert_texts: "dict[str, str] | None" = None) -> Flow:
     """Materialize the agent-pause continuation PAIR namespaced at `callsite`.
 
     `pair` is `[human_input_desc, resume_desc]` from `agent_step`'s continuation `Grow`. The
@@ -464,7 +466,15 @@ def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: i
 
     `max_tool_iterations` carries the spawner's per-node tool-iteration cap (from its `env:`)
     onto the resume node's own `env` so a resumed agent keeps the same cap across the pause; a
-    `None` falls back to the module default `MAX_TOOL_ITERATIONS`."""
+    `None` falls back to the module default `MAX_TOOL_ITERATIONS`.
+
+    `post_asserts`/`assert_texts` carry the SPAWNER's node-level POST `asserts:` reading `${output}`
+    onto the resume terminal (its `post_asserts`/`assert_texts`). A pause defers the agent's
+    committed output to this resume node, so its `${output}` post-asserts fire through the resume
+    node's own `run` wrapper when it produces the final answer (`{**record, "output": value}`) —
+    the SAME node-owned seam CALL uses on the cloned child END, NOT a bespoke redirect-commit site.
+    Kept `${output}`-only: the resume node's record holds just `answer` (the agent's declared inputs
+    are gone after the first turn), matching main's paused-agent firing scope."""
     from agent_composer.nodes.agent.node import AgentNode, Resume
     from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
     from agent_composer.nodes.human_input import HumanInputNode
@@ -494,6 +504,11 @@ def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: i
     resume_node.output_type = output_type
     # Carry the per-node tool-iteration cap forward so the resumed loop uses the same bound.
     resume_node.env = {"max_tool_iterations": max_tool_iterations}
+    # Carry the spawner's node-level `${output}` POST asserts onto the resume terminal so its own
+    # `run` wrapper fires them when it commits the final answer (record-only, `{"output": value}`).
+    # A re-pausing resume node propagates them to the next segment via `_ctx` (it reads these).
+    resume_node.post_asserts = list(post_asserts or [])
+    resume_node.assert_texts = dict(assert_texts or {})
 
     # Rewrite the answer forward-ref to the NAMESPACED node-first ref.
     answer_ref = f"${{{hi_id}.output}}"
@@ -516,7 +531,9 @@ def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: i
 
 
 def agent_segment_subgraph(pair, callsite: str, *, output_type=None, retries: int = 2,
-                           max_tool_iterations: Optional[int] = None) -> Flow:
+                           max_tool_iterations: Optional[int] = None,
+                           post_asserts: "list[str] | None" = None,
+                           assert_texts: "dict[str, str] | None" = None) -> Flow:
     """The pure AGENT-pause builder: the continuation fragment an AGENT grows into when it pauses.
 
     Wraps `clone_continuation_pair` (the deep-namespaced clone of the `[human_input, resume]` PAIR
@@ -536,9 +553,16 @@ def agent_segment_subgraph(pair, callsite: str, *, output_type=None, retries: in
     the resume node (see `clone_continuation_pair`), so a resumed agent with a non-text `output:`
     still emits the declared type on its final turn and the type propagates segment to segment.
     `max_tool_iterations` carries the spawner's per-node tool-iteration cap the same way, so the
-    resumed loop keeps the same bound across the pause."""
+    resumed loop keeps the same bound across the pause.
+
+    `post_asserts`/`assert_texts` carry the SPAWNER's node-level `${output}` POST `asserts:` onto
+    the resume terminal (see `clone_continuation_pair`), so a pausing agent's `${output}` asserts
+    still fire — record-only, through the resume node's own `run` wrapper — on the resumed final
+    answer. The live pause passes `ctx.post_asserts`/`ctx.assert_texts`; `replay_grow` passes the
+    identical pair off THIS node so a resumed run re-lowers the same asserts."""
     cloned = clone_continuation_pair(pair, callsite=callsite, output_type=output_type, retries=retries,
-                                     max_tool_iterations=max_tool_iterations)
+                                     max_tool_iterations=max_tool_iterations,
+                                     post_asserts=post_asserts, assert_texts=assert_texts)
     cloned.nodes[cloned.end_id].commit_as = callsite   # PROVISIONAL: the engine residual overrides it to the true origin
     return Flow(nodes=cloned.nodes, edges=cloned.edges, wiring=cloned.wiring,
                 start_id=cloned.start_id, end_id=cloned.end_id)

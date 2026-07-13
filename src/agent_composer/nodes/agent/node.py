@@ -211,6 +211,8 @@ class AgentNode(Node):
             output_type=self.output_type,
             retries=self.retries,
             max_tool_iterations=self._max_tool_iterations(),
+            post_asserts=list(self.post_asserts),
+            assert_texts=dict(self.assert_texts),
         )
 
     def _run_impl(self, inputs: dict, **caps: Any) -> NodeResult:
@@ -253,7 +255,8 @@ class AgentNode(Node):
         `agent_segment_subgraph` builder — no LLM turn re-run. The seed is re-validated through the
         `AgentSegment` schema so the re-entry frame keeps its round-trip validation. For a K-pause
         chain each segment's resume terminal becomes the next segment's spawner, so `callsite`/
-        `output_type` come off THIS node (the previous segment's terminal on segment 2+)."""
+        `output_type`/`post_asserts` come off THIS node (the previous segment's terminal on segment 2+),
+        so a resumed run re-lowers the same node-level `${output}` post-asserts onto the resume terminal."""
         from agent_composer.compile.expand import agent_segment_subgraph
         from agent_composer.suspension.expansions import AgentSegment
 
@@ -264,4 +267,6 @@ class AgentNode(Node):
             output_type=self.output_type,
             retries=self.retries,
             max_tool_iterations=self._max_tool_iterations(),
+            post_asserts=list(self.post_asserts),
+            assert_texts=dict(self.assert_texts),
         )

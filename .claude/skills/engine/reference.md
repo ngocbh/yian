@@ -77,6 +77,14 @@ lowering runs in BOTH the live grow path AND `replay_grow`, so a resumed CALL fi
 post-asserts (dropping it in `replay_grow` would silently skip the assert on resume). The moved
 assert's failure names the **child END id**, not the spawner.
 
+An **AGENT** that pauses is a spawner too: its `${output}` node-level `post_asserts` are carried
+onto the **resume terminal** (`expand.clone_continuation_pair`, via `agent_segment_subgraph`), so
+they fire through that terminal's own `run` wrapper when it commits the resumed final answer —
+`${output}`-only (the resume record holds just `answer`, the agent's declared inputs are gone
+after the first turn). Like CALL, this carry runs on BOTH the live pause path (off the mode
+`ctx`) AND `replay_grow` (off the spawner node), so a resumed agent enforces the same assert; for
+a multi-pause chain each resume terminal propagates them to the next segment via `_ctx`.
+
 ## `NodeKind` (closed vocabulary)
 
 `NodeKind` is a closed enum (no registry/metaclass), but the engine **core does not dispatch on

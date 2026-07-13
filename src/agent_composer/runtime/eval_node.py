@@ -2,13 +2,13 @@
 
 A node is a pure function of its bound input record; the ENGINE owns both boundaries —
 the read (bind the inputs from the pool) and the write (the dispatcher stores `Output`).
-This generator is that read seam plus the assert + dispatch normalization, lifted out of
+This generator is that read seam plus the dispatch normalization, lifted out of
 the node (it replaces the temporary `Node._emit`). It yields `NodeStarted`, binds the
 record, pre-resolves reserved keys (timed WAIT `until` / mapped-call `over`), builds the per-kind
 narrow caps (a mapped call's `bind_item`, and `caps['llm']` — the engine-owned model factory —
-for an LLM-backed node gated on `node.needs_llm`), runs the node,
-and turns the returned `NodeResult` into one terminal `NodeSucceeded`/`NodeFailed` — or a
-single `PauseRequested` for a returned `Pause`.
+for an LLM-backed node gated on `node.needs_llm`), runs the node through its `run` wrapper
+(which owns pre/post assert firing — record-only), and turns the returned `NodeResult` into one
+terminal `NodeSucceeded`/`NodeFailed` — or a single `PauseRequested` for a returned `Pause`.
 
 Every node-side failure path funnels to `NodeFailed` so the two engines (serial + parallel)
 agree byte-for-byte on the same input: a node `raise`, a `Grow` returned by a NON-spawner
@@ -25,7 +25,6 @@ release/resume (harmless given the monotonic pool), and a `call` that is BOTH un
 bad `over`/binding surfaces the over/bind error before the not-baked guard (loader always bakes).
 """
 
-import copy
 import inspect
 import traceback as _tb
 from dataclasses import replace
@@ -38,58 +37,11 @@ from agent_composer.events import (
     NodeStarted,
     NodeSucceeded,
     PauseRequested,
-    SourceSpan,
 )
-from agent_composer.expr import resolve_reference
-from agent_composer.expr.expressions import ExpressionError, _evaluate, _resolve_in_record
 from agent_composer.nodes.base import Grow, Output, Pause, Route
 from agent_composer.nodes.binding import bind_params
 from agent_composer.runtime.watchdog import node_watchdog
 from agent_composer.typesys.pool import VariablePool
-
-
-def _first_failing_assert(asserts, record: dict, pool: VariablePool):
-    """The first assert in `asserts` that does not hold against a bound scope, else None.
-
-    ONE generic assert-check for both pre- and post-asserts, kind-blind. Per assert, each
-    reference resolves from the widest scope that owns it, mirroring the two historical
-    resolution rules with no `node.kind` branch:
-      - head already in `record` (a declared input, or the synthetic `output` the caller
-        injects for post-asserts) -> `record`, via the dotted `_resolve_in_record` walk
-        (the node-local rule);
-      - any other head -> the pool, via full-path `resolve_reference` (the END pool-fallback
-        for namespaced cross-node refs like `${each#0/n.output.X}` that ride END from expand).
-
-    A raising assert (an ordered/arith comparison over a None/non-scalar ref) does NOT hold —
-    the same clean-NodeFailed contract as `Node._assert_holds`; only `ExpressionError` is
-    swallowed (the domain the condition engine raises in), so a real bug still surfaces.
-
-    Args:
-        asserts (`list[str]`): the assert expressions (any `when:`/`asserts:` spelling).
-        record (`dict`): the bound scope — input params (+ synthetic `output` for post).
-        pool (`VariablePool`): the live pool for cross-node/namespaced ref fallback.
-
-    Returns:
-        `str | None`: the first assert that does not hold, or None if all hold.
-    """
-    for a in asserts:
-        # Resolve each ref of THIS assert record-first / pool-fallback (byte-parity with the
-        # retired END `_resolve_end` and the node-local `_resolve_in_record` paths). The record
-        # head wins so a declared input / the synthetic `output` never reads a stale pool value;
-        # an unknown head (a namespaced END ref) falls to the pool as END did.
-        def _resolve(path: str, _record=record) -> Any:
-            head = path.split(".", 1)[0].strip()
-            if head in _record:
-                return _resolve_in_record(path, _record)
-            return resolve_reference(path, pool)
-
-        try:
-            holds = _evaluate(a, _resolve)
-        except ExpressionError:
-            holds = False
-        if not holds:
-            return a
-    return None
 
 
 def _default_llm(config):
@@ -135,14 +87,6 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
         # -> list (validated in the hook -> NodeFailed). The hook reads its sources from
         # `node_wiring` (the node/flow split) + `pool`; default `{}` for an ordinary node.
         record.update(node.bind_reserved(node_wiring, pool))
-        bad = _first_failing_assert(node.pre_asserts, record, pool)
-        if bad is not None:
-            display = node.assert_texts.get(bad, bad)
-            yield NodeFailed(node.id, error=f"node {node.id!r} pre-assert failed: {display}",
-                             error_type="NodeAssertFailed",
-                             locator=SourceSpan(node.id, "assert", display),
-                             range=node.field_ranges.get(bad))
-            return
         # Per-kind narrow caps, built by the engine — never the pool itself.
         # HUMAN_INPUT/WAIT are deliver-as-Output: they always Pause and the engine
         # delivers the answer. AGENT lowers a control pause to a continuation `Grow`,
@@ -156,18 +100,16 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
             # LLM-backed node (AGENT): hand it the engine-owned model factory. The node no
             # longer imports `model_from_config` — it builds its model from this provider.
             caps["llm"] = llm
-        # Pristine snapshot for the POST asserts: a leaf may mutate the dict it receives
-        # (e.g. a CODE function transforming in place), which must not corrupt the contract
-        # check — restores the isolation an earlier double-bind gave. Only paid when declared.
-        post_input = copy.deepcopy(record) if node.post_asserts else None
         # A kind-blind watchdog logs (does not kill) a node whose run overruns a soft
         # budget — so a runaway in-process CODE body is diagnosed, not a silent hang.
         with node_watchdog(node.id):
-            # Transition: eval_node calls _run_impl directly + fires asserts itself (the pre
-            # block above, the post block below) through Step 7; Step 8 flips this to node.run
-            # (the base wrapper) and deletes these firing blocks atomically. Calling _run_impl
-            # here bypasses the dormant wrapper so asserts fire EXACTLY ONCE.
-            outcome = node._run_impl(record, **caps)
+            # eval_node drives the base `run` WRAPPER (not `_run_impl`): the wrapper owns
+            # assert firing — it fills declared defaults, fires pre-asserts against the bound
+            # record, runs the kind's `_run_impl`, then fires post-asserts against
+            # `{**record, output}` (all record-only, no pool). Firing happens EXACTLY ONCE,
+            # here in the node. A streaming kind's `run` returns the generator unchanged (the
+            # wrapper fires no post on it), so eval_node still drains it below.
+            outcome = node.run(record, **caps)
             if isinstance(outcome, (Output, Route, Pause, Grow)):
                 result = outcome
             elif inspect.isgenerator(outcome):  # a streaming kind: yields StreamChunk, returns a NodeResult
@@ -195,9 +137,9 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
         if loc is not None and loc.node is None:
             loc = replace(loc, node=node.id)
         # Dual-path: ALONGSIDE the symbolic locator, resolve a concrete SourceRange. An exception
-        # that already carries its own `range` (a child START's NodeAssertFailed, which fires the
-        # boundary asserts itself and knows the assert's span) wins; otherwise key the node's
-        # recorded `field_ranges` on the locator KEY (an input name / assert expr) — NOT on
+        # that already carries its own `range` (any node's own `run` wrapper fires its pre/post
+        # asserts and raises `NodeAssertFailed` with the assert's span) wins; otherwise key the
+        # node's recorded `field_ranges` on the locator KEY (an input name / assert expr) — NOT on
         # `node.kind`. None when neither is present.
         rng = getattr(exc, "range", None)
         if rng is None and loc is not None:
@@ -215,24 +157,6 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
     if isinstance(result, Route):
         yield NodeRouted(node.id, result.handle)
         return
-    if node.post_asserts:
-        # Post-asserts check against the pristine input record plus the synthetic `${output}`
-        # (the just-produced terminal value), injected EXACTLY as `{"output": value}` (NOT
-        # spread) so the `${output}` selector wins over any declared field literally named
-        # `output` (the precedence rule in agent-compose-principles.md). `_first_failing_assert`
-        # resolves each ref record-first with a pool fallback, so a flow terminal's namespaced
-        # cross-node refs (`${each#0/n.output.X}` riding END from expand) and a named node's
-        # `${X.output}` flow-post assert resolve from the pool exactly as before — no END special
-        # case, no `node.kind` read.
-        post_record = {**post_input, "output": result.value}
-        bad = _first_failing_assert(node.post_asserts, post_record, pool)
-        if bad is not None:
-            display = node.assert_texts.get(bad, bad)
-            yield NodeFailed(node.id, error=f"node {node.id!r} post-assert failed: {display}",
-                             error_type="NodeAssertFailed",
-                             locator=SourceSpan(node.id, "assert", display),
-                             range=node.field_ranges.get(bad))
-            return
     # Fold the commit redirect onto the terminal: a node-chosen `Output.commit_as` (roadmap)
     # wins over the engine-baked `node.commit_as` (the subflow-terminal redirect); both default
     # None so an ordinary node commits under its own id. This is the sole channel `_on_success`

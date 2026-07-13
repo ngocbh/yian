@@ -155,3 +155,73 @@ def test_wrapper_delegates_for_grow_kind():
 
     assert isinstance(result, Grow)
     assert result.seed == {"topic": "ACME"}
+
+
+# --- eval_node NO LONGER fires asserts itself: the `run` wrapper owns firing. eval_node drives
+# `node.run` (not `_run_impl`), so a node whose `run` is overridden to bypass firing produces NO
+# NodeFailed even with a would-be-failing post-assert — proving eval_node does not fire on its own.
+
+
+def test_eval_node_no_longer_has_first_failing_assert():
+    """Structural: the pool-fallback firing function is gone from eval_node — asserts are the
+    wrapper's job now."""
+    import agent_composer.runtime.eval_node as en
+
+    assert not hasattr(en, "_first_failing_assert")
+
+
+class _BypassRunNode(Node):
+    """A CODE-style node whose `run` bypasses the wrapper's firing entirely (returns Output
+    directly). Its declared post-assert WOULD fail if anyone fired it — but nothing does, since
+    `run` skips the template method. Drives eval_node to prove the seam delegates firing to `run`."""
+
+    kind = NodeKind.CODE
+
+    def __init__(self, node_id: str, value: Any, **kw: Any) -> None:
+        super().__init__(node_id, **kw)
+        self.value = value
+
+    def _run_impl(self, inputs: dict, **caps: Any) -> Output:
+        return Output(value=self.value)
+
+    def run(self, inputs: dict, **caps: Any) -> Output:  # bypass the wrapper's firing
+        return Output(value=self.value)
+
+
+class _FireRunNode(_BypassRunNode):
+    """The positive control: identical node WITHOUT the `run` override — so it inherits the base
+    wrapper, which DOES fire the failing post-assert. Proves the would-fail assert really fails."""
+
+    run = Node.run  # inherit the firing template method
+
+
+def test_eval_node_does_not_fire_when_run_bypasses_firing():
+    """Behavioral: a would-be-failing post-assert produces NO NodeFailed when `run` bypasses
+    firing — eval_node delegates to `run()` and does not fire independently."""
+    from agent_composer.events import NodeFailed, NodeSucceeded
+
+    from tests.engine._fakes import drive, stamp_reads
+
+    node = _BypassRunNode("n", value="v")
+    node.post_asserts = ["${output} == 'never'"]  # would FAIL if fired
+    stamp_reads(node, {})
+
+    events = list(drive(node))
+    assert any(isinstance(e, NodeSucceeded) for e in events)
+    assert not any(isinstance(e, NodeFailed) for e in events)
+
+
+def test_eval_node_fires_via_wrapper_positive_control():
+    """Positive control: the SAME node WITHOUT the `run` override inherits the wrapper, which
+    fires the failing post-assert -> NodeFailed. Confirms the assert genuinely fails."""
+    from agent_composer.events import NodeFailed
+
+    from tests.engine._fakes import drive, stamp_reads
+
+    node = _FireRunNode("n", value="v")
+    node.post_asserts = ["${output} == 'never'"]
+    stamp_reads(node, {})
+
+    events = list(drive(node))
+    failed = [e for e in events if isinstance(e, NodeFailed)]
+    assert failed and "post-assert" in failed[0].error

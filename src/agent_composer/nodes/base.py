@@ -17,6 +17,7 @@ Invariant: a node never writes the pool. It *describes* its one output value as
 `Output(value)`; the engine performs the write under `node_id`. Keeps nodes pure.
 """
 
+import copy
 from abc import ABC
 from collections.abc import Generator
 from dataclasses import dataclass, field
@@ -287,11 +288,11 @@ class Node(ABC):
         (whose `_run_impl` also defaults — the second fill is inert).
 
         Firing reads ONLY the bound `inputs` record — never the pool — so node purity is
-        preserved. The message format + `NodeAssertFailed` locator/range match what the
-        `eval_node` seam produces today; parity holds because every post-assert reaching a
-        node is node-local after the #92 lowering (the record-first/pool-fallback in
-        `eval_node` is dead — see the Step 1 verification), so record-only firing is
-        equivalent when the wrapper takes over in a later step.
+        preserved. `eval_node` drives this wrapper (not `_run_impl`), so firing happens
+        EXACTLY ONCE, owned by the node. Record-only is sufficient because every assert
+        reaching a node is node-local after the ref lowering (build-time flow-asserts + the
+        grow-path spawner-asserts): a cross-node/namespaced ref is lowered to a synth param
+        that `bind_params` binds INTO the record, so there is no pool ref left to fall back to.
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
@@ -309,6 +310,11 @@ class Node(ABC):
                 locator=SourceSpan(self.id, "assert", display),
                 range=self.field_ranges.get(bad),
             )
+        # Pristine snapshot for the post-asserts, taken BEFORE `_run_impl` runs: a leaf may
+        # mutate the dict it receives (a CODE body transforming its input in place), which must
+        # not corrupt the post-assert scope — the contract check has to see the inputs as bound,
+        # not as the body left them. Only paid when this node declares post-asserts.
+        post_input = copy.deepcopy(inputs) if self.post_asserts else None
         result = self._run_impl(inputs, **caps)
         # Post-asserts fire ONLY for an `Output` result — never Route/Pause/Grow. A spawner's
         # Grow post-asserts are handled in a later step. A generator (streaming) result also
@@ -316,7 +322,7 @@ class Node(ABC):
         # fire post on it; it is returned unchanged for `eval_node` to drain. No node kind
         # returns a generator today.
         if isinstance(result, Output) and self.post_asserts:
-            post_record = {**inputs, "output": result.value}
+            post_record = {**post_input, "output": result.value}
             bad = next(
                 (a for a in self.post_asserts if not self._assert_holds(a, post_record)), None
             )

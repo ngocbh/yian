@@ -638,6 +638,13 @@ allowed in a flow-level assert — it is ambient (there is no producer node to d
 the check's dependency edge from), so it raises a `LoadError` at load time. If you
 need a system-dependent check, put it in a body node's `asserts:` or a `case`.
 
+A flow-level post assert reads its producer over an **optional** edge (the assert
+must not deadlock the run when its producer sits behind an untaken `case` branch).
+So a producer that is **skipped** resolves to `null` for the assert: a check like
+`${maybe.output} == null` **silently passes** when `maybe` is skipped, rather than
+failing. Assert on a value you know is produced, or gate the check behind the same
+branch as its producer.
+
 ```yaml
 asserts:
   - synth.output in ["go", "no_go", "needs_more_info"]

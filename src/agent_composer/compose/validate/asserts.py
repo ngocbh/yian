@@ -128,6 +128,15 @@ def lower_flow_asserts(
     # Names already handed out, to guard the (near-impossible) collision case.
     allocated: set[str] = set()
 
+    def _parseable(name: str) -> bool:
+        # A synth name must be a legal ref path (defensive; the `__assert_` prefix + author id
+        # components are always parseable in practice).
+        try:
+            condition_refs("${" + name + "}")
+            return True
+        except ExpressionError:
+            return False
+
     def _alloc(base: str) -> str:
         """Allocate a collision-proof synth name from `base`, verified parseable as a ref."""
         name = base
@@ -136,15 +145,10 @@ def lower_flow_asserts(
             name in flow_inputs
             or name in valid_targets
             or name in allocated
+            or not _parseable(name)
         ):
             name = f"{base}_{i}"
             i += 1
-        # A synth name must be a legal ref path — verify empirically (defensive; the
-        # `__assert_` prefix + author id components are always parseable in practice).
-        try:
-            condition_refs("${" + name + "}")
-        except ExpressionError:
-            name = f"{base}_{i}"
         allocated.add(name)
         return name
 

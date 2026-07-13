@@ -17,7 +17,7 @@ Invariant: a node never writes the pool. It *describes* its one output value as
 `Output(value)`; the engine performs the write under `node_id`. Keeps nodes pure.
 """
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from enum import Enum
@@ -273,14 +273,68 @@ class Node(ABC):
         self.range: Optional["SourceRange"] = None
         self.field_ranges: dict[str, "SourceRange"] = {}
 
-    @abstractmethod
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
-        """Execute the node as a pure function of its bound input record.
+        """Template method: fire pre-asserts (record-only), run the kind's `_run_impl`,
+        then fire post-asserts (record-only) against `{**inputs, output}`.
+
+        Firing reads ONLY the bound `inputs` record — never the pool — so node purity is
+        preserved. The message format + `NodeAssertFailed` locator/range match what the
+        `eval_node` seam produces today, so behavior is identical when the wrapper takes
+        over firing in a later step. (`apply_default` is added in a later step.)
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
-        cap left is a mapped `call`'s `bind_item` (keyword-only); every other kind takes only `inputs`. A
-        failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
+        cap left is a mapped `call`'s `bind_item` (keyword-only); every other kind takes only
+        `inputs`. A failure is a `raise`, not a variant — the engine boundary turns it into
+        `NodeFailed`."""
+        from agent_composer.events import SourceSpan
+
+        bad = next((a for a in self.pre_asserts if not self._assert_holds(a, inputs)), None)
+        if bad is not None:
+            display = self.assert_texts.get(bad, bad)
+            raise NodeAssertFailed(
+                f"node {self.id!r} pre-assert failed: {display}",
+                locator=SourceSpan(self.id, "assert", display),
+                range=self.field_ranges.get(bad),
+            )
+        result = self._run_impl(inputs, **caps)
+        # Post-asserts fire ONLY for an `Output` result — never Route/Pause/Grow. A spawner's
+        # Grow post-asserts are handled in a later step. A generator (streaming) result also
+        # falls through the guard untouched — the DORMANT streaming path: the wrapper must not
+        # fire post on it; it is returned unchanged for `eval_node` to drain. No node kind
+        # returns a generator today.
+        if isinstance(result, Output) and self.post_asserts:
+            post_record = {**inputs, "output": result.value}
+            bad = next(
+                (a for a in self.post_asserts if not self._assert_holds(a, post_record)), None
+            )
+            if bad is not None:
+                display = self.assert_texts.get(bad, bad)
+                raise NodeAssertFailed(
+                    f"node {self.id!r} post-assert failed: {display}",
+                    locator=SourceSpan(self.id, "assert", display),
+                    range=self.field_ranges.get(bad),
+                )
+        return result
+
+    def _run_impl(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
+        """Execute the node as a pure function of its bound input record (the per-kind body
+        the `run` template method wraps).
+
+        Not `@abstractmethod` this step: the kinds still define their own `run` (which shadows
+        the template method), so making `_run_impl` abstract would render every kind
+        uninstantiable. A later step renames each kind's `run` -> `_run_impl` and wires
+        `eval_node` to the template method; until then this default is a loud error.
+
+        Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
+        a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
+        cap left is a mapped `call`'s `bind_item` (keyword-only); every other kind takes only
+        `inputs`. A failure is a `raise`, not a variant — the engine boundary turns it into
+        `NodeFailed`."""
+        raise NotImplementedError(
+            f"node {self.id!r} ({type(self).__name__}) defines no _run_impl "
+            f"(a later step renames each kind's run -> _run_impl)"
+        )
 
     def on_failure(self, exc: Exception, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Recovery seam: called by the engine wrapper when run() raises. Default: re-raise."""

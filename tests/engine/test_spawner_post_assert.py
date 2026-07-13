@@ -19,6 +19,7 @@ Resume-safety: `replay_grow` rebuilds via the SAME `call_subgraph`, so a resumed
 rebuilt child END carries identical lowered asserts and still fires the post-assert.
 """
 
+from agent_composer.compile.expand import _SYNTH_PREFIX, call_subgraph
 from agent_composer.compose import load_flow
 from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.events import RunFailed
@@ -213,3 +214,165 @@ def test_spawner_post_assert_fires_on_resume():
     failed = [e for e in res.events if isinstance(e, RunFailed)]
     assert failed and failed[0].error_type == "NodeAssertFailed"
     assert "post-assert" in (res.error or "").lower()
+
+
+# =========================================================================== #
+# 4. collision-free synth alloc vs a child def's OWN lowered `__assert_input_v`
+# =========================================================================== #
+
+# A child def that (a) doubles its input AND (b) carries its OWN flow-level POST assert
+# reading `${input.v}`. Because a flow assert is POST (rides the def's END) only when it
+# also reads a produced value, it reads `${x.output}` too. Build-time lowers that flow
+# assert onto the def's END as a synth param `__assert_input_v` (+ its wiring + a
+# producer->END edge). A `call` to this def ALSO carrying a node-level POST assert reading
+# the SAME declared input `${v}` used to allocate the IDENTICAL `__assert_input_v` name a
+# SECOND time onto the cloned END (a duplicate ParamDecl + a phantom producer->END edge
+# sharing the input_group).
+_ECHO_CHILD_WITH_INPUT_ASSERT = """
+id: echo-child
+name: echo_child
+input:
+  v: int
+asserts:
+  - "${input.v} >= 0 and ${x.output} >= 0"
+nodes:
+  x:
+    kind: code
+    code: tests.engine._compose_codefns:double
+    input:
+      n: ${input.v}
+    output: int
+output: ${x.output}
+"""
+
+
+def _collision_parent() -> str:
+    # The call declares input `v` seeded from the run arg; its node-level POST assert reads
+    # the SAME declared input `${v}` (`< 100`). The child def already lowered `__assert_input_v`
+    # for its OWN `${input.v} >= 0` flow assert — so the spawner lowering must NOT reuse that name.
+    return """
+id: collision-parent
+name: collision_parent
+uses:
+  echo-child: echo-child
+input:
+  v: int
+nodes:
+  callee:
+    kind: call
+    call: echo-child
+    input:
+      v: ${input.v}
+    asserts:
+      - "${v} < 100 and ${output} > 0"
+output: ${callee.output}
+"""
+
+
+def _load_collision():
+    return load_flow(
+        _collision_parent(),
+        child_resolver=_resolver(**{"echo-child": _ECHO_CHILD_WITH_INPUT_ASSERT}),
+    )
+
+
+def _cloned_child_end(loaded):
+    """Build the CALL's grow subgraph directly (via `call_subgraph`, the SAME builder the
+    CallNode uses) and return the cloned child END node + the flow's edges, so a test can
+    inspect the cloned END's structural integrity."""
+    callee = loaded.compiled.nodes["callee"]
+    flow = call_subgraph(
+        callee.child,
+        callsite="callee",
+        record={"v": "${input.v}"},
+        post_asserts=callee.post_asserts,
+        assert_texts=callee.assert_texts,
+        input_names={p.name for p in (callee.params or [])},
+    )
+    return flow.nodes[flow.end_id], flow
+
+
+def test_collision_free_cloned_end_has_no_duplicate_params_or_edges():
+    # Structural regression: the cloned child END must NOT carry a duplicate synth param nor a
+    # phantom second producer->END edge sharing an input_group. This FAILS against the pre-fix
+    # code (the def's `__assert_input_v` survives the clone, then the spawner lowering allocates
+    # `__assert_input_v` AGAIN — duplicate ParamDecl + phantom edge).
+    loaded = _load_collision()
+    end, flow = _cloned_child_end(loaded)
+
+    names = [p.name for p in end.params]
+    assert len(names) == len(set(names)), f"duplicate END param names: {names}"
+
+    # No two edges into the END share an input_group (a phantom duplicate feeds the 3-state join).
+    groups = [e.input_group for e in flow.edges
+              if e.to == end.id and e.input_group is not None]
+    assert len(groups) == len(set(groups)), f"duplicate input_group into END: {groups}"
+
+    # Both the child's own `__assert_input_v` and the spawner's synth (bumped to `_1`) are present.
+    synths = [n for n in names if n.startswith(f"{_SYNTH_PREFIX}input_v")]
+    assert len(synths) == 2, f"expected two distinct v-synth params, got {synths}"
+
+
+def test_collision_case_run_satisfying_succeeds():
+    # v=5: satisfies BOTH `${input.v} >= 0` (child) and `${v} < 100` (spawner). output == 10.
+    res = run_flow(_load_collision(), {"v": 5})
+    assert res.status == "succeeded", res.error
+    assert res.output == 10
+
+
+def test_collision_case_run_violating_spawner_assert_fails_on_child_end():
+    # v=120: satisfies the CHILD's `>= 0` but violates the SPAWNER's `< 100` -> post-assert
+    # failure fired on the cloned CHILD END.
+    res = run_flow(_load_collision(), {"v": 120})
+    assert res.status == "failed"
+    failed = [e for e in res.events if isinstance(e, RunFailed)]
+    assert failed and failed[0].error_type == "NodeAssertFailed"
+    assert "post-assert" in (res.error or "").lower()
+    assert res.locator is not None and res.locator.node == "callee/__end__"
+
+
+# =========================================================================== #
+# 5. repeated refs to the SAME declared input share ONE synth param
+# =========================================================================== #
+
+def _repeated_ref_parent() -> str:
+    # The node-level POST assert references the SAME declared input `${v}` TWICE — the lowering
+    # must allocate ONE synth param for it (the `synth_for_input` per-pass dedup).
+    return """
+id: repeat-parent
+name: repeat_parent
+uses:
+  echo-child: echo-child
+input:
+  v: int
+nodes:
+  callee:
+    kind: call
+    call: echo-child
+    input:
+      v: ${input.v}
+    asserts:
+      - "${v} >= 0 and ${v} < 100 and ${output} > 0"
+output: ${callee.output}
+"""
+
+
+def _load_repeated():
+    # Reuse the plain `_ECHO_CHILD` (no child-level asserts) so only the spawner's synth appears.
+    return load_flow(
+        _repeated_ref_parent(),
+        child_resolver=_resolver(**{"echo-child": _ECHO_CHILD}),
+    )
+
+
+def test_repeated_input_ref_shares_one_synth_param():
+    loaded = _load_repeated()
+    end, _flow = _cloned_child_end(loaded)
+    synths = [p.name for p in end.params if p.name.startswith(f"{_SYNTH_PREFIX}input_v")]
+    assert len(synths) == 1, f"expected ONE v-synth param, got {synths}"
+
+
+def test_repeated_input_ref_run_succeeds():
+    res = run_flow(_load_repeated(), {"v": 5})
+    assert res.status == "succeeded", res.error
+    assert res.output == 10

@@ -130,6 +130,12 @@ def _lower_spawner_post_asserts(
       build-time producer/input lowering uses (see `compose/validate/asserts.py`). Repeated
       refs to the same input SHARE one synth param.
 
+    The synth name is allocated COLLISION-FREE against names already on the cloned END: the
+    child def's OWN flow-level post-asserts (lowered at build) may already occupy
+    `__assert_input_<X>` on the deep-copied END (via its `params`/`end_wiring`). Mirroring
+    build-time `_alloc`, a taken base bumps to `<base>_1`, `<base>_2`, ... so the spawner's
+    synth never duplicates a child param decl or its producer->END edge's `input_group`.
+
     Args:
         end: the cloned child END node (deep-copied, namespaced) — mutated in place.
         end_wiring: the cloned END's wiring dict (`param -> ${...}` source) — mutated in place.
@@ -144,6 +150,22 @@ def _lower_spawner_post_asserts(
         return
     start_ns = ns(callsite, START_ID)
     synth_for_input: dict[str, str] = {}       # input name -> allocated synth END param
+    # Names ALREADY on the cloned END (survivors of the deep-copy: the child def's own lowered
+    # synth params + record params) — the spawner's synth must not collide with any of them, nor
+    # with a name allocated earlier in THIS pass. Mirrors build-time `_alloc`'s collision guard.
+    taken: set[str] = {p.name for p in end.params} | set(end_wiring.keys())
+
+    def _alloc(base: str) -> str:
+        """Allocate a collision-free synth name from `base`: bump `<base>_1`, `<base>_2`, ...
+        until it is free of every name already on the cloned END (and this pass), then reserve
+        it. Mirrors the build-time `_alloc` in `compose/validate/asserts.py`."""
+        name = base
+        i = 1
+        while name in taken:
+            name = f"{base}_{i}"
+            i += 1
+        taken.add(name)
+        return name
 
     def _rename(path: str) -> "str | None":
         # Keep `${output[.field]}` (the END's own value); map a declared input `${X[.rest]}` to a
@@ -155,7 +177,7 @@ def _lower_spawner_post_asserts(
         if head in input_names:
             synth = synth_for_input.get(head)
             if synth is None:
-                synth = f"{_SYNTH_PREFIX}input_{head}"
+                synth = _alloc(f"{_SYNTH_PREFIX}input_{head}")
                 synth_for_input[head] = synth
                 end.params.append(ParamDecl(name=synth))
                 # `:-null` keeps the END input edge OPTIONAL so END waits for START to settle

@@ -252,13 +252,18 @@ resolved to a line at the CLI boundary — never a text heuristic.
   — `run.py` stamps none itself);
   the engine's typed write boundary stamps a `field` span (`key="output"`) on the
   `NodeExecutionError` it raises when a node's value fails its declared `output:` Type.
-- **Concrete range (resolved at the failure site):** ALONGSIDE the symbolic `locator`, the
-  funnel resolves a concrete **`SourceRange`** (start/end line+col, 1-based; in `events`) by
-  keying the node's recorded `field_ranges` on the locator KEY — kind-blind, never on
-  `node.kind`. It rides `NodeFailed.range` and its flow-level twin `RunResult.range` /
-  `RunFailed.range` (all default `None`; the flow twin is resolved from the boundary node's
-  `field_ranges` — `StartNode.field_ranges` for an e08 input-decl / a boundary assert,
-  `EndNode.field_ranges` for a post assert).
+- **Concrete range (resolved at the failure site):** ALONGSIDE the symbolic `locator`, a concrete
+  **`SourceRange`** (start/end line+col, 1-based; in `events`) is attached. For an `input` /
+  `input_decl` / `field` locator the funnel keys the node's recorded `field_ranges` on the
+  locator's **`(kind, key)`** tuple — kind-blind (on the locator, never `node.kind`), and
+  `(kind, key)`-tagged so an input never collides with a like-named field. An **assert** is located
+  BY POSITION: the `run` wrapper resolves the failing assert's own `pre_assert_ranges[i]` /
+  `post_assert_ranges[i]` (each aligned 1:1 with `pre_asserts` / `post_asserts`) and raises
+  `NodeAssertFailed(range=…)` — so two identical assert texts get distinct carets (asserts are NOT
+  in `field_ranges`). It rides `NodeFailed.range` and its flow-level twin `RunResult.range` /
+  `RunFailed.range` (all default `None`; the flow twin is the boundary node's resolved range —
+  `StartNode.field_ranges[("input_decl", name)]` for an e08 input-decl,
+  `StartNode.pre_assert_ranges` / `EndNode.post_assert_ranges` for a boundary / post assert).
 - **Resolution (CLI boundary):** `cli/run.py` prefers the pre-resolved `nf.range` →
   `result.range`; only if both are absent does `_resolve_range` map the span itself, via
   `_top_ranges` (the flow's `SourceFrame` maps, else `loader.top_frame_ranges(text)`): a

@@ -38,8 +38,8 @@ def test_call_parse_matches_descriptor_and_records_ranges():
         inputs={"x": "${input.x}"},
     )
     assert isinstance(desc.range, SourceRange)
-    assert isinstance(desc.field_ranges["call"], SourceRange)
-    assert isinstance(desc.field_ranges["inputs"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "call")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
 
 
 def test_call_parse_requires_call():

@@ -140,12 +140,13 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
             loc = replace(loc, node=node.id)
         # Dual-path: ALONGSIDE the symbolic locator, resolve a concrete SourceRange. An exception
         # that already carries its own `range` (any node's own `run` wrapper fires its pre/post
-        # asserts and raises `NodeAssertFailed` with the assert's span) wins; otherwise key the
-        # node's recorded `field_ranges` on the locator KEY (an input name / assert expr) — NOT on
-        # `node.kind`. None when neither is present.
+        # asserts and raises `NodeAssertFailed` with the assert's span — located by position) wins;
+        # otherwise key the node's recorded `field_ranges` on the locator's `(kind, key)` (e.g.
+        # `("input", name)` / `("input_decl", name)`) — NOT on `node.kind`, and never on the bare key
+        # (which would collide across namespaces). None when neither is present.
         rng = getattr(exc, "range", None)
         if rng is None and loc is not None:
-            rng = node.field_ranges.get(loc.key)
+            rng = node.field_ranges.get((loc.kind, loc.key))
         # Capture the full formatted traceback here, while the exception is live, so the CLI
         # can surface the raising call's Python stack under `--engine-trace`. The terse
         # default (message + boxed YAML frame) never shows it.

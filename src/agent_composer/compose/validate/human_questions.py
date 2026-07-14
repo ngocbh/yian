@@ -4,7 +4,7 @@ A loader post-build pass over the built node map. A LITERAL `questions:` list is
 checked via `parse_questions` (rejects bad count/shape/duplicate headers); a ref-form
 `questions_input` must name one of the node's declared inputs (mirrors the AGENT prompt-scope
 rule). It relocates `validate.validate_human_questions` verbatim, adding a `.range` anchor off
-the built gate's `field_ranges["questions"]` (the coarse `questions:` span, else the node's own
+the built gate's `field_ranges[("field", "questions")]` (the coarse `questions:` span, else the node's own
 range) — the transitional `node_lines` still feeds `.line`.
 
 Imports flow down only: `nodes` (HumanInputNode + its questions parser), `compose.helpers.errors`,
@@ -31,7 +31,7 @@ def validate_human_questions(
     - A ref-form questions_input -> the name MUST be one of the node's declared inputs
       (mirrors the AGENT prompt-scope rule); otherwise LoadError with a hint.
     Legacy (no questions) gates pass through. Each error anchors on the gate's `questions:`
-    field range (`field_ranges["questions"]`, else the node's own range); `node_lines` still
+    field range (`field_ranges[("field", "questions")]`, else the node's own range); `node_lines` still
     feeds the transitional `.line`. Accumulates all errors into one LoadError.
     """
     from agent_composer.nodes.human_input.node import HumanInputNode
@@ -47,7 +47,7 @@ def validate_human_questions(
         if not isinstance(node, HumanInputNode):
             continue
         line = lines.get(node_id)
-        rng = node.field_ranges.get("questions") or node.range
+        rng = node.field_ranges.get(("field", "questions")) or node.range
         if node.questions is not None:
             # A literal list baked into the node: structurally check it at LOAD,
             # so a bad count/shape/duplicate header fails here rather than at run.

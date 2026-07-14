@@ -28,7 +28,7 @@ def test_wait_parse_matches_descriptor_and_records_ranges():
 
     assert desc == WaitDescriptor(id="hold", until="${input.deadline}")
     assert isinstance(desc.range, SourceRange)
-    assert isinstance(desc.field_ranges["until"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "until")], SourceRange)
 
 
 def test_wait_build_returns_timed_node_with_reserved_until_wiring():

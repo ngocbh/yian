@@ -36,7 +36,7 @@ def test_agent_parse_matches_today_descriptor_and_stamps_ranges():
     )
     # Ranges are recorded for the node body and its fields.
     assert isinstance(desc.range, SourceRange)
-    assert isinstance(desc.field_ranges["prompt"], SourceRange)
-    assert isinstance(desc.field_ranges["inputs"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "prompt")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
     # The prompt value sits on line 4 of the flow (1-based).
-    assert desc.field_ranges["prompt"].start_line == 4
+    assert desc.field_ranges[("field", "prompt")].start_line == 4

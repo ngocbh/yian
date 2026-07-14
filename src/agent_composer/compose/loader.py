@@ -42,6 +42,7 @@ from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.helpers.source import (
     SourceFrame,
+    _boundary_assert_ranges,
     _boundary_field_ranges,
     _section_lines,
 )
@@ -372,6 +373,7 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> LoadedFlo
         flow_env=f.env,
         source=source,
         boundary_field_ranges=_boundary_field_ranges(text),
+        boundary_assert_ranges=_boundary_assert_ranges(text),
     )
 
 

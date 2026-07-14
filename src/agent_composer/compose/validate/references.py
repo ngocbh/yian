@@ -133,7 +133,7 @@ def validate_references(
         # a pool ref in a prompt is loud, and an unknown builtin / malformed span is
         # rejected here (via `prompt_refs`, the renderer's compile-time companion).
         if isinstance(node, AgentNode) and node.prompt:
-            prompt_rng = franges.get("prompt") or node.range
+            prompt_rng = franges.get(("field", "prompt")) or node.range
             declared = {p.name for p in (node.params or [])}
             try:
                 refs = prompt_refs(node.prompt)
@@ -159,7 +159,7 @@ def validate_references(
         if node.binds_per_item:
             nwiring = flow_wiring.get(node_id, {})
             reserved = node.reserved_wiring_keys()
-            input_rng = franges.get("inputs") or node.range
+            input_rng = franges.get(("field", "inputs")) or node.range
             for key in reserved:
                 over_rng = franges.get(key) or input_rng
                 scan(nwiring.get(key), f"node {node_id!r} map {key}", node_line, over_rng)
@@ -181,7 +181,7 @@ def validate_references(
         # `${<id>.output}` refs) — validated against the pool. The rewritten node-local
         # `${__rN}`/`${__on}` live in `node.cases` `when:` and are EXCLUDED here
         # (they resolve against the record).
-        input_rng = franges.get("inputs") or node.range
+        input_rng = franges.get(("field", "inputs")) or node.range
         for param, src in flow_wiring.get(node_id, {}).items():
             scan(src, f"node {node_id!r} input {param!r} from", node_line, input_rng)
 

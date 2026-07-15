@@ -44,9 +44,9 @@ def test_case_parse_matches_descriptor_and_records_ranges():
         else_="cold",
     )
     assert isinstance(desc.range, SourceRange)
-    assert isinstance(desc.field_ranges["on"], SourceRange)
-    assert isinstance(desc.field_ranges["cases"], SourceRange)
-    assert isinstance(desc.field_ranges["else"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "on")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "cases")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "else")], SourceRange)
 
 
 def test_case_parse_requires_cases():

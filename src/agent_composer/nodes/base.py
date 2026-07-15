@@ -266,14 +266,27 @@ class Node(ABC):
         # for a node that declares no `env:` and inherits no flow default.
         self.env: dict[str, Any] = {}
         # Render-only source-location metadata, populated by the compose builder (never by hand)
-        # and NEVER serialized: a checkpoint stores no topology, so `.range`/`.field_ranges` are
-        # rebuilt from the flow spec on restore, never round-tripped. Purely for diagnostics.
+        # and NEVER serialized: a checkpoint stores no topology, so these are rebuilt from the flow
+        # spec on restore, never round-tripped. Purely for diagnostics.
         # `self.range`: this node's own `SourceRange` in the flow YAML (the whole node block); None
         #   for a fake / directly-constructed node with no known source.
-        # `self.field_ranges`: `dict[field_name -> SourceRange]` for the node's individual authored
-        #   fields (a bad input binding, an assert expr); `{}` when no per-field spans are recorded.
+        # `self.field_ranges`: `dict[(kind, key) -> SourceRange]` for the node's individual authored
+        #   NAMED sites — a bad input binding (`("input", name)`), a flow input decl
+        #   (`("input_decl", name)`), or a kind field (`("field", name)`). Keyed by the location's
+        #   `(SourceSpan.kind, key)` so keys across namespaces never collide. Asserts are NOT here
+        #   (their text is not a unique identity) — they are located by position, below. `{}` when
+        #   no per-field spans are recorded.
         self.range: Optional["SourceRange"] = None
-        self.field_ranges: dict[str, "SourceRange"] = {}
+        self.field_ranges: dict[tuple[str, str], "SourceRange"] = {}
+        # Positional assert-range lists, aligned 1:1 with `pre_asserts` / `post_asserts` (an entry
+        # is None where no span exists — a spanless / in-memory flow). Populated by the loader:
+        # `validate_node_asserts` splits the descriptor's authored `assert_ranges` in lockstep with
+        # the pre/post classification, and the boundary sets the lowered flow-assert ranges. The
+        # `run` wrapper resolves a failing assert's caret by INDEX here — never by the assert STRING
+        # — so two identical assert texts get their own distinct carets (Python's model: evaluate in
+        # order, first-failure-wins, located by position). `[]` for a node with no asserts.
+        self.pre_assert_ranges: list[Optional["SourceRange"]] = []
+        self.post_assert_ranges: list[Optional["SourceRange"]] = []
 
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Template method: fill declared defaults for omitted inputs, fire pre-asserts
@@ -302,13 +315,21 @@ class Node(ABC):
         from agent_composer.events import SourceSpan
 
         inputs = apply_defaults(self.params or [], inputs)
-        bad = next((a for a in self.pre_asserts if not self._assert_holds(a, inputs)), None)
-        if bad is not None:
+        # Fire pre-asserts IN ORDER, first-failure-wins, and locate the failure BY POSITION:
+        # the failing assert's own `SourceRange` is `pre_assert_ranges[i]`, not a lookup keyed by
+        # the assert STRING — so two identical assert texts get distinct carets. The range list is
+        # aligned 1:1 with `pre_asserts`; a shorter list (spanless flow) or a None entry -> no range.
+        bad_i = next(
+            (i for i, a in enumerate(self.pre_asserts) if not self._assert_holds(a, inputs)), None
+        )
+        if bad_i is not None:
+            bad = self.pre_asserts[bad_i]
             display = self.assert_texts.get(bad, bad)
+            rng = self.pre_assert_ranges[bad_i] if bad_i < len(self.pre_assert_ranges) else None
             raise NodeAssertFailed(
                 f"node {self.id!r} pre-assert failed: {display}",
                 locator=SourceSpan(self.id, "assert", display),
-                range=self.field_ranges.get(bad),
+                range=rng,
             )
         # Pristine snapshot for the post-asserts, taken BEFORE `_run_impl` runs: a leaf may
         # mutate the dict it receives (a CODE body transforming its input in place), which must
@@ -323,15 +344,18 @@ class Node(ABC):
         # returns a generator today.
         if isinstance(result, Output) and self.post_asserts:
             post_record = {**post_input, "output": result.value}
-            bad = next(
-                (a for a in self.post_asserts if not self._assert_holds(a, post_record)), None
+            bad_i = next(
+                (i for i, a in enumerate(self.post_asserts)
+                 if not self._assert_holds(a, post_record)), None
             )
-            if bad is not None:
+            if bad_i is not None:
+                bad = self.post_asserts[bad_i]
                 display = self.assert_texts.get(bad, bad)
+                rng = self.post_assert_ranges[bad_i] if bad_i < len(self.post_assert_ranges) else None
                 raise NodeAssertFailed(
                     f"node {self.id!r} post-assert failed: {display}",
                     locator=SourceSpan(self.id, "assert", display),
-                    range=self.field_ranges.get(bad),
+                    range=rng,
                 )
         return result
 

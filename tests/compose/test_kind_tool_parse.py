@@ -34,8 +34,8 @@ def test_tool_parse_matches_descriptor_and_records_ranges():
         inputs={"url": "${input.url}"},
     )
     assert isinstance(desc.range, SourceRange)
-    assert isinstance(desc.field_ranges["tool_id"], SourceRange)
-    assert isinstance(desc.field_ranges["inputs"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "tool_id")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
 
 
 def test_tool_build_returns_tool_node_and_wires_inputs():

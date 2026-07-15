@@ -35,7 +35,7 @@ def test_call_map_loop_nodes_carry_range(seed, node_id, want_field):
     node = loaded.compiled.nodes[node_id]
     assert isinstance(node.range, SourceRange)
     assert node.field_ranges  # non-empty
-    assert isinstance(node.field_ranges[want_field], SourceRange)
+    assert isinstance(node.field_ranges[("field", want_field)], SourceRange)
 
 
 # A flow that WAITs (pauses) so `run_flow` produces a checkpoint we can round-trip.
@@ -75,7 +75,7 @@ def test_node_range_does_not_ride_checkpoint():
     # Stamp render-only source metadata on a live node BEFORE the run serializes.
     node = loaded.compiled.nodes["done"]
     node.range = SourceRange(4, 1, 6, 1)
-    node.field_ranges = {"code": SourceRange(6, 5, 6, 40)}
+    node.field_ranges = {("field", "code"): SourceRange(6, 5, 6, 40)}
 
     res = run_flow(loaded, {"settle_at": "2026-07-01"})
     assert res.status == "paused"

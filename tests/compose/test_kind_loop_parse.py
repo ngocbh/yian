@@ -43,11 +43,11 @@ def test_loop_parse_matches_descriptor_and_records_ranges():
         max=10,
     )
     assert isinstance(desc.range, SourceRange)
-    assert isinstance(desc.field_ranges["call"], SourceRange)
-    assert isinstance(desc.field_ranges["inputs"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "call")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
     # Range recorded under the RAW surface key text (`while`), not the field name (`while_`).
-    assert isinstance(desc.field_ranges["while"], SourceRange)
-    assert isinstance(desc.field_ranges["max"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "while")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "max")], SourceRange)
 
 
 def test_loop_parse_requires_call():
@@ -70,4 +70,4 @@ def test_loop_parse_maps_until_keyword():
     desc = LoopDescriptor.parse("drive", reader)
     assert desc.until_ == "${carry.done}"
     assert desc.while_ is None
-    assert isinstance(desc.field_ranges["until"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "until")], SourceRange)

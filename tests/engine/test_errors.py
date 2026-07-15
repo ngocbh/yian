@@ -288,6 +288,16 @@ def test_false_boundary_assert_carries_range():
     assert result.range is not None and result.range.start_line == 15
 
 
+def test_duplicate_asserts_caret_at_first_occurrence():
+    # e34 (#88 case 1): two IDENTICAL post-asserts on lines 12 and 13; both fail (output is 1, not
+    # < 0). Asserts are located BY POSITION, so the caret points at the FIRST occurrence (line 12) —
+    # the old text-keyed field_ranges collapsed identical items last-wins and would box line 13.
+    result = run_flow(load_flow((_ERRORS / "e34-dup-assert.yaml").read_text()), {})
+    assert result.status == "failed"
+    assert result.locator is not None and result.locator.kind == "assert"
+    assert result.range is not None and result.range.start_line == 12
+
+
 # --------------------------------------------------------------------------- #
 # Deferred negative fixtures (NOTED, not asserted yet):
 #   e05 — bare-tags union  -> read_typedefs mechanism (already covered)

@@ -4,7 +4,7 @@ A loader post-build pass (run after the flow's leaves + child signatures are ass
 Each binding's SOURCE `Type` — resolved from its `${<id>.output}`/`${input.X}` ref over the
 PARENT producers + flow-input types, read from the flow-owned `wiring` — must be structurally
 compatible with the CHILD input's declared `Type` (`types_compatible`, C-EQUIV). It carries
-a `.range` anchor off the built call node's `field_ranges["inputs"]` (the coarse `input:`
+a `.range` anchor off the built call node's `field_ranges[("field", "inputs")]` (the coarse `input:`
 mapping span) — the transitional `node_lines` still feeds `.line`.
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
@@ -40,7 +40,7 @@ def check_ref_map_types(
     structurally compatible with the CHILD input's declared `Type` (`types_compatible`,
     C-EQUIV). A `${item}`/coalesce/literal/opaque source — or an opaque/absent child input
     (incl. the reserved `over` key) — stays lenient (skipped). Loud + located at the
-    node's `input:` mapping range (`field_ranges["inputs"]`, else the node's own range);
+    node's `input:` mapping range (`field_ranges[("field", "inputs")]`, else the node's own range);
     `node_lines` still feeds the transitional `.line`. Iterates the WIRING (not the params)
     so a mis-named binding still surfaces here when its child decl is absent rather than
     being silently skipped."""
@@ -74,7 +74,7 @@ def check_ref_map_types(
             ):
                 source = replace(source, nullable=False)
             if not types_compatible(source, decl.type):
-                rng: Optional[SourceRange] = node.field_ranges.get("inputs") or node.range
+                rng: Optional[SourceRange] = node.field_ranges.get(("field", "inputs")) or node.range
                 raise LoadError(
                     f"call node {nid!r}: binding {param!r} — child expects "
                     f"{decl.type.kind.value!r}, source is {source.kind.value!r}",

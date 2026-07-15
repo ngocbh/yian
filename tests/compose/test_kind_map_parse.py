@@ -40,9 +40,9 @@ def test_map_parse_matches_descriptor_and_records_ranges():
         inputs={"x": "${item}"},
     )
     assert isinstance(desc.range, SourceRange)
-    assert isinstance(desc.field_ranges["call"], SourceRange)
-    assert isinstance(desc.field_ranges["over"], SourceRange)
-    assert isinstance(desc.field_ranges["inputs"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "call")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "over")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
 
 
 def test_map_parse_requires_over():
@@ -64,4 +64,4 @@ def test_map_parse_records_parallel():
     reader = _reader_for(flow, "fan")
     desc = MapDescriptor.parse("fan", reader)
     assert desc.parallel is True
-    assert isinstance(desc.field_ranges["parallel"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "parallel")], SourceRange)

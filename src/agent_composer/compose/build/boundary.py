@@ -111,6 +111,12 @@ def synthesize_boundary_graph(
         start.assert_texts = {**start.assert_texts, **lowered.pre_texts}
         end.post_asserts = list(lowered.end_post)
         end.assert_texts = dict(lowered.post_texts)
+        # Positional assert ranges ride ALONGSIDE the lowered asserts (aligned 1:1): the boundary PRE
+        # asserts ride START's `post_asserts`, so their ranges extend START's `post_assert_ranges`;
+        # END's POST asserts become its `post_assert_ranges`. A false boundary assert then carets its
+        # OWN line by index, and two identical flow asserts get distinct carets — never keyed by text.
+        start.post_assert_ranges = list(start.post_assert_ranges) + list(lowered.pre_ranges)
+        end.post_assert_ranges = list(lowered.post_ranges)
         # Each synthesized END input is an extra param + a wiring source + a producer edge, so
         # the value the post-assert reads is present in END's record when eval_node fires it.
         # EndNode.run() reads only its declared output names, so extra params are inert there.
@@ -127,14 +133,6 @@ def synthesize_boundary_graph(
                 counts[(producer, END_ID)] = i + 1
                 end_edges.append(Edge(id=f"{producer}->{END_ID}#{i}", from_=producer, to=END_ID,
                                       input_group=synth_name, optional=optional))
-        # Render-only field ranges: both START and END carry a base `field_ranges` dict, so
-        # stamp each side's lowered assert -> SourceRange map (keyed by the LOWERED string, the
-        # form eval_node fires). Non-blocking — absent ranges just fall back to the node range.
-        if lowered.pre_ranges:
-            start.field_ranges = {**start.field_ranges, **lowered.pre_ranges}
-        if lowered.post_ranges:
-            end.field_ranges = {**end.field_ranges, **lowered.post_ranges}
-
     # START_ID root edges over the FULL set (body + END_ID producer edges): a body node with no
     # incoming of any kind is a bare root. A 0-output END_ID (no producer edge) is itself a root.
     full = body_edges + end_edges

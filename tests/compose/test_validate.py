@@ -96,7 +96,7 @@ def test_validate_references_diag_has_range():
         validate_references(nodes, set(), producers, "${a.output}", wiring)
     assert "ghost" in str(exc.value)
     assert exc.value.range is not None
-    assert exc.value.range == nodes["a"].field_ranges["inputs"]
+    assert exc.value.range == nodes["a"].field_ranges[("field", "inputs")]
 
 
 def test_check_ref_map_types_moved():
@@ -115,7 +115,7 @@ def test_check_ref_map_types_moved():
         child_inputs=[InputDecl("n", "int", None, True, Type.scalar(ValueKind.INTEGER))],
     )
     rng = SourceRange(start_line=7, start_col=5, end_line=8, end_col=20)
-    node.field_ranges = {"inputs": rng}
+    node.field_ranges = {("field", "inputs"): rng}
     producers = {"src": Type.scalar(ValueKind.STRING)}  # source is a string
     wiring = {"c": {"n": "${src.output}"}}  # bound to the int-expecting child input
     with pytest.raises(LoadError) as exc:
@@ -140,7 +140,7 @@ def test_check_loop_type_contract_moved():
         kind=ValueKind.OBJECT, fields={"n": Type.scalar(ValueKind.INTEGER)}
     )
     rng = SourceRange(start_line=4, start_col=5, end_line=5, end_col=20)
-    node.field_ranges = {"inputs": rng}
+    node.field_ranges = {("field", "inputs"): rng}
     producers = {"src": Type.scalar(ValueKind.STRING)}  # seed source is a string
     wiring = {"lp": {"n": "${src.output}"}}  # carried `n` seeded from the string
     with pytest.raises(LoadError) as exc:
@@ -158,7 +158,7 @@ def test_check_wiring_parity_moved():
 
     node, wiring = _node_wiring(CodeDescriptor(id="n", code="m:f", inputs={"x": "${input.x}"}))
     rng = SourceRange(start_line=3, start_col=5, end_line=4, end_col=20)
-    node.field_ranges = {"inputs": rng}
+    node.field_ranges = {("field", "inputs"): rng}
     with pytest.raises(LoadError) as exc:
         # orphan wiring key with no matching param -> parity failure
         check_wiring_parity({"n": node}, {"n": {**wiring, "orphan": "${input.y}"}}, {"n": 3})
@@ -178,7 +178,7 @@ def test_validate_human_questions_diag_has_range():
 
     node = HumanInputNode("ask", questions=[])  # empty -> "expected 1..4 questions, got 0"
     rng = SourceRange(start_line=5, start_col=5, end_line=6, end_col=20)
-    node.field_ranges = {"questions": rng}
+    node.field_ranges = {("field", "questions"): rng}
     with pytest.raises(LoadError) as exc:
         validate_human_questions({"ask": node}, node_lines={"ask": 5})
     assert "questions" in str(exc.value)
@@ -204,16 +204,14 @@ output: ${score.output}
 
 
 def test_node_local_asserts_carry_ranges():
-    # Each node-local assert string maps to its OWN SourceRange in the descriptor's
-    # field_ranges (replacing the legacy assert_lines map keyed (node|None, expr)). The
-    # runtime keys node.field_ranges on the raw assert text (eval_node pre/post-assert
-    # failure), so every assert item gets its own caret — not just the coarse `asserts:`
-    # list span, which is still recorded under the field name.
+    # Each authored assert maps to its OWN SourceRange in the descriptor's POSITIONAL
+    # `assert_ranges` (aligned 1:1 with the authored `asserts:` list), so every assert gets its own
+    # caret located by INDEX — never by its (non-unique) text. Two identical asserts would still get
+    # distinct ranges. The coarse `asserts:` list span stays in field_ranges under `("field", ...)`.
     descriptors = parse_nodes(_nodes_reader(_ASSERT_FLOW))
-    fr = descriptors["score"].field_ranges
-    assert fr["${output} >= 0"].start_line == 11
-    assert fr["${output} <= 10"].start_line == 12
-    assert "asserts" in fr  # coarse list range still present under the field name
+    desc = descriptors["score"]
+    assert [r.start_line for r in desc.assert_ranges] == [11, 12]
+    assert ("field", "asserts") in desc.field_ranges  # coarse list range still present
 
 
 _INPUT_FLOW = """\
@@ -238,6 +236,35 @@ def test_per_input_param_carries_ranges():
     # (still present under the field name).
     descriptors = parse_nodes(_nodes_reader(_INPUT_FLOW))
     fr = descriptors["report"].field_ranges
-    assert fr["topic"].start_line == 8
-    assert fr["as_of"].start_line == 9
-    assert "inputs" in fr  # coarse mapping range still present under the field name
+    assert fr[("input", "topic")].start_line == 8
+    assert fr[("input", "as_of")].start_line == 9
+    assert ("field", "inputs") in fr  # coarse mapping range still present under the field name
+
+
+_INPUT_LIKE_FIELD_FLOW = """\
+id: f
+name: f
+nodes:
+  n:
+    kind: code
+    env:
+      retries: 2
+    input:
+      env: ${input.data}
+    output: int
+    code: tests.seeds.fns:const_one
+input:
+  data: str
+output: ${n.output}
+"""
+
+
+def test_input_named_like_field_no_collision():
+    # Case 2 (#88): a node with an input named `env` AND its own `env:` config field. Under the old
+    # flat string key both stamped `"env"` and collided (last-write-wins, one range survived); now
+    # they are tagged `("input", "env")` and `("field", "env")` — distinct keys, distinct ranges.
+    fr = parse_nodes(_nodes_reader(_INPUT_LIKE_FIELD_FLOW))["n"].field_ranges
+    assert ("input", "env") in fr and ("field", "env") in fr
+    assert fr[("input", "env")].start_line == 9  # the input binding line
+    assert fr[("field", "env")].start_line == 7  # the `env:` config value (retries: 2)
+    assert fr[("input", "env")] != fr[("field", "env")]

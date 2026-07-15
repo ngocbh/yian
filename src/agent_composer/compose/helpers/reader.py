@@ -159,6 +159,28 @@ class NodeReader:
                     out[item.value] = rng
         return out
 
+    def item_range_list(self, key: str) -> list[SourceRange | None]:
+        """For a SEQUENCE field, the item ranges IN AUTHOR ORDER, one per item (dups PRESERVED).
+
+        The POSITIONAL twin of `item_ranges`: where `item_ranges` returns `dict[text -> range]`
+        (and so collapses two identical items to one entry), this returns a `list` with one entry
+        per sequence element — the element's `SourceRange`, or `None` for a non-scalar element or
+        one with no recorded span. The result aligns 1:1 with the authored list, so a failure can
+        locate an item by its INDEX rather than by its (non-unique) text — the basis for locating
+        `asserts:` by position. Returns `[]` in spanless mode, when the field is absent, or when it
+        is not a sequence — best-effort, never raising (mirrors `item_ranges`).
+        """
+        pair = self._pair(key)
+        if pair is None:
+            return []
+        _key_node, value_node = pair
+        if not isinstance(value_node, yaml.SequenceNode):
+            return []
+        out: list[SourceRange | None] = []
+        for item in value_node.value:
+            out.append(self.spans.get(id(item)) if isinstance(item, yaml.ScalarNode) else None)
+        return out
+
     def mapping_value_ranges(self, key: str) -> dict[str, SourceRange]:
         """For a MAPPING field, map each child key -> its VALUE node's `SourceRange`.
 

@@ -43,7 +43,7 @@ def test_nested_call_error_frames_at_child_range(monkeypatch):
     assert result.status == "failed"
 
     frame = loaded.compiled.nodes["run"].child_source
-    boom_code_line = frame.field_ranges["boom"]["code"].start_line
+    boom_code_line = frame.field_ranges["boom"][("field", "code")].start_line
 
     buf = _sink(monkeypatch)
     _render_run_error(result, flow, text, loaded=loaded)

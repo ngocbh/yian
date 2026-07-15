@@ -128,7 +128,14 @@ class NodeDescriptor:
     inputs: dict[str, Any] = field(default_factory=dict)
     outputs: Any = None
     range: Optional[SourceRange] = field(default=None, compare=False)
-    field_ranges: dict[str, SourceRange] = field(default_factory=dict, compare=False)
+    field_ranges: dict[tuple[str, str], SourceRange] = field(default_factory=dict, compare=False)
+    # Positional `asserts:` ranges — one entry per authored assert IN ORDER, aligned 1:1 with the
+    # `asserts` list (`None` where no span was recorded). Stamped in `parse/nodes` via the reader's
+    # `item_range_list`; split into the built node's `pre_assert_ranges`/`post_assert_ranges` (in
+    # lockstep with the pre/post classification) by `validate_node_asserts`. Kept OUT of
+    # `field_ranges` because an assert's text is not a unique key (two identical asserts must still
+    # get distinct carets). `compare=False`, like the other render metadata. `[]` when none authored.
+    assert_ranges: list[SourceRange | None] = field(default_factory=list, compare=False)
 
     def output_type(self, registry: TypeRegistry) -> Optional[Type]:
         """This descriptor's declared `outputs:` as one `Type`; `None` when absent."""
@@ -202,7 +209,7 @@ class NodeDescriptor:
         node_id: str,
         reader: NodeReader,
         kwargs: dict[str, Any],
-        ranges: dict[str, SourceRange],
+        ranges: dict[tuple[str, str], SourceRange],
     ) -> None:
         """Lift the four common author-surface fields into the template `parse` accumulators.
 
@@ -218,7 +225,7 @@ class NodeDescriptor:
                 kwargs[key] = body[key]
                 rng = reader.range_of(key)
                 if rng is not None:
-                    ranges[key] = rng
+                    ranges[("field", key)] = rng
         if "env" in body:
             env = body["env"]
             if not isinstance(env, dict) or not all(isinstance(k, str) for k in env):
@@ -230,7 +237,7 @@ class NodeDescriptor:
             kwargs["env"] = env
             rng = reader.range_of("env")
             if rng is not None:
-                ranges["env"] = rng
+                ranges[("field", "env")] = rng
 
     @classmethod
     def parse(cls, node_id: str, reader: NodeReader) -> "NodeDescriptor":
@@ -250,14 +257,14 @@ class NodeDescriptor:
         cls._check_keys(node_id, reader)
         body = reader.value
         own_range = reader._own_range()
-        ranges: dict[str, SourceRange] = {}
+        ranges: dict[tuple[str, str], SourceRange] = {}
         kwargs: dict[str, Any] = {"id": node_id}
         for key in cls.allowed - NodeDescriptor.allowed:  # this kind's OWN keys only
             if key not in body:
                 continue
             rng = reader.range_of(key)
             if rng is not None:
-                ranges[key] = rng
+                ranges[("field", key)] = rng
             kwargs[cls.keyword_remap.get(key, key)] = body[key]
         cls._validate_fields(node_id, kwargs, ranges, own_range)
         cls._read_common_fields(node_id, reader, kwargs, ranges)
@@ -276,7 +283,7 @@ class NodeDescriptor:
         cls,
         node_id: str,
         kwargs: dict[str, Any],
-        ranges: dict[str, SourceRange],
+        ranges: dict[tuple[str, str], SourceRange],
         own_range: Optional[SourceRange],
     ) -> None:
         """Kind-specific field legality, run by the template `parse` after the own-key loop.
@@ -293,7 +300,7 @@ class NodeDescriptor:
         ):
             raise LoadError(
                 f"node {node_id!r} (kind={cls.kind}): `asserts:` must be a list of strings",
-                range=ranges.get("asserts"),
+                range=ranges.get(("field", "asserts")),
             )
 
     # --- Build-side machinery -----------------------------------------------------------

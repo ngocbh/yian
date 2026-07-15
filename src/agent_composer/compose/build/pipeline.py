@@ -134,6 +134,7 @@ def _assemble(
     flow_env: Optional[dict] = None,
     source: Optional[SourceFrame] = None,
     boundary_field_ranges: Optional[dict] = None,
+    boundary_assert_ranges: Optional[list] = None,
 ) -> LoadedFlow:
     """Assemble parsed sections into a `LoadedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
@@ -284,11 +285,12 @@ def _assemble(
     # Lower the flow-level `asserts:` into node-local asserts stamped on the synthesized
     # START/END. Fires uniformly via eval_node — a cross-node post
     # assert's `${producer.output}` becomes a real END input edge, so it survives child cloning.
-    # `boundary_field_ranges` is keyed by the raw assert string (among input names, which the
-    # lookup ignores), so it doubles as the render-only per-assert source map; `None` when spanless.
+    # `boundary_assert_ranges` is the POSITIONAL flow-`asserts:` source list (aligned 1:1 with the
+    # authored asserts), so each lowered START/END assert and each bad-ref `LoadError` carets by
+    # index — never by (non-unique) text; `None`/`[]` when spanless.
     lowered = lower_flow_asserts(
         asserts_section, flow_inputs, set(descriptors), producers,
-        assert_ranges=boundary_field_ranges,
+        assert_ranges=boundary_assert_ranges,
     )
 
     # Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in

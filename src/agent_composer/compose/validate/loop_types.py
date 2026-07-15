@@ -6,7 +6,7 @@ producers/flow inputs assembled LATER. This pass resolves each carried field's T
 bound seed source (`${<id>.output}`/`${input.X}` over the parent producers + flow-input types,
 via `_output_value_type`) and checks it is structurally compatible (`types_compatible`, C-EQUIV)
 with the body OUTPUT's same-named field Type. It carries a `.range` anchor off the built loop
-node's `field_ranges["inputs"]` (the coarse `input:` mapping span) — the transitional
+node's `field_ranges[("field", "inputs")]` (the coarse `input:` mapping span) — the transitional
 `node_lines` still feeds `.line`.
 
 Imports flow down only: `compile.validation` (the type comparator), `compose.nodes.resolver`
@@ -43,7 +43,7 @@ def check_loop_type_contract(
     it is structurally compatible (`types_compatible`, C-EQUIV) with the body OUTPUT's
     same-named field Type (the body `output_type`). A literal/coalesce/opaque seed source,
     or an opaque body output field, stays lenient (skipped). Loud + located at the loop
-    node's `input:` mapping range (`field_ranges["inputs"]`, else the node's own range) on a
+    node's `input:` mapping range (`field_ranges[("field", "inputs")]`, else the node's own range) on a
     same-names/different-TYPES mismatch; `node_lines` still feeds the transitional `.line`."""
     lines = node_lines or {}
     for nid, node in nodes.items():
@@ -62,7 +62,7 @@ def check_loop_type_contract(
             if source is None:
                 continue  # literal/coalesce/opaque seed source -> lenient
             if not types_compatible(source, body_field):
-                rng: Optional[SourceRange] = node.field_ranges.get("inputs") or node.range
+                rng: Optional[SourceRange] = node.field_ranges.get(("field", "inputs")) or node.range
                 raise LoadError(
                     f"loop node {nid!r}: carried field {field_name!r} — body output is "
                     f"{body_field.kind.value!r}, carried source is "

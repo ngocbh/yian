@@ -48,10 +48,10 @@ def test_parse_nodes_uses_span_tree():
     )
     # Located: the span tree stamps ranges onto the descriptor + its fields.
     assert desc.range is not None
-    assert desc.field_ranges["prompt"].start_line == 6  # 1-based, the prompt line
+    assert desc.field_ranges[("field", "prompt")].start_line == 6  # 1-based, the prompt line
     # The back-mapped plural fields resolve their source ranges (via the rewritten key).
-    assert desc.field_ranges["inputs"] is not None
-    assert desc.field_ranges["outputs"] is not None
+    assert desc.field_ranges[("field", "inputs")] is not None
+    assert desc.field_ranges[("field", "outputs")] is not None
 
 
 def test_parse_nodes_unknown_kind_is_located():

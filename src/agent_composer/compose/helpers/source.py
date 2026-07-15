@@ -16,11 +16,12 @@ from typing import Optional
 import yaml
 
 from agent_composer.events import SourceRange
+from agent_composer.nodes.base import FieldRanges
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 
 
-def _boundary_field_ranges(text: Optional[str]) -> dict[tuple[str, str], SourceRange]:
+def _boundary_field_ranges(text: Optional[str]) -> FieldRanges:
     """The flow-boundary source map stamped onto the top-level StartNode's `field_ranges`.
 
     Keys: each top-level `input:`/`inputs:` decl name, tagged `("input_decl", name)` -> its
@@ -35,11 +36,11 @@ def _boundary_field_ranges(text: Optional[str]) -> dict[tuple[str, str], SourceR
     try:
         value, spans, root = load_with_spans(text, return_root=True)
     except yaml.YAMLError:
-        return {}
+        return FieldRanges()
     if not isinstance(value, dict):
-        return {}
+        return FieldRanges()
     reader = NodeReader(value, spans, root)
-    out: dict[tuple[str, str], SourceRange] = {}
+    out: FieldRanges = FieldRanges()
     for key in ("input", "inputs"):
         if isinstance(value.get(key), dict):
             out.update(

@@ -37,6 +37,36 @@ if TYPE_CHECKING:
     from agent_composer.events import SourceRange
 
 
+class FieldRanges(dict):
+    """`node.field_ranges` — the render-only `(kind, key) -> SourceRange` map, guarded.
+
+    A plain dict whose `get` REFUSES a bare key. The map is keyed by the location's
+    `(SourceSpan.kind, key)` tuple, so a bare-string lookup can never match — it would
+    silently return `None`, and every caller falls back (`or node.range`), turning a typo
+    into a caret that points at the wrong line rather than an error. That silence is what
+    let two dead lookups survive both review and a green test suite when the map moved from
+    string keys to tuples. Refusing the wrong shape makes the mistake loud at the first call.
+
+    Keys: `("input", name)` a node input binding · `("input_decl", name)` a flow input decl
+    (START) · `("field", name)` a kind field (`code`/`over`/`until`/`inputs`/`env`/...).
+    Asserts are deliberately absent (their text is not a unique identity — they are located
+    by position; see `pre_assert_ranges`).
+
+    NOTE the type must survive copies: the compose builder's `_finish` rebuilds this onto the
+    runtime node, and copying it into a plain `dict` would silently drop the guard exactly
+    where lookups happen.
+    """
+
+    def get(self, key, default=None):  # type: ignore[override]
+        if not isinstance(key, tuple):
+            raise TypeError(
+                f"field_ranges is keyed by a (kind, key) tuple — got the bare key {key!r}. "
+                f"Use ({'field'!r}, {key!r}) / ({'input'!r}, {key!r}) / "
+                f"({'input_decl'!r}, {key!r})."
+            )
+        return super().get(key, default)
+
+
 class NodeKind(str, Enum):
     """Closed vocabulary. Dispatch is an explicit `match`, never a registry."""
 
@@ -270,14 +300,15 @@ class Node(ABC):
         # spec on restore, never round-tripped. Purely for diagnostics.
         # `self.range`: this node's own `SourceRange` in the flow YAML (the whole node block); None
         #   for a fake / directly-constructed node with no known source.
-        # `self.field_ranges`: `dict[(kind, key) -> SourceRange]` for the node's individual authored
-        #   NAMED sites — a bad input binding (`("input", name)`), a flow input decl
+        # `self.field_ranges`: `FieldRanges[(kind, key) -> SourceRange]` for the node's individual
+        #   authored NAMED sites — a bad input binding (`("input", name)`), a flow input decl
         #   (`("input_decl", name)`), or a kind field (`("field", name)`). Keyed by the location's
-        #   `(SourceSpan.kind, key)` so keys across namespaces never collide. Asserts are NOT here
-        #   (their text is not a unique identity) — they are located by position, below. `{}` when
-        #   no per-field spans are recorded.
+        #   `(SourceSpan.kind, key)` so keys across namespaces never collide; a bare-key lookup
+        #   raises rather than missing silently (see `FieldRanges`). Asserts are NOT here (their
+        #   text is not a unique identity) — they are located by position, below. Empty when no
+        #   per-field spans are recorded.
         self.range: Optional["SourceRange"] = None
-        self.field_ranges: dict[tuple[str, str], "SourceRange"] = {}
+        self.field_ranges: FieldRanges = FieldRanges()
         # Positional assert-range lists, aligned 1:1 with `pre_asserts` / `post_asserts` (an entry
         # is None where no span exists — a spanless / in-memory flow). Populated by the loader:
         # `validate_node_asserts` splits the descriptor's authored `assert_ranges` in lockstep with

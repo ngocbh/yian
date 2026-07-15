@@ -1,0 +1,29 @@
+# e35 — a dangling `${...}` ref in a MAP's reserved `over:` key. COMPILE: "unresolved references".
+# The highlight must box the `over:` line (26) — its range is stamped ("field", "over"). PR #98's
+# tuple migration left this lookup keyed by the BARE string ("over"), which can never match a
+# tuple-keyed map, so it silently fell back to the `input:` block (lines 27-28) — an unrelated
+# construct. Regression pin for #101. Fails at load; no inputs needed.
+id: err-bad-map-over-ref
+name: err_bad_map_over_ref
+input:
+  topics: list[str]
+defs:
+  body:
+    input:
+      item: str
+    nodes:
+      double:
+        kind: code
+        input:
+          item: ${input.item}
+        output: int
+        code: "return {'output': 1}"
+    output: ${double.output}
+nodes:
+  each:
+    kind: map
+    call: body
+    over: ${nope.output}       # ERROR (line 26): no node `nope` — the caret belongs HERE
+    input:
+      item: ${item}
+output: ${each.output}

@@ -161,7 +161,10 @@ def validate_references(
             reserved = node.reserved_wiring_keys()
             input_rng = franges.get(("field", "inputs")) or node.range
             for key in reserved:
-                over_rng = franges.get(key) or input_rng
+                # A reserved wiring key (`over`) is a KIND FIELD, so its range is tagged
+                # `("field", key)` — not the bare key, which would never match and would
+                # silently anchor the error on the whole `input:` block instead.
+                over_rng = franges.get(("field", key)) or input_rng
                 scan(nwiring.get(key), f"node {node_id!r} map {key}", node_line, over_rng)
             for param, src in nwiring.items():
                 if param in reserved:

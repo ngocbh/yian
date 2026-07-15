@@ -288,6 +288,17 @@ def test_false_boundary_assert_carries_range():
     assert result.range is not None and result.range.start_line == 15
 
 
+def test_map_over_ref_locates_the_over_line():
+    # e35 (#101): a dangling ref in a MAP's reserved `over:` key (line 26). The range must box
+    # `over:` itself — NOT the `input:` block on 27-28, which is what the bare-string lookup
+    # `field_ranges.get("over")` silently degraded to once the map became tuple-keyed (#98).
+    err = _load_error("e35-bad-map-over-ref.yaml")
+    assert "unresolved references" in str(err)
+    assert "map over" in str(err)  # names the reserved key, not an input
+    assert err.range is not None
+    assert (err.range.start_line, err.range.end_line) == (26, 26)
+
+
 def test_duplicate_asserts_caret_at_first_occurrence():
     # e34 (#88 case 1): two IDENTICAL post-asserts on lines 12 and 13; both fail (output is 1, not
     # < 0). Asserts are located BY POSITION, so the caret points at the FIRST occurrence (line 12) —

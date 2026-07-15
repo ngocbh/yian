@@ -32,6 +32,7 @@ from typing import Optional
 import yaml
 
 from agent_composer.events import SourceRange
+from agent_composer.nodes.base import FieldRanges
 from agent_composer.typesys.values import TypeCheckError
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.build.pipeline import _assemble, LoadedFlow
@@ -112,14 +113,17 @@ def _frame_ranges(
     except LoadError:
         return {}, {}
     node_ranges: dict[str, SourceRange] = {}
-    field_ranges: dict[str, dict[str, SourceRange]] = {}
+    # `node_id -> FieldRanges` — the OUTER map is keyed by a bare node id (correct: that is not
+    # a locator); each INNER map keeps its `(kind, key)` guard, since the CLI renderer looks up
+    # through it and is where a bare-key lookup would silently miss.
+    field_ranges: dict[str, FieldRanges] = {}
     for nid, desc in descriptors.items():
         rng = getattr(desc, "range", None)
         if rng is not None:
             node_ranges[nid] = rng
         fr = getattr(desc, "field_ranges", None)
         if fr:
-            field_ranges[nid] = dict(fr)
+            field_ranges[nid] = FieldRanges(fr)
     return node_ranges, field_ranges
 
 

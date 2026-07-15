@@ -54,17 +54,35 @@ class FieldRanges(dict):
 
     NOTE the type must survive copies: the compose builder's `_finish` rebuilds this onto the
     runtime node, and copying it into a plain `dict` would silently drop the guard exactly
-    where lookups happen.
+    where lookups happen — hence `copy` is overridden too.
+
+    Only the SILENT misses are guarded (`get`, `in`) plus `copy` (which would launder the type).
+    `fr[key]` needs no guard: a bare key already raises `KeyError` loudly.
     """
 
-    def get(self, key, default=None):  # type: ignore[override]
+    @staticmethod
+    def _check(key) -> None:
+        """Reject a non-tuple key, naming the tagged forms that would work."""
         if not isinstance(key, tuple):
             raise TypeError(
                 f"field_ranges is keyed by a (kind, key) tuple — got the bare key {key!r}. "
                 f"Use ({'field'!r}, {key!r}) / ({'input'!r}, {key!r}) / "
                 f"({'input_decl'!r}, {key!r})."
             )
+
+    def get(self, key, default=None):  # type: ignore[override]
+        self._check(key)
         return super().get(key, default)
+
+    def __contains__(self, key) -> bool:
+        # `("field", name) in fields` is a real lookup shape (the CLI's kind fallback), so a
+        # bare key here is the same silent-miss bug as `get` — it would just answer False.
+        self._check(key)
+        return super().__contains__(key)
+
+    def copy(self) -> "FieldRanges":
+        # `dict.copy` returns a PLAIN dict, which would silently launder the guard away.
+        return FieldRanges(self)
 
 
 class NodeKind(str, Enum):

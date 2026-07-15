@@ -51,6 +51,26 @@ def test_tuple_lookup_still_works():
     assert fr.get(("field", "over")) == "RANGE"
     assert fr.get(("field", "absent")) is None
     assert fr.get(("field", "absent"), "fallback") == "fallback"
+    assert ("field", "over") in fr
+    assert ("field", "absent") not in fr
+
+
+def test_bare_key_membership_raises():
+    # `("field", name) in fields` is a real lookup shape (the CLI's kind fallback), so a bare
+    # key here would silently answer False — the same silent-miss bug `get` guards against.
+    fr = FieldRanges({("field", "over"): "RANGE"})
+    with pytest.raises(TypeError, match="keyed by a .kind, key. tuple"):
+        "over" in fr  # noqa: B015
+
+
+def test_copy_keeps_the_guard():
+    # `dict.copy` returns a PLAIN dict, which would launder the guard away silently.
+    fr = FieldRanges({("field", "over"): "RANGE"})
+    dup = fr.copy()
+    assert isinstance(dup, FieldRanges)
+    assert dup.get(("field", "over")) == "RANGE"
+    with pytest.raises(TypeError):
+        dup.get("over")
 
 
 def test_guard_survives_build():

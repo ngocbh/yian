@@ -11,6 +11,7 @@ import pytest
 from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.loader import load_flow
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.nodes.agent import AgentDescriptor
 from agent_composer.compose.nodes.base import BuildContext
@@ -83,8 +84,9 @@ def test_reject_cycles_no_ranges_leaves_range_none():
 
 def test_validate_references_diag_has_range():
     # A node input binding that references an unknown node (`${ghost.output}`) is a dangling
-    # ref. The aggregate LoadError anchors its `range` on the referencing field — the node's
-    # `input:` mapping range (`field_ranges["inputs"]`), the coarsest available field span.
+    # ref. The aggregate LoadError anchors its `range` on the OFFENDING ENTRY — the per-binding
+    # `("input", name)` span the parse loop stamps for every kind — not the enclosing `input:`
+    # mapping, which would also mark every innocent sibling entry (#87).
     text = (
         "id: f\nname: f\nnodes:\n"
         "  a:\n    kind: agent\n    prompt: hi\n"
@@ -96,7 +98,33 @@ def test_validate_references_diag_has_range():
         validate_references(nodes, set(), producers, "${a.output}", wiring)
     assert "ghost" in str(exc.value)
     assert exc.value.range is not None
-    assert exc.value.range == nodes["a"].field_ranges[("field", "inputs")]
+    assert exc.value.range == nodes["a"].field_ranges[("input", "x")]
+    # ...and it is strictly narrower than the block it used to report: `x:` is on line 8, while
+    # the `input:` mapping runs to line 9 (`output: str` — a different field entirely).
+    assert exc.value.range != nodes["a"].field_ranges[("field", "inputs")]
+    assert exc.value.range.start_line == exc.value.range.end_line == 8
+
+
+def test_validate_references_diag_falls_back_when_no_per_binding_range():
+    # The fallback path. A desugared CASE binds SYNTHETIC wiring params (`__on`/`__rN` — the
+    # reconciled `when:` data refs), which own no authored `input:` entry, so the per-binding
+    # lookup finds nothing. Such an error must still locate — degrading to the node's own range
+    # rather than vanishing. Driven through the whole loader because the desugar is what mints
+    # `__rN` (the `_built_flow` slice above only builds agent/code leaves).
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  a:\n    kind: case\n"
+        "    cases:\n      - when: \"ghost.output >= 1\"\n        then: b\n"
+        "    else: b\n"
+        "  b:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n"
+        "output: ${b.output}\n"
+    )
+    with pytest.raises(LoadError) as exc:
+        load_flow(text)
+    assert "ghost" in str(exc.value)
+    assert "'__r0'" in str(exc.value)          # the synthetic param — no authored entry to stamp
+    assert exc.value.range is not None         # still located...
+    assert exc.value.range.start_line == 4     # ...on the `a:` node header (line 4)
 
 
 def test_check_ref_map_types_moved():

@@ -1,0 +1,34 @@
+# e36 — a dangling `${...}` ref in ONE of a MAP's per-element `input:` entries. COMPILE:
+# "unresolved references". The highlight must box the offending entry (`extra:`, line 33) — not the
+# whole `input:` block (31-33), which would also mark the valid `item:`/`n:` entries. The MAP
+# per-element branch is distinct code from a plain node's inputs: it reads the node wiring,
+# allows the body-local `${item}` scope, and skips the reserved `over` key. Pin for #87.
+# Fails at load; no inputs needed.
+id: err-bad-map-input-ref
+name: err_bad_map_input_ref
+input:
+  topics: list[str]
+defs:
+  body:
+    input:
+      item: str
+      n: int
+      extra: int
+    nodes:
+      double:
+        kind: code
+        input:
+          item: ${input.item}
+        output: int
+        code: "return {'output': 1}"
+    output: ${double.output}
+nodes:
+  each:
+    kind: map
+    call: body
+    over: ${input.topics}
+    input:
+      item: ${item}            # valid — the body-local element scope
+      n: 2                     # valid — a literal
+      extra: ${nope.output}    # ERROR (line 33): no node `nope` — the caret belongs HERE
+output: ${each.output}

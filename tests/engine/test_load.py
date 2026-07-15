@@ -1,6 +1,6 @@
 """Integration tests for the top-level loader.
 
-`load_flow(text) -> LoadedFlow` wires every prior slice into one runnable
+`load_flow(text) -> ComposedFlow` wires every prior slice into one runnable
 `CompiledFlow` + the flow-input decls + the boundary/post-terminal assert split. The
 load-test set is the seeds: flat (00/01), case (02/06), the
 arithmetic asserts (10), anchors (11), MODEL (07), AGENT knobs (14), nested records +
@@ -23,11 +23,11 @@ from agent_composer.nodes.code import CodeNode
 from agent_composer.nodes.case import CaseNode
 from agent_composer.nodes.model import ModelNode
 from agent_composer.typesys.values import ValueKind
-from agent_composer.compose import LoadedFlow, LoadError, load_flow
+from agent_composer.compose import ComposedFlow, LoadError, load_flow
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
-# Each loadable seed must load to a LoadedFlow.
+# Each loadable seed must load to a ComposedFlow.
 _LOADABLE = ["00", "01", "02", "06", "07", "09", "10", "11", "12", "13", "14", "17", "18", "19", "20", "21", "22", "23", "27", "28", "29", "30"]
 _SEED_FILES = {
     "00": "00-hello-agent.yaml",
@@ -66,19 +66,19 @@ _SEED_FILES = {
 }
 
 
-def _load(seed: str) -> LoadedFlow:
+def _load(seed: str) -> ComposedFlow:
     return load_flow((_SEEDS / _SEED_FILES[seed]).read_text())
 
 
 # --------------------------------------------------------------------------- #
-# every loadable seed loads to a LoadedFlow (a CompiledFlow + inputs + asserts)
+# every loadable seed loads to a ComposedFlow (a CompiledFlow + inputs + asserts)
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize("seed", _LOADABLE)
 def test_seed_loads_to_loaded_flow(seed):
     loaded = _load(seed)
-    assert isinstance(loaded, LoadedFlow)
+    assert isinstance(loaded, ComposedFlow)
     assert isinstance(loaded.compiled, CompiledFlow)
     assert loaded.compiled.start_id in loaded.compiled.nodes  # synthesized entry node present
     # an __end__ edge exists (the flow has a codomain).
@@ -289,7 +289,7 @@ def test_ref_map_without_resolver_is_loud(seed):
 def test_depends_on_seed_emits_ordering_edge():
     # seed 12 is wired (feature D): `fetch depends_on [warm_cache]` -> an ordering edge.
     loaded = load_flow((_SEEDS / "12-depends-on.yaml").read_text())
-    assert isinstance(loaded, LoadedFlow)
+    assert isinstance(loaded, ComposedFlow)
     ordering = [e for e in loaded.compiled.edges if e.ordering]
     assert len(ordering) == 1
     e = ordering[0]

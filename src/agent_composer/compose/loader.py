@@ -1,16 +1,16 @@
-"""The top-level loader: Compose YAML text -> a runnable `LoadedFlow`.
+"""The top-level loader: Compose YAML text -> a runnable `ComposedFlow`.
 
 The file-I/O front door: parse the YAML, build the typedefs registry, compose the
 call resolver, load every `defs:` callable, and hand the parsed sections to the
 post-parse conductor (`build.pipeline._assemble`, imported back here) which returns
-the `LoadedFlow`. This module owns the span readers (`_nodes_reader`/`_def_nodes_reader`/
+the `ComposedFlow`. This module owns the span readers (`_nodes_reader`/`_def_nodes_reader`/
 `_frame_ranges`/`top_frame_ranges`), the resolver composition (`make_file_resolver`/
 `_make_call_resolver`), and the defs loaders (`_load_def`/`_load_single_node_def`) —
 not the assembly pipeline itself.
 
 `call` resolution is **defs-first**: a `call:` names an in-file `defs:` callable (built
 in-loader by the same `_assemble`) or, failing that, an external flow via the
-injected `child_resolver` (`(flow_id, version) -> LoadedFlow`). `_make_call_resolver`
+injected `child_resolver` (`(flow_id, version) -> ComposedFlow`). `_make_call_resolver`
 composes the two (and rejects recursive/mutual defs). `call` nodes are resolved-and-baked
 at load: the loader derives the callable's signature (a plain call re-exports the single
 codomain `Type`; a mapped call stamps `list[<codomain>]`; bindings are name/arity- and
@@ -34,7 +34,7 @@ import yaml
 from agent_composer.events import SourceRange
 from agent_composer.typesys.values import TypeCheckError
 from agent_composer.typesys.types import read_typedefs
-from agent_composer.compose.build.pipeline import _assemble, LoadedFlow
+from agent_composer.compose.build.pipeline import _assemble, ComposedFlow
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.uses import parse_uses_ref
@@ -128,7 +128,7 @@ def top_frame_ranges(
     """Best-effort `(node_ranges, field_ranges)` for a top-level flow from its text alone.
 
     The `(node_id -> header `SourceRange`, node_id -> {field -> `SourceRange`})` maps a
-    `LoadedFlow.source` already carries — recomputed here from `text` for the CLI's error
+    `ComposedFlow.source` already carries — recomputed here from `text` for the CLI's error
     renderer when it does NOT hold the loaded IR (e.g. a `RunResult` handed in on its own).
     Empty maps when `text` can't be parsed: this is render metadata, never the error path,
     so it must not raise.
@@ -176,11 +176,11 @@ def _join_path(base, p: str) -> Path:
     return pp if pp.is_absolute() else Path(base) / pp
 
 
-def _check_version(child: "LoadedFlow", path: str, version: Optional[str]) -> None:
+def _check_version(child: "ComposedFlow", path: str, version: Optional[str]) -> None:
     """Raise if a `uses:` ref pins a version the resolved file does not declare.
 
     Args:
-        child (`LoadedFlow`):
+        child (`ComposedFlow`):
             The resolved child flow whose declared `version` is compared.
         path (`str`):
             The `uses:` path (for the error message).
@@ -198,7 +198,7 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
     """
     Build the default local file resolver for `uses:` references.
 
-    The returned `(path, version) -> LoadedFlow` callable resolves a ref to a `.yaml` on
+    The returned `(path, version) -> ComposedFlow` callable resolves a ref to a `.yaml` on
     the search path (`<dir>/<path>.yaml`, first match wins); `@<version>` is never part of
     the filename but acts as a guard — the resolved file is loaded, then its declared
     `version:` must equal the pinned `<v>`. Children load recursively so their own
@@ -214,7 +214,7 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
 
     Returns:
         `ChildResolver`:
-            A `resolve(path, version=None) -> LoadedFlow` closure over `search_paths`/`ctx`.
+            A `resolve(path, version=None) -> ComposedFlow` closure over `search_paths`/`ctx`.
 
     Raises:
         `LoadError`:
@@ -222,7 +222,7 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
             or a pinned-version mismatch.
     """
 
-    def resolve(path: str, version: Optional[str] = None) -> LoadedFlow:
+    def resolve(path: str, version: Optional[str] = None) -> ComposedFlow:
         rel = path  # version is a guard on the resolved file, never part of the filename
         for d in search_paths:
             cand = (Path(d) / (rel + ".yaml"))
@@ -264,9 +264,9 @@ def load_flow(
     *,
     child_resolver: Optional[ChildResolver] = None,
     search_paths: Optional[list] = None,
-) -> LoadedFlow:
+) -> ComposedFlow:
     """
-    Load Compose YAML text into a runnable `LoadedFlow`.
+    Load Compose YAML text into a runnable `ComposedFlow`.
 
     Parses, compiles, and validates the flow in one pass. A `call:` resolves
     **defs-first** (an in-file `defs:` callable), then a **`uses:` alias** (external, with
@@ -279,7 +279,7 @@ def load_flow(
         text (`str`):
             The Compose-shaped YAML source of the flow.
         child_resolver (`ChildResolver`, *optional*, defaults to `None`):
-            An explicit `(flow_id, version) -> LoadedFlow` resolver for external flows
+            An explicit `(flow_id, version) -> ComposedFlow` resolver for external flows
             (a fake, or a future marketplace). Mutually preferred over `search_paths`
             when both are given.
         search_paths (`list[str | Path]`, *optional*, defaults to `None`):
@@ -289,7 +289,7 @@ def load_flow(
             `system: paths:`.
 
     Returns:
-        `LoadedFlow`:
+        `ComposedFlow`:
             The compiled, validated flow ready for `run_flow`.
 
     Raises:
@@ -307,7 +307,7 @@ def load_flow(
     return _load_flow(text, child_resolver, search_paths, _LoadCtx())
 
 
-def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> LoadedFlow:
+def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedFlow:
     f = parse_file(text)
     _validate_system(f.system)
 
@@ -379,7 +379,7 @@ def _make_call_resolver(
     defs_section: dict, registry, external: Optional[ChildResolver], uses: dict,
     parent_text: str = "",
 ) -> ChildResolver:
-    """A `(flow_id, version) -> LoadedFlow` resolver: **defs-first** (in-file `defs:`)
+    """A `(flow_id, version) -> ComposedFlow` resolver: **defs-first** (in-file `defs:`)
     → **`uses:` alias** (external, with the ref's `@<version>`). A bare `call:` that is
     NEITHER a `defs:` callable NOR a `uses:` alias is a `LoadError` — external flows are
     reachable ONLY through a `uses:` alias (no bare-name backdoor to `external`).
@@ -401,10 +401,10 @@ def _make_call_resolver(
             f"name(s) {both} declared in both defs: and uses: (a callable has one namespace)"
         )
 
-    built: dict[str, LoadedFlow] = {}
+    built: dict[str, ComposedFlow] = {}
     in_progress: set[str] = set()
 
-    def resolve(flow_id: str, version: Optional[str] = None) -> LoadedFlow:
+    def resolve(flow_id: str, version: Optional[str] = None) -> ComposedFlow:
         if flow_id in built:
             return built[flow_id]
         if flow_id in defs_section:
@@ -450,8 +450,8 @@ def _make_call_resolver(
     return resolve
 
 
-def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: str = "") -> LoadedFlow:
-    """Build one in-file `defs:` entry into a `LoadedFlow` (a callable / sub-flow inline).
+def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: str = "") -> ComposedFlow:
+    """Build one in-file `defs:` entry into a `ComposedFlow` (a callable / sub-flow inline).
 
     Supports the **multi-node** form only — `{inputs?, nodes, outputs?, asserts?}`,
     sharing the file's `typedefs:` registry + the composite resolver (so a def can call
@@ -507,7 +507,7 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
         raise LoadError(f"defs entry {name!r}: {exc}", line=exc.line) from exc
 
 
-def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolver, parent_text: str = "") -> LoadedFlow:
+def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolver, parent_text: str = "") -> ComposedFlow:
     """Build a SINGLE-node `defs:` callable — `let f params = <one node over params>`.
 
     The flat body is `{kind, <logic fields>, input?, output?}` (singular keys; the

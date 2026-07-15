@@ -158,7 +158,7 @@ class FlowEngine:
         # Per-engine, per-run wiring overrides (`node_id -> wiring`) consulted by eval_node in
         # place of the shared compiled `flow.wiring[node_id]`. Populated for top-level START by
         # `_seed_start_and_advance` to narrow `${input.X}` to only the passed run args WITHOUT
-        # mutating the shared IR (a LoadedFlow is reusable across runs). Empty otherwise.
+        # mutating the shared IR (a ComposedFlow is reusable across runs). Empty otherwise.
         self.wiring_overrides: dict[str, dict] = {}
         # The LLM-client provider handed to LLM-backed nodes via caps['llm'] (the node no
         # longer imports the factory). Default = the lazy package-lookup thunk so a
@@ -275,7 +275,7 @@ class FlowEngine:
         passed keys so an OMITTED input is ABSENT (bind_params then fills START's declared default
         instead of binding a self-referential null). The narrowed wiring is a PER-ENGINE override
         (`self.wiring_overrides`) consulted by eval_node — the shared compiled `flow.wiring` is
-        NOT mutated (a LoadedFlow is reusable across runs). START's own eval_node run re-commits
+        NOT mutated (a ComposedFlow is reusable across runs). START's own eval_node run re-commits
         the COERCED record under START_ID. Direct-FlowEngine tests that hand-seed `store[START_ID]`
         pass no `run_inputs`; the compiled `${input.X}` wiring reads that hand-seeded record."""
         start_id = self.flow.start_id

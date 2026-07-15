@@ -8,7 +8,7 @@ The LAST compose phase before the loader. Two modules:
 - `pipeline.py` — `_assemble`, the conductor that drives the whole post-parse pipeline
   (build every node kind-blind -> type/exhaustiveness checks -> edge inference ->
   reference/assert validation -> boundary synthesis -> cycle/handle checks ->
-  `CompiledFlow.from_parts`), plus `LoadedFlow` (the compiled+validated result) and the
+  `CompiledFlow.from_parts`), plus `ComposedFlow` (the compiled+validated result) and the
   flow `outputs:` reader.
 
 Ladder position: `build/` may import every earlier phase (helpers/nodes/parse/desugar/

@@ -77,7 +77,7 @@ def _section_lines(text: Optional[str]) -> dict[str, int]:
 class SourceFrame:
     """Render-only source-location metadata for one flow (a def or an external file).
 
-    Carried on a `LoadedFlow` and copied onto the built `CallNode`/`MapNode` so the CLI
+    Carried on a `ComposedFlow` and copied onto the built `CallNode`/`MapNode` so the CLI
     can box a `.yaml` frame for the *child* a call descends into — the basis of the
     nested-error call traceback. Never read by the engine's `run()`; purely for error
     rendering.

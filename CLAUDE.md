@@ -284,7 +284,7 @@ src/agent_composer/
 ├── compile/      compiled IR (CompiledFlow) + representation-neutral validation
 ├── compose/      the Compose-YAML front end: text -> CompiledFlow
 │                 (parser/types/build/cases/validate/asserts/loader)
-├── run.py        the run boundary: LoadedFlow + inputs -> RunResult (run/resume)
+├── run.py        the run boundary: ComposedFlow + inputs -> RunResult (run/resume)
 ├── runtime/      state_manager + single-threaded engine + parallel worker pool
 ├── suspension/   pause reasons, commands, checkpoint
 ├── llm_clients/  provider clients (lazy) + LLMConfig + model_from_config
@@ -296,7 +296,7 @@ src/agent_composer/
 **Layer ladder (acyclic imports):** `events <- typesys <- nodes <- compile <-
 compose`, with `expr` feeding nodes and `suspension` feeding runtime. The
 package-root `run.py` sits above both `compose` and `runtime` (it consumes
-`LoadedFlow` and drives the engine) and is imported by neither. Never
+`ComposedFlow` and drives the engine) and is imported by neither. Never
 introduce a back-edge. `NodeKind` is a closed enum in `nodes/base.py`; authors
 write `kind:` directly for `agent`/`code`/`model`/`tool`/`case`/`human_input`/
 `wait`/`call`/`map`/`loop`, while `start`/`end` are loader-synthesized boundaries
@@ -315,7 +315,7 @@ authoring surface).
 - **compose** — the only YAML-aware layer: parse → typecheck → build → validate →
   `CompiledFlow`. All domain/boundary concerns live here.
 - **run** — the package-root run boundary (`run.py`): `run_flow`/`resume_flow`
-  turn a `LoadedFlow` + inputs into a `RunResult`, coercing inputs and enforcing
+  turn a `ComposedFlow` + inputs into a `RunResult`, coercing inputs and enforcing
   the flow's asserts. Touches no YAML; sits above compose and runtime.
 - **runtime** — the scheduler: single-writer dispatcher, 3-state edge join,
   outputs-before-successors, recursive skip-flood, layered checkpoint. Kind-blind.

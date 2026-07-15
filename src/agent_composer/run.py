@@ -1,6 +1,6 @@
 """`run_flow(loaded, inputs) -> RunResult` — the run entrypoint.
 
-A host-agnostic run boundary that drives a loaded `LoadedFlow` through the
+A host-agnostic run boundary that drives a loaded `ComposedFlow` through the
 `FlowEngine`. It owns the run-input concerns the pure graph engine doesn't:
 
 - coerce + default the run arguments against the flow's `InputDecl`s,
@@ -25,10 +25,10 @@ a `RunResult` with `status != "succeeded"` (RunFailed is an engine EVENT, not an
 exception). Compile-time errors (a bad flow) are surfaced by `load_flow`, not here.
 
 This is the top-level RUN BOUNDARY: it sits at the package root, above both `compose`
-(it consumes `compose`'s product type, `LoadedFlow`) and `runtime` (it drives the
+(it consumes `compose`'s product type, `ComposedFlow`) and `runtime` (it drives the
 `FlowEngine`). It is deliberately NOT a `compose` submodule — it touches no YAML; it
 turns an already-compiled flow contract into a run. Imports flow DOWN only: `compose`
-(LoadedFlow), `runtime` (FlowEngine), `compile`, `typesys` (the pool + seeding),
+(ComposedFlow), `runtime` (FlowEngine), `compile`, `typesys` (the pool + seeding),
 `expr`, and `events`. Nothing imports back.
 """
 
@@ -53,7 +53,7 @@ from agent_composer.typesys.seeding import (
     default_run_id,
     seed_system_clock,
 )
-from agent_composer.compose.loader import LoadedFlow
+from agent_composer.compose.loader import ComposedFlow
 
 if TYPE_CHECKING:
     from agent_composer.suspension.commands import DeliverAnswerCommand
@@ -138,7 +138,7 @@ class RunResult:
 
 
 def run_flow(
-    loaded: LoadedFlow,
+    loaded: ComposedFlow,
     inputs: Dict[str, Any],
     *,
     run_id: Optional[str] = None,
@@ -162,7 +162,7 @@ def run_flow(
     (subflow) asserts on one firing path.
 
     Args:
-        loaded (`LoadedFlow`):
+        loaded (`ComposedFlow`):
             A compiled, validated flow from [`load_flow`][agent_composer.load_flow].
             Carries the IR (asserts lowered onto its boundary nodes) and the declared
             input schema.
@@ -271,7 +271,7 @@ def run_flow(
 
 
 def resume_flow(
-    loaded: LoadedFlow,
+    loaded: ComposedFlow,
     *,
     engine: Optional[FlowEngine] = None,
     checkpoint: Any = None,
@@ -291,7 +291,7 @@ def resume_flow(
     post-terminal asserts; if the run pauses again, the returned result carries fresh handles.
 
     Args:
-        loaded (`LoadedFlow`):
+        loaded (`ComposedFlow`):
             The same compiled flow the suspended run was started from. Supplies the IR
             (to restore from a checkpoint) and the post-terminal assert set.
         engine (`FlowEngine`, *optional*, defaults to `None`):
@@ -373,7 +373,7 @@ def resume_flow(
     )
 
 
-def resume_command(loaded: LoadedFlow, reason: Any, value: Any) -> "DeliverAnswerCommand":
+def resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> "DeliverAnswerCommand":
     """
     Map a host-resumable pause reason and an answer to the engine command that delivers it.
 
@@ -384,7 +384,7 @@ def resume_command(loaded: LoadedFlow, reason: Any, value: Any) -> "DeliverAnswe
     satisfies) is not host-resumable.
 
     Args:
-        loaded (`LoadedFlow`):
+        loaded (`ComposedFlow`):
             The compiled flow the paused run belongs to. (Reserved for symmetry and future
             validation; the command is built from `reason` and `value`.)
         reason (`Any`):

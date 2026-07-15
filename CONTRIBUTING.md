@@ -169,7 +169,7 @@ def run_flow(loaded, inputs, *, run_id=None, on_event=None):
     `status="failed"` result *before* any node runs.
 
     Args:
-        loaded (`LoadedFlow`):
+        loaded (`ComposedFlow`):
             A compiled, validated flow from [`load_flow`][agent_composer.load_flow].
             Carries the IR, the declared input schema, and the assert sets.
         inputs (`dict[str, Any]`):

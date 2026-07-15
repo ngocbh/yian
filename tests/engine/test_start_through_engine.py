@@ -203,7 +203,7 @@ def test_child_boundary_assert_satisfied_succeeds(num_workers):
     assert res.output == 10
 
 
-# --- fix-B guard: a LoadedFlow is REUSABLE across runs with different input key sets --------- #
+# --- fix-B guard: a ComposedFlow is REUSABLE across runs with different input key sets --------- #
 # START's per-run `${input.X}` narrowing rides a per-ENGINE `wiring_overrides` dict, NOT the
 # shared compiled `flow.wiring[START_ID]`. This test would FAIL if the engine reverted to
 # mutating the shared IR (run 1 would narrow it to {topic,window}, then run 2 with `window`

@@ -33,7 +33,7 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
   ▼
- CompiledFlow   (returned inside a LoadedFlow: + input decls, asserts, source frame)
+ CompiledFlow   (returned inside a ComposedFlow: + input decls, asserts, source frame)
 ```
 
 Everything below just explains three of those words: **descriptor**, **build**, and
@@ -161,7 +161,7 @@ no special path downstream.
 
 ## What you get back
 
-`load_flow()` returns a **`LoadedFlow`**:
+`load_flow()` returns a **`ComposedFlow`**:
 
 - `compiled` — the `CompiledFlow` (immutable topology: nodes, inferred edges, wiring,
   synthesized `start`/`end` boundaries),

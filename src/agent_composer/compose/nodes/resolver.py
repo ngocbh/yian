@@ -1,7 +1,7 @@
 """Child resolve-and-signature — the load-time callable seam shared by `call`/`map`/`loop`.
 
 A `call`/`map`/`loop` node names a CALLABLE (a `defs:` entry or an external flow). The child
-resolver is the load-time seam: `(flow_id, version) -> LoadedFlow` (the loader composes the
+resolver is the load-time seam: `(flow_id, version) -> ComposedFlow` (the loader composes the
 defs-first resolution). From the resolved child the kind builder derives its `ChildSignature` —
 declared input types + single codomain `Type` — to stamp the node's `output_type` and to
 name/arity- + type-check the bindings, AND bakes the child's compiled flow onto the node
@@ -41,7 +41,7 @@ class ChildSignature:
     output: Optional[Type]
 
 
-# resolver(flow_id, flow_version) -> LoadedFlow (the load-time child seam; duck-typed
+# resolver(flow_id, flow_version) -> ComposedFlow (the load-time child seam; duck-typed
 # on `.compiled`/`.inputs` so `build` need not import `loader`). `flow_version` is an
 # opaque str tag (a `uses:` ref's `@<version>`); the in-file/legacy path passes None.
 ChildResolver = Callable[[str, Optional[str]], Any]
@@ -96,7 +96,7 @@ def _output_value_type(
 
 
 def child_signature(loaded: Any) -> ChildSignature:
-    """A loaded child `LoadedFlow` -> its compile-time `ChildSignature`.
+    """A loaded child `ComposedFlow` -> its compile-time `ChildSignature`.
 
     Duck-typed on `loaded.input` (the `InputDecl`s) + `loaded.compiled` (`.nodes`/`.outputs`)
     so `build` need not import `loader` (which imports `build`). The codomain `Type`
@@ -134,7 +134,7 @@ def child_signature(loaded: Any) -> ChildSignature:
 
 
 def _resolve_child(node_id: str, flow_id: str, resolver: ChildResolver) -> Any:
-    """Resolve a callable to its `LoadedFlow` via the resolver, loud on failure."""
+    """Resolve a callable to its `ComposedFlow` via the resolver, loud on failure."""
     try:
         return resolver(flow_id, None)
     except LoadError:

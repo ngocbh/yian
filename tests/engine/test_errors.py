@@ -279,7 +279,8 @@ def test_flow_input_type_failure_carries_range():
 def test_false_boundary_assert_carries_range():
     # e18: the flow-level `asserts:` item `input.window > 0` is on line 15; window <= 0 makes it
     # false before any node runs. The RunResult carries a concrete `range` boxing that assert
-    # line (resolved from the StartNode's flow-assert field_ranges keyed by the expr string).
+    # line — resolved BY POSITION off the StartNode's `pre_assert_ranges` (asserts are not in
+    # `field_ranges`: identical assert text is not a unique key, so they are located by index).
     result = run_flow(
         load_flow((_ERRORS / "e18-false-boundary-assert.yaml").read_text()),
         {"window": -5},

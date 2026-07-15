@@ -5,7 +5,7 @@ matching runtime `Node`, stamped with:
   - `output_type = read_type(descriptor.outputs, registry)` (None if no outputs),
   - `inputs = [InputBinding(name=k, source=v)]` from the descriptor's `inputs:`
     map (sink bindings — `type_str`/`type` lenient/None; the type is carried by the
-    source); a TOOL's `args` map binds the same way (untyped).
+    source); a TOOL's `input:` map binds the same way (untyped).
 
 `desc.build(ctx)` returns a `BuildResult` (`.node`/`.wiring`/`.edges`). Mirrors the per-kind
 ctor args.

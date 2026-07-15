@@ -141,7 +141,7 @@ def test_bind_isolates_lenient_value_from_pool():
 
 
 def test_bind_untyped_resolves_and_isolates():
-    # type=None -> resolve + deep-copy, NO type-check (the TOOL-args path).
+    # type=None -> resolve + deep-copy, NO type-check (the untyped TOOL-input path).
     pool = _pool(topic="ACME")
     pool.set("up", {"k": 1})
     rec = bind_inputs(

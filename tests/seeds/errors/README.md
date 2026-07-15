@@ -45,6 +45,8 @@ just what can.
 | `e30-inline-syntax-error.yaml` | a malformed inline `code:` body (`return (`) | inline syntax gate → located `LoadError` (padded to the real line) |
 | `e31-inline-no-return.yaml` | an inline `code:` body with no `return` | has-`return` load gate → located `LoadError` |
 | `e32-malformed-code-ref.yaml` | a `code:` value that is neither a valid ref nor inline source (dotted, no colon) | reject bucket → `LoadError` with a "did you mean" hint |
+| `e35-bad-map-over-ref.yaml` | a dangling `${…}` in a MAP's reserved `over:` key | the caret boxes the `over:` line, not the `input:` block — `("field", "over")` is tuple-keyed (#101) |
+| `e36-bad-map-input-ref.yaml` | a dangling `${…}` in ONE of a MAP's per-element `input:` entries | the caret boxes that entry, not the whole block — the MAP per-element scan path (#87) |
 
 ## Runtime failures (fail during the run; the header states the triggering inputs)
 
@@ -52,6 +54,7 @@ just what can.
 |---|---|---|
 | `e18-false-boundary-assert.yaml` | a false `${inputs}`-only assert (run `window: -5`) | boundary asserts (F-C5) |
 | `e19-false-post-assert.yaml` | a false `${X.output}` assert flips success → failed | post-terminal asserts |
+| `e34-dup-assert.yaml` | two IDENTICAL post-asserts on one node, both false (run with no inputs) | asserts located BY POSITION — the caret points at the FIRST occurrence, never collapsing to the last (#88) |
 | `e20-code-raises.yaml` | a CODE callable that raises → the run fails | node-failure → `RunFailed` |
 | `e21-code-wrong-type.yaml` | a CODE node returns the wrong type for its `outputs:` | typed write boundary |
 | `e22-required-missing.yaml` | `${x:?msg}` on an omitted value (run with it omitted) | `:?` use-site required |

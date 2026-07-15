@@ -24,7 +24,7 @@ def test_def_call_node_carries_source_frame():
     assert frame.text == text                                # a def indexes the PARENT file
     assert frame.node_ranges["approve"].start_line == 26     # inner nodes at their parent HEADER lines
     assert frame.node_ranges["record"].start_line == 32
-    assert frame.field_ranges["approve"]["outputs"].start_line == 31
+    assert frame.field_ranges["approve"][("field", "outputs")].start_line == 31
 
 
 def test_external_call_node_carries_source_frame_labelled_by_filename():

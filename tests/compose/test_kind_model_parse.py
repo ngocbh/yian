@@ -36,8 +36,8 @@ def test_model_parse_matches_descriptor_and_records_ranges():
         outputs="str",
     )
     assert isinstance(desc.range, SourceRange)
-    assert isinstance(desc.field_ranges["model_id"], SourceRange)
-    assert isinstance(desc.field_ranges["inputs"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "model_id")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
 
 
 def test_model_build_returns_model_node_and_stamps_ranges():

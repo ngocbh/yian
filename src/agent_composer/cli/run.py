@@ -57,8 +57,8 @@ def _ensure_cwd_importable() -> None:
 _ERR_CONTEXT = 5
 
 # When a failure carries no precise locator, fall back to the best sub-field range for the
-# node's kind before the node header. Keyed by the field name the descriptor records in its
-# `field_ranges`: a CODE node -> its `code:` range. Ordered: the first field present wins.
+# node's kind before the node header. These are field NAMES; the lookup tags each `("field", name)`
+# to match how `field_ranges` is keyed (a CODE node -> its `code:` range). First field present wins.
 _KIND_FALLBACK_FIELDS = ("code",)
 
 # The engine's `field` locator uses the SINGULAR write-boundary vocabulary (`output`/`input`),
@@ -68,8 +68,10 @@ _FIELD_KEY_ALIAS = {"output": "outputs", "input": "inputs"}
 
 
 def _field_range(fields: dict, key: str) -> Optional[SourceRange]:
-    """Look up a `field` locator key in a node's `field_ranges`, honoring the singular alias."""
-    return fields.get(key) or fields.get(_FIELD_KEY_ALIAS.get(key, key))
+    """Look up a `field` locator key in a node's `field_ranges` (keyed by `(kind, key)`),
+    honoring the singular alias. `fields` is one node's per-field map; the lookup tags `("field",
+    …)` so a field never collides with a like-named input (`("input", …)`)."""
+    return fields.get(("field", key)) or fields.get(("field", _FIELD_KEY_ALIAS.get(key, key)))
 
 
 def _top_ranges(loaded, text: str):
@@ -162,8 +164,8 @@ def _node_range(node_id: str, node_ranges: dict, field_ranges: dict) -> Optional
             continue
         fields = field_ranges.get(key, {})
         for fname in _KIND_FALLBACK_FIELDS:
-            if fname in fields:
-                return fields[fname]
+            if ("field", fname) in fields:
+                return fields[("field", fname)]
         if key in node_ranges:
             return node_ranges[key]
     return None
@@ -250,8 +252,8 @@ def _walk_call_frames(loaded, node_id: str, top_text: str, top_label: str,
                 rng = _field_range(fields, span.key)
             if rng is None:  # else the node's kind fallback (e.g. a code node's `code:`)
                 for fname in _KIND_FALLBACK_FIELDS:
-                    if fname in fields:
-                        rng = fields[fname]
+                    if ("field", fname) in fields:
+                        rng = fields[("field", fname)]
                         break
         if rng is None:
             rng = node_ranges.get(seg)  # the node body range (None -> synthetic/unauthored: skip)

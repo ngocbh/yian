@@ -97,14 +97,14 @@ class HumanInputDescriptor(NodeDescriptor):
             raise LoadError(
                 f"node {node_id!r} (kind=human_input): `questions:` and "
                 f"`adaptive_questions:` are mutually exclusive",
-                range=ranges.get("adaptive_questions"),
+                range=ranges.get(("field", "adaptive_questions")),
             )
         if auto is not None:
             if not isinstance(auto, dict) or not auto.get("prompt"):
                 raise LoadError(
                     f"node {node_id!r} (kind=human_input): `adaptive_questions:` "
                     f"requires a `prompt:` (the LLM brief)",
-                    range=ranges.get("adaptive_questions"),
+                    range=ranges.get(("field", "adaptive_questions")),
                 )
         super()._validate_fields(node_id, kwargs, ranges, own_range)
 

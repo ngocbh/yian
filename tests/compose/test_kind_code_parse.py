@@ -43,8 +43,8 @@ def test_code_parse_matches_descriptor_and_records_body_range():
     )
     # Ranges are recorded for the node body and its fields (the code body carries its own).
     assert isinstance(desc.range, SourceRange)
-    assert isinstance(desc.field_ranges["code"], SourceRange)
-    assert isinstance(desc.field_ranges["inputs"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "code")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
 
 
 def test_code_build_returns_code_node_and_stamps_ranges():

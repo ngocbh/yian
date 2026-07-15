@@ -20,15 +20,16 @@ from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 
 
-def _boundary_field_ranges(text: Optional[str]) -> dict[str, SourceRange]:
-    """The flow-boundary source map stamped onto the top-level StartNode.
+def _boundary_field_ranges(text: Optional[str]) -> dict[tuple[str, str], SourceRange]:
+    """The flow-boundary source map stamped onto the top-level StartNode's `field_ranges`.
 
-    Keys: each top-level `input:`/`inputs:` decl name -> its declaration value `SourceRange`,
-    plus each flow-level `asserts:` expr string -> its `SourceRange`. Feeds StartNode.field_ranges
-    so a boundary input-type failure (`input <name> — ...`) or a false boundary assert resolves a
-    precise caret. Empty for a spanless / uncomposable flow (compact / in-memory / a def, whose
-    `input:` lives under `defs.<name>` — best-effort, boundary errors there fall back to the node
-    range). Mirrors `_frame_ranges`: render metadata, never raises."""
+    Keys: each top-level `input:`/`inputs:` decl name, tagged `("input_decl", name)` -> its
+    declaration value `SourceRange`. (The boundary input-coercion failure carries a
+    `SourceSpan(kind="input_decl", key=name)` locator, so the runtime funnel resolves the caret by
+    that `(kind, key)`.) Flow-level `asserts:` are NOT here — they are located by position (see
+    `_boundary_assert_ranges`, threaded into the lowered START/END assert-range lists). Empty for a
+    spanless / uncomposable flow (compact / in-memory / a def) — best-effort, boundary errors there
+    fall back to the node range. Mirrors `_frame_ranges`: render metadata, never raises."""
     if not text:
         return {}
     try:
@@ -38,12 +39,33 @@ def _boundary_field_ranges(text: Optional[str]) -> dict[str, SourceRange]:
     if not isinstance(value, dict):
         return {}
     reader = NodeReader(value, spans, root)
-    out: dict[str, SourceRange] = {}
+    out: dict[tuple[str, str], SourceRange] = {}
     for key in ("input", "inputs"):
         if isinstance(value.get(key), dict):
-            out.update(reader.mapping_value_ranges(key))
-    out.update(reader.item_ranges("asserts"))
+            out.update(
+                {("input_decl", name): rng
+                 for name, rng in reader.mapping_value_ranges(key).items()}
+            )
     return out
+
+
+def _boundary_assert_ranges(text: Optional[str]) -> list[SourceRange | None]:
+    """The POSITIONAL ranges of the flow-level `asserts:` list, aligned 1:1 with it in author order.
+
+    The flow-boundary twin of the node-local `assert_ranges`: `lower_flow_asserts` consumes this to
+    stamp each lowered START/END assert's own `SourceRange` (a false boundary assert then carets its
+    own line), and to caret a bad-ref `LoadError` at the offending assert. Positional — NOT keyed by
+    text — so two identical flow asserts get distinct carets. `[]` for a spanless / uncomposable
+    flow; render metadata, never raises (mirrors `_boundary_field_ranges`)."""
+    if not text:
+        return []
+    try:
+        value, spans, root = load_with_spans(text, return_root=True)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(value, dict):
+        return []
+    return NodeReader(value, spans, root).item_range_list("asserts")
 
 
 def _section_lines(text: Optional[str]) -> dict[str, int]:
@@ -94,15 +116,16 @@ class SourceFrame:
             `node_id -> the node body's `SourceRange` in `text`` for the child's nodes.
             Empty (frame collapses to the call line) for a compact single-node def with no
             authored inner `nodes:` mapping.
-        field_ranges (`dict[str, dict[str, SourceRange]]`):
-            `node_id -> {field -> `SourceRange`}` — the kind-fallback / `output:` precision
-            used when the failing locator is `kind=field`.
+        field_ranges (`dict[str, dict[tuple[str, str], SourceRange]]`):
+            `node_id -> {(kind, key) -> `SourceRange`}` — the per-field precision, keyed by the
+            location's `(SourceSpan.kind, key)` (`kind ∈ {input, input_decl, field}`, never
+            `assert`), used when a failing locator resolves against this frame.
     """
 
     label: str
     text: str
     node_ranges: dict[str, SourceRange]
-    field_ranges: dict[str, dict[str, SourceRange]]
+    field_ranges: dict[str, dict[tuple[str, str], SourceRange]]
 
     def __deepcopy__(self, memo):
         # Frozen + render-only: every per-callsite `clone_child` deep-copies each child

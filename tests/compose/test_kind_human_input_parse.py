@@ -48,8 +48,8 @@ def test_human_input_parse_matches_descriptor_and_records_ranges():
         inputs={"ctx": "${input.ctx}"},
     )
     assert isinstance(desc.range, SourceRange)
-    assert isinstance(desc.field_ranges["prompt"], SourceRange)
-    assert isinstance(desc.field_ranges["inputs"], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "prompt")], SourceRange)
+    assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
 
 
 def test_human_input_build_returns_gate_and_wires_inputs():

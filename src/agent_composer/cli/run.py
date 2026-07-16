@@ -826,7 +826,7 @@ def _agent_providers(loaded, cli_cfg: Dict[str, Any]) -> List[str]:
     back to the CLI override then the process default, matching what generation resolves.
 
     Args:
-        loaded (`LoadedFlow`):
+        loaded (`ComposedFlow`):
             The compiled flow whose agent providers to enumerate.
         cli_cfg (`dict[str, Any]`):
             The `--provider`/`--model` CLI layer (may be empty) — the cascade's
@@ -871,7 +871,7 @@ def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
     key with no TTY re-raises the `RuntimeError` for `run` to surface cleanly.
 
     Args:
-        loaded (`LoadedFlow`):
+        loaded (`ComposedFlow`):
             The compiled flow whose agents' providers determine the keys to check.
         cli_cfg (`dict[str, Any]`):
             The `--provider`/`--model` CLI layer, threaded into provider resolution.

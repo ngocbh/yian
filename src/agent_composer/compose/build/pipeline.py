@@ -1,4 +1,4 @@
-"""The post-parse conductor: assembled sections -> a runnable `LoadedFlow`.
+"""The post-parse conductor: assembled sections -> a runnable `ComposedFlow`.
 
 `_assemble` is the pipeline shared by the top-level flow AND every in-file `defs:`
 callable:
@@ -9,10 +9,10 @@ callable:
   -> synthesize the START_ID/END_ID boundary over ALL edges -> reject cycles + check
   if/else handles -> CompiledFlow.from_parts.
 
-Holds `LoadedFlow` (the compiled+validated flow the engine runs) plus the flow
+Holds `ComposedFlow` (the compiled+validated flow the engine runs) plus the flow
 `outputs:` reader (`_flow_outputs`). Ladder position: the LAST phase before the
 loader — it may import every earlier phase (helpers/nodes/parse/desugar/edges/
-validate/build.boundary); the loader imports `_assemble`/`LoadedFlow` back from
+validate/build.boundary); the loader imports `_assemble`/`ComposedFlow` back from
 here. It imports NOTHING from `loader.py` (that would be a back-edge).
 """
 
@@ -56,7 +56,7 @@ _SINGLE_OUTPUT_NAME = "result"
 
 
 @dataclass(frozen=True)
-class LoadedFlow:
+class ComposedFlow:
     """
     A compiled, validated flow ready to run.
 
@@ -135,8 +135,8 @@ def _assemble(
     source: Optional[SourceFrame] = None,
     boundary_field_ranges: Optional[dict] = None,
     boundary_assert_ranges: Optional[list] = None,
-) -> LoadedFlow:
-    """Assemble parsed sections into a `LoadedFlow` — the post-parse pipeline shared by
+) -> ComposedFlow:
+    """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
 
       flow-input decls -> build every node kind-blind (`desc.build(ctx)`; a case lowers
@@ -324,7 +324,7 @@ def _assemble(
 
     compiled = CompiledFlow.from_parts(nodes, edges, outputs=flow_outputs, wiring=flow_wiring,
                                        flow_llm_config=flow_llm_config or {})
-    return LoadedFlow(
+    return ComposedFlow(
         compiled=compiled, input=inputs,
         version=version, name=name, description=description, source=source,
     )

@@ -16,9 +16,9 @@ These are exported from the top-level `agent_composer` package:
 
 | Name | What it is |
 |------|------------|
-| `load_flow` | parse + compile + validate Compose-YAML into a `LoadedFlow` |
-| `run_flow` | drive a `LoadedFlow` to a terminal, returning a `RunResult` |
-| `LoadedFlow` | a compiled, validated flow ready to run |
+| `load_flow` | parse + compile + validate Compose-YAML into a `ComposedFlow` |
+| `run_flow` | drive a `ComposedFlow` to a terminal, returning a `RunResult` |
+| `ComposedFlow` | a compiled, validated flow ready to run |
 | `CompiledFlow` | the compiled flow IR (`loaded.compiled`) |
 | `FlowEngine` | the execution runtime (you rarely touch it directly) |
 | `TypedVariablePool` | the typed value pool |
@@ -36,7 +36,7 @@ from agent_composer.run import resume_flow, resume_command, RunResult
 ## `load_flow`
 
 ```python
-load_flow(text: str, *, search_paths: list[str | Path] = ...) -> LoadedFlow
+load_flow(text: str, *, search_paths: list[str | Path] = ...) -> ComposedFlow
 ```
 
 Parses, compiles, and validates the flow `text`. Pass `search_paths` so that a
@@ -48,7 +48,7 @@ on a bad flow (compile-time errors surface here, not at run time).
 
 ```python
 run_flow(
-    loaded: LoadedFlow,
+    loaded: ComposedFlow,
     inputs: dict[str, Any],
     *,
     run_id: str | None = None,
@@ -109,7 +109,7 @@ print(result.status, result.output)
 
 ```python
 resume_flow(
-    loaded: LoadedFlow,
+    loaded: ComposedFlow,
     *,
     engine: FlowEngine | None = None,
     checkpoint: Any = None,
@@ -127,7 +127,7 @@ cross-process — from `result.checkpoint`, e.g. deserialized after a restart).
 ### `resume_command`
 
 ```python
-resume_command(loaded: LoadedFlow, reason: Any, value: Any) -> Command
+resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> Command
 ```
 
 Maps a host-resumable `PauseReason` plus an answer `value` to the engine command

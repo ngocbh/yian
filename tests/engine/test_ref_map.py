@@ -1,10 +1,10 @@
 """`call` build + child-signature resolution — LOAD/COMPILE facts.
 
-The loader resolves a callable to a `LoadedFlow`, derives its signature, re-exports the
+The loader resolves a callable to a `ComposedFlow`, derives its signature, re-exports the
 codomain, and name/arity-checks bindings. (End-to-end RUN lives in test_ref_run.py /
 test_map.py; the cross-flow type check e06 in test_errors.py.) These assert:
 
-- seed 03 (`research-one`) loads as a child flow (its `LoadedFlow` exposes a
+- seed 03 (`research-one`) loads as a child flow (its `ComposedFlow` exposes a
   resolvable child SIGNATURE — declared `InputDecl`s + the single codomain `Type`);
 - seed 04 (a plain `call` over 03) loads+compiles; the built `CallNode` (REF)
   `output_type` re-exports the child's single codomain `Type` (a `{report, asof}` record)
@@ -23,7 +23,7 @@ import pytest
 from agent_composer.nodes.call import CallNode   # nodes/call/__init__.py
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind
-from agent_composer.compose import LoadedFlow, LoadError, load_flow
+from agent_composer.compose import ComposedFlow, LoadError, load_flow
 from agent_composer.compose.nodes.resolver import ChildSignature, child_signature
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -33,7 +33,7 @@ def _text(name: str) -> str:
     return (_SEEDS / name).read_text()
 
 
-# A test-local child resolver: child flow id -> its loaded `LoadedFlow` (the loader
+# A test-local child resolver: child flow id -> its loaded `ComposedFlow` (the loader
 # derives the signature + bakes the compiled child). Seeds 04/05 ref `research-one`
 # (= seed 03's id); we load seed 03 once and hand it back by id.
 def _make_resolver():
@@ -55,7 +55,7 @@ def _make_resolver():
 
 def test_seed03_loads_as_child_flow():
     loaded = load_flow(_text("03-research-one.yaml"))
-    assert isinstance(loaded, LoadedFlow)
+    assert isinstance(loaded, ComposedFlow)
     sig = child_signature(loaded)
     assert isinstance(sig, ChildSignature)
     # declared inputs: topic (required str) + as_of (date, default today -> not required).
@@ -74,7 +74,7 @@ def test_seed03_loads_as_child_flow():
 
 def test_seed04_ref_loads_and_reexports_child_output():
     loaded = load_flow(_text("04-call.yaml"), search_paths=[_SEEDS])
-    assert isinstance(loaded, LoadedFlow)
+    assert isinstance(loaded, ComposedFlow)
     research = loaded.compiled.nodes["research"]
     assert isinstance(research, CallNode)               # REF -> CallNode
     assert not hasattr(research, "over")               # REF carries no over/parallel
@@ -107,7 +107,7 @@ def test_seed04_downstream_dotted_ref_validates_against_child_record():
 
 def test_seed05_map_loads_with_list_output_and_parallel():
     loaded = load_flow(_text("05-call-map.yaml"), search_paths=[_SEEDS])
-    assert isinstance(loaded, LoadedFlow)
+    assert isinstance(loaded, ComposedFlow)
     research_each = loaded.compiled.nodes["research_each"]
     assert isinstance(research_each, MapNode)          # kind: map -> MapNode
     assert not hasattr(research_each, "over")          # the SOURCE rides flow.wiring, not the node
@@ -230,4 +230,4 @@ def test_ref_map_without_resolver_is_loud():
 def test_refless_flow_still_loads_without_resolver():
     # a refless flow (no call) must still load with NO resolver.
     loaded = load_flow(_text("01-structured-agent.yaml"))
-    assert isinstance(loaded, LoadedFlow)
+    assert isinstance(loaded, ComposedFlow)

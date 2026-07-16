@@ -273,14 +273,14 @@ def test_end_post_assert_reads_output() -> None:
 # --------------------------------------------------------------------------- #
 
 
-# LoadedFlow/RunResult carry .input
+# ComposedFlow/RunResult carry .input
 def test_python_carriers_singular() -> None:
     """All Python carriers expose `.input` (singular); `.inputs` no longer exists."""
-    from agent_composer.compose.loader import LoadedFlow
+    from agent_composer.compose.loader import ComposedFlow
     from agent_composer.run import RunResult
 
-    assert "input" in LoadedFlow.__dataclass_fields__
-    assert "inputs" not in LoadedFlow.__dataclass_fields__
+    assert "input" in ComposedFlow.__dataclass_fields__
+    assert "inputs" not in ComposedFlow.__dataclass_fields__
     # RunResult is a dataclass-style class with `inputs: Dict[str, Any]` field today.
     assert "input" in RunResult.__dataclass_fields__
     assert "inputs" not in RunResult.__dataclass_fields__

@@ -31,7 +31,7 @@ from agent_composer.compose.nodes.resolver import (
 from agent_composer.compose.desugar.inline_calls import desugar_inline_calls
 from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.loader import LoadedFlow, load_flow
+from agent_composer.compose.loader import ComposedFlow, load_flow
 from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CallDescriptor,
@@ -76,6 +76,6 @@ __all__ = [
     "reject_cycles",
     "validate_references",
     "desugar_inline_calls",
-    "LoadedFlow",
+    "ComposedFlow",
     "load_flow",
 ]

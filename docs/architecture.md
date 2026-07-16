@@ -9,7 +9,7 @@
 There are only two big moves, and one long-lived object between them:
 
 ```
-   flow.yaml  ──load──▶  LoadedFlow  ──run──▶  RunResult
+   flow.yaml  ──load──▶  ComposedFlow  ──run──▶  RunResult
    (text)               (a typed graph)       (output | error | paused)
 ```
 
@@ -24,7 +24,7 @@ Everything else on this page is just naming the pieces of those two moves.
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.run import run_flow
 
-loaded = load_flow(open("flow.yaml").read())      # text  -> LoadedFlow
+loaded = load_flow(open("flow.yaml").read())      # text  -> ComposedFlow
 result = run_flow(loaded, {"question": "..."})    # graph -> RunResult
 print(result.output)
 ```
@@ -54,7 +54,7 @@ stages: **parse → desugar → wire → check → freeze.**
   │  reject_cycles         the graph must be a DAG
   │  check_case_handles    every branch has a home
   ▼
- CompiledFlow  (wrapped, with input decls + asserts + source frame, as a LoadedFlow)
+ CompiledFlow  (wrapped, with input decls + asserts + source frame, as a ComposedFlow)
 ```
 
 Two ideas make this phase tractable:
@@ -69,7 +69,7 @@ its `build()`, and registers them into the `KINDS` table. Cross-node graph passe
 in the ordered phase packages `compose/parse/ → compose/desugar/ → compose/edges/ →
 compose/validate/ → compose/build/`. The engine core sees none of it.
 
-The output is a **`LoadedFlow`**: a `CompiledFlow` (the immutable topology) plus the
+The output is a **`ComposedFlow`**: a `CompiledFlow` (the immutable topology) plus the
 typed `input:` declarations, the `asserts`, and a render-only *source frame* used to
 draw error tracebacks that point back at your YAML.
 

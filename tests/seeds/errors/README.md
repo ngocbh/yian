@@ -21,6 +21,13 @@ detect.** Concretely:
   its header, and gets a matching assertion in `tests/engine/test_errors.py`.
 - A failure mode whose check isn't built yet goes under `_future/errors/` with its milestone —
   never assert an error the engine can't yet capture.
+- **A failure the engine DOES catch but LOCATES WRONG is a third case** — it belongs here, marked ⚠
+  in the tables below, and its test asserts the **current, incorrect** caret. It is a *reproduction*,
+  not a specification: the header states the expected caret beside the current one, and **the test
+  should FAIL when the bug is fixed** — that failure is the signal, and the fixer updates it to the
+  expected line. Rationale: a diagnostics bug argued in prose is a bug nobody can confirm; the point
+  of the fixture is that a reader can run it. (This is distinct from `_future/`, which is for checks
+  that don't exist at all — here the check fires, it just points at the wrong line.)
 
 A negative gallery is half the value of a type system: it pins what *can't* be written, not
 just what can.
@@ -42,6 +49,8 @@ just what can.
 | `e15-prompt-undeclared-input.yaml` | an AGENT prompt references a non-declared input | prompt-L1 |
 | `e16-bad-typedef-name.yaml` | a `typedefs:` name shadows a typing constructor | `read_typedefs` rules |
 | `e17-case-nonexhaustive.yaml` | a `case … on` enum leaves a tag uncovered, no `else:` | exhaustiveness check |
+| `e37-synth-node-inherits-host-ranges.yaml` | a bad ref in an inline `call(...)` — the synth node is handed the HOST's `field_ranges` | ⚠ **known-wrong caret** (#88 reopened): cross-node collision the `(kind,key)` tuple can't fix |
+| `e38-case-when-ref-locates-node-header.yaml` | a bad ref inside a `case`'s `when:` — desugared to a synthetic `__r1` input | ⚠ **known-wrong caret** (#88 reopened): a locator naming something the author never wrote |
 | `e30-inline-syntax-error.yaml` | a malformed inline `code:` body (`return (`) | inline syntax gate → located `LoadError` (padded to the real line) |
 | `e31-inline-no-return.yaml` | an inline `code:` body with no `return` | has-`return` load gate → located `LoadError` |
 | `e32-malformed-code-ref.yaml` | a `code:` value that is neither a valid ref nor inline source (dotted, no colon) | reject bucket → `LoadError` with a "did you mean" hint |
@@ -66,6 +75,7 @@ just what can.
 | `e27-inline-code-raises.yaml` | an inline `code:` body that raises (run `topic: X`) | inline analogue of e20 (in-process raise → `RunFailed`) |
 | `e28-inline-wrong-type.yaml` | an inline `code:` body returns the wrong type for its `output:` | typed write boundary (reused, not reinvented) |
 | `e29-inline-nonserializable.yaml` | an inline `code:` body returns a nested non-serializable value | node's deep serialize-once check → fails AT the node |
+| `e34-dup-assert.yaml` | two IDENTICAL post-asserts on one node — both false | asserts located BY POSITION (caret at the first), not by their non-unique text |
 
 ## Deferred (`_future/errors/`, until the check lands)
 

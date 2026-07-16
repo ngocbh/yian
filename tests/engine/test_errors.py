@@ -338,6 +338,47 @@ def test_duplicate_asserts_caret_at_first_occurrence():
 
 
 # --------------------------------------------------------------------------- #
+# KNOWN-WRONG location, pinned so the bug is reproducible and its fix is loud (#88, reopened).
+#
+# These two assert the CURRENT, INCORRECT caret. They are reproductions, not specifications: each
+# fixture's header states the expected caret next to the current one. **When the underlying bug is
+# fixed these tests SHOULD fail** — that is the signal, and the fixer updates them to the expected
+# line. They are here because a bug nobody can run is a bug nobody can confirm.
+# --------------------------------------------------------------------------- #
+
+
+def test_synth_node_inherits_host_ranges_locates_at_host_line():
+    # e37 (#88, reopened): the inline `call(...)` on L30 desugars to `__call_0`, which is handed the
+    # HOST node's field_ranges verbatim (inline_calls.py:318). Its ("input","topic") therefore points
+    # at the HOST's `topic:` on L29 rather than its own directive on L30 — a cross-node collision the
+    # (kind,key) tuple cannot fix, because the key is correct and the MAP is foreign.
+    #
+    # CURRENT (asserted): the load-time ref-scan uses the `inputs:` BLOCK, anchored L29. Wrong, but
+    #   it contains L30. EXPECTED eventually: L30.
+    # NOTE: turning on per-entry resolution (#87 / PR #104) makes this WORSE, not better — it
+    #   resolves ("input","topic") to L29 alone, marking a valid line and leaving L30 unmarked.
+    #   That is why #87 is blocked on deciding what location a synthesized node gets.
+    err = _load_error("e37-synth-node-inherits-host-ranges.yaml")
+    assert "unresolved references" in str(err)
+    assert "__call_0" in str(err) and "'topic'" in str(err)  # the SYNTH node's input, not the host's
+    assert err.range is not None
+    assert err.range.start_line == 29  # WRONG (host's `topic:`); expected 30 once the bug is fixed
+
+
+def test_case_when_ref_locates_at_node_header():
+    # e38 (#88, reopened): a dangling ref in `cases[1].when` (L36). case.py:17-18 hoists it into a
+    # synthetic input `__r1`, so the locator names `__r1` — a name that appears nowhere in the file.
+    # No key scheme can resolve it: the STAMP could exist for ("cases",1,"when") and the LOCATOR
+    # would still be asking for `__r1`. This is the class of location failure that "descend into the
+    # container" cannot fix, and it is why `cases:` has no per-entry precision.
+    err = _load_error("e38-case-when-ref-locates-node-header.yaml")
+    assert "unresolved references" in str(err)
+    assert "'__r1'" in str(err)  # the synthetic name — not `when`, not anything the author wrote
+    assert err.range is not None
+    assert err.range.start_line == 31  # WRONG (the `gate:` header); expected 36 once fixed
+
+
+# --------------------------------------------------------------------------- #
 # Deferred negative fixtures (NOTED, not asserted yet):
 #   e05 — bare-tags union  -> read_typedefs mechanism (already covered)
 # e08 — input type enforcement at the flow boundary — now asserted in the runtime gallery above.

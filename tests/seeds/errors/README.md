@@ -49,8 +49,11 @@ just what can.
 | `e15-prompt-undeclared-input.yaml` | an AGENT prompt references a non-declared input | prompt-L1 |
 | `e16-bad-typedef-name.yaml` | a `typedefs:` name shadows a typing constructor | `read_typedefs` rules |
 | `e17-case-nonexhaustive.yaml` | a `case … on` enum leaves a tag uncovered, no `else:` | exhaustiveness check |
+| `e33-input-named-like-field.yaml` | an input named exactly like a flat field (`env`) | #88 case 2: `(kind,key)` keeps the field's range distinct from the like-named input's |
 | `e37-synth-node-inherits-host-ranges.yaml` | a bad ref in an inline `call(...)` — the synth node is handed the HOST's `field_ranges` | ⚠ **known-wrong caret** (#88 reopened): cross-node collision the `(kind,key)` tuple can't fix |
 | `e38-case-when-ref-locates-node-header.yaml` | a bad ref inside a `case`'s `when:` — desugared to a synthetic `__r1` input | ⚠ **known-wrong caret** (#88 reopened): a locator naming something the author never wrote |
+| `e39-llm-config-no-range.yaml` | a bad `llm_config:` entry (`provider: bogus_provider`) | ⚠ **no range at all**: the message names `provider`, then attaches `range=None`; frame via the legacy line-map |
+| `e40-agent-controls-no-range.yaml` | an unknown AGENT `controls:` entry | ⚠ **no range at all**: e39's twin on a sequence |
 | `e30-inline-syntax-error.yaml` | a malformed inline `code:` body (`return (`) | inline syntax gate → located `LoadError` (padded to the real line) |
 | `e31-inline-no-return.yaml` | an inline `code:` body with no `return` | has-`return` load gate → located `LoadError` |
 | `e32-malformed-code-ref.yaml` | a `code:` value that is neither a valid ref nor inline source (dotted, no colon) | reject bucket → `LoadError` with a "did you mean" hint |
@@ -75,11 +78,22 @@ just what can.
 | `e27-inline-code-raises.yaml` | an inline `code:` body that raises (run `topic: X`) | inline analogue of e20 (in-process raise → `RunFailed`) |
 | `e28-inline-wrong-type.yaml` | an inline `code:` body returns the wrong type for its `output:` | typed write boundary (reused, not reinvented) |
 | `e29-inline-nonserializable.yaml` | an inline `code:` body returns a nested non-serializable value | node's deep serialize-once check → fails AT the node |
-| `e34-dup-assert.yaml` | two IDENTICAL post-asserts on one node — both false | asserts located BY POSITION (caret at the first), not by their non-unique text |
+| `e41-structured-output-no-range.yaml` | a structured `output:` whose ONE bad field fails validation | ⚠ **known-wrong**: the locator names the whole field (never `score`), and `range=None` — the funnel asks `("field","output")` while the map is keyed `"outputs"` |
 
 ## Deferred (`_future/errors/`, until the check lands)
 
-_None._ (`e08` landed — typed input boundary; `e04`/`e05` were dropped with the
+These **load and run clean today** — the engine has no check to fire, so they assert nothing. They
+exist because #88's container table reads as if `env:`/`tools:` are one absent line away from a
+precise caret; they are not. Both are the clean proof that the **stamp was never the bottleneck**: a
+per-entry range for `("env","API_KEY")` would be correct, free under a path model, and asked for by
+nothing, ever.
+
+| File | Does today | Blocked on |
+|---|---|---|
+| `f01-env-ref-not-interpolated.yaml` | `env: {API_KEY: ${nope.output}}` loads AND runs — the ref is passed through as a literal string; `env: {API_KEY: 123}` also passes (only env KEYS are checked) | **no issue filed.** The silent `${...}` pass-through looks like a bug in its own right; out of scope for #88 |
+| `f02-agent-tools-no-load-check.yaml` | an unknown id in an AGENT `tools:` list survives compile; surfaces at run as a bare `ValueError` from inside the mode, with no locator | **no issue filed.** Not a dup of `e23`, which pins a TOOL node's `tool_id:` (that one IS checked) |
+
+(`e08` landed — typed input boundary; `e04`/`e05` were dropped with the
 `kind: match` + payload-union design — tagged data is a discriminant record routed by
 `case … on <field>`.)
 

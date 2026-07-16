@@ -1,0 +1,33 @@
+# f01 — `env:` values are NEVER interpolated and NEVER validated: this flow LOADS AND RUNS CLEAN.
+# No milestone owns this yet — no issue filed. DEFERRED because the engine cannot capture it at all.
+#
+# Both of these pass silently today:
+#   env: {API_KEY: ${nope.output}}   -> the ref is not resolved; the literal string "${nope.output}"
+#                                       is handed to the node as the env var's value
+#   env: {API_KEY: 123}              -> only env KEYS are checked for str-ness
+#                                       (compose/nodes/base.py:231 validates the mapping + its keys)
+#
+# WHY IT'S HERE: #88's reading that `env:` is a container "we just never descended into" implies a
+# caret is one absent line away. It isn't — there is NO FAILURE TO POINT AT. A per-entry range for
+# ("env","API_KEY") would be correct, free under a path model, and asked for by nothing, ever. `env:`
+# is the cleanest proof that the STAMP was never the bottleneck: the LOCATOR is, and here there is no
+# error to carry one.
+#
+# The silent `${...}` pass-through looks like a real bug in its own right (a ref that reads as a ref
+# and isn't one), but it is out of scope for #88 and has no issue yet — hence `_future/`, not
+# `errors/`, and no assertion.
+#
+#   CURRENT:  loads OK, runs OK, status="succeeded". API_KEY == the literal "${nope.output}".
+#   EXPECTED: undecided — either interpolate env values, or reject a `${...}` there loudly.
+id: fut-env-ref-not-interpolated
+name: fut_env_ref_not_interpolated
+nodes:
+  calc:
+    kind: code
+    env:
+      API_KEY: ${nope.output}      # neither resolved nor rejected — passed through as a literal
+      RETRIES: 123                 # not a string; not rejected either
+    output: int
+    code: |
+      return 1
+output: ${calc.output}

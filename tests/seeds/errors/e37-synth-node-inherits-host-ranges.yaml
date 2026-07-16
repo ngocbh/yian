@@ -13,11 +13,11 @@
 # CORRECT, the map belongs to another node.
 #
 # The failure is `node '__call_0' input 'topic'`.
-#   CURRENT (main):     caret L29,L30,L31 — the `inputs:` BLOCK. Wrong, but CONTAINS the error.
-#                       (L31 `output: str` is the separate #99 half-open overshoot, fixed by #105.)
-#   CURRENT (PR #104):  caret L29 ALONE — a VALID line marked, the real error on L30 unmarked.
-#                       Turning on per-entry resolution makes this case strictly WORSE.
-#   EXPECTED:           caret L30 — the `call(...)` directive the synth node came from.
+#   CURRENT (main, post-#104): caret L29 ALONE — per-entry resolution (#104) resolves
+#                       ("input","topic") to the HOST's `topic:`, marking a VALID line and leaving
+#                       the real error on L30 unmarked. (Before #104 it marked the whole `inputs:`
+#                       block L29-31, which at least CONTAINED L30 — per-entry made this case worse.)
+#   EXPECTED:           caret L30 — the `call(...)` directive the synth node came from. See #106.
 id: err-synth-inherits-host-ranges
 name: err_synth_inherits_host_ranges
 input:

@@ -337,14 +337,84 @@ def test_duplicate_asserts_caret_at_first_occurrence():
     assert result.range is not None and result.range.start_line == 12
 
 
+def test_input_named_like_a_field_does_not_collide():
+    # e33 (#88 case 2) — the one seed PR #98's plan promised and never shipped. The node has an
+    # `env:` FIELD (value L32) and an input literally named `env` (L35). Under the old flat
+    # `dict[str, SourceRange]` both keyed the bare string "env" and the later stamp won, so a caret
+    # could land on the unrelated construct. The (kind, key) tuple keeps them distinct.
+    #
+    # Asserts CORRECT behavior — the regression pin for the part of #88 that IS fixed.
+    text = (_ERRORS / "e33-input-named-like-field.yaml").read_text()
+    fr = load_flow(text.replace("${nope.output}", '"lit"')).compiled.nodes["calc"].field_ranges
+    assert fr[("field", "env")].start_line == 32  # the `env:` field's VALUE
+    assert fr[("input", "env")].start_line == 35  # the input NAMED `env`
+    assert fr[("field", "env")] != fr[("input", "env")]  # the collision #88 reported
+
+    err = _load_error("e33-input-named-like-field.yaml")
+    assert "unresolved references" in str(err) and "'env'" in str(err)
+    assert err.range is not None
+    # per-entry resolution (#87, PR #104) lands ON the offending `env:` input (L35), never L32 —
+    # a collision would have put the caret on the unrelated `env:` field value instead.
+    assert err.range.start_line == 35
+    assert err.range.start_line != 32
+
+
 # --------------------------------------------------------------------------- #
-# KNOWN-WRONG location, pinned so the bug is reproducible and its fix is loud (#88, reopened).
+# KNOWN-WRONG location, pinned so each bug is reproducible and its fix is loud (#88, reopened).
 #
-# These two assert the CURRENT, INCORRECT caret. They are reproductions, not specifications: each
-# fixture's header states the expected caret next to the current one. **When the underlying bug is
-# fixed these tests SHOULD fail** — that is the signal, and the fixer updates them to the expected
-# line. They are here because a bug nobody can run is a bug nobody can confirm.
+# These assert the CURRENT, INCORRECT diagnostic — either a caret on the wrong line (e37/e38) or
+# no range at all (e39/e40/e41). They are reproductions, not specifications: each fixture's header
+# states the expected diagnostic next to the current one. **When the underlying bug is fixed these
+# tests SHOULD fail** — that is the signal, and the fixer updates them to the expected line. They
+# are here because a bug nobody can run is a bug nobody can confirm.
 # --------------------------------------------------------------------------- #
+
+
+def test_llm_config_error_names_the_key_but_carries_no_range():
+    # e39: the message says `provider` — the failure site KNOWS which entry is bad — and then
+    # attaches range=None. The caret comes from the LEGACY LINE-MAP (the node header, L24) while the
+    # offending line is L27.
+    #
+    # The point for #88: descending into `llm_config:` would stamp a range nothing asks for. The
+    # missing half is the LOCATOR, not the stamp.
+    # ⚠ Prerequisite for #91/L4c: this renders ONLY via the legacy line — retiring line-maps without
+    # giving it a range= first would drop its frame entirely.
+    err = _load_error("e39-llm-config-no-range.yaml")
+    assert "llm_config" in str(err) and "provider" in str(err)  # the entry IS named
+    assert err.range is None                                     # ...and no range is attached
+    assert err.line == 24  # the node header, via the legacy line-map; expected 27 (the `provider:`)
+
+
+def test_agent_controls_error_names_the_item_but_carries_no_range():
+    # e40: e39's twin one container-shape over (a sequence, not a mapping). The message names
+    # `nope_control`; range is None; the frame is the node header via the legacy line-map.
+    err = _load_error("e40-agent-controls-no-range.yaml")
+    assert "unknown control tool" in str(err) and "nope_control" in str(err)  # the item IS named
+    assert err.range is None                                                   # ...no range
+    assert err.line == 22  # the node header; expected 25 (the `controls:` entry)
+
+
+def test_structured_output_failure_names_whole_field_and_range_is_none():
+    # e41: TWO defects in one run.
+    # (1) granularity — `score:` is bad, `claim:` is fine, but the locator names the WHOLE field and
+    #     the message never says `score`. A stamp for ("outputs","score") would go unused.
+    # (2) the funnel misses entirely -> range=None. engine.py:472 mints key="output" (SINGULAR);
+    #     field_ranges is keyed "outputs" (PLURAL, post-_back_map_input_output), so
+    #     eval_node.py:149's .get(("field","output")) misses on EVERY output-validation failure.
+    #     The CLI hides it via _FIELD_KEY_ALIAS — but a LIBRARY CALLER gets range=None. That is
+    #     #81's opening complaint, live.
+    result = run_flow(load_flow((_ERRORS / "e41-structured-output-no-range.yaml").read_text()), {})
+    assert result.status == "failed"
+    assert "does not match declared type int" in str(result.error)
+    assert "score" not in str(result.error)  # the failing field is never named
+    assert result.locator is not None
+    assert result.locator.kind == "field" and result.locator.key == "output"  # not `score`
+    assert result.range is None  # the singular/plural drift; the CLI recovers via the alias
+
+    # the range the funnel SHOULD have found is present under the plural key
+    node = load_flow((_ERRORS / "e41-structured-output-no-range.yaml").read_text()).compiled.nodes["calc"]
+    assert node.field_ranges.get(("field", "output")) is None      # what the funnel asks for
+    assert node.field_ranges.get(("field", "outputs")) is not None  # what is actually stored
 
 
 def test_synth_node_inherits_host_ranges_locates_at_host_line():
@@ -353,16 +423,15 @@ def test_synth_node_inherits_host_ranges_locates_at_host_line():
     # at the HOST's `topic:` on L29 rather than its own directive on L30 — a cross-node collision the
     # (kind,key) tuple cannot fix, because the key is correct and the MAP is foreign.
     #
-    # CURRENT (asserted): the load-time ref-scan uses the `inputs:` BLOCK, anchored L29. Wrong, but
-    #   it contains L30. EXPECTED eventually: L30.
-    # NOTE: turning on per-entry resolution (#87 / PR #104) makes this WORSE, not better — it
-    #   resolves ("input","topic") to L29 alone, marking a valid line and leaving L30 unmarked.
-    #   That is why #87 is blocked on deciding what location a synthesized node gets.
+    # CURRENT (asserted): with per-entry resolution now on (#87, PR #104), ("input","topic") resolves
+    #   to the HOST's `topic:` on L29 ALONE — a VALID line marked, the real error on L30 unmarked.
+    #   Per-entry made this case strictly worse (it used to mark the whole block, which contained
+    #   L30). EXPECTED: L30 — the `call(...)` directive. The synth node needs its own provenance; #106.
     err = _load_error("e37-synth-node-inherits-host-ranges.yaml")
     assert "unresolved references" in str(err)
     assert "__call_0" in str(err) and "'topic'" in str(err)  # the SYNTH node's input, not the host's
     assert err.range is not None
-    assert err.range.start_line == 29  # WRONG (host's `topic:`); expected 30 once the bug is fixed
+    assert err.range.start_line == 29  # WRONG (host's `topic:`); expected 30 once #106 is fixed
 
 
 def test_case_when_ref_locates_at_node_header():

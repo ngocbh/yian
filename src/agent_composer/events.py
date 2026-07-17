@@ -62,12 +62,41 @@ class SourceRange:
     last covered column (half-open) so a zero-width caret is start == end. Produced by
     the compose loader from PyYAML marks and by the funnel that resolves a symbolic
     `SourceSpan` key to the node's recorded range.
+
+    Because the end is EXCLUSIVE, `end_line` is not necessarily a line this span covers —
+    use `covered_lines` to render it rather than reading `end_line` directly.
     """
 
     start_line: int
     start_col: int
     end_line: int
     end_col: int
+
+    def covered_lines(self, source_text: str) -> list[int]:
+        """The 1-based lines this span actually covers, in order — what a renderer highlights.
+
+        The end is EXCLUSIVE, so `end_line` is covered only if the span reaches real text on it.
+        A YAML block construct (a block mapping, or a `|-` scalar) ends at the START OF THE NEXT
+        TOKEN, which sits on a later line whose text before `end_col` is nothing but indentation —
+        that line holds none of this span and is dropped. Naively taking `end_line` is what makes
+        an error on one node's `code:` highlight the *next* node's header.
+
+        Args:
+            source_text (`str`): the full flow YAML this range was resolved against — needed to
+                tell "the end stops just past real text" from "the end is only indentation".
+
+        Returns:
+            `list[int]`: the covered lines, always non-empty and starting at `start_line` (a
+            zero-width caret, `start == end`, still marks its own line).
+        """
+        lines = source_text.splitlines()
+        last = self.end_line
+        # Text on `end_line` before the exclusive end. Out-of-bounds (a range past EOF) reads as
+        # blank and drops the line — defensive, not expected.
+        prefix = lines[last - 1][: self.end_col - 1] if 0 < last <= len(lines) else ""
+        if not prefix.strip():
+            last -= 1
+        return list(range(self.start_line, max(last, self.start_line) + 1))
 
 
 @dataclass(frozen=True)

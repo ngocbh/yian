@@ -299,20 +299,22 @@ def _render_frame_stack(frames, message: str) -> None:
 def render_diagnostic(diag: Diagnostic, source_text: str, title: str = "") -> None:
     """Render a `Diagnostic` as the CLI's one located error frame (the Step-8 funnel).
 
-    Boxes `diag.primary` — its `[start_line, end_line]` lines highlighted in `source_text` —
-    and prints `diag.message` below in red, the same boxed frame a compile/run error used to
-    get, now fed by a resolved `SourceRange` rather than a line lookup. When `diag.notes` is
-    non-empty (the outer call-traceback frames of a nested `call`/`map` failure, innermost
-    last) they render as a stacked "call traceback" header ABOVE the primary, mirroring a
-    Python traceback. Falls back to a plain `title: message` line when there is no primary
-    range (or it falls outside the source). Writes to `err_console`; `title` labels the
-    primary box (the flow filename)."""
+    Boxes `diag.primary` — the lines it COVERS highlighted in `source_text` — and prints
+    `diag.message` below in red, the same boxed frame a compile/run error used to get, now fed
+    by a resolved `SourceRange` rather than a line lookup. The range is half-open, so which
+    lines it covers is the range's own business (`SourceRange.covered_lines`) — reading
+    `end_line` here would highlight one line too many for a block construct, whose end mark
+    lands on the next token's line. When `diag.notes` is non-empty (the outer call-traceback
+    frames of a nested `call`/`map` failure, innermost last) they render as a stacked "call
+    traceback" header ABOVE the primary, mirroring a Python traceback. Falls back to a plain
+    `title: message` line when there is no primary range (or it falls outside the source).
+    Writes to `err_console`; `title` labels the primary box (the flow filename)."""
     if diag.notes:
         err_console.print(Text("call traceback (most recent call last):", style="red bold"))
         for note in diag.notes:
             err_console.print(Text(f"  {note}", style="dim"))
     primary = diag.primary
-    marks = list(range(primary.start_line, primary.end_line + 1)) if primary else []
+    marks = primary.covered_lines(source_text) if primary else []
     _render_source_frame(source_text, marks, title, diag.message)
 
 

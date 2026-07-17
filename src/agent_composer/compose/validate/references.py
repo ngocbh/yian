@@ -81,10 +81,12 @@ def validate_references(
     only resolvable/checked producers belong here — an opaque/None producer stays
     lenient). `outputs` is the raw flow `outputs:` section.
 
-    Each error anchors on the referencing field's `SourceRange`, resolved off the built
-    node's `field_ranges` (the node's `input:` mapping for an input ref, its `prompt:` for a
-    prompt ref). The transitional `node_lines` (node id -> source line) + `outputs_line`
-    (the `outputs:` section line) still feed `LoadError.line` for the line-based renderer.
+    Each error anchors on the referencing site's `SourceRange`, resolved off the built node's
+    `field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
+    binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
+    / `("field", "prompt")`), else the node header. The transitional `node_lines` (node id ->
+    source line) + `outputs_line` (the `outputs:` section line) still feed `LoadError.line`
+    for the line-based renderer.
     The aggregate `LoadError` carries the FIRST located error's line AND range (best-effort,
     since several sites may be wrong at once).
 
@@ -161,7 +163,10 @@ def validate_references(
             reserved = node.reserved_wiring_keys()
             input_rng = franges.get(("field", "inputs")) or node.range
             for key in reserved:
-                over_rng = franges.get(key) or input_rng
+                # A reserved wiring key (`over`) is a KIND FIELD, so its range is tagged
+                # `("field", key)` — not the bare key, which would never match and would
+                # silently anchor the error on the whole `input:` block instead.
+                over_rng = franges.get(("field", key)) or input_rng
                 scan(nwiring.get(key), f"node {node_id!r} map {key}", node_line, over_rng)
             for param, src in nwiring.items():
                 if param in reserved:
@@ -170,7 +175,7 @@ def validate_references(
                     src,
                     f"node {node_id!r} map input {param!r} from",
                     node_line,
-                    input_rng,
+                    franges.get(("input", param)) or input_rng,
                     extra_heads=("item",),
                 )
             continue
@@ -181,9 +186,14 @@ def validate_references(
         # `${<id>.output}` refs) — validated against the pool. The rewritten node-local
         # `${__rN}`/`${__on}` live in `node.cases` `when:` and are EXCLUDED here
         # (they resolve against the record).
+        # Anchor each error on the OFFENDING ENTRY, not the whole `input:` mapping: the parse
+        # loop already stamps a per-binding `("input", name)` range for every kind, so the block
+        # range is only the fallback (a desugared CASE's synthetic `__rN`/`__on` wiring params
+        # own no authored entry; a spanless flow has no ranges at all).
         input_rng = franges.get(("field", "inputs")) or node.range
         for param, src in flow_wiring.get(node_id, {}).items():
-            scan(src, f"node {node_id!r} input {param!r} from", node_line, input_rng)
+            scan(src, f"node {node_id!r} input {param!r} from", node_line,
+                 franges.get(("input", param)) or input_rng)
 
     # Flow outputs (the codomain): each binding `from:` checked like a node input —
     # located at the `outputs:` section line (dangling-head/dotted-field errors point here).

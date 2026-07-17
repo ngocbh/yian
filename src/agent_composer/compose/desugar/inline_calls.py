@@ -42,6 +42,7 @@ import re
 from typing import Any, Callable, Optional
 
 from agent_composer.events import SourceRange
+from agent_composer.nodes.base import FieldRanges
 from agent_composer.expr import (
     ExpressionError,
     expr_refs_of,
@@ -315,7 +316,7 @@ def _to_call_descriptor(
         inputs=dict(call.args),
         over=None,
         range=range,
-        field_ranges=dict(field_ranges) if field_ranges else {},
+        field_ranges=FieldRanges(field_ranges) if field_ranges else FieldRanges(),
     )
 
 

@@ -256,7 +256,13 @@ resolved to a line at the CLI boundary — never a text heuristic.
   **`SourceRange`** (start/end line+col, 1-based; in `events`) is attached. For an `input` /
   `input_decl` / `field` locator the funnel keys the node's recorded `field_ranges` on the
   locator's **`(kind, key)`** tuple — kind-blind (on the locator, never `node.kind`), and
-  `(kind, key)`-tagged so an input never collides with a like-named field. An **assert** is located
+  `(kind, key)`-tagged so an input never collides with a like-named field. `field_ranges` is a
+  **`FieldRanges`** (`nodes/base.py`), a dict subclass whose `get` **raises `TypeError` on a
+  non-tuple key**: a bare-string lookup can never match, and every caller falls back
+  (`or node.range`), so without the guard a wrong key silently yields a caret on the wrong line
+  — which is exactly how two dead lookups survived review and a green suite. Any new code path
+  that builds the map must keep the type (the parse stamp, `_finish`'s copy onto the runtime
+  node, the START boundary map, the inline-call desugar all do). An **assert** is located
   BY POSITION: the `run` wrapper resolves the failing assert's own `pre_assert_ranges[i]` /
   `post_assert_ranges[i]` (each aligned 1:1 with `pre_asserts` / `post_asserts`) and raises
   `NodeAssertFailed(range=…)` — so two identical assert texts get distinct carets (asserts are NOT

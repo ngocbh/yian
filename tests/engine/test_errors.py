@@ -279,13 +279,52 @@ def test_flow_input_type_failure_carries_range():
 def test_false_boundary_assert_carries_range():
     # e18: the flow-level `asserts:` item `input.window > 0` is on line 15; window <= 0 makes it
     # false before any node runs. The RunResult carries a concrete `range` boxing that assert
-    # line (resolved from the StartNode's flow-assert field_ranges keyed by the expr string).
+    # line — resolved BY POSITION off the StartNode's `pre_assert_ranges` (asserts are not in
+    # `field_ranges`: identical assert text is not a unique key, so they are located by index).
     result = run_flow(
         load_flow((_ERRORS / "e18-false-boundary-assert.yaml").read_text()),
         {"window": -5},
     )
     assert result.status == "failed"
     assert result.range is not None and result.range.start_line == 15
+
+
+def test_bad_input_ref_locates_the_offending_entry():
+    # e14 (#87): the node's `input:` block spans lines 10-12, but only `rid:` on line 11 is bad
+    # (`topic:` on 10 is valid; 12 is `output: str`, a different field). The range must box line
+    # 11 alone — the block range would highlight all three.
+    #
+    # NOTE this asserts on e14 deliberately: of every error seed, it is the ONLY node-input ref
+    # (e01/e03 are flow-output refs, which carry no range; e15 is the prompt path), so it IS the
+    # regression surface for per-binding location. Its bad entry is also the SECOND one, which
+    # proves the lookup is genuinely per-entry rather than accidentally "first entry wins".
+    # Reordering e14's inputs will break this — correctly.
+    err = _load_error("e14-unknown-system-ambient.yaml")
+    assert "bogus" in str(err)
+    assert err.range is not None
+    assert (err.range.start_line, err.range.end_line) == (11, 11)
+
+
+def test_bad_map_per_element_input_ref_locates_the_offending_entry():
+    # e36 (#87): the MAP per-element branch is not the same code as the plain-input branch — it
+    # reads `nwiring`, allows the `${item}` scope, and skips the reserved `over` key — so it gets
+    # its own pin. `extra:` is on line 33; the `input:` block spans 31-33.
+    err = _load_error("e36-bad-map-input-ref.yaml")
+    assert "unresolved references" in str(err)
+    assert "map input 'extra'" in str(err)
+    assert err.range is not None
+    assert (err.range.start_line, err.range.end_line) == (33, 33)
+
+
+def test_map_over_ref_locates_the_over_line():
+    # e35 (#101): a dangling ref in a MAP's reserved `over:` key (line 26). The range must box
+    # `over:` itself — NOT the `input:` block on 27-28, which is what the bare-string lookup
+    # `field_ranges.get("over")` silently degraded to once the map became tuple-keyed (#98).
+    err = _load_error("e35-bad-map-over-ref.yaml")
+    assert "unresolved references" in str(err)
+    assert "map over" in str(err)  # names the reserved key, not an input
+    assert err.range is not None
+    assert (err.range.start_line, err.range.end_line) == (26, 26)
 
 
 def test_duplicate_asserts_caret_at_first_occurrence():

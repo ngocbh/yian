@@ -140,10 +140,11 @@ class NodeReader:
         """For a SEQUENCE field, map each scalar item's text -> its own `SourceRange`.
 
         Descends `key`'s value node (a `SequenceNode`) and, for every scalar element,
-        records `element_text -> range`. Used to give each `asserts:` list item its own
-        caret (the runtime keys `node.field_ranges` on the raw assert string). Returns
-        `{}` in spanless mode, when the field is absent, or when it is not a sequence —
-        best-effort, never raising (unlike `range_of`).
+        records `element_text -> range`. Text-keyed, so DUPLICATE items collapse (last
+        wins) — which is why `asserts:` are located by POSITION instead, via the
+        `item_range_list` twin below. Returns `{}` in spanless mode, when the field is
+        absent, or when it is not a sequence — best-effort, never raising (unlike
+        `range_of`).
         """
         pair = self._pair(key)
         if pair is None:

@@ -1,6 +1,6 @@
 """Desugar pass: `${<case>.output}` binding refs -> branch coalesce over case leaves.
 
-`expand_case_outputs` (below) walks every binding field (node `inputs:` / TOOL `args:` /
+`expand_case_outputs` (below) walks every binding field (any node's `inputs:` /
 mapped-call `over:`) and the flow `outputs:` bindings, and rewrites a clean WHOLE-SPAN
 case-output ref `${<case>.output[.path]}` to a coalesce `${t1.output[.path] | t2.output… }`
 over the case's LEAF (non-case) branch targets. A case-value ref in any NON-clean binding
@@ -51,7 +51,7 @@ def expand_case_outputs(
     """Expand every `${<case>.output}` binding ref to a coalesce over the case's branch
     targets, returning `(new_descriptors, new_outputs)`.
 
-    Walks every binding field (node `inputs:` / TOOL `args:` / mapped-call `over:`) and
+    Walks every binding field (any node's `inputs:` / a mapped call's `over:`) and
     the flow `outputs:` bindings; rewrites a clean whole-span case-output ref to the
     branch coalesce. Rejects (located `LoadError`) a case-value ref in a non-clean
     binding position, or in a `case` condition (`on:`/`when:`) or an `assert` — those are

@@ -29,7 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Optional
 
-from agent_composer.nodes.base import Node
+from agent_composer.nodes.base import FieldRanges, Node
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.typesys.values import Type
 from agent_composer.typesys.types import TypeRegistry
@@ -128,7 +128,9 @@ class NodeDescriptor:
     inputs: dict[str, Any] = field(default_factory=dict)
     outputs: Any = None
     range: Optional[SourceRange] = field(default=None, compare=False)
-    field_ranges: dict[tuple[str, str], SourceRange] = field(default_factory=dict, compare=False)
+    # `(kind, key) -> SourceRange` for each authored NAMED site, guarded against a bare-key
+    # lookup (see `FieldRanges`). Stamped here at parse; copied onto the runtime node by `_finish`.
+    field_ranges: FieldRanges = field(default_factory=FieldRanges, compare=False)
     # Positional `asserts:` ranges — one entry per authored assert IN ORDER, aligned 1:1 with the
     # `asserts` list (`None` where no span was recorded). Stamped in `parse/nodes` via the reader's
     # `item_range_list`; split into the built node's `pre_assert_ranges`/`post_assert_ranges` (in
@@ -257,7 +259,7 @@ class NodeDescriptor:
         cls._check_keys(node_id, reader)
         body = reader.value
         own_range = reader._own_range()
-        ranges: dict[tuple[str, str], SourceRange] = {}
+        ranges: FieldRanges = FieldRanges()
         kwargs: dict[str, Any] = {"id": node_id}
         for key in cls.allowed - NodeDescriptor.allowed:  # this kind's OWN keys only
             if key not in body:
@@ -324,7 +326,11 @@ class NodeDescriptor:
         they cannot drift across the per-kind builds: copies this descriptor's `range` and a COPY
         of its `field_ranges` onto the runtime node (so diagnostics after build still caret back
         to the source), then returns the `BuildResult(node, wiring, edges)`. `edges` defaults to
-        `()` (leaf/call/loop own no edges); `case` passes its data+control edges."""
+        `()` (leaf/call/loop own no edges); `case` passes its data+control edges.
+
+        The copy is a `FieldRanges`, not a plain `dict` — the runtime node is where the lookups
+        actually happen, so copying into a bare dict would drop the bare-key guard precisely
+        where it earns its keep."""
         node.range = self.range
-        node.field_ranges = dict(self.field_ranges)
+        node.field_ranges = FieldRanges(self.field_ranges)
         return BuildResult(node=node, wiring=wiring, edges=tuple(edges))

@@ -143,9 +143,10 @@ class NodeFailed:
     # an assert expr); None when no sub-line is determinable (a code raise) -> the
     # CLI falls back to the node's best sub-line / header.
     locator: Optional[SourceSpan] = None
-    # The concrete source span the funnel resolves ALONGSIDE the symbolic locator, by
-    # looking up the node's recorded `field_ranges[locator.key]` (kind-blind — keyed only
-    # on the locator key). None when the node records no range for that key. The CLI
+    # The concrete source span the funnel resolves ALONGSIDE the symbolic locator, by looking
+    # up the node's recorded `field_ranges[(locator.kind, locator.key)]` (kind-blind — keyed on
+    # the LOCATOR, never on `node.kind`; the kind tag is what keeps a field from colliding with
+    # a like-named input). None when the node records no range for that (kind, key). The CLI
     # prefers this over resolving the symbolic `locator`. Additive/coexistent with `locator`.
     range: Optional[SourceRange] = None
     # The formatted Python traceback of the raising call, captured at the node-failure
@@ -215,10 +216,12 @@ class RunFailed:
     # Flow-level precise location (a boundary assert expr, a failed input decl);
     # None when not determinable -> the CLI falls back to a plain message.
     locator: Optional[SourceSpan] = None
-    # The concrete source span resolved ALONGSIDE the symbolic locator (the flow-boundary
-    # twin of NodeFailed.range): the failing input decl's declaration line or the boundary
-    # assert expr's line, looked up on the StartNode's `field_ranges[locator.key]`. None when
-    # no range is recorded for that key. The CLI prefers this over resolving the locator.
+    # The concrete source span resolved ALONGSIDE the symbolic locator (the flow-boundary twin
+    # of NodeFailed.range). A failing input decl's declaration line is looked up on the
+    # StartNode's `field_ranges[("input_decl", name)]`; a false boundary assert instead carries
+    # its own range, resolved BY POSITION off `pre_assert_ranges`/`post_assert_ranges` (assert
+    # text is not a unique identity, so asserts are deliberately not in `field_ranges`). None
+    # when neither is recorded. The CLI prefers this over resolving the locator.
     range: Optional[SourceRange] = None
     # The formatted Python traceback of the originating node failure, if one was captured
     # (carried up from the aborting `NodeFailed`). None for flow-level failures with no

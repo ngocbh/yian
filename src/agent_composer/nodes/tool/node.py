@@ -1,7 +1,7 @@
 """TOOL — a direct, deterministic invocation of one `TOOL_REGISTRY` entry.
 
-No LLM in the loop (distinct from an AGENT's tool loop). The node's `args` are
-compiled to (untyped) input bindings and resolved by the engine's `eval_node` bind
+No LLM in the loop (distinct from an AGENT's tool loop). The node's `input:` entries are
+(untyped) bindings like any other kind's, resolved by the engine's `eval_node` bind
 seam — a whole-string `${ref}` resolves against the pool, a literal passes through,
 and every value is deep-copied (the tool sees only its own record `inputs`, never
 the live pool). The registry tool is a LangChain `BaseTool`, invoked via

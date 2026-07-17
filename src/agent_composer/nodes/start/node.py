@@ -17,7 +17,7 @@ job: system/clock/run_id. Hidden from authors: a reserved __-prefixed id, never 
 from typing import Optional
 
 from agent_composer.events import SourceSpan
-from agent_composer.nodes.base import Node, NodeKind, Output
+from agent_composer.nodes.base import FieldRanges, Node, NodeKind, Output
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.typesys import TypeCheckError, build_value_as
 from agent_composer.typesys.seeding import apply_defaults, coerce_inputs
@@ -59,14 +59,15 @@ class StartNode(Node):
                  title: Optional[str] = None) -> None:
         super().__init__(node_id, title=title)
         self.input_decls = list(input_decls or [])
-        # Render-only per-boundary-field source ranges (the flow's `input:` decls keyed by input
-        # NAME, and the flow-level `asserts:` exprs keyed by the raw assert string). The base
-        # `self.field_ranges` starts `{}`; the loader stamps these so `run` can attach a precise
-        # `range` to a boundary type failure and the engine can resolve a false-boundary-assert
-        # caret — the flow-boundary twin of a body node's per-field ranges. `{}` for a spanless /
-        # in-memory flow.
+        # Render-only per-boundary-field source ranges: the flow's `input:` decls, keyed
+        # `("input_decl", name)` like every other named site. The loader stamps these so `run` can
+        # attach a precise `range` to a boundary type failure — the flow-boundary twin of a body
+        # node's per-field ranges. Empty for a spanless / in-memory flow. (Flow-level `asserts:`
+        # are NOT here: their text is not a unique identity, so they are located by position via
+        # `pre_assert_ranges`/`post_assert_ranges`.) Rewrapped as `FieldRanges` so the bare-key
+        # guard survives a caller passing a plain dict.
         if field_ranges:
-            self.field_ranges = dict(field_ranges)
+            self.field_ranges = FieldRanges(field_ranges)
         # params = the input names PLUS each input's default/required: eval_node->bind_params reads
         # each source from flow.wiring[START_ID][name] (the seed at top level; the call-arg edges in
         # a child), and for an OMITTED input fills the declared default itself (or fails a required
@@ -103,7 +104,7 @@ class StartNode(Node):
                 # declaration line (node=None: it's the flow boundary, not a body node).
                 new = TypeCheckError(f"input `{decl.name}` — {exc}")
                 new.locator = SourceSpan(node=None, kind="input_decl", key=decl.name)
-                new.range = self.field_ranges.get(decl.name)
+                new.range = self.field_ranges.get(("input_decl", decl.name))
                 raise new from exc
         final = apply_defaults(self.input_decls, coerced)
         return Output(value=final)

@@ -1,0 +1,38 @@
+# e41 — a STRUCTURED `output:` whose one bad field fails validation: the locator names the WHOLE
+# field, and the range resolves to None. RUNTIME: the typed write boundary rejects it. Run with no
+# inputs. (e21 is the scalar twin; this one exists for the per-field granularity question.)
+#
+# TWO separate defects, both visible in one run:
+#
+# 1. GRANULARITY. `score:` is what's bad; `claim:` is fine. The locator is
+#    SourceSpan(node='calc', kind='field', key='output') — the whole field — and the message
+#    ('not-an-int' does not match declared type int) never says `score`. So even a perfect stamp for
+#    ("outputs","score") would go unused: nothing asks for it. Same lesson as e39/e40 — the LOCATOR
+#    is the missing half, not the stamp.
+#
+# 2. THE FUNNEL MISSES ENTIRELY -> range=None. `runtime/engine.py:472` mints key="output" (SINGULAR,
+#    the write-boundary vocabulary), but `field_ranges` is keyed "outputs" (PLURAL, after
+#    `_back_map_input_output` rewrites the author's `output:` key). So `eval_node.py:149`'s
+#    `field_ranges.get(("field","output"))` misses on EVERY output-validation failure:
+#        calc.field_ranges keys: [('field','code'), ('field','outputs')]
+#          .get(("field","output"))  -> None          <- what the funnel asks for
+#          .get(("field","outputs")) -> SourceRange(...)
+#    The CLI hides this at render time via `_FIELD_KEY_ALIAS` (`cli/run.py:67`), so `ac run` looks
+#    fine — but a LIBRARY CALLER of `run_flow` gets range=None. That is #81's opening complaint,
+#    live. It is also the tag-vs-document drift in one line: the alias table exists *because* the tag
+#    vocabulary is not the document's. A path locator kills it by construction — the mint site would
+#    name the real document key.
+#
+#   CURRENT:  locator kind='field' key='output' (not `score`); range=None. CLI recovers via the alias.
+#   EXPECTED: locator names `score`; range = the `score:` line; no alias table needed.
+id: err-structured-output-no-range
+name: err_structured_output_no_range
+nodes:
+  calc:
+    kind: code
+    output:
+      claim: str                                        # L34 — fine
+      score: int                                        # L35 — the field that fails
+    code: |
+      return {"claim": "ok", "score": "not-an-int"}
+output: ${calc.output.claim}

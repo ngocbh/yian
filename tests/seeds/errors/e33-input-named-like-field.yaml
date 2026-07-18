@@ -1,0 +1,39 @@
+# e33 — case 2 of #88: an INPUT named exactly like a FLAT FIELD (`env`). COMPILE: "unresolved
+# references". Fails at load; no inputs needed.
+#
+# This is #88's headline case and PR #98's fix for it shipped WITHOUT a regression seed (the L1 plan
+# promised one; only e34, case 1, landed). Backfilled here.
+#
+# The node has BOTH an `env:` field (L31, value on L32) AND an input literally named `env` (L35).
+# They are different locations in the document. The OLD flat `dict[str, SourceRange]` keyed both as
+# the bare string "env", so the second stamp overwrote the first and a caret could point at the
+# wrong construct entirely. PR #98 tags the key with the location's kind, keeping them distinct:
+#
+#     ('field', 'env')     -> L32      # the env: block's VALUE
+#     ('input', 'env')     -> L35      # the input binding named `env`
+#     ('field', 'inputs')  -> L34      # the inputs: block (spans L34-L35)
+#
+# The pin is that those two resolve to DIFFERENT lines. Note what makes this seed load-bearing: the
+# `env:` field's value (L32) sits ABOVE the inputs block, so a collision is VISIBLE as a caret on an
+# unrelated construct — with the field's value adjacent to the input, a last-wins bug could still
+# land on a plausible line and hide.
+#
+#   CURRENT (correct): caret L35 alone — per-entry resolution (#87, landed in PR #104) lands ON the
+#     offending `env:` input, NOT L32 the unrelated `env:` field value. This is the desired behavior;
+#     the (kind, key) tuple is what keeps the two `env` sites distinct.
+id: err-input-named-like-field
+name: err_input_named_like_field
+input:
+  topic: str
+nodes:
+  calc:
+    kind: code
+    env:                            # L31 — the FIELD `env`
+      API_KEY: xyz                  # L32 — its value; a collision would caret HERE
+    input:                          # L33 key; its VALUE block is L34-L35 (range_of -> the value)
+      keep: ${input.topic}
+      env: ${nope.output}           # L35 — an INPUT named `env` — THE ERROR
+    output: int
+    code: |
+      return 1
+output: ${calc.output}

@@ -1,0 +1,33 @@
+# e39 — a bad `llm_config:` entry: the error NAMES the offending key but carries NO range at all.
+# COMPILE: pydantic rejects the value. Fails at load; no inputs needed.
+#
+# The message says `provider` — so the information needed for a precise caret ALREADY EXISTS at the
+# failure site. It is simply never turned into a location: the `LoadError` carries `range=None`, and
+# the frame is drawn only because the CLI falls back to the LEGACY LINE-MAP (the node's header line).
+#
+# Why this matters for #88's "just descend into the container" reading: descending into `llm_config:`
+# would stamp a range for ("llm_config","provider") that NOTHING WOULD EVER ASK FOR. The missing half
+# is the LOCATOR, not the stamp — this failure attaches no locator whatsoever. `inputs:`/`asserts:`
+# are the only two containers with per-entry precision precisely because they are the only two whose
+# failure sites mint a locator.
+#
+# ⚠ ALSO A PREREQUISITE FOR #91/L4c: this error renders ONLY via the legacy line-map. Retiring the
+# line-maps without first giving it a `range=` would drop its source frame entirely.
+#
+#   CURRENT:  err.range is None; caret L24 (the `note:` node header) via the legacy line.
+#   EXPECTED: caret L27 — the offending `provider:` line.
+id: err-llm-config-no-range
+name: err_llm_config_no_range
+input:
+  topic: str
+nodes:
+  note:                              # L24 — the header the caret falls back to
+    kind: agent
+    llm_config:
+      provider: bogus_provider       # L27 — THE ERROR (not a known provider)
+      temperature: 0.3
+    input:
+      topic: ${input.topic}
+    output: str
+    prompt: "Rate ${topic}."
+output: ${note.output}

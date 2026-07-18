@@ -1,0 +1,43 @@
+# e38 — a dangling `${...}` inside a `case` node's `when:` reports at the NODE HEADER, not the
+# offending `when:` line. COMPILE: "unresolved references". Pins the class of location failure that
+# NO key scheme can fix (#88, reopened). Fails at load; no inputs needed.
+#
+# `compose/nodes/case.py:17-18` hoists each distinct `${...}` in a `when:` into a SYNTHETIC CaseNode
+# input `__rN`, rewriting the `when:` to the bare local `${__r1}`. So by the time the error is
+# raised, the locator is `("input", "__r1")` — a name that appears NOWHERE in this file. There is no
+# key to look up, so it falls all the way back to the node header.
+#
+# This is why `cases:` has no per-entry precision and CANNOT get it by "descending" into the field:
+# a stamp for `("cases", 1, "when")` (= L36) would be perfectly correct and nothing would ask for it.
+# The two halves a caret needs — the STAMP (a recorded range) and the LOCATOR (what the failure says)
+# — cannot meet once desugaring invents the name. Contrast e14, where the author's `rid:` survives to
+# error time and the locator can name it.
+#
+# A second, independent miss stacks on top: `compose/validate/references.py:184` resolves the range
+# via `franges.get(("field","inputs")) or node.range`. A CASE node HAS no `inputs:` field (its keys
+# are `cases`/`else`/`on`), so that lookup always misses — the fallback is the header even before the
+# `__r1` problem bites.
+#
+# The failure is `node 'gate' input '__r1'`.
+#   CURRENT:  caret L31 — the `gate:` node header. Not even the `cases:` block (L33).
+#   EXPECTED: caret L36 — the offending `when:` line.
+id: err-case-when-ref-header
+name: err_case_when_ref_header
+nodes:
+  score:
+    kind: code
+    code: tests.seeds.fns:const_one
+    output: int
+  gate:                                    # L31 — the header the caret WRONGLY lands on
+    kind: case
+    cases:                                 # L33 — the `cases:` block
+      - when: "score.output >= 0.5"        # L34 — valid
+        then: positive
+      - when: "nope.output >= 0.9"         # L36 — THE ERROR (no node `nope`)
+        then: positive
+    else: positive
+  positive:
+    kind: code
+    code: tests.seeds.fns:const_one
+    output: int
+output: ${positive.output}

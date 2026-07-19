@@ -1,9 +1,11 @@
 """Tests for the desugar phase: flow-level rewrites that run before the build loop.
 
 Each desugar pass rewrites a flow's parsed descriptors into ordinary descriptors +
-bindings. The synth nodes a pass mints must inherit the HOST node's located
-`.range`/`field_ranges` so their downstream errors point back at the author's binding
-site.
+bindings. A synth node a pass mints locates at the SITE it desugared from — the
+`call(...)` directive's own binding line, not the host node header — so its downstream
+errors caret the author's actual source. The exception is `adaptive_questions`, whose
+synth composer genuinely SHARES the gate's inputs verbatim and so correctly inherits the
+gate's `.range`/`field_ranges`.
 """
 
 from agent_composer.compose.helpers.reader import NodeReader
@@ -23,10 +25,11 @@ def _nodes_reader(text):
     return NodeReader(value, spans, root).child("nodes")
 
 
-def test_desugar_inline_calls_preserves_ranges():
+def test_desugar_inline_calls_locate_at_their_binding_site():
     # A whole-value `call(...)` in a node's `input:` binding lifts to a synth `call` node.
-    # The synth CallDescriptor must inherit the HOST node's range/field_ranges (so its
-    # downstream errors locate at the host binding site) — no `node_lines` map needed.
+    # The synth CallDescriptor locates at its OWN binding line (the `x:` entry the directive
+    # was written on), NOT the host node header — and carries an empty `field_ranges` (it owns
+    # no authored fields), so a bad ref inside the directive carets the directive.
     text = (
         "id: f\nname: f\nnodes:\n"
         "  writer:\n    kind: code\n    code: m:f\n"
@@ -42,8 +45,9 @@ def test_desugar_inline_calls_preserves_ranges():
     assert len(synth) == 1
     call_desc = synth[0]
     assert call_desc.call == "helper"
-    assert call_desc.range == host.range
-    assert call_desc.field_ranges == host.field_ranges
+    assert call_desc.range == host.field_ranges[("input", "x")]  # the `x:` binding, not the header
+    assert call_desc.range != host.range                         # ... which is strictly the header
+    assert call_desc.field_ranges == {}                          # owns no authored fields
 
 
 def test_desugar_adaptive_questions_preserves_ranges():

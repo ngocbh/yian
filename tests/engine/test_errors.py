@@ -417,21 +417,19 @@ def test_structured_output_failure_names_whole_field_and_range_is_none():
     assert node.field_ranges.get(("field", "outputs")) is not None  # what is actually stored
 
 
-def test_synth_node_inherits_host_ranges_locates_at_host_line():
-    # e37 (#88, reopened): the inline `call(...)` on L30 desugars to `__call_0`, which is handed the
-    # HOST node's field_ranges verbatim (inline_calls.py:318). Its ("input","topic") therefore points
-    # at the HOST's `topic:` on L29 rather than its own directive on L30 — a cross-node collision the
-    # (kind,key) tuple cannot fix, because the key is correct and the MAP is foreign.
+def test_synth_node_locates_at_its_call_directive_line():
+    # e37 (#106): the inline `call(...)` on L30 desugars to `__call_0`. It USED to be handed the HOST
+    # node's field_ranges verbatim, so its ("input","topic") pointed at the HOST's valid `topic:` on
+    # L29 — a foreign map (the key is right, the map belongs to another node), which per-entry
+    # resolution (PR #104) turned into a confidently-wrong caret on a valid line.
     #
-    # CURRENT (asserted): with per-entry resolution now on (#87, PR #104), ("input","topic") resolves
-    #   to the HOST's `topic:` on L29 ALONE — a VALID line marked, the real error on L30 unmarked.
-    #   Per-entry made this case strictly worse (it used to mark the whole block, which contained
-    #   L30). EXPECTED: L30 — the `call(...)` directive. The synth node needs its own provenance; #106.
+    # FIXED (#106): the desugar hands the synth node its OWN provenance — the `call(...)` directive's
+    # binding line — so the caret is L30 (the actual error), and the message names the synth node.
     err = _load_error("e37-synth-node-inherits-host-ranges.yaml")
     assert "unresolved references" in str(err)
     assert "__call_0" in str(err) and "'topic'" in str(err)  # the SYNTH node's input, not the host's
     assert err.range is not None
-    assert err.range.start_line == 29  # WRONG (host's `topic:`); expected 30 once #106 is fixed
+    assert err.range.start_line == 30  # the `call(...)` directive (was L29, the host's valid `topic:`)
 
 
 def test_case_when_ref_locates_at_node_header():

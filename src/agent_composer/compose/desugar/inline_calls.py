@@ -55,7 +55,7 @@ from agent_composer.expr.template import (
     _split_kv,
     flow_call_callees_in_spans,
 )
-from agent_composer.compose.nodes.bindings import keyless, map_binding_strings
+from agent_composer.compose.nodes.bindings import map_binding_strings
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import (
     CallDescriptor,
@@ -110,11 +110,16 @@ def desugar_inline_calls(
     for nid, desc in descriptors.items():
         rng = getattr(desc, "range", None)
         field_ranges = getattr(desc, "field_ranges", None)
-        new_desc, calls = _desugar_descriptor(desc, mint, host=nid, range=rng)
+        new_desc, calls, origins = _desugar_descriptor(
+            desc, mint, host=nid, range=rng, field_ranges=field_ranges
+        )
         new_descriptors[nid] = new_desc
         for call in calls:
+            # The synth node locates at the binding the `call(...)` came from (its own
+            # `input:` line), not the host node header — so a bad ref inside the directive
+            # carets the directive, not a (valid) host input that shares the param name.
             synth[call.id] = _to_call_descriptor(
-                call, host=f"node {nid!r}", range=rng, field_ranges=field_ranges
+                call, host=f"node {nid!r}", range=origins.get(call.id, rng)
             )
 
     new_outputs, out_calls = _desugar_outputs(outputs_section, mint, outputs_line)
@@ -146,18 +151,46 @@ def map_outputs_strings(outputs: Any, fn: Callable[[str], Any]) -> Any:
     return outputs
 
 
-def _desugar_descriptor(
-    desc: NodeDescriptor, mint: Callable[[], str], *, host: str, range: Optional[SourceRange]
-) -> tuple:
-    """Desugar a descriptor's binding fields, returning `(new_desc, inline_calls)`.
+def _binding_origin(
+    key: str, field_ranges: Optional[dict], host_range: Optional[SourceRange]
+) -> Optional[SourceRange]:
+    """The source range a synth node desugared from binding `key` should locate at.
 
-    Walks the binding fields via `map_binding_strings`; the closure `fn` desugars each
-    string and accumulates the inline calls it finds."""
+    Prefers the binding's OWN entry — `("input", key)` for a dict binding (an `input:` param),
+    `("field", key)` for a scalar binding field (a map's `over:`) — i.e. the line the
+    `call(...)` directive was written on. Falls back to the host node's range when there is no
+    stamped entry (a spanless flow, or a binding shape with no per-entry range)."""
+    fr = field_ranges or {}
+    return fr.get(("input", key)) or fr.get(("field", key)) or host_range
+
+
+def _desugar_descriptor(
+    desc: NodeDescriptor,
+    mint: Callable[[], str],
+    *,
+    host: str,
+    range: Optional[SourceRange],
+    field_ranges: Optional[dict],
+) -> tuple:
+    """Desugar a descriptor's binding fields, returning `(new_desc, calls, origins)`.
+
+    Walks the binding fields via `map_binding_strings`; each inline call is tagged in
+    `origins` with the SOURCE RANGE of the binding it was found in (via `_binding_origin`),
+    so its synth node locates at its own `call(...)` directive rather than the host header.
+    Nested inner-first calls share their enclosing binding's origin."""
     calls: list = []
-    new_desc = map_binding_strings(
-        desc, keyless(lambda value: _desugar_value(value, mint, calls, host, range=range))
-    )
-    return new_desc, calls
+    origins: dict[str, Optional[SourceRange]] = {}
+
+    def mapper(key: str, value: str) -> str:
+        origin = _binding_origin(key, field_ranges, range)
+        before = len(calls)
+        new_value = _desugar_value(value, mint, calls, host, range=range)
+        for c in calls[before:]:
+            origins[c.id] = origin
+        return new_value
+
+    new_desc = map_binding_strings(desc, mapper)
+    return new_desc, calls, origins
 
 
 def _desugar_value(

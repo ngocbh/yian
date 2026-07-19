@@ -129,6 +129,68 @@ def test_validate_references_diag_locates_case_when_via_synth_param():
     assert exc.value.range.start_line == 7     # the `cases[0].when` line, not the `a:` header (4)
 
 
+def test_validate_references_diag_case_on_form_locates_at_on_line():
+    # The `on:` form binds a single synthetic `__on` param. A bad ref there locates at the `on:`
+    # line and is named `on:` — the synthetic `__on` never leaks.
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  gate:\n    kind: case\n"
+        "    on: ${nope.output}\n"                          # `on:` on line 6
+        "    cases:\n      - when: hi\n        then: p\n"
+        "    else: p\n"
+        "  p:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n"
+        "output: ${p.output}\n"
+    )
+    with pytest.raises(LoadError) as exc:
+        load_flow(text)
+    assert "nope" in str(exc.value)
+    assert "__on" not in str(exc.value)          # the synthetic param does not leak...
+    assert "on:" in str(exc.value)               # ...it is named `on:`
+    assert exc.value.range is not None and exc.value.range.start_line == 6
+
+
+def test_validate_references_diag_case_when_multi_ref_locates_at_that_when():
+    # A `when:` reading TWO refs (one valid, one bad) allocates a `__rN` per distinct ref, each
+    # first-seen in this case; the bad ref carets THIS `when:` line and names `cases[0].when`.
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  s:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n"
+        "  gate:\n    kind: case\n"
+        "    cases:\n      - when: \"s.output >= 1 and nope.output >= 1\"\n        then: p\n"  # `when:` line 11
+        "    else: p\n"
+        "  p:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n"
+        "output: ${p.output}\n"
+    )
+    with pytest.raises(LoadError) as exc:
+        load_flow(text)
+    assert "nope" in str(exc.value) and "cases[0].when" in str(exc.value)
+    assert "__r" not in str(exc.value)
+    assert exc.value.range is not None and exc.value.range.start_line == 11
+
+
+def test_validate_references_diag_case_then_call_locates_at_then_line():
+    # A `then: call(...)` lifts a synth call node; a bad ref inside it carets the `then:` line
+    # (the synth node's OWN provenance), not the case header.
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  s:\n    kind: code\n    output: int\n    code: \"return {'output': 1}\"\n"
+        "  gate:\n    kind: case\n"
+        "    cases:\n      - when: \"s.output >= 1\"\n"
+        "        then: call(helper, x=${nope.output})\n"     # `then:` on line 12
+        "    else: s\n"
+        "output: ${gate.output}\n"
+        "defs:\n"
+        "  helper:\n    input:\n      x: int\n"
+        "    nodes:\n      h:\n        kind: code\n        code: \"return {'output': 1}\"\n"
+        "        input:\n          x: ${input.x}\n        output: int\n"
+        "    output: ${h.output}\n"
+    )
+    with pytest.raises(LoadError) as exc:
+        load_flow(text)
+    assert "nope" in str(exc.value) and "'__call_0'" in str(exc.value)
+    assert exc.value.range is not None and exc.value.range.start_line == 12
+
+
 def test_check_ref_map_types_moved():
     # A `call` binding whose SOURCE Type mismatches the child input's declared Type is loud.
     # The check lives in `validate.call_types`; the LoadError carries `.line` (additive) AND

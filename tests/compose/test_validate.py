@@ -191,6 +191,67 @@ def test_validate_references_diag_case_then_call_locates_at_then_line():
     assert exc.value.range is not None and exc.value.range.start_line == 12
 
 
+# --------------------------------------------------------------------------- #
+# #100 — a timed WAIT `until:` is a reserved wiring key, scanned as a source. It used to be
+# skipped by an `isinstance(node, WaitNode)` kind check, so a dangling/bad ref there was never
+# name-checked. It is now gated on the `reserved_wiring_keys()` trait like MAP `over:`.
+# --------------------------------------------------------------------------- #
+
+_WAIT_UNTIL = (
+    "id: f\nname: f\ninput:\n  t: str\nnodes:\n"
+    "  w:\n    kind: wait\n    until: {src}\n"        # `until:` on line 8
+    "output: ${{w.output}}\n"
+)
+
+
+def test_wait_until_dangling_node_ref_is_located():
+    # Was a raw `KeyError: 'nope'` in `_reject_cycles`; now a located LoadError at the `until:` line.
+    with pytest.raises(LoadError) as exc:
+        load_flow(_WAIT_UNTIL.format(src="${nope.output}"))
+    assert "nope" in str(exc.value) and "until" in str(exc.value)
+    assert exc.value.range is not None and exc.value.range.start_line == 8
+
+
+def test_wait_until_undeclared_input_is_located():
+    # Was a SILENT pass (failed only at run); now a located compile LoadError at the `until:` line.
+    with pytest.raises(LoadError) as exc:
+        load_flow(_WAIT_UNTIL.format(src="${input.typo}"))
+    assert "typo" in str(exc.value) and "until" in str(exc.value)
+    assert exc.value.range is not None and exc.value.range.start_line == 8
+
+
+def test_wait_until_bad_ambient_is_located():
+    # `${system.bogus}` is a bad ambient ref — a compile error everywhere else, and now here too.
+    with pytest.raises(LoadError) as exc:
+        load_flow(_WAIT_UNTIL.format(src="${system.bogus}"))
+    assert "bogus" in str(exc.value) and "until" in str(exc.value)
+
+
+def test_wait_until_inline_call_is_rejected():
+    # `until` has no `binding_fields`, so a raw `call(...)` is NOT lowered; it is rejected at load.
+    with pytest.raises(LoadError) as exc:
+        load_flow(_WAIT_UNTIL.format(src="call(gettime)"))
+    assert "inline call is not allowed" in str(exc.value) and "until" in str(exc.value)
+
+
+def test_wait_until_valid_input_ref_still_loads():
+    # Name-check, do NOT restrict: a valid `${input.X}` loads clean.
+    load_flow(_WAIT_UNTIL.format(src="${input.t}"))
+
+
+def test_wait_until_node_output_ref_still_loads():
+    # `until:` legitimately accepts a node output (`wait until the time this node computed`) — the
+    # scan name-checks it against the producers, it does not forbid it.
+    text = (
+        "id: f\nname: f\ninput:\n  t: str\nnodes:\n"
+        "  clock:\n    kind: code\n    input:\n      t: ${input.t}\n"
+        "    output: str\n    code: \"return {'output': '2030-01-01T00:00:00Z'}\"\n"
+        "  w:\n    kind: wait\n    until: ${clock.output}\n"
+        "output: ${w.output}\n"
+    )
+    load_flow(text)
+
+
 def test_check_ref_map_types_moved():
     # A `call` binding whose SOURCE Type mismatches the child input's declared Type is loud.
     # The check lives in `validate.call_types`; the LoadError carries `.line` (additive) AND

@@ -1,0 +1,14 @@
+# e45 — a timed WAIT `until:` bound to an inline `call(...)` directive. #100 (call-directive reject).
+# `until` has no `binding_fields`, so — unlike a MAP `over:` — the call is NOT lowered to a
+# `${__call_0.output}` ref; the raw string would ride through and pause on the literal "call(gettime)".
+# AFTER: a located LoadError rejects it, pointing the author at the `until:` line.
+# COMPILE: fails at load; no inputs needed.
+id: err-wait-until-inline-call
+name: err_wait_until_inline_call
+input:
+  t: str
+nodes:
+  w:
+    kind: wait
+    until: call(gettime)     # ERROR (line 13): an inline call is not allowed on until: — caret HERE
+output: ${w.output}

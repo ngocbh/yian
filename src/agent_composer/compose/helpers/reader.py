@@ -205,6 +205,34 @@ class NodeReader:
                 out[name] = rng
         return out
 
+    def sequence_field_ranges(self, seq_key: str, field: str) -> list[SourceRange | None]:
+        """For a SEQUENCE of MAPPINGS, each item's `field` VALUE range, IN AUTHOR ORDER.
+
+        Descends `seq_key`'s value node (a `SequenceNode`) and, for every element that is a
+        `MappingNode`, records the `SourceRange` of the value under `field` — or `None` when the
+        item is not a mapping, lacks `field`, or that value has no recorded span. The result
+        aligns 1:1 with the authored sequence, so a per-item field can be located by INDEX rather
+        than by (non-unique) text — the basis for a CASE's `cases[N].when` / `cases[N].then`
+        carets. Returns `[]` in spanless mode, when `seq_key` is absent, or when it is not a
+        sequence — best-effort, never raising (mirrors `item_range_list`).
+        """
+        pair = self._pair(seq_key)
+        if pair is None:
+            return []
+        _key_node, value_node = pair
+        if not isinstance(value_node, yaml.SequenceNode):
+            return []
+        out: list[SourceRange | None] = []
+        for item in value_node.value:
+            rng: SourceRange | None = None
+            if isinstance(item, yaml.MappingNode):
+                for child_key, child_value in item.value:
+                    if getattr(child_key, "value", None) == field:
+                        rng = self.spans.get(id(child_value))
+                        break
+            out.append(rng)
+        return out
+
     # -- typed accessors --------------------------------------------------------
 
     def str(self, key: str) -> str:

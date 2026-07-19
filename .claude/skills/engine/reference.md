@@ -57,8 +57,9 @@ base `Node`; a kind overrides only what it needs.
 | Member | Where the core reads it | Default → overrides |
 |--------|-------------------------|---------------------|
 | `binds_per_item: bool` | read boundary (`eval_node`): bind PER ELEMENT via a `bind_item` cap vs bind `params` once | `False` → `True` on `map` |
-| `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → timed `wait` `{"until": ts}`, `map` `{"over": [...]}` |
-| `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → timed `wait` `{"until"}`, `map` `{"over"}` |
+| `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run`; wrap the resolution in `self.locating_reserved(key)` so a failure carets the key's line | `{}` → timed `wait` `{"until": ts}`, `map` `{"over": [...]}` |
+| `locating_reserved(key)` (context mgr) | read boundary: on a locator-less exception, stamps a `("field", key)` locator so the funnel resolves `field_ranges[("field", key)]` (the key's own line) instead of the node header; re-raises the original | node-owned; used by `map` `over` / timed `wait` `until` |
+| `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` — the ref-scan scans them as SOURCES, `binds_per_item` gates the `${item}` leniency | `∅` → timed `wait` `{"until"}`, `map` `{"over"}` |
 | `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` (loop/non-REF, no depth work) → `1` call/map, `0` agent |
 | `grow_restamps_self: bool` | growth core: also stamp `_spawner_expansion` at the spawner's OWN bare id (re-pause nesting) | `False` → `True` on `agent` |
 | `is_loop: bool` | growth core (`_apply_grow`): gate the origin-keyed single-live-record ledger invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior record) | `False` → `True` on `loop` |

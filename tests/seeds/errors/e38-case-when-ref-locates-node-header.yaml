@@ -28,7 +28,7 @@ nodes:
     kind: code
     code: tests.seeds.fns:const_one
     output: int
-  gate:                                    # L31 — the header the caret WRONGLY lands on
+  gate:                                    # L31 — the node header (no longer the caret site)
     kind: case
     cases:                                 # L33 — the `cases:` block
       - when: "score.output >= 0.5"        # L34 — valid

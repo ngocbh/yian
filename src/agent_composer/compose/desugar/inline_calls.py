@@ -25,10 +25,12 @@ top-level node with no map-element scope — use a named `call` node with `over:
 a user node id may not use the reserved synth prefix `__call_`.
 
 Located parse metadata: each parsed host descriptor carries its own `range`/`field_ranges`
-(from the span tree). A synth `call` node inherits the HOST descriptor's ranges, so its
-downstream errors locate at the host binding site — no `node_lines` map. The flow
-`outputs:`/`asserts:` sections have no descriptor, so their inline calls locate at the
-section source line (`outputs_line`/`asserts_line`) until the span cutover retires those.
+(from the span tree). A synth `call` node locates at the SITE it desugared from — the host
+binding's own line (looked up in the host `field_ranges` by the binding key), not the host
+node header — and owns an empty `field_ranges`, so a bad ref inside the directive carets the
+directive rather than a host input that shares its param name. The flow `outputs:`/`asserts:`
+sections have no descriptor, so their inline calls locate at the section source line
+(`outputs_line`/`asserts_line`) until the span cutover retires those.
 
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
 kind-blind binding-field walk) + `compose.helpers.errors` (peers), `expr` (the ref-walk + the
@@ -90,10 +92,11 @@ def desugar_inline_calls(
     inline calls rewritten the same way. A span-wrapped inline `${ f(...) }` in an assert
     expression (`${ f(...) } == x`) lifts to a synth node so the assert reads its output.
 
-    Each synth node from a node host inherits that host descriptor's `range`/`field_ranges`;
-    a synth node from the flow `outputs:`/`asserts:` section locates at `outputs_line`/
-    `asserts_line`. Raises `LoadError` on a malformed inline call, a `${item}` capture, or a
-    reserved-prefix collision — located at the host node / `outputs:` / `asserts:`."""
+    Each synth node from a node host locates at the range of the binding it was found in (its
+    own `call(...)` directive line); a synth node from the flow `outputs:`/`asserts:` section
+    locates at `outputs_line`/`asserts_line`. Raises `LoadError` on a malformed inline call, a
+    `${item}` capture, or a reserved-prefix collision — located at the host node / `outputs:` /
+    `asserts:`."""
     mint = next_id or _synth_id_gen()
 
     # Reserve the synth namespace: a user node id must not use the prefix (else it
@@ -327,12 +330,13 @@ def _to_call_descriptor(
     *,
     host: str,
     range: Optional[SourceRange] = None,
-    field_ranges: Optional[dict] = None,
     line: Optional[int] = None,
 ) -> CallDescriptor:
     """One `InlineCall` -> a synth `CallDescriptor` (`over=None`), after the `${item}`
-    guard. A node-host synth node inherits the host's `range`/`field_ranges` (so downstream
-    errors locate at the host); a section host (`outputs:`/`asserts:`) locates at `line`."""
+    guard. The synth node carries its OWN provenance: `range` is the site it desugared from
+    (a node input's binding line, or a case `then:`/`else:` line), or `line` for a section
+    host (`outputs:`/`asserts:`). It owns no authored fields, so `field_ranges` is empty and
+    a bad ref inside the directive carets `range`, never a host line."""
     for name, value in call.args.items():
         if _captures_item(value):
             raise LoadError(
@@ -349,7 +353,7 @@ def _to_call_descriptor(
         inputs=dict(call.args),
         over=None,
         range=range,
-        field_ranges=FieldRanges(field_ranges) if field_ranges else FieldRanges(),
+        field_ranges=FieldRanges(),
     )
 
 

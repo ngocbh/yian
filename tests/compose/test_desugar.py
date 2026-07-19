@@ -68,14 +68,14 @@ def test_desugar_adaptive_questions_preserves_ranges():
     assert composer.field_ranges == gate.field_ranges
 
 
-def test_desugar_case_call_targets_preserves_ranges():
+def test_desugar_case_call_targets_locate_at_their_target_line():
     # A `case` then:/else: that is a whole-value `call(...)` directive lifts a synth `call`
-    # node. That synth node must inherit the HOST case descriptor's range/field_ranges (so its
-    # downstream errors locate at the case node) — no `node_lines` map needed.
+    # node. That synth node locates at its OWN `then:` line (captured positionally in the case
+    # descriptor's `then_ranges`), NOT the host case header, and carries an empty `field_ranges`.
     text = (
         "id: f\nname: f\nnodes:\n"
         "  route:\n    kind: case\n    on: ${score.output}\n"
-        "    cases:\n      - when: high\n        then: call(helper, n=3)\n"
+        "    cases:\n      - when: high\n        then: call(helper, n=3)\n"  # `then:` on line 9
         "    else: cold\n"
         "output: ${route.output}\n"
     )
@@ -86,5 +86,6 @@ def test_desugar_case_call_targets_preserves_ranges():
     assert len(synth) == 1
     call_desc = synth[0]
     assert call_desc.call == "helper"
-    assert call_desc.range == host.range
-    assert call_desc.field_ranges == host.field_ranges
+    assert call_desc.range == host.then_ranges[0]  # the `then:` line, not the case header
+    assert call_desc.range != host.range
+    assert call_desc.field_ranges == {}            # owns no authored fields

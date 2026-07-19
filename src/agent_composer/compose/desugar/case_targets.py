@@ -15,9 +15,10 @@ the ids collide) and BEFORE `expand_case_outputs`, so the synth call's args (whi
 read `${<case>.output}`) are expanded by that pass and `${<case>.output}` over THIS
 case sees the rewritten (synth-id) targets.
 
-Located parse metadata: a synth branch-target call node inherits the HOST case
-descriptor's `range`/`field_ranges` (so its downstream errors locate at the case node).
-No `node_lines` map.
+Located parse metadata: a synth branch-target call node locates at the `then:`/`else:` it was
+lifted from — the case descriptor's positional `then_ranges[N]` for a `then:`, the `("field",
+"else")` range for the `else:` — with an empty `field_ranges`, falling back to the case node's
+own range when a span is unavailable. No `node_lines` map.
 
 Imports flow down/peer only: `compose.parse.file` (CaseDescriptor), `compose.desugar.inline_calls`
 (the shared `call(...)` recognizer + synth-node factory), `compose.helpers.errors`. Only the loader
@@ -44,7 +45,8 @@ def desugar_case_call_targets(descriptors: dict, mint: Callable[[], str]) -> dic
     `CallDescriptor`, `over=None`); return the new descriptor map (augmented with the synth
     nodes). A plain node id (no `${`, not a `call(...)` directive) passes through unchanged.
 
-    Each synth branch-target node inherits the host case descriptor's range/field_ranges."""
+    Each synth branch-target node locates at the `then:`/`else:` it was lifted from (its own
+    source line), falling back to the case node's range when that span is unavailable."""
     synth: dict = {}
     new_descriptors: dict = {}
     for nid, desc in descriptors.items():
@@ -52,22 +54,26 @@ def desugar_case_call_targets(descriptors: dict, mint: Callable[[], str]) -> dic
             new_descriptors[nid] = desc
             continue
         rng = desc.range
-        field_ranges = desc.field_ranges
         new_cases = [
             {**c, "then": _lift_case_target(
                 c.get("then"), mint, synth, host=f"case node {nid!r} then:",
-                range=rng, field_ranges=field_ranges)}
-            for c in desc.cases
+                range=_nth(desc.then_ranges, ci) or rng)}
+            for ci, c in enumerate(desc.cases)
         ]
+        else_rng = desc.field_ranges.get(("field", "else")) or rng
         new_else = (
             _lift_case_target(
-                desc.else_, mint, synth, host=f"case node {nid!r} else:",
-                range=rng, field_ranges=field_ranges)
+                desc.else_, mint, synth, host=f"case node {nid!r} else:", range=else_rng)
             if desc.else_ is not None else None
         )
         new_descriptors[nid] = replace(desc, cases=new_cases, else_=new_else)
     new_descriptors.update(synth)
     return new_descriptors
+
+
+def _nth(seq: list, i: int) -> Optional[SourceRange]:
+    """The i-th positional range, or None when absent (a spanless flow, or a short list)."""
+    return seq[i] if 0 <= i < len(seq) else None
 
 
 def _lift_case_target(
@@ -77,7 +83,6 @@ def _lift_case_target(
     *,
     host: str,
     range: Optional[SourceRange] = None,
-    field_ranges: Optional[dict] = None,
 ) -> Any:
     """A then:/else: target rewritten to a single node id. Accepts TWO forms and
     rejects everything else with a located `LoadError`:
@@ -98,9 +103,7 @@ def _lift_case_target(
         outer = calls[-1]
         if new_value.strip() == f"${{{outer.id}.output}}":
             for c in calls:
-                synth[c.id] = _to_call_descriptor(
-                    c, host=host, range=range, field_ranges=field_ranges
-                )
+                synth[c.id] = _to_call_descriptor(c, host=host, range=range)
             return outer.id
     if "${" not in target:
         # Not a directive and no span: a plain node id, UNLESS it is a rejected `call(...)`

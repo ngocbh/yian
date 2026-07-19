@@ -38,7 +38,7 @@ leaf of the nodes package.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from agent_composer.compile.model import Edge
@@ -104,6 +104,28 @@ class CaseDescriptor(NodeDescriptor):
     else_: Optional[str] = None
     on: Optional[str] = None
     asserts: list[str] = field(default_factory=list)
+    # Positional per-case source ranges of the `when:` / `then:` VALUES, aligned 1:1 with `cases`
+    # (None where no span exists). Captured at parse so a synth CASE param (`__rN` from a `when:`
+    # ref) or a `then:/else: call(...)` target can locate at its own line, not the node header.
+    # Render-only, out of equality (like `field_ranges`); `cases[N].when/then` has no unique text
+    # key, so position — not text — is the identity.
+    when_ranges: list[Optional[SourceRange]] = field(default_factory=list, compare=False)
+    then_ranges: list[Optional[SourceRange]] = field(default_factory=list, compare=False)
+
+    @classmethod
+    def parse(cls, node_id: str, reader: NodeReader) -> "NodeDescriptor":
+        """Template `parse` + capture each `cases[N].when` / `.then` VALUE range positionally.
+
+        `cases:` is a sequence of `{when:, then:}` mappings whose per-item fields carry no unique
+        text key, so neither `field_ranges` nor `item_range_list` can reach them; the positional
+        `sequence_field_ranges` does. `_desugar_searched` / `desugar_case_call_targets` read these
+        to give a synth CASE param / call target its own caret."""
+        desc = super().parse(node_id, reader)
+        when_ranges = reader.sequence_field_ranges("cases", "when")
+        then_ranges = reader.sequence_field_ranges("cases", "then")
+        if when_ranges or then_ranges:
+            desc = replace(desc, when_ranges=when_ranges, then_ranges=then_ranges)
+        return desc
 
     @classmethod
     def _normalize_reader(cls, reader: NodeReader) -> None:
@@ -128,12 +150,19 @@ class CaseDescriptor(NodeDescriptor):
         unused (a case resolves nothing and reads no typedefs); it rides the shared contract.
         """
         if self.on is not None:
-            case_node, wiring, data_edges, control_edges = _desugar_on(self)
+            case_node, wiring, data_edges, control_edges, param_ranges, param_labels = _desugar_on(self)
         else:
-            case_node, wiring, data_edges, control_edges = _desugar_searched(self)
-        return self._finish(
+            case_node, wiring, data_edges, control_edges, param_ranges, param_labels = _desugar_searched(self)
+        result = self._finish(
             case_node, wiring, edges=tuple(data_edges) + tuple(control_edges)
         )
+        # A synth CASE param (`__rN` hoisted from a `when:` ref, `__on` from `on:`) owns no
+        # authored field, so the ref-scan would fall back to the node header and print the
+        # synthetic name. Stamp its own source range and author-facing label here so the caret
+        # lands on the `cases[N].when` / `on:` line and the message names it, not `__rN`.
+        result.node.field_ranges.update(param_ranges)
+        result.node.wiring_labels = param_labels
+        return result
 
 
 def _outputs_producer(ref: str) -> Optional[str]:
@@ -243,10 +272,11 @@ def _control_edges(node_id: str, handle_targets: list[tuple[str, str]]) -> list[
 
 def _desugar_on(
     desc: CaseDescriptor,
-) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge]]:
+) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
     """`on: ${ref}` form -> one `__on` param + a `${__on} == "<value>"` per case.
 
-    Returns `(node, wiring, data_edges, control_edges)`."""
+    Returns `(node, wiring, data_edges, control_edges, param_ranges, param_labels)` — the last
+    two locate the synth `__on` param at the `on:` line and label it `on:` (not `__on`)."""
     cases: list[Case] = []
     handle_targets: list[tuple[str, str]] = []
     for c in desc.cases:
@@ -263,23 +293,31 @@ def _desugar_on(
     node = CaseNode(desc.id, cases, title=desc.node_name)
     node.params = [ParamDecl(name="__on")]
     wiring = {"__on": desc.on}
+    on_rng = desc.field_ranges.get(("field", "on"))  # the `on:` value's own range
+    param_ranges = {("input", "__on"): on_rng} if on_rng is not None else {}
     return (
         node,
         wiring,
         _data_edges(desc.id, wiring),
         _control_edges(desc.id, handle_targets),
+        param_ranges,
+        {"__on": "on:"},
     )
 
 
 def _desugar_searched(
     desc: CaseDescriptor,
-) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge]]:
+) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
     """Searched form -> one `__rN` input per distinct `${...}` ref; `when:` rewritten.
 
-    Returns `(node, wiring, data_edges, control_edges)`."""
-    # Allocate one local per distinct ref across ALL when:s (first-seen order).
+    Returns `(node, wiring, data_edges, control_edges, param_ranges, param_labels)` — the last
+    two locate each synth `__rN` at the `cases[N].when` it was first seen in and label it
+    `cases[N].when` (not the synthetic `__rN`)."""
+    # Allocate one local per distinct ref across ALL when:s (first-seen order), remembering the
+    # case index each was first seen in (its caret / label site).
     ref_to_local: dict[str, str] = {}
-    for c in desc.cases:
+    local_case_index: dict[str, int] = {}
+    for ci, c in enumerate(desc.cases):
         when = c.get("when")
         if not isinstance(when, str):
             raise LoadError(
@@ -293,7 +331,9 @@ def _desugar_searched(
             ) from exc
         for ref in refs:
             if ref not in ref_to_local:
-                ref_to_local[ref] = f"__r{len(ref_to_local)}"
+                local = f"__r{len(ref_to_local)}"
+                ref_to_local[ref] = local
+                local_case_index[local] = ci
 
     wiring = {local: f"${{{ref}}}" for ref, local in ref_to_local.items()}
 
@@ -312,11 +352,20 @@ def _desugar_searched(
 
     node = CaseNode(desc.id, cases, title=desc.node_name)
     node.params = [ParamDecl(name=local) for local in ref_to_local.values()]
+    param_ranges: dict = {}
+    param_labels: dict[str, str] = {}
+    for local, ci in local_case_index.items():
+        rng = desc.when_ranges[ci] if ci < len(desc.when_ranges) else None
+        if rng is not None:
+            param_ranges[("input", local)] = rng
+        param_labels[local] = f"cases[{ci}].when"
     return (
         node,
         wiring,
         _data_edges(desc.id, wiring),
         _control_edges(desc.id, handle_targets),
+        param_ranges,
+        param_labels,
     )
 
 

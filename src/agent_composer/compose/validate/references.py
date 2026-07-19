@@ -187,12 +187,13 @@ def validate_references(
         # `${__rN}`/`${__on}` live in `node.cases` `when:` and are EXCLUDED here
         # (they resolve against the record).
         # Anchor each error on the OFFENDING ENTRY, not the whole `input:` mapping: the parse
-        # loop already stamps a per-binding `("input", name)` range for every kind, so the block
-        # range is only the fallback (a desugared CASE's synthetic `__rN`/`__on` wiring params
-        # own no authored entry; a spanless flow has no ranges at all).
+        # loop stamps a per-binding `("input", name)` range for every kind, and a desugar stamps
+        # one for its synthetic params (a CASE `__rN` -> its `cases[N].when` line); the block range
+        # is only the fallback (a spanless flow has no ranges at all). `wiring_ref_label` gives a
+        # synthetic param the author-facing name it was hoisted from instead of leaking `__rN`.
         input_rng = franges.get(("field", "inputs")) or node.range
         for param, src in flow_wiring.get(node_id, {}).items():
-            scan(src, f"node {node_id!r} input {param!r} from", node_line,
+            scan(src, f"node {node_id!r} {node.wiring_ref_label(param)} from", node_line,
                  franges.get(("input", param)) or input_rng)
 
     # Flow outputs (the codomain): each binding `from:` checked like a node input —

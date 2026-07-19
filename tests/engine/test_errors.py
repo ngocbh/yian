@@ -432,17 +432,17 @@ def test_synth_node_locates_at_its_call_directive_line():
     assert err.range.start_line == 30  # the `call(...)` directive (was L29, the host's valid `topic:`)
 
 
-def test_case_when_ref_locates_at_node_header():
-    # e38 (#88, reopened): a dangling ref in `cases[1].when` (L36). case.py:17-18 hoists it into a
-    # synthetic input `__r1`, so the locator names `__r1` — a name that appears nowhere in the file.
-    # No key scheme can resolve it: the STAMP could exist for ("cases",1,"when") and the LOCATOR
-    # would still be asking for `__r1`. This is the class of location failure that "descend into the
-    # container" cannot fix, and it is why `cases:` has no per-entry precision.
+def test_case_when_ref_locates_at_when_line():
+    # e38 (#106): a dangling ref in `cases[1].when` (L36) hoists to a synthetic CASE input `__r1`.
+    # It USED to locate at the `gate:` header and print the synthetic `__r1` (a name that appears
+    # nowhere in the file). FIXED: the CASE desugar stamps `__r1`'s own `cases[1].when` range and a
+    # `cases[1].when` label, so the caret is L36 and the message names the author's construct.
     err = _load_error("e38-case-when-ref-locates-node-header.yaml")
     assert "unresolved references" in str(err)
-    assert "'__r1'" in str(err)  # the synthetic name — not `when`, not anything the author wrote
+    assert "'__r1'" not in str(err)       # the synthetic name no longer leaks
+    assert "cases[1].when" in str(err)     # ... it is named by the author-facing site instead
     assert err.range is not None
-    assert err.range.start_line == 31  # WRONG (the `gate:` header); expected 36 once fixed
+    assert err.range.start_line == 36  # the offending `cases[1].when` (was L31, the `gate:` header)
 
 
 # --------------------------------------------------------------------------- #

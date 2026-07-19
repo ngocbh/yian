@@ -256,6 +256,10 @@ def test_compile_error_gallery(filename, substr, line):
         ("e27-inline-code-raises.yaml", {"topic": "X"}, "intentional inline failure"),
         ("e28-inline-wrong-type.yaml", {"topic": "X"}, "int"),
         ("e29-inline-nonserializable.yaml", {"topic": "X"}, "non-serializable"),
+        # #86 reserved-key RUNTIME failures — a MAP `over:` non-list and a timed WAIT `until:`
+        # non-date. Both load clean (the reserved keys are compile-lenient) and fail at run.
+        ("e42-map-over-not-a-list.yaml", {"xs": "not-a-list"}, "did not resolve to a list"),
+        ("e43-wait-until-not-a-date.yaml", {"when": 5}, "did not resolve to a date/datetime"),
     ],
 )
 def test_runtime_error_gallery(filename, inputs, substr):

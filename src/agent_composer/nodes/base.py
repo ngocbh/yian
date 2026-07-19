@@ -20,6 +20,7 @@ Invariant: a node never writes the pool. It *describes* its one output value as
 import copy
 from abc import ABC
 from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
@@ -435,6 +436,26 @@ class Node(ABC):
         """Recovery seam: called by the engine wrapper when run() raises. Default: re-raise."""
         raise exc
 
+    @contextmanager
+    def locating_reserved(self, key: str):
+        """Locate any failure while resolving a reserved wiring key `key` (`over` / `until`).
+
+        A reserved-key resolution (`bind_reserved`) fails with a plain `RuntimeError`/`ValueError`
+        carrying no locator, so the read seam's funnel has nothing to resolve and the caret falls
+        back to the node header. Wrapping the resolution stamps a `("field", key)` locator on that
+        exception, so the funnel resolves `field_ranges[("field", key)]` — the reserved key's own
+        line. The ORIGINAL exception is re-raised: its type and message are the node's contract
+        (pinned by tests); only the locator is added, and only when one is absent (a failure that
+        already located itself is left untouched)."""
+        from agent_composer.events import SourceSpan
+
+        try:
+            yield
+        except Exception as exc:
+            if getattr(exc, "locator", None) is None:
+                exc.locator = SourceSpan(self.id, "field", key)
+            raise
+
     def bind_reserved(self, node_wiring: dict, pool) -> dict[str, Any]:
         """Reserved input keys the read seam (`eval_node`) must pre-resolve from
         `node_wiring` + `pool` before `run`, merged into the bound record.
@@ -442,7 +463,8 @@ class Node(ABC):
         Possible keys (per kind): a timed WAIT returns `{"until": <ISO ts>}`; a MAP returns
         `{"over": <list>}`. Default: `{}` (an ordinary node reserves no keys). `node_wiring`
         is the flow-owned wiring for this node (`flow.wiring[id]`); `pool` is the live
-        `VariablePool` the seam reads sources from."""
+        `VariablePool` the seam reads sources from. A kind that resolves a reserved source should
+        wrap the resolution in `self.locating_reserved(key)` so a failure carets the key's line."""
         return {}
 
     def reserved_wiring_keys(self) -> set[str]:

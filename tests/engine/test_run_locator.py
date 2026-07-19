@@ -59,6 +59,28 @@ def test_code_wrong_type_output_sets_field_locator():
     assert result.locator.key == "output"
 
 
+def test_map_over_not_a_list_carets_the_over_line():
+    # e42 (#86): a MAP `over:` source resolving to a non-list fails at RUNTIME. The locator names
+    # the reserved `over` field, and the range boxes the `over:` line (26) — NOT the node header.
+    text = (_ERRORS / "e42-map-over-not-a-list.yaml").read_text()
+    result = run_flow(load_flow(text), {"xs": "not-a-list"})
+    assert result.status == "failed"
+    assert result.locator is not None and result.locator.kind == "field"
+    assert result.locator.node == "each" and result.locator.key == "over"
+    assert result.range is not None and result.range.start_line == 26   # the `over:` line
+
+
+def test_wait_until_not_a_date_carets_the_until_line():
+    # e43 (#86): a timed WAIT `until:` resolving to a non-date fails at RUNTIME. The locator names
+    # the reserved `until` field, and the range boxes the `until:` line (13) — NOT the node header.
+    text = (_ERRORS / "e43-wait-until-not-a-date.yaml").read_text()
+    result = run_flow(load_flow(text), {"when": 5})
+    assert result.status == "failed"
+    assert result.locator is not None and result.locator.kind == "field"
+    assert result.locator.node == "w" and result.locator.key == "until"
+    assert result.range is not None and result.range.start_line == 13   # the `until:` line
+
+
 _RESUME_WRONG_TYPE = """
 id: f
 name: f

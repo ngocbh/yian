@@ -81,14 +81,16 @@ class MapNode(Node):
 
         Returns `{"over": <list>}`: the `over` source rides `node_wiring["over"]`, evaluated
         against `pool`. A source that resolves to `None`/non-list is a loud `RuntimeError`
-        (surfaced as a NodeFailed by the read seam)."""
-        over_src = node_wiring["over"]
-        items = eval_binding(over_src, lambda p: resolve_reference(p, pool))
-        if items is None or not isinstance(items, list):
-            raise RuntimeError(
-                f"MAP node {self.id!r}: `over` ({over_src}) did not resolve to a list"
-            )
-        return {"over": items}
+        (surfaced as a NodeFailed by the read seam). The whole resolution is located to the
+        `over:` line — a bad-ref eval failure or a non-list value carets `over:`, not the header."""
+        with self.locating_reserved("over"):
+            over_src = node_wiring["over"]
+            items = eval_binding(over_src, lambda p: resolve_reference(p, pool))
+            if items is None or not isinstance(items, list):
+                raise RuntimeError(
+                    f"MAP node {self.id!r}: `over` ({over_src}) did not resolve to a list"
+                )
+            return {"over": items}
 
     def reserved_wiring_keys(self) -> set[str]:
         """A MAP reserves `over` (its iteration-source author-wiring key)."""

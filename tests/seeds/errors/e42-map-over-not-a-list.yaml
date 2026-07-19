@@ -1,0 +1,29 @@
+# e42 — a MAP `over:` source that resolves to a NON-LIST at RUNTIME. #86 reserved-key locator.
+# `over: ${input.xs}` type-checks lenient at compile (the reserved `over` key is skipped by
+# `check_ref_map_types`), so the flow LOADS clean and fails only when `run` resolves `xs` to a str.
+# BEFORE #86 the caret fell on the `each:` node header (line 23); AFTER it boxes the `over:` line.
+# RUNTIME: `ac run … --input xs=not-a-list`. Expect RuntimeError "did not resolve to a list".
+id: err-map-over-not-a-list
+name: err_map_over_not_a_list
+input:
+  xs: str
+defs:
+  body:
+    input:
+      item: str
+    nodes:
+      double:
+        kind: code
+        input:
+          item: ${input.item}
+        output: int
+        code: "return {'output': 1}"
+    output: ${double.output}
+nodes:
+  each:
+    kind: map
+    call: body
+    over: ${input.xs}       # ERROR at RUNTIME (line 26): a str, not a list — caret belongs HERE
+    input:
+      item: ${item}
+output: ${each.output}

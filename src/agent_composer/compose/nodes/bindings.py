@@ -33,16 +33,19 @@ def _descriptor_kind(desc: Any) -> str:
 
 
 def map_binding_strings(
-    desc: Any, mapper: Callable[[str], Any], *, binding_fields: dict = BINDING_FIELDS
+    desc: Any, mapper: Callable[[str, str], Any], *, binding_fields: dict = BINDING_FIELDS
 ) -> Any:
-    """Apply `mapper` to each STRING binding in `desc`'s kind-declared binding fields.
+    """Apply `mapper(key, value)` to each STRING binding in `desc`'s kind-declared binding fields.
 
-    The fields are `binding_fields[kind]` (from each kind's `binding_fields`): a dict
-    field (e.g. `inputs`) has `mapper` applied to each string VALUE; a scalar field
-    (e.g. a mapped call's `over`) has `mapper` applied directly when it is a string.
-    Non-string values (literals / native YAML) are left as-is; a descriptor whose kind
-    lists no binding fields (case/wait/loop/human_input) passes through unchanged. Returns
-    a new frozen descriptor when anything changed, else `desc` itself. `mapper` may raise."""
+    The fields are `binding_fields[kind]` (from each kind's `binding_fields`): a dict field
+    (e.g. `inputs`) applies `mapper(binding_name, value)` to each string VALUE; a scalar field
+    (e.g. a mapped call's `over`) applies `mapper(field_name, value)` when it is a string. The
+    `key` lets a caller locate what it rewrote (the inline-call desugar reads it to anchor a
+    synth node at that binding's own source line); a caller that only needs the value wraps its
+    function with `keyless`. Non-string values (literals / native YAML) are left as-is; a
+    descriptor whose kind lists no binding fields (case/wait/loop/human_input) passes through
+    unchanged. Returns a new frozen descriptor when anything changed, else `desc` itself.
+    `mapper` may raise."""
     kind = _descriptor_kind(desc)
     fields = binding_fields.get(kind, ())
     if not fields:
@@ -53,10 +56,16 @@ def map_binding_strings(
         current = getattr(desc, name)
         if isinstance(current, dict):
             updates[name] = {
-                k: (mapper(v) if isinstance(v, str) else v) for k, v in current.items()
+                k: (mapper(k, v) if isinstance(v, str) else v) for k, v in current.items()
             }
         elif isinstance(current, str):
-            updates[name] = mapper(current)
+            updates[name] = mapper(name, current)
         # None / non-string scalar: nothing to rewrite.
 
     return replace(desc, **updates) if updates else desc
+
+
+def keyless(fn: Callable[[str], Any]) -> Callable[[str, str], Any]:
+    """Adapt a value-only binding mapper to `map_binding_strings`' `(key, value)` contract,
+    dropping the key — for a caller that rewrites a binding purely from its value."""
+    return lambda _key, value: fn(value)

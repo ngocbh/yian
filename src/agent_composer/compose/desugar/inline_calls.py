@@ -55,7 +55,7 @@ from agent_composer.expr.template import (
     _split_kv,
     flow_call_callees_in_spans,
 )
-from agent_composer.compose.nodes.bindings import map_binding_strings
+from agent_composer.compose.nodes.bindings import keyless, map_binding_strings
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import (
     CallDescriptor,
@@ -155,7 +155,7 @@ def _desugar_descriptor(
     string and accumulates the inline calls it finds."""
     calls: list = []
     new_desc = map_binding_strings(
-        desc, lambda value: _desugar_value(value, mint, calls, host, range=range)
+        desc, keyless(lambda value: _desugar_value(value, mint, calls, host, range=range))
     )
     return new_desc, calls
 

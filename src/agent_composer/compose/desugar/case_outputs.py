@@ -25,7 +25,7 @@ import re
 from typing import Any, Optional
 
 from agent_composer.expr import ExpressionError, expr_refs_of
-from agent_composer.compose.nodes.bindings import map_binding_strings
+from agent_composer.compose.nodes.bindings import keyless, map_binding_strings
 from agent_composer.compose.desugar.inline_calls import map_outputs_strings
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import CaseDescriptor
@@ -64,7 +64,7 @@ def expand_case_outputs(
 
     new_descriptors = {
         nid: map_binding_strings(
-            d, _expander(case_ids, targets, f"node {nid!r}", lines.get(nid))
+            d, keyless(_expander(case_ids, targets, f"node {nid!r}", lines.get(nid)))
         )
         for nid, d in descriptors.items()
     }

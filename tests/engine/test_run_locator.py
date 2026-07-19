@@ -59,6 +59,30 @@ def test_code_wrong_type_output_sets_field_locator():
     assert result.locator.key == "output"
 
 
+def test_locating_reserved_stamps_bare_but_preserves_existing_locator():
+    # The node-owned context manager stamps a ("field", key) locator on a locator-less exception
+    # (so the funnel can resolve the key's line) but leaves the ORIGINAL type/message intact, and
+    # never overwrites a locator that is already present (a failure that located itself wins).
+    from agent_composer.events import SourceSpan
+    from agent_composer.nodes.map.node import MapNode
+
+    node = MapNode("m", flow_id="f")
+    try:
+        with node.locating_reserved("over"):
+            raise RuntimeError("boom")
+    except RuntimeError as exc:
+        assert str(exc) == "boom"                       # message untouched
+        assert (exc.locator.node, exc.locator.kind, exc.locator.key) == ("m", "field", "over")
+
+    prelocated = ValueError("inner")
+    prelocated.locator = SourceSpan("other", "assert", "x")
+    try:
+        with node.locating_reserved("over"):
+            raise prelocated
+    except ValueError as exc:
+        assert (exc.locator.node, exc.locator.kind, exc.locator.key) == ("other", "assert", "x")
+
+
 def test_map_over_not_a_list_carets_the_over_line():
     # e42 (#86): a MAP `over:` source resolving to a non-list fails at RUNTIME. The locator names
     # the reserved `over` field, and the range boxes the `over:` line (26) — NOT the node header.

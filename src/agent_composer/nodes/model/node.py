@@ -22,7 +22,7 @@ class ModelNode(Node):
 
     A MODEL node holds a `model_id` (+ optional weights/runtime hints) and is meant to delegate
     inference to an injected ML-serving seam (the MODEL analogue of AGENT's LLM). That seam was
-    removed as dead plumbing, so [`run`][agent_composer.nodes.model.node.ModelNode.run] raises
+    removed as dead plumbing, so [`Node.run`][agent_composer.nodes.base.Node.run] raises
     until real serving lands.
 
     Args:

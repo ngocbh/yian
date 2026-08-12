@@ -121,7 +121,7 @@ number, a list a list); embedded in surrounding text it is stringified.
 
 !!! note "Flow calls are not expressions"
     A `${...}` computes over values — it does **not** invoke a flow. To call a
-    child flow inline, use the `call(...)` directive (see [`call` / `map`](#call--map--composition-over-child-flows)),
+    child flow inline, use the `call(...)` directive (see [`call` / `map`](#call-map-composition-over-child-flows)),
     not `${flow(args)}` (which is a load error).
 
 

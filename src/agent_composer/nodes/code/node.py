@@ -120,8 +120,8 @@ class CodeNode(Node):
     """
     Run deterministic Python — a `module:function` reference or inline source, both in-process.
 
-    The one `code:` field is classified by shape at construction (see
-    [`classify_code_source`][agent_composer.nodes.code.node.classify_code_source]) and the
+    The one `code:` field is classified by shape at construction with
+    `classify_code_source`, and the
     mode is stored, so `run` stays pure dispatch. Reference mode imports and calls the
     function; inline mode wraps the bare body as `def main(inputs):`, compiles it (padded for
     absolute-YAML-line tracebacks), and calls `main(inputs)`. Node purity is preserved — `run`

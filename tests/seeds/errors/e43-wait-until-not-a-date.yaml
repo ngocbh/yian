@@ -1,0 +1,14 @@
+# e43 — a timed WAIT `until:` that resolves to a NON-DATE at RUNTIME. #86 reserved-key locator.
+# `until: ${input.when}` with `when: int` loads clean (WAIT is skipped by `check_ref_map_types`)
+# and fails when `run` resolves `when` to an int. BEFORE #86 the caret fell on the `w:` node header
+# (line 6); AFTER it boxes the `until:` line.
+# RUNTIME: `ac run … --input when=5`. Expect ValueError "did not resolve to a date/datetime".
+id: err-wait-until-not-a-date
+name: err_wait_until_not_a_date
+input:
+  when: int
+nodes:
+  w:
+    kind: wait
+    until: ${input.when}    # ERROR at RUNTIME (line 13): an int, not a date — caret belongs HERE
+output: ${w.output}

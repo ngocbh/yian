@@ -28,15 +28,26 @@ def resolve_until(until_src: Any, pool: VariablePool) -> str:
     """Resolve a WAIT `until` source to an ISO timestamp string.
 
     A `${...}` binding (or a literal) is evaluated against the pool; `date`/`datetime` segments
-    resolve to ISO strings (returned as-is), a raw `.isoformat()` object is formatted defensively,
-    anything else is a loud `ValueError`. Lifted out of `WaitNode` so the engine bind seam can
-    pre-resolve `inputs["until"]` for a pure `WaitNode.run`."""
+    resolve to ISO strings (validated + returned), a raw `.isoformat()` object is formatted
+    defensively, anything else is a loud `ValueError`. Lifted out of `WaitNode` so the engine bind
+    seam can pre-resolve `inputs["until"]` for a pure `WaitNode.run`."""
+    from datetime import datetime as _datetime
+
     from agent_composer.expr import eval_binding
     from agent_composer.expr.expressions import resolve_reference
 
     val = eval_binding(until_src, lambda path: resolve_reference(path, pool))
     if isinstance(val, str):
-        return val  # date/datetime are stored/resolved as ISO strings
+        # A str reaches `ScheduledPause.resume_at` unchecked, so a malformed literal (e.g.
+        # `until: "not-a-date"`) would pause forever. Validate the ISO shape here; `fromisoformat`
+        # (3.11+) covers date, datetime, and a trailing `Z`.
+        try:
+            _datetime.fromisoformat(val)
+        except ValueError:
+            raise ValueError(
+                f"wait `until` ({until_src!r}) is not an ISO timestamp: {val!r}"
+            )
+        return val
     if hasattr(val, "isoformat"):  # defensive: a raw date/datetime object
         return val.isoformat()
     raise ValueError(
@@ -90,9 +101,12 @@ class WaitNode(Node):
 
         Returns `{"until": <ISO ts>}` when `self.is_timed` (the `until` source rides
         `node_wiring["until"]`); `{}` for the event mode. Its presence in the record is the
-        timed/event discriminator `run` reads."""
+        timed/event discriminator `run` reads. The timed resolution is located to the `until:`
+        line — a bad ref or non-date value carets `until:`, not the node header. Stamp here (which
+        has `self`), not in the free `resolve_until`. The event branch reserves nothing."""
         if self.is_timed:
-            return {"until": resolve_until(node_wiring["until"], pool)}
+            with self.locating_reserved("until"):
+                return {"until": resolve_until(node_wiring["until"], pool)}
         return {}
 
     def reserved_wiring_keys(self) -> set[str]:

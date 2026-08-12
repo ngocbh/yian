@@ -1,0 +1,14 @@
+# e44 — a timed WAIT `until:` with a DANGLING node ref. #100 two-gate ref-scan.
+# BEFORE: `until:` was never name-checked (the ref-scan skipped WAIT via an `isinstance` kind check),
+# so a dangling node ref crashed the loader with a raw `KeyError: 'nope'` deep in `_reject_cycles`.
+# AFTER: a located LoadError ("unresolved references") carets the `until:` line.
+# COMPILE: fails at load; no inputs needed.
+id: err-wait-until-dangling-ref
+name: err_wait_until_dangling_ref
+input:
+  t: str
+nodes:
+  w:
+    kind: wait
+    until: ${nope.output}    # ERROR (line 13): no node `nope` — the caret belongs HERE
+output: ${w.output}

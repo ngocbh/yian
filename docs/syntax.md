@@ -444,9 +444,16 @@ ask:
 ```yaml
 settle:
   kind: wait
-  until: ${input.as_of}
+  until: ${input.as_of}        # or ${plan.output} — a node that computes the timestamp
   # downstream nodes order after it with depends_on: [settle]
 ```
+
+`until:` binds a `${...}` reference (or a literal ISO string) that must resolve to a
+date/datetime — either a flow input (`${input.as_of}`) or a **node output**
+(`${plan.output}`, which orders the wait after `plan`). The reference is **name-checked
+at load** like any other binding: a dangling or undeclared ref is a located `LoadError`,
+not a runtime crash. An inline `call(...)` is **not** allowed as an `until:` value (bind a
+node output instead), and a malformed literal ISO string is rejected.
 
 ### `call` / `map` — composition over child flows
 
@@ -484,6 +491,9 @@ Rules:
 - **Whole-value only.** `call(...)` is recognized only when it is the *entire*
   trimmed value (a binding value or a `case` `then:`/`else:` route target). A
   `call(` in the *middle* of a value, or inside a `${...}` span, is literal text.
+- **Not on `wait until:`.** A `map over:` accepts a `call(...)` (it lowers to a node
+  output before validation), but a `wait until:` does **not** — an inline call there is
+  a load error. Bind a node output (`until: ${gettime.output}`) instead.
 - **Keyword args only** — `call(f, x=1, note=${a.output})`. Each arg value is a
   `${...}` expression or a literal (`window=30` binds the int `30`). A positional
   arg is a load error.

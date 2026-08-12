@@ -20,8 +20,14 @@ mapping for an input-binding ref, its `prompt:` for a prompt ref). The transitio
 `node_lines`/`outputs_line` line-maps still feed `LoadError.line` for the line-based CLI
 renderer; a later renderer collapse retires them for the range.
 
-Imports flow down only: `compile.validation` (the leaf ref checker), `expr` (the binding
-parser), `nodes` (Node/AgentNode/WaitNode discrimination), `typesys` (Type), `compose.helpers.errors`.
+The two reserved wiring keys (MAP `over` / timed WAIT `until`) are scanned as SOURCES, gated on
+the `reserved_wiring_keys()` trait — not on the node kind. `check_wiring_parity` (one pass earlier)
+enforces `wiring == params | reserved`, so the reserved loop plus the input loop together scan every
+wiring key: the scan is complete by construction, no kind check needed.
+
+Imports flow down only: `compile.validation` (the leaf ref checker), `expr` (the binding parser +
+`flow_call_callees_in_spans`), `compose.desugar` (`desugar_call_directives`, to reject an inline
+`call(...)` on a reserved key), `nodes` (Node/AgentNode), `typesys` (Type), `compose.helpers.errors`.
 Only the loader (and the compose package facade) import this back.
 """
 
@@ -37,9 +43,10 @@ from agent_composer.expr import (
     expr_refs_of,
     prompt_refs,
 )
+from agent_composer.compose.desugar.inline_calls import desugar_call_directives
+from agent_composer.expr.template import flow_call_callees_in_spans
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.wait import WaitNode
 from agent_composer.typesys.values import Type
 
 # Heads forbidden in a strict prompt (always trigger the bespoke hint).
@@ -155,19 +162,43 @@ def validate_references(
                         node_line,
                         prompt_rng,
                     ))
-        # A per-item binder (MAP) reads a parent-pool `list[T]` from its reserved wiring key(s)
-        # (`over` — no `${item}` there); each per-element input MAY use `${item}` (the body-local
-        # element scope, lenient).
+        # Two trait gates, not a kind check. A reserved wiring key (MAP `over` / timed WAIT `until`)
+        # is a SOURCE bound from the parent pool — `over` a `list[T]`, `until` a date — never a
+        # per-element input. `reserved_wiring_keys()` says which keys are sources (this loop);
+        # `binds_per_item` says whether the per-element inputs get `${item}` (the loop below).
+        # Parity (`check_wiring_parity`, one pass earlier) guarantees `wiring == params | reserved`,
+        # so the reserved loop + the input loop scan EVERY wiring key — complete by construction.
+        nwiring = flow_wiring.get(node_id, {})
+        reserved = node.reserved_wiring_keys()
+        input_rng = franges.get(("field", "inputs")) or node.range
+        for key in reserved:
+            src = nwiring.get(key)
+            # A reserved key whose source STILL parses as a `call(...)` directive was never lowered:
+            # the desugar walk only visits a kind's `binding_fields`. `over` is in that set (it is a
+            # `${__call_0.output}` ref by now), `until` is NOT — so a raw `until: call(...)` would
+            # ride through and pause on a literal timestamp. Reject it (mirrors `asserts.py`).
+            try:
+                _, calls = (
+                    desugar_call_directives(src, lambda: "__r")
+                    if isinstance(src, str) else (None, [])
+                )
+                spans = flow_call_callees_in_spans(src) if isinstance(src, str) else []
+            except ExpressionError:
+                calls, spans = ["(malformed call)"], []
+            # A reserved key is a KIND FIELD, so its range is tagged `("field", key)` — not the bare
+            # key, which would never match the tuple-keyed map and would silently anchor on `input:`.
+            key_rng = franges.get(("field", key)) or input_rng
+            if calls or spans:
+                errors.append((
+                    f"node {node_id!r} {key}: an inline call is not allowed here — "
+                    f"bind a node output instead",
+                    node_line,
+                    key_rng,
+                ))
+                continue
+            scan(src, f"node {node_id!r} {key}", node_line, key_rng)
         if node.binds_per_item:
-            nwiring = flow_wiring.get(node_id, {})
-            reserved = node.reserved_wiring_keys()
-            input_rng = franges.get(("field", "inputs")) or node.range
-            for key in reserved:
-                # A reserved wiring key (`over`) is a KIND FIELD, so its range is tagged
-                # `("field", key)` — not the bare key, which would never match and would
-                # silently anchor the error on the whole `input:` block instead.
-                over_rng = franges.get(("field", key)) or input_rng
-                scan(nwiring.get(key), f"node {node_id!r} map {key}", node_line, over_rng)
+            # MAP only: each per-element input MAY use `${item}` (the body-local element scope).
             for param, src in nwiring.items():
                 if param in reserved:
                     continue  # the iteration source, scanned above (not a per-element input)
@@ -179,8 +210,6 @@ def validate_references(
                     extra_heads=("item",),
                 )
             continue
-        if isinstance(node, WaitNode):
-            continue  # a timed WAIT's `until` is out of ref-validation scope (as today)
         # Each node input `from:` source, read from the flow-owned wiring. For a
         # desugared CASE these are the `__rN`/`__on` SOURCES (the original
         # `${<id>.output}` refs) — validated against the pool. The rewritten node-local
@@ -191,8 +220,10 @@ def validate_references(
         # one for its synthetic params (a CASE `__rN` -> its `cases[N].when` line); the block range
         # is only the fallback (a spanless flow has no ranges at all). `wiring_ref_label` gives a
         # synthetic param the author-facing name it was hoisted from instead of leaking `__rN`.
-        input_rng = franges.get(("field", "inputs")) or node.range
-        for param, src in flow_wiring.get(node_id, {}).items():
+        # A reserved key (a timed WAIT `until`) is skipped — it was scanned above as a source.
+        for param, src in nwiring.items():
+            if param in reserved:
+                continue
             scan(src, f"node {node_id!r} {node.wiring_ref_label(param)} from", node_line,
                  franges.get(("input", param)) or input_rng)
 

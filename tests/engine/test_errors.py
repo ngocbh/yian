@@ -256,6 +256,10 @@ def test_compile_error_gallery(filename, substr, line):
         ("e27-inline-code-raises.yaml", {"topic": "X"}, "intentional inline failure"),
         ("e28-inline-wrong-type.yaml", {"topic": "X"}, "int"),
         ("e29-inline-nonserializable.yaml", {"topic": "X"}, "non-serializable"),
+        # #86 reserved-key RUNTIME failures — a MAP `over:` non-list and a timed WAIT `until:`
+        # non-date. Both load clean (the reserved keys are compile-lenient) and fail at run.
+        ("e42-map-over-not-a-list.yaml", {"xs": "not-a-list"}, "did not resolve to a list"),
+        ("e43-wait-until-not-a-date.yaml", {"when": 5}, "did not resolve to a date/datetime"),
     ],
 )
 def test_runtime_error_gallery(filename, inputs, substr):
@@ -322,9 +326,33 @@ def test_map_over_ref_locates_the_over_line():
     # `field_ranges.get("over")` silently degraded to once the map became tuple-keyed (#98).
     err = _load_error("e35-bad-map-over-ref.yaml")
     assert "unresolved references" in str(err)
-    assert "map over" in str(err)  # names the reserved key, not an input
+    # #100 folded the MAP-over and WAIT-until reserved-key scans into one kind-blind loop, so the
+    # message names the bare YAML key (`over`), dropping the old `map` prefix. Still names the
+    # reserved key, not an input — the assertion's original intent.
+    assert "over" in str(err)
     assert err.range is not None
     assert (err.range.start_line, err.range.end_line) == (26, 26)
+
+
+def test_wait_until_dangling_ref_locates_the_until_line():
+    # e44 (#100): a timed WAIT `until:` was never name-checked (the ref-scan skipped WAIT), so a
+    # dangling `${nope.output}` crashed the loader with a raw KeyError. It is now a located
+    # LoadError whose range boxes the `until:` line (13) — NOT the node header.
+    err = _load_error("e44-wait-until-dangling-ref.yaml")
+    assert "unresolved references" in str(err)
+    assert "until" in str(err) and "nope" in str(err)  # names the reserved key + the bad ref
+    assert err.range is not None
+    assert (err.range.start_line, err.range.end_line) == (13, 13)
+
+
+def test_wait_until_inline_call_is_rejected_at_the_until_line():
+    # e45 (#100): `until` has no `binding_fields`, so a raw `call(...)` is NOT lowered (unlike a MAP
+    # `over: call(...)`). It would ride through and pause on a literal string; it is now rejected at
+    # load with a located LoadError boxing the `until:` line (13).
+    err = _load_error("e45-wait-until-inline-call.yaml")
+    assert "inline call is not allowed" in str(err) and "until" in str(err)
+    assert err.range is not None
+    assert (err.range.start_line, err.range.end_line) == (13, 13)
 
 
 def test_duplicate_asserts_caret_at_first_occurrence():

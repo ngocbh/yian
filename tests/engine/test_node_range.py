@@ -76,6 +76,7 @@ def test_node_range_does_not_ride_checkpoint():
     node = loaded.compiled.nodes["done"]
     node.range = SourceRange(4, 1, 6, 1)
     node.field_ranges = {("field", "code"): SourceRange(6, 5, 6, 40)}
+    node.wiring_labels = {"__r0": "cases[0].when"}  # a synth-param label — also render-only
 
     res = run_flow(loaded, {"settle_at": "2026-07-01"})
     assert res.status == "paused"
@@ -86,6 +87,8 @@ def test_node_range_does_not_ride_checkpoint():
     assert "field_ranges" not in blob
     assert "start_line" not in blob  # a serialized SourceRange would carry its fields
     assert "\"range\"" not in blob
+    assert "wiring_labels" not in blob
+    assert "cases[0].when" not in blob  # the label value must not ride the blob either
 
     # And the restored run reconstructs + resumes to completion.
     ckpt = RunCheckpoint.loads(blob)

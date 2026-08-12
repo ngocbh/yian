@@ -1,26 +1,26 @@
-# e38 — a dangling `${...}` inside a `case` node's `when:` reports at the NODE HEADER, not the
-# offending `when:` line. COMPILE: "unresolved references". Pins the class of location failure that
-# NO key scheme can fix (#88, reopened). Fails at load; no inputs needed.
+# e38 — a dangling `${...}` inside a `case` node's `when:` must locate at the offending `when:` line,
+# not the NODE HEADER. COMPILE: "unresolved references". Pins the SYNTH-PARAM provenance failure a
+# key scheme alone cannot fix (#106, formerly folded into #88). Fails at load; no inputs needed.
 #
-# `compose/nodes/case.py:17-18` hoists each distinct `${...}` in a `when:` into a SYNTHETIC CaseNode
-# input `__rN`, rewriting the `when:` to the bare local `${__r1}`. So by the time the error is
-# raised, the locator is `("input", "__r1")` — a name that appears NOWHERE in this file. There is no
-# key to look up, so it falls all the way back to the node header.
+# `compose/nodes/case.py` hoists each distinct `${...}` in a `when:` into a SYNTHETIC CaseNode input
+# `__rN`, rewriting the `when:` to the bare local `${__r1}`. So the ref-scan sees `("input","__r1")`
+# — a name that appears NOWHERE in this file — and USED to fall back to the node header, printing the
+# synthetic `__r1` the author never wrote.
 #
-# This is why `cases:` has no per-entry precision and CANNOT get it by "descending" into the field:
-# a stamp for `("cases", 1, "when")` (= L36) would be perfectly correct and nothing would ask for it.
-# The two halves a caret needs — the STAMP (a recorded range) and the LOCATOR (what the failure says)
-# — cannot meet once desugaring invents the name. Contrast e14, where the author's `rid:` survives to
-# error time and the locator can name it.
+# FIXED (#106): the CASE desugar captures each `cases[N].when` range (positionally) at parse and
+# stamps `("input","__rN")` -> that range, plus a `cases[N].when` LABEL, onto the built node. So the
+# ref-scan resolves the caret to L36 and names the author's construct instead of the synthetic
+# local. The STAMP (a recorded range) and the LOCATOR (what the failure says) finally meet.
 #
-# A second, independent miss stacks on top: `compose/validate/references.py:184` resolves the range
-# via `franges.get(("field","inputs")) or node.range`. A CASE node HAS no `inputs:` field (its keys
-# are `cases`/`else`/`on`), so that lookup always misses — the fallback is the header even before the
-# `__r1` problem bites.
+# (A CASE node also has no `inputs:` field — its keys are `cases`/`else`/`on` — so the block-range
+# fallback `franges.get(("field","inputs"))` always missed; the per-`__rN` stamp now wins ahead of
+# it. Contrast e14, where the author's `rid:` survives to error time and can be named directly.)
 #
-# The failure is `node 'gate' input '__r1'`.
-#   CURRENT:  caret L31 — the `gate:` node header. Not even the `cases:` block (L33).
-#   EXPECTED: caret L36 — the offending `when:` line.
+# The failure is `node 'gate' cases[1].when`.
+#   FIXED:  caret L36 — the offending `when:` line; the message names `cases[1].when`.
+#   (was:   caret L31, the `gate:` header, message leaking `input '__r1'` — a name nowhere authored.)
+#
+# Run: `ac run tests/seeds/errors/e38-case-when-ref-locates-node-header.yaml`.
 id: err-case-when-ref-header
 name: err_case_when_ref_header
 nodes:
@@ -28,7 +28,7 @@ nodes:
     kind: code
     code: tests.seeds.fns:const_one
     output: int
-  gate:                                    # L31 — the header the caret WRONGLY lands on
+  gate:                                    # L31 — the node header (no longer the caret site)
     kind: case
     cases:                                 # L33 — the `cases:` block
       - when: "score.output >= 0.5"        # L34 — valid

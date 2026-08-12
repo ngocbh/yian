@@ -1,23 +1,23 @@
-# e37 — a SYNTHESIZED node is handed the HOST's `field_ranges`, so its caret resolves to the host's
-# line. COMPILE: "unresolved references". Pins the CROSS-NODE collision that #98's `(kind, key)`
-# tuple does NOT fix (#88, reopened). Fails at load; no inputs needed.
+# e37 — a SYNTHESIZED node's caret must resolve to its OWN source, not the host's. COMPILE:
+# "unresolved references". Pins the CROSS-NODE provenance bug #98's `(kind, key)` tuple could NOT
+# fix (#106, formerly folded into #88). Fails at load; no inputs needed.
+# Run: `ac run tests/seeds/errors/e37-synth-node-inherits-host-ranges.yaml`.
 #
-# The inline `call(...)` (line 30) desugars to a synth node `__call_0`; `_to_call_descriptor`
-# (compose/desugar/inline_calls.py:318) hands it `field_ranges=dict(field_ranges)` — the HOST
-# `summary` node's map, verbatim. Both nodes end up with the SAME map:
+# The inline `call(...)` (line 30) desugars to a synth node `__call_0`. It USED to be handed the HOST
+# `summary` node's `field_ranges` verbatim, so both nodes carried the SAME map:
 #     summary:   topic->L29  news->L30  inputs->L29  outputs->L31  prompt->L32
 #     __call_0:  topic->L29  news->L30  inputs->L29  outputs->L31  prompt->L32
-# `__call_0` is a CALL node — it has no `prompt:` and no `news` input. Its ONE input is `topic`,
-# authored on L30 inside the directive. Its `('input','topic')` says L29 — the HOST's `topic:`.
-# Same key, two source locations; the foreign one wins. A tuple key cannot fix this: the key is
-# CORRECT, the map belongs to another node.
+# `__call_0` is a CALL node — no `prompt:`, no `news` input. Its ONE input is `topic`, authored on
+# L30 INSIDE the directive; but the inherited `('input','topic')` said L29 — the HOST's `topic:`. Same
+# key, two locations, the foreign one won. No key scheme fixes that: the key is correct, the map is
+# foreign — the synth node needs its OWN provenance.
 #
 # The failure is `node '__call_0' input 'topic'`.
-#   CURRENT (main, post-#104): caret L29 ALONE — per-entry resolution (#104) resolves
-#                       ("input","topic") to the HOST's `topic:`, marking a VALID line and leaving
-#                       the real error on L30 unmarked. (Before #104 it marked the whole `inputs:`
-#                       block L29-31, which at least CONTAINED L30 — per-entry made this case worse.)
-#   EXPECTED:           caret L30 — the `call(...)` directive the synth node came from. See #106.
+#   FIXED (#106): caret L30 — the `call(...)` directive's binding line. The desugar now hands the
+#                 synth node the origin range of the binding it came from (empty field_ranges), so a
+#                 bad ref inside the directive carets the directive, not the host's like-named input.
+#                 (Pre-#104: the whole `inputs:` block L29-31; post-#104 per-entry: L29 alone, a valid
+#                 line — confidently wrong. This seed pins the corrected L30.)
 id: err-synth-inherits-host-ranges
 name: err_synth_inherits_host_ranges
 input:

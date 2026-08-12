@@ -25,10 +25,12 @@ top-level node with no map-element scope — use a named `call` node with `over:
 a user node id may not use the reserved synth prefix `__call_`.
 
 Located parse metadata: each parsed host descriptor carries its own `range`/`field_ranges`
-(from the span tree). A synth `call` node inherits the HOST descriptor's ranges, so its
-downstream errors locate at the host binding site — no `node_lines` map. The flow
-`outputs:`/`asserts:` sections have no descriptor, so their inline calls locate at the
-section source line (`outputs_line`/`asserts_line`) until the span cutover retires those.
+(from the span tree). A synth `call` node locates at the SITE it desugared from — the host
+binding's own line (looked up in the host `field_ranges` by the binding key), not the host
+node header — and owns an empty `field_ranges`, so a bad ref inside the directive carets the
+directive rather than a host input that shares its param name. The flow `outputs:`/`asserts:`
+sections have no descriptor, so their inline calls locate at the section source line
+(`outputs_line`/`asserts_line`) until the span cutover retires those.
 
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
 kind-blind binding-field walk) + `compose.helpers.errors` (peers), `expr` (the ref-walk + the
@@ -90,10 +92,11 @@ def desugar_inline_calls(
     inline calls rewritten the same way. A span-wrapped inline `${ f(...) }` in an assert
     expression (`${ f(...) } == x`) lifts to a synth node so the assert reads its output.
 
-    Each synth node from a node host inherits that host descriptor's `range`/`field_ranges`;
-    a synth node from the flow `outputs:`/`asserts:` section locates at `outputs_line`/
-    `asserts_line`. Raises `LoadError` on a malformed inline call, a `${item}` capture, or a
-    reserved-prefix collision — located at the host node / `outputs:` / `asserts:`."""
+    Each synth node from a node host locates at the range of the binding it was found in (its
+    own `call(...)` directive line); a synth node from the flow `outputs:`/`asserts:` section
+    locates at `outputs_line`/`asserts_line`. Raises `LoadError` on a malformed inline call, a
+    `${item}` capture, or a reserved-prefix collision — located at the host node / `outputs:` /
+    `asserts:`."""
     mint = next_id or _synth_id_gen()
 
     # Reserve the synth namespace: a user node id must not use the prefix (else it
@@ -110,11 +113,16 @@ def desugar_inline_calls(
     for nid, desc in descriptors.items():
         rng = getattr(desc, "range", None)
         field_ranges = getattr(desc, "field_ranges", None)
-        new_desc, calls = _desugar_descriptor(desc, mint, host=nid, range=rng)
+        new_desc, calls, origins = _desugar_descriptor(
+            desc, mint, host=nid, range=rng, field_ranges=field_ranges
+        )
         new_descriptors[nid] = new_desc
         for call in calls:
+            # The synth node locates at the binding the `call(...)` came from (its own
+            # `input:` line), not the host node header — so a bad ref inside the directive
+            # carets the directive, not a (valid) host input that shares the param name.
             synth[call.id] = _to_call_descriptor(
-                call, host=f"node {nid!r}", range=rng, field_ranges=field_ranges
+                call, host=f"node {nid!r}", range=origins.get(call.id, rng)
             )
 
     new_outputs, out_calls = _desugar_outputs(outputs_section, mint, outputs_line)
@@ -146,18 +154,46 @@ def map_outputs_strings(outputs: Any, fn: Callable[[str], Any]) -> Any:
     return outputs
 
 
-def _desugar_descriptor(
-    desc: NodeDescriptor, mint: Callable[[], str], *, host: str, range: Optional[SourceRange]
-) -> tuple:
-    """Desugar a descriptor's binding fields, returning `(new_desc, inline_calls)`.
+def _binding_origin(
+    key: str, field_ranges: Optional[dict], host_range: Optional[SourceRange]
+) -> Optional[SourceRange]:
+    """The source range a synth node desugared from binding `key` should locate at.
 
-    Walks the binding fields via `map_binding_strings`; the closure `fn` desugars each
-    string and accumulates the inline calls it finds."""
+    Prefers the binding's OWN entry — `("input", key)` for a dict binding (an `input:` param),
+    `("field", key)` for a scalar binding field (a map's `over:`) — i.e. the line the
+    `call(...)` directive was written on. Falls back to the host node's range when there is no
+    stamped entry (a spanless flow, or a binding shape with no per-entry range)."""
+    fr = field_ranges or {}
+    return fr.get(("input", key)) or fr.get(("field", key)) or host_range
+
+
+def _desugar_descriptor(
+    desc: NodeDescriptor,
+    mint: Callable[[], str],
+    *,
+    host: str,
+    range: Optional[SourceRange],
+    field_ranges: Optional[dict],
+) -> tuple:
+    """Desugar a descriptor's binding fields, returning `(new_desc, calls, origins)`.
+
+    Walks the binding fields via `map_binding_strings`; each inline call is tagged in
+    `origins` with the SOURCE RANGE of the binding it was found in (via `_binding_origin`),
+    so its synth node locates at its own `call(...)` directive rather than the host header.
+    Nested inner-first calls share their enclosing binding's origin."""
     calls: list = []
-    new_desc = map_binding_strings(
-        desc, lambda value: _desugar_value(value, mint, calls, host, range=range)
-    )
-    return new_desc, calls
+    origins: dict[str, Optional[SourceRange]] = {}
+
+    def mapper(key: str, value: str) -> str:
+        origin = _binding_origin(key, field_ranges, range)
+        before = len(calls)
+        new_value = _desugar_value(value, mint, calls, host, range=range)
+        for c in calls[before:]:
+            origins[c.id] = origin
+        return new_value
+
+    new_desc = map_binding_strings(desc, mapper)
+    return new_desc, calls, origins
 
 
 def _desugar_value(
@@ -294,12 +330,13 @@ def _to_call_descriptor(
     *,
     host: str,
     range: Optional[SourceRange] = None,
-    field_ranges: Optional[dict] = None,
     line: Optional[int] = None,
 ) -> CallDescriptor:
     """One `InlineCall` -> a synth `CallDescriptor` (`over=None`), after the `${item}`
-    guard. A node-host synth node inherits the host's `range`/`field_ranges` (so downstream
-    errors locate at the host); a section host (`outputs:`/`asserts:`) locates at `line`."""
+    guard. The synth node carries its OWN provenance: `range` is the site it desugared from
+    (a node input's binding line, or a case `then:`/`else:` line), or `line` for a section
+    host (`outputs:`/`asserts:`). It owns no authored fields, so `field_ranges` is empty and
+    a bad ref inside the directive carets `range`, never a host line."""
     for name, value in call.args.items():
         if _captures_item(value):
             raise LoadError(
@@ -316,7 +353,7 @@ def _to_call_descriptor(
         inputs=dict(call.args),
         over=None,
         range=range,
-        field_ranges=FieldRanges(field_ranges) if field_ranges else FieldRanges(),
+        field_ranges=FieldRanges(),
     )
 
 

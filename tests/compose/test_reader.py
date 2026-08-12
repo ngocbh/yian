@@ -47,3 +47,38 @@ def test_item_range_list_absent_and_spanless_are_empty():
     assert NodeReader(value, spans, root).item_range_list("asserts") == []   # field absent
     assert NodeReader.spanless({"asserts": ["x > 0"]}).item_range_list("asserts") == []  # no spans
 
+
+def test_sequence_field_ranges_positional_per_item_field():
+    """Per-item VALUE range of a field in a SEQUENCE of MAPPINGS, positional 1:1 — the basis
+    for a CASE's `cases[N].when` / `cases[N].then` caret (no unique text key to key on)."""
+    from agent_composer.compose.helpers.spanloader import load_with_spans
+    from agent_composer.compose.helpers.reader import NodeReader
+
+    text = (
+        "cases:\n"
+        '  - when: "a >= 1"\n'   # L2
+        "    then: x\n"          # L3
+        '  - when: "b >= 2"\n'   # L4
+        "    then: y\n"          # L5
+    )
+    value, spans, root = load_with_spans(text, return_root=True)
+    r = NodeReader(value, spans, root)
+
+    whens = r.sequence_field_ranges("cases", "when")
+    assert len(whens) == 2                                    # one per case, IN ORDER
+    assert whens[0].start_line == 2 and whens[1].start_line == 4
+    assert [t.start_line for t in r.sequence_field_ranges("cases", "then")] == [3, 5]
+
+
+def test_sequence_field_ranges_absent_spanless_and_nonmapping():
+    from agent_composer.compose.helpers.spanloader import load_with_spans
+    from agent_composer.compose.helpers.reader import NodeReader
+
+    value, spans, root = load_with_spans("a: 1\n", return_root=True)
+    assert NodeReader(value, spans, root).sequence_field_ranges("cases", "when") == []  # field absent
+    assert NodeReader.spanless(
+        {"cases": [{"when": "x"}]}
+    ).sequence_field_ranges("cases", "when") == []                                       # no spans
+    v2, s2, r2 = load_with_spans("cases:\n  - x\n  - y\n", return_root=True)             # scalar items
+    assert NodeReader(v2, s2, r2).sequence_field_ranges("cases", "when") == [None, None]
+

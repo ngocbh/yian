@@ -16,7 +16,7 @@ from agent_composer.compose.nodes.tool import ToolDescriptor
 from agent_composer.compose.nodes.wait import WaitDescriptor
 
 
-def _up(value):
+def _up(_key, value):
     return value.upper()
 
 

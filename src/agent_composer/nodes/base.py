@@ -327,6 +327,12 @@ class Node(ABC):
         #   per-field spans are recorded.
         self.range: Optional["SourceRange"] = None
         self.field_ranges: FieldRanges = FieldRanges()
+        # `self.wiring_labels`: wiring param -> author-facing phrase for a reference error, for a
+        #   SYNTHESIZED param the author never wrote (a CASE `__rN` from a `when:` ref, `__on` from
+        #   `on:`) — e.g. `"cases[1].when"` / `"on:"`. Render-only, not checkpointed; populated by
+        #   the desugar that mints the param. Empty for every authored param (the default label
+        #   below reproduces the plain `input '<param>'` text).
+        self.wiring_labels: dict[str, str] = {}
         # Positional assert-range lists, aligned 1:1 with `pre_asserts` / `post_asserts` (an entry
         # is None where no span exists — a spanless / in-memory flow). Populated by the loader:
         # `validate_node_asserts` splits the descriptor's authored `assert_ranges` in lockstep with
@@ -447,6 +453,13 @@ class Node(ABC):
         WAIT: `until`; a MAP: `over`), but returned with NO pool — load-time only. Default:
         the empty set (an ordinary node reserves no keys)."""
         return set()
+
+    def wiring_ref_label(self, param: str) -> str:
+        """The author-facing phrase for a wiring `param` in a reference error — e.g. `input 'x'`
+        for an authored input, or a synthetic param's own site (`cases[1].when`, `on:`) when the
+        desugar recorded one in `wiring_labels`. The default reproduces the plain `input '<param>'`
+        text, so a message about an authored param is byte-identical to before."""
+        return self.wiring_labels.get(param, f"input {param!r}")
 
     def replay_grow(self, seed: Any) -> "Flow":
         """Durable-replay seam (the READ half of `Grow`): rebuild THIS spawner's subgraph from the

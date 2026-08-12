@@ -1,6 +1,12 @@
 ---
 name: engine
-description: Use when implementing, extending, or changing the Agent Composer flow engine — anything under src/agent_composer/ (node kinds, runtime/scheduling, typed state, suspend/resume, compile/loader, expressions) or its contract. Enforces the workflow: design from the functional model (OCaml as reference), fit the engine invariants, plan, then implement in small tested steps. Trigger on requests like "add a … node kind", "implement … in the engine", "change how the runtime …".
+description: >-
+  Use when implementing, extending, or changing the Agent Composer flow engine —
+  anything under src/agent_composer/ (node kinds, runtime/scheduling, typed state,
+  suspend/resume, compile/loader, expressions) or its contract. Enforces the
+  workflow: design from the functional model (OCaml as reference), fit the engine
+  invariants, plan, then implement in small tested steps. Trigger on requests like
+  "add a … node kind", "implement … in the engine", or "change how the runtime …".
 ---
 
 # Engine development workflow

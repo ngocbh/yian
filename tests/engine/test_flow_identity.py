@@ -300,6 +300,20 @@ def test_flow_fingerprint_excludes_config_credentials():
     assert "first-shared-access-signature" not in manifest_text
 
 
+def test_flow_fingerprint_excludes_webhook_bearer_urls():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["SLACK_WEBHOOK_URL"] = (
+        "https://hooks.slack.com/services/T000/B000/FIRST_SECRET"
+    )
+    second.nodes["step"].env["SLACK_WEBHOOK_URL"] = (
+        "https://hooks.slack.com/services/T000/B000/SECOND_SECRET"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    assert "FIRST_SECRET" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+
 def test_flow_fingerprint_excludes_credential_declaration_defaults():
     source = """
 id: input-credentials

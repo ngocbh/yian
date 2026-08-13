@@ -192,6 +192,7 @@ _CREDENTIAL_NAMES = frozenset(
         "sslpassword",
         "token",
         "webhook_signature",
+        "webhook_url",
         "x_amz_security_token",
         "x_amz_signature",
         "x_goog_signature",
@@ -220,6 +221,7 @@ _HIGH_CONFIDENCE_CREDENTIAL_SUFFIXES = (
     "_session_token",
     "_shared_access_key",
     "_shared_access_signature",
+    "_webhook_url",
 )
 _AMBIGUOUS_CREDENTIAL_SUFFIXES = ("_auth", "_signature", "_token")
 _CREDENTIAL_COMPACT_NAMES = frozenset(

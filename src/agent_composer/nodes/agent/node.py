@@ -27,6 +27,7 @@ class AgentNode(Node):
     """
 
     kind = NodeKind.AGENT
+    needs_stop_event = True
 
     def __init__(
         self,
@@ -65,7 +66,7 @@ class AgentNode(Node):
             )
         return raw
 
-    def _ctx(self, prompt: str) -> AgentRunContext:
+    def _ctx(self, prompt: str, *, stop_event=None) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         return AgentRunContext(
             node_id=self.id,
@@ -75,9 +76,10 @@ class AgentNode(Node):
             output_type=self.output_type,
             retries=self.retries,
             max_tool_iterations=self._max_tool_iterations(),
+            stop_event=stop_event,
         )
 
-    def _run_impl(self, inputs: dict) -> Output:
+    def _run_impl(self, inputs: dict, *, stop_event=None) -> Output:
         """Render declared inputs and run the selected local mode to completion."""
         prompt = render_template_record(self.prompt, inputs)
-        return MODES[self.mode](self._ctx(prompt))
+        return MODES[self.mode](self._ctx(prompt, stop_event=stop_event))

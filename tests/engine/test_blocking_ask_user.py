@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import threading
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool
@@ -10,8 +11,10 @@ import pytest
 
 import agent_composer.llm_clients as llm_clients
 import agent_composer.tools as tools_module
+import agent_composer.nodes.agent.modes.tool_calling as tool_calling_mode
 from agent_composer.events import NodeFailed, NodeSucceeded
 from agent_composer.nodes.agent import AgentNode
+from agent_composer.nodes.base import _HostStop
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.runtime.eval_node import eval_node
 from agent_composer.tools import install_ask_user
@@ -214,6 +217,139 @@ def test_model_tool_calls_run_in_exact_returned_order(monkeypatch):
         ("ask_user", "Between tools?"),
         ("first", 1),
     ]
+
+
+def test_stop_during_model_call_prevents_returned_tool_side_effect(monkeypatch):
+    """A late model reply cannot start new tool work after host cancellation."""
+    stop_event = threading.Event()
+    effects = []
+
+    def mutate(value: str) -> str:
+        """Record one externally visible effect."""
+        effects.append(value)
+        return "ok"
+
+    monkeypatch.setitem(
+        tools_module.TOOL_REGISTRY,
+        "mutate_after_stop",
+        StructuredTool.from_function(mutate, name="mutate_after_stop"),
+    )
+
+    class _StopThenTool(_ScriptedChat):
+        def invoke(self, messages):
+            self.calls.append(list(messages))
+            if len(self.calls) == 1:
+                stop_event.set()
+                return _tool_reply(
+                    "mutate_after_stop",
+                    {"value": "ran"},
+                    "late-call",
+                )
+            return AIMessage(content="late answer")
+
+    chat = _StopThenTool([])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    node = AgentNode(
+        "agent",
+        prompt="go",
+        tools=["mutate_after_stop"],
+        mode="tool_calling",
+    )
+
+    with pytest.raises(_HostStop):
+        list(
+            eval_node(
+                node,
+                None,
+                VariablePool(),
+                stop_event=stop_event,
+            )
+        )
+
+    assert effects == []
+    assert len(chat.calls) == 1
+
+
+def test_stop_during_tool_resolution_prevents_model_binding(monkeypatch):
+    """Cancellation cannot cross tool resolution into a new provider operation."""
+    stop_event = threading.Event()
+    bound = []
+
+    class _Model:
+        def bind_tools(self, tools):
+            bound.append(list(tools))
+            return self
+
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _Model())
+
+    def resolve_and_stop(tool_ids):
+        stop_event.set()
+        return [object()]
+
+    monkeypatch.setattr(tool_calling_mode, "resolve_tools", resolve_and_stop)
+    node = AgentNode(
+        "agent",
+        prompt="go",
+        tools=["tool"],
+        mode="tool_calling",
+    )
+
+    with pytest.raises(_HostStop):
+        list(
+            eval_node(
+                node,
+                None,
+                VariablePool(),
+                stop_event=stop_event,
+            )
+        )
+
+    assert bound == []
+
+
+def test_stop_during_structured_attempt_prevents_retry(monkeypatch):
+    """Structured correction does not spend another model call after host stop."""
+    stop_event = threading.Event()
+    attempts = []
+
+    class _StoppingStructuredModel:
+        def with_structured_output(self, schema):
+            class _Bound:
+                def invoke(self, messages):
+                    attempts.append(list(messages))
+                    stop_event.set()
+                    raise ValueError("invalid structured reply")
+
+            return _Bound()
+
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda config: _StoppingStructuredModel(),
+    )
+    node = AgentNode(
+        "agent",
+        prompt="go",
+        mode="plain",
+        llm_config={"provider": "openai", "model": "gpt-4o"},
+    )
+    node.output_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"answer": Type.scalar(ValueKind.STRING)},
+        required=frozenset({"answer"}),
+    )
+
+    with pytest.raises(_HostStop):
+        list(
+            eval_node(
+                node,
+                None,
+                VariablePool(),
+                stop_event=stop_event,
+            )
+        )
+
+    assert len(attempts) == 1
 
 
 def test_ask_user_requires_an_explicit_authored_grant(monkeypatch):

@@ -26,13 +26,18 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         SystemMessage(content=DEFAULT_SYSTEM),
         HumanMessage(content=ctx.prompt),
     ]
+    ctx.check_stopped()
     model = llm_clients.model_from_config(ctx.llm_config or {})
+    ctx.check_stopped()
     bound = resolve_tools(list(ctx.tools))
+    ctx.check_stopped()
     chat = model.bind_tools(bound) if bound else model
     iterations = 0
 
     while ctx.max_tool_iterations < 0 or iterations < ctx.max_tool_iterations:
+        ctx.check_stopped()
         reply = chat.invoke(messages)
+        ctx.check_stopped()
         iterations += 1
         messages.append(reply)
         calls = getattr(reply, "tool_calls", None) or []
@@ -47,11 +52,13 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                         ctx.output_type,
                         max_retries=ctx.retries,
                         llm_config=ctx.llm_config,
+                        check_stopped=ctx.check_stopped,
                     )
                 )
             return Output(value=text_of(reply))
 
         for call in calls:
+            ctx.check_stopped()
             name = call.get("name") or ""
             if name not in ctx.tools:
                 raise AgentLoopError(
@@ -59,6 +66,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                     f"granted; granted tools: {ctx.tools}"
                 )
             result = invoke_tool(name, call.get("args") or {})
+            ctx.check_stopped()
             messages.append(
                 ToolMessage(content=str(result), tool_call_id=call.get("id") or "")
             )

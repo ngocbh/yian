@@ -18,12 +18,16 @@ from agent_composer.nodes.base import Output
 
 @register_mode("plain")
 def plain(ctx: AgentRunContext) -> Output:
+    ctx.check_stopped()
     model = llm_clients.model_from_config(ctx.llm_config or {})
+    ctx.check_stopped()
     msgs = [SystemMessage(content=DEFAULT_SYSTEM), HumanMessage(content=ctx.prompt)]
     # A declared non-text type -> structured generation; a bare str/Literal -> text path.
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
     if schema is None:
-        return Output(value=text_of(model.invoke(msgs)))
+        reply = model.invoke(msgs)
+        ctx.check_stopped()
+        return Output(value=text_of(reply))
     return Output(
         value=generate_structured(
             model,
@@ -31,5 +35,6 @@ def plain(ctx: AgentRunContext) -> Output:
             ctx.output_type,
             max_retries=ctx.retries,
             llm_config=ctx.llm_config,
+            check_stopped=ctx.check_stopped,
         )
     )

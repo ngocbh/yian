@@ -49,11 +49,12 @@ imports `compile.expand`, so the splice remains kind-blind.
 
 **Capabilities (`caps`)** are narrow, engine-owned effects passed as keyword args to
 `run`; each is gated by a node trait. A mapped call gets `caps['bind_item']`
-(per-element bind, gated on `binds_per_item`). WAIT gets the exact run-owned
-`caps['stop_event']` (gated on `needs_stop_event`) so host shutdown or sibling
-failure can wake it cooperatively. AGENT is the deliberate model-access exception:
-its mode imports `llm_clients` and calls `model_from_config` directly, while its
-granted tools use the ordinary tool registry.
+(per-element bind, gated on `binds_per_item`). AGENT and WAIT get the exact run-owned
+`caps['stop_event']` (gated on `needs_stop_event`): AGENT checks it between external
+model/tool effects, while WAIT blocks on it so host shutdown or sibling failure wakes
+the deadline wait. AGENT is the deliberate model-access exception: its mode imports
+`llm_clients` and calls `model_from_config` directly, while its granted tools use the
+ordinary tool registry.
 
 ## Node-owned traits/hooks (how the core stays kind-blind)
 
@@ -68,7 +69,7 @@ base `Node`; a kind overrides only what it needs.
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
 | `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` (loop/non-REF, no depth work) → `1` call/map |
 | `is_loop: bool` | growth core (`_apply_grow`): gate the origin-keyed single-live-record ledger invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior record) | `False` → `True` on `loop` |
-| `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on `wait` |
+| `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
 
 The rest of the splice (add subgraph, enforce `MAX_TOTAL_NODES`, mint one uniform `GrowRecord`,
 finish/mark the spawner, apply the origin `commit_as` to the derived terminal, schedule the

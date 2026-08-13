@@ -61,7 +61,8 @@ drives the `runtime` engine, sitting above both and imported by neither.
 
 Authorable blocking effects stay inside their node calls. An AGENT may invoke the
 explicitly granted `ask_user` tool, HUMAN_INPUT always invokes the same host-owned
-interaction seam, and WAIT blocks on its absolute UTC deadline. Each returns
+interaction seam, and WAIT blocks on its absolute UTC deadline. AGENT checks the
+run-owned stop signal between model/tool effects; WAIT blocks on that signal. Each returns
 `Output`; none creates checkpoint topology. The generic `Pause`/checkpoint path is
 dormant custom/artificial compatibility until issue #117 removes it. CODE's
 soft-budget watchdog is package-local under `nodes/code/` and times CODE only.

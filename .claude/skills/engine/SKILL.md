@@ -116,8 +116,9 @@ Most are just the functional model (above) made enforceable:
   references.
 - **Blocking authorable effects return ordinary outputs** — an AGENT's explicitly
   granted `ask_user` tool and HUMAN_INPUT call the process-owned handler inside
-  their live invocation; WAIT blocks on the run-owned stop event until its absolute
-  UTC deadline. All three return `Output`; none performs a pause or creates
+  their live invocation; AGENT checks the run-owned stop event between external
+  model/tool effects, and WAIT blocks on that event until its absolute UTC deadline.
+  All three return `Output`; none performs a pause or creates
   continuation topology. `PauseRequested`/`RunCheckpoint` remain only as dormant
   custom/artificial compatibility until issue #117 removes them.
 - **Dependency-light core (with a deliberate exception)** — keep the engine free

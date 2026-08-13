@@ -19,11 +19,12 @@ Layer: nodes — imports `typesys` (Type/ValueKind) + `pydantic`; no engine/runt
 from __future__ import annotations
 
 import json
-from typing import Any, List, Literal, Optional
+from typing import Any, Callable, List, Literal, Optional
 
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, create_model
 
+from agent_composer.nodes.base import _HostStop
 from agent_composer.typesys.values import Type, ValueKind
 
 # ValueKind -> python type for a scalar slot. DATE/DATETIME persist as ISO strings.
@@ -161,6 +162,7 @@ def generate_structured(
     *,
     max_retries: int = 2,
     llm_config: dict | None = None,
+    check_stopped: Callable[[], None] | None = None,
 ) -> Any:
     """Generate a value conforming to `typ`, retrying on provider deviation up to a cap.
 
@@ -175,23 +177,34 @@ def generate_structured(
     `HumanMessage` naming the error and retries, up to `max_retries` extra attempts
     (`max_retries + 1` total invocations). The last error is re-raised once the cap is spent.
     """
+    check = check_stopped or (lambda: None)
     schema = type_to_schema(typ)
     if _supports_native_structured(llm_config or {}):
-        return _generate_native(model, messages, typ, schema, max_retries)
-    return _generate_fallback(model, messages, typ, schema, max_retries)
+        return _generate_native(model, messages, typ, schema, max_retries, check)
+    return _generate_fallback(model, messages, typ, schema, max_retries, check)
 
 
 def _generate_native(
-    model: Any, messages: list, typ: Type, schema: type[BaseModel], max_retries: int
+    model: Any,
+    messages: list,
+    typ: Type,
+    schema: type[BaseModel],
+    max_retries: int,
+    check_stopped: Callable[[], None],
 ) -> Any:
     """Native path: `with_structured_output(schema)` + capped self-correction retry."""
     msgs = list(messages)
     last_err: Optional[Exception] = None
     for _ in range(max_retries + 1):
+        check_stopped()
         try:
             obj = model.with_structured_output(schema).invoke(msgs)
-            return _unwrap(obj, typ)
+            check_stopped()
+            value = _unwrap(obj, typ)
+        except _HostStop:
+            raise
         except Exception as err:  # provider deviated from the schema; correct and retry
+            check_stopped()
             last_err = err
             msgs = msgs + [
                 HumanMessage(
@@ -201,11 +214,18 @@ def _generate_native(
                     )
                 )
             ]
+        else:
+            return value
     raise last_err  # type: ignore[misc]
 
 
 def _generate_fallback(
-    model: Any, messages: list, typ: Type, schema: type[BaseModel], max_retries: int
+    model: Any,
+    messages: list,
+    typ: Type,
+    schema: type[BaseModel],
+    max_retries: int,
+    check_stopped: Callable[[], None],
 ) -> Any:
     """Prompt-injection path for a provider with no native structured output: ask for JSON
     matching the schema, parse + validate the free-text reply, capped self-correction retry.
@@ -220,11 +240,16 @@ def _generate_fallback(
     msgs = list(messages) + [instruction]
     last_err: Optional[Exception] = None
     for _ in range(max_retries + 1):
+        check_stopped()
         try:
             text = _text_of(model.invoke(msgs))
+            check_stopped()
             obj = schema.model_validate(json.loads(_strip_code_fence(text)))
-            return _unwrap(obj, typ)
-        except Exception as err:  # unparseable / non-conforming; correct and retry
+            value = _unwrap(obj, typ)
+        except _HostStop:
+            raise
+        except Exception as err:  # unparseable / non-conforming/provider-shape deviation
+            check_stopped()
             last_err = err
             msgs = msgs + [
                 HumanMessage(
@@ -234,4 +259,6 @@ def _generate_fallback(
                     )
                 )
             ]
+        else:
+            return value
     raise last_err  # type: ignore[misc]

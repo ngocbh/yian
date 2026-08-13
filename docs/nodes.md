@@ -123,7 +123,7 @@ branching on kind.
 | `binds_per_item` | map | bind inputs per element via `caps["bind_item"]`, not once up front |
 | `bind_reserved` / `reserved_wiring_keys` | wait, map | reserved keys resolved before `run` (`until`, `over`); the names for load-time checks |
 | `grow_depth_delta` / `is_loop` | spawners | recursion-depth stamp; loop bookkeeping |
-| `needs_stop_event` | wait | receive the run-owned cooperative stop event |
+| `needs_stop_event` | agent, wait | receive the run-owned cooperative stop event |
 
 ## Why this shape
 

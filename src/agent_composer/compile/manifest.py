@@ -279,6 +279,7 @@ _JDBC_SQLSERVER_PREFIX = re.compile(r"^\s*jdbc:sqlserver://", re.IGNORECASE)
 _JDBC_ORACLE_THIN_PREFIX = re.compile(r"^\s*jdbc:oracle:thin:", re.IGNORECASE)
 _REDACTED_URI_CREDENTIAL = "__redacted__"
 _REDACTED_BINDING_PREFIX = "__redacted_binding__:"
+_SAFE_HTTP_AUTH_SCHEMES = frozenset({"basic", "bearer", "digest", "negotiate"})
 _MISSING = object()
 
 
@@ -454,12 +455,17 @@ def _redacted_expression_shape(node: Tree | Token) -> dict[str, Any]:
     }
 
 
-def _credential_binding_marker(value: str) -> str | None:
+def _credential_binding_marker(
+    value: str,
+    *,
+    preserve_http_auth_scheme: bool = False,
+) -> str | None:
     """Return a secret-free identity marker for a credential template with references.
 
     Reference paths and expression structure affect execution and therefore identity.
-    Literal runs and literal operands are represented only by their shape, so rotating
-    an embedded credential cannot change the marker or appear in the manifest.
+    Literal template runs and literal operands contribute only their shape. The sole
+    exception is an exact, known HTTP scheme in an authorization slot: that vocabulary
+    is non-secret and changes how the dynamic credential is interpreted.
     """
     try:
         segments = scan_template(value)
@@ -470,7 +476,11 @@ def _credential_binding_marker(value: str) -> str | None:
     shape: list[dict[str, Any]] = []
     for segment in segments:
         if isinstance(segment, Literal):
-            shape.append({"segment": "literal"})
+            literal_shape = {"segment": "literal"}
+            scheme = segment.text.strip().casefold()
+            if preserve_http_auth_scheme and scheme in _SAFE_HTTP_AUTH_SCHEMES:
+                literal_shape["http_auth_scheme"] = scheme
+            shape.append(literal_shape)
             continue
         if not isinstance(segment, Span):  # pragma: no cover - closed template sum
             raise TypeError(f"unsupported template segment {type(segment).__name__}")
@@ -1094,7 +1104,13 @@ def _canonical_mapping(
                 )
             )
             binding_marker = (
-                _credential_binding_marker(item)
+                _credential_binding_marker(
+                    item,
+                    preserve_http_auth_scheme=(
+                        _normalized_key_spellings(key)[0]
+                        in {"authorization", "proxy_authorization"}
+                    ),
+                )
                 if (
                     preserve_binding_identity
                     and redacted_credential_key

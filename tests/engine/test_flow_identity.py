@@ -1431,6 +1431,47 @@ def test_credential_binding_marker_redacts_literal_operands():
     assert flow_fingerprint(first) != flow_fingerprint(changed)
 
 
+def test_credential_binding_marker_keeps_http_auth_scheme_semantics():
+    first = _fragment()
+    changed = copy.deepcopy(first)
+    first.wiring["body"]["authorization"] = "Bearer ${input.token}"
+    changed.wiring["body"]["authorization"] = "Basic ${input.token}"
+
+    assert flow_fingerprint(first) != flow_fingerprint(changed)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    assert "Bearer" not in manifest_text
+
+
+@pytest.mark.parametrize(
+    ("slot", "first_source", "rotated_source"),
+    [
+        (
+            "authorization",
+            "prefix-${input.token}",
+            "suffix-${input.token}",
+        ),
+        (
+            "password",
+            "Bearer ${input.tail}",
+            "Basic ${input.tail}",
+        ),
+    ],
+    ids=["unknown-affix", "scheme-outside-authorization"],
+)
+def test_credential_binding_marker_redacts_unsafe_literal_runs(
+    slot, first_source, rotated_source
+):
+    first = _fragment()
+    rotated = copy.deepcopy(first)
+    first.wiring["body"][slot] = first_source
+    rotated.wiring["body"][slot] = rotated_source
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for literal in ("prefix-", "Bearer"):
+        assert literal not in manifest_text
+
+
 def test_binding_like_static_credentials_remain_literal():
     for scope in (
         "env",

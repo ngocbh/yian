@@ -13,11 +13,11 @@ Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never i
     compile.model  <-  runtime  ->  suspension
     compose + compile.expand + runtime  <-  run.py
 
-`_growth.py` is an internal dependency-free seed-schema leaf shared by compile and
-suspension, so those packages never import each other for a data contract.
-Leaves import nothing else in the layer: `events`, `_growth`, `typesys` (the typed value pool), `expr`
-(`${...}` evaluation), and `llm_clients` (provider client wrappers + `LLMConfig` — the AGENT
-node's model seam). `nodes` are the node kinds — spawners return canonical growth seeds and
+`_growth.py` and `_state.py` are internal dependency-free contract leaves shared by
+compile and suspension, so those packages never import each other for data vocabularies.
+Leaves import nothing else in the layer: `events`, `_growth`, `_state`, `typesys` (the typed
+value pool), `expr` (`${...}` evaluation), and `llm_clients` (provider client wrappers +
+`LLMConfig` — the AGENT node's model seam). `nodes` are the node kinds — spawners return canonical growth seeds and
 never import compile; the synthesized boundary kinds own their
 reserved ids (`StartNode.ID == "__start__"`, `EndNode.ID == "__end__"`). `compile` is the
 compiled `CompiledFlow` IR + representation-neutral validation checkers, and owns the

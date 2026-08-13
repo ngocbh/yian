@@ -70,8 +70,9 @@ compile's concrete builders, and runtime. Lower layers never import it. **Arrows
 never reverse.** In particular, nodes return canonical growth seeds and never
 import `compile`; runtime may consume the `compile.model` topology contract but
 never imports `compile.expand`. `run.py` injects `compile.expand.build_grow` into
-runtime instead. The internal `_growth.py` leaf carries the temporary seed schema
-shared by compile and suspension, so neither imports the other for that contract.
+runtime instead. The internal `_growth.py` and `_state.py` leaves carry the temporary
+seed schema and scheduling-state vocabulary shared by compile and suspension, so
+neither imports the other for those contracts.
 `tests/engine/test_layer_direction.py` ratchets these boundaries.
 When you add a package, name what it sits *above* and what it sits *below*, and
 record that in its charter's "Knows / Never imports".

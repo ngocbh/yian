@@ -110,6 +110,17 @@ def test_suspension_never_imports_nodes() -> None:
     )
 
 
+def test_suspension_never_imports_compile() -> None:
+    """Suspension stays below both nodes and their compiled topology."""
+    violations = _forbidden_imports(
+        PACKAGE_ROOT / "suspension", "agent_composer.compile"
+    )
+    assert not violations, (
+        "suspension must not import compile; shared checkpoint state contracts belong "
+        "in a dependency-free leaf module:\n" + "\n".join(violations)
+    )
+
+
 def test_compile_never_imports_suspension() -> None:
     """Compile and suspension share only lower leaf contracts, never each other."""
     violations = _forbidden_imports(

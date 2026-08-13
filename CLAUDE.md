@@ -277,6 +277,8 @@ load-bearing packages. Full charters live in each package's `__init__.py`.
 src/agent_composer/
 ├── typesys/      typed value system (values) + variable pool        [leaf, no deps]
 ├── events.py     run + node event vocabulary
+├── _growth.py    shared temporary growth-seed schemas               [leaf, no deps]
+├── _state.py     shared scheduler-state vocabulary                   [leaf, no deps]
 ├── expr/         one ${...} grammar: parse -> AST -> evaluate / ref-walk on the pool
 ├── nodes/        Node contract (base.py) + per-kind impls
 │                 (start, end, agent, code, model, tool, case, call, map,
@@ -294,7 +296,8 @@ src/agent_composer/
 ```
 
 **Layer ladder (acyclic imports):** `events <- typesys <- nodes <- compile <-
-compose`, with `expr` feeding nodes and `suspension` feeding runtime. The
+compose`, with `expr` feeding nodes, `_growth.py` and `_state.py` feeding compile
+and suspension as shared leaves, and `suspension` feeding runtime. The
 package-root `run.py` sits above both `compose` and `runtime` (it consumes
 `ComposedFlow` and drives the engine) and is imported by neither. Never
 introduce a back-edge. `NodeKind` is a closed enum in `nodes/base.py`; authors

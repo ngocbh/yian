@@ -206,8 +206,9 @@ Arrows never reverse: a package imports only lower-level or peer packages. See t
 the shared contract to `common.py` / a leaf, or invert via a seam). Dynamic growth is
 the concrete example: nodes return seeds, compile owns `build_grow`, `run.py` injects
 it, and runtime never imports `compile.expand`. The temporary continuation seed
-schema sits in the internal `_growth.py` leaf shared by compile and suspension, so
-those consumers do not import each other.
+schema and scheduling-state vocabulary sit in the internal `_growth.py` and
+`_state.py` leaves shared by compile and suspension, so those consumers do not
+import each other.
 
 ## The `expr` layer (one grammar, everywhere `${...}` appears)
 

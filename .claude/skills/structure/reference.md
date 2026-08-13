@@ -67,5 +67,6 @@ runtime knows only the injected `(spawner, seed) -> Flow` callable. Package-root
 
 `tests/engine/test_layer_direction.py` parses imports with `ast` and enforces these
 rules, including equivalent relative-import spellings. The temporary AGENT
-continuation schema lives in the internal `_growth.py` leaf because both compile
-and suspension consume it; placing it in either consumer would create a cycle.
+continuation schema and scheduling-state vocabulary live in the internal
+`_growth.py` and `_state.py` leaves because both compile and suspension consume
+them; placing either contract in a consumer would create a cycle.

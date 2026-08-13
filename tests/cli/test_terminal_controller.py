@@ -113,6 +113,21 @@ def test_prompt_free_result_transfers_after_controller_join_and_registry_cleanup
     assert "ask_user" not in TOOL_REGISTRY
 
 
+def test_controller_stop_links_to_child_without_reverse_propagation() -> None:
+    """A nested lifecycle observes parent stop but cannot poison its parent."""
+    parent = run_cli._ControllerStopEvent(lambda: None)
+
+    with parent.linked_child() as local_failure:
+        local_failure.set()
+        assert local_failure.is_set()
+        assert not parent.is_set()
+
+    with parent.linked_child() as host_cancelled:
+        assert not host_cancelled.is_set()
+        parent.set()
+        assert host_cancelled.is_set()
+
+
 def test_sigint_deferred_at_thread_launch_still_joins_before_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

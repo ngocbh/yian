@@ -197,6 +197,8 @@ The assistant's reply prints before the next `You:` prompt.
 - A single bad turn does not end the session: if the reply agent errors mid-turn
   (a raise, or hitting its tool-iteration cap), the CLI prints the failure and
   continues from your conversation so far.
+- Ctrl-C propagates into a flow running through the bundled `run_flow` tool (including
+  a blocking WAIT); a nested flow failure remains a tool result and does not cancel chat.
 
 ## Examples
 

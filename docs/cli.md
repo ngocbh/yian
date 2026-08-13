@@ -87,6 +87,11 @@ An authored `wait` also stays in the live run: it occupies one worker until its
 absolute UTC deadline, then returns `None`. It does not ask the terminal for an
 early release and does not create a checkpoint.
 
+In the bundled composer chat, Ctrl-C also reaches a WAIT inside the `run_flow`
+flow-op tool. The nested run uses a one-way child stop signal: host cancellation
+flows into it, but an ordinary nested failure remains a `FAILED` tool result and
+does not cancel the surrounding conversation.
+
 The CLI still contains a compatibility loop for a custom/artificial node that
 directly returns the generic `Pause` result. It can answer legacy human-shaped or
 scheduled reasons; a bare external-event reason remains paused. No authorable

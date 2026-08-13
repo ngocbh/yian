@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import CancelledError
+from contextlib import contextmanager
 from functools import partial
 import itertools
 import json
@@ -528,11 +529,37 @@ class _ControllerStopEvent(threading.Event):
     def __init__(self, cancel_prompts: Callable[[], None]) -> None:
         super().__init__()
         self._cancel_prompts = cancel_prompts
+        self._linked_lock = threading.Lock()
+        self._linked_children: set[threading.Event] = set()
 
     def set(self) -> None:
-        """Signal engine workers, then wake every broker prompt waiter."""
+        """Signal this lifecycle, its active child runs, and broker prompt waiters."""
         super().set()
+        with self._linked_lock:
+            linked_children = tuple(self._linked_children)
+        for child in linked_children:
+            child.set()
         self._cancel_prompts()
+
+    @contextmanager
+    def linked_child(self):
+        """Yield a one-way child event for one nested engine lifecycle.
+
+        Parent cancellation sets the child. A nested failure sets only the child,
+        so a failed flow invoked as a tool can return its ordinary failure result
+        without cancelling the enclosing chat run.
+        """
+        child = threading.Event()
+        with self._linked_lock:
+            if self.is_set():
+                child.set()
+            else:
+                self._linked_children.add(child)
+        try:
+            yield child
+        finally:
+            with self._linked_lock:
+                self._linked_children.discard(child)
 
 
 def _run_with_terminal_controller(

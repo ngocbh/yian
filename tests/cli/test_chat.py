@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import threading
+import time
 from concurrent.futures import CancelledError
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_module
 from agent_composer.cli import app
 import agent_composer.cli.chat.command as chat_command
+from agent_composer.cli.chat import tools as chat_tools
 import agent_composer.cli.run as run_cli
 from agent_composer.cli.terminal import PromptRequest
 from agent_composer.nodes.base import _HostStop
@@ -724,3 +726,76 @@ def test_chat_tool_call_through_the_loop(tmp_path, monkeypatch):
     assert r.exit_code == 0
     assert "here are your flows" in r.output   # the loop reached a final answer after the tool call
     assert "turn failed" not in r.output       # the tool call was handled, not looped to the cap
+
+
+def test_nested_chat_wait_observes_outer_controller_stop(tmp_path, monkeypatch):
+    """Outer cancellation wakes a WAIT running inside the chat ``run_flow`` tool."""
+    (tmp_path / "wait.yaml").write_text(
+        "id: nested-wait\n"
+        "name: nested_wait\n"
+        "nodes:\n"
+        "  wait:\n"
+        "    kind: wait\n"
+        '    until: "2999-01-01T00:00:00+00:00"\n'
+        "  done:\n"
+        "    kind: code\n"
+        "    runs_after: [wait]\n"
+        "    output: str\n"
+        "    code: |\n"
+        '      return "done"\n'
+        "output: ${done.output}\n"
+    )
+    monkeypatch.setattr(chat_tools, "_WORKSPACE", tmp_path.resolve())
+
+    def controller(stop_event, on_event, ask_user, render):
+        timer = threading.Timer(0.05, stop_event.set)
+        timer.start()
+        try:
+            with chat_tools._bind_controller_stop(stop_event):
+                return chat_tools.run_flow("wait.yaml")
+        finally:
+            timer.cancel()
+            timer.join()
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="terminal controller stopped"):
+        run_cli._run_with_terminal_controller(
+            controller,
+            prompt_handler=lambda request: None,
+            reporter=None,
+        )
+
+    assert time.monotonic() - started < 0.8
+
+
+def test_nested_chat_failure_does_not_set_outer_controller_stop(tmp_path, monkeypatch):
+    """A child engine failure remains a tool result instead of cancelling chat."""
+    (tmp_path / "fail.yaml").write_text(
+        "id: nested-failure\n"
+        "name: nested_failure\n"
+        "nodes:\n"
+        "  fail:\n"
+        "    kind: code\n"
+        "    output: str\n"
+        "    code: |\n"
+        '      raise RuntimeError("nested boom")\n'
+        '      return "unreachable"\n'
+        "output: ${fail.output}\n"
+    )
+    monkeypatch.setattr(chat_tools, "_WORKSPACE", tmp_path.resolve())
+    parent_states = []
+
+    def controller(stop_event, on_event, ask_user, render):
+        with chat_tools._bind_controller_stop(stop_event):
+            result = chat_tools.run_flow("fail.yaml")
+        parent_states.append(stop_event.is_set())
+        return result
+
+    result = run_cli._run_with_terminal_controller(
+        controller,
+        prompt_handler=lambda request: None,
+        reporter=None,
+    )
+
+    assert result == "FAILED: nested boom"
+    assert parent_states == [False]

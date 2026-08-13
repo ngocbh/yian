@@ -206,13 +206,14 @@ def chat(
                             "transcript", state["transcript"]
                         )
 
-                return _run_flow_controlled(
-                    current_flow,
-                    {"opening": state["transcript"]},
-                    on_event=observe,
-                    llm_config=cli_cfg or None,
-                    stop_event=stop_event,
-                )
+                with chat_tools._bind_controller_stop(stop_event):
+                    return _run_flow_controlled(
+                        current_flow,
+                        {"opening": state["transcript"]},
+                        on_event=observe,
+                        llm_config=cli_cfg or None,
+                        stop_event=stop_event,
+                    )
 
             result = _run_with_terminal_controller(
                 controller,

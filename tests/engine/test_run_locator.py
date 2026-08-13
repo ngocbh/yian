@@ -12,8 +12,7 @@ from pathlib import Path
 
 from agent_composer.compose import load_flow
 from agent_composer.run import run_flow
-from agent_composer.run import resume_flow
-from agent_composer.suspension.commands import DeliverAnswerCommand
+from agent_composer.tools import install_ask_user
 
 _ERRORS = Path(__file__).resolve().parents[1] / "seeds" / "errors"
 
@@ -71,17 +70,13 @@ output: ${ask.output}
 """
 
 
-def test_resume_wrong_type_answer_sets_field_locator():
-    # A delivered HUMAN_INPUT answer that fails the parked node's declared `output:` Type is
-    # rejected at the resume write boundary. The RunFailed must still carry the `field` locator
-    # (the resume() path forwards it identically to the run()/pooled paths).
+def test_human_input_wrong_type_answer_sets_field_locator():
+    # A host answer that fails the HUMAN_INPUT node's declared `output:` Type is
+    # rejected at the ordinary write boundary with the field locator preserved.
     loaded = load_flow(_RESUME_WRONG_TYPE)
-    res = run_flow(loaded, {})
-    assert res.status == "paused"
-    bad = DeliverAnswerCommand(node_id="ask", value="not-an-int")
-    res2 = resume_flow(loaded, engine=res.engine, commands=[bad])
-    assert res2.status == "failed"
-    assert res2.locator is not None and res2.locator.kind == "field"
-    assert res2.locator.node == "ask"
-    assert res2.locator.key == "output"
-
+    with install_ask_user(lambda **request: "not-an-int"):
+        result = run_flow(loaded, {})
+    assert result.status == "failed"
+    assert result.locator is not None and result.locator.kind == "field"
+    assert result.locator.node == "ask"
+    assert result.locator.key == "output"

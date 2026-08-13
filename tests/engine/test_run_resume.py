@@ -5,6 +5,7 @@ from agent_composer.run import resume_command, run_flow, resume_flow
 from agent_composer.suspension.commands import DeliverAnswerCommand
 from agent_composer.suspension.checkpoint import RunCheckpoint
 from agent_composer.suspension.pause import EventAwaited
+from agent_composer.tools import install_ask_user
 
 FLOW = """
 id: f
@@ -124,49 +125,41 @@ output: ${merge.output}
 
 def test_effects_approve_path():
     loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    assert r1.status == "paused"                       # at human_input
-    r2 = resume_flow(loaded, engine=r1.engine,
-                     commands=[DeliverAnswerCommand(node_id="approve", value="approve")])
-    assert r2.status == "paused"                       # at the timed wait
-    r3 = resume_flow(loaded, engine=r2.engine,
+    with install_ask_user(lambda **request: "approve"):
+        paused = run_flow(loaded, {"settle_at": "2026-07-01"})
+    assert paused.status == "paused"                   # only the timed WAIT parks
+    done = resume_flow(loaded, engine=paused.engine,
                      commands=[DeliverAnswerCommand(node_id="settle", value=None)])
-    assert r3.status == "succeeded"
-    assert r3.output == "approve"                      # confirm_action(rec={answer:"approve"})
+    assert done.status == "succeeded"
+    assert done.output == "approve"                    # confirm_action(rec={answer:"approve"})
 
 
 def test_effects_reject_path():
     loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    r2 = resume_flow(loaded, engine=r1.engine,
-                     commands=[DeliverAnswerCommand(node_id="approve", value="reject")])
-    assert r2.status == "succeeded"                    # abort branch, no wait
-    assert r2.output == "reject"                       # confirm_action(rec={answer:"reject"})
+    with install_ask_user(lambda **request: "reject"):
+        result = run_flow(loaded, {"settle_at": "2026-07-01"})
+    assert result.status == "succeeded"                # abort branch, no wait
+    assert result.output == "reject"                   # confirm_action(rec={answer:"reject"})
 
 
 def test_effects_typed_answer_rejected():
     loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    r2 = resume_flow(loaded, engine=r1.engine,
-                     commands=[DeliverAnswerCommand(node_id="approve", value="maybe")])
-    assert r2.status == "failed"            # "maybe" not in Literal[approve,reject]: pool.set rejects,
-                                            # guarded -> NodeExecutionError -> RunFailed (resume does NOT crash)
+    with install_ask_user(lambda **request: "maybe"):
+        result = run_flow(loaded, {"settle_at": "2026-07-01"})
+    assert result.status == "failed"  # not in Literal[approve,reject]
 
 
-def test_multi_pause_resume_via_resume_command():
-    # Drive human_input -> wait entirely through the logical contract: each resume reads
-    # the refreshed pause reason and maps it to a command via resume_command (no hardcoded
-    # coordinate). Exercises the loop body more than once.
+def test_wait_after_blocking_human_input_resumes_via_reason():
+    # HUMAN_INPUT answers in the live run; the remaining WAIT reason maps to its
+    # compatibility delivery command without a hardcoded coordinate.
     loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    assert r1.status == "paused"                         # at human_input "approve"
-    cmd1 = resume_command(loaded, r1.pause_reasons[0], "approve")
-    r2 = resume_flow(loaded, engine=r1.engine, commands=[cmd1])
-    assert r2.status == "paused"                         # now at the wait
-    cmd2 = resume_command(loaded, r2.pause_reasons[0], True)
-    r3 = resume_flow(loaded, engine=r2.engine, commands=[cmd2])
-    assert r3.status == "succeeded"
-    assert r3.output == "approve"
+    with install_ask_user(lambda **request: "approve"):
+        paused = run_flow(loaded, {"settle_at": "2026-07-01"})
+    assert paused.status == "paused"
+    command = resume_command(loaded, paused.pause_reasons[0], True)
+    done = resume_flow(loaded, engine=paused.engine, commands=[command])
+    assert done.status == "succeeded"
+    assert done.output == "approve"
 
 
 def test_resume_command_rejects_non_resumable_reason():
@@ -175,25 +168,18 @@ def test_resume_command_rejects_non_resumable_reason():
         resume_command(loaded, EventAwaited(), "x")  # external-watcher pause, not host-resumable
 
 
-def test_resume_command_builds_deliver_for_human_input():
-    loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    cmd = resume_command(loaded, r1.pause_reasons[0], "approve")
-    assert isinstance(cmd, DeliverAnswerCommand)               # deliver-as-Output, not a variable patch
-    assert cmd.node_id == "approve" and cmd.value == "approve"
-
-
 def test_full_host_round_trip_human_then_wait():
     loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    assert r1.status == "paused"                               # at human_input "approve"
-    r2 = resume_flow(loaded, engine=r1.engine,
-                     commands=[resume_command(loaded, r1.pause_reasons[0], "approve")])
-    assert r2.status == "paused"                               # at the timed wait "settle"
-    r3 = resume_flow(loaded, engine=r2.engine,
-                     commands=[resume_command(loaded, r2.pause_reasons[0], None)])  # WAIT release
-    assert r3.status == "succeeded"
-    assert r3.output == "approve"
+    with install_ask_user(lambda **request: "approve"):
+        paused = run_flow(loaded, {"settle_at": "2026-07-01"})
+    assert paused.status == "paused"                           # timed WAIT "settle"
+    done = resume_flow(
+        loaded,
+        engine=paused.engine,
+        commands=[resume_command(loaded, paused.pause_reasons[0], None)],
+    )
+    assert done.status == "succeeded"
+    assert done.output == "approve"
 
 
 def test_resume_command_does_not_require_node_in_compiled_flow():

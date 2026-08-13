@@ -13,8 +13,8 @@ which field is authored:
   node's `Output`; the engine never reads wall-clock. `date`/`datetime` segments
   resolve to ISO strings, so the resolver accepts a str directly.
 
-Both mirror HUMAN_INPUT's deliver-as-Output model: the node ALWAYS pauses on
-its single run; the engine delivers the answer — no re-run.
+Both use the temporary generic deliver-as-Output pause model: the node ALWAYS
+pauses on its single run; the engine delivers the release value — no re-run.
 """
 
 from typing import Any, Optional
@@ -50,8 +50,8 @@ class WaitNode(Node):
 
     EVENT mode (`event_spec` set) parks with `EventAwaited` until the host watcher delivers the
     payload as this node's Output; TIMED mode parks with `ScheduledPause(resume_at=...)` (the
-    `until` source is pre-resolved into `inputs["until"]` by the engine bind seam). Both mirror
-    HUMAN_INPUT's deliver-as-Output model — the node always pauses on its single run.
+    `until` source is pre-resolved into `inputs["until"]` by the engine bind seam). Both use
+    the temporary generic pause model — the node always pauses on its single run.
 
     Args:
         node_id (`str`):

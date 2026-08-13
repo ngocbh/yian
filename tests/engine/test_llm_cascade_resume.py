@@ -11,9 +11,11 @@ import agent_composer.run as run_mod
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.suspension.checkpoint import RunCheckpoint
+from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
 
-# A HUMAN_INPUT before an AGENT inside a CALL child: resume replays the CALL expansion,
-# re-cloning the not-yet-run agent. Top flow sets `provider`; the CLI layer sets `model`.
+# A HUMAN_INPUT-shaped artificial Pause before an AGENT inside a CALL child: resume
+# replays the CALL expansion, re-cloning the not-yet-run agent. Top flow sets
+# `provider`; the CLI layer sets `model`.
 _CALL_WRAPS_AGENT = """
 id: cag
 name: cag
@@ -45,6 +47,13 @@ output: ${answer.output}
 """
 
 
+def _load_with_artificial_human_pauses(source: str):
+    """Load a checkpoint fixture with test-only generic Pause leaves."""
+    loaded = load_flow(source)
+    replace_human_inputs_with_artificial_pauses(loaded.compiled)
+    return loaded
+
+
 def test_cli_cascade_survives_cross_process_resume_through_call(monkeypatch):
     from langchain_core.messages import AIMessage
 
@@ -62,14 +71,14 @@ def test_cli_cascade_survives_cross_process_resume_through_call(monkeypatch):
 
     monkeypatch.setattr(llm_clients_mod, "model_from_config", fake_model_from_config)
 
-    loaded = load_flow(_CALL_WRAPS_AGENT)
+    loaded = _load_with_artificial_human_pauses(_CALL_WRAPS_AGENT)
     rec = run_flow(loaded, {}, llm_config={"model": "claude-opus-4-8"})
     assert rec.status == "paused"
 
     # Cross-process: recompile fresh, resume from the round-tripped checkpoint with the SAME
     # CLI layer. The inner agent's first model build after resume must carry provider+model.
     ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())
-    fresh = load_flow(_CALL_WRAPS_AGENT)
+    fresh = _load_with_artificial_human_pauses(_CALL_WRAPS_AGENT)
     captured.clear()
     res = resume_flow(
         fresh,
@@ -100,7 +109,7 @@ def test_defaults_are_read_once_per_fresh_or_durable_init_but_not_live_resume(
     monkeypatch.setattr(run_mod, "default_llm_provider", provider)
     monkeypatch.setattr(run_mod, "default_llm_model", model)
 
-    loaded = load_flow(_HUMAN_ONLY)
+    loaded = _load_with_artificial_human_pauses(_HUMAN_ONLY)
     paused = run_flow(loaded, {})
     assert paused.status == "paused"
     assert calls == {"provider": 1, "model": 1}
@@ -113,12 +122,12 @@ def test_defaults_are_read_once_per_fresh_or_durable_init_but_not_live_resume(
     assert live.status == "succeeded"
     assert calls == {"provider": 1, "model": 1}
 
-    durable_source = load_flow(_HUMAN_ONLY)
+    durable_source = _load_with_artificial_human_pauses(_HUMAN_ONLY)
     durable_paused = run_flow(durable_source, {})
     checkpoint = RunCheckpoint.loads(durable_paused.checkpoint.dumps())
     assert calls == {"provider": 2, "model": 2}
 
-    fresh = load_flow(_HUMAN_ONLY)
+    fresh = _load_with_artificial_human_pauses(_HUMAN_ONLY)
     durable = resume_flow(
         fresh,
         checkpoint=checkpoint,

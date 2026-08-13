@@ -63,10 +63,6 @@ synthesizes.
 
 ::: agent_composer.nodes.agent.node.AgentNode
 
-::: agent_composer.nodes.agent.node.Fresh
-
-::: agent_composer.nodes.agent.node.Resume
-
 ::: agent_composer.nodes.code.node.CodeNode
 
 ::: agent_composer.nodes.model.node.ModelNode
@@ -109,6 +105,12 @@ The core ships no domain tools; a host registers its own into the shared registr
 ::: agent_composer.tools.register_tool
 
 ::: agent_composer.tools.resolve_tools
+
+::: agent_composer.tools.install_ask_user
+
+::: agent_composer.tools.invoke_tool
+
+::: agent_composer.tools.invoke_tool_trusted
 
 ## LLM configuration
 

@@ -44,9 +44,10 @@ class NodeBase(ABC):
 - **`inputs`** — the params, already resolved from the pool into a plain dict (never the
   pool itself). The node declares only param *names*; the **flow** owns where each reads
   from, and the engine binds the two before calling.
-- **`caps`** — *capabilities*: the side-effecting helpers a pure dict can't carry (the LLM
-  client `caps["llm"]`, a mapped call's `caps["bind_item"]`). The engine builds them per
-  call and owns their lifecycle; a node that needs none ignores `caps`.
+- **`caps`** — narrow capabilities a plain input dict cannot carry, such as a mapped
+  call's `caps["bind_item"]` or a cooperative `stop_event`. The read boundary supplies
+  only traits a node explicitly requests. The AGENT node is the documented exception for
+  model access: its mode builds the configured model directly through `llm_clients`.
 
 **Why only `run`?** The wrapper that checks assertions and funnels errors is identical for
 every kind — so it is *protocol*, not node behavior, and lives on the engine. See
@@ -61,19 +62,19 @@ what `run` returns:
    LEAF  (is_spawner=False)                 SPAWNER  (is_spawner=True)
    run → Output | Pause | Route             run → Grow(seed) | Output
    one unit of work:                        may expand into __start__ → children → __end__
-   code, model, tool, case,                  call, map, loop; temporary agent continuation
+   agent, code, model, tool, case,           call, map, loop
    human_input, wait, start, end
 ```
 
-- A **leaf** does one thing and returns `Output` (or `Pause` if it must wait).
+- A **leaf** does one thing and returns `Output` (or the temporary generic `Pause`
+  compatibility result). `human_input` and agent `ask_user` calls block inside
+  the live invocation and return `Output`; they do not pause the graph.
 - A **router** (`case`) is a leaf that returns `Route(handle)` — no value, it just selects
   the live out-edge (siblings skip-flood). Still `is_spawner=False`; routing isn't growth.
 - A **spawner** returns `Grow` with a canonical seed describing the requested work.
   Compile-owned `build_grow` turns it into a subgraph with one `__start__` and
   `__end__` (whose result becomes this node's result via a baked `commit_as`). See
-  [growth](engine.md#growth-a-node-that-is-really-a-subflow). An agent normally
-  returns `Output`, but its current control-pause compatibility path is also a
-  spawner and returns a seed-first continuation `Grow`.
+  [growth](engine.md#growth-a-node-that-is-really-a-subflow).
 
 ## A kind is just a `run`
 
@@ -82,9 +83,9 @@ class CodeNode(NodeBase):              # LEAF — run a Python function
     def run(self, inputs, **caps):
         return Output(self.fn(inputs))
 
-class AgentNode(NodeBase):             # LEAF — one LLM step
-    def run(self, inputs, **caps):     # self.llm_config = WHICH model (serializable);
-        return Output(caps["llm"](self.prompt.format(inputs)))   # caps["llm"] = live client
+class AgentNode(NodeBase):             # LEAF — one live model/tool loop
+    def run(self, inputs, **caps):
+        return Output(self.run_model_loop(inputs))
 
 class CaseNode(NodeBase):              # ROUTER — pick a branch, produce no value
     def run(self, inputs, **caps):
@@ -111,8 +112,7 @@ branching on kind.
 |---|---|---|
 | `binds_per_item` | map | bind inputs per element via `caps["bind_item"]`, not once up front |
 | `bind_reserved` / `reserved_wiring_keys` | wait, map | reserved keys resolved before `run` (`until`, `over`); the names for load-time checks |
-| `needs_llm` | agent | build the `caps["llm"]` model factory |
-| `grow_depth_delta` / `grow_restamps_self` / `is_loop` | spawners | recursion-depth stamp; agent re-pause nesting; loop bookkeeping |
+| `grow_depth_delta` / `is_loop` | spawners | recursion-depth stamp; loop bookkeeping |
 
 ## Why this shape
 

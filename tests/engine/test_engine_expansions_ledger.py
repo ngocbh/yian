@@ -12,15 +12,15 @@ from typing import Any
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID, FlowOutput
 from agent_composer.nodes.call.node import CallNode
-from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.map.node import MapNode
 from agent_composer.runtime.engine import FlowEngine
-from tests.engine._fakes import FuncNode, stamp_reads
+from agent_composer.suspension.pause import HumanInputRequired
+from tests.engine._fakes import FuncNode, PauseNode, stamp_reads
 from tests.engine._graph_builder import _graph
 
 
 def _inner_pause_child():
-    """A small child CompiledFlow whose body contains an `ask` HUMAN_INPUT leaf
+    """A child flow whose body contains a test-only generic Pause leaf
     and an `unwrap` step that lifts the answer scalar out of the record. The
     unwrap keeps the flow output a bare string so downstream e2e
     tests can assert `evs[-1].output == "approve"` cleanly."""
@@ -29,7 +29,9 @@ def _inner_pause_child():
     return _graph(
         [
             FuncNode("seed", lambda p: {"output": p.get("payload", "x")}),
-            HumanInputNode("ask", prompt="Approve?"),
+            PauseNode(
+                "ask", reason=HumanInputRequired(prompt="Approve?", node_id="ask")
+            ),
             unwrap,
         ],
         [(START_ID, "seed"), ("seed", "ask"), ("ask", "unwrap"), ("unwrap", END_ID)],

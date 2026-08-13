@@ -1,7 +1,7 @@
 """Commands — external control delivered to a (possibly suspended) run.
 
-`DeliverAnswerCommand` is the vehicle an external watcher/human uses to satisfy a
-pause: it delivers the awaited value (the human's answer, the external-event
+`DeliverAnswerCommand` is the temporary generic vehicle an external watcher/host
+uses to satisfy a pause: it delivers the awaited value (for example an event
 payload) to the parked leaf as that leaf's `Output` (deliver-as-Output).
 `AbortCommand` terminates a run.
 """

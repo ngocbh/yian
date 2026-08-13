@@ -337,8 +337,8 @@ def resume_flow(
     Drive a suspended run to its next terminal via exactly one resume handle.
 
     Resume from a live `engine=` (fast, in-process) or a deserialized `checkpoint=`
-    (durable, cross-process) — pass exactly one. The `commands` (typically the injected
-    human answer or a wait release, built with
+    (durable, cross-process) — pass exactly one. The `commands` (temporary generic-pause
+    values such as a wait release, built with
     [`resume_command`][agent_composer.run.resume_command]) are applied before the
     run continues. Mirrors [`run_flow`][agent_composer.run_flow]'s terminal-event loop and
     post-terminal asserts; if the run pauses again, the returned result carries fresh handles.
@@ -354,8 +354,8 @@ def resume_flow(
             A serializable snapshot from a paused `RunResult.checkpoint`, possibly
             deserialized in another process. Mutually exclusive with `engine`.
         commands (`list[Any]`, *optional*, defaults to `None`):
-            Engine commands to apply before resuming (e.g. delivered answers, wait
-            releases). `None` is treated as an empty list.
+            Engine commands to apply before resuming (e.g. delivered compatibility values
+            or wait releases). `None` is treated as an empty list.
         on_event (`Callable[[Any], None]`, *optional*, defaults to `None`):
             Called with each engine event as it occurs. Use it for progress reporting.
         llm_config (`dict[str, Any]`, *optional*, defaults to `None`):
@@ -452,12 +452,12 @@ def resume_flow(
 
 def resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> "DeliverAnswerCommand":
     """
-    Map a host-resumable pause reason and an answer to the engine command that delivers it.
+    Map a host-resumable pause reason and a compatibility value to its delivery command.
 
     Dispatch is on the reason's *shape*, never a static-graph lookup: the parked node may be
-    a runtime-namespaced live id (e.g. `call_sub/w`, `agent/__ask#q1`) that exists only on
+    a runtime-namespaced live id (e.g. `call_sub/w`) that exists only on
     the live engine, where the command is resolved. A reason carrying a `node_id` delivers
-    the answer as that leaf's output; a reason without one (a bare external event a watcher
+    the value as that leaf's output; a reason without one (a bare external event a watcher
     satisfies) is not host-resumable.
 
     Args:
@@ -468,8 +468,7 @@ def resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> "DeliverAns
             A `PauseReason` from `RunResult.pause_reasons`. Must expose a `node_id` to be
             host-resumable.
         value (`Any`):
-            The answer to deliver. For a `human_input` it is the typed answer; for a `wait`
-            release pass `None`.
+            The compatibility value to deliver; for a `wait` release pass `None`.
 
     Returns:
         `DeliverAnswerCommand`:
@@ -486,4 +485,4 @@ def resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> "DeliverAns
     node_id = getattr(reason, "node_id", None)
     if node_id is None:
         raise ValueError(f"pause reason {getattr(reason, 'type', '?')!r} is not host-resumable")
-    return DeliverAnswerCommand(node_id=node_id, value=value)   # HUMAN_INPUT + WAIT (release: value=None)
+    return DeliverAnswerCommand(node_id=node_id, value=value)

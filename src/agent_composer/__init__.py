@@ -1,8 +1,9 @@
 """Agent Composer — a generic runner for a *workflow of nodes*.
 
 Owns its execution runtime (a single-writer dispatcher over a fixed worker pool),
-a typed serializable variable pool, and a durable suspend/resume protocol (the
-basis for HUMAN_INPUT and WATCH nodes). See the project README for status.
+a typed serializable variable pool, blocking host-owned human interaction, and a
+temporary durable suspend/resume compatibility protocol for WAIT/WATCH. See the
+project README for status.
 
 Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never in a cycle):
 

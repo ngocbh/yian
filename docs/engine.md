@@ -76,7 +76,7 @@ engine branches on:
 Outcome =
   | Output(value, commit_as=None)   # "here is my result"    → bind it, unlock dependents
   | Route(handle)                   # "route only, no value" → take this branch, skip siblings
-  | Pause(reason)                   # "I need to wait/ask"    → checkpoint and stop
+  | Pause(reason)                   # temporary wait compatibility → checkpoint and stop
   | Grow(seed, prune=∅)             # "I'm really a subflow"  → build + splice more nodes
 ```
 
@@ -97,13 +97,13 @@ def apply(outcome, node, state, queue, graph, grow_builder):
 ```
 
 `Output` covers ordinary steps. `Route` covers a pure router (`case`): it stores nothing
-and only selects a live out-edge. `Pause` suspends for a human or a timer. `Grow` is how
-a node that *is really a subflow* expands.
+and only selects a live out-edge. `Pause` is temporary generic timer/event compatibility;
+authorable `human_input` and agent `ask_user` calls block in-process and return `Output`.
+`Grow` is how a node that *is really a subflow* expands.
 
 ## Growth: a node that is really a subflow
 
-`call`, `map`, and `loop` are not single steps — each *is a smaller flow*. The
-temporary AGENT control-pause compatibility path also expands a continuation. A spawner
+`call`, `map`, and `loop` are not single steps — each *is a smaller flow*. A spawner
 returns only a canonical, kind-shaped seed; no node imports the compile layer or builds
 topology. `compile.expand.build_grow` is the sole kind-aware interpreter that turns the
 spawner and seed into a self-describing `Flow`. Package-root `run.py` injects that
@@ -118,7 +118,7 @@ spawner's id. Runtime may consume `compile.model` topology but never imports
 
 The splice carries a few extra concerns (stamp recursion depth, loop bookkeeping),
 but the growth core reads **node-owned traits**
-(`grow_depth_delta`, `grow_restamps_self`, `is_loop`) — never
+(`grow_depth_delta`, `is_loop`) — never
 `node.kind`. A child's asserts are **not** an engine-side splice concern: a called flow's
 `asserts:` are lowered onto its own `__start__`/`__end__` at build (just like the
 top-level flow, below), and those boundary nodes are cloned into the parent along with the
@@ -158,8 +158,8 @@ serialized). Only the number of nodes in flight differs.
 | `node.run(inputs, **caps) → Outcome` | the one kind-specific step |
 | `node.on_failure(...)` | recovery seam (default: re-raise) |
 | `node.is_spawner` | may it return `Grow`? |
-| read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_llm` |
-| growth traits | `grow_depth_delta`, `grow_restamps_self`, `is_loop` |
+| read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event` |
+| growth traits | `grow_depth_delta`, `is_loop` |
 
 That is the complete list — a small set of traits/hooks plus `run`. No `NodeKind` is
 visible to the engine.

@@ -371,9 +371,10 @@ output: ${bullish.output | cautious.output}
 
 ### `human_input` — a deterministic human gate
 
-A `human_input` node **always** suspends the run at a fixed point and waits for a
-typed answer from the human. The answer is validated against the declared
-`output:` before the flow continues.
+A `human_input` node **always** invokes the host-owned `ask_user` interaction at a
+fixed point and blocks its worker until the human answers. The answer is
+validated against the declared `output:` before the flow continues. This is one
+live node call, not a checkpoint pause.
 
 ```yaml
 approve:
@@ -575,28 +576,27 @@ poll:
 The node's value is the final carried record (committed under the loop node's id
 once the loop stops).
 
-A body may itself pause (e.g. a `human_input` leaf): the run suspends mid-loop and
-resumes into the next iteration — this is the shape a chat REPL takes. The pause is
-**durable** — a checkpoint taken mid-loop restores and resumes in a fresh process,
-not just in the original one.
+A body may itself block (e.g. a `human_input` leaf): the worker stays inside that
+live iteration until the host answers, then the same run advances into the next
+iteration. This is the shape a chat REPL takes.
 
 A long loop stays within the engine's node budget: once an iteration commits its
 carried record forward, that iteration's expanded body is **pruned** from the live
 graph, so only one iteration is resident at a time (a thousand-turn loop costs the
 same as a two-turn one).
 
-## Effects from inside an agent — the `ask_user` control
+## Effects from inside an agent — the `ask_user` tool
 
-A `tool_calling` agent can be granted the `ask_user` **control**. Unlike
-`human_input` (which always pauses), `ask_user` is *model-chosen*: the agent
-suspends to ask the human **only if** it decides it needs a fact it can't supply,
-then resumes with the answer fed back as the tool result.
+A `tool_calling` agent can be granted the ordinary `ask_user` tool. Unlike
+`human_input` (which always asks), `ask_user` is *model-chosen*: the agent calls it
+**only if** it decides it needs a fact it cannot supply. The tool blocks inside
+the same live agent loop, then its returned answer is fed back as the tool result.
 
 ```yaml
 assistant:
   kind: agent
-  mode: tool_calling           # the loop — required to call a control
-  controls: [ask_user]         # enable the capability
+  mode: tool_calling           # the loop — required to call tools
+  tools: [ask_user]            # explicitly grant the capability
   input:
     request: ${input.request}
   output: str

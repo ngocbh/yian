@@ -9,6 +9,7 @@ from typing import Any, Callable
 from agent_composer.events import StreamChunk
 from agent_composer.nodes.base import Node, NodeKind, Output, Pause, Route
 from agent_composer.nodes.binding import ParamDecl
+from agent_composer.suspension.pause import HumanInputRequired
 
 
 def stamp_reads(node, reads):
@@ -121,8 +122,10 @@ class BranchNode(Node):
 
 
 class PauseNode(Node):
-    """A HUMAN_INPUT-kind fake that ALWAYS pauses on its single run (deliver-as-Output
-    model). The engine delivers its answer; the node never re-runs.
+    """A generic test-only Pause leaf for dormant checkpoint compatibility.
+
+    Its borrowed kind tag is incidental; authorable HUMAN_INPUT blocks instead.
+    The engine delivers a compatibility value and the fake never re-runs.
     """
 
     kind = NodeKind.HUMAN_INPUT
@@ -133,6 +136,54 @@ class PauseNode(Node):
 
     def _run_impl(self, inputs: dict) -> Pause:
         return Pause(self.reason)
+
+
+class ArtificialHumanPauseNode(PauseNode):
+    """A test-only HUMAN_INPUT-shaped leaf for dormant checkpoint coverage.
+
+    Authorable HUMAN_INPUT blocks in-process now. Tests that specifically exercise
+    the temporary generic ``Pause`` compatibility API use this artificial leaf so
+    they do not teach the old authoring behavior. The reason is built at run time so
+    a cloned leaf reports its fully namespaced id.
+    """
+
+    def __init__(self, node_id: str, *, prompt: str = "", **kw: Any) -> None:
+        super().__init__(node_id, reason=None, **kw)
+        self.prompt = prompt
+
+    def _run_impl(self, inputs: dict) -> Pause:
+        return Pause(HumanInputRequired(
+            prompt=self.prompt,
+            node_title=self.title,
+            node_id=self.id,
+        ))
+
+
+def replace_human_inputs_with_artificial_pauses(flow):
+    """Replace authored HUMAN_INPUT leaves recursively for checkpoint-only tests.
+
+    The loaded topology and all render/type metadata stay intact; only execution of
+    each HUMAN_INPUT leaf is swapped for :class:`ArtificialHumanPauseNode`. Static
+    child flows are visited before runtime growth clones them.
+    """
+    from agent_composer.nodes.human_input import HumanInputNode
+
+    for node_id, node in list(flow.nodes.items()):
+        child = getattr(node, "child", None)
+        if child is not None:
+            replace_human_inputs_with_artificial_pauses(child)
+        if not isinstance(node, HumanInputNode):
+            continue
+
+        replacement = ArtificialHumanPauseNode(
+            node.id,
+            prompt=node.prompt or "",
+            title=node.title,
+        )
+        replacement.__dict__.update(node.__dict__)
+        replacement.prompt = node.prompt or ""
+        flow.nodes[node_id] = replacement
+    return flow
 
 
 # Legacy alias: the re-run "pause once then complete" intent is gone (deliver-as-Output);

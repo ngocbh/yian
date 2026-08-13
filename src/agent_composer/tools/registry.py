@@ -6,7 +6,10 @@ node and the AGENT tool-calling loop look tools up here by id.
 
 This is the package's tool *seam*: the core ships no domain tools — a host
 application registers its own (e.g. ``@register_tool("add")``). Tool ids must be
-unique across everything registered into the process.
+unique across everything registered into the process. Model calls are validated
+against their public schema; HUMAN_INPUT alone may use the trusted schema for
+host-injected metadata. The reserved ``ask_user`` entry has one process-wide host
+owner per interaction lifecycle.
 """
 
 from __future__ import annotations
@@ -166,7 +169,7 @@ def install_ask_user(handler: Callable[..., Any]) -> Iterator[BaseTool]:
     """Install the process-wide ``ask_user`` owner for one host lifecycle.
 
     The model-visible schema contains only ``question``. Structured question and
-    display metadata are injected solely through [`invoke_tool_trusted`][]. A second
+    display metadata are injected solely through ``invoke_tool_trusted``. A second
     active owner is rejected, and cleanup removes only this installation's exact
     registry entry.
     """

@@ -4,10 +4,14 @@ This is the typed payload on `PauseRequested` and the thing a checkpoint persist
 so a scheduler/watcher knows when to wake the run. Adding a new way to wait is a
 new subclass, nothing else.
 
-Maps to the user-facing surface:
-- HUMAN_INPUT node          -> HumanInputRequired (re-prompt on resume)
-- WATCH composite's WAIT     -> EventAwaited (watcher fires -> resume)
-- a plain timed wait         -> ScheduledPause
+Maps to the temporary generic compatibility surface:
+- a legacy/artificial human reason -> HumanInputRequired
+- WATCH composite's WAIT            -> EventAwaited (watcher fires -> resume)
+- a plain timed wait                -> ScheduledPause
+
+Authorable HUMAN_INPUT and agent ``ask_user`` calls no longer produce a pause;
+they block inside their live node execution. The human reason remains wire/test
+compatibility until the subsequent run-log cutover removes this package.
 """
 
 from typing import Annotated, Any, Literal, Optional, Union
@@ -17,9 +21,10 @@ from pydantic import BaseModel, Field
 
 class HumanInputRequired(BaseModel):
     """
-    A suspended node awaits a human's answer (a `HUMAN_INPUT` node, or an agent `ask_user`).
+    A legacy/artificial paused leaf awaits a human-shaped answer.
 
-    The host re-prompts on resume and delivers the answer as the parked leaf's Output.
+    The host re-prompts on resume and delivers the answer as the parked leaf's
+    Output. Authorable HUMAN_INPUT and agent ``ask_user`` do not emit this reason.
 
     Attributes:
         type (`Literal["human_input_required"]`):
@@ -37,7 +42,8 @@ class HumanInputRequired(BaseModel):
         node_id (`str`, *optional*, defaults to `None`):
             Logical resumption identity — the node the answer is delivered to as its Output.
         slot (`str`, *optional*, defaults to `None`):
-            Vestigial under the leaf-pause model (always `None`); pending plumbing cleanup.
+            Vestigial compatibility field (always `None`); removed with the
+            subsequent run-log cutover.
     """
 
     type: Literal["human_input_required"] = "human_input_required"
@@ -48,10 +54,9 @@ class HumanInputRequired(BaseModel):
     # to render. Empty (default) => legacy prompt-only form; non-empty => structured questions.
     questions: list[dict[str, Any]] = Field(default_factory=list)
     node_title: Optional[str] = None
-    # LOGICAL resumption identity: the node that paused. The agent `ask_user` pause is now a
-    # namespaced HUMAN_INPUT leaf, so `run.resume_command` delivers the answer
-    # as that leaf's Output keyed on `node_id` — the `slot` field is vestigial (always None for
-    # the leaf-pause model; the resume-plumbing prune is a later cleanup step).
+    # LOGICAL resumption identity: the artificial/legacy node that paused. The generic
+    # compatibility path delivers the answer as that leaf's Output keyed on `node_id`.
+    # `slot` is vestigial and remains only for the temporary wire shape.
     node_id: Optional[str] = None
     slot: Optional[str] = None
 

@@ -96,7 +96,7 @@ one of four outcomes — it never touches the engine's memory:
 |---------|---------|
 | `Output` | here are my typed results — bind them and continue |
 | `Route`  | a `case` decision — take this branch, skip the others |
-| `Pause`  | I need something from outside (a human, a timer) — checkpoint the run |
+| `Pause`  | temporary generic timer/event compatibility — checkpoint the run |
 | `Grow`   | splice this sub-graph in and continue (how `call`/`map`/`loop` expand) |
 
 The engine's defining rule: **it never asks what *kind* of node this is.** It reads
@@ -104,6 +104,11 @@ inputs, calls `run`, and branches only on the *shape of the outcome* and a few
 node-owned traits (`is_spawner`, `binds_per_item`, …). Adding a brand-new node kind
 requires zero engine changes — a ratchet test (`tests/engine/test_kind_census.py`)
 keeps the engine's kind-branch count pinned at 0.
+
+Authorable human interaction does not use `Pause`: `human_input` and an agent's
+`ask_user` tool block inside the live node call and eventually return `Output`.
+The generic checkpoint path remains temporarily for compatibility until issue
+#117 removes it.
 
 Because all state lives in one place the engine controls, a run can stop after *any*
 node and resume later: `Pause` serializes the world to a `RunCheckpoint`, and

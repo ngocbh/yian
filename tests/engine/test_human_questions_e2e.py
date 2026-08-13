@@ -1,16 +1,16 @@
-"""End-to-end pause/resume across the three `human_input` question surfaces.
+"""End-to-end blocking answers across the three `human_input` question surfaces.
 
-A `human_input` gate suspends the run with a `HumanInputRequired.questions` list and
-resumes when the host delivers a record keyed by each question's `header`. The three
-ways the gate sources its questions:
+A `human_input` gate calls the installed host with a validated ``questions`` list
+and returns the handler's record keyed by each question's ``header``. The three ways
+the gate sources its questions are:
 
   (A) static     — a literal `questions:` list in the YAML (seed 26).
   (C) manual ref — a `code` node produces the list, fed via `questions: ${qs}`.
   (B) adaptive   — an `adaptive_questions:` block that desugars at load into a synth
                    compose-agent + the gate; the agent authors the list.
 
-Each test runs to the pause, asserts the carried questions, delivers an answer record,
-and resumes to a succeeded terminal. The static and manual-ref forms need no LLM; the
+Each test asserts the trusted host payload and the succeeded terminal. The static and
+manual-ref forms need no LLM; the
 adaptive form monkeypatches `model_from_config` with a fake structured-output chat.
 """
 
@@ -18,41 +18,29 @@ from pathlib import Path
 
 import agent_composer.llm_clients as llm_clients_mod
 from agent_composer.compose import load_flow
-from agent_composer.run import resume_command, resume_flow, run_flow
-from agent_composer.suspension.pause import HumanInputRequired
-
-
-def _human_input_reason(result):
-    """The single `HumanInputRequired` pause reason on a paused `RunResult`."""
-    reasons = [r for r in result.pause_reasons if isinstance(r, HumanInputRequired)]
-    assert len(reasons) == 1, f"expected one human-input pause, got {result.pause_reasons}"
-    return reasons[0]
+from agent_composer.run import run_flow
+from agent_composer.tools import install_ask_user
 
 
 # --- (A) static: a literal questions list in the seed --------------------------------- #
 
 
-def test_static_questions_pause_resume():
-    """Seed 26: a static `questions:` list templates `${proj}` into a question, pauses,
-    and the delivered header-keyed record routes the terminal output."""
+def test_static_questions_block_and_return_answer():
+    """Seed 26 renders its static questions and routes the host answer."""
     loaded = load_flow(Path("tests/seeds/26-human-questions.yaml").read_text())
-    result = run_flow(loaded, {"proj": "Atlas"})
-
-    assert result.status == "paused", result.error
-    reason = _human_input_reason(result)
-    assert reason.questions, "the gate must carry the static questions"
-    headers = [q["header"] for q in reason.questions]
-    assert headers == ["Framework", "Notes"]
-    framework_q = next(q for q in reason.questions if q["header"] == "Framework")
-    assert "Atlas" in framework_q["question"]  # ${proj} rendered
-
-    # Deliver a record keyed by every question header (the gate's bare-object answer).
+    requests = []
     answer = {"Framework": "React", "Notes": "ship it"}
-    cmd = resume_command(loaded, reason, answer)
-    final = resume_flow(loaded, engine=result.engine, commands=[cmd])
+    with install_ask_user(lambda **request: requests.append(request) or answer):
+        result = run_flow(loaded, {"proj": "Atlas"})
 
-    assert final.status == "succeeded", final.error
-    assert final.output == "React"  # routed on the delivered label
+    assert result.status == "succeeded", result.error
+    questions = requests[0]["questions"]
+    assert questions, "the gate must pass the static questions"
+    headers = [q["header"] for q in questions]
+    assert headers == ["Framework", "Notes"]
+    framework_q = next(q for q in questions if q["header"] == "Framework")
+    assert "Atlas" in framework_q["question"]  # ${proj} rendered
+    assert result.output == "React"  # routed on the returned label
 
 
 # --- (C) manual ref: a code node produces the questions list -------------------------- #
@@ -76,24 +64,22 @@ output: ${ask.output}
 """
 
 
-def test_manual_ref_questions_pause_resume():
+def test_manual_ref_questions_block_and_return_answer():
     """A `code` node builds the questions list; the gate reads it via `questions: ${qs}`,
-    pauses with the code-produced question, and resumes on the delivered record."""
+    passes the code-produced question to the host, and returns its record."""
     loaded = load_flow(_MANUAL_REF)
-    result = run_flow(loaded, {"seed": "Which option?"})
+    requests = []
+    with install_ask_user(
+        lambda **request: requests.append(request) or {"H": "A"}
+    ):
+        result = run_flow(loaded, {"seed": "Which option?"})
 
-    assert result.status == "paused", result.error
-    reason = _human_input_reason(result)
-    assert len(reason.questions) == 1
-    q = reason.questions[0]
+    assert result.status == "succeeded", result.error
+    assert len(requests[0]["questions"]) == 1
+    q = requests[0]["questions"][0]
     assert q["question"] == "Which option?"  # the seed input flowed through the code node
     assert q["header"] == "H"
-
-    cmd = resume_command(loaded, reason, {"H": "A"})
-    final = resume_flow(loaded, engine=result.engine, commands=[cmd])
-
-    assert final.status == "succeeded", final.error
-    assert final.output == {"H": "A"}  # the gate emits the bare answer record
+    assert result.output == {"H": "A"}
 
 
 # --- (B) adaptive: an LLM composes the questions, desugared into agent + gate ---------- #
@@ -151,24 +137,21 @@ class _ComposeChat:
         return _Bound()
 
 
-def test_adaptive_questions_pause_resume(monkeypatch):
+def test_adaptive_questions_block_and_return_answer(monkeypatch):
     """An `adaptive_questions:` block desugars into a compose-agent + gate. The agent
-    composes the questions list (via the fake structured chat), the gate pauses carrying
-    exactly those questions, and the delivered record resumes to a succeeded terminal."""
+    composes the questions list and the gate passes exactly those questions to the host."""
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: _ComposeChat())
 
     loaded = load_flow(_ADAPTIVE)
-    result = run_flow(loaded, {"ctx": "storage"})
+    requests = []
+    with install_ask_user(
+        lambda **request: requests.append(request) or {"DB": "Postgres"}
+    ):
+        result = run_flow(loaded, {"ctx": "storage"})
 
-    assert result.status == "paused", result.error
-    reason = _human_input_reason(result)
-    # The gate pauses with EXACTLY the agent-composed questions.
-    assert [q["header"] for q in reason.questions] == ["DB"]
-    assert reason.questions[0]["question"] == "Which database?"
-    assert [o["label"] for o in reason.questions[0]["options"]] == ["Postgres", "SQLite"]
-
-    cmd = resume_command(loaded, reason, {"DB": "Postgres"})
-    final = resume_flow(loaded, engine=result.engine, commands=[cmd])
-
-    assert final.status == "succeeded", final.error
-    assert final.output == {"DB": "Postgres"}
+    assert result.status == "succeeded", result.error
+    questions = requests[0]["questions"]
+    assert [q["header"] for q in questions] == ["DB"]
+    assert questions[0]["question"] == "Which database?"
+    assert [o["label"] for o in questions[0]["options"]] == ["Postgres", "SQLite"]
+    assert result.output == {"DB": "Postgres"}

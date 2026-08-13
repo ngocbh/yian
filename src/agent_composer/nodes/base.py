@@ -90,7 +90,7 @@ class NodeKind(str, Enum):
     MODEL = "model"
     TOOL = "tool"
     CASE = "case"
-    HUMAN_INPUT = "human_input"  # suspend for a person
+    HUMAN_INPUT = "human_input"  # block through the host-owned ask_user tool
     WAIT = "wait"  # internal-only: suspend for an external poke (WATCH uses it)
     LOOP = "loop"  # internal-only: iterate a callable to a fixpoint (`('a -> 'a) -> 'a -> 'a`)
     START = "start"  # internal-only: loader-synthesized input boundary (parameter binding)
@@ -129,8 +129,12 @@ class Route:
 
 @dataclass(frozen=True)
 class Pause:
-    """A leaf wait (HUMAN_INPUT / WAIT / an agent mid-loop control-pause). `reason` is a
-    `suspension.pause.PauseReason`. The engine emits `PauseRequested` and suspends."""
+    """A temporary generic leaf wait retained for WAIT/checkpoint compatibility.
+
+    ``reason`` is a ``suspension.pause.PauseReason``. The engine emits
+    ``PauseRequested`` and suspends. Authorable HUMAN_INPUT and AGENT interactions
+    block inside their live call and do not return this variant.
+    """
 
     reason: Any
 
@@ -141,7 +145,7 @@ class Grow:
 
     Fields:
       - `seed`: the pure input to the compile-owned growth builder. Kind-shaped but opaque to the
-        engine (a call record dict, map records list, agent segment, or loop `(record, index)`).
+        engine (a call record dict, map records list, or loop `(record, index)`).
         The same canonical value is persisted so durable replay rebuilds identical topology without
         re-running the node that produced it.
       - `prune`: ids to retire in the same step (∅ for call/map; a self-respawn loop's finished

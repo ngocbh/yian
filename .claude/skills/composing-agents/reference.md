@@ -20,14 +20,14 @@ Copy, rename, and edit.
 | [`typed_output.yaml`](templates/typed_output.yaml) | AGENT with a record `output:` — structured generation + `retries:` |
 | [`branching.yaml`](templates/branching.yaml) | classify → `case` route → `\|` join |
 | [`tool-use.yaml`](templates/tool-use.yaml) | a `tool` node (no LLM) feeding an AGENT |
-| [`human-in-loop.yaml`](templates/human-in-loop.yaml) | a `human_input` pause/gate (typed approve/revise answer) |
+| [`human-in-loop.yaml`](templates/human-in-loop.yaml) | a blocking `human_input` gate (typed approve/revise answer) |
 | [`human-questions.yaml`](templates/human-questions.yaml) | a `human_input` gate with multiple questions — static `questions:` + `adaptive_questions:` |
 | [`child-summarize.yaml`](templates/child-summarize.yaml) | a reusable CHILD flow |
 | [`call-child.yaml`](templates/call-child.yaml) | `call` a sibling flow once (via `uses:`) |
 | [`expr-and-call.yaml`](templates/expr-and-call.yaml) | `${a + b}` arithmetic in a binding + inline `call(...)` over an in-file `defs:` callee |
 | [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list, in parallel |
-| [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — chat-shaped pause-per-turn |
-| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — `loop` per turn (`human_input` → `agent`, transcript grown in `output:` bindings), the shape `ac chat` runs |
+| [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — chat-shaped blocking turn |
+| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — `human_input` → exit CASE → agent/code, with flow-owned exit, the shape `ac chat` runs |
 | [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml) | flow-level `llm_config:`, per-node override, `inherit: false` |
 | [`node-env-config.yaml`](templates/node-env-config.yaml) | flow-level `env:` default + per-node override (node wins), e.g. `max_tool_iterations` |
 
@@ -120,10 +120,11 @@ tag or add an `else:`.
 from it (a `wait`, a side-effecting tool), use `depends_on: [a]` (co-skips B if A
 skipped) or `runs_after: [a]` (orders only; B still runs).
 
-**Ask the human.** For a *guaranteed* gate use a `human_input` node (always
-pauses). For "ask only if the model decides it needs to", give a `tool_calling`
-agent `controls: [ask_user]`. A `human_input` gate can present multiple
-multiple-choice questions (static `questions:`), have an LLM compose them
+**Ask the human.** For a *guaranteed* gate use a `human_input` node (it blocks its
+worker until the host answers). For "ask only if the model decides it needs to",
+give a `tool_calling` agent `tools: [ask_user]`. Both calls stay inside their live
+node execution. A `human_input` gate can present multiple-choice questions
+(static `questions:`), have an LLM compose them
 (`adaptive_questions:`, which desugars to a compose-agent + gate at load), or read
 them from an upstream node (`questions: ${name}`); the answer is then a record
 keyed by each question's `header`.
@@ -139,25 +140,21 @@ threading a carried record `'a -> 'a` (the body's `output:` shape EQUALS its
 predicate goes false); `until: done` is a POST-check / do-while (1+ runs, stop
 when the predicate becomes TRUE); `times: N` runs exactly N times with no
 predicate. Predicates use the canonical bare form (no `${}`). `max:` is a required runaway guard
-for `while:`/`until:` — but REDUNDANT and REJECTED with `times:`. A body that pauses
-(a `human_input` leaf) makes the loop a chat REPL — run/resume threads each turn,
-and the pause is DURABLE (a mid-loop checkpoint resumes in a fresh process). A long
+for `while:`/`until:` — but REDUNDANT and REJECTED with `times:`. A body that blocks
+(a `human_input` leaf) makes the loop a live chat REPL — the same run threads each
+answered turn. A long
 loop stays cheap: each committed iteration is PRUNED from the live graph, so only one
 is resident at a time. See `loop.yaml`.
 
-**Conversational REPL (LOOP + human_input).** A chat is a `loop` whose body pauses each
-turn: `ask` (`human_input`) → `reply` (`agent`), carrying the 2-field record
-`{transcript: str, exited: bool}` (`'a -> 'a`). The transcript grows DETERMINISTICALLY in
-the turn body's `output:` bindings — a `${...}` template that concatenates the prior
-transcript with this turn's message and reply — not by re-prompting the model, and with no
-CODE fold node. The one gotcha: the loop body's `output:` must EQUAL the carried record,
-so each field's binding must match its carried TYPE. A CONCATENATING template (literal text
-around spans, e.g. the multi-line `transcript` binding) is joined to a `str`, so it types
-as `str` and fits the carried `str` field; a single lone span (`${input.exited}`) is a
-typed passthrough. Only a single lone span with a MULTI-ref expression (e.g. `${a + b}`)
-types as NONE and the loop's record contract rejects it — keep each output field a plain
-passthrough or a concatenating template. This is the shape `ac chat` runs; see `chat.yaml`
-(and `examples/chat.yaml` for a runnable copy).
+**Conversational REPL (LOOP + human_input).** A chat is a `loop` whose body blocks at
+`ask` (`human_input`), then a CASE routes exact `/exit` and `/quit` values to an exit
+record before `reply` (`agent`). The normal branch appends the message and reply to the
+transcript. Defaulted output bindings rejoin those branches into the carried 2-field
+record `{transcript: str, exited: bool}` (`'a -> 'a`). Typed exit is flow-owned; only
+terminal EOF is normalized by the bundled host. The loop body's `output:` must EQUAL the
+carried record. A lone multi-ref coalesce has no inferable type, so the template uses
+adjacent defaulted spans for the `str` field and a lone defaulted span for `bool`. This is
+the shape `ac chat` runs; see `chat.yaml` (and `examples/chat.yaml` for a runnable copy).
 
 ## Gotchas
 

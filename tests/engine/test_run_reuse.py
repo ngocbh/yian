@@ -10,6 +10,7 @@ from agent_composer.compose.loader import load_flow
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.suspension.checkpoint import RunCheckpoint
+from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
 
 
 _RECURSIVE_FLOW = """
@@ -137,6 +138,13 @@ def _graph_snapshot(flow):
     }
 
 
+def _load_pausing_call():
+    """Load the checkpoint fixture with a test-only artificial Pause leaf."""
+    loaded = load_flow(_PAUSING_CALL)
+    replace_human_inputs_with_artificial_pauses(loaded.compiled)
+    return loaded
+
+
 def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monkeypatch):
     seen = []
 
@@ -188,12 +196,12 @@ def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monke
 
 
 def test_checkpoint_resume_restores_into_a_private_graph():
-    source = load_flow(_PAUSING_CALL)
+    source = _load_pausing_call()
     paused = run_flow(source, {})
     assert paused.status == "paused"
 
     checkpoint = RunCheckpoint.loads(paused.checkpoint.dumps())
-    fresh = load_flow(_PAUSING_CALL)
+    fresh = _load_pausing_call()
     static = _graph_snapshot(fresh.compiled)
     resumed = resume_flow(
         fresh,

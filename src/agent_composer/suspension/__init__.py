@@ -1,10 +1,11 @@
-"""Durable suspend/resume machinery.
+"""Temporary generic durable suspend/resume compatibility.
 
-A node that awaits something (a person, an external event) emits `PauseRequested`
-carrying a typed `PauseReason`. The engine parks that node, records it, and the
-run can be serialized to a `RunCheckpoint`. The host satisfies the pause by
-delivering the awaited value as the parked leaf's `Output` via a
-`DeliverAnswerCommand` and re-invoking `resume()` on the live engine.
+A node that returns the legacy ``Pause`` variant emits ``PauseRequested`` carrying
+a typed ``PauseReason``. The engine parks that node and can serialize the run to a
+``RunCheckpoint``; the host later delivers the value as the parked leaf's
+``Output``. Authorable HUMAN_INPUT and AGENT ``ask_user`` calls now block inside
+live node execution instead. This compatibility package is removed by the
+subsequent run-log cutover.
 """
 
 from agent_composer.suspension.checkpoint import RunCheckpoint

@@ -1,15 +1,15 @@
 # 17 — Effects: HUMAN_INPUT + WAIT.
 #
-# Propose an action, ask a human to APPROVE it (HUMAN_INPUT — suspend/resume, a TYPED answer),
+# Propose an action, ask a human to APPROVE it (blocking HUMAN_INPUT, a TYPED answer),
 # route on the answer, WAIT until a settle time, then confirm (a side effect). Shows:
 # kind: human_input (flat: inputs:/prompt:/outputs:, the answer validated against a type),
 # kind: wait (until:), `case … on` routing the human's answer, and depends_on: to order a
 # side-effect node after the wait with no data binding.
 #
-# PROPOSED syntax — HUMAN_INPUT/WAIT are runtime-native but NOT yet authorable (§0c / engine
-# TODO: "Add HUMAN_INPUT / WAIT to NodeKind"). This seed PINS how effects look in the Compose surface
-# surface. Effects are top-level ONLY: an effect reachable inside a REF/MAP child is
-# compile-rejected (alang §4A — a child can't suspend yet).
+# HUMAN_INPUT blocks its live worker through the host-owned ask_user tool; WAIT still uses the
+# temporary generic pause compatibility path. This seed pins both effects in the Compose surface
+# and proves the blocking human answer feeds an ordinary CASE before the timed WAIT.
+# The answer is validated at the same typed Output boundary as every other node value.
 
 id: effects
 name: effects_human_wait

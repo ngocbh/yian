@@ -493,14 +493,16 @@ def test_ready_snapshot_branches_on_num_workers():
 
 def test_pooled_snapshot_captures_paused_state():
     # Pooled run pauses, then snapshot() goes through _ready_snapshot's POOLED arm — proves the
-    # single-engine design does not silently break the snapshot path under num_workers>=1. Uses a
-    # real HumanInputNode so the structured PauseReason serializes through the checkpoint model
-    # (snapshot().pause_reasons is list[PauseReason], not a bare string).
-    from agent_composer.nodes.human_input import HumanInputNode
+    # single-engine design does not silently break the snapshot path under num_workers>=1.
+    # A test-only Pause node carries a structured reason accepted by the checkpoint model.
+    from agent_composer.suspension.pause import HumanInputRequired
 
     eng = FlowEngine(
         _graph([FuncNode("a", lambda p: {}),
-                HumanInputNode("gate", prompt="approve?")],
+                PauseOnceNode(
+                    "gate",
+                    reason=HumanInputRequired(prompt="approve?", node_id="gate"),
+                )],
                [(START_ID, "a"), ("a", "gate"), ("gate", END_ID)]),
         num_workers=4,
     )

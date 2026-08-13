@@ -1,9 +1,10 @@
 """`ac run` — load a flow, gather inputs, drive it to a terminal, render the output.
 
 Inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`); any declared
-input still missing is prompted for interactively (required ones are starred). A run that
-suspends on a HUMAN_INPUT / WAIT effect is resumed interactively — each pause prompts for
-the awaited value and the run continues to a terminal. The answer's type is enforced at
+input still missing is prompted for interactively (required ones are starred). The engine
+runs behind a main-thread terminal broker: blocking HUMAN_INPUT and agent ``ask_user`` calls
+wait for that broker and then continue inside the same live node call. The temporary generic
+WAIT pause path is resumed through the same terminal surface. Answer types are enforced at
 the engine boundary; an invalid one fails the run.
 
 `--provider`/`--model` feed the outermost layer of the `llm_config` cascade (fill-the-gap,
@@ -45,6 +46,7 @@ from agent_composer.typesys.values import ValueKind
 
 console = Console()
 err_console = Console(stderr=True)
+_DEFAULT_BROKER_EOF = object()
 
 
 def _ensure_cwd_importable() -> None:
@@ -545,6 +547,7 @@ def _run_with_terminal_controller(
     *,
     prompt_handler: Callable[[PromptRequest], Any],
     reporter: Optional[_ProgressReporter],
+    eof_value: Any = _DEFAULT_BROKER_EOF,
 ) -> RunResult:
     """Run one complete CLI lifecycle behind a main-thread terminal broker.
 
@@ -552,6 +555,8 @@ def _run_with_terminal_controller(
     receives the shared stop event, a brokered observer, the installed
     ``ask_user`` handler, and the broker's render enqueue operation. The main
     thread alone serves the FIFO and joins the controller before registry cleanup.
+    ``eof_value`` optionally normalizes prompt EOF to a caller-owned value; omitted
+    EOF keeps the broker's exception policy.
     """
 
     broker: TerminalBroker
@@ -567,7 +572,10 @@ def _run_with_terminal_controller(
             if reporter is not None and not stop_event.is_set() and not request.cancelled:
                 reporter.start()
 
-    broker = TerminalBroker(prompt_on_main, stop_event=stop_event)
+    broker_kwargs: dict[str, Any] = {"stop_event": stop_event}
+    if eof_value is not _DEFAULT_BROKER_EOF:
+        broker_kwargs["eof_value"] = eof_value
+    broker = TerminalBroker(prompt_on_main, **broker_kwargs)
 
     def ask_user(**kwargs: Any) -> Any:
         """Translate broker lifecycle cancellation into the runtime stop signal."""
@@ -840,7 +848,7 @@ def _q_style() -> Any:
 def assemble_question_answers(questions, ask):
     """Build a human_input answer record from a question list + an `ask` callable.
 
-    `questions` is the pause's question list (each a dict {question, header, options,
+    `questions` is the host request's question list (each a dict {question, header, options,
     multi_select}). `ask(question) -> answer` is the per-question elicitation (the real
     one wraps questionary; tests pass a scripted callable). Returns a record keyed by
     each question's `header`: a single label `str` for a single-select question, a
@@ -910,13 +918,12 @@ def _ask_question(question, index=None, total=None, request=None):
     """Elicit one question via questionary; return its answer (str, list[str], or None).
 
     `index`/`total` (1-based, optional) drive a styled "Question N of M · <header>" rule
-    printed above the widget so a multi-question pause reads as a numbered sequence; omit
+    printed above the widget so a multi-question request reads as a numbered sequence; omit
     them (the default) for a bare single prompt. Decorated choices ("label — description")
     are rendered for display but mapped back to the bare `label` so the returned value is
     always the bare label, never the hint string. An "Other" escape is always offered;
     choosing it routes to a free-text prompt. Returns `None` on cancel (questionary
-    `.ask()` yields None on Ctrl-C/Esc), which the caller treats like the legacy path —
-    stay paused."""
+    `.ask()` yields None on Ctrl-C/Esc) for the caller to interpret."""
     import questionary
 
     text = question["question"]
@@ -1036,9 +1043,10 @@ def _resume_to_terminal(
 ) -> RunResult:
     """Drive a paused run to a terminal from the controller thread.
 
-    HUMAN_INPUT and scheduled WAIT effects are elicited through the brokered
-    ``ask_user`` handler; warnings and progress stay brokered through ``render``
-    and ``on_event``. Cancelling a structured answer keeps the run paused.
+    Legacy ``HumanInputRequired`` and scheduled WAIT reasons are elicited through
+    the brokered ``ask_user`` handler; warnings and progress stay brokered through
+    ``render`` and ``on_event``. Authorable HUMAN_INPUT no longer enters this path.
+    Cancelling a structured compatibility answer keeps the run paused.
     """
 
     while result.status == "paused":

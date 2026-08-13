@@ -63,30 +63,29 @@ ac run examples/classify.yaml --input text="I love this!"
 ## `human-approval.yaml` — a deterministic human gate
 
 Exercises the **`human_input`** node. An agent drafts a plan, a `human_input`
-node always pauses for an `approve` / `revise` answer (a `Literal` typedef),
+node always blocks for an `approve` / `revise` answer (a `Literal` typedef),
 `case ... on` routes on the typed answer, and a coalesce joins whichever branch
 ran.
 
 ```console
 ac run examples/human-approval.yaml --input task="Plan a team offsite"
-#   → pauses and prompts you to approve or revise
+#   → prompts you to approve or revise while the flow remains live
 ```
 
-Run it from the CLI to see interactive resume; the pause is **guaranteed**.
+Run it from the CLI to see the guaranteed blocking gate.
 
 ## `ask-user.yaml` — a model-chosen clarifying question
 
-Exercises the **`ask_user` control** on a `tool_calling` agent. The agent
-suspends to ask a clarifying question **only if** it judges the request
-ambiguous — otherwise it answers outright. Whether the pause happens depends on
-the prompt and the model.
+Exercises the **`ask_user` tool** on a `tool_calling` agent. The agent calls the
+blocking tool **only if** it judges the request ambiguous — otherwise it answers
+outright. Whether the call happens depends on the prompt and the model.
 
 ```console
 ac run examples/ask-user.yaml --input request="Book me a table for dinner"
 ```
 
-Contrast with `human-approval.yaml`: `human_input` always pauses; `ask_user`
-pauses only if the model decides to.
+Contrast with `human-approval.yaml`: `human_input` always asks; `ask_user` asks
+only if the model decides to.
 
 ## `decision-brief.yaml` — a realistic multi-stage flow
 

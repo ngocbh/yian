@@ -1,9 +1,9 @@
-"""`ac chat` — an interactive REPL dogfooded as a flow.
+"""``ac chat`` — a broker-driven interactive flow.
 
-Loads the bundled composer chat flow (or a user-supplied one), runs it, and drives the
-per-turn human_input suspend/resume: print the assistant's latest reply, prompt the
-user, resume with the message. `/exit` or EOF ends the session. The turn loop and
-tools live here; the engine sees only an ordinary flow.
+Loads the bundled composer chat flow (or a user-supplied one) and runs it behind the
+main-thread terminal broker. HUMAN_INPUT blocks inside the live run; assistant replies
+are enqueued before the next prompt. Textual exit is flow-owned. Only terminal EOF is
+normalized by the broker to ``/exit``.
 
 A single bad turn does not end the session. The reply agent can fail mid-turn (a raise,
 or hitting its tool-iteration cap), which terminates the underlying flow *run* as
@@ -14,23 +14,32 @@ accumulated transcript, so the conversation continues from where it left off.
 
 from __future__ import annotations
 
+from concurrent.futures import CancelledError
+from functools import partial
+import os
 from pathlib import Path
+import select
+import sys
+from threading import Lock
 from typing import Any, Optional
 
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.text import Text
 
 from agent_composer.cli.chat import tools as chat_tools
 from agent_composer.cli.run import (  # reused helpers
     _ensure_cwd_importable,
     _ensure_provider_keys,
     _last_segment,
+    _prompt_request,
     _render_load_error,
+    _run_with_terminal_controller,
 )
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
-from agent_composer.run import resume_command, resume_flow, run_flow
+from agent_composer.run import _run_flow_controlled
 from agent_composer.events import NodeSucceeded
 
 console = Console()
@@ -38,6 +47,96 @@ err_console = Console(stderr=True)  # errors go to stderr, mirroring `ac run` (r
 
 # The composer chat flow shipped with the package — the default when no flow is given.
 _BUNDLED = Path(__file__).parent / "chat.yaml"
+
+
+def _prompt_chat_request(request) -> Any:
+    """Read one chat line on the broker-owned main thread.
+
+    Structured question sets retain the general CLI renderer. The ordinary chat
+    surface is deliberately line-oriented: it preserves typed text exactly (apart
+    from the line ending), raises EOF for the broker to normalize, and applies no
+    textual command policy.
+    """
+    if request.questions:
+        return _prompt_request(request)
+    label = request.question or f"input for {request.node_id}"
+    console.print(Text(f"{label} ", style="bold cyan"), end="")
+    try:
+        input_fd = sys.stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        # Click's in-memory CliRunner stdin has no descriptor, but its scripted
+        # line is already available and therefore cannot hold controller cleanup.
+        input_fd = None
+
+    if input_fd is None:
+        line = sys.stdin.readline()
+        is_eof = line == ""
+    else:
+        # Read exactly one line from the descriptor. TextIOWrapper.readline() may
+        # prefetch later pasted lines into its private buffer, making the next
+        # select() wait despite data already buffered. It can also block after a
+        # partial line arrives and stop observing cancellation. Descriptor-specific
+        # reads avoid both failures while retaining stdin's codec: byte-exact for
+        # pipes and one canonical boundary at a time for a terminal.
+        cancel_read, cancel_write = os.pipe()
+        raw = bytearray()
+        reached_eof = False
+        canonical_tty = os.isatty(input_fd)
+        cancel_lock = Lock()
+        cancel_active = True
+
+        def cancel() -> None:
+            # PromptRequest extracts callbacks under its own lock and invokes them
+            # afterward. Serialize that delayed invocation with descriptor teardown
+            # so a closed numeric fd can never be reused before this write.
+            with cancel_lock:
+                if not cancel_active:
+                    return
+                try:
+                    os.write(cancel_write, b"x")
+                except OSError:
+                    return
+
+        request.set_cancel_callback(cancel)
+        try:
+            while True:
+                readable, _, _ = select.select([input_fd, cancel_read], [], [])
+                if cancel_read in readable or request.cancelled:
+                    raise CancelledError
+                # A canonical TTY becomes readable only for one completed line or
+                # VEOF. Read that whole boundary at once: byte-at-a-time reads can
+                # consume the partial text preceding Ctrl-D and then wait forever
+                # for a boundary the terminal driver has already discharged. Pipes
+                # stay byte-exact so later pasted lines cannot be prefetched.
+                chunk = os.read(input_fd, 65536 if canonical_tty else 1)
+                if chunk == b"":
+                    reached_eof = True
+                    break
+                if canonical_tty:
+                    raw.extend(chunk)
+                    break
+                if chunk == b"\n":
+                    break
+                raw.extend(chunk)
+        finally:
+            request.set_cancel_callback(None)
+            with cancel_lock:
+                cancel_active = False
+                os.close(cancel_read)
+                os.close(cancel_write)
+        is_eof = reached_eof and not raw
+        if is_eof:
+            line = ""
+        else:
+            encoding = getattr(sys.stdin, "encoding", None) or "utf-8"
+            errors = getattr(sys.stdin, "errors", None) or "strict"
+            line = bytes(raw).decode(encoding, errors)
+    if request.cancelled:
+        raise CancelledError
+    if is_eof:
+        console.print()
+        raise EOFError
+    return line.rstrip("\r\n")
 
 
 def chat(
@@ -79,73 +178,54 @@ def chat(
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
 
-    # Host-mirrored conversation state, updated off the flow's event stream each turn:
-    #   reply      — the reply node's latest output, printed before the next prompt (`None`
-    #                between turns, cleared once printed). The reply node lives inside the
-    #                per-turn LOOP body, so its runtime id is namespaced (`chat/reply`,
-    #                `chat~1/reply`) — `_last_segment` maps it back to the authored `reply`.
-    #   transcript — the turn body's grown transcript, read off the body's terminal
-    #                (`__end__`) record. Mirrored here so a FAILED turn (the agent raised
-    #                or hit its tool cap, terminating the run) can restart the flow from
-    #                the accumulated conversation instead of ending the session. The
-    #                per-iteration body end emits the `{transcript, exited}` dict; the
-    #                top-level flow end emits a bare str, so the `isinstance(..., dict)`
-    #                guard keeps only the body's record.
-    state: dict[str, Any] = {"reply": None, "transcript": ""}
+    # The last completed turn is the restart seed after a reply failure. A failed
+    # in-progress turn never reaches its body END, so it cannot alter this mirror.
+    state: dict[str, Any] = {"transcript": ""}
 
-    def on_event(ev: Any) -> None:
-        if not isinstance(ev, NodeSucceeded):
-            return
-        seg = _last_segment(ev.node_id)
-        if seg == "reply":
-            state["reply"] = ev.output
-        elif seg == "__end__" and isinstance(ev.output, dict):
-            state["transcript"] = ev.output.get("transcript", state["transcript"])
+    try:
+        while True:
+            # A node failure sets its run's cooperative stop event to drain siblings.
+            # Start recovery under a fresh broker/controller lifecycle so that terminal
+            # event never leaks into the next immutable flow run.
+            current_flow = load_flow(text, search_paths=search)
 
-    quit_session = False
-    while not quit_session:
-        # (Re)start the flow from the accumulated transcript. A FRESH `load_flow` is required per
-        # (re)start: the engine grows the compiled graph in place as the LOOP spawns iterations, so
-        # a graph that has already run cannot be re-run. It immediately pauses on the first
-        # `human_input` (the turn's `ask`); the inner loop then drives turns.
-        loaded = load_flow(text, search_paths=search)
-        result = run_flow(
-            loaded, {"opening": state["transcript"]}, on_event=on_event, llm_config=cli_cfg or None
-        )
-        while result.status == "paused":
-            if state["reply"] is not None:
-                console.print(Markdown(str(state["reply"])))
-                state["reply"] = None
-            try:
-                msg = console.input("[bold cyan]You:[/bold cyan] ")
-            except (EOFError, KeyboardInterrupt):
-                # Ctrl+D / Ctrl+C at the prompt echoes NO newline, leaving the cursor glued to
-                # the `You:` line — emit one so the exit notice (and the shell prompt after) start
-                # on a fresh line instead of needing a manual redraw.
-                console.print()
-                quit_session = True
+            def controller(stop_event, on_event, ask_user, render):
+                """Run one immutable chat attempt on the controller thread."""
+
+                def observe(event: Any) -> None:
+                    """Mirror completed turns and queue replies on the terminal FIFO."""
+                    if on_event is not None:
+                        on_event(event)
+                    if not isinstance(event, NodeSucceeded):
+                        return
+                    segment = _last_segment(event.node_id)
+                    if segment == "reply":
+                        render(partial(console.print, Markdown(str(event.output))))
+                    elif segment == "__end__" and isinstance(event.output, dict):
+                        state["transcript"] = event.output.get(
+                            "transcript", state["transcript"]
+                        )
+
+                return _run_flow_controlled(
+                    current_flow,
+                    {"opening": state["transcript"]},
+                    on_event=observe,
+                    llm_config=cli_cfg or None,
+                    stop_event=stop_event,
+                )
+
+            result = _run_with_terminal_controller(
+                controller,
+                prompt_handler=_prompt_chat_request,
+                reporter=None,
+                eof_value="/exit",
+            )
+            if result.status != "failed":
                 break
-            if msg.strip() in {"/exit", "/quit"}:
-                quit_session = True
-                break
-            # The pause is the turn's single `human_input`; deliver the typed line as its answer.
-            reason = result.pause_reasons[0]
-            cmd = resume_command(loaded, reason, msg)
-            # Resume the SAME in-process run via the live engine. `llm_config` is not re-supplied
-            # here: it is a no-op on the `engine=` path (the live graph already carries the baked
-            # cascade from the initial run_flow; it only re-applies on the `checkpoint=` restore).
-            result = resume_flow(loaded, engine=result.engine, commands=[cmd], on_event=on_event)
-
-        if quit_session:
-            break
-        # The run left "paused" without the user quitting. A FAILED turn (the agent raised or hit
-        # its tool cap) surfaces the error and restarts the flow from the mirrored transcript; any
-        # other terminal (the flow reached its own end / max) simply ends the session.
-        if result.status == "failed":
             console.print(f"[red]turn failed:[/red] {result.error}")
             console.print("[dim]continuing — your conversation so far is preserved.[/dim]")
-            state["reply"] = None
-            continue
-        break
+    except KeyboardInterrupt:
+        err_console.print("[yellow]cancelled by user[/yellow]")
+        raise typer.Exit(code=130)
 
     console.print("[dim]session ended[/dim]")

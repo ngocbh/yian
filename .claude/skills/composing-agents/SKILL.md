@@ -27,7 +27,7 @@ branch+join, tool use, human gate, `call`/`map` composition); copy one and edit.
 2. **Name reusable types** in `typedefs:` (enums, records, aliases).
 3. **Decompose into leaf nodes.** Each node is one step: an LLM call (`agent`),
    deterministic code (`code`), a registered tool (`tool`), a branch (`case`), a
-   human gate (`human_input`), a timed pause (`wait`), a child-flow call
+   blocking human gate (`human_input`), a timed pause (`wait`), a child-flow call
    (`call`/`map`), or an iterated body (`loop`). Prefer many small typed nodes over
    one mega-prompt.
 4. **Wire by reference, not by edges.** A node consumes another by putting
@@ -217,7 +217,9 @@ Routing on a `Literal` is **exhaustiveness-checked** — omitting a tag with no
 `else:` is a compile error.
 
 ### `human_input` — a guaranteed human gate
-**Always** suspends and waits for a typed answer (validated against `output:`).
+**Always** calls the host-owned `ask_user` tool and blocks its worker until the
+host returns a typed answer (validated against `output:`). It stays inside the
+live node call; it does not create a resumable checkpoint.
 ```yaml
 approve:
   kind: human_input
@@ -233,9 +235,9 @@ approve:
 Instead of a typed `prompt:`+`output:`, a gate can present **questions** (1–4,
 AskUserQuestion-shaped) — the answer is a record keyed by each `header`; `output:`
 then defaults to `object`. `prompt:` is optional; `questions:` and
-`adaptive_questions:` are mutually exclusive. The gate stays **PURE** (never calls
-an LLM): `adaptive_questions:` is LOAD-TIME sugar that lowers to a compose-agent +
-gate.
+`adaptive_questions:` are mutually exclusive. The gate itself never chooses or
+calls an LLM: `adaptive_questions:` is LOAD-TIME sugar that lowers to a
+compose-agent + gate; the gate only calls the host's installed interaction tool.
 ```yaml
 ask:                                  # (A) static questions list
   kind: human_input
@@ -294,23 +296,23 @@ turn:
 ```
 The body's `output:` shape must **equal** the carried record and read only a
 **subset** of its names (`'a -> 'a`) — names checked at build, types at load. The
-node's value is the final carried record. A body that pauses (a `human_input` leaf)
-makes the loop a chat REPL: run/resume threads each turn. Pick **exactly one**
+node's value is the final carried record. A body that blocks (a `human_input` leaf)
+makes the loop a live chat REPL: the same run threads each answered turn. Pick
+**exactly one**
 driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
 stop when the predicate becomes true), or `times: N` (fixed count). `max:` is
 required for `while:`/`until:` but **redundant and rejected** with `times:`.
 
 #### Conversational REPL — a chat as a `loop` (what `ac chat` runs)
-A chat is a `loop` whose body pauses each turn: `ask` (`human_input`) → `reply`
-(`agent`), carrying `{transcript: str, exited: bool}`. The transcript grows
-**deterministically in the turn body's `output:` bindings** — a `${...}` template that
-concatenates the prior transcript with this turn's message and reply — not by
-re-prompting the model, and with no CODE fold node. **Gotcha:** the body's `output:` must
-EQUAL the carried record, so each field's binding must match its carried TYPE. A
-**concatenating template** (literal text around spans) is joined to a `str` and fits the
-carried `str` field; a single lone span (`${input.exited}`) is a typed passthrough. Only a
-single lone span with a **multi-ref expression** (e.g. `${a + b}`) types as **None** and
-the loop's record contract **rejects** it. See [`templates/chat.yaml`](templates/chat.yaml).
+A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
+`case` routes exact `/exit` and `/quit` values to an exit record before the
+`reply` agent. The normal branch builds the next transcript; defaulted output
+bindings rejoin the exit record or normal transcript into the carried
+`{transcript: str, exited: bool}` record. Typed exit is flow-owned — a host must
+not intercept it — while terminal EOF may be normalized to `/exit`. **Gotcha:**
+the body's `output:` must EQUAL the carried record. A lone multi-ref coalesce has
+no inferable type; adjacent defaulted spans preserve `str`, and the lone
+defaulted exit span preserves `bool`. See [`templates/chat.yaml`](templates/chat.yaml).
 
 ## Run-ordering without data (`depends_on` / `runs_after`)
 Both gate a node on another **settling** even when no value flows. `depends_on:
@@ -351,16 +353,18 @@ Inside a `prompt:` you may reference only names the node declares in its own
 in the prompt.
 
 ## Effects from inside an agent — `ask_user`
-A `tool_calling` agent granted `controls: [ask_user]` can pause to ask the human
-**only if the model decides it needs to**, then resume with the answer as the tool
-result. For a *guaranteed* gate use `human_input`; for "ask only if needed" use
-`ask_user`.
+A `tool_calling` agent granted `tools: [ask_user]` can synchronously ask the human
+**only if the model decides it needs to**. The tool blocks inside the same live
+agent loop and its returned answer becomes the ordinary tool result. For a
+*guaranteed* gate use `human_input`; for "ask only if needed" use `ask_user`.
 
 ## Validate & run
 - **Quick validate** (loads + compiles, no model): `ac run <flow>.yaml` will load
   first; or from Python `load_flow(text, search_paths=[flow_dir])`.
 - **Run:** `ac run <flow>.yaml --input k=v [--inputs file.json]`. Missing required
-  inputs are prompted; a `human_input`/`wait` pause is resumed interactively.
+  inputs are prompted; `human_input` and `ask_user` requests are served by the
+  host while the run remains live. A temporary generic `Pause`/checkpoint path
+  remains for `wait` compatibility until issue #117 removes it.
 - A flow with only `code`/`tool` nodes runs with **no provider**; any `agent` node
   needs a provider/model configured (see `docs/installation.md`).
 

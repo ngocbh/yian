@@ -13,19 +13,33 @@ from agent_composer.compile.model import END_ID, START_ID, FlowOutput, NodeState
 from agent_composer.events import RunPaused, RunSucceeded
 from agent_composer.nodes.base import Grow
 from agent_composer.nodes.call.node import CallNode
-from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.map.node import MapNode
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.suspension.checkpoint import RunCheckpoint
 from agent_composer.suspension.commands import DeliverAnswerCommand
 from agent_composer.suspension.expansions import GrowRecord
-from tests.engine._fakes import FuncNode, stamp_reads
+from agent_composer.suspension.pause import HumanInputRequired
+from tests.engine._fakes import (
+    FuncNode,
+    PauseNode,
+    replace_human_inputs_with_artificial_pauses,
+    stamp_reads,
+)
 from tests.engine._graph_builder import _graph
 from tests.engine.test_engine_expansions_ledger import (
     _inner_pause_child,
     call_with_inner_pause,
     map_with_inner_pause,
 )
+
+
+def _load_with_artificial_human_pauses(source: str):
+    """Load YAML with authored HUMAN_INPUT swapped only for legacy Pause tests."""
+    from agent_composer.compose.loader import load_flow
+
+    loaded = load_flow(source)
+    replace_human_inputs_with_artificial_pauses(loaded.compiled)
+    return loaded
 
 
 # --- the whole-arm clone+register helpers are deterministic ------------------ #
@@ -129,9 +143,12 @@ def test_replay_reproduces_live_overlay_nested_oracle():
 
 
 def _fork_with_deferred():
-    """start -> {ask(HUMAN_INPUT), b1 -> b2} -> join -> END_ID. While `ask` is parked, the b1->b2
-    branch runs b1 and b2 becomes ready DURING suspension -> held in `deferred`. Pure-static
-    (no expansion), so it isolates the restore re-seed half (paused + deferred + ready)."""
+    """start -> {ask(test Pause), b1 -> b2} -> join -> END_ID.
+
+    While `ask` is parked, the b1->b2 branch runs b1 and b2 becomes ready DURING
+    suspension -> held in `deferred`. Pure-static (no expansion), so it isolates
+    the restore re-seed half (paused + deferred + ready).
+    """
     def _join(i):
         return {"output": [i["a"], i["b"]]}
 
@@ -142,7 +159,9 @@ def _fork_with_deferred():
     stamp_reads(b2, {"v": "${b1.output}"})
     return _graph(
         [FuncNode("start", lambda p: {"output": "go"}),
-         HumanInputNode("ask", prompt="ok?"), b1, b2, join],
+         PauseNode(
+             "ask", reason=HumanInputRequired(prompt="ok?", node_id="ask")
+         ), b1, b2, join],
         [(START_ID, "start"), ("start", "ask"), ("start", "b1"),
          ("b1", "b2"), ("ask", "join"), ("b2", "join"), ("join", END_ID)],
         outputs=[FlowOutput(name="r", from_="${join.output.output}")],
@@ -238,7 +257,7 @@ def test_durable_map_inner_pause_resumes_on_fresh_flow():
 
 
 def _map_n0_via_sibling():
-    """start -> {empty(MAP over []), ask(HUMAN_INPUT)} -> join -> END_ID. The MAP fires with N=0
+    """start -> {empty(MAP over []), ask(test Pause)} -> join -> END_ID. The MAP fires with N=0
     (emits []) while `ask` parks -> at pause the map GrowRecord carries seed==[] (N=0)."""
     child = _inner_pause_child()
     empty = MapNode("empty", flow_id="inner_pause_child", child=child,
@@ -247,7 +266,9 @@ def _map_n0_via_sibling():
     join = FuncNode("join", lambda i: {"output": [i["m"], i["a"]]})
     stamp_reads(join, {"m": "${empty.output}", "a": "${ask.output}"})
     return _graph(
-        [empty, HumanInputNode("ask", prompt="ok?"), join],
+        [empty, PauseNode(
+            "ask", reason=HumanInputRequired(prompt="ok?", node_id="ask")
+        ), join],
         [(START_ID, "empty"), (START_ID, "ask"), ("empty", "join"), ("ask", "join"), ("join", END_ID)],
         outputs=[FlowOutput(name="r", from_="${join.output.output}")],
     )
@@ -368,10 +389,12 @@ def test_durable_map_of_call_resumes_on_fresh_flow():
 
 
 def _side_counter_flow(runs):
-    # start -> ask(HUMAN_INPUT) -> END_ID ; plus a `side` counter rooted off START_ID (dead-end leaf)
+    # start -> ask(test Pause) -> END_ID; plus a side counter rooted off START_ID.
     return _graph(
         [FuncNode("start", lambda p: {"output": "go"}),
-         HumanInputNode("ask", prompt="?"),
+         PauseNode(
+             "ask", reason=HumanInputRequired(prompt="?", node_id="ask")
+         ),
          FuncNode("side", lambda p: runs.append(1) or {"output": "s"})],
         [(START_ID, "start"), ("start", "ask"), ("ask", END_ID), (START_ID, "side"), ("side", END_ID)],
         outputs=[FlowOutput(name="r", from_="${ask.output}"), FlowOutput(name="s", from_="${side.output}")],
@@ -479,8 +502,8 @@ def test_replay_reproduces_live_loop_overlay():
     from tests.engine.test_loop_run import LOOP_CHAT
 
     # Drive LOOP_CHAT to its FIRST pause on a live engine: iteration #0 is grown (its body parks on
-    # the human_input leaf BEFORE its END fires, so the #0 overlay is un-pruned and resident).
-    loaded = load_flow(LOOP_CHAT)
+    # the artificial pause leaf BEFORE its END fires, so the #0 overlay is un-pruned and resident).
+    loaded = _load_with_artificial_human_pauses(LOOP_CHAT)
     live = run_flow(loaded, {})
     assert live.status == "paused"
     live_engine = live.engine
@@ -503,7 +526,10 @@ def test_replay_reproduces_live_loop_overlay():
     assert loop_descs[0].seed                           # the live iteration (record, index) seed
 
     # Replay in isolation onto a FRESH recompiled flow (before restore() wires it in).
-    fresh = FlowEngine(load_flow(LOOP_CHAT).compiled, grow_builder=build_grow)
+    fresh = FlowEngine(
+        _load_with_artificial_human_pauses(LOOP_CHAT).compiled,
+        grow_builder=build_grow,
+    )
     fresh._replay_expansions(ckpt.expansions)
 
     # Set-for-set overlay equality against the live engine — the rebuilt window {body_0, loop~1}
@@ -532,7 +558,7 @@ def test_durable_loop_resumes_on_fresh_flow():
     from tests.engine.test_loop_run import LOOP_CHAT
 
     # --- Live oracle (in-process): drive LOOP_CHAT to terminal exactly as the in-process test.
-    loaded = load_flow(LOOP_CHAT)
+    loaded = _load_with_artificial_human_pauses(LOOP_CHAT)
     live1 = run_flow(loaded, {})
     assert live1.status == "paused"
     live2 = resume_flow(loaded, engine=live1.engine,
@@ -545,7 +571,7 @@ def test_durable_loop_resumes_on_fresh_flow():
     assert live_output == {"messages": ["hi", "bye"], "exited": True}
 
     # --- Durable sequence: a fresh process parks at the turn-1 pause, persists, round-trips.
-    proc1 = run_flow(load_flow(LOOP_CHAT), {})
+    proc1 = run_flow(_load_with_artificial_human_pauses(LOOP_CHAT), {})
     assert proc1.status == "paused"
     ckpt = RunCheckpoint.loads(proc1.checkpoint.dumps())   # cross-process round-trip
 
@@ -560,12 +586,12 @@ def test_durable_loop_resumes_on_fresh_flow():
 
     # --- Restore on a FRESH recompiled flow and drive the remaining turns to terminal.
     fresh = FlowEngine.restore(
-        load_flow(LOOP_CHAT).compiled,
+        _load_with_artificial_human_pauses(LOOP_CHAT).compiled,
         ckpt,
         grow_builder=build_grow,
     )
 
-    # The replay rebuilt the live iteration's namespaced human_input leaf on the fresh flow.
+    # The replay rebuilt the live iteration's namespaced artificial pause leaf on the fresh flow.
     parked_leaf = ckpt.pause_reasons[0].node_id
     assert parked_leaf in fresh.flow.nodes
 
@@ -598,7 +624,7 @@ def test_loop_multi_hop_resnapshot_ledger_matches_live():
     # --- Live oracle: drive LOOP_CHAT to the SECOND pause (turn 2) in-process; capture its ledger
     # shape. Turn 1 grows iter #0; delivering "a" drives the fresh `loop~1` driver, which grows iter #1
     # (seed = ({messages:["a"], exited:false}, 1)) and prunes #0 — exactly ONE record remains.
-    loaded = load_flow(LOOP_CHAT)
+    loaded = _load_with_artificial_human_pauses(LOOP_CHAT)
     live1 = run_flow(loaded, {})
     assert live1.status == "paused"
     live2 = resume_flow(loaded, engine=live1.engine,
@@ -610,7 +636,7 @@ def test_loop_multi_hop_resnapshot_ledger_matches_live():
     assert live_record == {"messages": ["a"], "exited": False}         # the live iteration seed
 
     # --- Durable sequence: 3 simulated processes. proc1 parks at pause 1, persists, round-trips.
-    proc1 = run_flow(load_flow(LOOP_CHAT), {})
+    proc1 = run_flow(_load_with_artificial_human_pauses(LOOP_CHAT), {})
     assert proc1.status == "paused"
     ckpt1 = RunCheckpoint.loads(proc1.checkpoint.dumps())             # cross-process round-trip
     hop1_descs = [e for e in ckpt1.expansions if e.spawner_id == "loop"]
@@ -618,7 +644,7 @@ def test_loop_multi_hop_resnapshot_ledger_matches_live():
 
     # hop 1: restore on a FRESH recompiled flow, resume past pause 1 delivering "a" -> pause 2.
     hop1 = FlowEngine.restore(
-        load_flow(LOOP_CHAT).compiled,
+        _load_with_artificial_human_pauses(LOOP_CHAT).compiled,
         ckpt1,
         grow_builder=build_grow,
     )
@@ -641,7 +667,7 @@ def test_loop_multi_hop_resnapshot_ledger_matches_live():
     # --- hop 2: a 3rd process restores the re-snapshot and finishes. Deliver "bye" -> fold sets
     # exited=true -> predicate false -> succeeds. Two messages delivered total: "a" then "bye".
     hop2 = FlowEngine.restore(
-        load_flow(LOOP_CHAT).compiled,
+        _load_with_artificial_human_pauses(LOOP_CHAT).compiled,
         ckpt2,
         grow_builder=build_grow,
     )
@@ -720,7 +746,8 @@ def test_nested_loop_in_call_ledger_single_record_nested_under_call():
     assert engine._origin_record["wrap/loop"] is loop_kids[0]
 
 
-# A PAUSING nested loop (chat body inside a CALL) — snapshot MID-loop, restore, resume to terminal.
+# A nested loop whose loaded HUMAN_INPUT is swapped for an artificial Pause leaf —
+# snapshot mid-loop, restore, and resume to terminal for checkpoint compatibility.
 _NESTED_CHAT_LOOP_IN_CALL = """
 id: ncc
 name: ncc
@@ -774,7 +801,7 @@ def test_nested_loop_in_call_durable_hop_bounded_and_matches_live():
     from agent_composer.compose.loader import load_flow
     from agent_composer.run import resume_command, resume_flow, run_flow
 
-    loaded = load_flow(_NESTED_CHAT_LOOP_IN_CALL)
+    loaded = _load_with_artificial_human_pauses(_NESTED_CHAT_LOOP_IN_CALL)
 
     # --- Live oracle: drive the nested chat loop to terminal in-process ("hi" then "bye").
     live1 = run_flow(loaded, {})
@@ -791,7 +818,9 @@ def test_nested_loop_in_call_durable_hop_bounded_and_matches_live():
     assert live3.output == {"messages": ["hi", "bye"], "exited": True}
 
     # --- Durable hop: a fresh process parks at the turn-1 pause, persists, round-trips.
-    proc1 = run_flow(load_flow(_NESTED_CHAT_LOOP_IN_CALL), {})
+    proc1 = run_flow(
+        _load_with_artificial_human_pauses(_NESTED_CHAT_LOOP_IN_CALL), {}
+    )
     assert proc1.status == "paused"
     ckpt = RunCheckpoint.loads(proc1.checkpoint.dumps())
     # The persisted ledger is bounded: ONE call record with ONE nested loop record.
@@ -799,7 +828,7 @@ def test_nested_loop_in_call_durable_hop_bounded_and_matches_live():
     assert ckpt_tree == [("wrap", ["wrap/loop"])]
 
     fresh = FlowEngine.restore(
-        load_flow(_NESTED_CHAT_LOOP_IN_CALL).compiled,
+        _load_with_artificial_human_pauses(_NESTED_CHAT_LOOP_IN_CALL).compiled,
         ckpt,
         grow_builder=build_grow,
     )

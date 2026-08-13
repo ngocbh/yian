@@ -24,6 +24,7 @@ from agent_composer.compose import load_flow
 from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.events import RunFailed
 from agent_composer.suspension.checkpoint import RunCheckpoint
+from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
 
 
 # A child that doubles its int input and re-exports it as `${output}` (an int).
@@ -154,7 +155,7 @@ def test_declared_input_post_assert_violating_fails():
 # 3. resume-safety: the lowered spawner post-assert survives a checkpoint hop
 # =========================================================================== #
 
-# A child that PAUSES before its END (a human_input), so the run suspends mid-child.
+# A child whose HUMAN_INPUT is swapped for a test-only Pause before its END.
 _PAUSING_CHILD = """
 id: approver
 name: approver
@@ -172,8 +173,8 @@ output: ${approve.output}
 
 
 def _pausing_parent() -> str:
-    # The call carries a node-level ${output} < 100 post-assert; the child pauses on a
-    # human_input before its END, so the assert can only fire on the RESUMED leg.
+    # The call carries a node-level ${output} < 100 post-assert; the test swaps the child's
+    # HUMAN_INPUT for an artificial pause, so the assert can fire only on the resumed leg.
     return """
 id: pause-parent
 name: pause_parent
@@ -194,13 +195,17 @@ output: ${gate.output}
 
 
 def _load_pausing():
-    return load_flow(_pausing_parent(),
-                     child_resolver=_resolver(**{"approver": _PAUSING_CHILD}))
+    loaded = load_flow(
+        _pausing_parent(),
+        child_resolver=_resolver(**{"approver": _PAUSING_CHILD}),
+    )
+    replace_human_inputs_with_artificial_pauses(loaded.compiled)
+    return loaded
 
 
 def test_spawner_post_assert_fires_on_resume():
-    # Run -> pause -> cross-process snapshot/dumps -> loads/restore -> resume. The human
-    # delivers 120, violating ${output} < 100 -> the rebuilt child END fires the post-assert
+    # Run -> artificial pause -> cross-process snapshot/dumps -> loads/restore -> resume.
+    # Delivering 120 violates ${output} < 100, so the rebuilt child END fires the post-assert
     # on the RESUMED leg and the run FAILS. Proves durable construction re-lowers the same asserts.
     loaded = _load_pausing()
     rec = run_flow(loaded, {"v": 1})

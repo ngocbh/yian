@@ -1,7 +1,7 @@
 # 26 — HUMAN_INPUT questions: the three question surfaces.
 #
-# A `human_input` gate suspends the run for a person and collects a STRUCTURED
-# answer keyed by each question's `header`. The gate carries its questions in one
+# A `human_input` gate blocks its worker for a person and collects a STRUCTURED
+# answer keyed by each question's `header` in the same live call. It carries questions in one
 # of three forms:
 #
 #   (A) static     — a literal `questions:` list written in the YAML (THIS seed).

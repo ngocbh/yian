@@ -1,6 +1,6 @@
 """F1 — a SPAWNER (CALL/MAP) nested inside a LOOP body durably resumes.
 
-The existing durable-loop coverage parks on a `human_input` LEAF inside a loop body
+The existing durable-loop coverage parks on a test-only artificial leaf inside a loop body
 (`test_durable_replay.test_durable_loop_resumes_on_fresh_flow`) and on a loop nested
 inside a CALL (`test_nested_loop_in_call_*`). This file closes the missing direction:
 a CALL / MAP spawner nested *inside* a dynamically-grown loop iteration, paused mid-body
@@ -14,11 +14,20 @@ from agent_composer.compose.loader import load_flow
 from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.suspension.checkpoint import RunCheckpoint
+from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
+
+
+def _load_with_artificial_human_pauses(source: str):
+    """Load a growth fixture with test-only leaves for generic Pause coverage."""
+    loaded = load_flow(source)
+    replace_human_inputs_with_artificial_pauses(loaded.compiled)
+    return loaded
 
 
 # A loop whose BODY (`chat_turn`) contains a CALL (`getmsg` -> `turn_body`) whose child
-# holds the pausing `human_input`. So each iteration grows: body clone -> CALL clone ->
-# child clone with the parked `ask` leaf — a spawner nested inside a grown loop iteration.
+# has its HUMAN_INPUT swapped for an artificial Pause. Each iteration grows: body clone
+# -> CALL clone -> child clone with the parked `ask` leaf — a spawner nested inside a
+# grown loop iteration.
 _CALL_IN_LOOP_BODY = """
 id: cil
 name: cil
@@ -61,9 +70,12 @@ output: ${loop.output}
 
 
 def test_call_in_loop_body_pauses_and_resumes_each_turn():
-    """In-process: the CALL's child `human_input` parks the run each iteration; delivering
-    a message resumes into the next iteration; "bye" flips `exited` and the run succeeds."""
-    loaded = load_flow(_CALL_IN_LOOP_BODY)
+    """An artificial Pause replacement parks the CALL child each iteration.
+
+    Delivering a message resumes into the next iteration; "bye" flips `exited`
+    and the compatibility run succeeds.
+    """
+    loaded = _load_with_artificial_human_pauses(_CALL_IN_LOOP_BODY)
     r1 = run_flow(loaded, {})
     assert r1.status == "paused", r1.error
     assert len(r1.pause_reasons) == 1
@@ -81,7 +93,7 @@ def test_call_in_loop_body_pauses_and_resumes_each_turn():
 def test_call_in_loop_body_durable_hop_matches_live():
     """Durable: park at the turn-1 pause, round-trip the checkpoint, restore on a freshly
     recompiled flow, and drive the remaining turns to the SAME terminal as the live run."""
-    loaded = load_flow(_CALL_IN_LOOP_BODY)
+    loaded = _load_with_artificial_human_pauses(_CALL_IN_LOOP_BODY)
 
     # Live oracle (in-process).
     live1 = run_flow(loaded, {})
@@ -95,13 +107,13 @@ def test_call_in_loop_body_durable_hop_matches_live():
     live_output = live3.output
 
     # Durable sequence: a fresh process parks at turn 1, persists, round-trips the blob.
-    proc1 = run_flow(load_flow(_CALL_IN_LOOP_BODY), {})
+    proc1 = run_flow(_load_with_artificial_human_pauses(_CALL_IN_LOOP_BODY), {})
     assert proc1.status == "paused", proc1.error
     ckpt = RunCheckpoint.loads(proc1.checkpoint.dumps())
 
     # Restore on a FRESH recompiled flow; the parked (namespaced) leaf must be in the graph.
     fresh = FlowEngine.restore(
-        load_flow(_CALL_IN_LOOP_BODY).compiled,
+        _load_with_artificial_human_pauses(_CALL_IN_LOOP_BODY).compiled,
         ckpt,
         grow_builder=build_grow,
     )
@@ -116,8 +128,9 @@ def test_call_in_loop_body_durable_hop_matches_live():
     assert dur3.output == live_output
 
 
-# A loop whose body maps a pausing child over a 2-element list — a MAP spawner nested inside
-# a grown loop iteration. Each iteration parks on the FIRST unresolved element's `ask` leaf.
+# A loop whose body maps an artificial Pause replacement over a 2-element list — a MAP
+# spawner nested inside a grown loop iteration. Each iteration parks on the first unresolved
+# element's test-only `ask` leaf.
 _MAP_IN_LOOP_BODY = """
 id: mil
 name: mil
@@ -165,16 +178,14 @@ output: ${loop.output}
 
 
 def _deliver_all(loaded, result, value):
-    """Resume `result`'s engine by delivering `value` to EVERY current pause (a MAP fans out
-    one `human_input` per element, so an iteration parks on N simultaneous pauses)."""
+    """Deliver ``value`` to every artificial pause in a fanned-out MAP iteration."""
     cmds = [resume_command(loaded, pr, value) for pr in result.pause_reasons]
     return resume_flow(loaded, engine=result.engine, commands=cmds)
 
 
 def test_map_in_loop_body_pauses_and_resumes_each_turn():
-    """In-process: each loop iteration maps the pausing child over 2 seeds, parking on 2
-    simultaneous `human_input` pauses; delivering "hi" to both advances a turn, "bye" exits."""
-    loaded = load_flow(_MAP_IN_LOOP_BODY)
+    """Each loop turn parks on two artificial MAP-child pauses and resumes together."""
+    loaded = _load_with_artificial_human_pauses(_MAP_IN_LOOP_BODY)
     r1 = run_flow(loaded, {})
     assert r1.status == "paused", r1.error
     assert len(r1.pause_reasons) == 2
@@ -191,7 +202,7 @@ def test_map_in_loop_body_pauses_and_resumes_each_turn():
 def test_map_in_loop_body_durable_hop_matches_live():
     """Durable: park mid-loop on the MAP's per-element pauses, round-trip the checkpoint,
     restore on a fresh flow, and drive to the SAME terminal as the live run."""
-    loaded = load_flow(_MAP_IN_LOOP_BODY)
+    loaded = _load_with_artificial_human_pauses(_MAP_IN_LOOP_BODY)
 
     live1 = run_flow(loaded, {})
     live2 = _deliver_all(loaded, live1, "hi")
@@ -199,12 +210,12 @@ def test_map_in_loop_body_durable_hop_matches_live():
     assert live3.status == "succeeded", live3.error
     live_output = live3.output
 
-    proc1 = run_flow(load_flow(_MAP_IN_LOOP_BODY), {})
+    proc1 = run_flow(_load_with_artificial_human_pauses(_MAP_IN_LOOP_BODY), {})
     assert proc1.status == "paused", proc1.error
     ckpt = RunCheckpoint.loads(proc1.checkpoint.dumps())
 
     fresh = FlowEngine.restore(
-        load_flow(_MAP_IN_LOOP_BODY).compiled,
+        _load_with_artificial_human_pauses(_MAP_IN_LOOP_BODY).compiled,
         ckpt,
         grow_builder=build_grow,
     )

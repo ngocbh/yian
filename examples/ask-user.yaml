@@ -4,10 +4,10 @@
 # ENABLES the capability: the live agent loop blocks to ask the human ONLY when the model
 # decides it needs a fact it can't supply itself, then receives the answer as the tool
 # result. (Contrast with the HUMAN_INPUT node — see human-approval.yaml —
-# which ALWAYS pauses at a fixed point. For a guaranteed gate, use HUMAN_INPUT; for an
+# which ALWAYS blocks at a fixed point. For a guaranteed gate, use HUMAN_INPUT; for an
 # agent that asks "only if needed", use this.)
 #
-# Because it is model-chosen, whether the pause happens depends on the prompt AND the
+# Because it is model-chosen, whether the call happens depends on the prompt AND the
 # model: a tool-capable model that judges the request ambiguous will call ask_user; a
 # request that is already clear (or a weak model) may just answer outright.
 #

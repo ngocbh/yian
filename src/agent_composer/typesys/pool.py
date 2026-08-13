@@ -6,7 +6,8 @@ resolves to `store[<start_id>].X` — the synthesized START_ID node's committed 
 record IS the flow's run-arguments object (the standalone `inputs` namespace is
 retired). The one side namespace is `system` (host-injected ambient — run id / clock /
 tenant; reserved, run-global). There is no engine-private key-addressed namespace;
-HUMAN_INPUT/WAIT answers are delivered as the parked leaf's Output.
+blocking HUMAN_INPUT answers and temporary generic pause deliveries both become
+the leaf's ordinary Output.
 
 Two responsibilities:
 - `resolve(head, rest)` backs the `${...}` expression evaluator. Because values

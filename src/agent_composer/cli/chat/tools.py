@@ -88,7 +88,8 @@ def run_flow(
     (e.g. {"text": "Alice is 30"}) — pass it as an object, NOT a JSON string; omit it for a
     flow that takes no inputs. If unsure which inputs a flow needs, call `validate_flow`
     first. Returns `OUTPUT: <result>` on success, `FAILED: <error>` if the run errors, or
-    `PAUSED: ...` if the flow needs interactive human input (which cannot be answered here)."""
+    `PAUSED: ...` for a temporary generic pause such as WAIT. Blocking HUMAN_INPUT is
+    served by the enclosing chat host."""
     text = _resolve(path).read_text()
     try:
         loaded = load_flow(text, search_paths=[_WORKSPACE])
@@ -98,7 +99,7 @@ def run_flow(
     if result.status == "succeeded":
         return f"OUTPUT: {result.output}"
     if result.status == "paused":
-        return "PAUSED: this flow needs interactive input; cannot run inside chat."
+        return "PAUSED: this flow entered the temporary generic pause path."
     return f"FAILED: {result.error}"
 
 

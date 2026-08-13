@@ -1,6 +1,7 @@
 # Python API
 
-Use the engine as a library: load a flow, run it, and (if it pauses) resume it.
+Use the engine as a library: load a flow, run it, and serve any blocking human
+interaction from the host. A temporary generic pause API remains for compatibility.
 
 ```python
 from agent_composer import load_flow, run_flow
@@ -67,6 +68,33 @@ with `status != "succeeded"`.
   progress). Event types include `NodeStarted`, `RunSucceeded`, `RunPaused`,
   `RunFailed`, `RunAborted`.
 
+## Blocking human interaction
+
+An authored `human_input` node and an agent granted `tools: [ask_user]` call the
+same process-owned tool synchronously. A library host installs one handler for the
+whole run lifecycle; the calling node remains live until the handler returns or
+raises:
+
+```python
+from agent_composer.tools import install_ask_user
+
+approval = load_flow(
+    open("examples/human-approval.yaml").read(),
+    search_paths=["examples"],
+)
+
+def ask(**request):
+    return input(request["question"] + " ")
+
+with install_ask_user(ask):
+    result = run_flow(approval, {"task": "Plan a team offsite"})
+```
+
+The handler receives `question`, `questions`, `answer_schema`, `title`, and
+`node_id`. `human_input` uses the trusted metadata path; model-requested
+`ask_user` calls can supply only the public `question` argument. Only one handler
+may own the reserved tool in a process at a time.
+
 ## `RunResult`
 
 The outcome of one run (or resume):
@@ -82,25 +110,25 @@ The outcome of one run (or resume):
 | `engine` | the live `FlowEngine` when paused (fast in-process resume) |
 | `checkpoint` | a serializable snapshot when paused (durable, cross-process resume) |
 
-## Resuming a paused run
+## Temporary generic pause compatibility
 
-A flow suspends on a `human_input` node, a timed `wait`, or an `ask_user`
-control. When `result.status == "paused"`, deliver an answer per pause reason and
-resume:
+Authorable human interaction no longer produces `RunPaused`. A timed `wait` and
+custom/artificial nodes can still use the dormant generic `Pause`/checkpoint API
+until issue #117 removes it. When `result.status == "paused"`, deliver a value per
+host-resumable reason and resume:
 
 ```python
 from agent_composer.run import resume_flow, resume_command
 
-result = run_flow(loaded, {"task": "Plan a team offsite"})
+# Here `wait_flow` is a loaded flow that declares `settle_at` and a timed WAIT node.
+result = run_flow(wait_flow, {"settle_at": "2026-09-01"})
 while result.status == "paused":
-    commands = []
-    for reason in result.pause_reasons:
-        if reason.type == "human_input_required":
-            answer = input(reason.prompt + " ")        # collect the typed answer
-            commands.append(resume_command(loaded, reason, answer))
-        elif reason.type == "scheduled_pause":
-            commands.append(resume_command(loaded, reason, None))   # release a wait
-    result = resume_flow(loaded, engine=result.engine, commands=commands)
+    commands = [
+        resume_command(wait_flow, reason, None)
+        for reason in result.pause_reasons
+        if reason.type == "scheduled_pause"
+    ]
+    result = resume_flow(wait_flow, engine=result.engine, commands=commands)
 
 print(result.status, result.output)
 ```
@@ -131,9 +159,9 @@ resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> Command
 ```
 
 Maps a host-resumable `PauseReason` plus an answer `value` to the engine command
-that delivers it. For a `human_input` the `value` is the typed answer; for a
-`wait` release pass `value=None`. A reason with no `node_id` (a bare external
-event) is not host-resumable and raises.
+that delivers it as the parked leaf's output. For a `wait` release pass
+`value=None`. A reason with no `node_id` (a bare external event) is not
+host-resumable and raises.
 
 ## Next
 

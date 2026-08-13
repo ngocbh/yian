@@ -1,27 +1,25 @@
-"""HUMAN_INPUT — a structural gate that suspends the run for a person.
+"""HUMAN_INPUT — a blocking call to the host-owned ``ask_user`` tool.
 
-Deliver-as-Output model: on its single run the node ALWAYS emits
-`PauseRequested(HumanInputRequired)` and parks. The host satisfies the pause with a
-`DeliverAnswerCommand(node_id=this_node, value=answer)`; the engine writes that value
-as the node's `Output` (`pool.set` + fire the out-edges) — the node never re-runs. Its
-single output value is the delivered answer.
+The node renders and validates its authored question surface, invokes the reserved
+tool through the trusted metadata path, and returns the handler's answer as its one
+``Output``. The worker remains occupied until the host answers or raises.
 """
 
 from typing import Any, Optional
 
 from agent_composer.expr.template import render_template_record
-from agent_composer.nodes.base import Node, NodeKind, Pause
+from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.human_input.questions import parse_questions
-from agent_composer.suspension.pause import HumanInputRequired
+from agent_composer.tools import invoke_tool_trusted
 
 
 class HumanInputNode(Node):
     """
-    A structural gate that suspends the run for a person (deliver-as-Output model).
+    A structural gate that blocks its worker until a person answers.
 
-    On its single run the node always emits `Pause(HumanInputRequired)` and parks. The host
-    satisfies it with a `DeliverAnswerCommand`, and the engine writes that answer as this node's
-    Output — the node never re-runs.
+    On its single run the node invokes the process-owned ``ask_user`` tool through
+    the trusted path and returns the answer as this node's ``Output``. Tool
+    validation and handler exceptions propagate to the ordinary node-failure boundary.
 
     The node carries questions in one of three ways: a literal list baked in
     (`questions`), a runtime read from a declared input param (`questions_input`),
@@ -77,28 +75,22 @@ class HumanInputNode(Node):
             # An upstream-produced list, already resolved — taken as-is, no templating.
             raw = inputs[self.questions_input]
         else:
-            # Legacy prompt-only form — no questions.
-            return Pause(
-                HumanInputRequired(
-                    prompt=prompt,
-                    answer_schema=self.answer_schema,
-                    node_title=self.title,
-                    node_id=self.id,
-                )
-            )
+            parsed_questions = None
+        if self.questions is not None or self.questions_input is not None:
+            parsed = parse_questions(raw)  # raises QuestionSpecError on a bad shape
+            parsed_questions = [question.model_dump() for question in parsed]
 
-        parsed = parse_questions(raw)  # raises QuestionSpecError on a bad shape
-        return Pause(
-            HumanInputRequired(
-                # HumanInputRequired.prompt is a required str — a questions-only node
-                # (no intro) passes "" rather than None.
-                prompt=prompt or "",
-                questions=[q.model_dump() for q in parsed],
-                answer_schema=self.answer_schema,
-                node_title=self.title,
-                node_id=self.id,
-            )
+        answer = invoke_tool_trusted(
+            "ask_user",
+            {
+                "question": prompt or "",
+                "questions": parsed_questions,
+                "answer_schema": self.answer_schema or None,
+                "title": self.title,
+                "node_id": self.id,
+            },
         )
+        return Output(answer)
 
     def _render_question(self, question: dict, inputs: dict) -> dict:
         """Render `${...}` spans in a literal question's human-facing strings.

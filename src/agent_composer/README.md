@@ -34,6 +34,7 @@ shape of it:
 ```
 typesys/      typed value system (values) + variable pool                 [leaf, no deps]
 events.py     run + node event vocabulary
+_growth.py    shared temporary growth-seed schemas                       [leaf, no deps]
 expr/         one ${...} expression grammar: parse -> AST -> evaluate / ref-walk on the pool
 nodes/        pure Node contract + per-kind implementations; spawners return growth seeds
               (start, end, agent, code, model, tool, case, call, map,
@@ -53,7 +54,8 @@ _settings.py  env-based default provider/model
 
 Import direction (acyclic): `events <- typesys <- nodes <- compile <- compose`,
 with `compile`/`typesys`/`nodes`/`expr` feeding `compose` (the front-end that reads
-YAML into the IR), `expr` feeding nodes, and `suspension` feeding runtime. The
+YAML into the IR), `expr` feeding nodes, `_growth.py` feeding compile and
+suspension as a shared leaf, and `suspension` feeding runtime. The
 package-root `run.py` is the run boundary: it consumes `compose`'s `ComposedFlow` and
 drives the `runtime` engine, sitting above both and imported by neither.
 

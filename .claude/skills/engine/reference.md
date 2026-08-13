@@ -205,7 +205,9 @@ Arrows never reverse: a package imports only lower-level or peer packages. See t
 `structure` skill. An upward import means the code is in the wrong package (extract
 the shared contract to `common.py` / a leaf, or invert via a seam). Dynamic growth is
 the concrete example: nodes return seeds, compile owns `build_grow`, `run.py` injects
-it, and runtime never imports `compile.expand`.
+it, and runtime never imports `compile.expand`. The temporary continuation seed
+schema sits in the internal `_growth.py` leaf shared by compile and suspension, so
+those consumers do not import each other.
 
 ## The `expr` layer (one grammar, everywhere `${...}` appears)
 

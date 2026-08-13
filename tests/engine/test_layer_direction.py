@@ -110,6 +110,17 @@ def test_suspension_never_imports_nodes() -> None:
     )
 
 
+def test_compile_never_imports_suspension() -> None:
+    """Compile and suspension share only lower leaf contracts, never each other."""
+    violations = _forbidden_imports(
+        PACKAGE_ROOT / "compile", "agent_composer.suspension"
+    )
+    assert not violations, (
+        "compile must not import suspension; extract shared growth contracts to a "
+        "lower leaf module:\n" + "\n".join(violations)
+    )
+
+
 def test_scanner_normalizes_absolute_and_relative_import_spellings() -> None:
     """Equivalent import syntax resolves to the same forbidden module targets."""
     assert _package_parts(PACKAGE_ROOT / "nodes" / "call" / "node.py") == (

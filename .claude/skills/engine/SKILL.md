@@ -151,7 +151,8 @@ Most are just the functional model (above) made enforceable:
 Write a short plan: the **OCaml analogue** you're borrowing and its type; what you
 simplify/drop and why; where it lands in the layer map
 (`events ← typesys ← nodes ← compile ← compose`, with `expr` feeding nodes and
-`suspension` feeding runtime); and the **seam** if it touches an external
+`suspension` feeding runtime, plus the internal `_growth.py` leaf shared by
+compile and suspension); and the **seam** if it touches an external
 dependency. Flag any non-obvious choice and confirm before coding (CLAUDE.md "ask
 when uncertain").
 
@@ -166,6 +167,7 @@ GitHub issue when the work lands (reference the commit/PR). Commit at green.
 Follow the **`structure` skill** for where files and folders go — package charters
 in `__init__.py`, `common.py` vs `utils.py`, one-way imports, no cycles. The
 engine's layer ladder (`events ← typesys ← nodes ← compile ← compose`, with `expr`
-feeding nodes and `suspension` feeding runtime) is an instance of that framework.
+feeding nodes, `_growth.py` feeding compile and suspension, and suspension feeding
+runtime) is an instance of that framework.
 The package-root `run.py` sits above compose and runtime and wires cross-layer
 capabilities: notably it injects compile's `build_grow` into the kind-blind runtime.

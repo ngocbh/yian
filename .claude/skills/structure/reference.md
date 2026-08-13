@@ -66,4 +66,6 @@ runtime knows only the injected `(spawner, seed) -> Flow` callable. Package-root
   the lower `compile.model` topology contract remain allowed).
 
 `tests/engine/test_layer_direction.py` parses imports with `ast` and enforces these
-rules, including equivalent relative-import spellings.
+rules, including equivalent relative-import spellings. The temporary AGENT
+continuation schema lives in the internal `_growth.py` leaf because both compile
+and suspension consume it; placing it in either consumer would create a cycle.

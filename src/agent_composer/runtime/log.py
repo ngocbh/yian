@@ -10,11 +10,22 @@ logs without creating an authority cycle.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields, is_dataclass
+import fcntl
 import json
 import math
+import os
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Final, Iterator, Literal, Protocol, TypeAlias, runtime_checkable
+from typing import (
+    Any,
+    BinaryIO,
+    Final,
+    Iterator,
+    Literal,
+    Protocol,
+    TypeAlias,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
@@ -222,6 +233,265 @@ class RunLog(Protocol):
     ) -> None:
         """Close the log when its ownership context exits."""
         ...
+
+
+class MemoryRunLog:
+    """Process-local ordered authority for one run's canonical records.
+
+    The log owns a codec-round-tripped copy of every appended record.  Closing
+    prevents later appends but deliberately keeps the cached prefix iterable so
+    callers can inspect a completed result after leaving an ownership context.
+    """
+
+    def __init__(self, run_id: str) -> None:
+        """Create an empty zero-based log for one non-empty run identity."""
+        self._run_id = _validated_run_id(run_id)
+        self._records: list[RecordEnvelope] = []
+        self._next_sequence = 0
+        self._closed = False
+
+    @property
+    def run_id(self) -> str:
+        """Return the sole run identity accepted by this log."""
+        return self._run_id
+
+    @property
+    def path(self) -> None:
+        """Return ``None`` because this log has no durable backing file."""
+        return None
+
+    @property
+    def next_sequence(self) -> int:
+        """Return the sequence assigned by the next successful append."""
+        return self._next_sequence
+
+    def __iter__(self) -> Iterator[RecordEnvelope]:
+        """Iterate independent copies of a stable retained-prefix snapshot."""
+        retained = tuple(self._records)
+        return (_copy_envelope(envelope) for envelope in retained)
+
+    def records(self) -> tuple[RecordEnvelope, ...]:
+        """Return independent copies in an immutable outer carrier."""
+        return tuple(self)
+
+    def append(self, record: RunRecord) -> RecordEnvelope:
+        """Validate, canonically copy, and retain one record in sequence order."""
+        self._ensure_open()
+        retained = _canonical_envelope(record, self._run_id, self._next_sequence)
+        self._records.append(retained)
+        self._next_sequence += 1
+        return _copy_envelope(retained)
+
+    def close(self) -> None:
+        """Close the append boundary; repeated calls have no effect."""
+        self._closed = True
+
+    def __enter__(self) -> "MemoryRunLog":
+        """Return this open log to its ownership context."""
+        self._ensure_open()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close the append boundary on every context exit."""
+        self.close()
+
+    def _ensure_open(self) -> None:
+        """Reject writes and new ownership contexts after close."""
+        if self._closed:
+            raise RuntimeError("run log is closed")
+
+
+class JsonlRunLog:
+    """Exclusively locked, append-and-fsync JSONL authority for one run.
+
+    Instances are opened only through :meth:`create` or :meth:`resume`.  The
+    process holds a nonblocking exclusive advisory lock for the full instance
+    lifetime, while an in-memory validated prefix makes iteration independent of
+    the backing file after close.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        run_id: str,
+        file: BinaryIO,
+        records: list[RecordEnvelope],
+        prefix_size: int,
+    ) -> None:
+        """Adopt an already-locked file and its validated complete prefix."""
+        self._path = path
+        self._run_id = run_id
+        self._file = file
+        self._records = records
+        self._next_sequence = len(records)
+        self._prefix_size = prefix_size
+        self._closed = False
+
+    @classmethod
+    def create(cls, path: os.PathLike[str] | str, run_id: str) -> "JsonlRunLog":
+        """Exclusively create and lock a new owner-only JSONL file.
+
+        The ``O_EXCL`` open never replaces an existing path.  All failure paths
+        after opening release the advisory lock and descriptor before propagating
+        the host exception.
+        """
+        canonical_run_id = _validated_run_id(run_id)
+        canonical_path = Path(path)
+        fd: int | None = None
+        file: BinaryIO | None = None
+        locked = False
+        try:
+            fd = os.open(
+                canonical_path,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            os.fchmod(fd, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locked = True
+            file = os.fdopen(fd, "r+b", buffering=0)
+            fd = None  # the binary file now owns this descriptor
+            return cls(canonical_path, canonical_run_id, file, [], 0)
+        except BaseException:
+            if file is not None:
+                _release_file(file)
+            elif fd is not None:
+                _release_fd(fd, locked=locked)
+            raise
+
+    @classmethod
+    def resume(cls, path: os.PathLike[str] | str) -> "JsonlRunLog":
+        """Lock, repair, and validate one existing complete JSONL prefix.
+
+        Lock acquisition happens before any file read.  Bytes after the final
+        newline are never records—even when those bytes form valid JSON—and are
+        durably truncated before complete lines are decoded.
+        """
+        canonical_path = Path(path)
+        fd: int | None = None
+        file: BinaryIO | None = None
+        locked = False
+        try:
+            fd = os.open(canonical_path, os.O_RDWR)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locked = True
+            file = os.fdopen(fd, "r+b", buffering=0)
+            fd = None  # the binary file now owns this descriptor
+
+            data = file.read()
+            complete_end = data.rfind(b"\n") + 1
+            if complete_end != len(data):
+                descriptor = file.fileno()
+                os.ftruncate(descriptor, complete_end)
+                os.lseek(descriptor, complete_end, os.SEEK_SET)
+                file.flush()
+                os.fsync(descriptor)
+                data = data[:complete_end]
+            else:
+                os.lseek(file.fileno(), complete_end, os.SEEK_SET)
+
+            records = _decode_complete_prefix(data)
+            if not records:
+                raise ValueError("cannot resume an empty run log")
+            return cls(
+                canonical_path,
+                records[0].run_id,
+                file,
+                records,
+                complete_end,
+            )
+        except BaseException:
+            if file is not None:
+                _release_file(file)
+            elif fd is not None:
+                _release_fd(fd, locked=locked)
+            raise
+
+    @property
+    def run_id(self) -> str:
+        """Return the sole run identity validated across this file."""
+        return self._run_id
+
+    @property
+    def path(self) -> Path:
+        """Return the durable JSONL path."""
+        return self._path
+
+    @property
+    def next_sequence(self) -> int:
+        """Return the sequence assigned by the next successful append."""
+        return self._next_sequence
+
+    def __iter__(self) -> Iterator[RecordEnvelope]:
+        """Iterate independent copies of a stable validated-prefix snapshot."""
+        retained = tuple(self._records)
+        return (_copy_envelope(envelope) for envelope in retained)
+
+    def records(self) -> tuple[RecordEnvelope, ...]:
+        """Return independent copies in an immutable outer carrier."""
+        return tuple(self)
+
+    def append(self, record: RunRecord) -> RecordEnvelope:
+        """Append one complete line and retain it only after its fsync succeeds."""
+        self._ensure_open()
+        retained = _canonical_envelope(record, self._run_id, self._next_sequence)
+        line = encode_record(retained) + b"\n"
+        descriptor = self._file.fileno()
+        prior_prefix = self._prefix_size
+        os.lseek(descriptor, prior_prefix, os.SEEK_SET)
+
+        try:
+            written = self._file.write(line)
+            if written != len(line):
+                raise OSError(
+                    f"short run-log write: wrote {written!r} of {len(line)} bytes"
+                )
+            self._file.flush()
+            os.fsync(descriptor)
+        except BaseException as exc:
+            rollback_errors = _rollback_append(descriptor, prior_prefix)
+            if rollback_errors and hasattr(exc, "add_note"):
+                exc.add_note(
+                    "run-log rollback also failed: "
+                    + "; ".join(str(error) for error in rollback_errors)
+                )
+            raise
+
+        self._records.append(retained)
+        self._next_sequence += 1
+        self._prefix_size += len(line)
+        return _copy_envelope(retained)
+
+    def close(self) -> None:
+        """Release the lock and file exactly once while retaining cached records."""
+        if self._closed:
+            return
+        self._closed = True
+        _release_file(self._file)
+
+    def __enter__(self) -> "JsonlRunLog":
+        """Return this open log to its ownership context."""
+        self._ensure_open()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Release the file and lock on every context exit."""
+        self.close()
+
+    def _ensure_open(self) -> None:
+        """Reject writes and new ownership contexts after close."""
+        if self._closed:
+            raise RuntimeError("run log is closed")
 
 
 class _StrictModel(BaseModel):
@@ -799,8 +1069,98 @@ def _object_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _validated_run_id(run_id: Any) -> str:
+    """Return one exact non-empty string suitable for envelope identity."""
+    if type(run_id) is not str or not run_id:
+        raise ValueError("run log run_id must be a non-empty string")
+    _validated_json_string(run_id)
+    return run_id
+
+
+def _canonical_envelope(
+    record: RunRecord,
+    run_id: str,
+    sequence: int,
+) -> RecordEnvelope:
+    """Return a codec-round-tripped envelope independent of caller-owned values."""
+    envelope = RecordEnvelope(
+        schema=SCHEMA_VERSION,
+        run_id=run_id,
+        seq=sequence,
+        record=record,
+    )
+    return decode_record(encode_record(envelope))
+
+
+def _copy_envelope(envelope: RecordEnvelope) -> RecordEnvelope:
+    """Return an independent canonical copy safe to expose outside log authority."""
+    return decode_record(encode_record(envelope))
+
+
+def _decode_complete_prefix(data: bytes) -> list[RecordEnvelope]:
+    """Validate every newline-terminated record and its shared identity."""
+    if not data:
+        return []
+    lines = data.split(b"\n")
+    if lines[-1] != b"":
+        raise ValueError("run-log prefix is not newline terminated")
+
+    records: list[RecordEnvelope] = []
+    run_id: str | None = None
+    for expected_sequence, line in enumerate(lines[:-1]):
+        envelope = decode_record(line)
+        if envelope.seq != expected_sequence:
+            raise ValueError(
+                "run-log sequence mismatch: "
+                f"expected {expected_sequence}, found {envelope.seq}"
+            )
+        if run_id is None:
+            run_id = envelope.run_id
+        elif envelope.run_id != run_id:
+            raise ValueError(
+                f"run-log run_id mismatch: expected {run_id!r}, "
+                f"found {envelope.run_id!r}"
+            )
+        records.append(envelope)
+    return records
+
+
+def _rollback_append(descriptor: int, prefix_size: int) -> list[BaseException]:
+    """Best-effort truncate, reposition, and sync after a failed append attempt."""
+    errors: list[BaseException] = []
+    for operation in (
+        lambda: os.ftruncate(descriptor, prefix_size),
+        lambda: os.lseek(descriptor, prefix_size, os.SEEK_SET),
+        lambda: os.fsync(descriptor),
+    ):
+        try:
+            operation()
+        except BaseException as exc:
+            errors.append(exc)
+    return errors
+
+
+def _release_file(file: BinaryIO) -> None:
+    """Unlock and close an adopted file, closing even when explicit unlock fails."""
+    try:
+        fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+    finally:
+        file.close()
+
+
+def _release_fd(descriptor: int, *, locked: bool) -> None:
+    """Release a not-yet-adopted descriptor on an opener failure path."""
+    try:
+        if locked:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
 __all__ = [
     "SCHEMA_VERSION",
+    "JsonlRunLog",
+    "MemoryRunLog",
     "NodeExpandedRecord",
     "NodeFailedRecord",
     "NodeRoutedRecord",

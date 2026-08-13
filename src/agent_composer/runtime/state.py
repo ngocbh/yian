@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from agent_composer._state import NodeState
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.events import (
+    NodeSucceeded,
     NodeStarted,
     RunFailed,
     RunResumed,
@@ -29,6 +30,7 @@ from agent_composer.events import (
 )
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
+    NodeSucceededRecord,
     NodeStartedRecord,
     RecordEnvelope,
     RunLog,
@@ -36,12 +38,14 @@ from agent_composer.runtime.log import (
     RunResumedRecord,
     RunStartedRecord,
     canonical_seed,
+    canonical_typed,
     decode_pool,
     decode_record,
     encode_pool,
     encode_record,
 )
 from agent_composer.typesys.pool import VariablePool
+from agent_composer.typesys.values import ANY_VALUE_ADAPTER, TypedValue
 
 
 class RunState:
@@ -208,6 +212,30 @@ class _FrontierApply:
     observers: tuple[Any, ...]
 
 
+@dataclass(slots=True)
+class _SuccessApply:
+    """Detached success state fully materialized before durable append."""
+
+    pool: VariablePool
+    node_state: dict[str, NodeState]
+    edge_state: dict[str, NodeState]
+    ready: deque[str]
+    in_flight: dict[str, None]
+    next_sequence: int
+    observers: tuple[Any, ...]
+
+
+@dataclass(slots=True)
+class _SuccessDraft:
+    """Validated detached success value, dispositions, and replacement frontier."""
+
+    value: TypedValue
+    node_state: dict[str, NodeState]
+    edge_state: dict[str, NodeState]
+    ready: deque[str]
+    in_flight: dict[str, None]
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedTransition:
     """One canonical record plus its already-validated total state-change plan.
@@ -343,6 +371,64 @@ def prepare_node_started(state: RunState, node_id: str) -> PreparedTransition:
     return prepare_record(state, NodeStartedRecord(node_id=node_id))
 
 
+def prepare_node_succeeded(
+    state: RunState,
+    node_id: str,
+    output: Any,
+    *,
+    commit_as: str | None = None,
+) -> PreparedTransition:
+    """Prepare one canonical output commit and its newly-ready successors.
+
+    Args:
+        state (`RunState`):
+            Initialized nonterminal state with ``node_id`` in ordered in-flight work.
+        node_id (`str`):
+            Exact ID of the executing node that produced ``output``.
+        output (`Any`):
+            Plain or typed value to validate against the effective target's output type.
+        commit_as (`str | None`, *optional*):
+            Explicit commit target.  ``None`` falls back to the executing node's baked
+            target and then to ``node_id`` itself.
+
+    Returns:
+        `PreparedTransition`:
+            Canonical ``NodeSucceededRecord`` and detached append-before-apply plan.
+
+    Raises:
+        `TypeError`:
+            A carrier has the wrong exact type or ``output`` cannot be typed.
+        `ValueError`:
+            The executing node/target is invalid or ``output`` violates its type.
+    """
+    if type(state) is not RunState:
+        raise TypeError("prepare_node_succeeded expects a RunState")
+    if type(node_id) is not str:
+        raise TypeError("node_id must be a string")
+    if commit_as is not None and type(commit_as) is not str:
+        raise TypeError("commit_as must be a string or None")
+    if commit_as == "":
+        raise ValueError("commit_as must be non-empty when supplied")
+    _require_initialized_nonterminal(state)
+    _require_succeeding_node(state, node_id)
+
+    node_target = state.flow.nodes[node_id].commit_as
+    if node_target is not None and (type(node_target) is not str or not node_target):
+        raise ValueError(f"node {node_id!r} has an invalid baked commit target")
+    target = commit_as if commit_as is not None else node_target or node_id
+    if target not in state.flow.nodes:
+        raise ValueError(f"success commit target {target!r} does not exist in the flow")
+    value_wire, _ = canonical_typed(output, state.flow.nodes[target].output_type)
+    return prepare_record(
+        state,
+        NodeSucceededRecord(
+            node_id=node_id,
+            commit_target=target,
+            value=value_wire,
+        ),
+    )
+
+
 def prepare_run_resumed(
     state: RunState,
     *,
@@ -383,14 +469,15 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
     """Validate one supported authoritative record against the current frontier.
 
     This is the shared reducer seam for live dispatch and later historical replay.
-    Only dispatch and recovery-frontier records are supported here; node outcome
-    records acquire reducers in later slices.
+    Dispatch, recovery-frontier, and successful-outcome records are supported here;
+    the remaining node outcomes acquire reducers in later slices.
 
     Args:
         state (`RunState`):
             Initialized nonterminal state immediately before ``record``.
         record (`RunRecord`):
-            A ``NodeStartedRecord`` or ``RunResumedRecord`` to validate and copy.
+            A ``NodeStartedRecord``, ``RunResumedRecord``, or
+            ``NodeSucceededRecord`` to validate and copy.
 
     Returns:
         `PreparedTransition`:
@@ -410,6 +497,8 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
         _validate_node_started(state, record)
     elif isinstance(record, RunResumedRecord):
         _validate_run_resumed(state, record)
+    elif isinstance(record, NodeSucceededRecord):
+        _validate_node_succeeded(state, record)
     else:
         raise TypeError(
             f"unsupported run record for state preparation: {type(record).__name__}"
@@ -433,11 +522,26 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
             raise TypeError("node-start envelope decoded to a different record kind")
         _validate_node_started(state, canonical_record)
         observers: tuple[Any, ...] = (NodeStarted(node_id=canonical_record.node_id),)
-    else:
+    elif isinstance(record, RunResumedRecord):
         if not isinstance(canonical_record, RunResumedRecord):
             raise TypeError("run-resume envelope decoded to a different record kind")
         _validate_run_resumed(state, canonical_record)
         observers = (RunResumed(),)
+    else:
+        if not isinstance(canonical_record, NodeSucceededRecord):
+            raise TypeError("node-success envelope decoded to a different record kind")
+        output = _validate_node_succeeded(state, canonical_record).value.to_object()
+        observers = (
+            NodeSucceeded(
+                node_id=canonical_record.node_id,
+                output=output,
+                commit_as=(
+                    None
+                    if canonical_record.commit_target == canonical_record.node_id
+                    else canonical_record.commit_target
+                ),
+            ),
+        )
 
     start_id = state.flow.start_id
     end_id = state.flow.end_id
@@ -536,12 +640,15 @@ def _commit_frontier(
     state: RunState,
     prepared: PreparedTransition,
 ) -> tuple[Any, ...]:
-    """Validate, append, and install one dispatch or recovery transition."""
+    """Validate, append, and install one dispatch, recovery, or success transition."""
     plan = prepared._plan
     if not isinstance(plan, _FrontierPlan):
         raise TypeError("frontier commit requires a frontier plan")
-    if not isinstance(prepared.record, (NodeStartedRecord, RunResumedRecord)):
-        raise TypeError("frontier plan requires a dispatch or resume record")
+    if not isinstance(
+        prepared.record,
+        (NodeStartedRecord, RunResumedRecord, NodeSucceededRecord),
+    ):
+        raise TypeError("frontier plan requires a dispatch, resume, or success record")
     _require_prepared_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
@@ -553,13 +660,22 @@ def _commit_frontier(
         raise ValueError("prepared transition reducer authority is stale")
     if isinstance(prepared.record, NodeStartedRecord):
         _validate_node_started(state, prepared.record)
-    else:
+    elif isinstance(prepared.record, RunResumedRecord):
         _validate_run_resumed(state, prepared.record)
+    else:
+        _validate_node_succeeded(state, prepared.record)
     _require_unchanged_record(prepared, plan.envelope_bytes)
-    apply = _materialize_frontier(state, prepared)
+    apply = (
+        _materialize_success(state, prepared)
+        if isinstance(prepared.record, NodeSucceededRecord)
+        else _materialize_frontier(state, prepared)
+    )
 
     _append_and_verify(log, prepared)
-    _apply_frontier(state, apply)
+    if isinstance(apply, _SuccessApply):
+        _apply_success(state, apply)
+    else:
+        _apply_frontier(state, apply)
     return apply.observers
 
 
@@ -843,6 +959,128 @@ def _validate_run_resumed(state: RunState, record: RunResumedRecord) -> None:
             raise ValueError(f"RunResumed retry node {node_id!r} is already ready")
 
 
+def _require_succeeding_node(state: RunState, node_id: str) -> None:
+    """Require an existing unknown node in the ordered in-flight frontier."""
+    if node_id not in state.flow.nodes:
+        raise ValueError(f"NodeSucceeded node {node_id!r} does not exist in the flow")
+    if state.node_state.get(node_id) is not NodeState.UNKNOWN:
+        raise ValueError(f"NodeSucceeded node {node_id!r} must have UNKNOWN disposition")
+    if node_id not in state.in_flight:
+        raise ValueError(f"NodeSucceeded node {node_id!r} is not in-flight")
+
+
+def _validate_node_succeeded(
+    state: RunState,
+    record: NodeSucceededRecord,
+) -> _SuccessDraft:
+    """Validate and detach one success value plus its complete frontier change."""
+    if type(record.node_id) is not str:
+        raise TypeError("NodeSucceededRecord node_id must be a string")
+    if type(record.commit_target) is not str:
+        raise TypeError("NodeSucceededRecord commit_target must be a string")
+    _require_succeeding_node(state, record.node_id)
+    if record.commit_target not in state.flow.nodes:
+        raise ValueError(
+            f"success commit target {record.commit_target!r} does not exist in the flow"
+        )
+    try:
+        typed = ANY_VALUE_ADAPTER.validate_python(record.value, strict=True)
+    except ValueError as exc:
+        raise ValueError("NodeSucceededRecord value is not a typed value") from exc
+    wire, decoded = canonical_typed(
+        typed,
+        state.flow.nodes[record.commit_target].output_type,
+    )
+    if wire != record.value:
+        raise ValueError("NodeSucceededRecord value is not canonical for its target")
+
+    outgoing = list(state.flow.outgoing(record.commit_target))
+    for edge in outgoing:
+        if state.edge_state[edge.id] is not NodeState.UNKNOWN:
+            raise ValueError(
+                f"success target outgoing edge {edge.id!r} must be UNKNOWN"
+            )
+
+    node_state = dict(state.node_state)
+    node_state[record.node_id] = NodeState.TAKEN
+    edge_state = dict(state.edge_state)
+    ready = deque(state.ready)
+    in_flight = dict(state.in_flight)
+    del in_flight[record.node_id]
+    newly_ready: set[str] = set()
+
+    for edge in outgoing:
+        edge_state[edge.id] = NodeState.TAKEN
+        successor = edge.to
+        if _disposition(state.flow, edge_state, successor) != "ready":
+            continue
+        if successor in newly_ready:
+            continue
+        if node_state.get(successor) is not NodeState.UNKNOWN:
+            raise ValueError(
+                f"newly-ready successor {successor!r} must have UNKNOWN disposition"
+            )
+        if successor in ready:
+            raise ValueError(f"newly-ready successor {successor!r} is already ready")
+        if successor in in_flight:
+            raise ValueError(
+                f"newly-ready successor {successor!r} is already in-flight"
+            )
+        ready.append(successor)
+        newly_ready.add(successor)
+
+    return _SuccessDraft(
+        value=decoded,
+        node_state=node_state,
+        edge_state=edge_state,
+        ready=ready,
+        in_flight=in_flight,
+    )
+
+
+def _disposition(
+    flow: CompiledFlow,
+    edge_state: dict[str, NodeState],
+    node_id: str,
+) -> str:
+    """Classify one join using the runtime's edge-class-aware readiness rules."""
+    incoming = list(flow.incoming(node_id))
+    if not incoming:
+        return "ready"
+    control = [edge for edge in incoming if edge.source_handle is not None]
+    ordering = [
+        edge
+        for edge in incoming
+        if edge.source_handle is None and edge.ordering
+    ]
+    data = [
+        edge
+        for edge in incoming
+        if edge.source_handle is None and not edge.ordering
+    ]
+
+    if control and all(
+        edge_state[edge.id] is NodeState.SKIPPED for edge in control
+    ):
+        return "dead"
+    groups: dict[str | None, list[Any]] = {}
+    for edge in data:
+        groups.setdefault(edge.input_group, []).append(edge)
+    for group in groups.values():
+        if not group[0].optional and all(
+            edge_state[edge.id] is NodeState.SKIPPED for edge in group
+        ):
+            return "dead"
+    if any(
+        not edge.optional and edge_state[edge.id] is NodeState.SKIPPED
+        for edge in ordering
+    ):
+        return "dead"
+    if any(edge_state[edge.id] is NodeState.UNKNOWN for edge in incoming):
+        return "wait"
+    return "ready"
+
+
 def _require_pristine(state: RunState) -> None:
     """Reject any state that no longer has its constructor-created empty frontier."""
     exact_containers = (
@@ -1018,6 +1256,51 @@ def _materialize_frontier(
     )
 
 
+def _materialize_success(
+    state: RunState,
+    prepared: PreparedTransition,
+) -> _SuccessApply:
+    """Build detached pool, dispositions, frontier, and observer before append."""
+    plan = prepared._plan
+    if not isinstance(plan, _FrontierPlan):
+        raise TypeError("success materialization requires a frontier plan")
+    envelope = decode_record(plan.envelope_bytes)
+    record = envelope.record
+    if not (
+        envelope.run_id == prepared.expected_run_id
+        and envelope.seq == prepared.expected_sequence
+        and isinstance(record, NodeSucceededRecord)
+    ):
+        raise ValueError("immutable success plan does not match its transition")
+
+    draft = _validate_node_succeeded(state, record)
+    pool = decode_pool(encode_pool(state.pool))
+    pool.store[record.commit_target] = draft.value
+    _, observer_typed = canonical_typed(
+        draft.value,
+        state.flow.nodes[record.commit_target].output_type,
+    )
+    return _SuccessApply(
+        pool=pool,
+        node_state=draft.node_state,
+        edge_state=draft.edge_state,
+        ready=draft.ready,
+        in_flight=draft.in_flight,
+        next_sequence=envelope.seq + 1,
+        observers=(
+            NodeSucceeded(
+                node_id=record.node_id,
+                output=observer_typed.to_object(),
+                commit_as=(
+                    None
+                    if record.commit_target == record.node_id
+                    else record.commit_target
+                ),
+            ),
+        ),
+    )
+
+
 def _apply_frontier(state: RunState, apply: _FrontierApply) -> None:
     """Install an already-detached frontier through total assignments only."""
     state.ready = apply.ready
@@ -1026,12 +1309,23 @@ def _apply_frontier(state: RunState, apply: _FrontierApply) -> None:
     state.num_workers = apply.num_workers
 
 
+def _apply_success(state: RunState, apply: _SuccessApply) -> None:
+    """Install an already-detached successful outcome through total assignments."""
+    state.pool = apply.pool
+    state.node_state = apply.node_state
+    state.edge_state = apply.edge_state
+    state.ready = apply.ready
+    state.in_flight = apply.in_flight
+    state.next_sequence = apply.next_sequence
+
+
 __all__ = [
     "PreparedTransition",
     "RunStartData",
     "RunState",
     "commit_prepared",
     "prepare_node_started",
+    "prepare_node_succeeded",
     "prepare_record",
     "prepare_run_resumed",
     "prepare_run_started",

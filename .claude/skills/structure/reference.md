@@ -48,6 +48,10 @@ down for the whole engine.
 | A whole new distinct responsibility (>1 file)    | new package (write charter)   |
 | Something an existing package already owns        | that package (don't make a new one) |
 
+Kind-specific support follows the entity row: for example, CODE's in-process
+soft-budget watchdog lives in `nodes/code/watchdog.py`. Putting it around every
+evaluation in `runtime/` would both misstate ownership and broaden behavior.
+
 ## Import-direction smell test
 
 - Importing *upward* (leaf reaches into a root package) → wrong package, or needs a seam.
@@ -66,7 +70,7 @@ runtime knows only the injected `(spawner, seed) -> Flow` callable. Package-root
   the lower `compile.model` topology contract remain allowed).
 
 `tests/engine/test_layer_direction.py` parses imports with `ast` and enforces these
-rules, including equivalent relative-import spellings. The temporary AGENT
-continuation schema and scheduling-state vocabulary live in the internal
-`_growth.py` and `_state.py` leaves because both compile and suspension consume
-them; placing either contract in a consumer would create a cycle.
+rules, including equivalent relative-import spellings. Spawner seed schemas live
+with their owning nodes; the scheduling-state vocabulary lives in the internal
+`_state.py` leaf because both compile and suspension consume it. Placing that
+shared contract in either consumer would create a cycle.

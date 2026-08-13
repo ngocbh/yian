@@ -1,4 +1,4 @@
-"""MAP — the `List.map` driver (`kind: map` + `over:`), internal-only build target.
+"""MAP — the authorable `List.map` driver (`kind: map` + `over:`).
 
 `MapNode` is the mapped-call node, distinct from REF's `CallNode`. The two are different typed
 drivers: a `CallNode` applies a callable ONCE (`'a flow -> 'b`); a `MapNode` maps it over a

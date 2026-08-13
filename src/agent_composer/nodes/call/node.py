@@ -1,4 +1,4 @@
-"""CALL — the REF driver (`kind: call`), internal-only build target.
+"""CALL — the authorable REF driver (`kind: call`).
 
 `CallNode` applies a callable ONCE (`'a flow -> 'b`). It is the REF half of the REF/MAP pair;
 the MAP half is `nodes.map.MapNode` (`kind: map` + `over:`, `list['a] -> list['b]`) — the two are

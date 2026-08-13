@@ -125,9 +125,10 @@ ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--quiet] [--verbose] [
 - Any required input still missing is **prompted interactively** — each prompt
   labelled with the input's type, a required (`*`)/optional mark, and any default.
 - `HUMAN_INPUT` and an authored agent `ask_user` tool block inside the live node
-  call while the CLI's main-thread broker collects the answer. A temporary
-  generic `WAIT` pause is still resumed interactively until issue #117 removes
-  checkpoint compatibility.
+  call while the CLI's main-thread broker collects the answer. `WAIT` likewise
+  blocks a worker until its absolute UTC deadline and returns `None`. None of
+  these authorable interactions pauses the graph; only a dormant generic
+  `Pause`/checkpoint API for custom or artificial nodes remains until issue #117.
 - Per-node progress prints to **stderr**: each running node shows a spinner that
   becomes a green `✓` on success or a red `✗` (plus the error) on failure.
   `--quiet`/`-q` suppresses it; `--verbose`/`-v` also prints each node's output.

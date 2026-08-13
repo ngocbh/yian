@@ -1,7 +1,7 @@
 # Per-node config — the `env:` block.
 #
-# `env:` is a static mapping of config keys a node's own run() reads (the engine never
-# interprets it). A flow-level `env:` is the default for every node; each node overrides
+# `env:` is a static mapping of config keys a node's own implementation reads (the engine
+# never interprets it). A flow-level `env:` is the default for every node; each node overrides
 # individual keys. Merge is static at build time ({**flow_env, **node_env}, node wins),
 # flow-local (a called child flow does NOT inherit this flow's env), literals only.
 #

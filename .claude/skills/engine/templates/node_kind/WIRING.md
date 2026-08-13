@@ -10,9 +10,10 @@ for an **authorable leaf** kind (one a flow names directly, like `code`/`tool`).
 > they have no `compose/nodes/<kind>.py` module and expand at load/runtime instead. This
 > checklist is for a leaf you want authors to write.
 >
-> A simple leaf returns `Output`, `Route`, or `Pause` and skips the conditional
-> spawner step below. If the new kind can return `Grow`, it is a spawner as well as
-> authorable and must follow §2a; that requirement does not apply to ordinary leaves.
+> A normal authorable leaf returns `Output` or `Route` and skips the conditional
+> spawner step below. `Pause` is dormant custom/artificial compatibility only. If
+> the new kind can return `Grow`, it is a spawner as well as authorable and must
+> follow §2a; that requirement does not apply to ordinary leaves.
 
 Use `code` (`compose/nodes/code.py`, the simplest real leaf) as the reference
 implementation throughout. Build bottom-up by dependency, **one test green before the
@@ -23,10 +24,10 @@ next step** (CLAUDE.md).
 Add a member to the `NodeKind` enum — the single source of the tag. It is a closed
 vocabulary (no registry/metaclass); the engine core does NOT dispatch on it, so a new
 leaf needs no engine change — its behavior is entirely in its own `_run_impl`. A
-spawner additionally owns its growth traits/hooks (`grow_depth_delta`,
-`grow_restamps_self`, `is_loop`) and the compile interpretation described in §2a.
-The other node-owned capability traits (`binds_per_item`, `bind_reserved`,
-`needs_llm`) remain available to either shape. The base `Node.run` is a concrete
+spawner additionally owns its growth traits/hooks (`is_spawner`,
+`grow_depth_delta`, `is_loop`) and the compile interpretation described in §2a.
+The other node-owned capability traits/hooks (`binds_per_item`, `bind_reserved`,
+`reserved_wiring_keys`, `needs_stop_event`) remain available to either shape. The base `Node.run` is a concrete
 template method that fires the node's asserts around `_run_impl`; do not override it.
 
 ```python
@@ -52,7 +53,7 @@ must preserve the layer boundary:
   documents the seed schema but never constructs a `Flow` and never imports
   `compile`.
 - Set `is_spawner = True` and only the node-owned growth traits the generic splice
-  needs (`grow_depth_delta`, `grow_restamps_self`, or `is_loop`).
+  needs (`grow_depth_delta` or `is_loop`).
 - Add the kind-aware interpretation to the closed match in
   `compile/expand.py::build_grow(spawner, canonical_seed)`. It validates the seed
   and returns one deterministic, self-contained `Flow` fragment.

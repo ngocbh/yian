@@ -153,7 +153,8 @@ Any node may carry an `env:` block — a mapping of **static** config keys the n
 own implementation reads. It is the generic knob for "tune this node's behavior"
 that isn't data flow (`input:`) or model selection (`llm_config:`). Keys are plain
 strings; each key's meaning and type is the consuming node's concern (the engine
-never interprets `env` — it only hands the merged mapping to the node's `run()`).
+never interprets `env`; compose stores the merged mapping on the node for its own
+implementation to read).
 
 A flow can set a default `env:` for **every** node under it; each node can override
 individual keys. On build the two merge per key, **node wins**:
@@ -278,8 +279,10 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
 ### `code` / `model` / `tool` — the other leaves
 
 These are the non-LLM computational leaves — a Python callable, an ML model, or
-a registered tool. They take typed `input:` bindings and declare a typed
-`output:` (which, unlike an AGENT, may be any type).
+a registered tool. CODE and MODEL consume `input:` bindings and may declare a
+typed `output:`. TOOL instead accepts an untyped `input:` map defined by the
+registered tool and rejects `output:`; its return value is still bound as the
+node's `output` for downstream references.
 
 A `code` node's `code:` field is one of two shapes:
 
@@ -614,6 +617,13 @@ assistant:
 
 For a *guaranteed* gate use `human_input`; for "ask only if needed" use
 `ask_user`.
+
+All three authorable blocking surfaces are live calls: `ask_user` returns the
+human's answer to the same AGENT tool loop, HUMAN_INPUT returns it as the node's
+output, and WAIT returns `None` at its deadline.
+There is no authored agent `entry:`/`controls:` surface and no event-mode WAIT;
+the dormant generic `Pause`/checkpoint API is available only to custom or
+artificial nodes until issue #117 removes it.
 
 ## Expression contexts
 

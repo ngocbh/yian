@@ -92,11 +92,11 @@ class NodeKind(str, Enum):
     CASE = "case"
     HUMAN_INPUT = "human_input"  # block through the host-owned ask_user tool
     WAIT = "wait"  # authorable: block until an absolute UTC date/datetime
-    LOOP = "loop"  # internal-only: iterate a callable to a fixpoint (`('a -> 'a) -> 'a -> 'a`)
+    LOOP = "loop"  # authorable: iterate a callable to a fixpoint (`('a -> 'a) -> 'a -> 'a`)
     START = "start"  # internal-only: loader-synthesized input boundary (parameter binding)
     END = "end"      # internal-only: loader-synthesized return boundary (record + list modes)
-    CALL = "call"    # internal-only: consult another flow once (REF — `kind: call`)
-    MAP = "map"      # internal-only: map a callable over a list (`kind: map` + `over:`)
+    CALL = "call"    # authorable: consult another flow once (REF — `kind: call`)
+    MAP = "map"      # authorable: map a callable over a list (`kind: map` + `over:`)
 
 
 # --- the node's return type is a closed sum ----------------------------------------
@@ -240,7 +240,8 @@ class Node(ABC):
             Author-supplied static per-node config (`{str -> literal}`), baked at build
             time from the flow-level `env:` default merged with the node's own `env:`
             (node override wins). Opaque to the engine core — kind-blind: only a node's
-            own `run()` reads the keys it understands (AGENT: `max_tool_iterations`).
+            own `_run_impl()` path reads the keys it understands (AGENT:
+            `max_tool_iterations`).
             Unknown keys are carried but ignored. `{}` when none is authored.
     """
 
@@ -315,7 +316,7 @@ class Node(ABC):
         # Author-supplied static per-node config, opaque to the engine core (kind-blind): a
         # plain `{str -> literal}` map baked at build time from the flow-level `env:` default
         # merged with this node's own `env:` (node override wins; see the compose builder). The
-        # engine NEVER reads it — only a node's own `run()` interprets the keys it understands
+        # engine NEVER reads it — only a node's own `_run_impl()` path interprets understood keys
         # (e.g. AGENT reads `max_tool_iterations`); unknown keys are carried but ignored. `{}`
         # for a node that declares no `env:` and inherits no flow default.
         self.env: dict[str, Any] = {}
@@ -429,14 +430,14 @@ class Node(ABC):
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
-        are passed only to nodes whose traits request them (`bind_item`, `llm`, `stop_event`).
+        are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
         A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
         raise NotImplementedError(
             f"node {self.id!r} ({type(self).__name__}) defines no _run_impl"
         )
 
     def on_failure(self, exc: Exception, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
-        """Recovery seam: called by the engine wrapper when run() raises. Default: re-raise."""
+        """Reserved recovery seam, not currently driven by ``eval_node``. Default: re-raise."""
         raise exc
 
     def bind_reserved(self, node_wiring: dict, pool) -> dict[str, Any]:

@@ -13,7 +13,7 @@ from typing import Any, Optional
 from agent_composer.expr.template import render_template_record
 from agent_composer.nodes.agent.modes import MODES, AgentRunContext
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
-from agent_composer.nodes.base import Node, NodeKind, NodeResult
+from agent_composer.nodes.base import Node, NodeKind, Output
 
 DEFAULT_MODE = "plain"
 
@@ -77,7 +77,7 @@ class AgentNode(Node):
             max_tool_iterations=self._max_tool_iterations(),
         )
 
-    def _run_impl(self, inputs: dict) -> NodeResult:
+    def _run_impl(self, inputs: dict) -> Output:
         """Render declared inputs and run the selected local mode to completion."""
         prompt = render_template_record(self.prompt, inputs)
         return MODES[self.mode](self._ctx(prompt))

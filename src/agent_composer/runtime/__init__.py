@@ -4,7 +4,7 @@ Runtime executes the compiled topology and reduces only the closed node-result
 sum.  Graph-growth construction arrives as an injected callable from the run
 boundary, so runtime interprets no node kind and owns no compile-time expansion.
 
-Knows about:   events, typesys, nodes, compile.model topology, suspension, and llm_clients.
+Knows about:   events, typesys, nodes, compile.model topology, and suspension.
 Never imports: compile.expand, compose, the package-root run boundary, CLI, or provider
                SDKs.
 """

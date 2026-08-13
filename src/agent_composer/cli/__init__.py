@@ -3,8 +3,15 @@
 `ac run FLOW.yaml` loads a Compose flow, gathers its inputs (flags first, then an
 interactive prompt for any missing required one), and drives it to a terminal.
 The main thread owns terminal prompts/renders while a controller drives the flow;
-blocking HUMAN_INPUT/``ask_user`` calls cross that broker, and the temporary WAIT
-pause path is resumed there too. The CLI owns no engine scheduling logic.
+blocking HUMAN_INPUT/``ask_user`` calls cross that broker. WAIT remains live in
+its worker until its deadline. A dormant controller loop can still service an
+artificial generic pause, but no authorable node enters it. The CLI owns no
+engine scheduling logic.
+
+Knows about: compose; compile metadata and LLM-cascade helpers; the package-root run
+boundary; events; node host-stop signals; typed values; tools; LLM API-key metadata;
+process defaults in ``_settings``; and peer CLI modules. Never imports runtime scheduling
+internals or provider SDKs; owns no graph mutation.
 """
 
 from __future__ import annotations

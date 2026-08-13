@@ -7,6 +7,10 @@ A host-agnostic run boundary that drives a loaded `ComposedFlow` through the
 - seed the `input` namespace + the host-ambient `system` clock, and
 - drive the engine to a terminal, mapping engine events to a `RunResult`.
 
+Authorable AGENT ``ask_user``, HUMAN_INPUT, and WAIT calls remain inside live node
+execution and return ordinary outputs. The ``paused`` result shape and resume helpers
+remain only as dormant custom/artificial generic-Pause compatibility.
+
 The flow's `asserts:` are NOT enforced here: they are lowered onto the synthesized
 boundary nodes at build (PRE/boundary asserts -> `StartNode.post_asserts` with each
 `${input.X}` rewritten to `${output.X}`, fired against START's COERCED output through
@@ -90,7 +94,8 @@ class RunResult:
             fresh run arguments.
         status (`str`):
             The terminal state: one of `"succeeded"`, `"failed"`, `"paused"`, or
-            `"aborted"`.
+            `"aborted"`. Authorable nodes do not produce `"paused"`; it is dormant
+            custom/artificial compatibility.
         output (`Any`, *optional*, defaults to `None`):
             The flow's single terminal value — a scalar or a multi-field object.
             Set only when `status == "succeeded"`.
@@ -336,9 +341,9 @@ def resume_flow(
     """
     Drive a suspended run to its next terminal via exactly one resume handle.
 
-    Resume from a live `engine=` (fast, in-process) or a deserialized `checkpoint=`
-    (durable, cross-process) — pass exactly one. The `commands` (temporary generic-pause
-    values such as a wait release, built with
+    Resume a custom/artificial compatibility pause from a live `engine=` (fast,
+    in-process) or a deserialized `checkpoint=` (durable, cross-process) — pass
+    exactly one. The `commands` (temporary generic-pause values built with
     [`resume_command`][agent_composer.run.resume_command]) are applied before the
     run continues. Mirrors [`run_flow`][agent_composer.run_flow]'s terminal-event loop and
     post-terminal asserts; if the run pauses again, the returned result carries fresh handles.
@@ -354,8 +359,8 @@ def resume_flow(
             A serializable snapshot from a paused `RunResult.checkpoint`, possibly
             deserialized in another process. Mutually exclusive with `engine`.
         commands (`list[Any]`, *optional*, defaults to `None`):
-            Engine commands to apply before resuming (e.g. delivered compatibility values
-            or wait releases). `None` is treated as an empty list.
+            Engine commands to apply before resuming (delivered compatibility values for
+            artificial parked leaves). `None` is treated as an empty list.
         on_event (`Callable[[Any], None]`, *optional*, defaults to `None`):
             Called with each engine event as it occurs. Use it for progress reporting.
         llm_config (`dict[str, Any]`, *optional*, defaults to `None`):
@@ -468,7 +473,8 @@ def resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> "DeliverAns
             A `PauseReason` from `RunResult.pause_reasons`. Must expose a `node_id` to be
             host-resumable.
         value (`Any`):
-            The compatibility value to deliver; for a `wait` release pass `None`.
+            The compatibility value to deliver. A synthetic scheduled release
+            conventionally uses `None`; authorable WAIT never enters this path.
 
     Returns:
         `DeliverAnswerCommand`:

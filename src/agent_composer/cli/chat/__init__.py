@@ -6,4 +6,7 @@ normal transcript through defaulted output bindings — the workspace-confined f
 tools the composer assistant calls (`tools.py`), and the Typer subcommand that owns the
 broker/controller lifecycle (`command.py`). Typed `/exit` and `/quit` are ordinary values
 routed by the flow; only EOF is host-normalized. Nothing here changes engine core.
+
+Knows about: peer CLI modules, compose, the package-root run boundary, tools, and events.
+Never imports: runtime scheduling internals or provider SDKs; owns no graph mutation.
 """

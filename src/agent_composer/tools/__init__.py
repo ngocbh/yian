@@ -4,6 +4,9 @@ The core ships no domain tools; a host registers its own via ``register_tool``.
 Model-requested calls use the strict public schema. HUMAN_INPUT alone uses the
 trusted path for host-injected metadata. ``install_ask_user`` gives the reserved
 entry one process-wide owner for a complete host lifecycle.
+
+Knows about: langchain-core and the Python standard library.
+Never imports: nodes, compile, compose, runtime, suspension, the run boundary, or CLI.
 """
 
 from __future__ import annotations

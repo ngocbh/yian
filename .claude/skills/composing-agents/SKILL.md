@@ -172,7 +172,7 @@ verdict:
   kind: code
   input:
     s: ${score.output.signal}
-  output: Signal               # unlike an agent, ANY type
+  output: Signal               # one typed value; AGENT supports this shape too
   code: pkg.mod:fn             # a reference — OR an inline `code: |` body that returns
 ```
 
@@ -361,6 +361,10 @@ A `tool_calling` agent granted `tools: [ask_user]` can synchronously ask the hum
 **only if the model decides it needs to**. The tool blocks inside the same live
 agent loop and its returned answer becomes the ordinary tool result. For a
 *guaranteed* gate use `human_input`; for "ask only if needed" use `ask_user`.
+AGENT `ask_user` returns its answer to the same live tool loop; HUMAN_INPUT and
+WAIT return ordinary node outputs from their live calls. There is no authored
+agent `entry:`/`controls:` field or event-mode WAIT. Generic `Pause` remains
+custom/artificial compatibility only until issue #117.
 
 ## Validate & run
 - **Quick validate** (loads + compiles, no model): `ac run <flow>.yaml` will load

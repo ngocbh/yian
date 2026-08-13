@@ -1,8 +1,8 @@
-"""plain mode — a single LLM call. No tools, no loop.
+"""plain mode — direct generation with no tools or tool loop.
 
-The simplest agent: render the prompt, ask the model once, return its text. Any
-skills on the node are ignored (there is no loop to invoke them). Good for pure
-generation/synthesis nodes.
+The simplest agent: render the prompt and return text, or use structured
+generation (including its configured correction attempts) for a non-text output
+type. Any authored tools are ignored because there is no tool loop.
 """
 
 from __future__ import annotations

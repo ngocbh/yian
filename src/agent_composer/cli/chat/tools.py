@@ -88,8 +88,8 @@ def run_flow(
     (e.g. {"text": "Alice is 30"}) — pass it as an object, NOT a JSON string; omit it for a
     flow that takes no inputs. If unsure which inputs a flow needs, call `validate_flow`
     first. Returns `OUTPUT: <result>` on success, `FAILED: <error>` if the run errors, or
-    `PAUSED: ...` for a temporary generic pause such as WAIT. Blocking HUMAN_INPUT is
-    served by the enclosing chat host."""
+    `PAUSED: ...` only for a custom/artificial generic pause. Blocking HUMAN_INPUT is
+    served by the enclosing chat host, while authored WAIT remains live until its deadline."""
     text = _resolve(path).read_text()
     try:
         loaded = load_flow(text, search_paths=[_WORKSPACE])

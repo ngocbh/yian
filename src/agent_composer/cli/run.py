@@ -3,9 +3,10 @@
 Inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`); any declared
 input still missing is prompted for interactively (required ones are starred). The engine
 runs behind a main-thread terminal broker: blocking HUMAN_INPUT and agent ``ask_user`` calls
-wait for that broker and then continue inside the same live node call. The temporary generic
-WAIT pause path is resumed through the same terminal surface. Answer types are enforced at
-the engine boundary; an invalid one fails the run.
+wait for that broker and then continue inside the same live node call. WAIT stays live in
+its worker until its deadline. A dormant controller loop can still service custom/artificial
+generic pauses through the same terminal surface. Answer types are enforced at the engine
+boundary; an invalid one fails the run.
 
 `--provider`/`--model` feed the outermost layer of the `llm_config` cascade (fill-the-gap,
 not a hard override): they fill only the fields an agent and its enclosing flow leave unset.
@@ -1043,9 +1044,9 @@ def _resume_to_terminal(
 ) -> RunResult:
     """Drive a paused run to a terminal from the controller thread.
 
-    Legacy ``HumanInputRequired`` and scheduled WAIT reasons are elicited through
+    Artificial ``HumanInputRequired`` and ``ScheduledPause`` reasons are elicited through
     the brokered ``ask_user`` handler; warnings and progress stay brokered through
-    ``render`` and ``on_event``. Authorable HUMAN_INPUT no longer enters this path.
+    ``render`` and ``on_event``. Authorable AGENT, HUMAN_INPUT, and WAIT never enter this path.
     Cancelling a structured compatibility answer keeps the run paused.
     """
 
@@ -1069,7 +1070,7 @@ def _resume_to_terminal(
             elif reason.type == "scheduled_pause":
                 release_label = "Release now"
                 decision = ask_user(
-                    question=f"{reason.node_id}: release the wait now?",
+                    question=f"{reason.node_id}: release this artificial pause now?",
                     questions=[
                         {
                             "header": "action",
@@ -1077,7 +1078,7 @@ def _resume_to_terminal(
                             "options": [
                                 {
                                     "label": release_label,
-                                    "description": "Resume this wait immediately.",
+                                    "description": "Resume this artificial pause immediately.",
                                 },
                                 {
                                     "label": "Keep waiting",
@@ -1297,7 +1298,7 @@ def run(
         else:
             console.print(out)
     elif result.status == "paused":
-        err_console.print("[yellow]run paused (resume cancelled)[/yellow]")
+        err_console.print("[yellow]artificial compatibility pause unresolved[/yellow]")
         raise typer.Exit(code=1)
     else:
         # A node failure points at WHERE in the `.yaml` it raised (boxed frame), mirroring a

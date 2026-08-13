@@ -32,7 +32,7 @@ nodes:
     kind: code
     input:
       text: ${draft.output}        # the reference IS the edge draft -> parse
-    output: Parsed                 # unlike an AGENT, a CODE node may return ANY type
+    output: Parsed                 # one typed value; AGENT supports records too
     code: your_package.parsing:parse_note
 
 output: ${parse.output}

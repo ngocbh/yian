@@ -65,7 +65,8 @@ ac run examples/classify.yaml --input text="I love this!"
 Exercises the **`human_input`** node. An agent drafts a plan, a `human_input`
 node always blocks for an `approve` / `revise` answer (a `Literal` typedef),
 `case ... on` routes on the typed answer, and a coalesce joins whichever branch
-ran.
+ran. The gate returns the answer as an ordinary node output; it does not pause or
+checkpoint the flow.
 
 ```console
 ac run examples/human-approval.yaml --input task="Plan a team offsite"
@@ -85,7 +86,8 @@ ac run examples/ask-user.yaml --input request="Book me a table for dinner"
 ```
 
 Contrast with `human-approval.yaml`: `human_input` always asks; `ask_user` asks
-only if the model decides to.
+only if the model decides to. When it does, the answer returns to the same live
+agent tool loop.
 
 ## `decision-brief.yaml` — a realistic multi-stage flow
 
@@ -108,12 +110,11 @@ fan-in, a typed enum output, `case ... on` with `else`, a coalesce, multi-output
 and asserts — all with AGENT nodes, so it runs against any provider with no extra
 Python.
 
-!!! note "Why the verdict is an enum, not a record"
-    The synth node's verdict is a `Decision` enum rather than a
-    `{decision, confidence}` record because AGENT nodes return text, which can
-    coerce to `str` or a `Literal[...]` tag but not to a record or number. A
-    structured/numeric verdict would need a `code` or `model` producer. See the
-    note in [Flow syntax → `agent`](syntax.md#agent-an-llm-leaf).
+!!! note "Why the example uses an enum"
+    The synth node's verdict is a `Decision` enum because the following `case`
+    routes directly on those tags. AGENT nodes may also declare a record, number,
+    boolean, or list output; those shapes use structured generation. See
+    [Flow syntax → `agent`](syntax.md#agent-an-llm-leaf).
 
 ## Next
 

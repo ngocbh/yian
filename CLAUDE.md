@@ -18,8 +18,9 @@ the package README — [`src/agent_composer/README.md`](src/agent_composer/READM
 flow-is-a-function, agent-is-a-flow, OCaml as the concept map, a closed
 `NodeKind` with explicit `match` dispatch, node purity (a node never writes the
 pool; it returns `Output | Route | Pause | Grow`), a typed serializable variable
-pool, and durable suspend/resume. **Consult it before designing any engine or
-flow change.** The flow-authoring surface is documented in
+pool, live authorable blocking effects, and dormant generic suspend/resume
+compatibility. **Consult it before designing any engine or flow change.** The
+flow-authoring surface is documented in
 [`docs/syntax.md`](docs/syntax.md); docstring/style conventions are in
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
@@ -37,7 +38,7 @@ They are the lens for reviewing any engine change:
   on the closed node-result sum (`Output | Route | Pause | Grow`) and on
   node-owned traits/hooks. A ratchet test (`tests/engine/test_kind_census.py`)
   holds the core's kind-dispatch count at 0. New behavior belongs in a node's own
-  `run()`, never in an engine `match node.kind`.
+  `_run_impl()`, never in an engine `match node.kind`.
 
 ## AI behavior rules — read these every session
 
@@ -229,7 +230,7 @@ write it. Read it together with the two shaping properties above.
   general primitive that composes. If a real flow can't be expressed, that's an
   engine gap — fix the primitive, don't special-case the flow.
 - **New capability as a node, not an engine branch.** Put kind-specific logic in
-  the node's own `run()` or a node-owned trait/hook; keep `runtime/` kind-blind.
+  the node's own `_run_impl()` or a node-owned trait/hook; keep `runtime/` kind-blind.
 - **Purity at the boundary.** A node *returns* `Output | Route | Pause | Grow`; the
   engine *binds* outputs under `(node_id, key)` like an immutable `let`. A node
   never reaches into the pool.
@@ -265,8 +266,8 @@ pip install -e '.[all]'               # engine + all provider adapters
 
 Run the engine anywhere with `PYTHONPATH=src`. Provider extras are optional and
 lazy-imported: `anthropic`, `openai`, `google`, `ollama`, or `all`. The primary
-surface is the `ac` CLI (`ac = agent_composer.cli:main`); today it has one
-subcommand, `ac run FLOW.yaml`.
+surface is the `ac` CLI (`ac = agent_composer.cli:main`), with `ac run FLOW.yaml`
+and `ac chat` as its primary commands.
 
 ## Project structure
 
@@ -277,7 +278,6 @@ load-bearing packages. Full charters live in each package's `__init__.py`.
 src/agent_composer/
 ├── typesys/      typed value system (values) + variable pool        [leaf, no deps]
 ├── events.py     run + node event vocabulary
-├── _growth.py    shared temporary growth-seed schemas               [leaf, no deps]
 ├── _state.py     shared scheduler-state vocabulary                   [leaf, no deps]
 ├── expr/         one ${...} grammar: parse -> AST -> evaluate / ref-walk on the pool
 ├── nodes/        Node contract (base.py) + per-kind impls
@@ -288,16 +288,16 @@ src/agent_composer/
 │                 (parser/types/build/cases/validate/asserts/loader)
 ├── run.py        the run boundary: ComposedFlow + inputs -> RunResult (run/resume)
 ├── runtime/      state_manager + single-threaded engine + parallel worker pool
-├── suspension/   pause reasons, commands, checkpoint
+├── suspension/   dormant artificial-pause reasons, commands, checkpoint
 ├── llm_clients/  provider clients (lazy) + LLMConfig + model_from_config
-├── tools/        the tool registry (register_tool / resolve_tools)
-├── cli/          the `ac` command-line entry point
+├── tools/        tool registry + process-owned ask_user seam
+├── cli/          `ac` commands + main-thread terminal broker
 └── _settings.py  env-based default provider/model
 ```
 
 **Layer ladder (acyclic imports):** `events <- typesys <- nodes <- compile <-
-compose`, with `expr` feeding nodes, `_growth.py` and `_state.py` feeding compile
-and suspension as shared leaves, and `suspension` feeding runtime. The
+compose`, with `expr` feeding nodes, `_state.py` feeding compile and suspension
+as a shared leaf, and `suspension` feeding runtime. The
 package-root `run.py` sits above both `compose` and `runtime` (it consumes
 `ComposedFlow` and drives the engine) and is imported by neither. Never
 introduce a back-edge. `NodeKind` is a closed enum in `nodes/base.py`; authors
@@ -313,17 +313,21 @@ authoring surface).
 - **expr** — the single `${...}` grammar (parse → AST → evaluate / ref-walk).
   Documented in [`docs/expressions.md`](docs/expressions.md).
 - **nodes** — the node contract in `base.py`: a pure node returns
-  `Output | Route | Pause | Grow`. Each kind is a package with its own `run()`.
+  `Output | Route | Pause | Grow`. The base `Node.run` template owns default/assert
+  protocol; each kind is a package with its own `_run_impl()` body.
 - **compile** — `CompiledFlow` IR + representation-neutral validation.
 - **compose** — the only YAML-aware layer: parse → typecheck → build → validate →
   `CompiledFlow`. All domain/boundary concerns live here.
 - **run** — the package-root run boundary (`run.py`): `run_flow`/`resume_flow`
-  turn a `ComposedFlow` + inputs into a `RunResult`, coercing inputs and enforcing
-  the flow's asserts. Touches no YAML; sits above compose and runtime.
+  turn a `ComposedFlow` + inputs into a `RunResult`, coerce run inputs, and drive
+  the engine. Flow asserts are lowered onto boundary nodes. Touches no YAML; sits
+  above compose and runtime.
 - **runtime** — the scheduler: single-writer dispatcher, 3-state edge join,
   outputs-before-successors, recursive skip-flood, layered checkpoint. Kind-blind.
-- **suspension** — durable suspend/resume: a node performs `PauseRequested`, the
-  run serializes to a `RunCheckpoint`, an external scheduler resumes it.
+- **suspension** — dormant custom/artificial compatibility: a returned `Pause`
+  becomes `PauseRequested`, the run can serialize a `RunCheckpoint`, and a host
+  can resume it. Authorable AGENT `ask_user`, HUMAN_INPUT, and WAIT instead block
+  live and return `Output`.
 
 ## Testing
 
@@ -342,7 +346,7 @@ the guardrail for the kind-blind invariant, not an obstacle to route around.
 ## Known pitfalls
 
 - **Keep `runtime/` kind-blind.** Don't add `match node.kind` in the engine core;
-  push kind-specific logic into the node's `run()` or a trait. The census ratchet
+  push kind-specific logic into the node's `_run_impl()` or a trait. The census ratchet
   will catch a regression.
 - **Interpreter gotcha.** The default PATH python (3.9) can't import the package;
   use the conda `agentcomposer` env or `pip install -e`.

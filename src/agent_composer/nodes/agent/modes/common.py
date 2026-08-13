@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from agent_composer.nodes.base import NodeResult
+from agent_composer.nodes.base import Output
 
 DEFAULT_SYSTEM = (
     "You are an analysis agent inside a larger workflow. Follow the instructions "
@@ -37,7 +37,7 @@ class AgentRunContext:
 
 
 # A mode is a pure node-body function of its process-local context.
-AgentMode = Callable[[AgentRunContext], NodeResult]
+AgentMode = Callable[[AgentRunContext], Output]
 
 MODES: dict[str, AgentMode] = {}
 

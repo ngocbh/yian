@@ -58,8 +58,8 @@ vocabulary. A node returns one of the closed sum
 
 ### Node kinds
 
-The authorable leaf kinds plus the internal-only drivers and boundaries the loader
-synthesizes.
+The authorable leaf, control, and composition kinds plus the internal-only START
+and END boundaries synthesized by the loader.
 
 ::: agent_composer.nodes.agent.node.AgentNode
 
@@ -84,6 +84,8 @@ synthesizes.
 ::: agent_composer.nodes.call.node.CallNode
 
 ::: agent_composer.nodes.map.node.MapNode
+
+::: agent_composer.nodes.loop.node.LoopNode
 
 ### Parameter binding
 

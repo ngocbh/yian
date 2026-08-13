@@ -135,6 +135,11 @@ node execution. A `human_input` gate can present multiple-choice questions
 them from an upstream node (`questions: ${name}`); the answer is then a record
 keyed by each question's `header`.
 
+These are live authoring surfaces, not checkpoint controls: AGENT has no authored
+`entry:`/`controls:` fields, HUMAN_INPUT has no pause fields, and WAIT has no
+event-watch form. The generic `Pause` result is custom/artificial compatibility,
+not flow YAML.
+
 **Reuse a sub-flow.** Factor the repeated work into its own flow file, bind it with
 `uses: <alias>: <filename>`, and `call:` it (once) or `map:` it (per list element).
 Reference its object fields downstream as `${node.output.field}`.
@@ -228,8 +233,9 @@ nodes:
 
 ## Per-node config — `env:`
 
-Any node may carry an `env:` mapping of **static** config keys its own `run()` reads
-(the engine never interprets `env`). A flow-level `env:` is the default for every node;
+Any node may carry an `env:` mapping of **static** config keys its own
+implementation reads (the engine never interprets `env`). A flow-level `env:`
+is the default for every node;
 each node overrides individual keys. Merge is **static at build time** (`{**flow_env,
 **node_env}`, node wins), **flow-local** (a child flow does NOT inherit the parent's
 flow env), literals only (no `${...}`).

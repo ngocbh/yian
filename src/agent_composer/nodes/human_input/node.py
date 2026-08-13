@@ -63,7 +63,7 @@ class HumanInputNode(Node):
         self.questions = questions
         self.questions_input = questions_input
 
-    def _run_impl(self, inputs: dict):
+    def _run_impl(self, inputs: dict) -> Output:
         prompt = render_template_record(self.prompt, inputs) if self.prompt is not None else None
 
         if self.questions is not None:

@@ -1,8 +1,8 @@
 """Runtime graph-expansion machinery — the pure half.
 
-When a spawner (REF / MAP / agent-pause) runs, it does not run a child engine; it
-returns a *description* (`Grow(Flow)`) and the engine GROWS the live graph by cloning the
-target child(ren) deep-namespaced into the running `CompiledFlow`. This module holds the
+When a spawner (REF / MAP / LOOP / agent-pause) runs, it does not run a child engine; it
+returns a seed-first `Grow`. The injected `build_grow` interpreter constructs the fragment and
+the engine grows its live graph. This module holds the
 **pure** machinery that growth keys off:
 
 - `ns` / `map_callsite` (imported from `nodes.ids`) / `ask_resume_edge_id`:
@@ -28,7 +28,8 @@ from typing import Any, Optional
 from agent_composer.compile.model import Edge, END_ID, Flow, START_ID
 from agent_composer.expr import rewrite_template_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
-from agent_composer.nodes.base import Node, ParamDecl
+from agent_composer.nodes.agent_segment import AgentSegment
+from agent_composer.nodes.base import Node, NodeKind, ParamDecl
 from agent_composer.nodes.end.node import EndNode
 from agent_composer.nodes.ids import map_callsite, ns
 from agent_composer.nodes.start.node import StartNode
@@ -310,7 +311,7 @@ def call_subgraph(child, callsite: str, record: dict, *,
     (a `call` node's `asserts:` reading `${output}` + declared inputs). They are lowered onto the
     cloned child END by `clone_child`, so they fire through the SAME eval_node post-assert seam —
     NOT a bespoke redirect-commit site. The CALL node passes `self.post_asserts`, `self.assert_texts`,
-    and its declared-input (param) names; `replay_grow` passes the identical trio so a resumed run's
+    and its declared-input (param) names; durable `build_grow` uses the identical trio so a resumed run's
     rebuilt child END carries the same lowered asserts."""
     cloned = clone_child(child, callsite=callsite, record=record,
                          post_asserts=post_asserts, assert_texts=assert_texts,
@@ -392,7 +393,7 @@ def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) ->
     """The pure LOOP CONTINUE builder: body_k + the fresh next-iteration driver.
 
     `origin` is the ORIGIN loop id `L` (NOT the running driver id) — bodies are always keyed
-    on the origin so live `run` (on `L~k`) and durable `replay_grow` (on `L`) build the SAME
+    on the origin so live construction (from `L~k`) and durable construction (from `L`) build the SAME
     `L#k/…` namespace. `k` is THIS iteration's index; `carried` seeds body_k. `driver` is the
     fresh `L~(k+1)` LoopNode the node minted via `respawn(k+1)`.
 
@@ -549,11 +550,72 @@ def agent_segment_subgraph(pair, callsite: str, *, output_type=None, retries: in
     `post_asserts`/`assert_texts` carry the SPAWNER's node-level `${output}` POST `asserts:` onto
     the resume terminal (see `clone_continuation_pair`), so a pausing agent's `${output}` asserts
     still fire — record-only, through the resume node's own `run` wrapper — on the resumed final
-    answer. The live pause passes `ctx.post_asserts`/`ctx.assert_texts`; `replay_grow` passes the
-    identical pair off THIS node so a resumed run re-lowers the same asserts."""
+    answer. The live pause captures `ctx.post_asserts`/`ctx.assert_texts`; durable `build_grow`
+    reads the identical pair off THIS node so a resumed run re-lowers the same asserts."""
     cloned = clone_continuation_pair(pair, callsite=callsite, output_type=output_type, retries=retries,
                                      max_tool_iterations=max_tool_iterations,
                                      post_asserts=post_asserts, assert_texts=assert_texts)
     cloned.nodes[cloned.end_id].commit_as = callsite   # PROVISIONAL: the engine residual overrides it to the true origin
     return Flow(nodes=cloned.nodes, edges=cloned.edges, wiring=cloned.wiring,
                 start_id=cloned.start_id, end_id=cloned.end_id)
+
+
+def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
+    """Build the deterministic fragment described by one spawner's canonical seed.
+
+    This is the sole kind-aware growth-construction path. Nodes calculate only their pure seed;
+    the package-root run boundary injects this callable into the kind-blind runtime for both live
+    growth and durable replay. AGENT is a temporary compatibility arm while control continuations
+    remain graph expansions.
+
+    Args:
+        spawner: The CALL, MAP, LOOP, or temporary AGENT node whose seed is being interpreted.
+        canonical_seed: The persisted builder input produced by that node. LOOP accepts the live
+            tuple and its JSON-round-tripped two-element list form.
+
+    Returns:
+        The self-contained `Flow` fragment the runtime splices into its private live graph.
+
+    Raises:
+        ValueError: If `spawner` is not one of the closed legal growth kinds.
+    """
+    match spawner.kind:
+        case NodeKind.CALL:
+            return call_subgraph(
+                spawner.child,
+                callsite=spawner.id,
+                record=dict(canonical_seed),
+                post_asserts=spawner.post_asserts,
+                assert_texts=spawner.assert_texts,
+                input_names={param.name for param in (spawner.params or [])},
+            )
+        case NodeKind.MAP:
+            return map_subgraph(
+                spawner.child,
+                spawner_id=spawner.id,
+                records=[dict(record) for record in canonical_seed],
+            )
+        case NodeKind.LOOP:
+            carried, iteration = canonical_seed
+            return loop_continue_subgraph(
+                spawner.child,
+                spawner.origin_id,
+                dict(carried),
+                iteration,
+                spawner.respawn(iteration + 1),
+            )
+        case NodeKind.AGENT:
+            segment = AgentSegment.model_validate(canonical_seed)
+            return agent_segment_subgraph(
+                [segment.hi_desc, segment.resume_desc],
+                callsite=spawner.id,
+                output_type=spawner.output_type,
+                retries=spawner.retries,
+                max_tool_iterations=spawner._max_tool_iterations(),
+                post_asserts=list(spawner.post_asserts),
+                assert_texts=dict(spawner.assert_texts),
+            )
+        case _:
+            raise ValueError(
+                f"node {spawner.id!r} ({spawner.kind.value}) cannot build graph growth"
+            )

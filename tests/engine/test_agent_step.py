@@ -3,9 +3,9 @@
 `agent_step(messages, pending, iterations, ctx) -> Output | Grow` carries the
 re-entry frame as args/return, never scratch. On ENTRY it always invokes the model on
 the passed-in `messages` (no scratch resume-replay branch). On a final answer ->
-`Output(text)`; on a control call -> `Grow` of the continuation subgraph, with the
-PAIR (a `human_input` descriptor + a `resume_agent` descriptor reading `answer` via the
-BARE forward-ref `${<hi>.output}`) carried on `Grow.seed` for durable re-grow.
+`Output(text)`; on a control call -> a seed-first `Grow` carrying the descriptor PAIR
+(a `human_input` descriptor + a `resume_agent` descriptor reading `answer` via the BARE
+forward-ref `${<hi>.output}`).
 """
 
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage

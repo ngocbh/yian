@@ -15,6 +15,7 @@ body and (except the origin) itself. The CONTINUE body-END carries NO `commit_as
 next driver by plain wiring.
 """
 
+from agent_composer.compile.expand import build_grow
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import resume_command, resume_flow, run_flow
 
@@ -434,7 +435,11 @@ def test_long_loop_stays_within_node_budget(monkeypatch):
     from agent_composer.runtime.engine import FlowEngine
 
     monkeypatch.setattr(eng, "MAX_TOTAL_NODES", 40)   # a 20-iteration loop blows this un-pruned
-    engine = FlowEngine(load_flow(TIMES_20).compiled, run_inputs={})
+    engine = FlowEngine(
+        load_flow(TIMES_20).compiled,
+        run_inputs={},
+        grow_builder=build_grow,
+    )
     terminal = list(engine.run())[-1]
     from agent_composer.events import RunSucceeded
 
@@ -457,7 +462,11 @@ def test_terminate_leaves_exactly_one_dead_final_body_and_driver():
     from agent_composer.events import RunSucceeded
     from agent_composer.runtime.engine import FlowEngine
 
-    engine = FlowEngine(load_flow(TIMES_3).compiled, run_inputs={})   # n=10, times 3
+    engine = FlowEngine(
+        load_flow(TIMES_3).compiled,
+        run_inputs={},
+        grow_builder=build_grow,
+    )   # n=10, times 3
     terminal = list(engine.run())[-1]
     assert isinstance(terminal, RunSucceeded)
     assert terminal.output == {"n": 7}
@@ -469,4 +478,3 @@ def test_terminate_leaves_exactly_one_dead_final_body_and_driver():
     driver_clones = {n for n in engine.flow.nodes if n.startswith("loop~")}
     assert driver_clones == {"loop~3"}                    # exactly the STOP driver clone
     assert "loop" in engine.flow.nodes                    # committed origin stays (not residue)
-

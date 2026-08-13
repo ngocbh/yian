@@ -120,6 +120,7 @@ def test_map_child_assert_one_violating_element_fails():
 # FlowEngine with `run_inputs=` (the parent flow declares `v`/`vs`) so the top-level START is an
 # ordinary scheduled node.
 from agent_composer.events import RunFailed
+from agent_composer.compile.expand import build_grow
 from agent_composer.runtime.engine import FlowEngine
 
 
@@ -127,7 +128,7 @@ from agent_composer.runtime.engine import FlowEngine
 def test_ref_boundary_failure_fails_run(num_workers):
     loaded = load_flow(_REF_FLOW)
     eng = FlowEngine(loaded.compiled, run_inputs={"v": -1},   # violates n >= 0 on the cloned child START
-                     num_workers=num_workers)
+                     num_workers=num_workers, grow_builder=build_grow)
     events = list(eng.run())
     assert isinstance(events[-1], RunFailed)
     assert "post-assert failed" in events[-1].error    # fired by the cloned child StartNode post-asserts
@@ -137,7 +138,7 @@ def test_ref_boundary_failure_fails_run(num_workers):
 def test_map_boundary_failure_fails_run(num_workers):
     loaded = load_flow(_MAP_FLOW)
     eng = FlowEngine(loaded.compiled, run_inputs={"vs": [1, -1]},  # element 1 violates n >= 0 on its child START
-                     num_workers=num_workers)
+                     num_workers=num_workers, grow_builder=build_grow)
     events = list(eng.run())
     assert isinstance(events[-1], RunFailed)
     assert "post-assert failed" in events[-1].error

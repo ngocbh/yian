@@ -9,7 +9,7 @@ these direct-drive tests supply them via the `_fakes` helpers (`stamp_reads`/`dr
 AgentLoopError -> NodeFailed) by `test_agent.py`.
 """
 
-from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, Flow
+from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge
 from agent_composer.events import NodeFailed, NodeRouted, NodeStarted, NodeSucceeded, PauseRequested, RunFailed
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output
 from agent_composer.nodes.binding import ParamDecl
@@ -114,7 +114,7 @@ class _NonSpawnerGrowNode(Node):
     kind = NodeKind.CODE
 
     def _run_impl(self, inputs):
-        return Grow(Flow(nodes={}, edges=[], wiring={}, start_id="", end_id=""))
+        return Grow(seed={})
 
 
 class _BadReturnNode(Node):

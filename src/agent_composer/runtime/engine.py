@@ -133,6 +133,11 @@ class FlowEngine:
             hand-seed the START store entry (the compiled `${input.X}` wiring reads it). The
             flow's boundary (`${input}`) asserts ride START's ordinary `post_asserts` and fire
             through eval_node against START's coerced output — the engine takes no assert list.
+        grow_builder (`Callable`, *optional*, defaults to `None`):
+            Pure `(spawner, canonical_seed) -> Flow` constructor supplied by the run boundary.
+            Required only when a node returns `Grow` or a checkpoint replays growth; static direct
+            engines may omit it. Runtime treats the callable generically and never imports the
+            compile-owned implementation.
     """
 
     def __init__(
@@ -143,6 +148,7 @@ class FlowEngine:
         num_workers: int = 0,
         run_inputs: Optional[dict] = None,
         llm=None,
+        grow_builder=None,
     ) -> None:
         self.flow = flow
         self.pool = pool if pool is not None else VariablePool()
@@ -165,6 +171,10 @@ class FlowEngine:
         # monkeypatched `model_from_config` is honored on the direct + engine paths alike.
         from agent_composer.runtime.eval_node import _default_llm
         self.llm = llm if llm is not None else _default_llm
+        # Pure expansion constructor injected from the package-root run boundary. None is valid
+        # for a static direct engine; `_apply_grow` fails loudly before mutation if a dynamic node
+        # is driven without the seam.
+        self.grow_builder = grow_builder
         self.ready: deque[str] = deque()  # serial path; also the serial _ready_snapshot arm
         if self.num_workers >= 1:
             self.ready_q: "queue.Queue[str]" = queue.Queue()
@@ -357,13 +367,21 @@ class FlowEngine:
         )
 
     @classmethod
-    def restore(cls, flow: CompiledFlow, checkpoint, *, num_workers: Optional[int] = None) -> "FlowEngine":
+    def restore(
+        cls,
+        flow: CompiledFlow,
+        checkpoint,
+        *,
+        num_workers: Optional[int] = None,
+        grow_builder=None,
+    ) -> "FlowEngine":
         """Rebuild a resumable engine on `flow` from a (deserialized) checkpoint.
 
         `num_workers=None` (default) rebuilds the engine at the checkpoint's recorded
         drive mode; pass an int to OVERRIDE it — a run checkpointed serial can resume
         pooled and vice-versa (workers are pure executors; correctness is
-        worker-count-independent).
+        worker-count-independent). `grow_builder` is the same optional pure constructor
+        accepted by `__init__`; it is required when the checkpoint contains growth records.
 
         Order: build the engine on the pool (at the resolved drive mode) → replay the
         expansions descriptor tree
@@ -400,7 +418,12 @@ class FlowEngine:
         # reuses a retained snapshot()/loads() object across resume_flow() retries is not
         # retro-mutated (resume dirties the pool; an AGENT 2nd segment appends in place).
         workers = checkpoint.num_workers if num_workers is None else num_workers
-        engine = cls(flow, pool=checkpoint.pool.model_copy(deep=True), num_workers=max(0, workers))
+        engine = cls(
+            flow,
+            pool=checkpoint.pool.model_copy(deep=True),
+            num_workers=max(0, workers),
+            grow_builder=grow_builder,
+        )
         # Replay re-grows the live topology + sm overlay + alias/depth/_spawner_expansion and
         # rebuilds self.expansions from OUR OWN descriptor copies. schedule=False.
         engine._replay_expansions([d.model_copy(deep=True) for d in checkpoint.expansions])
@@ -632,8 +655,8 @@ class FlowEngine:
         """Deterministic fold over the persisted `GrowRecord` tree: re-grow the live topology +
         bookkeeping a paused run had, with all live effects suppressed (`schedule=False` — no
         boundary assert, no budget raise, no scheduling). Kind-BLIND: each record names its
-        spawner, `spawner.replay_grow(seed)` rebuilds that spawner's OWN subgraph (the pure inverse
-        of the live grow), and `_apply_grow` re-splices it and re-applies the generic growth
+        spawner, and the injected builder rebuilds that spawner's OWN subgraph from the canonical
+        seed. `_apply_grow` re-splices it and re-applies the generic growth
         bookkeeping (trait-driven depth/stamps/loop retention). The pure
         clone (`ns(callsite, child_id)`) re-keys every cloned node identically, so the rebuilt
         overlay matches the live engine's byte-for-byte.
@@ -648,13 +671,16 @@ class FlowEngine:
         for rec in records:
             if is_top_level:
                 self.expansions.append(rec)     # rebuild the ledger; nested ones ride their parent
-            spawner = self.flow.nodes[rec.spawner_id]
-            sg = spawner.replay_grow(rec.seed)
-            self._apply_grow(rec.spawner_id, Grow(sg, seed=rec.seed), schedule=False, record=rec)
+            self._apply_grow(
+                rec.spawner_id,
+                Grow(seed=rec.seed),
+                schedule=False,
+                record=rec,
+            )
             self._replay_expansions(rec.children, is_top_level=False)
 
     def _apply_grow(self, spawner_id, grow, *, schedule=True, record=None):
-        """Generic growth core (kind-BLIND): splice the node-built `Flow`, register it, enforce
+        """Generic growth core (kind-BLIND): build and splice a `Flow`, register it, enforce
         MAX_TOTAL_NODES, record ONE uniform `GrowRecord` in the durable ledger, apply the trait-driven
         growth bookkeeping (boundary asserts, REF depth, `_spawner_expansion` stamps, origin
         `commit_as`), finish/mark the spawner, apply `grow.prune` (enabling loop self-prune), and
@@ -667,7 +693,13 @@ class FlowEngine:
         names it), else append it top-level. A LOOP takes the origin-keyed single-record path: the
         record is attributed to the compiled loop `origin` and supersedes the prior iteration's
         record in the same container (see the `node.is_loop` branch below)."""
-        sg = grow.subgraph
+        if self.grow_builder is None:
+            raise RuntimeError(
+                "dynamic graph growth requires an injected grow_builder; "
+                "pass grow_builder=(spawner, canonical_seed) -> Flow"
+            )
+        spawner_node = self.flow.nodes[spawner_id]
+        sg = self.grow_builder(spawner_node, grow.seed)
         with self.sm.lock:
             self.flow.add_subgraph(sg.nodes, sg.edges, sg.wiring)
             self.sm.register(list(sg.nodes), sg.edges)
@@ -680,7 +712,6 @@ class FlowEngine:
         # iterations fold into a single record under `L`. `is_loop` is read HERE (before the moved
         # prune below) because a loop driver may SELF-prune `spawner_id`, after which
         # `flow.nodes[spawner_id]` no longer exists.
-        spawner_node = self.flow.nodes[spawner_id]
         origin = spawner_node.origin_id or spawner_id
         spawner_is_loop = spawner_node.is_loop
         # Mint the one GrowRecord for this grow (live), OR reuse the deserialized one on replay.
@@ -697,20 +728,20 @@ class FlowEngine:
         # depth on every spawner in the spliced subgraph AND its terminal(s), and bound a positive
         # delta by MAX_REF_DEPTH. A None delta (LOOP, non-REF) is a no-op. Runs before the ledger
         # attach so a depth-budget raise leaves no orphan record.
-        self._stamp_grow_depth(spawner_id, grow, schedule=schedule)
+        self._stamp_grow_depth(spawner_id, sg, schedule=schedule)
         # `_spawner_expansion` stamping (kind-blind): point every spawner in the spliced subgraph +
         # its derived terminal(s) at THIS record, so a nested grow nests under it and the CALL
         # post-assert commit-site recovery finds it. A self-restamping spawner (AGENT) also stamps
         # its OWN bare id for re-pause idempotency. Runs AFTER `parent` was captured above so the
         # self-stamp does not shadow the enclosing spawner's record for the ledger attach.
-        self._stamp_spawner_expansion(spawner_id, grow, rec)
+        self._stamp_spawner_expansion(spawner_id, sg, rec)
         # Origin `commit_as` override (kind-blind, applied to the derived terminal): re-point the
         # terminal so a multi-pause AGENT's FINAL non-pausing Output commits under the ORIGINAL agent
         # id (the origin propagates through the engine-side chain `spawner.commit_as or spawner_id`,
         # which a pure builder cannot see). A no-op for CALL/MAP/LOOP: their spawner carries no
         # `commit_as`, so `origin == spawner_id`, which the terminal's `commit_as` already equals.
         # Runs AFTER the stamps above, which rely on the terminal's PROVISIONAL `commit_as`.
-        self._apply_origin_commit_as(spawner_id, grow)
+        self._apply_origin_commit_as(spawner_id, sg)
         # Finish/mark is UNIFORM across every spawner (kind-blind): a spawner that returned a Grow
         # has run and expanded, so it finishes executing and enters EXPANDED. Idempotent for a loop
         # whose repeated iteration grows re-mark the same spawner; runs on replay too (the legacy
@@ -752,7 +783,7 @@ class FlowEngine:
         if schedule:
             self._schedule(sg.start_id)
 
-    def _apply_origin_commit_as(self, spawner_id, grow) -> None:
+    def _apply_origin_commit_as(self, spawner_id, sg) -> None:
         """Kind-blind origin `commit_as` override on the derived terminal(s). The origin is the
         engine-side chained target `spawner.commit_as or spawner_id`: for a multi-pause AGENT,
         segment N's spawner is segment N-1's resume node whose `commit_as` was overridden to the
@@ -762,10 +793,10 @@ class FlowEngine:
         terminal's `commit_as` (already `spawner_id`) is unchanged."""
         spawner = self.flow.nodes[spawner_id]
         origin = spawner.commit_as or spawner_id
-        for term in self._derived_terminals(grow.subgraph, spawner_id):
+        for term in self._derived_terminals(sg, spawner_id):
             self.flow.nodes[term].commit_as = origin
 
-    def _stamp_spawner_expansion(self, spawner_id, grow, rec) -> None:
+    def _stamp_spawner_expansion(self, spawner_id, sg, rec) -> None:
         """Kind-blind `_spawner_expansion` stamping: point every `is_spawner` node in the spliced
         subgraph AND its derived terminal(s) at `rec`, so a grow nested inside one of them nests its
         GrowRecord under `rec` and the commit-site post-assert recovery (`_on_success`) finds the
@@ -778,7 +809,6 @@ class FlowEngine:
         break the single-record collapse. A compiled loop / genuine nested spawner (`origin_id` None,
         or `== id`) is still stamped."""
         spawner = self.flow.nodes[spawner_id]
-        sg = grow.subgraph
         if spawner.grow_restamps_self:
             self._spawner_expansion[spawner_id] = rec
         for nid, node in sg.nodes.items():
@@ -797,7 +827,7 @@ class FlowEngine:
         names the terminal by kind (`ns(spawner, END_ID)` / `__resume#`)."""
         return [nid for nid, node in sg.nodes.items() if node.commit_as == spawner_id]
 
-    def _stamp_grow_depth(self, spawner_id, grow, *, schedule) -> None:
+    def _stamp_grow_depth(self, spawner_id, sg, *, schedule) -> None:
         """Kind-blind REF-depth stamp, driven by the spawner's `grow_depth_delta` trait. `None`
         delta -> no depth work. Else `d = depth.get(spawner_id, 0) + delta`; a positive delta is
         bounded by MAX_REF_DEPTH (raise gated on `schedule` — replay re-derives depth top-down
@@ -807,7 +837,6 @@ class FlowEngine:
         delta = spawner.grow_depth_delta
         if delta is None:
             return
-        sg = grow.subgraph
         d = self.depth.get(spawner_id, 0) + delta
         if schedule and delta > 0 and d > MAX_REF_DEPTH:
             raise RuntimeError(

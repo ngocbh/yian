@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage
 
 import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
+from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
@@ -203,7 +204,7 @@ def test_ask_user_in_memory_continuation_round_trip(monkeypatch):
         outputs=[FlowOutput(name="output", from_="${agent.output}")],
         wiring={END_ID: {"output": "${agent.output}"}},
     )
-    eng = FlowEngine(graph)
+    eng = FlowEngine(graph, grow_builder=build_grow)
     evs = list(eng.run())
     assert isinstance(evs[-1], RunPaused)
     reason = evs[-1].reasons[0]

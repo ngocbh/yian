@@ -38,6 +38,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
+from agent_composer.compile.expand import build_grow
 from agent_composer.compile.llm_cascade import resolve_llm_cascade
 from agent_composer.events import (
     RunAborted,
@@ -228,6 +229,7 @@ def run_flow(
         flow, pool,
         num_workers=num_workers,
         run_inputs=coerced,
+        grow_builder=build_grow,
     )
     events: List[Any] = []
     status = "incomplete"
@@ -339,7 +341,12 @@ def resume_flow(
         # is not persisted across processes — the host re-supplies it here). In-process resume
         # via engine= already carries the resolved configs baked on the live graph.
         resolve_llm_cascade(flow, llm_config or {})
-        engine = FlowEngine.restore(flow, checkpoint, num_workers=num_workers)
+        engine = FlowEngine.restore(
+            flow,
+            checkpoint,
+            num_workers=num_workers,
+            grow_builder=build_grow,
+        )
 
     events: List[Any] = []
     status, output, error = "incomplete", None, None

@@ -186,9 +186,10 @@ class NodeFailed:
 
 @dataclass
 class NodeExpanded:
-    """A spawner (CALL/MAP/AGENT/LOOP) returned a `Grow`; the dispatcher's `_apply_grow` splices
-    the subgraph into the live graph. The node ran (its value is committed by the subgraph
-    terminal via `commit_as`)."""
+    """A spawner returned a seed-first `Grow`; the dispatcher builds and splices its fragment.
+
+    The node ran; its eventual value is committed by the fragment terminal via `commit_as`.
+    """
 
     node_id: str
     grow: Any = None

@@ -119,7 +119,7 @@ class AgentNode(Node):
     """
 
     kind = NodeKind.AGENT
-    is_spawner: ClassVar[bool] = True  # grows the graph: a control pause splices a Grow(Flow)
+    is_spawner: ClassVar[bool] = True  # a control pause returns a seed-first Grow
     grow_depth_delta: ClassVar[int] = 0  # a K-pause chain is ONE call: carry parent depth, no bound
     grow_restamps_self: ClassVar[bool] = True  # re-pause nests under this same spawner id (self-stamp)
     needs_llm: ClassVar[bool] = True  # LLM-backed: engine hands the model factory via caps["llm"]
@@ -248,25 +248,3 @@ class AgentNode(Node):
         # conversation and runs the loop.
         ctx = self._ctx(prompt=render_template_record(self.entry.prompt, inputs), llm=llm)
         return MODES[self.mode](ctx)
-
-    def replay_grow(self, seed: Any):
-        """Durable-replay inverse of the agent's pause `Grow`: rebuild ONE continuation segment's
-        subgraph from the persisted `{hi_desc, resume_desc}` seed via the SAME
-        `agent_segment_subgraph` builder — no LLM turn re-run. The seed is re-validated through the
-        `AgentSegment` schema so the re-entry frame keeps its round-trip validation. For a K-pause
-        chain each segment's resume terminal becomes the next segment's spawner, so `callsite`/
-        `output_type`/`post_asserts` come off THIS node (the previous segment's terminal on segment 2+),
-        so a resumed run re-lowers the same node-level `${output}` post-asserts onto the resume terminal."""
-        from agent_composer.compile.expand import agent_segment_subgraph
-        from agent_composer.suspension.expansions import AgentSegment
-
-        seg = AgentSegment.model_validate(seed)
-        return agent_segment_subgraph(
-            [seg.hi_desc, seg.resume_desc],
-            callsite=self.id,
-            output_type=self.output_type,
-            retries=self.retries,
-            max_tool_iterations=self._max_tool_iterations(),
-            post_asserts=list(self.post_asserts),
-            assert_texts=dict(self.assert_texts),
-        )

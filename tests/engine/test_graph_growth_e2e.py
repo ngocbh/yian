@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_composer.compile.expand import build_grow
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.nodes.base import NodeKind
@@ -95,7 +96,11 @@ def _run_map(topics):
     """Drive a MAP run via FlowEngine directly (run_flow only attaches .engine on pause),
     returning (engine, events) so a test can inspect the GROWN live graph."""
     parent = load_flow(_MAP, child_resolver=_resolver(**{"child-one": _CHILD}))
-    eng = FlowEngine(parent.compiled, run_inputs={"topics": topics})
+    eng = FlowEngine(
+        parent.compiled,
+        run_inputs={"topics": topics},
+        grow_builder=build_grow,
+    )
     events = list(eng.run())
     return eng, events
 
@@ -133,7 +138,11 @@ def test_no_node_attr_or_method_reads_scratch():
 
 def test_live_graph_grows_under_a_map_run():
     parent = load_flow(_MAP, child_resolver=_resolver(**{"child-one": _CHILD}))
-    eng = FlowEngine(parent.compiled, run_inputs={"topics": ["ACME", "BETA"]})
+    eng = FlowEngine(
+        parent.compiled,
+        run_inputs={"topics": ["ACME", "BETA"]},
+        grow_builder=build_grow,
+    )
     before = len(eng.flow.nodes)
     events = list(eng.run())
     assert isinstance(events[-1], RunSucceeded)

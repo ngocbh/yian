@@ -11,8 +11,8 @@ Regression guard: before the fix, the resume terminal carried no `post_asserts`,
 `${output}` post-assert on a *pausing* agent was silently dropped on the resumed final
 answer (the run succeeded even when the assert was violated).
 
-Live path (`agent_segment_subgraph` off `ctx`) AND durable `replay_grow` both carry the
-spawner's `post_asserts`/`assert_texts`, so a resumed run enforces the same assert.
+Live and durable paths both use the compile-owned builder with the spawner's
+`post_asserts`/`assert_texts`, so a resumed run enforces the same assert.
 """
 
 from types import SimpleNamespace
@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 
 import agent_composer.llm_clients as llm_clients_mod
+from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
 from agent_composer.run import resume_command
 from agent_composer.events import RunFailed, RunPaused, RunResumed, RunSucceeded
@@ -77,7 +78,7 @@ def _agent_flow_with_post_assert():
 
 
 def _run_to_pause(graph):
-    eng = FlowEngine(graph)
+    eng = FlowEngine(graph, grow_builder=build_grow)
     evs = list(eng.run())
     assert isinstance(evs[-1], RunPaused), f"expected pause, got {evs[-1]}"
     reason = evs[-1].reasons[0]
@@ -116,7 +117,7 @@ def test_agent_post_assert_satisfied_on_resume_succeeds(monkeypatch):
 
 
 # =========================================================================== #
-# durable resume-safety: replay_grow re-lowers the node-level ${output} assert
+# durable resume-safety: the injected builder re-lowers the node-level ${output} assert
 # =========================================================================== #
 
 # A YAML-authored agent carrying a node-level `${output}` post-assert (the realistic form —
@@ -138,8 +139,8 @@ output: ${agent.output}
 
 def test_agent_post_assert_fires_on_durable_resume(monkeypatch):
     # Run -> pause -> cross-process snapshot/dumps -> RESTORE on a freshly recompiled flow ->
-    # resume. Restoring on a fresh flow forces `replay_grow` to rebuild the resume terminal, so
-    # this proves replay_grow carries the node-level `${output}` post-assert. The human answer
+    # resume. Restoring on a fresh flow forces the injected builder to rebuild the resume terminal,
+    # proving durable reconstruction carries the node-level `${output}` post-assert. The answer
     # "FINAL" violates `${output} == 'GOOD'` -> the rebuilt resume terminal fires it and FAILS.
     from agent_composer import load_flow
     from agent_composer.run import run_flow
@@ -153,11 +154,14 @@ def test_agent_post_assert_fires_on_durable_resume(monkeypatch):
     assert rec.status == "paused"
     ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())
 
-    fresh = FlowEngine.restore(load_flow(_ASK_WITH_ASSERT).compiled, ckpt)
+    fresh = FlowEngine.restore(
+        load_flow(_ASK_WITH_ASSERT).compiled,
+        ckpt,
+        grow_builder=build_grow,
+    )
     cmd = resume_command(loaded, ckpt.pause_reasons[0], "yes")
     evs = list(fresh.resume(commands=[cmd]))
     last = evs[-1]
     assert isinstance(last, RunFailed), f"expected failure on durable resume, got {last}"
     assert last.error_type == "NodeAssertFailed"
     assert "post-assert" in (last.error or "").lower()
-

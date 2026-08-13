@@ -8,6 +8,7 @@ tests pin: the clone+register helpers are deterministic (re-key identically),
 / MAP / AGENT / nested grown run reaches the SAME terminal as the live engine.
 """
 
+from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID, FlowOutput, NodeState
 from agent_composer.events import RunPaused, RunSucceeded
 from agent_composer.nodes.base import Grow
@@ -31,26 +32,23 @@ from tests.engine.test_engine_expansions_ledger import (
 
 
 def _replay_one(engine, spawner_id, seed):
-    """Replay a SINGLE grow the way `_replay_expansions` does — `node.replay_grow(seed)` rebuilds
-    the spawner's own subgraph and `_apply_grow(..., schedule=False, record=rec)` re-splices it with
-    effects suppressed. Returns the reused GrowRecord."""
+    """Replay one seed through the injected builder with live effects suppressed."""
     engine.sm.add_executing(spawner_id)
     rec = GrowRecord(spawner_id=spawner_id, seed=seed, children=[])
     engine.expansions.append(rec)
-    sg = engine.flow.nodes[spawner_id].replay_grow(seed)
-    engine._apply_grow(spawner_id, Grow(sg, seed=seed), schedule=False, record=rec)
+    engine._apply_grow(spawner_id, Grow(seed=seed), schedule=False, record=rec)
     return rec
 
 
 def test_grow_call_re_registers_identical_node_ids():
-    """`replay_grow(seed)` + `_apply_grow(schedule=False)` re-keys the SAME cloned node ids for the
+    """Injected rebuild + `_apply_grow(schedule=False)` re-keys the SAME cloned node ids for the
     same `(spawner, child, record)` across two fresh engines (the clone is pure: `ns(callsite,
     child_id)` has no counter)."""
-    e1 = FlowEngine(call_with_inner_pause())
+    e1 = FlowEngine(call_with_inner_pause(), grow_builder=build_grow)
     _replay_one(e1, "bridge", {"payload": "go"})
     ids1 = {n for n in e1.flow.nodes if n.startswith("bridge/")}
 
-    e2 = FlowEngine(call_with_inner_pause())
+    e2 = FlowEngine(call_with_inner_pause(), grow_builder=build_grow)
     _replay_one(e2, "bridge", {"payload": "go"})
     ids2 = {n for n in e2.flow.nodes if n.startswith("bridge/")}
 
@@ -105,14 +103,18 @@ def test_replay_reproduces_live_overlay_nested_oracle():
     flow.nodes / commit_as / depth / _spawner_expansion keys / edge_state (set-equality) the
     live engine grew. Uses a NESTED (CALL-in-CALL) fixture — a flat fixture is blind to a
     dropped recursion."""
-    live = FlowEngine(call_in_call_with_inner_pause(), run_inputs={"payload": "go"})
+    live = FlowEngine(
+        call_in_call_with_inner_pause(),
+        run_inputs={"payload": "go"},
+        grow_builder=build_grow,
+    )
     assert isinstance(list(live.run())[-1], RunPaused)
     live_overlay = _capture_overlay(live)
     ckpt = RunCheckpoint.loads(live.snapshot().dumps())
 
     # Replay in isolation (before restore() wires it in): a bare fresh engine on a
     # recompiled flow + _replay_expansions reproduces the overlay.
-    fresh = FlowEngine(call_in_call_with_inner_pause())
+    fresh = FlowEngine(call_in_call_with_inner_pause(), grow_builder=build_grow)
     fresh._replay_expansions(ckpt.expansions)
     replayed = _capture_overlay(fresh)
 
@@ -176,7 +178,11 @@ def test_restore_on_grown_flow_raises():
     re-grown one) raises ValueError BEFORE replay (add_subgraph is non-idempotent)."""
     import pytest
 
-    live = FlowEngine(call_with_inner_pause(), run_inputs={"payload": "go"})
+    live = FlowEngine(
+        call_with_inner_pause(),
+        run_inputs={"payload": "go"},
+        grow_builder=build_grow,
+    )
     assert isinstance(list(live.run())[-1], RunPaused)
     ckpt = RunCheckpoint.loads(live.snapshot().dumps())
     with pytest.raises(ValueError, match="requires a clean flow"):
@@ -190,7 +196,7 @@ def _durable_resume(make_flow, run_inputs, answer):
     """Run `make_flow()` to a pause, snapshot->dumps->loads->restore on a SECOND freshly
     built flow (true cross-process), deliver `answer` to the parked leaf, drive to terminal.
     Returns (live_terminal, durable_terminal, restored_engine)."""
-    live = FlowEngine(make_flow(), run_inputs=run_inputs)
+    live = FlowEngine(make_flow(), run_inputs=run_inputs, grow_builder=build_grow)
     live_evs = list(live.run())
     assert isinstance(live_evs[-1], RunPaused)
     parked = live.snapshot().paused_nodes
@@ -198,10 +204,10 @@ def _durable_resume(make_flow, run_inputs, answer):
         commands=[DeliverAnswerCommand(node_id=p, value=answer) for p in parked]))[-1]
 
     # restart fresh: a true second process re-runs to the SAME pause, persists, restores.
-    proc1 = FlowEngine(make_flow(), run_inputs=run_inputs)
+    proc1 = FlowEngine(make_flow(), run_inputs=run_inputs, grow_builder=build_grow)
     assert isinstance(list(proc1.run())[-1], RunPaused)
     ckpt = RunCheckpoint.loads(proc1.snapshot().dumps())
-    fresh = FlowEngine.restore(make_flow(), ckpt)
+    fresh = FlowEngine.restore(make_flow(), ckpt, grow_builder=build_grow)
     parked2 = ckpt.paused_nodes
     dur_term = list(fresh.resume(
         commands=[DeliverAnswerCommand(node_id=p, value=answer) for p in parked2]))[-1]
@@ -250,13 +256,21 @@ def _map_n0_via_sibling():
 def test_durable_map_n0_via_sibling_resumes_on_fresh_flow():
     """A MAP over [] that fired before a sibling pause restores + resumes cross-process.
     The replay rebuilds EndNode.list_(n=0) (a 0-incoming root that emits [])."""
-    proc1 = FlowEngine(_map_n0_via_sibling(), run_inputs={"items": []})
+    proc1 = FlowEngine(
+        _map_n0_via_sibling(),
+        run_inputs={"items": []},
+        grow_builder=build_grow,
+    )
     assert isinstance(list(proc1.run())[-1], RunPaused)
     ckpt = RunCheckpoint.loads(proc1.snapshot().dumps())
     maps = [e for e in ckpt.expansions if e.spawner_id == "empty"]
     assert len(maps) == 1 and maps[0].seed == []          # N=0 seed (empty records list) persisted
 
-    fresh = FlowEngine.restore(_map_n0_via_sibling(), ckpt)
+    fresh = FlowEngine.restore(
+        _map_n0_via_sibling(),
+        ckpt,
+        grow_builder=build_grow,
+    )
     assert "empty/__end__" in fresh.flow.nodes              # N=0 fan-in node rebuilt
     term = list(fresh.resume(
         commands=[DeliverAnswerCommand(node_id=ckpt.paused_nodes[0], value="A")]))[-1]
@@ -297,7 +311,11 @@ def test_durable_two_pause_agent_resumes_on_fresh_flow(monkeypatch):
     assert rec.status == "paused"
     ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())
 
-    fresh = FlowEngine.restore(load_flow(ASK).compiled, ckpt)
+    fresh = FlowEngine.restore(
+        load_flow(ASK).compiled,
+        ckpt,
+        grow_builder=build_grow,
+    )
     # resume past pause 1 -> the restored engine grows segment 2 and parks at pause 2 (invoke #2).
     evs1 = list(fresh.resume(commands=[resume_command(loaded, ckpt.pause_reasons[0], "a1")]))
     paused2 = [e for e in evs1 if isinstance(e, RunPaused)]
@@ -335,7 +353,11 @@ def test_two_hop_agent_resnapshot_ledger_matches_live(monkeypatch):
     monkeypatch.setattr(llm, "model_from_config", lambda cfg: chat)
     proc1 = run_flow(load_flow(ASK), {})                   # pause 1 (invoke #1)
     ckpt1 = RunCheckpoint.loads(proc1.checkpoint.dumps())
-    hop1 = FlowEngine.restore(load_flow(ASK).compiled, ckpt1)
+    hop1 = FlowEngine.restore(
+        load_flow(ASK).compiled,
+        ckpt1,
+        grow_builder=build_grow,
+    )
     list(hop1.resume(commands=[resume_command(loaded, ckpt1.pause_reasons[0], "a1")]))  # pause 2 (invoke #2)
     hop1_tree = hop1.snapshot().expansions
     # the re-snapshot after a durable hop is the FULL tree, not a truncated/duplicated one.
@@ -344,7 +366,11 @@ def test_two_hop_agent_resnapshot_ledger_matches_live(monkeypatch):
 
     # --- hop 2: a 3rd process restores the re-snapshot and finishes ---
     ckpt2 = RunCheckpoint.loads(hop1.snapshot().dumps())
-    hop2 = FlowEngine.restore(load_flow(ASK).compiled, ckpt2)
+    hop2 = FlowEngine.restore(
+        load_flow(ASK).compiled,
+        ckpt2,
+        grow_builder=build_grow,
+    )
     evs = list(hop2.resume(commands=[resume_command(loaded, ckpt2.pause_reasons[0], "a2")]))  # invoke #3
     assert isinstance(evs[-1], RunSucceeded) and evs[-1].output == "FINAL"
 
@@ -356,13 +382,21 @@ def test_durable_call_in_call_resumes_on_fresh_flow():
     """A CALL-in-CALL grown to a deep inner pause restores + resumes cross-process on a
     freshly recompiled flow. Asserts the doubly-namespaced leaf, the depth tree, and the
     nested-spawner parent-pointer were all rebuilt by the recursion."""
-    proc1 = FlowEngine(call_in_call_with_inner_pause(), run_inputs={"payload": "go"})
+    proc1 = FlowEngine(
+        call_in_call_with_inner_pause(),
+        run_inputs={"payload": "go"},
+        grow_builder=build_grow,
+    )
     assert isinstance(list(proc1.run())[-1], RunPaused)
     ckpt = RunCheckpoint.loads(proc1.snapshot().dumps())
     live_term = list(proc1.resume(
         commands=[DeliverAnswerCommand(node_id=ckpt.paused_nodes[0], value="A")]))[-1]
 
-    fresh = FlowEngine.restore(call_in_call_with_inner_pause(), ckpt)
+    fresh = FlowEngine.restore(
+        call_in_call_with_inner_pause(),
+        ckpt,
+        grow_builder=build_grow,
+    )
     assert "outer/deep/ask" in fresh.flow.nodes                 # doubly namespaced
     assert fresh.depth["outer/deep"] == 1
     assert fresh.depth["outer/__end__"] == 1
@@ -401,7 +435,11 @@ def test_durable_map_of_call_resumes_on_fresh_flow():
     """A MAP-of-CALL grown to a deep per-element pause restores + resumes cross-process. The
     nested call GrowRecord lives under the map record's flat `children` (namespaced under each#0);
     the replay recurses into it and rebuilds the doubly-namespaced clone."""
-    proc1 = FlowEngine(_map_of_call_with_inner_pause(), run_inputs={"items": ["a"]})
+    proc1 = FlowEngine(
+        _map_of_call_with_inner_pause(),
+        run_inputs={"items": ["a"]},
+        grow_builder=build_grow,
+    )
     assert isinstance(list(proc1.run())[-1], RunPaused)
     ckpt = RunCheckpoint.loads(proc1.snapshot().dumps())
     top_maps = [e for e in ckpt.expansions if e.spawner_id == "each"]
@@ -411,7 +449,11 @@ def test_durable_map_of_call_resumes_on_fresh_flow():
     live_term = list(proc1.resume(
         commands=[DeliverAnswerCommand(node_id=ckpt.paused_nodes[0], value="A")]))[-1]
 
-    fresh = FlowEngine.restore(_map_of_call_with_inner_pause(), ckpt)
+    fresh = FlowEngine.restore(
+        _map_of_call_with_inner_pause(),
+        ckpt,
+        grow_builder=build_grow,
+    )
     assert any(n.startswith("each#0/inner_bridge/") for n in fresh.flow.nodes)  # doubly namespaced
     dur_term = list(fresh.resume(
         commands=[DeliverAnswerCommand(node_id=ckpt.paused_nodes[0], value="A")]))[-1]
@@ -469,7 +511,11 @@ def test_durable_agent_under_call_resumes_on_fresh_flow(monkeypatch):
     assert len(calls) == 1
     assert [c.spawner_id for c in calls[0].children] == ["gate/agent"]
 
-    fresh = FlowEngine.restore(load_flow(_CALL_WRAPS_AGENT).compiled, ckpt)
+    fresh = FlowEngine.restore(
+        load_flow(_CALL_WRAPS_AGENT).compiled,
+        ckpt,
+        grow_builder=build_grow,
+    )
     assert reason.node_id in fresh.flow.nodes                  # the deep leaf rebuilt by replay
     evs = list(fresh.resume(commands=[resume_command(loaded, ckpt.pause_reasons[0], "yes")]))
     assert isinstance(evs[-1], RunSucceeded) and evs[-1].output == "FINAL"
@@ -495,7 +541,11 @@ def test_durable_two_pause_agent_under_call_resumes_on_fresh_flow(monkeypatch):
     assert rec.status == "paused"
     ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())
 
-    fresh = FlowEngine.restore(load_flow(_CALL_WRAPS_AGENT).compiled, ckpt)
+    fresh = FlowEngine.restore(
+        load_flow(_CALL_WRAPS_AGENT).compiled,
+        ckpt,
+        grow_builder=build_grow,
+    )
     # resume past pause 1 -> the restored engine grows segment 2 and parks at pause 2 (invoke #2).
     evs1 = list(fresh.resume(commands=[resume_command(loaded, ckpt.pause_reasons[0], "a1")]))
     paused2 = [e for e in evs1 if isinstance(e, RunPaused)]
@@ -556,11 +606,19 @@ def test_restore_does_not_mutate_a_held_checkpoint():
     """restore() deep-copies the pool + expansion descriptors (symmetric with snapshot()'s
     write-side copy), so resuming a restored engine does not retro-mutate a checkpoint object
     the host still holds (reachable via the public resume_flow(checkpoint=))."""
-    proc1 = FlowEngine(call_with_inner_pause(), run_inputs={"payload": "go"})
+    proc1 = FlowEngine(
+        call_with_inner_pause(),
+        run_inputs={"payload": "go"},
+        grow_builder=build_grow,
+    )
     assert isinstance(list(proc1.run())[-1], RunPaused)
     held = proc1.snapshot()                                    # a retained object (no loads())
     before_keys = set(held.pool.store.keys())
-    e2 = FlowEngine.restore(call_with_inner_pause(), held)
+    e2 = FlowEngine.restore(
+        call_with_inner_pause(),
+        held,
+        grow_builder=build_grow,
+    )
     assert held.pool is not e2.pool                            # deep-copied, not aliased
     assert held.expansions[0] is not e2.expansions[0]
     list(e2.resume(commands=[DeliverAnswerCommand(node_id=e2.paused[0][0], value="approve")]))
@@ -576,14 +634,6 @@ def test_replay_does_not_promote_a_nested_child(monkeypatch):
     inner = GrowRecord(spawner_id="inner", seed={}, children=[])
     top = GrowRecord(spawner_id="agent", seed={}, children=[inner])
     e = FlowEngine(_side_counter_flow([]))
-
-    class _FakeSpawner:
-        # so the fold's `flow.nodes[...]/.replay_grow` succeed without cloning a real subgraph
-        def replay_grow(self, seed):
-            return None
-
-    e.flow.nodes["agent"] = _FakeSpawner()
-    e.flow.nodes["inner"] = _FakeSpawner()
     monkeypatch.setattr(e, "_apply_grow", lambda *a, **k: None)
     e.expansions = []
     e._replay_expansions([top])
@@ -591,14 +641,18 @@ def test_replay_does_not_promote_a_nested_child(monkeypatch):
 
 
 def test_grow_loop_schedule_false_registers_without_scheduling():
-    """Replaying ONE loop iteration (`replay_grow(seed)` + `_apply_grow(schedule=False)`) rebuilds
+    """Replaying one loop seed through `_apply_grow(schedule=False)` rebuilds
     the iteration overlay (clones + registers the `#0/` body namespace AND the fresh `loop~1`
     driver, re-attaches the single record to `_origin_record`) but schedules NOTHING and does not
     trip the node-budget guard — the suppressed replay path, mirroring the CALL/MAP replay."""
     from agent_composer.compose.loader import load_flow
     from tests.engine.test_loop_run import COUNTER
 
-    engine = FlowEngine(load_flow(COUNTER).compiled, run_inputs={})
+    engine = FlowEngine(
+        load_flow(COUNTER).compiled,
+        run_inputs={},
+        grow_builder=build_grow,
+    )
     spawner_id = "loop"
     record = {"n": 0, "exited": False}
     rec = _replay_one(engine, spawner_id, (record, 0))
@@ -652,7 +706,7 @@ def test_replay_reproduces_live_loop_overlay():
     assert loop_descs[0].seed                           # the live iteration (record, index) seed
 
     # Replay in isolation onto a FRESH recompiled flow (before restore() wires it in).
-    fresh = FlowEngine(load_flow(LOOP_CHAT).compiled)
+    fresh = FlowEngine(load_flow(LOOP_CHAT).compiled, grow_builder=build_grow)
     fresh._replay_expansions(ckpt.expansions)
 
     # Set-for-set overlay equality against the live engine — the rebuilt window {body_0, loop~1}
@@ -708,7 +762,11 @@ def test_durable_loop_resumes_on_fresh_flow():
     assert not any(k.startswith("loop#1/") for k in ckpt.node_state)
 
     # --- Restore on a FRESH recompiled flow and drive the remaining turns to terminal.
-    fresh = FlowEngine.restore(load_flow(LOOP_CHAT).compiled, ckpt)
+    fresh = FlowEngine.restore(
+        load_flow(LOOP_CHAT).compiled,
+        ckpt,
+        grow_builder=build_grow,
+    )
 
     # The replay rebuilt the live iteration's namespaced human_input leaf on the fresh flow.
     parked_leaf = ckpt.pause_reasons[0].node_id
@@ -762,7 +820,11 @@ def test_loop_multi_hop_resnapshot_ledger_matches_live():
     assert len(hop1_descs) == 1 and hop1_descs[0].seed                # pause-1 ledger: one record
 
     # hop 1: restore on a FRESH recompiled flow, resume past pause 1 delivering "a" -> pause 2.
-    hop1 = FlowEngine.restore(load_flow(LOOP_CHAT).compiled, ckpt1)
+    hop1 = FlowEngine.restore(
+        load_flow(LOOP_CHAT).compiled,
+        ckpt1,
+        grow_builder=build_grow,
+    )
     dur2 = resume_flow(loaded, engine=hop1,
                        commands=[resume_command(loaded, ckpt1.pause_reasons[0], "a")])
     assert dur2.status == "paused", dur2.error
@@ -781,7 +843,11 @@ def test_loop_multi_hop_resnapshot_ledger_matches_live():
 
     # --- hop 2: a 3rd process restores the re-snapshot and finishes. Deliver "bye" -> fold sets
     # exited=true -> predicate false -> succeeds. Two messages delivered total: "a" then "bye".
-    hop2 = FlowEngine.restore(load_flow(LOOP_CHAT).compiled, ckpt2)
+    hop2 = FlowEngine.restore(
+        load_flow(LOOP_CHAT).compiled,
+        ckpt2,
+        grow_builder=build_grow,
+    )
     dur3 = resume_flow(loaded, engine=hop2,
                        commands=[resume_command(loaded, ckpt2.pause_reasons[0], "bye")])
     assert dur3.status == "succeeded", dur3.error
@@ -840,7 +906,11 @@ def test_nested_loop_in_call_ledger_single_record_nested_under_call():
     the run crashes."""
     from agent_composer.compose.loader import load_flow
 
-    engine = FlowEngine(load_flow(_NESTED_LOOP_IN_CALL).compiled, run_inputs={})
+    engine = FlowEngine(
+        load_flow(_NESTED_LOOP_IN_CALL).compiled,
+        run_inputs={},
+        grow_builder=build_grow,
+    )
     terminal = list(engine.run())[-1]
     assert isinstance(terminal, RunSucceeded)
     assert terminal.output == {"n": 7}                      # 10 - 3 body runs = 7
@@ -931,7 +1001,11 @@ def test_nested_loop_in_call_durable_hop_bounded_and_matches_live():
     ckpt_tree = [(r.spawner_id, [c.spawner_id for c in r.children]) for r in ckpt.expansions]
     assert ckpt_tree == [("wrap", ["wrap/loop"])]
 
-    fresh = FlowEngine.restore(load_flow(_NESTED_CHAT_LOOP_IN_CALL).compiled, ckpt)
+    fresh = FlowEngine.restore(
+        load_flow(_NESTED_CHAT_LOOP_IN_CALL).compiled,
+        ckpt,
+        grow_builder=build_grow,
+    )
     assert ckpt.pause_reasons[0].node_id in fresh.flow.nodes    # deep leaf rebuilt by replay
     dur2 = resume_flow(loaded, engine=fresh,
                        commands=[resume_command(loaded, ckpt.pause_reasons[0], "hi")])
@@ -949,7 +1023,7 @@ def test_nested_loop_in_call_durable_hop_bounded_and_matches_live():
 def test_snapshot_captures_num_workers():
     from agent_composer.runtime.engine import FlowEngine
     from tests.engine.test_engine_expansions_ledger import call_with_inner_pause
-    eng = FlowEngine(call_with_inner_pause(), num_workers=3)
+    eng = FlowEngine(call_with_inner_pause(), num_workers=3, grow_builder=build_grow)
     assert eng.snapshot().num_workers == 3
 
 
@@ -957,12 +1031,14 @@ def test_restore_defaults_to_checkpointed_count_and_override():
     """restore() rebuilds at the checkpoint's num_workers; an explicit kwarg overrides."""
     from agent_composer.runtime.engine import FlowEngine
     from tests.engine.test_engine_expansions_ledger import call_with_inner_pause
-    src = FlowEngine(call_with_inner_pause(), num_workers=2)
+    src = FlowEngine(call_with_inner_pause(), num_workers=2, grow_builder=build_grow)
     ckpt = src.snapshot()
     # fresh clean flow per restore (restore mutates flow in place; replay needs a clean graph)
-    e_default = FlowEngine.restore(call_with_inner_pause(), ckpt)
+    e_default = FlowEngine.restore(call_with_inner_pause(), ckpt, grow_builder=build_grow)
     assert e_default.num_workers == 2
-    e_override = FlowEngine.restore(call_with_inner_pause(), ckpt, num_workers=0)
+    e_override = FlowEngine.restore(
+        call_with_inner_pause(), ckpt, num_workers=0, grow_builder=build_grow
+    )
     assert e_override.num_workers == 0
 
 

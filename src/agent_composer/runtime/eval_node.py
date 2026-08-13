@@ -119,9 +119,10 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
                     f"node {node.id!r} run() returned {type(outcome).__name__}, not a NodeResult"
                 )
         if isinstance(result, Grow):
-            # A spawner grows the live graph: hand the self-describing `Grow` to the dispatcher's
-            # `_apply_grow` via NodeExpanded. Any non-spawner kind returning a Grow is a clear error
-            # (the graph only grows from spawners).
+            # A spawner grows the live graph: hand its seed-first `Grow` to the dispatcher's
+            # `_apply_grow` via NodeExpanded. The injected builder constructs topology there. Any
+            # non-spawner kind returning a Grow is a clear error (the graph only grows from
+            # spawners).
             if not node.is_spawner:
                 # `node.kind.value` here is MESSAGE-ONLY (a diagnostic string), not dispatch —
                 # the gate is the kind-blind `is_spawner` trait, so the census stays 0.

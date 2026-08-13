@@ -7,12 +7,10 @@ NO `over` attribute and no `${...}` source on the node. The `over` SOURCE bindin
 `flow.wiring[id]["over"]` (mirroring WaitNode's timed `until`), pre-resolved into `inputs["over"]`
 by the engine's `eval_node` before `run`.
 
-`run` returns one `Grow(Flow)` — self-describing expansion: it builds the whole MAP fan-in
-subgraph (`map_subgraph` — N per-element child clones PLUS a synthesized `EndNode.list_` fan-in over
-the child ENDs) and the engine's generic `_apply_grow` splices it into the live graph, with a
-per-kind MAP residual (depth/refdepth/finish-mark). The `Grow.seed` is the raw list of per-element
-records (the durable builder input); an empty `over` -> a subgraph whose sole node is the list-`END`
-(it emits `[]`). The per-element call-args go RAW: the spliced child START_ID owns omitted-input
+`run` returns one seed-first `Grow` carrying the raw list of per-element records. The compile-owned
+injected builder constructs the MAP fan-in, and the engine's generic `_apply_grow` splices it. An
+empty `over` builds a synthetic start wired directly to the list END (which emits `[]`). The
+per-element call-args go RAW: the spliced child START_ID owns omitted-input
 defaulting (its params carry default/required), so the driver no longer pre-defaults.
 `child`/`child_inputs` are baked at load by `compose.nodes.map.build`; `child_inputs` is read by
 compile validation (`check_ref_map_types`). The child's asserts ride its own compiled boundary
@@ -22,7 +20,6 @@ engine's `num_workers`); it is carried for the over case.
 
 from typing import Any, Callable, ClassVar, Optional
 
-from agent_composer.compile.expand import map_subgraph
 from agent_composer.expr import eval_binding, resolve_reference
 from agent_composer.nodes.base import Grow, Node, NodeKind
 
@@ -33,9 +30,8 @@ class MapNode(Node):
 
     The MAP half of the REF/MAP pair (the REF half is
     [`CallNode`][agent_composer.nodes.call.node.CallNode]). The `over` source is pre-resolved into
-    `inputs["over"]` by the engine bind seam; `run` returns one `Grow(Flow)` — it builds the
-    whole MAP fan-in (N per-element child clones + a synthesized list END) via `map_subgraph`, and
-    the engine's generic `_apply_grow` splices it and grows the live graph. The spliced child START
+    `inputs["over"]` by the engine bind seam; `run` returns one seed-first `Grow`. The injected
+    compile builder constructs the MAP fan-in and the engine splices it. The spliced child START
     owns omitted-input defaulting, so per-element call-args go raw.
 
     Args:
@@ -59,7 +55,7 @@ class MapNode(Node):
     """
 
     kind = NodeKind.MAP
-    is_spawner: ClassVar[bool] = True  # grows the graph: run() returns a Grow(Flow)
+    is_spawner: ClassVar[bool] = True  # grows the graph: run() returns a seed-first Grow
     binds_per_item: ClassVar[bool] = True  # binds call-args PER ELEMENT via `bind_item`, not up front
     grow_depth_delta: ClassVar[int] = 1  # each child is one REF level deeper (bounded by MAX_REF_DEPTH)
 
@@ -98,15 +94,7 @@ class MapNode(Node):
         if self.child is None:
             raise RuntimeError(f"MAP node {self.id!r}: child flow {self.flow_id!r} not baked")
         # Per-element call-args RAW (no driver pre-default): the spliced child START_ID fills omitted
-        # inputs from its params' declared defaults. `run` is self-describing — it builds the whole
-        # MAP fan-in subgraph and returns a `Grow` for the engine to splice generically;
-        # `seed=records` is the durable builder input (a resumed run rebuilds the same subgraph via
-        # `map_subgraph(child, self.id, records)`).
+        # inputs from its params' declared defaults. The node describes growth with only the
+        # per-element records; the compile-owned injected builder constructs the MAP fan-in.
         records = [dict(bind_item(el)) for el in inputs["over"]]
-        return Grow(map_subgraph(self.child, spawner_id=self.id, records=records), seed=records)
-
-    def replay_grow(self, seed: Any):
-        """Durable-replay inverse of `run`: rebuild the whole MAP fan-in subgraph from the persisted
-        per-element records (`seed`) via the SAME `map_subgraph` builder — no body re-run. The
-        resolved `over:` list is captured on the seed, so replay needs no re-binding."""
-        return map_subgraph(self.child, spawner_id=self.id, records=[dict(r) for r in seed])
+        return Grow(seed=records)

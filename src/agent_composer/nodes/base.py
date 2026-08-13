@@ -31,9 +31,6 @@ from agent_composer.typesys.seeding import apply_defaults
 from agent_composer.typesys.values import Type
 
 if TYPE_CHECKING:
-    # Import-cycle guard: `compile.model` imports `nodes.base`, so `Flow` is only pulled in for
-    # type checking. `Grow.subgraph`/`replay_grow` annotate it as a forward-ref string at runtime.
-    from agent_composer.compile.model import Flow
     from agent_composer.events import SourceRange
 
 
@@ -140,21 +137,19 @@ class Pause:
 
 @dataclass(frozen=True)
 class Grow:
-    """A spawner expands into a subgraph. The engine splices `subgraph` generically and
-    applies `prune`. Fields:
-      - `subgraph`: the `Flow` to splice — the builder's self-describing graph fragment. The engine
-        schedules its `start_id` (one node) and fans out downstream via `_advance`; a `Flow` whose
-        terminal carries a baked `commit_as=<spawner id>` commits under the spawner on success.
+    """A spawner describes one deterministic graph expansion for the engine to build.
+
+    Fields:
+      - `seed`: the pure input to the compile-owned growth builder. Kind-shaped but opaque to the
+        engine (a call record dict, map records list, agent segment, or loop `(record, index)`).
+        The same canonical value is persisted so durable replay rebuilds identical topology without
+        re-running the node that produced it.
       - `prune`: ids to retire in the same step (∅ for call/map; a self-respawn loop's finished
         iteration ids). Defaults to ∅.
-      - `seed`: the PURE BUILDER INPUT the engine persists so a resumed run can rebuild the spliced
-        subgraph without re-running non-deterministic nodes (e.g. an agent's LLM turn). Kind-shaped
-        but OPAQUE to the engine (a call record dict, a map records list, agent segments, a loop
-        (record, index)); it is durability data, NOT a per-kind policy switch."""
+    """
 
-    subgraph: "Flow"
+    seed: Any
     prune: "frozenset[str]" = field(default_factory=frozenset)
-    seed: Any = None
 
 
 # The closed sum a pure `run(inputs)` returns.
@@ -460,19 +455,6 @@ class Node(ABC):
         desugar recorded one in `wiring_labels`. The default reproduces the plain `input '<param>'`
         text, so a message about an authored param is byte-identical to before."""
         return self.wiring_labels.get(param, f"input {param!r}")
-
-    def replay_grow(self, seed: Any) -> "Flow":
-        """Durable-replay seam (the READ half of `Grow`): rebuild THIS spawner's subgraph from the
-        persisted `seed` (the pure builder input captured on the live `Grow.seed`). The engine's
-        `_replay_expansions` calls it on restore to re-grow a paused run's expanded subgraphs in a
-        fresh process, WITHOUT re-running the non-deterministic body that first produced the seed
-        (an agent's LLM turn, a resolved `over:` list). It is the pure inverse of the node's own
-        live grow: `run()` builds the subgraph AND returns the seed; `replay_grow(seed)` rebuilds
-        the SAME subgraph from that seed alone. Only spawners (`is_spawner`) ever appear in the
-        durable ledger, so the base default is a loud error for a non-spawner."""
-        raise NotImplementedError(
-            f"node {self.id!r} ({type(self).__name__}) is not a spawner and cannot replay_grow"
-        )
 
     @staticmethod
     def _assert_holds(expr: str, record: dict) -> bool:

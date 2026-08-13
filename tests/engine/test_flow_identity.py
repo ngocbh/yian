@@ -365,6 +365,53 @@ def test_flow_fingerprint_redacts_uri_credentials_in_node_env():
         assert credential not in manifest_text
 
 
+def test_flow_fingerprint_redacts_credentials_in_jdbc_wrapper_uri():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["DATABASE_URL"] = (
+        "jdbc:postgresql://alice:first-password@db.example:5432/app"
+        "?sslmode=require&password=first-query-password&application_name=worker"
+    )
+    second.nodes["step"].env["DATABASE_URL"] = (
+        "jdbc:postgresql://bob:second-password@db.example:5432/app"
+        "?sslmode=require&password=second-query-password&application_name=worker"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first-password", "first-query-password"):
+        assert credential not in manifest_text
+
+    for changed_uri in (
+        second.nodes["step"].env["DATABASE_URL"].replace(
+            "db.example", "other.example"
+        ),
+        second.nodes["step"].env["DATABASE_URL"].replace("/app?", "/other?"),
+        second.nodes["step"].env["DATABASE_URL"].replace(
+            "application_name=worker", "application_name=scheduler"
+        ),
+    ):
+        changed = copy.deepcopy(second)
+        changed.nodes["step"].env["DATABASE_URL"] = changed_uri
+        assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_flow_fingerprint_redacts_uri_credentials_after_leading_whitespace():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["ENDPOINT"] = (
+        "  https://alice:first-password@api.example/v1?token=first-token"
+    )
+    second.nodes["step"].env["ENDPOINT"] = (
+        "  https://bob:second-password@api.example/v1?token=second-token"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first-password", "first-token"):
+        assert credential not in manifest_text
+
+
 def test_flow_fingerprint_redacts_uri_credentials_in_nested_mapping_keys():
     """Credential-only key changes collapse without losing duplicate entry semantics."""
     first = _compiled()
@@ -902,6 +949,9 @@ def test_wait_manifest_redacts_credentials_recursively_but_keeps_semantics():
         "basicAuth",
         "http.authorization",
         "basicauth",
+        "basic_auth",
+        "proxy_auth",
+        "CUSTOM_AUTH",
         "SIG",
         "SIGNATURE",
         "X-Amz-Signature",
@@ -932,6 +982,45 @@ def test_flow_fingerprint_redacts_common_provider_credentials(credential_key):
 
     assert flow_fingerprint(first) == flow_fingerprint(second)
     assert "first-provider-secret" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+
+def test_flow_fingerprint_redacts_nested_docker_auth_config():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["container"] = {
+        "settings": [
+            {
+                "DOCKER_AUTH_CONFIG": {
+                    "auths": {
+                        "registry.example": {
+                            "auth": "first-docker-auth",
+                            "identitytoken": "first-identity-token",
+                        }
+                    }
+                }
+            }
+        ]
+    }
+    second.nodes["step"].env["container"] = {
+        "settings": [
+            {
+                "DOCKER_AUTH_CONFIG": {
+                    "auths": {
+                        "registry.example": {
+                            "auth": "second-docker-auth",
+                            "identitytoken": "second-identity-token",
+                        }
+                    }
+                }
+            }
+        ]
+    }
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    assert "DOCKER_AUTH_CONFIG" not in manifest_text
+    assert "first-docker-auth" not in manifest_text
+    assert "first-identity-token" not in manifest_text
 
 
 @pytest.mark.parametrize(
@@ -988,6 +1077,9 @@ def test_compact_credential_matching_keeps_unrelated_config(config_key):
         "pageToken",
         "custom_service_signature",
         "custom_service_token",
+        "oauth",
+        "reauth",
+        "custom_auth",
     ],
 )
 def test_semantic_credential_like_config_remains_identity_bearing(config_key):

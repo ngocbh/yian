@@ -56,6 +56,12 @@ class _SeedSpawner(Node):
         return Grow(seed={"value": "built"})
 
 
+class _DepthSeedSpawner(_SeedSpawner):
+    """A seed spawner whose growth consumes one reference-depth level."""
+
+    grow_depth_delta = 1
+
+
 _CANONICAL_MUTABLE_SEED = {
     "value": "built",
     "nested": {"items": [{"label": "stable"}]},
@@ -83,6 +89,13 @@ def _dynamic_flow():
     )
 
 
+def _depth_dynamic_flow():
+    return _graph(
+        [_DepthSeedSpawner("spawn")],
+        [(START_ID, "spawn"), ("spawn", END_ID)],
+    )
+
+
 def _mutable_seed_flow():
     return _graph(
         [_MutableSeedSpawner("spawn")],
@@ -100,6 +113,24 @@ def _fragment(spawner, seed):
         start_id=leaf.id,
         end_id=leaf.id,
     )
+
+
+def _growth_state(engine):
+    """Snapshot every dispatcher-owned structure growth validation must not change."""
+    return {
+        "nodes": dict(engine.flow.nodes),
+        "edges": list(engine.flow.edges),
+        "wiring": copy.deepcopy(engine.flow.wiring),
+        "outgoing": {node_id: list(edges) for node_id, edges in engine.flow._outgoing.items()},
+        "incoming": {node_id: list(edges) for node_id, edges in engine.flow._incoming.items()},
+        "node_state": dict(engine.sm.node_state),
+        "edge_state": dict(engine.sm.edge_state),
+        "depth": dict(engine.depth),
+        "spawner_expansion": copy.deepcopy(engine._spawner_expansion),
+        "origin_record": copy.deepcopy(engine._origin_record),
+        "expansions": copy.deepcopy(engine.expansions),
+        "ready": engine._ready_snapshot(),
+    }
 
 
 @pytest.mark.parametrize("num_workers", [0, 3])
@@ -142,6 +173,41 @@ def test_builder_failure_precedes_topology_and_ledger_mutation(num_workers):
     assert flow.edges == original_edges
     assert flow.wiring == original_wiring
     assert engine.expansions == []
+    assert not any(isinstance(event, NodeExpanded) for event in events)
+
+
+@pytest.mark.parametrize("num_workers", [0, 3])
+@pytest.mark.parametrize("limit", ["MAX_TOTAL_NODES", "MAX_REF_DEPTH"])
+def test_failed_growth_limit_validation_is_atomic(monkeypatch, num_workers, limit):
+    """A rejected fragment leaves no partial runtime overlay or observable expand event."""
+    from agent_composer.runtime import engine as runtime_engine
+
+    flow = _depth_dynamic_flow() if limit == "MAX_REF_DEPTH" else _dynamic_flow()
+    before_validation = None
+
+    def builder(spawner, seed):
+        nonlocal before_validation
+        before_validation = _growth_state(engine)
+        return _fragment(spawner, seed)
+
+    engine = FlowEngine(flow, num_workers=num_workers, grow_builder=builder)
+    existing = GrowRecord(spawner_id="existing", seed={"value": "kept"}, children=[])
+    engine.depth["existing"] = 2
+    engine._spawner_expansion["existing"] = existing
+    engine._origin_record["existing"] = existing
+    engine.expansions.append(existing)
+    if limit == "MAX_TOTAL_NODES":
+        monkeypatch.setattr(runtime_engine, "MAX_TOTAL_NODES", len(flow.nodes))
+    else:
+        engine.depth["spawn"] = runtime_engine.MAX_REF_DEPTH
+
+    events = list(engine.run())
+
+    assert isinstance(events[-1], RunFailed)
+    expected_error = "node budget" if limit == "MAX_TOTAL_NODES" else "MAX_REF_DEPTH"
+    assert expected_error in events[-1].error
+    assert before_validation is not None
+    assert _growth_state(engine) == before_validation
     assert not any(isinstance(event, NodeExpanded) for event in events)
 
 

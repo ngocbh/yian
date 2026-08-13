@@ -687,9 +687,9 @@ class FlowEngine:
             self._replay_expansions(rec.children, is_top_level=False)
 
     def _apply_grow(self, spawner_id, grow, *, schedule=True, record=None):
-        """Generic growth core (kind-BLIND): build and splice a `Flow`, register it, enforce
-        MAX_TOTAL_NODES, record ONE uniform `GrowRecord` in the durable ledger, apply the trait-driven
-        growth bookkeeping (boundary asserts, REF depth, `_spawner_expansion` stamps, origin
+        """Generic growth core (kind-BLIND): build a `Flow`, validate its bounds, splice/register
+        it, record ONE uniform `GrowRecord` in the durable ledger, apply the trait-driven growth
+        bookkeeping (boundary asserts, REF depth, `_spawner_expansion` stamps, origin
         `commit_as`), finish/mark the spawner, apply `grow.prune` (enabling loop self-prune), and
         schedule its `start_id` (the single entry, which fans out downstream via `_advance`).
         `schedule=False` suppresses scheduling+budget on replay; `record` reuses
@@ -712,11 +712,15 @@ class FlowEngine:
         canonical_seed = copy.deepcopy(grow.seed)
         sg = self.grow_builder(spawner_node, copy.deepcopy(canonical_seed))
         with self.sm.lock:
-            self.flow.add_subgraph(sg.nodes, sg.edges, sg.wiring)
-            self.sm.register(list(sg.nodes), sg.edges)
-            if schedule and len(self.flow.nodes) > MAX_TOTAL_NODES:
+            projected_node_count = len(self.flow.nodes) + sum(
+                node_id not in self.flow.nodes for node_id in sg.nodes
+            )
+            if schedule and projected_node_count > MAX_TOTAL_NODES:
                 raise RuntimeError(
                     f"expansion exceeded node budget ({MAX_TOTAL_NODES}) at spawner {spawner_id!r}")
+            grow_depth = self._validated_grow_depth(spawner_id, schedule=schedule)
+            self.flow.add_subgraph(sg.nodes, sg.edges, sg.wiring)
+            self.sm.register(list(sg.nodes), sg.edges)
         # Attribution origin (kind-blind): a loop driver clone `L~k` attributes its grow/commit to the
         # compiled loop `L` via `origin_id`; every other node has `origin_id is None`, so `origin` is
         # just the spawner id (no behavior change). The durable ledger keys on `origin`, so a loop's
@@ -735,11 +739,10 @@ class FlowEngine:
         # a `self.expansions` root. On replay (`record is not None`) the record is already attached
         # (top-level by `_replay_expansions`, nested by deserialization), so this is skipped.
         parent = self._spawner_expansion.get(spawner_id) if record is None else None
-        # REF-depth stamping (kind-blind, driven by the `grow_depth_delta` trait): stamp the derived
-        # depth on every spawner in the spliced subgraph AND its terminal(s), and bound a positive
-        # delta by MAX_REF_DEPTH. A None delta (LOOP, non-REF) is a no-op. Runs before the ledger
-        # attach so a depth-budget raise leaves no orphan record.
-        self._stamp_grow_depth(spawner_id, sg, schedule=schedule)
+        # REF-depth stamping (kind-blind, driven by the `grow_depth_delta` trait): the depth was
+        # derived and bounded before the splice; now stamp it on every spawner in the subgraph AND
+        # its terminal(s). A None delta (LOOP, non-REF) is a no-op.
+        self._stamp_grow_depth(spawner_id, sg, grow_depth)
         # `_spawner_expansion` stamping (kind-blind): point every spawner in the spliced subgraph +
         # its derived terminal(s) at THIS record, so a nested grow nests under it and the CALL
         # post-assert commit-site recovery finds it. A self-restamping spawner (AGENT) also stamps
@@ -838,26 +841,28 @@ class FlowEngine:
         names the terminal by kind (`ns(spawner, END_ID)` / `__resume#`)."""
         return [nid for nid, node in sg.nodes.items() if node.commit_as == spawner_id]
 
-    def _stamp_grow_depth(self, spawner_id, sg, *, schedule) -> None:
-        """Kind-blind REF-depth stamp, driven by the spawner's `grow_depth_delta` trait. `None`
-        delta -> no depth work. Else `d = depth.get(spawner_id, 0) + delta`; a positive delta is
-        bounded by MAX_REF_DEPTH (raise gated on `schedule` — replay re-derives depth top-down
-        without re-tripping). Stamp `d` on every `is_spawner` node in the spliced subgraph AND on
-        the derived terminal(s) (they carry the depth)."""
+    def _validated_grow_depth(self, spawner_id, *, schedule) -> Optional[int]:
+        """Derive and validate a grow's REF depth without mutating runtime bookkeeping."""
         spawner = self.flow.nodes[spawner_id]
         delta = spawner.grow_depth_delta
         if delta is None:
-            return
+            return None
         d = self.depth.get(spawner_id, 0) + delta
         if schedule and delta > 0 and d > MAX_REF_DEPTH:
             raise RuntimeError(
                 f"expansion exceeded MAX_REF_DEPTH ({MAX_REF_DEPTH}) at {spawner_id!r}"
             )
+        return d
+
+    def _stamp_grow_depth(self, spawner_id, sg, depth: Optional[int]) -> None:
+        """Stamp a prevalidated REF depth on a grown subgraph's spawners and terminals."""
+        if depth is None:
+            return
         for nid, node in sg.nodes.items():
             if node.is_spawner:
-                self.depth[nid] = d
+                self.depth[nid] = depth
         for term in self._derived_terminals(sg, spawner_id):
-            self.depth[term] = d
+            self.depth[term] = depth
 
     def _on_success(self, node_id: str, event: NodeSucceeded) -> None:
         # The commit target: `commit_as` redirects a subflow terminal's value under its spawner

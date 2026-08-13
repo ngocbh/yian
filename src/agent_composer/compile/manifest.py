@@ -149,9 +149,10 @@ _CASE_FIELDS = frozenset({"handle", "when"})
 _FRESH_FIELDS = frozenset({"prompt"})
 _RESUME_FIELDS = frozenset({"memo", "iterations", "pending"})
 
-# Config secrets are intentionally absent from identity. Exact names and provider-agnostic
-# suffixes cover common credential spellings; the small semantic-exception set is the explicit
-# extension point for authored names that collide with those broad suffixes.
+# Config secrets are intentionally absent from identity. Exact names and high-confidence
+# compound suffixes are credentials in every config spelling. Generic token/signature suffixes
+# are credentials in flat config only when authored like environment variables; URI parameters
+# use the stricter suffix policy regardless of case.
 _CREDENTIAL_NAMES = frozenset(
     {
         "api_key",
@@ -163,10 +164,12 @@ _CREDENTIAL_NAMES = frozenset(
         "client_secret",
         "credential",
         "credentials",
+        "databricks_token",
         "google_application_credentials",
         "github_token",
         "hf_token",
         "id_token",
+        "npm_token",
         "password",
         "passphrase",
         "private_key",
@@ -176,13 +179,15 @@ _CREDENTIAL_NAMES = frozenset(
         "session_token",
         "sig",
         "signature",
+        "slack_bot_token",
         "token",
+        "webhook_signature",
         "x_amz_security_token",
         "x_amz_signature",
         "x_goog_signature",
     }
 )
-_CREDENTIAL_SUFFIXES = (
+_HIGH_CONFIDENCE_CREDENTIAL_SUFFIXES = (
     "_api_key",
     "_api_token",
     "_account_key",
@@ -204,24 +209,18 @@ _CREDENTIAL_SUFFIXES = (
     "_secret_access_key",
     "_secret_key",
     "_session_token",
-    "_signature",
-    "_token",
 )
-_SEMANTIC_CREDENTIAL_KEY_EXCEPTIONS = frozenset(
-    {
-        "eos_token",
-        "output_signature",
-    }
-)
+_AMBIGUOUS_CREDENTIAL_SUFFIXES = ("_signature", "_token")
 _CREDENTIAL_COMPACT_NAMES = frozenset(
     name.replace("_", "") for name in _CREDENTIAL_NAMES
 )
-_CREDENTIAL_COMPACT_SUFFIXES = tuple(
-    suffix.replace("_", "") for suffix in _CREDENTIAL_SUFFIXES
+_HIGH_CONFIDENCE_CREDENTIAL_COMPACT_SUFFIXES = tuple(
+    suffix.replace("_", "") for suffix in _HIGH_CONFIDENCE_CREDENTIAL_SUFFIXES
 )
-_SEMANTIC_CREDENTIAL_KEY_COMPACT_EXCEPTIONS = frozenset(
-    name.replace("_", "") for name in _SEMANTIC_CREDENTIAL_KEY_EXCEPTIONS
+_AMBIGUOUS_CREDENTIAL_COMPACT_SUFFIXES = tuple(
+    suffix.replace("_", "") for suffix in _AMBIGUOUS_CREDENTIAL_SUFFIXES
 )
+_ENVIRONMENT_VARIABLE_KEY = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
 _URI_CREDENTIAL_PARAM_NAMES = frozenset({"key"})
 _URI_PREFIX = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _REDACTED_URI_CREDENTIAL = "__redacted__"
@@ -316,25 +315,52 @@ def _normalized_key_spellings(key: str) -> tuple[str, str]:
     return normalized, normalized.replace("_", "")
 
 
+def _matches_suffixes(
+    normalized: str,
+    compact: str,
+    suffixes: tuple[str, ...],
+    compact_suffixes: tuple[str, ...],
+) -> bool:
+    """Whether normalized key spellings end in one suffix from a paired vocabulary."""
+    return any(
+        normalized == suffix[1:] or normalized.endswith(suffix)
+        for suffix in suffixes
+    ) or any(
+        compact == suffix or compact.endswith(suffix)
+        for suffix in compact_suffixes
+    )
+
+
+def _matches_known_credential(normalized: str, compact: str) -> bool:
+    """Whether normalized spellings match exact or high-confidence credential names."""
+    return (
+        normalized in _CREDENTIAL_NAMES
+        or compact in _CREDENTIAL_COMPACT_NAMES
+        or _matches_suffixes(
+            normalized,
+            compact,
+            _HIGH_CONFIDENCE_CREDENTIAL_SUFFIXES,
+            _HIGH_CONFIDENCE_CREDENTIAL_COMPACT_SUFFIXES,
+        )
+    )
+
+
+def _matches_ambiguous_credential_suffix(normalized: str, compact: str) -> bool:
+    """Whether normalized spellings end in generic token/signature vocabulary."""
+    return _matches_suffixes(
+        normalized,
+        compact,
+        _AMBIGUOUS_CREDENTIAL_SUFFIXES,
+        _AMBIGUOUS_CREDENTIAL_COMPACT_SUFFIXES,
+    )
+
+
 def _credential_key(key: str) -> bool:
     """Whether a flat config key carries a credential rather than program semantics."""
     normalized, compact = _normalized_key_spellings(key)
-    if (
-        normalized in _SEMANTIC_CREDENTIAL_KEY_EXCEPTIONS
-        or compact in _SEMANTIC_CREDENTIAL_KEY_COMPACT_EXCEPTIONS
-    ):
-        return False
-    return (
-        normalized in _CREDENTIAL_NAMES
-        or any(
-            normalized == suffix[1:] or normalized.endswith(suffix)
-            for suffix in _CREDENTIAL_SUFFIXES
-        )
-        or compact in _CREDENTIAL_COMPACT_NAMES
-        or any(
-            compact == suffix or compact.endswith(suffix)
-            for suffix in _CREDENTIAL_COMPACT_SUFFIXES
-        )
+    return _matches_known_credential(normalized, compact) or (
+        _ENVIRONMENT_VARIABLE_KEY.fullmatch(key.strip()) is not None
+        and _matches_ambiguous_credential_suffix(normalized, compact)
     )
 
 
@@ -344,7 +370,8 @@ def _uri_credential_key(key: str) -> bool:
     return (
         normalized in _URI_CREDENTIAL_PARAM_NAMES
         or compact in _URI_CREDENTIAL_PARAM_NAMES
-        or _credential_key(key)
+        or _matches_known_credential(normalized, compact)
+        or _matches_ambiguous_credential_suffix(normalized, compact)
     )
 
 

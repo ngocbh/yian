@@ -579,6 +579,43 @@ def test_flow_fingerprint_redacts_uri_key_parameter_only():
     assert flow_fingerprint(first) != flow_fingerprint(changed_region)
 
 
+@pytest.mark.parametrize("delimiter", ["?", "#"], ids=["query", "fragment"])
+@pytest.mark.parametrize(
+    "credential_param",
+    [
+        "output_signature",
+        "function_signature",
+        "eos_token",
+        "continuation_token",
+        "page_token",
+        "fim_prefix_token",
+        "image_token",
+    ],
+)
+def test_uri_params_apply_strict_token_and_signature_policy(
+    delimiter, credential_param
+):
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["SIGNED_URL"] = (
+        f"https://api.example/v1{delimiter}region=us"
+        f"&{credential_param}=first-credential"
+    )
+    second.nodes["step"].env["SIGNED_URL"] = (
+        f"https://api.example/v1{delimiter}region=us"
+        f"&{credential_param}=second-credential"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    assert "first-credential" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+    changed_region = copy.deepcopy(second)
+    changed_region.nodes["step"].env["SIGNED_URL"] = changed_region.nodes["step"].env[
+        "SIGNED_URL"
+    ].replace("region=us", "region=eu")
+    assert flow_fingerprint(first) != flow_fingerprint(changed_region)
+
+
 @pytest.mark.parametrize(
     "changed_uri",
     [
@@ -826,11 +863,15 @@ def test_wait_manifest_redacts_credentials_recursively_but_keeps_semantics():
     "credential_key",
     [
         "DATABRICKS_TOKEN",
+        "CUSTOM_SERVICE_SIGNATURE",
+        "CUSTOM_SERVICE_TOKEN",
+        " CUSTOM_SERVICE_TOKEN ",
         "GITHUB_TOKEN",
         "HUGGINGFACEHUB_API_TOKEN",
         "NPM_TOKEN",
         "OPENAI_API_TOKEN",
         "SERVICE_ACCESS_TOKEN",
+        "SLACK_BOT_TOKEN",
         "AWS_SESSION_TOKEN",
         "id_token",
         "X-Amz-Security-Token",
@@ -868,6 +909,15 @@ def test_wait_manifest_redacts_credentials_recursively_but_keeps_semantics():
         "xAmzSignature",
         "xgoogsignature",
         "WEBHOOK_SIGNATURE",
+        "databricks_token",
+        "github_token",
+        "hf_token",
+        "npm_token",
+        "slack_bot_token",
+        "webhook_signature",
+        "x_amz_security_token",
+        "x_amz_signature",
+        "x_goog_signature",
     ],
 )
 def test_flow_fingerprint_redacts_common_provider_credentials(credential_key):
@@ -893,11 +943,54 @@ def test_flow_fingerprint_redacts_common_provider_credentials(credential_key):
         "keynote",
         "apiVersion",
         "connectionPool",
-        "output_signature",
-        "eos_token",
     ],
 )
 def test_compact_credential_matching_keeps_unrelated_config(config_key):
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env[config_key] = "first-semantic-value"
+    second.nodes["step"].env[config_key] = "second-semantic-value"
+
+    assert flow_fingerprint(first) != flow_fingerprint(second)
+    assert "first-semantic-value" in json.dumps(flow_manifest(first), sort_keys=True)
+
+
+@pytest.mark.parametrize(
+    "config_key",
+    [
+        "bos_token",
+        "eos_token",
+        "pad_token",
+        "unk_token",
+        "mask_token",
+        "sep_token",
+        "cls_token",
+        "continuation_token",
+        "fim_prefix_token",
+        "image_token",
+        "page_token",
+        "start_token",
+        "end_token",
+        "stop_token",
+        "decoder_start_token",
+        "input_signature",
+        "output_signature",
+        "function_signature",
+        "method_signature",
+        "call_signature",
+        "type_signature",
+        "model_signature",
+        "serving_signature",
+        "bosToken",
+        "decoderstarttoken",
+        "inputSignature",
+        "modelsignature",
+        "pageToken",
+        "custom_service_signature",
+        "custom_service_token",
+    ],
+)
+def test_semantic_credential_like_config_remains_identity_bearing(config_key):
     first = _compiled()
     second = copy.deepcopy(first)
     first.nodes["step"].env[config_key] = "first-semantic-value"

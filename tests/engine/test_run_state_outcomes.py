@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import gc
+import tracemalloc
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
-import gc
 from statistics import median
-import tracemalloc
 from typing import Any
 
 import pytest
@@ -349,29 +349,13 @@ def test_success_rejects_a_previously_settled_target_edge_before_append():
     assert log.next_sequence == sequence
 
 
-@pytest.mark.parametrize(
-    ("conflict", "match"),
-    [
-        ("ready", "already ready"),
-        ("in_flight", "already in-flight"),
-        ("disposition", "must have UNKNOWN disposition"),
-    ],
-)
-def test_success_rejects_an_inconsistent_newly_ready_successor_before_append(
-    conflict: str,
-    match: str,
-):
+def test_success_rejects_a_settled_newly_ready_successor_before_append():
     state, log = _redirect_ready()
-    if conflict == "ready":
-        state.ready.append("after-baked")
-    elif conflict == "in_flight":
-        state.in_flight["after-baked"] = None
-    else:
-        state.node_state["after-baked"] = NodeState.TAKEN
+    state.node_state["after-baked"] = NodeState.TAKEN
     before = _state_snapshot(state)
     sequence = log.next_sequence
 
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(ValueError, match="must have UNKNOWN disposition"):
         prepare_node_succeeded(state, "filler", ("valid",))
 
     assert _state_snapshot(state) == before
@@ -443,6 +427,57 @@ def test_success_preserves_sequential_readiness_for_interleaved_successors():
     )
 
     assert tuple(state.ready) == ("after-b", "after-a")
+
+
+def _parallel_successor_flow(width: int) -> CompiledFlow:
+    """Return two wide joins fed by interleaved edges from one target."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "target": FuncNode("target", lambda inputs: inputs),
+        "after-a": FuncNode("after-a", lambda inputs: inputs),
+        "after-b": FuncNode("after-b", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    edges = [Edge(id="start-target", from_=START_ID, to="target")]
+    for index in range(width):
+        edges.extend(
+            (
+                Edge(
+                    id=f"target-a-{index}",
+                    from_="target",
+                    to="after-a",
+                    input_group="a",
+                ),
+                Edge(
+                    id=f"target-b-{index}",
+                    from_="target",
+                    to="after-b",
+                    input_group="b",
+                ),
+            )
+        )
+    return CompiledFlow.from_parts(nodes=nodes, edges=edges)
+
+
+def test_success_scans_each_distinct_affected_join_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state, log = _initialized_and_started(_parallel_successor_flow(64))
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, "target"))
+    incoming = state.flow.incoming
+    scanned: list[str] = []
+
+    def counted_incoming(node_id: str) -> list[Edge]:
+        scanned.append(node_id)
+        return incoming(node_id)
+
+    monkeypatch.setattr(state.flow, "incoming", counted_incoming)
+
+    prepared = prepare_node_succeeded(state, "target", {"done": True})
+
+    assert scanned == ["after-a", "after-b"]
+    assert prepared._plan.delta.newly_ready_ids == ("after-a", "after-b")
 
 
 @pytest.mark.parametrize(

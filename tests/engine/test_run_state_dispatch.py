@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
 from collections import deque
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from textwrap import dedent
 from typing import Any
 
 import pytest
@@ -28,6 +31,7 @@ from agent_composer.runtime.state import (
     RunState,
     commit_prepared,
     prepare_node_started,
+    prepare_node_succeeded,
     prepare_record,
     prepare_run_resumed,
     prepare_run_started,
@@ -61,10 +65,10 @@ def _flow() -> CompiledFlow:
 
 
 def _initialized(
-    *, num_workers: int = 2
+    *, num_workers: int = 2, flow: CompiledFlow | None = None
 ) -> tuple[RunState, MemoryRunLog, CompiledFlow]:
     """Return state and log after their shared authoritative RunStarted record."""
-    flow = _flow()
+    flow = _flow() if flow is None else flow
     state = RunState(flow)
     pool = VariablePool(start_id=flow.start_id)
     pool.set(flow.start_id, {"labels": ["one", "two"]})
@@ -334,23 +338,76 @@ def test_run_resumed_allows_an_empty_retry_segment_and_changes_workers():
     _assert_committed_path(log, RunResumedRecord(retry_node_ids=(), num_workers=0))
 
 
+def _wide_resume_flow(width: int) -> CompiledFlow:
+    """Return a START fan-out whose first successor can be retried over wide ready work."""
+    queued = [f"queued-{index}" for index in range(width)]
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "retry": FuncNode("retry", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    nodes.update(
+        {
+            node_id: FuncNode(node_id, lambda inputs: inputs)
+            for node_id in queued
+        }
+    )
+    edges = [Edge(id="start-retry", from_=START_ID, to="retry")]
+    edges.extend(
+        Edge(id=f"start-{node_id}", from_=START_ID, to=node_id)
+        for node_id in queued
+    )
+    return CompiledFlow.from_parts(nodes=nodes, edges=edges)
+
+
+def test_run_resumed_preserves_wide_ready_work_without_copying_it():
+    state, log, _ = _initialized(flow=_wide_resume_flow(512))
+    commit_prepared(log, state, prepare_node_started(state, START_ID))
+    commit_prepared(
+        log,
+        state,
+        prepare_node_succeeded(state, START_ID, {"started": True}),
+    )
+    commit_prepared(log, state, prepare_node_started(state, "retry"))
+
+    prepared = prepare_run_resumed(state, num_workers=3)
+    ready = state.ready
+    commit_prepared(log, state, prepared)
+
+    assert state.ready is ready
+    assert len(state.ready) == 513
+    assert state.ready[0] == "retry"
+    assert state.in_flight == {}
+    assert prepared.record.retry_node_ids == ("retry",)
+
+
+def test_run_resumed_validation_does_not_read_the_ready_frontier():
+    tree = ast.parse(dedent(inspect.getsource(state_module._validate_run_resumed)))
+    ready_reads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "state"
+        and node.attr == "ready"
+    ]
+    assert ready_reads == []
+
+
 @pytest.mark.parametrize(
-    ("in_flight", "ready", "node_state", "match"),
+    ("in_flight", "node_state", "match"),
     [
-        (("missing",), (), {}, "does not exist"),
-        (("first",), ("first",), {}, "already ready"),
-        (("first",), (), {"first": NodeState.TAKEN}, "UNKNOWN"),
+        (("missing",), {}, "does not exist"),
+        (("first",), {"first": NodeState.TAKEN}, "UNKNOWN"),
     ],
 )
 def test_run_resumed_rejects_invalid_retry_frontiers(
     in_flight: tuple[str, ...],
-    ready: tuple[str, ...],
     node_state: dict[str, NodeState],
     match: str,
 ):
     state, log, _ = _initialized()
     state.in_flight = dict.fromkeys(in_flight)
-    state.ready = deque(ready)
     state.node_state.update(node_state)
     before = _state_snapshot(state)
 

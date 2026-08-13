@@ -930,8 +930,6 @@ def _validate_run_resumed(state: RunState, record: RunResumedRecord) -> None:
             )
         if state.in_flight[node_id] is not None:
             raise ValueError("in-flight must be an ordered set with None values")
-        if node_id in state.ready:
-            raise ValueError(f"RunResumed retry node {node_id!r} is already ready")
 
 
 def _require_succeeding_node(state: RunState, node_id: str) -> None:
@@ -985,16 +983,19 @@ def _prepare_success_delta(
     outgoing_edge_ids: list[str] = []
     newly_ready_ids: list[str] = []
     settled_edge_ids: set[str] = set()
-    newly_ready: set[str] = set()
+    seen_outgoing_edge_ids: set[str] = set()
+    remaining_by_successor: dict[str, int] = {}
+    edge_ids_by_successor: dict[str, list[str]] = {}
+    outgoing = state.flow.outgoing(target)
 
-    for edge in state.flow.outgoing(target):
+    for edge in outgoing:
         if not isinstance(edge, Edge) or edge.from_ != target:
             raise ValueError(
                 f"success target {target!r} has an invalid outgoing adjacency"
             )
         if type(edge.id) is not str or not edge.id:
             raise ValueError("success target has an invalid outgoing edge ID")
-        if edge.id in settled_edge_ids:
+        if edge.id in seen_outgoing_edge_ids:
             raise ValueError(f"success target outgoing edge {edge.id!r} is duplicated")
         if edge.id not in state.edge_state:
             raise ValueError(
@@ -1011,9 +1012,16 @@ def _prepare_success_delta(
             )
 
         outgoing_edge_ids.append(edge.id)
+        seen_outgoing_edge_ids.add(edge.id)
+        remaining_by_successor[edge.to] = remaining_by_successor.get(edge.to, 0) + 1
+        edge_ids_by_successor.setdefault(edge.to, []).append(edge.id)
+
+    for edge in outgoing:
         settled_edge_ids.add(edge.id)
         successor = edge.to
-        if successor in newly_ready:
+        remaining = remaining_by_successor[successor] - 1
+        remaining_by_successor[successor] = remaining
+        if remaining:
             continue
         if (
             _sparse_disposition(
@@ -1021,7 +1029,7 @@ def _prepare_success_delta(
                 state.edge_state,
                 settled_edge_ids,
                 successor,
-                required_edge_id=edge.id,
+                required_edge_ids=frozenset(edge_ids_by_successor[successor]),
             )
             != "ready"
         ):
@@ -1030,14 +1038,7 @@ def _prepare_success_delta(
             raise ValueError(
                 f"newly-ready successor {successor!r} must have UNKNOWN disposition"
             )
-        if successor in state.ready:
-            raise ValueError(f"newly-ready successor {successor!r} is already ready")
-        if successor in state.in_flight:
-            raise ValueError(
-                f"newly-ready successor {successor!r} is already in-flight"
-            )
         newly_ready_ids.append(successor)
-        newly_ready.add(successor)
 
     value_bytes = ANY_VALUE_ADAPTER.dump_json(typed, warnings="error")
     return _SuccessDelta(
@@ -1056,17 +1057,17 @@ def _sparse_disposition(
     taken_edge_ids: set[str],
     node_id: str,
     *,
-    required_edge_id: str,
+    required_edge_ids: frozenset[str],
 ) -> str:
     """Classify one touched join over the live state plus sparse TAKEN overlay."""
     incoming = flow.incoming(node_id)
     if not incoming:
         raise ValueError(
-            f"success edge {required_edge_id!r} is absent from successor "
+            f"success edges {sorted(required_edge_ids)!r} are absent from successor "
             f"{node_id!r} incoming adjacency"
         )
 
-    found_required = False
+    found_required: set[str] = set()
     saw_control = False
     all_control_skipped = True
     required_ordering_skipped = False
@@ -1081,8 +1082,8 @@ def _sparse_disposition(
                 f"successor {node_id!r} has invalid incoming edge IDs"
             )
         seen_incoming_ids.add(edge.id)
-        if edge.id == required_edge_id:
-            found_required = True
+        if edge.id in required_edge_ids:
+            found_required.add(edge.id)
         if edge.id not in edge_state:
             raise ValueError(
                 f"successor incoming edge {edge.id!r} has no disposition"
@@ -1114,9 +1115,10 @@ def _sparse_disposition(
                 all_skipped and disposition is NodeState.SKIPPED,
             )
 
-    if not found_required:
+    if found_required != required_edge_ids:
         raise ValueError(
-            f"success edge {required_edge_id!r} is absent from successor "
+            f"success edges {sorted(required_edge_ids - found_required)!r} are absent "
+            "from successor "
             f"{node_id!r} incoming adjacency"
         )
     if saw_control and all_control_skipped:

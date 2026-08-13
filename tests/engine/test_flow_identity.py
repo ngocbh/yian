@@ -1432,12 +1432,32 @@ def test_credential_binding_marker_redacts_literal_operands():
 
 
 def test_binding_like_static_credentials_remain_literal():
-    for scope in ("env", "structured-env", "nested-wiring"):
+    for scope in (
+        "env",
+        "env-uri",
+        "env-connection",
+        "structured-env",
+        "nested-wiring",
+    ):
         first = _compiled()
         rotated = copy.deepcopy(first)
         if scope == "env":
             first.nodes["step"].env["password"] = "${first.secret}"
             rotated.nodes["step"].env["password"] = "${second.secret}"
+        elif scope == "env-uri":
+            first.nodes["step"].env["endpoint"] = (
+                "https://api.example/v1?token=${first.secret}"
+            )
+            rotated.nodes["step"].env["endpoint"] = (
+                "https://api.example/v1?token=${second.secret}"
+            )
+        elif scope == "env-connection":
+            first.nodes["step"].env["connection_string"] = (
+                "Server=db.example;Password=${first.secret}"
+            )
+            rotated.nodes["step"].env["connection_string"] = (
+                "Server=db.example;Password=${second.secret}"
+            )
         elif scope == "structured-env":
             first.nodes["step"].env["auth"] = {"password": "${first.secret}"}
             rotated.nodes["step"].env["auth"] = {"password": "${second.secret}"}

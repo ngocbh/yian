@@ -396,6 +396,182 @@ def test_flow_fingerprint_redacts_credentials_in_jdbc_wrapper_uri():
         assert flow_fingerprint(first) != flow_fingerprint(changed)
 
 
+def test_flow_fingerprint_redacts_jdbc_sqlserver_semicolon_credentials():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["DATABASE_URL"] = (
+        "jdbc:sqlserver://db.example:1433;databaseName=app;user=alice;"
+        "password={first;password};encrypt=true"
+    )
+    second.nodes["step"].env["DATABASE_URL"] = (
+        "jdbc:sqlserver://db.example:1433;databaseName=app;user=bob;"
+        "password={second;password};encrypt=true"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first;password"):
+        assert credential not in manifest_text
+
+    for old, new in (
+        ("db.example", "other.example"),
+        (":1433", ":1434"),
+        ("databaseName=app", "databaseName=other"),
+        ("encrypt=true", "encrypt=false"),
+    ):
+        changed = copy.deepcopy(second)
+        changed.nodes["step"].env["DATABASE_URL"] = changed.nodes["step"].env[
+            "DATABASE_URL"
+        ].replace(old, new)
+        assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+@pytest.mark.parametrize(
+    ("first_url", "second_url", "semantic_change"),
+    [
+        (
+            "jdbc:oracle:thin:alice/first-password@//db.example:1521/appservice",
+            "jdbc:oracle:thin:bob/second-password@//db.example:1521/appservice",
+            "jdbc:oracle:thin:bob/second-password@//db.example:1521/otherservice",
+        ),
+        (
+            "jdbc:oracle:thin:alice/first-password@db.example:1521:APPSID",
+            "jdbc:oracle:thin:bob/second-password@db.example:1521:APPSID",
+            "jdbc:oracle:thin:bob/second-password@db.example:1521:OTHERSID",
+        ),
+    ],
+    ids=["service", "sid"],
+)
+def test_flow_fingerprint_redacts_oracle_thin_inline_credentials(
+    first_url, second_url, semantic_change
+):
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["DATABASE_URL"] = first_url
+    second.nodes["step"].env["DATABASE_URL"] = second_url
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first-password"):
+        assert credential not in manifest_text
+
+    changed = copy.deepcopy(second)
+    changed.nodes["step"].env["DATABASE_URL"] = semantic_change
+    assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+@pytest.mark.parametrize(
+    ("first_url", "second_url"),
+    [
+        (
+            "https://api.example/v1?region=us&user=alice",
+            "https://api.example/v1?region=us&user=bob",
+        ),
+        (
+            "jdbc:postgresql://db.example:5432/app?sslmode=require&username=alice",
+            "jdbc:postgresql://db.example:5432/app?sslmode=require&username=bob",
+        ),
+    ],
+    ids=["uri-user", "jdbc-username"],
+)
+def test_flow_fingerprint_redacts_uri_user_query_parameters(first_url, second_url):
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["ENDPOINT"] = first_url
+    second.nodes["step"].env["ENDPOINT"] = second_url
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    assert "alice" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+
+@pytest.mark.parametrize(
+    ("key", "first_value", "second_value", "semantic_change"),
+    [
+        (
+            "connection_string",
+            "postgres://alice:first@db.example:5432/app?sslmode=require",
+            "postgres://bob:second@db.example:5432/app?sslmode=require",
+            "postgres://bob:second@other.example:5433/other?sslmode=require",
+        ),
+        (
+            "AZURE_STORAGE_CONNECTION_STRING",
+            "Server=db.example;Port=1433;Database=app;User Id=alice;"
+            "Password={first;password};Encrypt=true",
+            "Server=db.example;Port=1433;Database=app;User Id=bob;"
+            "Password={second;password};Encrypt=true",
+            "Server=other.example;Port=1434;Database=other;User Id=bob;"
+            "Password={second;password};Encrypt=false",
+        ),
+        (
+            "DATABASE_CONNECTION_STRING",
+            "jdbc:sqlserver://db.example:1433;databaseName=app;user=alice;"
+            "password=first;encrypt=true",
+            "jdbc:sqlserver://db.example:1433;databaseName=app;user=bob;"
+            "password=second;encrypt=true",
+            "jdbc:sqlserver://other.example:1434;databaseName=other;user=bob;"
+            "password=second;encrypt=false",
+        ),
+    ],
+    ids=["uri", "semicolon-dsn", "jdbc-sqlserver"],
+)
+def test_connection_string_keys_keep_sanitized_endpoint_identity(
+    key, first_value, second_value, semantic_change
+):
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env[key] = first_value
+    second.nodes["step"].env[key] = second_value
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first", "first;password"):
+        assert credential not in manifest_text
+
+    changed = copy.deepcopy(second)
+    changed.nodes["step"].env[key] = semantic_change
+    assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_connection_string_key_keeps_structured_endpoint_identity():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["connection_string"] = {
+        "server": "db.example",
+        "port": 5432,
+        "database": "app",
+        "user": "alice",
+        "password": "first-password",
+        "sslmode": "require",
+    }
+    second.nodes["step"].env["connection_string"] = {
+        "server": "db.example",
+        "port": 5432,
+        "database": "app",
+        "user": "bob",
+        "password": "second-password",
+        "sslmode": "require",
+    }
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first-password"):
+        assert credential not in manifest_text
+
+    changed = copy.deepcopy(second)
+    changed.nodes["step"].env["connection_string"]["database"] = "other"
+    assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_connection_string_key_excludes_unrecognized_scalar():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["connection_string"] = "first raw secret"
+    second.nodes["step"].env["connection_string"] = "second raw secret"
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    assert "first raw secret" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+
 def test_flow_fingerprint_redacts_uri_credentials_after_leading_whitespace():
     first = _compiled()
     second = copy.deepcopy(first)
@@ -917,6 +1093,8 @@ def test_wait_manifest_redacts_credentials_recursively_but_keeps_semantics():
         "HUGGINGFACEHUB_API_TOKEN",
         "NPM_TOKEN",
         "OPENAI_API_TOKEN",
+        "PGPASSWORD",
+        "MYSQL_PWD",
         "SERVICE_ACCESS_TOKEN",
         "SLACK_BOT_TOKEN",
         "AWS_SESSION_TOKEN",

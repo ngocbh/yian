@@ -172,9 +172,11 @@ _CREDENTIAL_NAMES = frozenset(
         "github_token",
         "hf_token",
         "id_token",
+        "mysql_pwd",
         "npm_token",
         "password",
         "passphrase",
+        "pgpassword",
         "private_key",
         "proxy_auth",
         "refresh_token",
@@ -219,8 +221,36 @@ _CREDENTIAL_COMPACT_NAMES = frozenset(
     name.replace("_", "") for name in _CREDENTIAL_NAMES
 )
 _ENVIRONMENT_VARIABLE_KEY = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
-_URI_CREDENTIAL_PARAM_NAMES = frozenset({"key"})
+_URI_CREDENTIAL_PARAM_NAMES = frozenset({"key", "user", "user_name", "username"})
+_CONNECTION_PROPERTY_CREDENTIAL_NAMES = frozenset(
+    {"pwd", "uid", "user", "user_id", "user_name", "username"}
+)
+_DSN_IDENTITY_PROPERTY_NAMES = frozenset(
+    {
+        "account_name",
+        "addr",
+        "address",
+        "database",
+        "database_name",
+        "data_source",
+        "dbname",
+        "default_endpoints_protocol",
+        "driver",
+        "endpoint",
+        "endpoint_suffix",
+        "host",
+        "hostname",
+        "initial_catalog",
+        "network_address",
+        "port",
+        "server",
+        "service",
+        "sid",
+    }
+)
 _URI_PREFIX = re.compile(r"^\s*(?:[A-Za-z][A-Za-z0-9+.-]*:)+//")
+_JDBC_SQLSERVER_PREFIX = re.compile(r"^\s*jdbc:sqlserver://", re.IGNORECASE)
+_JDBC_ORACLE_THIN_PREFIX = re.compile(r"^\s*jdbc:oracle:thin:", re.IGNORECASE)
 _REDACTED_URI_CREDENTIAL = "__redacted__"
 _MISSING = object()
 
@@ -353,6 +383,16 @@ def _credential_key(key: str) -> bool:
     )
 
 
+def _connection_string_key(key: str) -> bool:
+    """Whether a key explicitly identifies a URI or DSN connection string."""
+    normalized, compact = _normalized_key_spellings(key)
+    return (
+        normalized == "connection_string"
+        or normalized.endswith("_connection_string")
+        or compact == "connectionstring"
+    )
+
+
 def _uri_credential_key(key: str) -> bool:
     """Whether a URI parameter carries a credential, including the URI-specific `key`."""
     normalized, compact = _normalized_key_spellings(key)
@@ -361,6 +401,15 @@ def _uri_credential_key(key: str) -> bool:
         or compact in _URI_CREDENTIAL_PARAM_NAMES
         or _matches_known_credential(normalized, compact)
         or _matches_ambiguous_credential_suffix(normalized)
+    )
+
+
+def _connection_property_credential_key(key: str) -> bool:
+    """Whether a URI/DSN property identifies connection authentication material."""
+    normalized, compact = _normalized_key_spellings(key)
+    return (
+        normalized in _CONNECTION_PROPERTY_CREDENTIAL_NAMES
+        or _matches_known_credential(normalized, compact)
     )
 
 
@@ -375,11 +424,33 @@ def _redact_uri_params(value: str) -> str:
     return "&".join(redacted_parts)
 
 
-def _redact_uri_credentials(value: str) -> str:
-    """Remove URI userinfo and credential parameters without normalizing the URI."""
+def _redact_uri_tail_params(value: str) -> str:
+    """Redact credential query/fragment parameters in a URI-like tail."""
+    fragment_start = value.find("#")
+    if fragment_start == -1:
+        before_fragment = value
+        fragment = None
+    else:
+        before_fragment = value[:fragment_start]
+        fragment = value[fragment_start + 1 :]
+
+    query_start = before_fragment.find("?")
+    if query_start != -1:
+        before_fragment = (
+            before_fragment[: query_start + 1]
+            + _redact_uri_params(before_fragment[query_start + 1 :])
+        )
+    redacted_tail = before_fragment
+    if fragment is not None:
+        redacted_tail += f"#{_redact_uri_params(fragment)}"
+    return redacted_tail
+
+
+def _redact_hierarchical_uri(value: str) -> str | None:
+    """Sanitize a hierarchical URI while retaining its endpoint and path spelling."""
     prefix = _URI_PREFIX.match(value)
     if prefix is None:
-        return value
+        return None
 
     authority_start = prefix.end()
     delimiters = (
@@ -391,26 +462,153 @@ def _redact_uri_credentials(value: str) -> str:
     authority = value[authority_start:authority_end]
     if "@" in authority:
         authority = authority.rsplit("@", 1)[1]
+    tail = _redact_uri_tail_params(value[authority_end:])
+    return value[:authority_start] + authority + tail
 
-    tail = value[authority_end:]
-    fragment_start = tail.find("#")
-    if fragment_start == -1:
-        before_fragment = tail
-        fragment = None
-    else:
-        before_fragment = tail[:fragment_start]
-        fragment = tail[fragment_start + 1 :]
 
-    query_start = before_fragment.find("?")
-    if query_start != -1:
-        before_fragment = (
-            before_fragment[: query_start + 1]
-            + _redact_uri_params(before_fragment[query_start + 1 :])
+def _semicolon_property_spans(
+    value: str, start: int
+) -> list[tuple[int, int, int, str]] | None:
+    """Parse semicolon properties, honoring braces around values containing delimiters."""
+    spans: list[tuple[int, int, int, str]] = []
+    cursor = start
+    while cursor < len(value):
+        delimiter = value.find(";", cursor)
+        equal = value.find("=", cursor)
+        if equal == -1 or (delimiter != -1 and delimiter < equal):
+            return None
+        key = value[cursor:equal].strip()
+        if not key:
+            return None
+
+        scan = equal + 1
+        while scan < len(value) and value[scan].isspace():
+            scan += 1
+        if scan < len(value) and value[scan] == "{":
+            scan += 1
+            while scan < len(value):
+                if value[scan] != "}":
+                    scan += 1
+                    continue
+                if scan + 1 < len(value) and value[scan + 1] == "}":
+                    scan += 2
+                    continue
+                scan += 1
+                break
+            else:
+                return None
+            while scan < len(value) and value[scan].isspace():
+                scan += 1
+            if scan < len(value) and value[scan] != ";":
+                return None
+            end = scan
+        else:
+            end = delimiter if delimiter != -1 else len(value)
+
+        spans.append((cursor, end, equal, key))
+        if end == len(value):
+            break
+        cursor = end + 1
+        if cursor == len(value):
+            break
+    return spans
+
+
+def _redact_semicolon_properties(
+    value: str, start: int
+) -> tuple[str, frozenset[str]] | None:
+    """Redact credential fields in one fully parsed semicolon property sequence."""
+    spans = _semicolon_property_spans(value, start)
+    if not spans:
+        return None
+
+    replacements: list[tuple[int, int]] = []
+    normalized_keys: set[str] = set()
+    for _, end, equal, key in spans:
+        normalized, _ = _normalized_key_spellings(key)
+        normalized_keys.add(normalized)
+        if _connection_property_credential_key(key):
+            replacements.append((equal + 1, end))
+
+    redacted = value
+    for value_start, value_end in reversed(replacements):
+        redacted = (
+            redacted[:value_start]
+            + _REDACTED_URI_CREDENTIAL
+            + redacted[value_end:]
         )
-    redacted_tail = before_fragment
-    if fragment is not None:
-        redacted_tail += f"#{_redact_uri_params(fragment)}"
-    return value[:authority_start] + authority + redacted_tail
+    return redacted, frozenset(normalized_keys)
+
+
+def _redact_jdbc_sqlserver_credentials(value: str) -> str | None:
+    """Sanitize standard SQL Server JDBC semicolon properties."""
+    prefix = _JDBC_SQLSERVER_PREFIX.match(value)
+    if prefix is None:
+        return None
+    property_delimiter = value.find(";", prefix.end())
+    if property_delimiter == -1:
+        return _redact_hierarchical_uri(value) or value
+    parsed = _redact_semicolon_properties(value, property_delimiter + 1)
+    if parsed is None:
+        return _REDACTED_URI_CREDENTIAL
+    redacted, _ = parsed
+    return _redact_hierarchical_uri(redacted) or redacted
+
+
+def _redact_jdbc_oracle_thin_credentials(value: str) -> str | None:
+    """Sanitize Oracle thin inline credentials while preserving service/SID identity."""
+    prefix = _JDBC_ORACLE_THIN_PREFIX.match(value)
+    if prefix is None:
+        return None
+    rest = value[prefix.end() :]
+    at = rest.rfind("@")
+    if at == -1:
+        return _redact_uri_tail_params(value)
+    endpoint = _redact_uri_tail_params(rest[at + 1 :])
+    if at == 0:
+        return value[: prefix.end()] + "@" + endpoint
+    return (
+        value[: prefix.end()]
+        + f"{_REDACTED_URI_CREDENTIAL}/{_REDACTED_URI_CREDENTIAL}@"
+        + endpoint
+    )
+
+
+def _redact_semicolon_dsn_credentials(value: str) -> str | None:
+    """Sanitize a recognized key/value DSN without normalizing semantic fields."""
+    parsed = _redact_semicolon_properties(value, 0)
+    if parsed is None:
+        return None
+    redacted, keys = parsed
+    if keys.isdisjoint(_DSN_IDENTITY_PROPERTY_NAMES):
+        return None
+    return redacted
+
+
+def _redact_connection_credentials(
+    value: str, *, allow_generic_dsn: bool = False
+) -> tuple[str, bool]:
+    """Return a sanitized recognized URI/DSN and whether its structure was recognized."""
+    sqlserver = _redact_jdbc_sqlserver_credentials(value)
+    if sqlserver is not None:
+        return sqlserver, True
+    oracle = _redact_jdbc_oracle_thin_credentials(value)
+    if oracle is not None:
+        return oracle, True
+    uri = _redact_hierarchical_uri(value)
+    if uri is not None:
+        return uri, True
+    if ";" in value or allow_generic_dsn:
+        dsn = _redact_semicolon_dsn_credentials(value)
+        if dsn is not None:
+            return dsn, True
+    return value, False
+
+
+def _redact_uri_credentials(value: str) -> str:
+    """Remove recognized URI/JDBC/DSN credentials without normalizing semantics."""
+    redacted, _ = _redact_connection_credentials(value)
+    return redacted
 
 
 def _sorted_mapping(
@@ -457,6 +655,7 @@ def _canonical_sequence(
     path: str,
     *,
     redact_credentials: bool = False,
+    redact_connection_properties: bool = False,
 ) -> list[Any]:
     """Canonicalize an ordered list/tuple while preserving element order."""
     object_id = id(value)
@@ -470,6 +669,7 @@ def _canonical_sequence(
                 ctx,
                 f"{path}[{index}]",
                 redact_credentials=redact_credentials,
+                redact_connection_properties=redact_connection_properties,
             )
             for index, item in enumerate(value)
         ]
@@ -483,6 +683,7 @@ def _canonical_set(
     path: str,
     *,
     redact_credentials: bool = False,
+    redact_connection_properties: bool = False,
 ) -> list[Any]:
     """Canonicalize unordered members by each member's canonical JSON spelling."""
     object_id = id(value)
@@ -496,6 +697,7 @@ def _canonical_set(
                 ctx,
                 f"{path}[]",
                 redact_credentials=redact_credentials,
+                redact_connection_properties=redact_connection_properties,
             )
             for item in value
         ]
@@ -510,6 +712,7 @@ def _canonical_mapping(
     path: str,
     *,
     redact_credentials: bool = False,
+    redact_connection_properties: bool = False,
 ) -> dict[str, Any]:
     """Canonicalize an arbitrary-key mapping as sorted typed key/value entries."""
     object_id = id(value)
@@ -521,11 +724,37 @@ def _canonical_mapping(
         for index, (key, item) in enumerate(value.items()):
             # A URI used AS a mapping key is semantic endpoint identity, not a credential
             # field name. Retain it and redact only its userinfo/query values below.
-            if (
+            canonical_item: Any = _MISSING
+            redacted_string_key = (
                 redact_credentials
                 and isinstance(key, str)
                 and _URI_PREFIX.match(key) is None
-                and _credential_key(key)
+            )
+            if redacted_string_key and _connection_string_key(key):
+                if isinstance(item, str):
+                    sanitized, recognized = _redact_connection_credentials(
+                        item,
+                        allow_generic_dsn=True,
+                    )
+                    if not recognized:
+                        continue
+                    canonical_item = {"type": "str", "value": sanitized}
+                elif isinstance(item, dict):
+                    canonical_item = _canonical_value(
+                        item,
+                        ctx,
+                        f"{path}.values[{index}]",
+                        redact_credentials=True,
+                        redact_connection_properties=True,
+                    )
+                else:
+                    continue
+            elif redacted_string_key and (
+                _credential_key(key)
+                or (
+                    redact_connection_properties
+                    and _connection_property_credential_key(key)
+                )
             ):
                 continue
             entry = {
@@ -534,12 +763,18 @@ def _canonical_mapping(
                     ctx,
                     f"{path}.keys[{index}]",
                     redact_credentials=redact_credentials,
+                    redact_connection_properties=redact_connection_properties,
                 ),
-                "value": _canonical_value(
-                    item,
-                    ctx,
-                    f"{path}.values[{index}]",
-                    redact_credentials=redact_credentials,
+                "value": (
+                    canonical_item
+                    if canonical_item is not _MISSING
+                    else _canonical_value(
+                        item,
+                        ctx,
+                        f"{path}.values[{index}]",
+                        redact_credentials=redact_credentials,
+                        redact_connection_properties=redact_connection_properties,
+                    )
                 ),
             }
             entries.append(entry)
@@ -555,6 +790,7 @@ def _canonical_value(
     path: str,
     *,
     redact_credentials: bool = False,
+    redact_connection_properties: bool = False,
 ) -> Any:
     """Encode one value as a deterministic, type-discriminated JSON record."""
     if isinstance(value, Enum):
@@ -567,6 +803,7 @@ def _canonical_value(
                 ctx,
                 path,
                 redact_credentials=redact_credentials,
+                redact_connection_properties=redact_connection_properties,
             ),
         }
     if value is None:
@@ -596,6 +833,7 @@ def _canonical_value(
             ctx,
             path,
             redact_credentials=redact_credentials,
+            redact_connection_properties=redact_connection_properties,
         )
     if isinstance(value, list):
         return {
@@ -604,6 +842,7 @@ def _canonical_value(
                 ctx,
                 path,
                 redact_credentials=redact_credentials,
+                redact_connection_properties=redact_connection_properties,
             ),
             "type": "list",
         }
@@ -614,6 +853,7 @@ def _canonical_value(
                 ctx,
                 path,
                 redact_credentials=redact_credentials,
+                redact_connection_properties=redact_connection_properties,
             ),
             "type": "tuple",
         }
@@ -624,6 +864,7 @@ def _canonical_value(
                 ctx,
                 path,
                 redact_credentials=redact_credentials,
+                redact_connection_properties=redact_connection_properties,
             ),
             "type": "set",
         }
@@ -634,6 +875,7 @@ def _canonical_value(
                 ctx,
                 path,
                 redact_credentials=redact_credentials,
+                redact_connection_properties=redact_connection_properties,
             ),
             "type": "frozenset",
         }

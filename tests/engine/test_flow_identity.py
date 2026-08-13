@@ -339,6 +339,69 @@ output: ${step.output}
     assert flow_fingerprint(first) != flow_fingerprint(changed_endpoint)
 
 
+@pytest.mark.parametrize(
+    "declaration_name",
+    ["connection_string", "warehouse_connection_string"],
+)
+def test_connection_string_declaration_default_keeps_sanitized_identity(
+    declaration_name,
+):
+    source = f"""
+id: input-connection
+name: Input connection
+input:
+  {declaration_name}: str = __CONNECTION__
+nodes:
+  step:
+    kind: code
+    output: str
+    code: |
+      return "ok"
+output: ${{step.output}}
+"""
+    first_value = "postgres://alice:first@db.example:5432/app?sslmode=require"
+    second_value = "postgres://bob:second@db.example:5432/app?sslmode=require"
+    first = _compiled(source.replace("__CONNECTION__", first_value))
+    rotated = _compiled(source.replace("__CONNECTION__", second_value))
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first"):
+        assert credential not in manifest_text
+
+    for old, new in (
+        ("db.example", "other.example"),
+        (":5432", ":5433"),
+        ("/app?", "/other?"),
+        ("sslmode=require", "sslmode=verify-full"),
+    ):
+        changed = _compiled(
+            source.replace("__CONNECTION__", second_value.replace(old, new))
+        )
+        assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_connection_string_declaration_default_excludes_unrecognized_scalar():
+    source = """
+id: input-connection
+name: Input connection
+input:
+  connection_string: str = __CONNECTION__
+nodes:
+  step:
+    kind: code
+    output: str
+    code: |
+      return "ok"
+output: ${step.output}
+"""
+    first = _compiled(source.replace("__CONNECTION__", "first-raw-secret"))
+    rotated = _compiled(source.replace("__CONNECTION__", "second-raw-secret"))
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    assert "first-raw-secret" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+
 def test_flow_fingerprint_redacts_uri_credentials_in_node_env():
     first = _compiled()
     second = copy.deepcopy(first)
@@ -560,6 +623,72 @@ def test_connection_string_key_keeps_structured_endpoint_identity():
     changed = copy.deepcopy(second)
     changed.nodes["step"].env["connection_string"]["database"] = "other"
     assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_connection_string_key_keeps_sanitized_libpq_conninfo_identity():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["POSTGRES_CONNECTION_STRING"] = (
+        "host='db example' port=5432 dbname=app user='alice role' "
+        "password='first\\' secret' sslmode=require application_name=worker\\ one"
+    )
+    second.nodes["step"].env["POSTGRES_CONNECTION_STRING"] = (
+        "host='db example' port=5432 dbname=app user='bob role' "
+        "password='second\\' secret' sslmode=require application_name=worker\\ one"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice role", "first\\' secret"):
+        assert credential not in manifest_text
+
+    for old, new in (
+        ("host='db example'", "host='other example'"),
+        ("port=5432", "port=5433"),
+        ("dbname=app", "dbname=other"),
+        ("sslmode=require", "sslmode=verify-full"),
+        ("application_name=worker\\ one", "application_name=scheduler\\ one"),
+    ):
+        changed = copy.deepcopy(second)
+        changed.nodes["step"].env["POSTGRES_CONNECTION_STRING"] = changed.nodes[
+            "step"
+        ].env["POSTGRES_CONNECTION_STRING"].replace(old, new)
+        assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_connection_string_key_redacts_azure_shared_access_credentials():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["AZURE_SERVICE_BUS_CONNECTION_STRING"] = (
+        "Endpoint=sb://bus.example/;AccountName=account;"
+        "SharedAccessKeyName=policy;SharedAccessKey={first;key};"
+        "SharedAccessSignature=first-sas;EntityPath=orders;TransportType=amqp"
+    )
+    second.nodes["step"].env["AZURE_SERVICE_BUS_CONNECTION_STRING"] = (
+        "Endpoint=sb://bus.example/;AccountName=account;"
+        "SharedAccessKeyName=policy;SharedAccessKey={second;key};"
+        "SharedAccessSignature=second-sas;EntityPath=orders;TransportType=amqp"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("first;key", "first-sas"):
+        assert credential not in manifest_text
+
+    for old, new in (
+        ("bus.example", "other.example"),
+        ("AccountName=account", "AccountName=other"),
+        ("SharedAccessKeyName=policy", "SharedAccessKeyName=other-policy"),
+        ("EntityPath=orders", "EntityPath=payments"),
+        ("TransportType=amqp", "TransportType=amqp-websockets"),
+    ):
+        changed = copy.deepcopy(second)
+        changed.nodes["step"].env[
+            "AZURE_SERVICE_BUS_CONNECTION_STRING"
+        ] = changed.nodes["step"].env["AZURE_SERVICE_BUS_CONNECTION_STRING"].replace(
+            old, new
+        )
+        assert flow_fingerprint(first) != flow_fingerprint(changed)
 
 
 def test_connection_string_key_excludes_unrecognized_scalar():
@@ -1096,6 +1225,8 @@ def test_wait_manifest_redacts_credentials_recursively_but_keeps_semantics():
         "PGPASSWORD",
         "MYSQL_PWD",
         "SERVICE_ACCESS_TOKEN",
+        "SHARED_ACCESS_KEY",
+        "SHARED_ACCESS_SIGNATURE",
         "SLACK_BOT_TOKEN",
         "AWS_SESSION_TOKEN",
         "id_token",

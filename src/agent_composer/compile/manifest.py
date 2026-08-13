@@ -184,6 +184,8 @@ _CREDENTIAL_NAMES = frozenset(
         "secret_access_key",
         "secret_key",
         "session_token",
+        "shared_access_key",
+        "shared_access_signature",
         "sig",
         "signature",
         "slack_bot_token",
@@ -223,7 +225,14 @@ _CREDENTIAL_COMPACT_NAMES = frozenset(
 _ENVIRONMENT_VARIABLE_KEY = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
 _URI_CREDENTIAL_PARAM_NAMES = frozenset({"key", "user", "user_name", "username"})
 _CONNECTION_PROPERTY_CREDENTIAL_NAMES = frozenset(
-    {"pwd", "uid", "user", "user_id", "user_name", "username"}
+    {
+        "pwd",
+        "uid",
+        "user",
+        "user_id",
+        "user_name",
+        "username",
+    }
 )
 _DSN_IDENTITY_PROPERTY_NAMES = frozenset(
     {
@@ -238,6 +247,7 @@ _DSN_IDENTITY_PROPERTY_NAMES = frozenset(
         "driver",
         "endpoint",
         "endpoint_suffix",
+        "entity_path",
         "host",
         "hostname",
         "initial_catalog",
@@ -245,7 +255,10 @@ _DSN_IDENTITY_PROPERTY_NAMES = frozenset(
         "port",
         "server",
         "service",
+        "shared_access_key_name",
         "sid",
+        "sslmode",
+        "transport_type",
     }
 )
 _URI_PREFIX = re.compile(r"^\s*(?:[A-Za-z][A-Za-z0-9+.-]*:)+//")
@@ -585,9 +598,88 @@ def _redact_semicolon_dsn_credentials(value: str) -> str | None:
     return redacted
 
 
-def _redact_connection_credentials(
-    value: str, *, allow_generic_dsn: bool = False
-) -> tuple[str, bool]:
+def _libpq_property_spans(
+    value: str,
+) -> list[tuple[int, int, str]] | None:
+    """Parse libpq keyword/value fields, including quoted and escaped values."""
+    spans: list[tuple[int, int, str]] = []
+    cursor = 0
+    while cursor < len(value):
+        while cursor < len(value) and value[cursor].isspace():
+            cursor += 1
+        if cursor == len(value):
+            break
+
+        key_start = cursor
+        while (
+            cursor < len(value)
+            and not value[cursor].isspace()
+            and value[cursor] != "="
+        ):
+            cursor += 1
+        key = value[key_start:cursor]
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+            return None
+        while cursor < len(value) and value[cursor].isspace():
+            cursor += 1
+        if cursor == len(value) or value[cursor] != "=":
+            return None
+        cursor += 1
+        while cursor < len(value) and value[cursor].isspace():
+            cursor += 1
+
+        value_start = cursor
+        if cursor < len(value) and value[cursor] == "'":
+            cursor += 1
+            while cursor < len(value):
+                if value[cursor] == "\\":
+                    if cursor + 1 == len(value):
+                        return None
+                    cursor += 2
+                elif value[cursor] == "'":
+                    cursor += 1
+                    break
+                else:
+                    cursor += 1
+            else:
+                return None
+            if cursor < len(value) and not value[cursor].isspace():
+                return None
+        else:
+            while cursor < len(value) and not value[cursor].isspace():
+                if value[cursor] == "\\":
+                    if cursor + 1 == len(value):
+                        return None
+                    cursor += 2
+                else:
+                    cursor += 1
+        spans.append((value_start, cursor, key))
+    return spans
+
+
+def _redact_libpq_conninfo_credentials(value: str) -> str | None:
+    """Sanitize a recognized libpq keyword/value connection string."""
+    spans = _libpq_property_spans(value)
+    if not spans:
+        return None
+    normalized_keys = {
+        _normalized_key_spellings(key)[0] for _, _, key in spans
+    }
+    if normalized_keys.isdisjoint(_DSN_IDENTITY_PROPERTY_NAMES):
+        return None
+
+    redacted = value
+    for value_start, value_end, key in reversed(spans):
+        if _connection_property_credential_key(key):
+            redacted = (
+                redacted[:value_start]
+                + _REDACTED_URI_CREDENTIAL
+                + redacted[value_end:]
+            )
+    return redacted
+
+
+def _redact_connection_credentials(value: str) -> tuple[str, bool]:
     """Return a sanitized recognized URI/DSN and whether its structure was recognized."""
     sqlserver = _redact_jdbc_sqlserver_credentials(value)
     if sqlserver is not None:
@@ -598,10 +690,13 @@ def _redact_connection_credentials(
     uri = _redact_hierarchical_uri(value)
     if uri is not None:
         return uri, True
-    if ";" in value or allow_generic_dsn:
+    if ";" in value:
         dsn = _redact_semicolon_dsn_credentials(value)
         if dsn is not None:
             return dsn, True
+    conninfo = _redact_libpq_conninfo_credentials(value)
+    if conninfo is not None:
+        return conninfo, True
     return value, False
 
 
@@ -706,6 +801,27 @@ def _canonical_set(
         ctx.values.remove(object_id)
 
 
+def _canonical_connection_value(
+    value: Any,
+    ctx: _ManifestContext,
+    path: str,
+) -> Any:
+    """Canonicalize only a safely recognized connection string or structured mapping."""
+    if isinstance(value, str):
+        sanitized, recognized = _redact_connection_credentials(value)
+        if recognized:
+            return {"type": "str", "value": sanitized}
+    elif isinstance(value, dict):
+        return _canonical_value(
+            value,
+            ctx,
+            path,
+            redact_credentials=True,
+            redact_connection_properties=True,
+        )
+    return _MISSING
+
+
 def _canonical_mapping(
     value: dict,
     ctx: _ManifestContext,
@@ -731,23 +847,12 @@ def _canonical_mapping(
                 and _URI_PREFIX.match(key) is None
             )
             if redacted_string_key and _connection_string_key(key):
-                if isinstance(item, str):
-                    sanitized, recognized = _redact_connection_credentials(
-                        item,
-                        allow_generic_dsn=True,
-                    )
-                    if not recognized:
-                        continue
-                    canonical_item = {"type": "str", "value": sanitized}
-                elif isinstance(item, dict):
-                    canonical_item = _canonical_value(
-                        item,
-                        ctx,
-                        f"{path}.values[{index}]",
-                        redact_credentials=True,
-                        redact_connection_properties=True,
-                    )
-                else:
+                canonical_item = _canonical_connection_value(
+                    item,
+                    ctx,
+                    f"{path}.values[{index}]",
+                )
+                if canonical_item is _MISSING:
                     continue
             elif redacted_string_key and (
                 _credential_key(key)
@@ -919,7 +1024,15 @@ def _type_manifest(value: Type | None, ctx: _ManifestContext, path: str) -> Any:
 def _declaration_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, Any]:
     """Canonicalize a ParamDecl or duck-typed flow InputDecl without importing compose."""
     _check_fields(value, _DECL_FIELDS, path)
-    if _credential_key(value.name):
+    if _connection_string_key(value.name):
+        default = _canonical_connection_value(
+            value.default,
+            ctx,
+            f"{path}.default",
+        )
+        if default is _MISSING:
+            default = {"type": "redacted"}
+    elif _credential_key(value.name):
         default = {"type": "redacted"}
     else:
         default = _canonical_value(

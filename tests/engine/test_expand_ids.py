@@ -1,4 +1,5 @@
-from agent_composer.compile.expand import ns, map_callsite, ask_resume_edge_id
+from agent_composer.compile.expand import ask_resume_edge_id
+from agent_composer.nodes.ids import map_callsite, ns
 
 
 def test_ns_joins_callsite_and_child_id():

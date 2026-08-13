@@ -5,7 +5,8 @@ returns a *description* (`Grow(Flow)`) and the engine GROWS the live graph by cl
 target child(ren) deep-namespaced into the running `CompiledFlow`. This module holds the
 **pure** machinery that growth keys off:
 
-- `ns` / `map_callsite` / `ask_resume_edge_id`: deterministic id minting. Every
+- `ns` / `map_callsite` (imported from `nodes.ids`) / `ask_resume_edge_id`:
+  deterministic id minting. Every
   cloned node/edge id is a pure function of `(callsite, child static id, element index)` —
   NO emission counter — so a re-clone on kill-recovery re-keys identically.
 
@@ -29,6 +30,7 @@ from agent_composer.expr import rewrite_template_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.nodes.base import Node, ParamDecl
 from agent_composer.nodes.end.node import EndNode
+from agent_composer.nodes.ids import map_callsite, ns
 from agent_composer.nodes.start.node import StartNode
 
 # Reserved prefix for END params synthesized from a lowered spawner post-assert. Mirrors the
@@ -36,17 +38,6 @@ from agent_composer.nodes.start.node import StartNode
 # because the layer ladder forbids `compile` importing from `compose`. Authors cannot write
 # `__`-prefixed ids, so a synth name never collides with an author id.
 _SYNTH_PREFIX = "__assert_"
-
-
-def ns(callsite: str, child_id: str) -> str:
-    """Namespace a child node/edge id under its callsite: `<callsite>/<child_id>`.
-    `callsite` = spawner id (REF/agent) or `f"{spawner}#{i}"` (MAP element i); nests."""
-    return f"{callsite}/{child_id}"
-
-
-def map_callsite(spawner_id: str, i: int) -> str:
-    """The per-element callsite for MAP element `i`: `f"{spawner}#{i}"`."""
-    return f"{spawner_id}#{i}"
 
 
 def ask_resume_edge_id(callsite: str) -> str:

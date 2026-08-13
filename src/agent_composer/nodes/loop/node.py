@@ -20,9 +20,10 @@ BOTH `run` (on `L~k`) and `replay_grow` (on `L`) build body/driver at the ORIGIN
 """
 from typing import Any, ClassVar, Optional
 
-from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, ns
+from agent_composer.compile.expand import loop_continue_subgraph
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output
+from agent_composer.nodes.ids import map_callsite, ns
 
 
 class LoopMaxExceeded(RuntimeError):

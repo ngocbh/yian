@@ -121,7 +121,8 @@ class ComposeFile(BaseModel):
     system: dict[str, Any] = Field(default_factory=dict)
     # Flow-level model-selection defaults (the cascade's flow layer). Optional — absent
     # is `{}`. A child agent fills the gaps it leaves unset from this, then from the
-    # parent/CLI layers; `resolve_llm_cascade` bakes the effective dict per agent.
+    # parent/CLI layers and the explicit process defaults captured at run initialization;
+    # `resolve_llm_cascade` bakes each dict and returns the complete static-path map.
     llm_config: dict[str, Any] = Field(default_factory=dict)
     # Flow-level static per-node config defaults (`{str -> literal}`). Optional — absent is
     # `{}`. Each node in THIS flow merges it under its own `env:` (node override wins); the

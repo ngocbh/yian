@@ -35,14 +35,15 @@ shape of it:
 typesys/      typed value system (values) + variable pool                 [leaf, no deps]
 events.py     run + node event vocabulary
 expr/         one ${...} expression grammar: parse -> AST -> evaluate / ref-walk on the pool
-nodes/        Node contract (base) + per-kind implementations
+nodes/        pure Node contract + per-kind implementations; spawners return growth seeds
               (start, end, agent, code, model, tool, case, call, map,
                loop, human_input, wait)
-compile/      compiled IR (CompiledFlow) + representation-neutral validation
+compile/      compiled IR + validation; build_grow; stable manifests/fingerprints;
+              effective static-path LLM configuration maps
 compose/      the Compose-YAML loader: text -> CompiledFlow
               (helpers/nodes/parse/desugar/edges/validate/build/loader)
 run.py        the run boundary: ComposedFlow + inputs -> RunResult (run/resume)
-runtime/      state_manager, single-threaded engine, parallel worker pool, node watchdog
+runtime/      kind-blind state manager, engine drains, worker pool, node watchdog
 suspension/   pause reasons, commands, checkpoint
 llm_clients/  provider clients (lazy-imported) + LLMConfig + model_from_config
 tools/        the tool registry (TOOL_REGISTRY / register_tool / resolve_tools)
@@ -55,3 +56,19 @@ with `compile`/`typesys`/`nodes`/`expr` feeding `compose` (the front-end that re
 YAML into the IR), `expr` feeding nodes, and `suspension` feeding runtime. The
 package-root `run.py` is the run boundary: it consumes `compose`'s `ComposedFlow` and
 drives the `runtime` engine, sitting above both and imported by neither.
+
+Dynamic growth preserves that direction through dependency inversion. A spawner
+node returns `Grow(seed, prune)` without importing `compile`; the kind-aware
+`compile.expand.build_grow(spawner, seed)` turns that seed into a deterministic
+`Flow`. The package-root run boundary injects `build_grow` into `FlowEngine`, whose
+splice path remains kind-blind and never imports `compile.expand` (it may import
+`compile.model`, the topology contract it executes). The seed is the durable
+identity of the expansion, and compile-owned expansion digests cover the resulting
+entry/end ids and topology.
+
+Compile also owns stable identity for the static program. `flow_manifest`
+canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and
+`resolve_llm_cascade` returns a complete map keyed by slash-separated static agent
+paths. The run boundary snapshots process provider/model defaults once at run
+initialization and supplies them explicitly; `apply_effective_llm_map` can replay
+the complete map without consulting ambient settings.

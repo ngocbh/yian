@@ -96,8 +96,10 @@ Most are just the functional model (above) made enforceable:
 - **Hierarchical / composable** *(function composition)* — a node can *be*
   another flow (a `call:`/`uses:` reference → a child subgraph seeded from the
   parent's pool), nestable to arbitrary depth. This is how an agent calls another
-  agent and how composite nodes are built. Never assume a node is a leaf; preserve
-  recursion through compile + run + checkpoint.
+  agent and how composite nodes are built. A spawner returns only a canonical
+  `Grow(seed, prune)`; the compile-owned `build_grow` interprets that seed after the
+  package-root run boundary injects it into runtime. Never assume a node is a leaf;
+  preserve recursion through compile + run + checkpoint.
 - **General / expressive** — the engine **privileges no output type** (report,
   classification, decision, number, structured record — whatever the terminal
   node emits) and no domain. When adding a primitive, prefer the most general form
@@ -128,7 +130,9 @@ Most are just the functional model (above) made enforceable:
   the closed `Outcome` sum and on node-owned traits/hooks (`binds_per_item`, `bind_reserved`,
   `grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`). A
   ratchet test (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion`
-  dispatch count at 0.
+  dispatch count at 0. A separate layer ratchet forbids `nodes -> compile` and
+  `runtime -> compile.expand`: nodes describe seeds, compile constructs fragments,
+  and runtime receives the constructor as an injected callable.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
   only a node's own `_run_impl()` interprets known keys (e.g. AGENT's `max_tool_iterations`). It is the
@@ -158,4 +162,6 @@ GitHub issue when the work lands (reference the commit/PR). Commit at green.
 Follow the **`structure` skill** for where files and folders go — package charters
 in `__init__.py`, `common.py` vs `utils.py`, one-way imports, no cycles. The
 engine's layer ladder (`events ← typesys ← nodes ← compile ← compose`, with `expr`
-and `suspension` feeding in) is an instance of that framework.
+feeding nodes and `suspension` feeding runtime) is an instance of that framework.
+The package-root `run.py` sits above compose and runtime and wires cross-layer
+capabilities: notably it injects compile's `build_grow` into the kind-blind runtime.

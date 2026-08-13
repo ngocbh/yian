@@ -155,7 +155,9 @@ engine derives a schema from `output:` and the model emits a conforming value
 at the write boundary and retried up to `retries:` times (default 2) on deviation.
 Use a downstream `code`/`model` node only for deterministic post-processing. To give
 an agent ordinary tools: `tools: [tool_id, ...]` (requires `mode: tool_calling`).
-A node may pin its model via `llm_config:`; otherwise the environment defaults apply.
+A node may pin its model via `llm_config:`; otherwise the process defaults captured
+once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
+layers but still receives those provider/model defaults.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +
 per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
 agent's tool-calling loop (default `-1` = no cap).

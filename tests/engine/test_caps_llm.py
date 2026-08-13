@@ -104,4 +104,30 @@ def test_agent_run_uses_injected_llm_over_default(monkeypatch):
     assert chat.calls == 1
 
 
+def test_agent_direct_run_falls_back_to_lazy_package_factory(monkeypatch):
+    """A no-cap direct driver resolves the lower llm_clients seam at call time."""
+    from langchain_core.messages import AIMessage
+
+    import agent_composer.llm_clients as llm_mod
+
+    class _FakeChat:
+        def invoke(self, messages):
+            return AIMessage(content="direct answer")
+
+    seen = []
+    chat = _FakeChat()
+
+    def factory(config):
+        seen.append(config)
+        return chat
+
+    monkeypatch.setattr(llm_mod, "model_from_config", factory)
+    config = {"provider": "openai", "model": "gpt-test"}
+    node = AgentNode("direct", prompt="hi", llm_config=config, mode="plain")
+
+    result = node._run_impl({})
+
+    assert result == Output(value="direct answer")
+    assert seen == [config]
+
 

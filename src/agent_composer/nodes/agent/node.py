@@ -31,8 +31,9 @@ The node builds its chat model from the engine-injected `caps['llm']` provider (
 `model_from_config`-shaped factory the engine owns; gated by the `needs_llm` trait) and hands
 the mode the prompt rendered against its **declared inputs** (strict AGENT — the prompt sees
 only `${name}` bound inputs, not the pool), the tools/controls, and the model. The engine
-imports an LLM SDK by design — the old "engine imports no LLM SDK" rule was dropped;
-a mode talks to langchain directly.
+path always supplies that capability; a direct no-cap driver falls back to the lower
+`llm_clients.model_from_config` package attribute. The engine imports an LLM SDK by design —
+the old "engine imports no LLM SDK" rule was dropped; a mode talks to langchain directly.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar, Optional, Union
 
+import agent_composer.llm_clients as llm_clients
 from agent_composer.expr.template import render_template_record
 from agent_composer.nodes.agent.controls import CONTROL_TOOLS
 from agent_composer.nodes.agent.modes import MODES, AgentRunContext
@@ -101,7 +103,8 @@ class AgentNode(Node):
             Plain-dict model selection (normalized to `LLMConfig` by `model_from_config`).
             On construction this is the node's OWN authored config; `resolve_llm_cascade`
             later overwrites `self.llm_config` with the EFFECTIVE config (own gap-filled by
-            the flow/parent/CLI layers). The authored source is kept on `own_llm_config`.
+            the flow/parent/CLI layers and explicit process provider/model defaults captured
+            at run initialization). The authored source is kept on `own_llm_config`.
         llm_inherit (`bool`, *optional*, defaults to `True`):
             Whole-node cascade opt-out. `False` (authored as `llm_config: {inherit: false}`)
             ignores flow, parent, and CLI layers, but still fills missing provider/model
@@ -217,14 +220,12 @@ class AgentNode(Node):
         )
 
     def _run_impl(self, inputs: dict, **caps: Any) -> NodeResult:
-        # caps['llm'] is the engine-owned model factory (the needs_llm gate). Fall back to the
-        # lazy package thunk for a direct node._run_impl(...) with no caps (direct-driver tests). The
-        # import is lazy to avoid an import cycle (runtime.eval_node imports nodes.base).
+        # caps['llm'] is the engine-owned model factory (the needs_llm gate). A direct
+        # node._run_impl(...) driver has no caps, so read the lower llm_clients package
+        # attribute at call time; monkeypatches remain visible without importing runtime.
         llm = caps.get("llm")
         if llm is None:
-            from agent_composer.runtime.eval_node import _default_llm
-
-            llm = _default_llm
+            llm = llm_clients.model_from_config
         # Dispatch on the closed `entry` sum. A mid-loop control pause lowers to a
         # continuation `Grow`; the engine mints the Resume half and the re-entry
         # frame rides as graph data. `llm_config` carries forward.

@@ -130,7 +130,8 @@ class CompiledFlow(Flow):
         flow_llm_config (`dict[str, Any]`):
             The flow's authored `llm_config:` model-selection defaults (the cascade's flow
             layer); `{}` when absent. `resolve_llm_cascade` gap-fills each agent's effective
-            config from this, the parent chain, and the CLI layer at run start.
+            config from this, the parent chain, the CLI layer, and explicit process defaults
+            captured once at run initialization. It returns the complete static-path map.
     """
 
     def __init__(self, nodes: dict[str, Node], edges: list[Edge],

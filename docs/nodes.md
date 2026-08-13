@@ -58,19 +58,22 @@ Every kind is one of two shapes — a *concept*, not a class hierarchy, decided 
 what `run` returns:
 
 ```
-   LEAF  (is_spawner=False)                 SUBFLOW  (is_spawner=True)
-   run → Output | Pause | Route             run → Grow(subgraph)
-   one unit of work:                        "a node that IS a smaller flow":
-   agent, code, model, tool, case,          expands into __start__ → children → __end__
-   human_input, wait, start, end            call, map, loop
+   LEAF  (is_spawner=False)                 SPAWNER  (is_spawner=True)
+   run → Output | Pause | Route             run → Grow(seed) | Output
+   one unit of work:                        may expand into __start__ → children → __end__
+   code, model, tool, case,                  call, map, loop; temporary agent continuation
+   human_input, wait, start, end
 ```
 
 - A **leaf** does one thing and returns `Output` (or `Pause` if it must wait).
 - A **router** (`case`) is a leaf that returns `Route(handle)` — no value, it just selects
   the live out-edge (siblings skip-flood). Still `is_spawner=False`; routing isn't growth.
-- A **subflow** returns `Grow` describing the boxes to splice in. By convention the
-  subgraph has a single `__start__` and `__end__` (whose result becomes this node's result
-  via a baked `commit_as`). See [growth](engine.md#growth-a-node-that-is-really-a-subflow).
+- A **spawner** returns `Grow` with a canonical seed describing the requested work.
+  Compile-owned `build_grow` turns it into a subgraph with one `__start__` and
+  `__end__` (whose result becomes this node's result via a baked `commit_as`). See
+  [growth](engine.md#growth-a-node-that-is-really-a-subflow). An agent normally
+  returns `Output`, but its current control-pause compatibility path is also a
+  spawner and returns a seed-first continuation `Grow`.
 
 ## A kind is just a `run`
 
@@ -90,13 +93,13 @@ class CaseNode(NodeBase):              # ROUTER — pick a branch, produce no va
 class MapNode(NodeBase):              # SUBFLOW — run a child once per item
     is_spawner = True
     def run(self, inputs, **caps):
-        children = [clone(self.body, i, bake(item)) for i, item in enumerate(inputs["over"])]
-        end = ListEnd(n=len(children), commit_as=self.id)   # gathers N results; commits under me
-        return Grow(Flow(nodes=[Start(), *children, end], edges=..., start_id=..., end_id=...))
+        records = [caps["bind_item"](item) for item in inputs["over"]]
+        return Grow(seed=records)       # compile.build_grow clones + wires the child flow
 ```
 
 Notice what is **not** here: no node reads the pool, emits an event, or checks its own
-success/failure plumbing. Each kind expresses only its own logic.
+success/failure plumbing. A spawner also never imports compile or constructs graph
+topology. Each kind expresses only its own logic.
 
 ## Traits, briefly
 

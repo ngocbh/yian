@@ -77,11 +77,11 @@ Outcome =
   | Output(value, commit_as=None)   # "here is my result"    → bind it, unlock dependents
   | Route(handle)                   # "route only, no value" → take this branch, skip siblings
   | Pause(reason)                   # "I need to wait/ask"    → checkpoint and stop
-  | Grow(subgraph, prune=∅)         # "I'm really a subflow"  → splice in more nodes
+  | Grow(seed, prune=∅)             # "I'm really a subflow"  → build + splice more nodes
 ```
 
 ```python
-def apply(outcome, node, state, queue, graph):
+def apply(outcome, node, state, queue, graph, grow_builder):
     match outcome:                        # the ONLY match in the engine — never on kind
         case Output(value, commit_as):
             target = commit_as or node.id
@@ -90,7 +90,8 @@ def apply(outcome, node, state, queue, graph):
             queue.route(node, handle)                         # take edge, skip-flood siblings
         case Pause(reason):
             checkpoint(state, queue); raise Suspended(node, reason)
-        case Grow(subgraph, prune):
+        case Grow(seed, prune):
+            subgraph = grow_builder(node, seed)               # injected by run.py
             graph.splice(subgraph); graph.prune(prune)        # add boxes; retire spent ones
             queue.add(subgraph.start)
 ```
@@ -101,12 +102,19 @@ a node that *is really a subflow* expands.
 
 ## Growth: a node that is really a subflow
 
-`call`, `map`, and `loop` are not single steps — each *is a smaller flow*. Rather than
-hard-coding them, such a node returns a self-describing `Flow` subgraph and the engine
-splices it in. One convention unifies all three: **the subgraph is a well-formed sub-flow
-with a single `__start__` and `__end__`**. The engine schedules the `start`, and the
-spawner bakes `commit_as=<its own id>` onto the terminal — so however many inner nodes
-run, downstream sees one clean output committed under the spawner's id.
+`call`, `map`, and `loop` are not single steps — each *is a smaller flow*. The
+temporary AGENT control-pause compatibility path also expands a continuation. A spawner
+returns only a canonical, kind-shaped seed; no node imports the compile layer or builds
+topology. `compile.expand.build_grow` is the sole kind-aware interpreter that turns the
+spawner and seed into a self-describing `Flow`. Package-root `run.py` injects that
+callable into the kind-blind runtime for live growth and checkpoint replay.
+
+One convention unifies all three constructed fragments: **the subgraph is a
+well-formed sub-flow with a single `__start__` and `__end__`**. The engine schedules
+the `start`, and the builder bakes `commit_as=<spawner id>` onto the terminal — so
+however many inner nodes run, downstream sees one clean output committed under the
+spawner's id. Runtime may consume `compile.model` topology but never imports
+`compile.expand`.
 
 The splice carries a few extra concerns (stamp recursion depth, loop bookkeeping),
 but the growth core reads **node-owned traits**

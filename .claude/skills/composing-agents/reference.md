@@ -208,11 +208,13 @@ it leaves unset from the layer outside it. Precedence (most specific first):
 1. the agent's own `llm_config:`
 2. the enclosing (sub)flow's `llm_config:`, then each parent flow outward
 3. the CLI `--provider` / `--model` flags
-4. env defaults in `model_from_config`
+4. process provider/model defaults, read exactly once when the run initializes
 
 Set flow-wide defaults with a top-level `llm_config:`; override one field per node;
-opt a node out of the whole cascade with `inherit: false` (own dict only). See
-[`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml).
+opt a node out of the authored outer layers with `inherit: false` (own dict plus
+the snapshotted process provider/model defaults; no flow/parent/CLI layers). The
+static tree is resolved up front, so later environment changes do not alter the
+effective selection. See [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml).
 
 ```yaml
 llm_config: {provider: anthropic, temperature: 0.2}   # flow layer

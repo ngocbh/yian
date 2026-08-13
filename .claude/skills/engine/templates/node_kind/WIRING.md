@@ -9,6 +9,10 @@ for an **authorable leaf** kind (one a flow names directly, like `code`/`tool`).
 > Internal-only kinds (`START`/`END`) are *synthesized* by the loader, not authored —
 > they have no `compose/nodes/<kind>.py` module and expand at load/runtime instead. This
 > checklist is for a leaf you want authors to write.
+>
+> A simple leaf returns `Output`, `Route`, or `Pause` and skips the conditional
+> spawner step below. If the new kind can return `Grow`, it is a spawner as well as
+> authorable and must follow §2a; that requirement does not apply to ordinary leaves.
 
 Use `code` (`compose/nodes/code.py`, the simplest real leaf) as the reference
 implementation throughout. Build bottom-up by dependency, **one test green before the
@@ -18,11 +22,12 @@ next step** (CLAUDE.md).
 
 Add a member to the `NodeKind` enum — the single source of the tag. It is a closed
 vocabulary (no registry/metaclass); the engine core does NOT dispatch on it, so a new
-leaf needs no engine change — its behavior is entirely in its own `_run_impl` (and, for a
-spawner, the node-owned growth traits/hooks: `binds_per_item`, `bind_reserved`,
-`grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`). The base `Node.run` is a
-concrete template method that fires the node's asserts around `_run_impl` — a leaf never
-overrides `run`.
+leaf needs no engine change — its behavior is entirely in its own `_run_impl`. A
+spawner additionally owns its growth traits/hooks (`grow_depth_delta`,
+`grow_restamps_self`, `is_loop`) and the compile interpretation described in §2a.
+The other node-owned capability traits (`binds_per_item`, `bind_reserved`,
+`needs_llm`) remain available to either shape. The base `Node.run` is a concrete
+template method that fires the node's asserts around `_run_impl`; do not override it.
 
 ```python
 class NodeKind(str, Enum):
@@ -37,6 +42,26 @@ class NodeKind(str, Enum):
   around it — do not override `run`).
 - `nodes/xxx/__init__.py` — copy `__init__.py.template` (re-export only; the
   package charter per the `structure` skill).
+
+### 2a. Spawner only — seed-first growth construction
+
+Skip this section for a simple leaf. A kind whose `_run_impl` may return `Grow`
+must preserve the layer boundary:
+
+- Return only `Grow(seed=<canonical value>, prune=<ids>)`. The node owns and
+  documents the seed schema but never constructs a `Flow` and never imports
+  `compile`.
+- Set `is_spawner = True` and only the node-owned growth traits the generic splice
+  needs (`grow_depth_delta`, `grow_restamps_self`, or `is_loop`).
+- Add the kind-aware interpretation to the closed match in
+  `compile/expand.py::build_grow(spawner, canonical_seed)`. It validates the seed
+  and returns one deterministic, self-contained `Flow` fragment.
+- Add focused tests proving the node returns only the canonical seed and
+  `build_grow` reconstructs the expected entry/end ids, topology, and wiring.
+
+Do not add a runtime kind branch or a `runtime -> compile.expand` import. The
+package-root run boundary injects `build_grow` into the kind-blind runtime for live
+growth and replay.
 
 ## 3. `compose/nodes/xxx.py` — descriptor (subclass of `NodeDescriptor`)
 
@@ -98,7 +123,8 @@ If anything outside `compose/` references `XxxDescriptor`, add it to the imports
 ## 6. `tests/engine/test_xxx.py` — prove it
 
 Copy `test_node.py.template`. At minimum: a direct `_run_impl()` unit test and one
-`load_flow` + `run_flow` end-to-end. Run:
+`load_flow` + `run_flow` end-to-end. For a spawner, also test its canonical seed
+and the matching `build_grow` arm (§2a). Run:
 
 ```bash
 PYTHONPATH=src pytest tests/engine/test_xxx.py -q
@@ -118,6 +144,7 @@ Close the tracking GitHub issue when the work lands, referencing the commit/PR
 |------------|------|--------|
 | Enum tag | `nodes/base.py` | `class NodeKind` |
 | Node impl | `nodes/xxx/node.py` + `__init__.py` | new package |
+| Growth builder *(spawner only)* | `compile/expand.py` | `build_grow` closed match |
 | Descriptor (subclass `NodeDescriptor`) | `compose/nodes/xxx.py` | copy `code.py` |
 | Register | `compose/nodes/__init__.py` | `_DESCRIPTORS` tuple |
 | Re-export | `compose/__init__.py` | imports + `__all__` |

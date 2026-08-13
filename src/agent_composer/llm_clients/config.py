@@ -14,6 +14,31 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict
 
 
+# One provider vocabulary shared by the validated config carrier and the factory that
+# consumes it. Keep routing subsets in factory.py; its import-time census verifies that
+# every name here has exactly one route and that no factory route bypasses validation.
+SUPPORTED_LLM_PROVIDERS: tuple[str, ...] = (
+    "openai",
+    "xai",
+    "deepseek",
+    "qwen",
+    "qwen-cn",
+    "glm",
+    "glm-cn",
+    "minimax",
+    "minimax-cn",
+    "openrouter",
+    "vllm",
+    "ollama",
+    "anthropic",
+    "google",
+    "azure",
+)
+# `typing.Literal` flattens a tuple argument into its member values. Deriving the type
+# from the tuple keeps Pydantic's enum validation/schema and the factory gate in lockstep.
+LLMProvider = Literal[SUPPORTED_LLM_PROVIDERS]  # type: ignore[valid-type]
+
+
 class LLMConfig(BaseModel):
     """
     Per-AGENT LLM selection — the carrier `model_from_config` resolves into a chat model.
@@ -24,8 +49,9 @@ class LLMConfig(BaseModel):
 
     Attributes:
         provider (`str`, *optional*, defaults to `None`):
-            One of `anthropic`/`openai`/`google`/`deepseek`/`xai`/`ollama`/`vllm`.
-            `None` inherits the global default provider.
+            One of `openai`, `xai`, `deepseek`, `qwen`, `qwen-cn`, `glm`, `glm-cn`,
+            `minimax`, `minimax-cn`, `openrouter`, `vllm`, `ollama`, `anthropic`,
+            `google`, or `azure`. `None` inherits the global default provider.
         model (`str`, *optional*, defaults to `None`):
             Provider-specific model id. `None` inherits the global default model.
         anthropic_effort (`str`, *optional*, defaults to `None`):
@@ -38,9 +64,7 @@ class LLMConfig(BaseModel):
             Sampling temperature; `None` leaves the provider default.
     """
 
-    provider: Optional[
-        Literal["anthropic", "openai", "google", "deepseek", "xai", "ollama", "vllm"]
-    ] = None
+    provider: Optional[LLMProvider] = None
     model: Optional[str] = None
     anthropic_effort: Optional[Literal["high", "medium", "low"]] = None
     openai_reasoning_effort: Optional[Literal["high", "medium", "low"]] = None

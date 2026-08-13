@@ -38,6 +38,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
+from agent_composer._settings import default_llm_model, default_llm_provider
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.llm_cascade import resolve_llm_cascade
 from agent_composer.events import (
@@ -179,7 +180,8 @@ def run_flow(
             `RunPaused`, `RunFailed`, `RunAborted`). Use it for progress reporting.
         llm_config (`dict[str, Any]`, *optional*, defaults to `None`):
             Outermost cascade layer (CLI `--provider`/`--model`); fills only the gaps a
-            flow leaves unset, then `model_from_config` applies env/global defaults.
+            flow leaves unset. The run boundary reads the process provider/model defaults
+            once each and bakes a complete effective config onto every agent before execution.
         num_workers (`int`, *optional*, defaults to `0`):
             Engine drive mode. `0` is the single-threaded inline drain (deterministic
             event order); `>=1` spawns a worker pool of that size so independent ready
@@ -209,9 +211,14 @@ def run_flow(
     # The loaded graph is a reusable program. Cascade resolution and recursive-node expansion
     # both mutate their graph, so every fresh run receives its own live copy.
     flow = copy.deepcopy(loaded.compiled)
-    # Resolve the per-agent effective llm_config before the engine reads the graph: the CLI
-    # layer (llm_config) is the outermost gap-fill layer of the cascade. See resolve_llm_cascade.
-    resolve_llm_cascade(flow, llm_config or {})
+    # Snapshot ambient defaults exactly once each. Every agent receives concrete provider/model
+    # values before the engine reads the graph, so later model construction cannot observe an
+    # environment change. The CLI layer is the outermost authored gap-fill layer.
+    llm_defaults = {
+        "provider": default_llm_provider().lower(),
+        "model": default_llm_model(),
+    }
+    resolve_llm_cascade(flow, llm_config or {}, defaults=llm_defaults)
 
     pool = VariablePool()
     seed_system_clock(pool)  # ${system.today}/${system.now} — once per run
@@ -314,8 +321,9 @@ def resume_flow(
         llm_config (`dict[str, Any]`, *optional*, defaults to `None`):
             Outermost cascade layer (CLI `--provider`/`--model`); fills only the gaps a flow
             leaves unset. On a durable resume the CLI config is NOT persisted across
-            processes, so the host must re-supply it; it is re-applied to the recompiled flow
-            before `restore`.
+            processes, so the host must re-supply it; it is re-applied with one snapshot of
+            the process provider/model defaults before `restore`. A live resume retains its
+            already-resolved configs and does not read defaults again.
         num_workers (`int`, *optional*, defaults to `None`):
             Override the drive mode for a DURABLE (`checkpoint=`) resume; `None` keeps the
             checkpointed count. Ignored with a live `engine=` (the live engine keeps its own
@@ -337,10 +345,14 @@ def resume_flow(
         # fresh run. A live engine already owns its graph and must keep using that instance.
         flow = copy.deepcopy(loaded.compiled)
         # Resolve the cascade BEFORE restore: restore's replay re-clones each CALL/MAP child
-        # from the static graph, so the effective config must be baked on first (the CLI layer
-        # is not persisted across processes — the host re-supplies it here). In-process resume
-        # via engine= already carries the resolved configs baked on the live graph.
-        resolve_llm_cascade(flow, llm_config or {})
+        # from the static graph, so the effective config must be baked on first. Snapshot the
+        # ambient defaults once each for this durable initialization. In-process resume via
+        # engine= already carries the resolved configs and does not read settings again.
+        llm_defaults = {
+            "provider": default_llm_provider().lower(),
+            "model": default_llm_model(),
+        }
+        resolve_llm_cascade(flow, llm_config or {}, defaults=llm_defaults)
         engine = FlowEngine.restore(
             flow,
             checkpoint,

@@ -821,18 +821,17 @@ def _resume_to_terminal(
 def _agent_providers(loaded, cli_cfg: Dict[str, Any]) -> List[str]:
     """Collect the distinct effective LLM providers of every agent node in `loaded`.
 
-    Resolves the `llm_config` cascade (with `cli_cfg` as the outermost gap-fill layer)
-    on a throwaway copy of the compiled flow — so the live flow is untouched — then walks
-    the whole static call tree (top-level nodes plus every `call`/`map`/`loop` body child)
-    reading each agent node's baked provider. A node that still names no provider falls
-    back to the CLI override then the process default, matching what generation resolves.
+    Snapshots the process provider/model defaults once each, then resolves the
+    `llm_config` cascade (with `cli_cfg` as the outermost gap-fill layer) on a throwaway
+    copy of the compiled flow. The returned effective map covers the whole static call
+    tree, and every provider in it is concrete.
 
     Args:
         loaded (`ComposedFlow`):
             The compiled flow whose agent providers to enumerate.
         cli_cfg (`dict[str, Any]`):
             The `--provider`/`--model` CLI layer (may be empty) — the cascade's
-            outermost gap-fill layer and the provider fallback.
+            outermost authored gap-fill layer.
 
     Returns:
         `List[str]`:
@@ -840,27 +839,21 @@ def _agent_providers(loaded, cli_cfg: Dict[str, Any]) -> List[str]:
     """
     import copy
 
-    from agent_composer._settings import default_llm_provider
+    from agent_composer._settings import default_llm_model, default_llm_provider
     from agent_composer.compile.llm_cascade import resolve_llm_cascade
-    from agent_composer.nodes.agent import AgentNode
 
     probe = copy.deepcopy(loaded.compiled)
-    resolve_llm_cascade(probe, dict(cli_cfg))
-    fallback = cli_cfg.get("provider") or default_llm_provider()
+    defaults = {
+        "provider": default_llm_provider().lower(),
+        "model": default_llm_model(),
+    }
+    effective = resolve_llm_cascade(probe, dict(cli_cfg), defaults=defaults)
 
     seen: List[str] = []
-
-    def _walk(flow) -> None:
-        for node in flow.nodes.values():
-            if isinstance(node, AgentNode):
-                prov = (node.llm_config or {}).get("provider") or fallback
-                if prov not in seen:
-                    seen.append(prov)
-            child = getattr(node, "child", None)
-            if child is not None and hasattr(child, "nodes"):
-                _walk(child)
-
-    _walk(probe)
+    for config in effective.values():
+        provider = config["provider"]
+        if provider not in seen:
+            seen.append(provider)
     return seen
 
 

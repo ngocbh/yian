@@ -104,7 +104,8 @@ class AgentNode(Node):
             the flow/parent/CLI layers). The authored source is kept on `own_llm_config`.
         llm_inherit (`bool`, *optional*, defaults to `True`):
             Whole-node cascade opt-out. `False` (authored as `llm_config: {inherit: false}`)
-            makes the effective config the node's own dict only — no flow/parent/CLI layers.
+            ignores flow, parent, and CLI layers, but still fills missing provider/model
+            fields from the process defaults captured at run initialization.
         mode (`str`, *optional*, defaults to `"plain"`):
             The loop method; must be a registered mode.
         retries (`int`, *optional*, defaults to `2`):

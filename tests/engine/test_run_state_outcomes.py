@@ -477,18 +477,17 @@ def test_success_canonical_copies_isolate_input_record_pool_and_observers():
     assert success_record.value["value"] == {"nested": [["original"]]}
 
 
-def test_success_rejects_stale_reducer_authority_before_append():
+def test_competing_success_plans_reject_the_second_sequence_before_append():
     state, log = _initialized_and_started(_fanout_flow())
-    prepared = prepare_node_succeeded(state, START_ID, {"value": "done"})
-    sequence = log.next_sequence
-    state.input["tampered"] = True
+    first = prepare_node_succeeded(state, START_ID, {"value": "done"})
+    second = prepare_node_succeeded(state, START_ID, {"value": "done"})
 
-    with pytest.raises(ValueError, match="authority is stale"):
-        commit_prepared(log, state, prepared)
+    commit_prepared(log, state, first)
+    sequence = log.next_sequence
+    with pytest.raises(ValueError, match="run-state sequence mismatch"):
+        commit_prepared(log, state, second)
 
     assert log.next_sequence == sequence
-    assert START_ID in state.in_flight
-    assert state.node_state[START_ID] is NodeState.UNKNOWN
 
 
 def _reducer_snapshot(state: RunState) -> dict[str, Any]:

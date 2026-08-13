@@ -6,10 +6,11 @@ from collections import deque
 from copy import deepcopy
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
+import agent_composer.runtime.state as state_module
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, NodeState, START_ID
 from agent_composer.events import NodeStarted, RunFailed, RunResumed
 from agent_composer.nodes.end import EndNode
@@ -37,10 +38,6 @@ from tests.engine._fakes import FuncNode
 
 _FINGERPRINT = "a" * 64
 _RUN_ID = "dispatch-run"
-
-
-class _DictSubclass(dict):
-    """Value-equal mapping with a non-authoritative reducer container type."""
 
 
 def _flow() -> CompiledFlow:
@@ -214,7 +211,7 @@ def test_retried_node_can_start_again_in_a_valid_record_sequence():
     )
 
 
-def test_node_started_preparation_captures_existing_in_flight_order():
+def test_node_started_preparation_keeps_existing_frontier_live():
     state, log, _ = _initialized()
     state.ready = deque(("ordinary",))
     state.in_flight = {"first": None, "second": None}
@@ -222,7 +219,7 @@ def test_node_started_preparation_captures_existing_in_flight_order():
     prepared = prepare_node_started(state, "ordinary")
 
     assert prepared.record == NodeStartedRecord(node_id="ordinary")
-    assert prepared._plan.expected_in_flight == ("first", "second")
+    assert prepared._plan.delta.node_id == "ordinary"
     assert tuple(state.ready) == ("ordinary",)
     assert tuple(state.in_flight) == ("first", "second")
     _assert_committed_path(log)
@@ -253,7 +250,7 @@ class _InspectingLog(MemoryRunLog):
         return super().append(record)
 
 
-def test_node_started_appends_before_replacing_the_frontier():
+def test_node_started_appends_before_applying_the_frontier_delta():
     state, prior, _ = _initialized()
     log = _InspectingLog(state, prior, (START_ID,), ())
 
@@ -265,7 +262,7 @@ def test_node_started_appends_before_replacing_the_frontier():
     _assert_committed_path(log, NodeStartedRecord(node_id=START_ID))
 
 
-def test_run_resumed_appends_before_replacing_the_frontier():
+def test_run_resumed_appends_before_applying_the_frontier_delta():
     state, prior, _ = _initialized(num_workers=2)
     commit_prepared(prior, state, prepare_node_started(state, START_ID))
     log = _InspectingLog(
@@ -302,8 +299,8 @@ def test_run_resumed_preparation_preserves_retry_order_ahead_of_ready_work():
     )
     assert prepared.observers == (RunResumed(),)
 
-    assert prepared._plan.expected_ready == ("ordinary", END_ID)
-    assert prepared._plan.expected_in_flight == ("first", "second")
+    assert prepared._plan.delta.retry_node_ids == ("first", "second")
+    assert prepared._plan.delta.num_workers == 5
     assert tuple(state.ready) == ("ordinary", END_ID)
     assert tuple(state.in_flight) == ("first", "second")
     assert state.num_workers == 2
@@ -436,91 +433,25 @@ def test_dispatch_and_resume_require_initialized_nonterminal_state():
         prepare_run_resumed(state, num_workers=1)
 
 
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        lambda state: state.ready.append("ordinary"),
-        lambda state: state.in_flight.__setitem__("ordinary", None),
-        lambda state: state.node_state.__setitem__("first", NodeState.TAKEN),
-        lambda state: state.edge_state.__setitem__("start-first", NodeState.TAKEN),
-        lambda state: state.pool.add_system("stale", True),
-        lambda state: state.depth.__setitem__("first", 1),
-        lambda state: state.wiring_overrides.__setitem__("first", {"x": 1}),
-        lambda state: setattr(state, "run_id", "different"),
-        lambda state: setattr(state, "flow_fingerprint", "b" * 64),
-        lambda state: setattr(state, "next_sequence", state.next_sequence + 1),
-        lambda state: setattr(state, "num_workers", state.num_workers + 1),
-        lambda state: state.input.__setitem__("stale", True),
-        lambda state: state.effective_llm_by_static_path.__setitem__(
-            "agent", {"provider": "changed"}
-        ),
-        lambda state: setattr(state, "result", RunFailed(error="stale")),
-        lambda state: setattr(state, "node_state", _DictSubclass(state.node_state)),
-        lambda state: setattr(state, "edge_state", _DictSubclass(state.edge_state)),
-        lambda state: setattr(state, "input", _DictSubclass(state.input)),
-    ],
-    ids=[
-        "ready",
-        "in-flight",
-        "node-disposition",
-        "edge-disposition",
-        "pool",
-        "depth",
-        "wiring",
-        "run-id",
-        "fingerprint",
-        "sequence",
-        "workers",
-        "input",
-        "effective-config",
-        "result",
-        "node-container-type",
-        "edge-container-type",
-        "input-container-type",
-    ],
-)
-def test_node_started_rejects_any_stale_authority_coordinate_before_append(
-    mutate: Callable[[RunState], None],
+@pytest.mark.parametrize("transition", ["start", "resume"])
+def test_competing_frontier_plans_reject_the_second_sequence_before_append(
+    transition: str,
 ):
     state, log, _ = _initialized()
-    prepared = prepare_node_started(state, START_ID)
-    mutate(state)
-    before_sequence = log.next_sequence
+    if transition == "start":
+        first = prepare_node_started(state, START_ID)
+        second = prepare_node_started(state, START_ID)
+    else:
+        commit_prepared(log, state, prepare_node_started(state, START_ID))
+        first = prepare_run_resumed(state, num_workers=3)
+        second = prepare_run_resumed(state, num_workers=3)
 
-    with pytest.raises(ValueError):
-        commit_prepared(log, state, prepared)
+    commit_prepared(log, state, first)
+    sequence = log.next_sequence
+    with pytest.raises(ValueError, match="run-state sequence mismatch"):
+        commit_prepared(log, state, second)
 
-    assert log.next_sequence == before_sequence
-    _assert_committed_path(log)
-
-
-@pytest.mark.parametrize(
-    "mutate",
-    [
-        lambda state: state.wiring_overrides[START_ID]["metadata"].__setitem__(
-            "labels", ("one", "two")
-        ),
-        lambda state: state.input.__setitem__("labels", ("one", "two")),
-        lambda state: state.effective_llm_by_static_path["agent"][
-            "options"
-        ].__setitem__("stop", ("END",)),
-        lambda state: state.pool.store[START_ID].value.__setitem__(
-            "labels", ("one", "two")
-        ),
-    ],
-    ids=["wiring", "input", "effective-config", "pool"],
-)
-def test_nested_canonical_type_change_is_rejected_before_append(
-    mutate: Callable[[RunState], None],
-):
-    state, log, _ = _initialized()
-    prepared = prepare_node_started(state, START_ID)
-    mutate(state)
-
-    with pytest.raises(ValueError, match="canonical JSON|authority"):
-        commit_prepared(log, state, prepared)
-
-    _assert_committed_path(log)
+    assert log.next_sequence == sequence
 
 
 class _CoordinateLog:
@@ -555,16 +486,11 @@ def test_non_start_commit_requires_exact_log_identity_before_append(mismatch: st
     _assert_committed_path(prior)
 
 
-def test_resume_rejects_stale_frontier_and_cross_state_before_append():
+def test_resume_rejects_cross_state_before_append():
     state, log, flow = _initialized()
     state.in_flight = {"first": None, "second": None}
     state.ready = deque(("ordinary",))
     prepared = prepare_run_resumed(state, num_workers=4)
-    state.in_flight = {"second": None, "first": None}
-
-    with pytest.raises(ValueError, match="in-flight"):
-        commit_prepared(log, state, prepared)
-    assert log.next_sequence == 1
 
     other = RunState(flow)
     with pytest.raises(ValueError, match="originating RunState"):
@@ -614,20 +540,82 @@ def test_append_failure_leaves_dispatch_or_resume_state_exactly_unchanged(
     assert _state_snapshot(state) == before
 
 
-def test_committed_frontiers_do_not_alias_precommit_containers():
+@pytest.mark.parametrize("transition", ["start", "resume"])
+def test_committed_frontier_deltas_preserve_container_identities(transition: str):
     state, log, _ = _initialized()
-    old_ready = state.ready
-    old_in_flight = state.in_flight
+    if transition == "start":
+        prepared = prepare_node_started(state, START_ID)
+    else:
+        commit_prepared(log, state, prepare_node_started(state, START_ID))
+        prepared = prepare_run_resumed(state, num_workers=3)
+    roots = (
+        state.pool,
+        state.node_state,
+        state.edge_state,
+        state.ready,
+        state.in_flight,
+        state.depth,
+        state.wiring_overrides,
+        state.input,
+        state.effective_llm_by_static_path,
+    )
+    root_ids = tuple(id(root) for root in roots)
 
-    commit_prepared(log, state, prepare_node_started(state, START_ID))
+    commit_prepared(log, state, prepared)
 
-    old_ready.append("second")
-    old_in_flight["second"] = None
-    assert tuple(state.ready) == ()
-    assert tuple(state.in_flight) == (START_ID,)
-    assert state.ready is not old_ready
-    assert state.in_flight is not old_in_flight
-    _assert_committed_path(log, NodeStartedRecord(node_id=START_ID))
+    assert root_ids == tuple(
+        id(root)
+        for root in (
+            state.pool,
+            state.node_state,
+            state.edge_state,
+            state.ready,
+            state.in_flight,
+            state.depth,
+            state.wiring_overrides,
+            state.input,
+            state.effective_llm_by_static_path,
+        )
+    )
+
+
+@pytest.mark.parametrize("transition", ["start", "resume"])
+def test_frontier_commit_uses_only_the_prevalidated_delta(
+    monkeypatch: pytest.MonkeyPatch,
+    transition: str,
+):
+    state, log, _ = _initialized()
+    if transition == "start":
+        prepared = prepare_node_started(state, START_ID)
+    else:
+        commit_prepared(log, state, prepare_node_started(state, START_ID))
+        prepared = prepare_run_resumed(state, num_workers=3)
+
+    def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("commit repeated preparation work")
+
+    monkeypatch.setattr(state_module, "_validate_node_started", unexpected)
+    monkeypatch.setattr(state_module, "_validate_run_resumed", unexpected)
+    monkeypatch.setattr(state_module, "encode_pool", unexpected)
+    monkeypatch.setattr(state_module, "decode_pool", unexpected)
+    monkeypatch.setattr(state.flow, "incoming", unexpected)
+    monkeypatch.setattr(state.flow, "outgoing", unexpected)
+
+    commit_prepared(log, state, prepared)
+
+    assert state.next_sequence == log.next_sequence
+
+
+def test_frontier_commit_rejects_public_record_mutation_before_append():
+    state, log, _ = _initialized()
+    prepared = prepare_node_started(state, START_ID)
+    object.__setattr__(prepared.record, "node_id", "changed")
+
+    with pytest.raises(ValueError, match="record changed"):
+        commit_prepared(log, state, prepared)
+
+    assert log.next_sequence == 1
+    assert tuple(state.ready) == (START_ID,)
 
 
 def test_commit_returns_fresh_observers_derived_from_the_canonical_plan():
@@ -643,7 +631,7 @@ def test_commit_returns_fresh_observers_derived_from_the_canonical_plan():
     _assert_committed_path(log, NodeStartedRecord(node_id=START_ID))
 
 
-def test_frontier_plan_is_frozen_and_contains_only_immutable_snapshots():
+def test_frontier_plan_is_frozen_and_contains_only_an_immutable_delta():
     state, _, flow = _initialized()
     state.ready = deque(("first", "second"))
     prepared = prepare_node_started(state, "first")
@@ -651,12 +639,13 @@ def test_frontier_plan_is_frozen_and_contains_only_immutable_snapshots():
 
     assert plan.originating_state is state
     assert plan.originating_flow is flow
-    assert plan.expected_ready == ("first", "second")
-    assert plan.expected_in_flight == ()
+    assert plan.delta.node_id == "first"
     assert isinstance(plan.envelope_bytes, bytes)
-    assert isinstance(plan.authority_signature, bytes)
+    assert not hasattr(plan, "expected_ready")
+    assert not hasattr(plan, "expected_in_flight")
+    assert not hasattr(plan, "authority_signature")
     with pytest.raises(FrozenInstanceError):
-        plan.expected_ready = ()  # type: ignore[misc]
+        plan.delta = None  # type: ignore[misc]
 
 
 class _ReturningLog:

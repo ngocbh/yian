@@ -5,11 +5,11 @@ A node is a **pure function of its bound input record**: it implements
 `Output | Route | Pause | Grow` (the node-result sum type) — **or**, for a streaming
 kind, a generator that yields `StreamChunk` and then *returns* a `NodeResult`.
 The node never receives the pool: the engine's `runtime.eval_node` seam binds its
-inputs (the read boundary) and hands it a record. The one effectful kind that still
-needs a narrow capability is a mapped `call` (`bind_item`, a keyword-only arg); every other kind
-takes only `inputs`. Failure is **not** a variant — a failing node `raise`s and the
-engine boundary turns it into `NodeFailed`. A returned `Pause` becomes one
-`PauseRequested`; the engine delivers the answer as the parked leaf's `Output`
+inputs (the read boundary) and hands it a record. Narrow effects enter through trait-gated
+capabilities: mapped `call` receives `bind_item`, LLM-backed nodes receive `llm`, and a
+cooperatively blocking node may receive `stop_event`. Failure is **not** a variant — a
+failing node `raise`s and the engine boundary turns it into `NodeFailed`. A returned `Pause`
+becomes one `PauseRequested`; the engine delivers the answer as the parked leaf's `Output`
 (deliver-as-Output — the node never re-runs). A streaming kind is a generator that
 yields `StreamChunk` and *returns* its `NodeResult` (drained by `_drain_node_generator`).
 
@@ -156,6 +156,21 @@ class Grow:
 NodeResult = Union[Output, Route, Pause, Grow]
 
 
+class _HostStop(Exception):
+    """Private control signal: the host requested execution to stop cooperatively.
+
+    This is deliberately outside `NodeResult`: it unwinds node evaluation without becoming
+    a node failure, a flow failure, or the public legacy abort result.
+    """
+
+    def __init__(self, message: str = "", *, primary: bool = True) -> None:
+        super().__init__(message)
+        # False means this exception merely observed an already-set event. A pooled drive
+        # prefers an exact primary exception after every worker has joined, so an initiating
+        # terminal EOF is not replaced by a sibling's derived cancellation wakeup.
+        self.primary = primary
+
+
 class NodeAssertFailed(Exception):
     """A node-local `asserts:` clause evaluated false (or errored) — raised by a node's own
     `run()` when it fires its boundary asserts (StartNode after coercion) instead of relying on
@@ -261,6 +276,10 @@ class Node(ABC):
     # passes it to `run`; when False (the common case) no LLM cap is built. Mirrors
     # `binds_per_item` gating. Overridden True by AgentNode.
     needs_llm: ClassVar[bool] = False
+    # Declares "I can cooperate with a host-owned execution stop". When True, the read seam
+    # (`eval_node`) supplies the exact `caps['stop_event']` object owned by the run. Nodes that
+    # do not opt in receive no stop capability, keeping the effect boundary explicit.
+    needs_stop_event: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -358,10 +377,9 @@ class Node(ABC):
         that `bind_params` binds INTO the record, so there is no pool ref left to fall back to.
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
-        a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
-        cap left is a mapped `call`'s `bind_item` (keyword-only); every other kind takes only
-        `inputs`. A failure is a `raise`, not a variant — the engine boundary turns it into
-        `NodeFailed`."""
+        a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
+        are passed only to nodes whose traits request them (`bind_item`, `llm`, `stop_event`).
+        A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
         from agent_composer.events import SourceSpan
 
         inputs = apply_defaults(self.params or [], inputs)
@@ -418,10 +436,9 @@ class Node(ABC):
         is instantiated directly in a few tests/fakes; a kind that omits it raises this loud error.
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
-        a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
-        cap left is a mapped `call`'s `bind_item` (keyword-only); every other kind takes only
-        `inputs`. A failure is a `raise`, not a variant — the engine boundary turns it into
-        `NodeFailed`."""
+        a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
+        are passed only to nodes whose traits request them (`bind_item`, `llm`, `stop_event`).
+        A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
         raise NotImplementedError(
             f"node {self.id!r} ({type(self).__name__}) defines no _run_impl"
         )

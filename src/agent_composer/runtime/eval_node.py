@@ -5,15 +5,17 @@ the read (bind the inputs from the pool) and the write (the dispatcher stores `O
 This generator is that read seam plus the dispatch normalization, lifted out of
 the node (it replaces the temporary `Node._emit`). It yields `NodeStarted`, binds the
 record, pre-resolves reserved keys (timed WAIT `until` / mapped-call `over`), builds the per-kind
-narrow caps (a mapped call's `bind_item`, and `caps['llm']` — the engine-owned model factory —
-for an LLM-backed node gated on `node.needs_llm`), runs the node through its `run` wrapper
-(which owns pre/post assert firing — record-only), and turns the returned `NodeResult` into one
-terminal `NodeSucceeded`/`NodeFailed` — or a single `PauseRequested` for a returned `Pause`.
+narrow caps (a mapped call's `bind_item`, the engine-owned `caps['llm']` model factory, and the
+host-owned `caps['stop_event']`, each gated on its node trait), runs the node through its `run`
+wrapper (which owns pre/post assert firing — record-only), and turns the returned `NodeResult`
+into one terminal `NodeSucceeded`/`NodeFailed` — or a single `PauseRequested` for a returned
+`Pause`.
 
 Every node-side failure path funnels to `NodeFailed` so the two engines (serial + parallel)
 agree byte-for-byte on the same input: a node `raise`, a `Grow` returned by a NON-spawner
 kind, and a non-`NodeResult` return all become `NodeFailed` inside the `try` — none
-escape the generator uncaught. (A spawner's `Grow` instead becomes `NodeExpanded`.)
+escape the generator uncaught. `_HostStop` is the deliberate exception: private host control
+flow bypasses the failure funnel. (A spawner's `Grow` instead becomes `NodeExpanded`.)
 
 The bind is PURE: it reads the node's sources ONLY from `flow.wiring[node.id]` joined to the
 node's `params` — the node carries no source. Direct-drive tests supply a stub `flow` with
@@ -26,6 +28,7 @@ bad `over`/binding surfaces the over/bind error before the not-baked guard (load
 """
 
 import inspect
+import threading
 import traceback as _tb
 from dataclasses import replace
 from typing import Any
@@ -38,7 +41,7 @@ from agent_composer.events import (
     NodeSucceeded,
     PauseRequested,
 )
-from agent_composer.nodes.base import Grow, Output, Pause, Route
+from agent_composer.nodes.base import Grow, Output, Pause, Route, _HostStop
 from agent_composer.nodes.binding import bind_params
 from agent_composer.runtime.watchdog import node_watchdog
 from agent_composer.typesys.pool import VariablePool
@@ -52,7 +55,15 @@ def _default_llm(config):
     return model_from_config(config)
 
 
-def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_override=None):
+def eval_node(
+    node,
+    flow,
+    pool: VariablePool,
+    llm=_default_llm,
+    *,
+    wiring_override=None,
+    stop_event=None,
+):
     """Evaluate one node through the engine read/dispatch seam; yield its event stream.
 
     `llm` is the engine-owned LLM-client provider (a `model_from_config`-shaped callable)
@@ -62,9 +73,17 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
     `wiring_override` is a per-run wiring dict the engine may supply for THIS node instead of
     the compiled `flow.wiring[node.id]` — used to narrow top-level START's `${input.X}` sources
     to only the passed run args (so an OMITTED input binds absent and bind_params fills START's
-    declared default) WITHOUT mutating the shared compiled IR. `None` falls back to flow.wiring."""
+    declared default) WITHOUT mutating the shared compiled IR. `None` falls back to flow.wiring.
+
+    `stop_event` is the host-owned cooperative-stop signal. Every evaluation checks it before
+    running, but only a node declaring `needs_stop_event` receives it as a capability. A direct
+    opted-in evaluation that omits it receives a fresh unset private event."""
     yield NodeStarted(node.id)
     try:
+        # Host cancellation is control flow outside the node-result sum. Check only after the
+        # observable NodeStarted boundary, then let _HostStop escape this generator unchanged.
+        if stop_event is not None and stop_event.is_set():
+            raise _HostStop(primary=False)
         # The flow-owned wiring for this node (the node/flow split): every kind's sources live here
         # (leaf/WAIT, CALL, CASE). The node holds NO source. A direct-driver must supply a
         # stub `flow.wiring` with the reserved keys; `flow is None` gives empty wiring, so a timed
@@ -98,6 +117,13 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
             # LLM-backed node (AGENT): hand the engine-driven path its model factory. A
             # direct no-cap node driver owns a lower-layer llm_clients fallback instead.
             caps["llm"] = llm
+        if node.needs_stop_event:
+            # Engine-driven evaluation always passes its run-owned event. Direct evaluation has
+            # no host owner, so create one only for an opted-in node; ordinary nodes allocate and
+            # receive nothing.
+            if stop_event is None:
+                stop_event = threading.Event()
+            caps["stop_event"] = stop_event
         # A kind-blind watchdog logs (does not kill) a node whose run overruns a soft
         # budget — so a runaway in-process CODE body is diagnosed, not a silent hang.
         with node_watchdog(node.id):
@@ -130,6 +156,10 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
                 )
             yield NodeExpanded(node.id, result)
             return
+    except _HostStop:
+        # A host stop is neither a node failure nor a public abort outcome. The serial engine lets
+        # it unwind; a pooled worker translates it to an internal dispatcher signal.
+        raise
     except Exception as exc:  # noqa: BLE001 — boundary: any node error -> NodeFailed (both engines)
         # A failure may carry a `locator` (BindingError stamps a node-less input SourceSpan;
         # the binding layer has no node identity). Fill the node id here — this funnel is the

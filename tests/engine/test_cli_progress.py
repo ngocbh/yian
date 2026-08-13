@@ -132,7 +132,7 @@ def test_cli_accepts_verbose_flag(monkeypatch, tmp_path):
             on_event(NodeSucceeded("a", output="hello"))
         return RunResult(input={}, status="succeeded", output="hello")
 
-    monkeypatch.setattr(climod, "run_flow", fake_run_flow)
+    monkeypatch.setattr(climod, "_run_flow_controlled", fake_run_flow)
     monkeypatch.setattr(climod, "_ensure_provider_keys", lambda *a, **k: None)
     f = tmp_path / "f.yaml"
     f.write_text(_FLOW)
@@ -148,7 +148,7 @@ def test_cli_quiet_suppresses_events(monkeypatch, tmp_path):
         seen["on_event"] = on_event
         return RunResult(input={}, status="succeeded", output="hello")
 
-    monkeypatch.setattr(climod, "run_flow", fake_run_flow)
+    monkeypatch.setattr(climod, "_run_flow_controlled", fake_run_flow)
     monkeypatch.setattr(climod, "_ensure_provider_keys", lambda *a, **k: None)
     f = tmp_path / "f.yaml"
     f.write_text(_FLOW)
@@ -165,7 +165,7 @@ def test_cli_num_workers_threads_through(monkeypatch, tmp_path):
         seen["num_workers"] = num_workers
         return RunResult(input={}, status="succeeded", output="hello")
 
-    monkeypatch.setattr(climod, "run_flow", fake_run_flow)
+    monkeypatch.setattr(climod, "_run_flow_controlled", fake_run_flow)
     monkeypatch.setattr(climod, "_ensure_provider_keys", lambda *a, **k: None)
     f = tmp_path / "f.yaml"
     f.write_text(_FLOW)
@@ -181,7 +181,7 @@ def test_cli_num_workers_threads_through(monkeypatch, tmp_path):
 def test_cli_rejects_negative_workers(monkeypatch, tmp_path):
     """`--num-workers` is clamped at the CLI boundary: a negative value is rejected."""
     monkeypatch.setattr(
-        climod, "run_flow",
+        climod, "_run_flow_controlled",
         lambda *a, **k: RunResult(input={}, status="succeeded", output="x"),
     )
     f = tmp_path / "f.yaml"

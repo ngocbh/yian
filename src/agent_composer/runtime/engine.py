@@ -51,7 +51,7 @@ from agent_composer.events import (
 )
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, NodeState
 from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.base import Grow
+from agent_composer.nodes.base import Grow, _HostStop
 from agent_composer.runtime.eval_node import eval_node
 from agent_composer.runtime.state_manager import StateManager
 from agent_composer.typesys import TypeCheckError
@@ -66,11 +66,18 @@ MAX_TOTAL_NODES = 10_000   # the load-bearing runtime-size bound (nested MAP bre
 MAX_REF_DEPTH = 5          # defense-in-depth depth bound (the static call graph is acyclic+finite)
 
 _POLL = 0.02  # queue poll timeout (s); keeps shutdown responsive
-_JOIN_TIMEOUT = 2.0
 
 
 class _Aborted(Exception):
     """Internal signal raised out of the drain when a cooperative abort is requested."""
+
+
+@dataclass(frozen=True)
+class _WorkerHostStop:
+    """Worker-to-dispatcher signal that host-stop control flow unwound one executor."""
+
+    node_id: str
+    exception: _HostStop
 
 
 class NodeExecutionError(RuntimeError):
@@ -139,6 +146,10 @@ class FlowEngine:
             Required only when a node returns `Grow` or a checkpoint replays growth; static direct
             engines may omit it. Runtime treats the callable generically and never imports the
             compile-owned implementation.
+        stop_event (`threading.Event`, *optional*, defaults to `None`):
+            Host-owned cooperative execution stop injected only into nodes declaring
+            `needs_stop_event`. A fresh private event is created when omitted. This transient
+            process capability is not persisted in checkpoints.
     """
 
     def __init__(
@@ -150,6 +161,7 @@ class FlowEngine:
         run_inputs: Optional[dict] = None,
         llm=None,
         grow_builder=None,
+        stop_event=None,
     ) -> None:
         self.flow = flow
         self.pool = pool if pool is not None else VariablePool()
@@ -176,6 +188,11 @@ class FlowEngine:
         # for a static direct engine; `_apply_grow` fails loudly before mutation if a dynamic node
         # is driven without the seam.
         self.grow_builder = grow_builder
+        # Host-owned cooperative execution stop. This is intentionally distinct from the
+        # pooled worker-lifecycle `_stop`: `stop_event` is injected into opted-in nodes and may
+        # be set by the host or a primary node failure; `_stop` only tells idle executor threads
+        # that one pooled drive has finished and they should exit.
+        self.stop_event = stop_event if stop_event is not None else threading.Event()
         self.ready: deque[str] = deque()  # serial path; also the serial _ready_snapshot arm
         if self.num_workers >= 1:
             self.ready_q: "queue.Queue[str]" = queue.Queue()
@@ -209,8 +226,9 @@ class FlowEngine:
         self._cancel = False
 
     def request_abort(self) -> None:
-        """Request a cooperative cancel, checked between nodes."""
+        """Request a legacy abort and wake any cooperative blocking node."""
         self._cancel = True
+        self.stop_event.set()
 
     # --- lifecycle ---------------------------------------------------------- #
 
@@ -240,7 +258,14 @@ class FlowEngine:
                 yield from self._drain()
             except _Aborted:
                 yield RunAborted(); return
+            except _HostStop:
+                # request_abort uses the host event only as its worker wakeup. The authored
+                # public outcome remains the legacy RunAborted rather than private host control.
+                if self._cancel:
+                    yield RunAborted(); return
+                raise
             except NodeExecutionError as exc:
+                self.stop_event.set()
                 yield RunFailed(error=exc.error, error_type=exc.error_type, locator=exc.locator,
                                 traceback=exc.traceback, range=exc.range); return
             if self.paused:
@@ -254,6 +279,7 @@ class FlowEngine:
             threading.Thread(target=self._worker, name=f"ac-worker-{i}", daemon=True)
             for i in range(self.num_workers)
         ]
+        host_stop: Optional[_HostStop] = None
         for w in workers:
             w.start()
         try:
@@ -265,13 +291,42 @@ class FlowEngine:
             )
         except _Aborted:
             terminal = RunAborted()
+        except _HostStop as exc:
+            # A request_abort/AbortCommand wakeup can reach the dispatcher as an internal
+            # worker stop before its next `_cancel` check. Preserve the abort as first cause.
+            if not self._cancel:
+                host_stop = exc
+            else:
+                terminal = RunAborted()
         except NodeExecutionError as exc:
+            # First-cause wins: publish cooperative stop before draining sibling workers, but
+            # retain this exact node failure as the run terminal even if a sibling unwinds with
+            # _HostStop while the pool joins.
+            self.stop_event.set()
             terminal = RunFailed(error=exc.error, error_type=exc.error_type, locator=exc.locator,
                                  traceback=exc.traceback, range=exc.range)
         finally:
             self._stop.set()
             for w in workers:
-                w.join(timeout=_JOIN_TIMEOUT)
+                # Opted-in blocking nodes observe `stop_event`; join fully so a completed drive
+                # never leaks an executor into the next run. An uncooperative external call is a
+                # process boundary and intentionally has no pretend timeout-based cleanup.
+                w.join()
+        if host_stop is not None:
+            # All workers are now quiescent, so every exact stop signal is present. Prefer an
+            # initiating exception to a sibling that merely observed the already-set event.
+            while True:
+                try:
+                    message = self.event_q.get_nowait()
+                except queue.Empty:
+                    break
+                if (
+                    isinstance(message, _WorkerHostStop)
+                    and message.exception.primary
+                    and not host_stop.primary
+                ):
+                    host_stop = message.exception
+            raise host_stop
         yield terminal
 
     def _seed_start_and_advance(self):
@@ -375,6 +430,7 @@ class FlowEngine:
         *,
         num_workers: Optional[int] = None,
         grow_builder=None,
+        stop_event=None,
     ) -> "FlowEngine":
         """Rebuild a resumable engine on `flow` from a (deserialized) checkpoint.
 
@@ -383,6 +439,8 @@ class FlowEngine:
         pooled and vice-versa (workers are pure executors; correctness is
         worker-count-independent). `grow_builder` is the same optional pure constructor
         accepted by `__init__`; it is required when the checkpoint contains growth records.
+        `stop_event` supplies the new process-local cooperative-stop capability; when omitted,
+        the restored engine owns a fresh unset event.
 
         Order: build the engine on the pool (at the resolved drive mode) → replay the
         expansions descriptor tree
@@ -424,6 +482,7 @@ class FlowEngine:
             pool=checkpoint.pool.model_copy(deep=True),
             num_workers=max(0, workers),
             grow_builder=grow_builder,
+            stop_event=stop_event,
         )
         # Replay re-grows the live topology + sm overlay + alias/depth/_spawner_expansion and
         # rebuilds self.expansions from OUR OWN descriptor copies. schedule=False.
@@ -463,6 +522,7 @@ class FlowEngine:
             for command in commands or []:
                 self._apply_command(command)
         except NodeExecutionError as exc:
+            self.stop_event.set()
             yield RunFailed(error=exc.error, error_type=exc.error_type, locator=exc.locator,
                             traceback=exc.traceback, range=exc.range)
             return
@@ -500,6 +560,7 @@ class FlowEngine:
                 self._schedule(nid)
         elif isinstance(command, AbortCommand):
             self._cancel = True
+            self.stop_event.set()
 
     # --- drain -------------------------------------------------------------- #
 
@@ -507,6 +568,8 @@ class FlowEngine:
         while self.ready:
             if self._cancel:
                 raise _Aborted
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             node_id = self.ready.popleft()
             yield from self._run_node(node_id)
 
@@ -514,8 +577,18 @@ class FlowEngine:
         node = self.flow.nodes[node_id]
         succeeded: Optional[NodeSucceeded] = None
         routed: Optional[NodeRouted] = None
-        for event in eval_node(node, self.flow, self.pool, self.llm,
-                               wiring_override=self.wiring_overrides.get(node_id)):
+        for event in eval_node(
+            node,
+            self.flow,
+            self.pool,
+            self.llm,
+            wiring_override=self.wiring_overrides.get(node_id),
+            stop_event=self.stop_event,
+        ):
+            # A cooperative node may return normally after its event was set. Its late outcome
+            # must not mutate the pool/topology or become externally visible.
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             if isinstance(event, NodeExpanded):
                 # Growth is committed before its event becomes observable. A direct generator
                 # consumer can mutate an event payload while this generator is suspended at
@@ -532,6 +605,8 @@ class FlowEngine:
                 yield event
                 return
             yield event
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             if isinstance(event, NodeSucceeded):
                 succeeded = event
             elif isinstance(event, NodeRouted):
@@ -558,10 +633,18 @@ class FlowEngine:
         while not self.sm.is_complete(self.ready_q.empty()):
             if self._cancel:
                 raise _Aborted
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             try:
                 event = self.event_q.get(timeout=_POLL)
             except queue.Empty:
                 continue
+            if isinstance(event, _WorkerHostStop):
+                raise event.exception
+            # Drop every node outcome produced after another path initiated host stop. An
+            # initiating failure reaches this point before the dispatcher sets the event.
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             if isinstance(event, NodeExpanded):
                 # Match the inline path: construction/application is atomic with respect to
                 # external observation, and a failed construction emits no NodeExpanded.
@@ -575,6 +658,8 @@ class FlowEngine:
                 yield event
                 continue
             yield event  # forward to the caller (streaming)
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             if isinstance(event, NodeSucceeded):
                 self._on_success(event.node_id, event)
             elif isinstance(event, NodeRouted):
@@ -596,11 +681,35 @@ class FlowEngine:
                 node_id = self.ready_q.get(timeout=_POLL)
             except queue.Empty:
                 continue
+            if self.stop_event.is_set():
+                self.event_q.put(
+                    _WorkerHostStop(node_id, _HostStop(primary=False))
+                )
+                return
             node = self.flow.nodes[node_id]
             try:
-                for event in eval_node(node, self.flow, self.pool, self.llm,
-                                       wiring_override=self.wiring_overrides.get(node_id)):
+                for event in eval_node(
+                    node,
+                    self.flow,
+                    self.pool,
+                    self.llm,
+                    wiring_override=self.wiring_overrides.get(node_id),
+                    stop_event=self.stop_event,
+                ):
+                    if self.stop_event.is_set():
+                        self.event_q.put(
+                            _WorkerHostStop(node_id, _HostStop(primary=False))
+                        )
+                        return
                     self.event_q.put(event)
+            except _HostStop as exc:
+                self.event_q.put(_WorkerHostStop(node_id, exc))
+                # A derived stop only observed cancellation already initiated elsewhere. In
+                # particular, an EOF-cancelled sibling must not set the event before the active
+                # prompt worker has recovered and transported the exact EOF-backed exception.
+                if exc.primary:
+                    self.stop_event.set()
+                return
             except Exception as exc:  # noqa: BLE001 — never let a worker die silently
                 self.event_q.put(NodeFailed(node_id, str(exc), type(exc).__name__))
 

@@ -34,6 +34,7 @@ turns an already-compiled flow contract into a run. Imports flow DOWN only: `com
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
@@ -204,9 +205,12 @@ def run_flow(
     # the boundary has exactly one defaulting authority.
     coerced = coerce_inputs(loaded.input, inputs)
 
+    # The loaded graph is a reusable program. Cascade resolution and recursive-node expansion
+    # both mutate their graph, so every fresh run receives its own live copy.
+    flow = copy.deepcopy(loaded.compiled)
     # Resolve the per-agent effective llm_config before the engine reads the graph: the CLI
     # layer (llm_config) is the outermost gap-fill layer of the cascade. See resolve_llm_cascade.
-    resolve_llm_cascade(loaded.compiled, llm_config or {})
+    resolve_llm_cascade(flow, llm_config or {})
 
     pool = VariablePool()
     seed_system_clock(pool)  # ${system.today}/${system.now} — once per run
@@ -221,7 +225,7 @@ def run_flow(
     # run.py enforces NO asserts itself; the input TypeCheckError + a false boundary/post assert
     # all come back as a RunFailed engine event.
     engine = FlowEngine(
-        loaded.compiled, pool,
+        flow, pool,
         num_workers=num_workers,
         run_inputs=coerced,
     )
@@ -327,12 +331,15 @@ def resume_flow(
     if (engine is None) == (checkpoint is None):
         raise ValueError("resume_flow requires exactly one of engine= or checkpoint=")
     if engine is None:
+        # Durable restore replays graph growth, so it needs a private clean graph just like a
+        # fresh run. A live engine already owns its graph and must keep using that instance.
+        flow = copy.deepcopy(loaded.compiled)
         # Resolve the cascade BEFORE restore: restore's replay re-clones each CALL/MAP child
         # from the static graph, so the effective config must be baked on first (the CLI layer
         # is not persisted across processes — the host re-supplies it here). In-process resume
         # via engine= already carries the resolved configs baked on the live graph.
-        resolve_llm_cascade(loaded.compiled, llm_config or {})
-        engine = FlowEngine.restore(loaded.compiled, checkpoint, num_workers=num_workers)
+        resolve_llm_cascade(flow, llm_config or {})
+        engine = FlowEngine.restore(flow, checkpoint, num_workers=num_workers)
 
     events: List[Any] = []
     status, output, error = "incomplete", None, None

@@ -1,4 +1,4 @@
-"""Pure node contract, per-kind implementations, and node-owned seed schemas.
+"""Pure node contract and per-kind implementations.
 
 Nodes consume bound input records and return the closed ``Output | Route | Pause |
 Grow`` result sum.  Spawners return only a canonical ``Grow`` seed (plus ids to

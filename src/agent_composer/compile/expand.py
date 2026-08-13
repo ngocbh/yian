@@ -17,7 +17,8 @@ child `END_ID` is the alias filler. A child node reading `${input.X}` is re-poin
 child START_ID's output object (`${<callsite>/<start>.output.X}`); the dispatcher
 consumes the descriptions and performs the (impure) `add_subgraph` + `register` + seed.
 
-Layer: compile — imports `nodes`/`model`/`expr` (ladder-legal); never `runtime`.
+Layer: compile — imports `expr`/`nodes` plus the temporary suspension seed
+contract (ladder-legal); never `runtime`.
 """
 
 from __future__ import annotations
@@ -28,11 +29,11 @@ from typing import Any, Optional
 from agent_composer.compile.model import Edge, END_ID, Flow, START_ID
 from agent_composer.expr import rewrite_template_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
-from agent_composer.nodes.agent_segment import AgentSegment
 from agent_composer.nodes.base import Node, NodeKind, ParamDecl
 from agent_composer.nodes.end.node import EndNode
 from agent_composer.nodes.ids import map_callsite, ns
 from agent_composer.nodes.start.node import StartNode
+from agent_composer.suspension.expansions import AgentSegment
 
 # Reserved prefix for END params synthesized from a lowered spawner post-assert. Mirrors the
 # BUILD-time `_SYNTH_PREFIX` in `compose/validate/asserts.py` — kept a separate literal here

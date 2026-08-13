@@ -27,7 +27,18 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from agent_composer.nodes.agent_segment import AgentSegment
+
+class AgentSegment(BaseModel):
+    """Validated seed for one temporary AGENT continuation expansion.
+
+    ``hi_desc`` describes the synthesized human-input leaf (node id, slot, and
+    prompt). ``resume_desc`` carries the resume-agent frame as serializable data.
+    The lower suspension package owns this temporary durable contract so both
+    nodes and compile can depend on it without a package cycle.
+    """
+
+    hi_desc: dict[str, Any]
+    resume_desc: dict[str, Any]
 
 
 class GrowRecord(BaseModel):

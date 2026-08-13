@@ -99,6 +99,17 @@ def test_nodes_never_import_runtime() -> None:
     )
 
 
+def test_suspension_never_imports_nodes() -> None:
+    """Suspension is a lower node dependency and must not import back into nodes."""
+    violations = _forbidden_imports(
+        PACKAGE_ROOT / "suspension", "agent_composer.nodes"
+    )
+    assert not violations, (
+        "suspension must not import nodes; shared pause/growth contracts belong in "
+        "the lower suspension package:\n" + "\n".join(violations)
+    )
+
+
 def test_scanner_normalizes_absolute_and_relative_import_spellings() -> None:
     """Equivalent import syntax resolves to the same forbidden module targets."""
     assert _package_parts(PACKAGE_ROOT / "nodes" / "call" / "node.py") == (

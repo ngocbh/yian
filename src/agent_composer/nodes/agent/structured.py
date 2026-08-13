@@ -198,7 +198,9 @@ def _generate_native(
     for _ in range(max_retries + 1):
         check_stopped()
         try:
-            obj = model.with_structured_output(schema).invoke(msgs)
+            bound = model.with_structured_output(schema)
+            check_stopped()
+            obj = bound.invoke(msgs)
             check_stopped()
             value = _unwrap(obj, typ)
         except _HostStop:

@@ -545,6 +545,12 @@ def _semicolon_property_spans(
             end = scan
         else:
             end = delimiter if delimiter != -1 else len(value)
+            unquoted_value = value[scan:end]
+            if re.search(r"\s+[A-Za-z_][A-Za-z0-9_]*\s*=", unquoted_value):
+                # Whitespace-separated assignments belong to libpq conninfo. Without
+                # this check, its first semicolon is mistaken for a DSN delimiter and
+                # credential fields remain buried inside the first property value.
+                return None
 
         spans.append((cursor, end, equal, key))
         if end == len(value):
@@ -679,18 +685,17 @@ def _libpq_property_spans(
                     if cursor + 1 == len(value):
                         return None
                     cursor += 2
-                elif value[cursor] == ";":
-                    # An unescaped semicolon is a DSN property delimiter, not a
-                    # libpq value. Reject it so a failed DSN parse cannot be
-                    # misclassified as sanitized conninfo.
-                    return None
                 else:
                     cursor += 1
         spans.append((value_start, cursor, key))
     return spans
 
 
-def _redact_libpq_conninfo_credentials(value: str) -> str | None:
+def _redact_libpq_conninfo_credentials(
+    value: str,
+    *,
+    require_credential: bool = False,
+) -> str | None:
     """Sanitize a recognized libpq keyword/value connection string."""
     spans = _libpq_property_spans(value)
     if not spans:
@@ -699,6 +704,10 @@ def _redact_libpq_conninfo_credentials(value: str) -> str | None:
         _normalized_key_spellings(key)[0] for _, _, key in spans
     }
     if normalized_keys.isdisjoint(_DSN_IDENTITY_PROPERTY_NAMES):
+        return None
+    if require_credential and not any(
+        _connection_property_credential_key(key) for _, _, key in spans
+    ):
         return None
 
     redacted = value
@@ -727,7 +736,15 @@ def _redact_connection_credentials(value: str) -> tuple[str, bool]:
         dsn = _redact_semicolon_dsn_credentials(value)
         if dsn is not None:
             return dsn, True
-    conninfo = _redact_libpq_conninfo_credentials(value)
+        # A malformed semicolon DSN can resemble one giant libpq property. Only
+        # accept the fallback when libpq parsed a credential as its own field;
+        # otherwise exclude the ambiguous value rather than risk retaining a secret.
+        conninfo = _redact_libpq_conninfo_credentials(
+            value,
+            require_credential=True,
+        )
+    else:
+        conninfo = _redact_libpq_conninfo_credentials(value)
     if conninfo is not None:
         return conninfo, True
     return value, False

@@ -786,6 +786,41 @@ def test_connection_string_key_keeps_sanitized_libpq_conninfo_identity():
         assert flow_fingerprint(first) != flow_fingerprint(changed)
 
 
+@pytest.mark.parametrize(
+    ("first_password", "second_password"),
+    [
+        ("first;secret", "second;secret"),
+        ("'first;secret'", "'second;secret'"),
+        (r"first\;secret", r"second\;secret"),
+    ],
+    ids=["ordinary", "quoted", "escaped"],
+)
+def test_connection_string_key_redacts_libpq_semicolon_credentials(
+    first_password, second_password
+):
+    first = _compiled()
+    rotated = copy.deepcopy(first)
+    first.nodes["step"].env["POSTGRES_CONNECTION_STRING"] = (
+        "host=db.example dbname=app user=alice "
+        f"password={first_password} sslmode=require"
+    )
+    rotated.nodes["step"].env["POSTGRES_CONNECTION_STRING"] = (
+        "host=db.example dbname=app user=bob "
+        f"password={second_password} sslmode=require"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first"):
+        assert credential not in manifest_text
+
+    changed = copy.deepcopy(rotated)
+    changed.nodes["step"].env["POSTGRES_CONNECTION_STRING"] = changed.nodes[
+        "step"
+    ].env["POSTGRES_CONNECTION_STRING"].replace("db.example", "other.example")
+    assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
 def test_connection_string_key_redacts_azure_shared_access_credentials():
     first = _compiled()
     second = copy.deepcopy(first)

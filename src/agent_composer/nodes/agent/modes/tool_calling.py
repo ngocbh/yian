@@ -36,6 +36,7 @@ from agent_composer.nodes.agent.modes.common import (
 )
 from agent_composer.nodes.agent.modes.utils import text_of
 from agent_composer.nodes.base import Grow, Output
+from agent_composer.tools import invoke_tool, resolve_tools
 
 # Default tool-iteration policy: -1 means NO CAP — the loop runs until the model returns a
 # final answer. A node bounds it per-flow with a POSITIVE `env: {max_tool_iterations: N}`
@@ -53,18 +54,9 @@ def _slug_call_id(call_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]", "_", call_id)
 
 
-def run_tool(name: str, args: dict[str, Any]) -> str:
-    """Execute one registered ordinary tool (same `TOOL_REGISTRY` path as a TOOL node).
-    Errors come back as text for the model to see rather than crashing the node."""
-    from agent_composer.tools import TOOL_REGISTRY
-
-    tool = TOOL_REGISTRY.get(name)
-    if tool is None:
-        return f"Tool {name!r} is not available to this node."
-    try:
-        return str(tool.invoke(args))
-    except Exception as exc:  # noqa: BLE001
-        return f"Tool {name!r} failed: {exc}"
+def run_tool(name: str, args: dict[str, Any]) -> Any:
+    """Execute one ordinary tool through the shared public invocation boundary."""
+    return invoke_tool(name, args)
 
 
 def agent_step(
@@ -85,8 +77,6 @@ def agent_step(
     forward-ref `${<hi>.output}` (node-first). Data-tool calls in the turn are flushed into
     `messages` before the `Grow`.
     """
-    from agent_composer.tools import resolve_tools
-
     control_set = set(ctx.controls)
     bound = resolve_tools(list(ctx.tools)) + [CONTROL_TOOLS[n].tool for n in ctx.controls]
     chat = ctx.model.bind_tools(bound) if bound else ctx.model
@@ -120,9 +110,15 @@ def agent_step(
 
         # Run all data-tool calls first so every call in the turn gets answered.
         for call in (c for c in calls if c.get("name") not in control_set):
+            name = call.get("name") or ""
+            if name not in ctx.tools:
+                raise AgentLoopError(
+                    f"agent node {ctx.node_id!r} requested tool {name!r}, but it is not "
+                    f"granted; granted tools: {ctx.tools}"
+                )
             messages.append(
                 ToolMessage(
-                    content=run_tool(call.get("name") or "", call.get("args") or {}),
+                    content=str(run_tool(name, call.get("args") or {})),
                     tool_call_id=call.get("id") or "",
                 )
             )

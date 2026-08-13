@@ -11,6 +11,8 @@ run lands; AGENT-mode compile-time validation moved with the v0 compiler.)
 
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel
 
 import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
@@ -53,10 +55,22 @@ def _patch_model(monkeypatch, chat):
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
 
 
+class _NoToolArgs(BaseModel):
+    """Schema for fake tools that accept no public arguments."""
+
+
+class _TopicToolArgs(BaseModel):
+    """Schema for the fake value tool's one public argument."""
+
+    topic: str
+
+
 class _FakeTool:
-    def __init__(self, fn):
+    def __init__(self, fn, args_schema=_NoToolArgs):
         self._fn = fn
         self.seen = []
+        self.args_schema = args_schema
+        self.tool_call_schema = args_schema
 
     def invoke(self, args):
         self.seen.append(args)
@@ -91,7 +105,7 @@ def test_tool_calling_returns_plain_text(monkeypatch):
 
 
 def test_tool_calling_round_trip(monkeypatch):
-    tool = _FakeTool(lambda a: f"px:{a['topic']}")
+    tool = _FakeTool(lambda a: f"px:{a['topic']}", _TopicToolArgs)
     monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "value", tool)
     chat = _FakeChat([
         _ai_tool_call("value", {"topic": "ACME"}),
@@ -101,6 +115,112 @@ def test_tool_calling_round_trip(monkeypatch):
     assert _run_node(_node(tools=["value"])).output == "done"
     assert tool.seen == [{"topic": "ACME"}]   # the tool actually ran
     assert chat.calls == 2                      # ask -> tool -> ask
+
+
+def test_tool_calling_executes_model_calls_in_returned_order(monkeypatch):
+    seen = []
+
+    def first(value: int) -> str:
+        """Record the first call."""
+        seen.append(("first", value))
+        return "one"
+
+    def second(value: int) -> str:
+        """Record the second call."""
+        seen.append(("second", value))
+        return "two"
+
+    monkeypatch.setitem(
+        tools_mod.TOOL_REGISTRY,
+        "first",
+        StructuredTool.from_function(first, name="first"),
+    )
+    monkeypatch.setitem(
+        tools_mod.TOOL_REGISTRY,
+        "second",
+        StructuredTool.from_function(second, name="second"),
+    )
+    chat = _FakeChat(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "first", "args": {"value": 1}, "id": "1", "type": "tool_call"},
+                    {"name": "second", "args": {"value": 2}, "id": "2", "type": "tool_call"},
+                ],
+            ),
+            AIMessage(content="done"),
+        ]
+    )
+    _patch_model(monkeypatch, chat)
+
+    assert _run_node(_node(tools=["first", "second"])).output == "done"
+    assert seen == [("first", 1), ("second", 2)]
+
+
+def test_tool_calling_rejects_globally_registered_but_ungranted_tool(monkeypatch):
+    seen = []
+
+    def secret() -> str:
+        """A process tool this agent was not granted."""
+        seen.append("called")
+        return "secret"
+
+    monkeypatch.setitem(
+        tools_mod.TOOL_REGISTRY,
+        "secret",
+        StructuredTool.from_function(secret, name="secret"),
+    )
+    chat = _FakeChat([_ai_tool_call("secret", {})])
+    _patch_model(monkeypatch, chat)
+
+    event = _run_node(_node(tools=[]))
+    assert isinstance(event, NodeFailed)
+    assert "not granted" in event.error
+    assert seen == []
+
+
+def test_tool_calling_rejects_model_injected_arguments(monkeypatch):
+    seen = []
+
+    def lookup(question: str) -> str:
+        """Answer one public question."""
+        seen.append(question)
+        return question
+
+    monkeypatch.setitem(
+        tools_mod.TOOL_REGISTRY,
+        "lookup",
+        StructuredTool.from_function(lookup, name="lookup"),
+    )
+    chat = _FakeChat(
+        [_ai_tool_call("lookup", {"question": "status?", "node_id": "injected"})]
+    )
+    _patch_model(monkeypatch, chat)
+
+    event = _run_node(_node(tools=["lookup"]))
+    assert isinstance(event, NodeFailed)
+    assert "unsupported argument" in event.error
+    assert seen == []
+
+
+def test_tool_calling_propagates_tool_exception_as_node_failure(monkeypatch):
+    def explode(topic: str) -> str:
+        """Raise the failure the node boundary must report."""
+        raise RuntimeError(f"cannot load {topic}")
+
+    monkeypatch.setitem(
+        tools_mod.TOOL_REGISTRY,
+        "explode",
+        StructuredTool.from_function(explode, name="explode"),
+    )
+    chat = _FakeChat([_ai_tool_call("explode", {"topic": "ACME"})])
+    _patch_model(monkeypatch, chat)
+
+    event = _run_node(_node(tools=["explode"]))
+    assert isinstance(event, NodeFailed)
+    assert event.error_type == "RuntimeError"
+    assert "cannot load ACME" in event.error
 
 
 def test_tool_calling_cap_trips_when_bounded(monkeypatch):

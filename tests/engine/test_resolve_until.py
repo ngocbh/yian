@@ -1,8 +1,7 @@
-"""`resolve_until` as a free function (so the engine bind seam can call it).
+"""Resolve a WAIT ``until`` source at the node-owned binding boundary.
 
-Behavior-preserving lift of `WaitNode._resolve_until`: resolve a `${...}` (or literal) `until`
-source to an ISO string, accepting a str directly, formatting a `.isoformat()` object defensively,
-else raising `ValueError`. `WaitNode._resolve_until` now delegates here.
+``resolve_until`` accepts a string directly, formats an object exposing
+``isoformat()`` defensively, and rejects values that are not date/datetime-like.
 """
 
 import pytest

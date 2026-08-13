@@ -1,4 +1,4 @@
-"""kind=wait — the suspend-until-timestamp node's descriptor + parse/build handle.
+"""kind=wait — the blocking absolute-deadline node's descriptor + build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `wait` node's frozen
 `WaitDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
@@ -17,7 +17,7 @@ from agent_composer.nodes.wait import WaitNode
 
 @dataclass(frozen=True, kw_only=True)
 class WaitDescriptor(NodeDescriptor):
-    """kind=wait — suspend until a timestamp (until:); produces no value.
+    """kind=wait — block until an absolute date/datetime; produces ``None``.
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
     `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
@@ -39,13 +39,11 @@ class WaitDescriptor(NodeDescriptor):
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `WaitNode` (+ wiring) for this `WaitDescriptor`.
 
-        Builds the wait leaf: a timed WAIT's `until` SOURCE rides
-        the reserved wiring key (`{"until": self.until}`), never a node-side param, and the node
-        carries only the `is_timed` residual. Stamps `.range`/`.field_ranges` from the descriptor
+        Builds the wait leaf: its required `until` SOURCE rides the reserved wiring key
+        (`{"until": self.until}`), never a node-side param. Stamps `.range`/`.field_ranges`
         via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is unused (leaf kind)
         and the inline-CODE anchors on `ctx` are read only by the CODE build.
         """
-        node = WaitNode(self.id, is_timed=self.until is not None, title=self.node_name)
+        node = WaitNode(self.id, title=self.node_name)
         node.params = []
-        wiring = {"until": self.until} if self.until is not None else {}
-        return self._finish(node, wiring)
+        return self._finish(node, {"until": self.until})

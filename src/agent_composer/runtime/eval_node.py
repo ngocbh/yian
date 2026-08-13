@@ -4,7 +4,7 @@ A node is a pure function of its bound input record; the ENGINE owns both bounda
 the read (bind the inputs from the pool) and the write (the dispatcher stores `Output`).
 This generator is that read seam plus the dispatch normalization, lifted out of
 the node (it replaces the temporary `Node._emit`). It yields `NodeStarted`, binds the
-record, pre-resolves reserved keys (timed WAIT `until` / mapped-call `over`), builds narrow caps
+record, pre-resolves reserved keys (absolute WAIT `until` / mapped-call `over`), builds narrow caps
 (a mapped call's `bind_item` and the host-owned `caps['stop_event']`, each gated on its node
 trait), runs the node through its `run`
 wrapper (which owns pre/post assert firing — record-only), and turns the returned `NodeResult`
@@ -21,10 +21,9 @@ The bind is PURE: it reads the node's sources ONLY from `flow.wiring[node.id]` j
 node's `params` — the node carries no source. Direct-drive tests supply a stub `flow` with
 `wiring` (the test helpers derive it). Layer: runtime imports nodes.* freely.
 
-Accepted bind ordering vs the old per-node `_run` (both on states a loaded flow cannot reach,
-both still terminating in `NodeFailed`): a timed WAIT re-resolves `until` on every path including
-release/resume (harmless given the monotonic pool), and a `call` that is BOTH unbaked AND has a
-bad `over`/binding surfaces the over/bind error before the not-baked guard (loader always bakes).
+Accepted bind ordering vs the old per-node `_run` on an unreachable loaded-flow state: a
+`call` that is both unbaked and has a bad `over`/binding surfaces the bind error before the
+not-baked guard; the loader always bakes calls, and either path terminates in `NodeFailed`.
 """
 
 import inspect
@@ -43,7 +42,6 @@ from agent_composer.events import (
 )
 from agent_composer.nodes.base import Grow, Output, Pause, Route, _HostStop
 from agent_composer.nodes.binding import bind_params
-from agent_composer.runtime.watchdog import node_watchdog
 from agent_composer.typesys.pool import VariablePool
 
 
@@ -89,7 +87,7 @@ def eval_node(
             record = {}
         else:
             record = bind_params(node.params or [], node_wiring, pool)
-        # Reserved-key pre-resolve (node-owned): timed WAIT `until` -> ISO ts; mapped-call `over`
+        # Reserved-key pre-resolve (node-owned): WAIT `until` -> ISO deadline; mapped-call `over`
         # -> list (validated in the hook -> NodeFailed). The hook reads its sources from
         # `node_wiring` (the node/flow split) + `pool`; default `{}` for an ordinary node.
         record.update(node.bind_reserved(node_wiring, pool))
@@ -107,24 +105,18 @@ def eval_node(
             if stop_event is None:
                 stop_event = threading.Event()
             caps["stop_event"] = stop_event
-        # A kind-blind watchdog logs (does not kill) a node whose run overruns a soft
-        # budget — so a runaway in-process CODE body is diagnosed, not a silent hang.
-        with node_watchdog(node.id):
-            # eval_node drives the base `run` WRAPPER (not `_run_impl`): the wrapper owns
-            # assert firing — it fills declared defaults, fires pre-asserts against the bound
-            # record, runs the kind's `_run_impl`, then fires post-asserts against
-            # `{**record, output}` (all record-only, no pool). Firing happens EXACTLY ONCE,
-            # here in the node. A streaming kind's `run` returns the generator unchanged (the
-            # wrapper fires no post on it), so eval_node still drains it below.
-            outcome = node.run(record, **caps)
-            if isinstance(outcome, (Output, Route, Pause, Grow)):
-                result = outcome
-            elif inspect.isgenerator(outcome):  # a streaming kind: yields StreamChunk, returns a NodeResult
-                result = yield from node._drain_node_generator(outcome)
-            else:
-                raise RuntimeError(
-                    f"node {node.id!r} run() returned {type(outcome).__name__}, not a NodeResult"
-                )
+        # Drive the base `run` WRAPPER (not `_run_impl`): the wrapper owns assert firing.
+        # Kind-specific execution diagnostics, such as CODE's in-process watchdog, stay in
+        # the owning node package rather than timing every engine operation.
+        outcome = node.run(record, **caps)
+        if isinstance(outcome, (Output, Route, Pause, Grow)):
+            result = outcome
+        elif inspect.isgenerator(outcome):  # a streaming kind: yields StreamChunk, returns a NodeResult
+            result = yield from node._drain_node_generator(outcome)
+        else:
+            raise RuntimeError(
+                f"node {node.id!r} run() returned {type(outcome).__name__}, not a NodeResult"
+            )
         if isinstance(result, Grow):
             # A spawner grows the live graph: hand its seed-first `Grow` to the dispatcher's
             # `_apply_grow` via NodeExpanded. The injected builder constructs topology there. Any

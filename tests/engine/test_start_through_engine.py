@@ -20,6 +20,7 @@ from agent_composer.events import NodeStarted, NodeSucceeded, RunFailed
 from agent_composer.run import resume_flow, run_flow
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
+from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
 
 
 # --- boundary assert still gates the run (same behavior), now via START post_assert -------- #
@@ -121,16 +122,17 @@ def test_boundary_assert_reads_coerced_default():
     assert res.output == 5
 
 
-# --- S-3: a run that pauses right after START checkpoints a RAN START + resumes correctly -- #
-_WAIT_FLOW = """
+# --- S-3: a test-only Pause after START checkpoints a RAN START + resumes correctly -------- #
+_PAUSE_FLOW = """
 id: w
 name: w
 input:
   settle_at: date
 nodes:
   settle:
-    kind: wait
-    until: ${input.settle_at}
+    kind: human_input
+    prompt: "continue?"
+    output: Optional[str]
   done:
     kind: code
     depends_on: [settle]
@@ -145,7 +147,8 @@ def test_pause_after_start_checkpoints_ran_start_and_resumes():
     from agent_composer.suspension.checkpoint import RunCheckpoint
     from agent_composer.suspension.commands import DeliverAnswerCommand
 
-    loaded = load_flow(_WAIT_FLOW)
+    loaded = load_flow(_PAUSE_FLOW)
+    replace_human_inputs_with_artificial_pauses(loaded.compiled)
     res = run_flow(loaded, {"settle_at": "2026-07-01"})
     assert res.status == "paused"
     # the checkpoint's frontier reflects a START that already RAN (TAKEN), not one pending.

@@ -51,7 +51,7 @@ CORE_MODULES = {
 # P3.6 deleted `Enqueue`/`_apply_enqueue` (LOOP turn-0 now returns `Grow`) and swapped the 3
 # `_SPAWNER_KINDS` residual stamps + the `eval_node` def for the kind-blind `node.is_spawner`,
 # dropping the ceiling to 8.
-# P5.1 moved the two `eval_node` read-boundary reads (MAP over-mode, WAIT timed) behind the
+# P5.1 moved the two `eval_node` read-boundary reads (MAP over-mode, WAIT until) behind the
 # node-owned `bind_reserved`/`binds_per_item` hooks, dropping the ceiling to 6.
 # P5.2 bound assert-refs at the read boundary (record-first, pool-fallback) so END post-asserts
 # stop being special: the `node.kind == NodeKind.END` post-assert branch in `eval_node` is gone,

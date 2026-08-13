@@ -29,11 +29,11 @@ def infer_data_edges(
 
     For each consuming node, scan its sources and emit a data `Edge` per `${<id>.output[.…]}`
     ref, tagged with the `input_group` that identifies WHICH sink it feeds (the param/arg name
-    for a leaf/REF input; `over` for a MAP's `over:`; `until` for a timed WAIT). A coalesce
+    for a leaf/REF input; `over` for a MAP's `over:`; `until` for WAIT). A coalesce
     sink's alternatives share one group. Edges are the **projection of `flow.wiring`** for
     leaf + WAIT + REF/MAP.
 
-    `flow_wiring[node_id]` is the `{param -> source}` map (a timed WAIT carries its `until`, a
+    `flow_wiring[node_id]` is the `{param -> source}` map (WAIT carries its `until`, a
     MAP its `over`, under the reserved keys). A `case` node is SKIPPED here — `CaseDescriptor.build`
     owns the case's data + control edges (returned in its `BuildResult.edges`), so no provisional
     into-case edge is inferred.
@@ -68,12 +68,10 @@ def infer_data_edges(
             continue
 
         if isinstance(desc, WaitDescriptor):
-            # A timed `wait` orders after any node its `until:` reads. The `until` SOURCE is
-            # relocated to the flow wiring (reserved key); an event WAIT has no `until`
-            # key. `${input.X}`/`${system.X}` yield no edge.
+            # WAIT orders after any node its required `until:` reads. The source is relocated
+            # to the flow wiring under the reserved key; `${input.X}`/`${system.X}` yield no edge.
             wiring = flow_wiring.get(node_id, {})
-            if "until" in wiring:
-                emit_for(wiring["until"], node_id, "until")
+            emit_for(wiring["until"], node_id, "until")
             continue
 
         # leaf + REF/MAP: sources are the flow-owned wiring. A MAP's

@@ -180,7 +180,7 @@ def validate_references(
                 )
             continue
         if isinstance(node, WaitNode):
-            continue  # a timed WAIT's `until` is out of ref-validation scope (as today)
+            continue  # WAIT's `until` is reserved wiring outside the ordinary param scan
         # Each node input `from:` source, read from the flow-owned wiring. For a
         # desugared CASE these are the `__rN`/`__on` SOURCES (the original
         # `${<id>.output}` refs) — validated against the pool. The rewritten node-local

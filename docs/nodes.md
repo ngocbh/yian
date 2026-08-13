@@ -66,9 +66,10 @@ what `run` returns:
    human_input, wait, start, end
 ```
 
-- A **leaf** does one thing and returns `Output` (or the temporary generic `Pause`
-  compatibility result). `human_input` and agent `ask_user` calls block inside
-  the live invocation and return `Output`; they do not pause the graph.
+- A **leaf** does one thing and returns `Output` (or, for a custom/artificial
+  compatibility node, temporary generic `Pause`). AGENT `ask_user`, HUMAN_INPUT,
+  and WAIT block inside the live invocation and return `Output`; authorable nodes
+  do not pause the graph. WAIT returns `None` after its absolute UTC deadline.
 - A **router** (`case`) is a leaf that returns `Route(handle)` — no value, it just selects
   the live out-edge (siblings skip-flood). Still `is_spawner=False`; routing isn't growth.
 - A **spawner** returns `Grow` with a canonical seed describing the requested work.

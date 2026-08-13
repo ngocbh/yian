@@ -12,7 +12,6 @@ from agent_composer.events import RunPaused, RunResumed, RunSucceeded
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, NodeState, FlowOutput
 from agent_composer.nodes.base import Node, NodeKind, Output
-from agent_composer.nodes.wait import WaitNode
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.suspension.checkpoint import RunCheckpoint
@@ -339,9 +338,15 @@ def test_snapshot_deep_copies_expansion_descriptors():
     assert len(held.expansions[0].children) == 0                   # deep-copied, unchanged
 
 
-def test_wait_node_suspends_with_market_event():
+def test_artificial_pause_keeps_event_awaited_compatibility():
     g = _graph(
-        [FuncNode("start", lambda p: {}), WaitNode("watch", event_spec={"kind": "alert"})],
+        [
+            FuncNode("start", lambda p: {}),
+            PauseNode(
+                "watch",
+                reason=EventAwaited(event_spec={"kind": "alert"}, node_id="watch"),
+            ),
+        ],
         [(START_ID, "watch"), ("watch", END_ID)],
         outputs=[FlowOutput(name="event", from_="${watch.output}")],
     )
@@ -351,7 +356,7 @@ def test_wait_node_suspends_with_market_event():
     assert isinstance(evs[-1].reasons[0], EventAwaited)
     assert evs[-1].reasons[0].event_spec == {"kind": "alert"}
     assert evs[-1].reasons[0].node_id == "watch"                 # self-addressing for resume
-    # the watcher fires: deliver the payload as the WAIT node's Output
+    # A legacy watcher delivers the generic artificial leaf's output.
     evs2 = list(engine.resume(commands=[DeliverAnswerCommand(node_id="watch", value={"eps": 1.2})]))
     assert isinstance(evs2[-1], RunSucceeded)
     assert evs2[-1].output == {"eps": 1.2}                       # node's Output binds to ${watch.output}
@@ -365,17 +370,15 @@ def test_event_awaited_type_literal_round_trip():
     assert json.loads(r.model_dump_json())["type"] == "event_awaited"
 
 
-def test_wait_timed_until_pauses():
-    from agent_composer.nodes.wait import WaitNode
-    from agent_composer.typesys.pool import VariablePool
+def test_artificial_pause_keeps_scheduled_reason_compatibility():
     from agent_composer.events import PauseRequested
     from agent_composer.suspension.pause import ScheduledPause
-    pool = VariablePool()
-    pool.set(START_ID, {"settle_at": "2026-07-01"})     # a date input (stored as ISO string)
-    node = WaitNode("settle", is_timed=True)
-    node._wiring_src = {"until": "${input.settle_at}"}  # the until source lives on flow.wiring
-    # Deliver-as-Output: the node ALWAYS pauses on its single run; the engine delivers.
-    pause = [e for e in drive(node, pool) if isinstance(e, PauseRequested)][0]
+
+    node = PauseNode(
+        "settle",
+        reason=ScheduledPause(resume_at="2026-07-01", node_id="settle"),
+    )
+    pause = [event for event in drive(node) if isinstance(event, PauseRequested)][0]
     assert isinstance(pause.reason, ScheduledPause)
     assert pause.reason.resume_at.startswith("2026-07-01")
     assert pause.reason.node_id == "settle"            # self-addressing for resume_command

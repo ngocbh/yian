@@ -91,7 +91,7 @@ class NodeKind(str, Enum):
     TOOL = "tool"
     CASE = "case"
     HUMAN_INPUT = "human_input"  # block through the host-owned ask_user tool
-    WAIT = "wait"  # internal-only: suspend for an external poke (WATCH uses it)
+    WAIT = "wait"  # authorable: block until an absolute UTC date/datetime
     LOOP = "loop"  # internal-only: iterate a callable to a fixpoint (`('a -> 'a) -> 'a -> 'a`)
     START = "start"  # internal-only: loader-synthesized input boundary (parameter binding)
     END = "end"      # internal-only: loader-synthesized return boundary (record + list modes)
@@ -129,10 +129,10 @@ class Route:
 
 @dataclass(frozen=True)
 class Pause:
-    """A temporary generic leaf wait retained for WAIT/checkpoint compatibility.
+    """A temporary generic leaf pause retained for checkpoint compatibility.
 
     ``reason`` is a ``suspension.pause.PauseReason``. The engine emits
-    ``PauseRequested`` and suspends. Authorable HUMAN_INPUT and AGENT interactions
+    ``PauseRequested`` and suspends. Authorable AGENT, HUMAN_INPUT, and WAIT nodes
     block inside their live call and do not return this variant.
     """
 
@@ -443,7 +443,7 @@ class Node(ABC):
         """Reserved input keys the read seam (`eval_node`) must pre-resolve from
         `node_wiring` + `pool` before `run`, merged into the bound record.
 
-        Possible keys (per kind): a timed WAIT returns `{"until": <ISO ts>}`; a MAP returns
+        Possible keys (per kind): WAIT returns `{"until": <ISO deadline>}`; a MAP returns
         `{"over": <list>}`. Default: `{}` (an ordinary node reserves no keys). `node_wiring`
         is the flow-owned wiring for this node (`flow.wiring[id]`); `pool` is the live
         `VariablePool` the seam reads sources from."""
@@ -453,8 +453,8 @@ class Node(ABC):
         """The reserved AUTHOR-wiring key names this node owns beyond its declared `params`
         — the keys `check_wiring_parity` must allow, and validation treats specially.
 
-        These are the static NAMES of the same keys `bind_reserved` resolves at run (a timed
-        WAIT: `until`; a MAP: `over`), but returned with NO pool — load-time only. Default:
+        These are the static NAMES of the same keys `bind_reserved` resolves at run
+        (WAIT: `until`; MAP: `over`), but returned with NO pool — load-time only. Default:
         the empty set (an ordinary node reserves no keys)."""
         return set()
 

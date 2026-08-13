@@ -8,6 +8,7 @@ behaviors end-to-end through `load_flow`/`run_flow`.
 """
 
 import logging
+from datetime import datetime, timezone
 
 import pytest
 
@@ -144,25 +145,93 @@ def test_inline_raise_is_framed_at_the_yaml_line():
     assert "boom" in (result.error or "")
 
 
-# --- watchdog (kind-blind soft-budget logger) ------------------------------------------- #
+# --- CODE-owned watchdog (soft-budget logger) ------------------------------------------- #
 
 
 def test_watchdog_logs_a_slow_node(caplog):
-    from agent_composer.runtime.watchdog import node_watchdog
+    from agent_composer.nodes.code.watchdog import node_watchdog
     import time
 
-    with caplog.at_level(logging.WARNING, logger="agent_composer.runtime.watchdog"):
+    with caplog.at_level(logging.WARNING, logger="agent_composer.nodes.code.watchdog"):
         with node_watchdog("slowpoke", budget=0.02):
             time.sleep(0.08)
     assert any("slowpoke" in r.getMessage() for r in caplog.records)
 
 
 def test_watchdog_silent_on_a_fast_node(caplog):
-    from agent_composer.runtime.watchdog import node_watchdog
+    from agent_composer.nodes.code.watchdog import node_watchdog
     import time
 
-    with caplog.at_level(logging.WARNING, logger="agent_composer.runtime.watchdog"):
+    with caplog.at_level(logging.WARNING, logger="agent_composer.nodes.code.watchdog"):
         with node_watchdog("speedy", budget=0.5):
             pass
         time.sleep(0.02)
     assert not any("speedy" in r.getMessage() for r in caplog.records)
+
+
+def test_watchdog_wraps_both_code_modes_but_not_other_blocking_kinds(monkeypatch):
+    """The timer belongs to CODE execution, not the kind-blind eval seam."""
+    import threading
+    from types import SimpleNamespace
+
+    from agent_composer.nodes.agent import AgentNode
+    from agent_composer.nodes.agent.modes import MODES
+    from agent_composer.nodes.code import CodeNode
+    from agent_composer.nodes.human_input import HumanInputNode
+    from agent_composer.nodes.wait import WaitNode
+    from agent_composer.nodes.code import watchdog
+    from agent_composer.runtime.eval_node import eval_node
+    from agent_composer.typesys.pool import VariablePool
+
+    timers = []
+
+    class _Timer:
+        def __init__(self, interval, function):
+            self.interval = interval
+            self.function = function
+            self.daemon = False
+            self.started = False
+            self.cancelled = False
+            timers.append(self)
+
+        def start(self):
+            self.started = True
+
+        def cancel(self):
+            self.cancelled = True
+
+    monkeypatch.setattr(watchdog.threading, "Timer", _Timer)
+    monkeypatch.setattr(
+        "agent_composer.nodes.wait.node._utc_now",
+        lambda: datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
+    monkeypatch.setitem(MODES, "plain", lambda ctx: Output("agent answer"))
+    monkeypatch.setattr(
+        "agent_composer.nodes.human_input.node.invoke_tool_trusted",
+        lambda tool_id, metadata: "human answer",
+    )
+
+    empty_flow = SimpleNamespace(wiring={"agent": {}, "human": {}})
+    assert list(eval_node(AgentNode("agent"), empty_flow, VariablePool()))[-1].output == (
+        "agent answer"
+    )
+    assert list(eval_node(HumanInputNode("human", prompt="?"), empty_flow, VariablePool()))[
+        -1
+    ].output == "human answer"
+    wait_events = list(eval_node(
+        WaitNode("wait"),
+        SimpleNamespace(wiring={"wait": {"until": "2026-01-01T00:00:00+00:00"}}),
+        VariablePool(),
+        stop_event=threading.Event(),
+    ))
+    assert timers == []
+    inline_result = CodeNode("inline", code="return inputs['v']").run({"v": 1})
+    reference_result = CodeNode(
+        "reference", code="tests.engine._fakes:passthrough"
+    ).run({"v": 2})
+
+    assert wait_events[-1].output is None
+    assert inline_result.value == 1
+    assert reference_result.value == 2
+    assert [timer.interval for timer in timers] == [30.0, 30.0]
+    assert all(timer.started and timer.cancelled for timer in timers)

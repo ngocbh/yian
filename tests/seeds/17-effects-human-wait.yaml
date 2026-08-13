@@ -6,9 +6,9 @@
 # kind: wait (until:), `case … on` routing the human's answer, and depends_on: to order a
 # side-effect node after the wait with no data binding.
 #
-# HUMAN_INPUT blocks its live worker through the host-owned ask_user tool; WAIT still uses the
-# temporary generic pause compatibility path. This seed pins both effects in the Compose surface
-# and proves the blocking human answer feeds an ordinary CASE before the timed WAIT.
+# HUMAN_INPUT blocks its live worker through the host-owned ask_user tool; WAIT blocks one
+# worker until its absolute UTC deadline and then returns None. This seed pins both effects in
+# the Compose surface and proves the human answer feeds an ordinary CASE before the UTC WAIT.
 # The answer is validated at the same typed Output boundary as every other node value.
 
 id: effects
@@ -47,7 +47,7 @@ nodes:
 
   settle:
     kind: wait
-    until: ${input.settle_at}          # park until the timestamp; resume is one-shot
+    until: ${input.settle_at}          # a date means midnight UTC
     # `wait` produces no meaningful value — downstream orders after it via depends_on.
 
   confirm:

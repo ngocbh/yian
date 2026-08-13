@@ -21,8 +21,21 @@ def test_effect_nodes_drop_scratch_keys():
 
     hi = HumanInputNode("h", prompt="?")
     assert not hasattr(hi, "answer_key")
-    w = WaitNode("w", is_timed=True)
+    w = WaitNode("w")
     assert not hasattr(w, "release_key") and not hasattr(w, "payload_key")
+
+
+def test_wait_event_mode_and_runtime_wide_watchdog_are_gone():
+    from agent_composer.nodes.wait.node import WaitNode
+
+    wait = WaitNode("wait")
+    assert not hasattr(wait, "is_timed")
+    assert not hasattr(wait, "event_spec")
+    assert not hasattr(wait, "poll")
+    with pytest.raises(TypeError):
+        WaitNode("wait", event_spec={"topic": "alerts"})
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("agent_composer.runtime.watchdog")
 
 
 def test_agent_continuation_packages_and_builders_are_gone():

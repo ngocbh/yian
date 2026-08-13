@@ -538,7 +538,7 @@ class FlowEngine:
             # its existing out-edges. The node is resolved against the LIVE graph, so a
             # runtime-namespaced id resolves. Wrapped in the SAME TypeCheckError -> NodeExecutionError
             # guard _on_success uses, so a type-invalid answer FAILS the run (it does not crash
-            # resume). A WAIT release delivers value=None (timed WAIT output_type is None).
+            # resume). A compatibility scheduled-release command may deliver value=None.
             node = self.flow.nodes[command.node_id]
             try:
                 self.pool.set(command.node_id, command.value, declared=node.output_type)

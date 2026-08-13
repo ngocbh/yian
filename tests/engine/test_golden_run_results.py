@@ -4,11 +4,7 @@ from agent_composer.compose import (
     LoadError,
     load_flow,
 )
-from agent_composer.run import (
-    resume_command,
-    resume_flow,
-    run_flow,
-)
+from agent_composer.run import run_flow
 from agent_composer.tools import install_ask_user
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -105,7 +101,7 @@ def test_golden_map_run_result():
     ]
 
 
-# --- (ii) blocking HUMAN_INPUT followed by legacy timed WAIT (CODE-only, LLM-free).
+# --- (ii) blocking HUMAN_INPUT followed by an absolute UTC WAIT (CODE-only, LLM-free).
 #     Mirrors seed 17's shape, but agent-free so it runs without an LLM.
 _EFFECTS = """
 id: e
@@ -146,19 +142,14 @@ output: ${confirm.output | abort.output}
 """
 
 
-def test_golden_human_input_then_timed_wait_resume_terminal():
-    # HUMAN_INPUT completes through its trusted host; WAIT remains the one temporary pause.
+def test_golden_human_input_then_past_wait_completes_without_checkpoint():
+    # HUMAN_INPUT completes through its trusted host; the past WAIT returns in the same run.
     loaded = load_flow(_EFFECTS)
     with install_ask_user(lambda **request: "approve"):
-        paused = run_flow(loaded, {"settle_at": "2026-07-01"})
-    assert paused.status == "paused"
-    done = resume_flow(
-        loaded,
-        engine=paused.engine,
-        commands=[resume_command(loaded, paused.pause_reasons[0], True)],
-    )
-    assert done.status == "succeeded"
-    assert done.output == "approve"                # confirm_action(rec={answer:"approve"})
+        result = run_flow(loaded, {"settle_at": "2000-01-01"})
+    assert result.status == "succeeded"
+    assert result.checkpoint is None
+    assert result.output == "approve"
 
 
 # --- (iii) static edge-id sets for a few flows — LOAD-pinned against the

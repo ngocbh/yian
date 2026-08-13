@@ -873,21 +873,21 @@ def test_durable_resume_pooled_matches_serial():
     serial durable resume. A run checkpointed serial is resumable pooled (override) and
     vice-versa — correctness is worker-count-independent."""
     from agent_composer.run import run_flow, resume_flow
-    from agent_composer.compose.loader import load_flow
-    from tests.engine.test_run_resume import _RESUME_FANOUT
+    from tests.engine.test_run_resume import _RESUME_FANOUT, _load_artificial_pause_flow
 
-    loaded = load_flow(_RESUME_FANOUT)
+    loaded = _load_artificial_pause_flow(_RESUME_FANOUT)
     paused = run_flow(loaded, {"settle_at": "2026-07-01"}, num_workers=0)
     blob = paused.checkpoint.dumps()
     assert paused.checkpoint.num_workers == 0
 
     # cross-process round-trip, resumed POOLED via the override (resume_flow passthrough)
     ckpt = RunCheckpoint.loads(blob)
-    res = resume_flow(load_flow(_RESUME_FANOUT), checkpoint=ckpt, num_workers=4,
+    res = resume_flow(_load_artificial_pause_flow(_RESUME_FANOUT), checkpoint=ckpt, num_workers=4,
                       commands=[DeliverAnswerCommand(node_id="settle", value=None)])
     assert res.status == "succeeded", res.error
 
     # serial durable resume for the oracle
-    ser = resume_flow(load_flow(_RESUME_FANOUT), checkpoint=RunCheckpoint.loads(blob),
+    ser = resume_flow(_load_artificial_pause_flow(_RESUME_FANOUT),
+                      checkpoint=RunCheckpoint.loads(blob),
                       commands=[DeliverAnswerCommand(node_id="settle", value=None)])
     assert res.output == ser.output

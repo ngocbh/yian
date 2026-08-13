@@ -92,7 +92,9 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
     NodeKind.HUMAN_INPUT: frozenset(
         {"prompt", "answer_schema", "questions", "questions_input"}
     ),
-    NodeKind.WAIT: frozenset({"is_timed", "event_spec", "poll"}),
+    # WAIT's execution identity is its required flow-owned `until` wiring; the node owns
+    # no additional constructor state.
+    NodeKind.WAIT: frozenset(),
     NodeKind.CALL: frozenset({"flow_id", "flow_version", "child"}),
     NodeKind.MAP: frozenset({"flow_id", "flow_version", "child"}),
     NodeKind.LOOP: frozenset(
@@ -1449,23 +1451,9 @@ def _node_manifest(
             }
         )
     elif node.kind is NodeKind.WAIT:
-        manifest.update(
-            {
-                "event_spec": _canonical_value(
-                    node.event_spec,
-                    ctx,
-                    f"{path}.event_spec",
-                    redact_credentials=True,
-                ),
-                "is_timed": node.is_timed,
-                "poll": _canonical_value(
-                    node.poll,
-                    ctx,
-                    f"{path}.poll",
-                    redact_credentials=True,
-                ),
-            }
-        )
+        # WAIT owns no constructor state; its absolute deadline is canonicalized through
+        # the ordinary flow `wiring` manifest.
+        pass
     elif node.kind in (NodeKind.CALL, NodeKind.MAP, NodeKind.LOOP):
         manifest.update(
             {

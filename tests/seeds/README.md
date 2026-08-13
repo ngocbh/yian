@@ -7,7 +7,7 @@ run via the Compose loader (`agent_composer.load_flow` / `run_flow`); the CODE
 nodes call `tests.seeds.fns`.
 
 > Flows that need not-yet-supported features (including MATCH) live under `_future/`
-> until their milestone lands. Settled HUMAN_INPUT and temporary WAIT coverage lives in
+> until their milestone lands. Settled blocking HUMAN_INPUT and WAIT coverage lives in
 > the main gallery.
 
 The goal: every feature and every syntax convention shows up in at least one seed, so the
@@ -318,7 +318,7 @@ nodes:
 | `12-depends-on.yaml` | run-ordering edges — `depends_on` (co-skip) / `runs_after` (pure order); a side-effect node, no data binding, + `bool` output |
 | `13-types-objects.yaml` | the type grammar — Python scalars, `list[X]`, inline/block/nested objects (records), deep dotted access |
 | `14-agent-tools.yaml` | AGENT knobs — `mode` / ordinary `tools` including `ask_user` / `llm_config` + structured output |
-| `17-effects-human-wait.yaml` | effects — blocking `HUMAN_INPUT` (typed answer) + temporary paused `WAIT` (`until:`) + `case` on the answer + a `depends_on` side-effect |
+| `17-effects-human-wait.yaml` | effects — blocking `HUMAN_INPUT` (typed answer) + absolute UTC `WAIT` (`until:`) + `case` on the answer + a `depends_on` side-effect |
 | `18-research-pipeline.yaml` | **(DRAFT)** realistic end-to-end — fan-out reviewers → typed-`View` synth → `case … on` stance → multi-output + `asserts:` |
 | `19-binding-stances.yaml` | **(DRAFT/proposed)** every input-binding stance — required (plain, co-skip) / optional (`:-`) / branch-join (`\|`) / fail-loud (`:?`); pins the **per-input readiness** model (review-doc CC3 / Problem 2) |
 | `20-call-defs.yaml` | a `call:` resolving to an in-file `defs:` callable (a multi-node sub-flow inline) — `defs:` section + `call` defs-first; loads resolver-free |
@@ -332,7 +332,7 @@ nodes:
 
 Every node kind (AGENT/CODE/MODEL/TOOL/call/case/loop/HUMAN_INPUT/WAIT) and every settled
 convention appears in at least one seed. Seed 17 pins blocking HUMAN_INPUT and WAIT's
-temporary pause-compatibility surface. Tagged data is modelled as a discriminant record (a `Literal`
+absolute UTC deadline surface. Tagged data is modelled as a discriminant record (a `Literal`
 field) routed by `case … on <field>` — the `kind: match` + payload-union design was dropped.
 
 ## Negative gallery — `errors/`
@@ -348,8 +348,8 @@ each isolates one failure, with a matching test. Failure modes whose check isn't
 in `_future/errors/` with their milestone. See `errors/README.md` for the full table and rule.
 
 **Deferred / still to build:** `MATCH` remains proposed in seed 16; treat its exact syntax as
-*for review*. HUMAN_INPUT is settled and blocking, while WAIT retains temporary generic-pause
-compatibility. The `tests.seeds.fns` CODE module now owes, in addition to
+*for review*. HUMAN_INPUT and WAIT are settled blocking nodes. The `tests.seeds.fns`
+CODE module now owes, in addition to
 `one_line_summary` / `fetch_facts` / `prime_cache` / `build_outline` (seeds 01/03/12/13):
 `confirm_action` (seed 17). *(The `errors/`
 fixtures need no owed fns — they fail before/without running a CODE callable.)*

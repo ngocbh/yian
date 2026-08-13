@@ -27,7 +27,7 @@ branch+join, tool use, human gate, `call`/`map` composition); copy one and edit.
 2. **Name reusable types** in `typedefs:` (enums, records, aliases).
 3. **Decompose into leaf nodes.** Each node is one step: an LLM call (`agent`),
    deterministic code (`code`), a registered tool (`tool`), a branch (`case`), a
-   blocking human gate (`human_input`), a timed pause (`wait`), a child-flow call
+   blocking human gate (`human_input`), a blocking UTC deadline (`wait`), a child-flow call
    (`call`/`map`), or an iterated body (`loop`). Prefer many small typed nodes over
    one mega-prompt.
 4. **Wire by reference, not by edges.** A node consumes another by putting
@@ -254,13 +254,17 @@ ask2:                                 # (B) LLM composes them (desugars at load)
 ```
 (Form (C): read a list from an upstream node — `questions: ${qs}`.)
 
-### `wait` — a timed pause
+### `wait` — block until an absolute UTC deadline
 ```yaml
 settle:
   kind: wait
   until: ${input.as_of}
   # order a downstream node after it with depends_on: [settle]
 ```
+`until:` resolves to an ISO `date` or `datetime`. Date and naive datetime values
+are UTC; aware values are normalized to UTC. A past/current deadline returns
+immediately. Otherwise WAIT holds one worker until the remaining wall-clock
+duration elapses, then returns `None`; it does not create a checkpoint.
 
 ### `call` / `map` — composition over child flows
 A child is itself a flow file. `call` runs it once; `map` runs it per list element
@@ -363,8 +367,9 @@ agent loop and its returned answer becomes the ordinary tool result. For a
   first; or from Python `load_flow(text, search_paths=[flow_dir])`.
 - **Run:** `ac run <flow>.yaml --input k=v [--inputs file.json]`. Missing required
   inputs are prompted; `human_input` and `ask_user` requests are served by the
-  host while the run remains live. A temporary generic `Pause`/checkpoint path
-  remains for `wait` compatibility until issue #117 removes it.
+  host while the run remains live. WAIT also remains in the live run. A temporary
+  generic `Pause`/checkpoint path remains only for artificial compatibility until
+  issue #117 removes it.
 - A flow with only `code`/`tool` nodes runs with **no provider**; any `agent` node
   needs a provider/model configured (see `docs/installation.md`).
 

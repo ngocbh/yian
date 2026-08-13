@@ -1543,74 +1543,14 @@ def test_flow_fingerprint_redacts_model_weights_uri_credentials():
         assert flow_fingerprint(first) != flow_fingerprint(changed)
 
 
-def test_wait_manifest_redacts_credentials_recursively_but_keeps_semantics():
-    first = WaitNode(
-        "node",
-        event_spec={
-            "topic": "orders",
-            "transport": {
-                "endpoint": (
-                    "https://alice:first-password@events.example/orders"
-                    "?region=us&token=first-event-token"
-                ),
-                "headers": {"GITHUB_TOKEN": "first-github-token"},
-            },
-        },
-        poll={
-            "seconds": 5,
-            "request": {"auth": {"api_key": "first-poll-api-key"}},
-        },
-    )
-    second = WaitNode(
-        "node",
-        event_spec={
-            "topic": "orders",
-            "transport": {
-                "endpoint": (
-                    "https://bob:second-password@events.example/orders"
-                    "?region=us&token=second-event-token"
-                ),
-                "headers": {"GITHUB_TOKEN": "second-github-token"},
-            },
-        },
-        poll={
-            "seconds": 5,
-            "request": {"auth": {"api_key": "second-poll-api-key"}},
-        },
-    )
+def test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring():
+    first = _single_node_flow(WaitNode("node"))
+    second = _single_node_flow(WaitNode("node"))
+    first.wiring["node"] = {"until": "2026-01-01T00:00:00+00:00"}
+    second.wiring["node"] = {"until": "2026-01-02T00:00:00+00:00"}
 
-    first_flow = _single_node_flow(first)
-    second_flow = _single_node_flow(second)
-    assert flow_fingerprint(first_flow) == flow_fingerprint(second_flow)
-    manifest_text = json.dumps(flow_manifest(first_flow), sort_keys=True)
-    for credential in (
-        "alice",
-        "first-password",
-        "first-event-token",
-        "first-github-token",
-        "first-poll-api-key",
-    ):
-        assert credential not in manifest_text
-
-    changed_topic = copy.deepcopy(second)
-    changed_topic.event_spec["topic"] = "payments"
-    assert flow_fingerprint(first_flow) != flow_fingerprint(
-        _single_node_flow(changed_topic)
-    )
-
-    changed_poll = copy.deepcopy(second)
-    changed_poll.poll["seconds"] = 10
-    assert flow_fingerprint(first_flow) != flow_fingerprint(
-        _single_node_flow(changed_poll)
-    )
-
-    changed_endpoint = copy.deepcopy(second)
-    changed_endpoint.event_spec["transport"]["endpoint"] = changed_endpoint.event_spec[
-        "transport"
-    ]["endpoint"].replace("events.example", "other.example")
-    assert flow_fingerprint(first_flow) != flow_fingerprint(
-        _single_node_flow(changed_endpoint)
-    )
+    assert flow_fingerprint(first) != flow_fingerprint(second)
+    assert expansion_digest(first) != expansion_digest(second)
 
 
 @pytest.mark.parametrize(
@@ -2335,13 +2275,6 @@ def test_flow_fingerprint_preserves_start_input_declaration_order():
             {"prompt": "p", "title": "first"},
             {"prompt": "p", "title": "second"},
         ),
-        (WaitNode, {"is_timed": False}, {"is_timed": True}),
-        (
-            WaitNode,
-            {"event_spec": {"topic": "first"}},
-            {"event_spec": {"topic": "second"}},
-        ),
-        (WaitNode, {"poll": {"seconds": 1}}, {"poll": {"seconds": 2}}),
         (
             CallNode,
             {"flow_id": "first", "child": _fragment()},
@@ -2433,9 +2366,6 @@ def test_flow_fingerprint_preserves_start_input_declaration_order():
         "human-questions",
         "human-questions-input",
         "human-title",
-        "wait-is-timed",
-        "wait-event-spec",
-        "wait-poll",
         "call-flow-id",
         "call-flow-version",
         "call-child",
@@ -2567,10 +2497,6 @@ def test_expansion_digest_excludes_effective_but_includes_authored_llm_config():
             HumanInputNode("node", prompt="second", answer_schema=[{"name": "answer"}]),
         ),
         (
-            WaitNode("node", event_spec={"topic": "first"}, poll={"seconds": 1}),
-            WaitNode("node", event_spec={"topic": "second"}, poll={"seconds": 1}),
-        ),
-        (
             CallNode("node", flow_id="first", child=_fragment()),
             CallNode("node", flow_id="second", child=_fragment()),
         ),
@@ -2597,7 +2523,7 @@ def test_expansion_digest_excludes_effective_but_includes_authored_llm_config():
             EndNode.list_("node", n=1),
         ),
     ],
-    ids=["tool", "case-order", "human-input", "wait", "call", "loop", "end-mode"],
+    ids=["tool", "case-order", "human-input", "call", "loop", "end-mode"],
 )
 def test_flow_manifest_covers_remaining_kind_execution_fields(first, second):
     assert flow_fingerprint(_single_node_flow(first)) != flow_fingerprint(_single_node_flow(second))

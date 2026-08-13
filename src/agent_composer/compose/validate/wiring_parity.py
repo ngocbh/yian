@@ -1,7 +1,7 @@
 """Graph-stage: load-time `flow.wiring` / `params` key parity for every node.
 
 A loader post-build pass. Every node's `flow.wiring` keys must equal its declared `params`
-names PLUS the kind's reserved wiring keys (`until` for a timed WAIT, `over` for a mapped
+names PLUS the kind's reserved wiring keys (`until` for WAIT, `over` for a mapped
 `call`). It relocates `build.check_wiring_parity` verbatim, adding a `.range` anchor off the
 built node's `field_ranges[("field", "inputs")]` (the coarse `input:` mapping span, else the node's own
 range) — the transitional `node_lines` still feeds `.line`.
@@ -22,7 +22,7 @@ def check_wiring_parity(
     nodes: dict, flow_wiring: dict[str, dict[str, Any]], node_lines: Optional[dict] = None
 ) -> None:
     """Load-time key parity: every node's `flow.wiring` keys must equal its declared
-    `params` names PLUS the kind's reserved keys (`until` for a timed WAIT, `over` for a mapped
+    `params` names PLUS the kind's reserved keys (`until` for WAIT, `over` for a mapped
     `call`).
 
     Closes the duplicate-param hole by construction (a nested-dict wiring cannot hold a duplicate

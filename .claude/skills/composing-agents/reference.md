@@ -22,6 +22,7 @@ Copy, rename, and edit.
 | [`tool-use.yaml`](templates/tool-use.yaml) | a `tool` node (no LLM) feeding an AGENT |
 | [`human-in-loop.yaml`](templates/human-in-loop.yaml) | a blocking `human_input` gate (typed approve/revise answer) |
 | [`human-questions.yaml`](templates/human-questions.yaml) | a `human_input` gate with multiple questions — static `questions:` + `adaptive_questions:` |
+| [`wait-until.yaml`](templates/wait-until.yaml) | an absolute UTC WAIT ordered before downstream CODE |
 | [`child-summarize.yaml`](templates/child-summarize.yaml) | a reusable CHILD flow |
 | [`call-child.yaml`](templates/call-child.yaml) | `call` a sibling flow once (via `uses:`) |
 | [`expr-and-call.yaml`](templates/expr-and-call.yaml) | `${a + b}` arithmetic in a binding + inline `call(...)` over an in-file `defs:` callee |
@@ -119,6 +120,11 @@ tag or add an `else:`.
 **Order without data flow.** When node B must run after A but consumes no value
 from it (a `wait`, a side-effecting tool), use `depends_on: [a]` (co-skips B if A
 skipped) or `runs_after: [a]` (orders only; B still runs).
+
+**Wait until an absolute deadline.** Give `wait` an ISO `date` or `datetime` via
+`until:`. Dates mean midnight UTC, naive datetimes are UTC, and aware datetimes
+are normalized to UTC. WAIT blocks one worker and returns `None` at the deadline;
+it does not pause/checkpoint the run. See `wait-until.yaml`.
 
 **Ask the human.** For a *guaranteed* gate use a `human_input` node (it blocks its
 worker until the host answers). For "ask only if the model decides it needs to",

@@ -1,108 +1,97 @@
-"""WAIT — the internal suspend-until primitive (two modes).
+"""WAIT — block one worker until an absolute UTC deadline.
 
-Not exposed to flow authors directly: the WATCH composite is built from the event
-mode, and a timed pause is built from the timed mode. The mode is selected by
-which field is authored:
-
-- `event_spec` set -> EVENT mode: suspend with `EventAwaited(node_id=self.id)` until
-  the host watcher delivers the event payload as this node's `Output` (a
-  `DeliverAnswerCommand`) and resumes the run.
-- `until` set -> TIMED mode: resolve the `${...}` binding to an ISO timestamp and
-  suspend with `ScheduledPause(resume_at=ts, node_id=self.id)`. Resume is
-  command-driven — the host releases the wait by delivering `value=None` as this
-  node's `Output`; the engine never reads wall-clock. `date`/`datetime` segments
-  resolve to ISO strings, so the resolver accepts a str directly.
-
-Both use the temporary generic deliver-as-Output pause model: the node ALWAYS
-pauses on its single run; the engine delivers the release value — no re-run.
+WAIT accepts one resolved ISO date or datetime through its reserved ``until``
+wiring. A date and a naive datetime are interpreted in UTC; an aware datetime
+is normalized to UTC. The node waits cooperatively on the run-owned stop event,
+so engine failure or host shutdown can wake and drain its worker.
 """
 
-from typing import Any, Optional
+from datetime import datetime, timezone
+from threading import TIMEOUT_MAX
+from typing import Any
 
-from agent_composer.nodes.base import Node, NodeKind, Pause
+from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
 from agent_composer.typesys.pool import VariablePool
-from agent_composer.suspension.pause import EventAwaited, ScheduledPause
 
 
 def resolve_until(until_src: Any, pool: VariablePool) -> str:
-    """Resolve a WAIT `until` source to an ISO timestamp string.
+    """Resolve a WAIT ``until`` source to an ISO date or datetime string.
 
-    A `${...}` binding (or a literal) is evaluated against the pool; `date`/`datetime` segments
-    resolve to ISO strings (returned as-is), a raw `.isoformat()` object is formatted defensively,
-    anything else is a loud `ValueError`. Lifted out of `WaitNode` so the engine bind seam can
-    pre-resolve `inputs["until"]` for a pure `WaitNode.run`."""
+    A ``${...}`` binding or literal is evaluated against ``pool``. Typed
+    ``date``/``datetime`` values resolve to ISO strings; a raw object exposing
+    ``isoformat()`` is formatted defensively. The WAIT body parses and
+    normalizes the resulting absolute deadline.
+    """
     from agent_composer.expr import eval_binding
     from agent_composer.expr.expressions import resolve_reference
 
-    val = eval_binding(until_src, lambda path: resolve_reference(path, pool))
-    if isinstance(val, str):
-        return val  # date/datetime are stored/resolved as ISO strings
-    if hasattr(val, "isoformat"):  # defensive: a raw date/datetime object
-        return val.isoformat()
+    value = eval_binding(until_src, lambda path: resolve_reference(path, pool))
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
     raise ValueError(
-        f"wait `until` ({until_src!r}) did not resolve to a date/datetime: {val!r}"
+        f"wait `until` ({until_src!r}) did not resolve to a date/datetime: {value!r}"
     )
 
 
-class WaitNode(Node):
-    """
-    The internal suspend-until primitive, in two modes (not authored directly).
+def _utc_now() -> datetime:
+    """Return the current aware UTC wall-clock instant."""
+    return datetime.now(timezone.utc)
 
-    EVENT mode (`event_spec` set) parks with `EventAwaited` until the host watcher delivers the
-    payload as this node's Output; TIMED mode parks with `ScheduledPause(resume_at=...)` (the
-    `until` source is pre-resolved into `inputs["until"]` by the engine bind seam). Both use
-    the temporary generic pause model — the node always pauses on its single run.
+
+def _deadline_utc(value: str) -> datetime:
+    """Parse one ISO date/datetime and return its aware UTC instant."""
+    deadline = datetime.fromisoformat(value)
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    return deadline.astimezone(timezone.utc)
+
+
+class WaitNode(Node):
+    """Block until the resolved absolute ``until`` deadline.
+
+    The ``until`` source lives in ``CompiledFlow.wiring[id]["until"]`` and is
+    pre-resolved by :meth:`bind_reserved`. ``_run_impl`` receives that concrete
+    ISO value plus the exact run-owned stop event. A normal timeout returns
+    ``Output(None)``; a lifecycle wake raises the private ``_HostStop`` signal so
+    the engine discards the node outcome while draining.
 
     Args:
-        node_id (`str`):
-            The node's unique id.
-        is_timed (`bool`, *optional*, defaults to `False`):
-            The timed/event discriminator; the timed `until` source rides `flow.wiring`.
-        event_spec (`dict`, *optional*, defaults to `None`):
-            EVENT mode: what to watch; defaults to `{}`.
-        poll (`dict`, *optional*, defaults to `None`):
-            EVENT mode: how often to re-check; defaults to `{}`.
-        title (`str`, *optional*, defaults to `None`):
-            Display title.
+        node_id: The node's unique id.
+        title: Optional display title.
     """
 
     kind = NodeKind.WAIT
+    needs_stop_event = True
 
-    def __init__(
-        self,
-        node_id: str,
-        *,
-        is_timed: bool = False,
-        event_spec: Optional[dict[str, Any]] = None,
-        poll: Optional[dict[str, Any]] = None,
-        title: Optional[str] = None,
-    ) -> None:
-        # The timed/event discriminator: a timed WAIT's `until` SOURCE lives on
-        # `CompiledFlow.wiring[id]["until"]` (the node/flow split), not the node — `is_timed` is the
-        # only residual; the engine pre-resolves the source into inputs["until"] before `run`.
+    def __init__(self, node_id: str, *, title: str | None = None) -> None:
         super().__init__(node_id, title=title)
-        self.is_timed = is_timed
-        self.event_spec = event_spec or {}
-        self.poll = poll or {}
 
-    def bind_reserved(self, node_wiring: dict, pool) -> dict:
-        """Pre-resolve the timed WAIT `until` source into a concrete ISO ts for `run`.
-
-        Returns `{"until": <ISO ts>}` when `self.is_timed` (the `until` source rides
-        `node_wiring["until"]`); `{}` for the event mode. Its presence in the record is the
-        timed/event discriminator `run` reads."""
-        if self.is_timed:
-            return {"until": resolve_until(node_wiring["until"], pool)}
-        return {}
+    def bind_reserved(self, node_wiring: dict, pool: VariablePool) -> dict[str, str]:
+        """Resolve the required ``until`` wiring into the node's input record."""
+        return {"until": resolve_until(node_wiring["until"], pool)}
 
     def reserved_wiring_keys(self) -> set[str]:
-        """A timed WAIT reserves `until` (its author-wiring source); event mode reserves nothing."""
-        return {"until"} if self.is_timed else set()
+        """Declare the required author-owned ``until`` wiring key."""
+        return {"until"}
 
-    def _run_impl(self, inputs: dict):
-        # The engine pre-resolves a timed `until` into inputs["until"] (a concrete ISO ts);
-        # its presence is the timed/event discriminator. `resolve_until` is the bind's job now.
-        if "until" in inputs:  # timed mode
-            return Pause(ScheduledPause(resume_at=inputs["until"], node_id=self.id))
-        # event mode (unauthorable; WATCH) — the watcher delivers the payload as this node's Output
-        return Pause(EventAwaited(event_spec=self.event_spec, poll=self.poll, node_id=self.id))
+    def _run_impl(self, inputs: dict, *, stop_event) -> Output:
+        """Wait for the remaining absolute duration or unwind on lifecycle stop."""
+        deadline = _deadline_utc(inputs["until"])
+        remaining = (deadline - _utc_now()).total_seconds()
+        if remaining <= 0:
+            return Output(None)
+
+        # Event.wait raises OverflowError above TIMEOUT_MAX. Re-read wall time
+        # only after each maximum-sized chunk; ordinary waits retain one call.
+        while remaining > TIMEOUT_MAX:
+            if stop_event.wait(timeout=TIMEOUT_MAX):
+                raise _HostStop(primary=False)
+            remaining = (deadline - _utc_now()).total_seconds()
+
+        if remaining <= 0:
+            return Output(None)
+        if stop_event.wait(timeout=remaining):
+            raise _HostStop(primary=False)
+        return Output(None)

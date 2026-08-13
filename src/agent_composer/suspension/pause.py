@@ -6,11 +6,11 @@ new subclass, nothing else.
 
 Maps to the temporary generic compatibility surface:
 - a legacy/artificial human reason -> HumanInputRequired
-- WATCH composite's WAIT            -> EventAwaited (watcher fires -> resume)
-- a plain timed wait                -> ScheduledPause
+- a legacy external watcher        -> EventAwaited
+- a legacy scheduled wake          -> ScheduledPause
 
-Authorable HUMAN_INPUT and agent ``ask_user`` calls no longer produce a pause;
-they block inside their live node execution. The human reason remains wire/test
+Authorable AGENT, HUMAN_INPUT, and WAIT calls do not produce these reasons; they
+block inside their live node execution. The reason types remain wire/test
 compatibility until the subsequent run-log cutover removes this package.
 """
 
@@ -63,7 +63,7 @@ class HumanInputRequired(BaseModel):
 
 class EventAwaited(BaseModel):
     """
-    A suspended node awaits an external event (a `WATCH` composite's `WAIT`).
+    A legacy/artificial suspended node awaits an external event.
 
     A watcher re-checks the condition on a poll cadence and, when it fires, resumes the
     run by delivering the watcher payload as the node's Output.
@@ -84,15 +84,15 @@ class EventAwaited(BaseModel):
     # what to watch (a condition over a source) + how often to re-check.
     event_spec: dict[str, Any] = Field(default_factory=dict)
     poll: dict[str, Any] = Field(default_factory=dict)
-    # LOGICAL resumption identity: the WAIT node whose watcher payload the host
-    # delivers as the node's Output. None (default) => not host-resumable (a bare
+    # LOGICAL resumption identity: the artificial node whose watcher payload the host
+    # delivers as its Output. None (default) => not host-resumable (a bare
     # EventAwaited() an external watcher satisfies; resume_command rejects it).
     node_id: Optional[str] = None
 
 
 class ScheduledPause(BaseModel):
     """
-    A suspended node awaits a wall-clock time (a plain timed wait).
+    A legacy/artificial suspended node awaits a wall-clock time.
 
     Attributes:
         type (`Literal["scheduled_pause"]`):
@@ -100,12 +100,12 @@ class ScheduledPause(BaseModel):
         resume_at (`str`, *optional*, defaults to `None`):
             ISO timestamp to wake at; `None` means "until poked".
         node_id (`str`, *optional*, defaults to `None`):
-            Logical resumption identity — the node whose timed wait the host releases.
+            Logical resumption identity — the artificial node the host releases.
     """
 
     type: Literal["scheduled_pause"] = "scheduled_pause"
     resume_at: Optional[str] = None  # ISO timestamp; None = "until poked"
-    # LOGICAL resumption identity: the node whose timed wait the host releases.
+    # LOGICAL resumption identity: the artificial node the host releases.
     node_id: Optional[str] = None
 
 

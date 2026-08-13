@@ -5,6 +5,7 @@ import pytest
 from agent_composer.compose.loader import load_flow
 from agent_composer.events import SourceRange
 from agent_composer.nodes.start.node import StartNode
+from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
 
 _SEEDS = Path(__file__).resolve().parents[1] / "seeds"
 
@@ -38,16 +39,17 @@ def test_call_map_loop_nodes_carry_range(seed, node_id, want_field):
     assert isinstance(node.field_ranges[("field", want_field)], SourceRange)
 
 
-# A flow that WAITs (pauses) so `run_flow` produces a checkpoint we can round-trip.
-_WAIT_FLOW = """
+# An artificial Pause flow so ``run_flow`` produces a compatibility checkpoint.
+_PAUSE_FLOW = """
 id: f
 name: f
 input:
   settle_at: date
 nodes:
   settle:
-    kind: wait
-    until: ${input.settle_at}
+    kind: human_input
+    prompt: "continue?"
+    output: Optional[str]
   done:
     kind: code
     depends_on: [settle]
@@ -71,7 +73,8 @@ def test_node_range_does_not_ride_checkpoint():
     from agent_composer.suspension.commands import DeliverAnswerCommand
     from agent_composer.events import SourceRange
 
-    loaded = load_flow(_WAIT_FLOW)
+    loaded = load_flow(_PAUSE_FLOW)
+    replace_human_inputs_with_artificial_pauses(loaded.compiled)
     # Stamp render-only source metadata on a live node BEFORE the run serializes.
     node = loaded.compiled.nodes["done"]
     node.range = SourceRange(4, 1, 6, 1)
@@ -92,8 +95,7 @@ def test_node_range_does_not_ride_checkpoint():
 
     # And the restored run reconstructs + resumes to completion.
     ckpt = RunCheckpoint.loads(blob)
-    release = DeliverAnswerCommand(node_id="settle", value=None)  # WAIT release = Output(None)
+    release = DeliverAnswerCommand(node_id="settle", value=None)
     res2 = resume_flow(loaded, checkpoint=ckpt, commands=[release])
     assert res2.status == "succeeded"
     assert res2.output == "cancel"  # confirm_action(rec={}) -> "cancel"
-

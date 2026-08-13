@@ -23,15 +23,28 @@ import pytest
 
 import agent_composer.cli.run as run_cli
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
-from agent_composer.compile.model import END_ID, START_ID
+from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge
 from agent_composer.events import NodeStarted
 from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
+from agent_composer.nodes.end import EndNode
+from agent_composer.nodes.start import StartNode
 from agent_composer.run import RunResult
 from agent_composer.tools import TOOL_REGISTRY, invoke_tool
-from tests.engine._graph_builder import _graph
 
 
 _TIMEOUT = 2.0
+
+
+def _pooled_graph(nodes: list[Node], raw_edges: list[tuple[str, str]]) -> CompiledFlow:
+    """Build the parameter-free boundary graph used by pooled controller tests."""
+    node_map = {node.id: node for node in nodes}
+    node_map[START_ID] = StartNode(START_ID)
+    node_map[END_ID] = EndNode.record(END_ID, output_names=[])
+    edges = [
+        Edge(f"e{index}", source, target)
+        for index, (source, target) in enumerate(raw_edges)
+    ]
+    return CompiledFlow.from_parts(node_map, edges)
 
 
 class _Reporter:
@@ -264,7 +277,7 @@ def test_pooled_prompt_eof_preserves_exact_initiating_cause() -> None:
     expected = EOFError("pooled input closed")
     loaded = SimpleNamespace(
         input=[],
-        compiled=_graph(
+        compiled=_pooled_graph(
             [_PooledAskNode("ask")],
             [(START_ID, "ask"), ("ask", END_ID)],
         ),
@@ -319,7 +332,7 @@ def test_pooled_prompt_eof_outranks_cancelled_sibling(
     monkeypatch.setattr(TerminalBroker, "_wait_for_prompt", counted_wait)
     loaded = SimpleNamespace(
         input=[],
-        compiled=_graph(
+        compiled=_pooled_graph(
             [_PooledConcurrentAskNode("ask-a"), _PooledConcurrentAskNode("ask-b")],
             [
                 (START_ID, "ask-a"),
@@ -621,7 +634,7 @@ def test_real_pooled_failure_wakes_prompt_and_joins_every_engine_worker() -> Non
     prompt_released = Event()
     loaded = SimpleNamespace(
         input=[],
-        compiled=_graph(
+        compiled=_pooled_graph(
             [_PooledAskNode("ask"), _PooledFailAfterPrompt("fail")],
             [
                 (START_ID, "ask"),

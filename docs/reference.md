@@ -58,14 +58,10 @@ vocabulary. A node returns one of the closed sum
 
 ### Node kinds
 
-The authorable leaf kinds plus the internal-only drivers and boundaries the loader
-synthesizes.
+The authorable leaf, control, and composition kinds plus the internal-only START
+and END boundaries synthesized by the loader.
 
 ::: agent_composer.nodes.agent.node.AgentNode
-
-::: agent_composer.nodes.agent.node.Fresh
-
-::: agent_composer.nodes.agent.node.Resume
 
 ::: agent_composer.nodes.code.node.CodeNode
 
@@ -89,6 +85,8 @@ synthesizes.
 
 ::: agent_composer.nodes.map.node.MapNode
 
+::: agent_composer.nodes.loop.node.LoopNode
+
 ### Parameter binding
 
 The node/flow split: a node declares its signature as
@@ -109,6 +107,12 @@ The core ships no domain tools; a host registers its own into the shared registr
 ::: agent_composer.tools.register_tool
 
 ::: agent_composer.tools.resolve_tools
+
+::: agent_composer.tools.install_ask_user
+
+::: agent_composer.tools.invoke_tool
+
+::: agent_composer.tools.invoke_tool_trusted
 
 ## LLM configuration
 

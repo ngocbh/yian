@@ -1,8 +1,7 @@
-"""Unit tests for durable suspend/resume.
+"""Unit tests for temporary generic durable suspend/resume compatibility.
 
-The headline cycle: a HUMAN_INPUT node suspends; the run is serialized to JSON
-(simulating cross-process persistence), reloaded, the answer is injected via a
-command, and a FRESH engine resumes the run to completion.
+Test-only ``PauseNode`` leaves exercise the temporary generic compatibility API:
+serialize to JSON, restore, deliver a value, and resume a fresh engine.
 """
 
 import json
@@ -13,14 +12,13 @@ from agent_composer.events import RunPaused, RunResumed, RunSucceeded
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, NodeState, FlowOutput
 from agent_composer.nodes.base import Node, NodeKind, Output
-from agent_composer.nodes.human_input import HumanInputNode
-from agent_composer.nodes.wait import WaitNode
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.suspension.checkpoint import RunCheckpoint
 from agent_composer.suspension.commands import DeliverAnswerCommand
+from agent_composer.suspension.expansions import GrowRecord
 from agent_composer.suspension.pause import HumanInputRequired, EventAwaited
-from tests.engine._fakes import FuncNode, derive_wiring, drive, stamp_reads
+from tests.engine._fakes import FuncNode, PauseNode, derive_wiring, drive, stamp_reads
 from tests.engine._graph_builder import _graph
 
 
@@ -40,12 +38,17 @@ class EchoNode(Node):
 
 
 def _ask_flow():
-    # start -> ask(HUMAN_INPUT) -> after(echo ask's value) -> END_ID
+    # start -> ask(test-only Pause) -> after(echo ask's value) -> END_ID
     # The flow's single declared output is the echoed answer.
     return _graph(
         [
             FuncNode("start", lambda p: {"output": "go"}),
-            HumanInputNode("ask", prompt="Approve the action?"),
+            PauseNode(
+                "ask",
+                reason=HumanInputRequired(
+                    prompt="Approve the action?", node_id="ask"
+                ),
+            ),
             EchoNode("after", source="ask"),
         ],
         [(START_ID, "start"), ("start", "ask"), ("ask", "after"), ("after", END_ID)],
@@ -54,13 +57,17 @@ def _ask_flow():
 
 
 def _two_pause_flow():
-    # start -> ask1(HUMAN_INPUT) -> ask2(HUMAN_INPUT) -> after(echo ask2) -> END_ID
+    # start -> ask1(Pause) -> ask2(Pause) -> after(echo ask2) -> END_ID
     # Two suspension points in a linear chain; the terminal echoes ask2's answer.
     return _graph(
         [
             FuncNode("start", lambda p: {"output": "go"}),
-            HumanInputNode("ask1", prompt="First?"),
-            HumanInputNode("ask2", prompt="Second?"),
+            PauseNode(
+                "ask1", reason=HumanInputRequired(prompt="First?", node_id="ask1")
+            ),
+            PauseNode(
+                "ask2", reason=HumanInputRequired(prompt="Second?", node_id="ask2")
+            ),
             EchoNode("after", source="ask2"),
         ],
         [(START_ID, "start"), ("start", "ask1"), ("ask1", "ask2"), ("ask2", "after"), ("after", END_ID)],
@@ -100,7 +107,7 @@ def test_paused_leaf_is_not_reset_to_unknown():
 
 
 def _fork_two_pause_join():
-    # start -> {ask1, ask2}(HUMAN_INPUT) -> join(records once) -> END_ID
+    # start -> {ask1, ask2}(test-only Pause) -> join(records once) -> END_ID
     log = []
 
     def _join(i):
@@ -110,8 +117,16 @@ def _fork_two_pause_join():
     join = FuncNode("join", _join)
     stamp_reads(join, {"a": "${ask1.output}", "b": "${ask2.output}"})
     g = _graph(
-        [FuncNode("start", lambda p: {"output": "go"}),
-         HumanInputNode("ask1", prompt="1?"), HumanInputNode("ask2", prompt="2?"), join],
+        [
+            FuncNode("start", lambda p: {"output": "go"}),
+            PauseNode(
+                "ask1", reason=HumanInputRequired(prompt="1?", node_id="ask1")
+            ),
+            PauseNode(
+                "ask2", reason=HumanInputRequired(prompt="2?", node_id="ask2")
+            ),
+            join,
+        ],
         [(START_ID, "start"), ("start", "ask1"), ("start", "ask2"),
          ("ask1", "join"), ("ask2", "join"), ("join", END_ID)],
         outputs=[FlowOutput(name="r", from_="${join.output.output}")],
@@ -150,33 +165,67 @@ def test_checkpoint_json_round_trip():
     assert back.pool.resolve("start", ["output", "output"]) == "go"
 
 
-def test_checkpoint_v1_blob_rejected_by_loads():
-    # breaking blob migration: a 1.0 checkpoint (the old node_id->key->TypedValue store)
-    # is not loadable. loads() reads the raw-JSON version BEFORE model_validate, so the
-    # error is the clear "incompatible version", not an opaque pydantic failure.
-    blob = RunCheckpoint(pool=VariablePool()).dumps()
-    tampered = json.dumps({**json.loads(blob), "version": "1.0"})
-    with pytest.raises(ValueError, match="incompatible checkpoint version"):
+def _legacy_v8_agent_record() -> GrowRecord:
+    """Return the descriptor shape written for one paused v8 AGENT turn."""
+    return GrowRecord(
+        spawner_id="agent",
+        seed={
+            "hi_desc": {
+                "kind": "human_input",
+                "node_id": "__ask#q1",
+                "prompt": "Continue?",
+                "slot": "q1",
+            },
+            "resume_desc": {
+                "kind": "resume_agent",
+                "memo": [],
+                "iterations": 1,
+                "pending": {"name": "ask_user", "call_id": "q1", "args": {}},
+                "answer": "${__ask#q1.output}",
+                "tools": [],
+                "controls": ["ask_user"],
+                "mode": "tool_calling",
+            },
+        },
+        children=[],
+    )
+
+
+def test_checkpoint_v8_blob_rejected_by_loads():
+    # v8 could contain paused-AGENT continuation topology that no longer has a builder.
+    # loads() rejects it before model validation with the explicit cutover reason.
+    blob = RunCheckpoint(
+        pool=VariablePool(), expansions=[_legacy_v8_agent_record()]
+    ).dumps()
+    tampered = json.dumps({**json.loads(blob), "version": "8.0"})
+    with pytest.raises(
+        ValueError,
+        match=r"incompatible checkpoint version '8\.0'.*'9\.0'.*AGENT continuation topology",
+    ):
         RunCheckpoint.loads(tampered)
 
 
-def test_checkpoint_v1_object_rejected_by_restore():
+def test_checkpoint_v8_object_rejected_by_restore():
     # Defense-in-depth: restore() ALSO gates — a RunCheckpoint object can reach it
     # without passing through loads().
     g = _ask_flow()
-    ckpt = RunCheckpoint(pool=VariablePool()).model_copy(update={"version": "1.0"})
-    with pytest.raises(ValueError, match="incompatible checkpoint version"):
+    ckpt = RunCheckpoint(
+        pool=VariablePool(), expansions=[_legacy_v8_agent_record()]
+    ).model_copy(update={"version": "8.0"})
+    with pytest.raises(
+        ValueError,
+        match=r"incompatible checkpoint version '8\.0'.*'9\.0'.*AGENT continuation topology",
+    ):
         FlowEngine.restore(g, ckpt)
 
 
 def test_checkpoint_current_version_round_trip_carries_store():
-    # The single-value store survives dumps/loads transitively through the pool, at the "8.0"
-    # checkpoint version (bumped when MAP grew a synthetic map#/__start__ fan-out node).
+    # The single-value store survives dumps/loads transitively through the pool at v9.
     # The version label here tracks the CURRENT default.
     pool = VariablePool()
     pool.set("n", "v")
     back = RunCheckpoint.loads(RunCheckpoint(pool=pool).dumps())
-    assert back.version == "8.0"
+    assert back.version == "9.0"
     assert back.pool.get("n") == "v"
 
 
@@ -273,26 +322,31 @@ def test_snapshot_is_point_in_time_not_aliased_to_live_pool():
 
 def test_snapshot_deep_copies_expansion_descriptors():
     """the GrowRecord ledger is deep-copied into the checkpoint, so a
-    later live append (e.g. a multi-pause AGENT chaining a segment under `children`) does not
-    mutate a held checkpoint."""
+    later live nested grow append does not mutate a held checkpoint."""
     from agent_composer.suspension.expansions import GrowRecord
 
     engine = FlowEngine(_ask_flow())
     list(engine.run())                                             # park so snapshot() is valid
-    desc = GrowRecord(spawner_id="agent", seed={"hi_desc": {}, "resume_desc": {}}, children=[])
+    desc = GrowRecord(spawner_id="outer", seed={"x": 1}, children=[])
     engine.expansions = [desc]
     held = engine.snapshot()
     assert len(held.expansions[0].children) == 0
 
-    # a live second-pause append (nesting chain) must not touch the held checkpoint
-    desc.children.append(GrowRecord(spawner_id="agent/__resume#0", seed={}, children=[]))
+    # A later nested CALL append must not touch the held checkpoint.
+    desc.children.append(GrowRecord(spawner_id="outer/inner", seed={"x": 2}, children=[]))
     assert len(engine.expansions[0].children) == 1
     assert len(held.expansions[0].children) == 0                   # deep-copied, unchanged
 
 
-def test_wait_node_suspends_with_market_event():
+def test_artificial_pause_keeps_event_awaited_compatibility():
     g = _graph(
-        [FuncNode("start", lambda p: {}), WaitNode("watch", event_spec={"kind": "alert"})],
+        [
+            FuncNode("start", lambda p: {}),
+            PauseNode(
+                "watch",
+                reason=EventAwaited(event_spec={"kind": "alert"}, node_id="watch"),
+            ),
+        ],
         [(START_ID, "watch"), ("watch", END_ID)],
         outputs=[FlowOutput(name="event", from_="${watch.output}")],
     )
@@ -302,7 +356,7 @@ def test_wait_node_suspends_with_market_event():
     assert isinstance(evs[-1].reasons[0], EventAwaited)
     assert evs[-1].reasons[0].event_spec == {"kind": "alert"}
     assert evs[-1].reasons[0].node_id == "watch"                 # self-addressing for resume
-    # the watcher fires: deliver the payload as the WAIT node's Output
+    # A legacy watcher delivers the generic artificial leaf's output.
     evs2 = list(engine.resume(commands=[DeliverAnswerCommand(node_id="watch", value={"eps": 1.2})]))
     assert isinstance(evs2[-1], RunSucceeded)
     assert evs2[-1].output == {"eps": 1.2}                       # node's Output binds to ${watch.output}
@@ -316,33 +370,18 @@ def test_event_awaited_type_literal_round_trip():
     assert json.loads(r.model_dump_json())["type"] == "event_awaited"
 
 
-def test_wait_timed_until_pauses():
-    from agent_composer.nodes.wait import WaitNode
-    from agent_composer.typesys.pool import VariablePool
+def test_artificial_pause_keeps_scheduled_reason_compatibility():
     from agent_composer.events import PauseRequested
     from agent_composer.suspension.pause import ScheduledPause
-    pool = VariablePool()
-    pool.set(START_ID, {"settle_at": "2026-07-01"})     # a date input (stored as ISO string)
-    node = WaitNode("settle", is_timed=True)
-    node._wiring_src = {"until": "${input.settle_at}"}  # the until source lives on flow.wiring
-    # Deliver-as-Output: the node ALWAYS pauses on its single run; the engine delivers.
-    pause = [e for e in drive(node, pool) if isinstance(e, PauseRequested)][0]
+
+    node = PauseNode(
+        "settle",
+        reason=ScheduledPause(resume_at="2026-07-01", node_id="settle"),
+    )
+    pause = [event for event in drive(node) if isinstance(event, PauseRequested)][0]
     assert isinstance(pause.reason, ScheduledPause)
     assert pause.reason.resume_at.startswith("2026-07-01")
     assert pause.reason.node_id == "settle"            # self-addressing for resume_command
-
-
-def test_human_input_renders_prompt_from_inputs():
-    from agent_composer.nodes.human_input import HumanInputNode
-    from agent_composer.typesys.pool import VariablePool
-    from agent_composer.events import PauseRequested
-    pool = VariablePool()
-    pool.set("propose", "order ACME")            # producer value
-    node = HumanInputNode("approve", prompt="Approve? ${action}")
-    stamp_reads(node, {"action": "${propose.output}"})
-    evs = list(drive(node, pool))
-    pause = [e for e in evs if isinstance(e, PauseRequested)][0]
-    assert pause.reason.prompt == "Approve? order ACME"
 
 
 def test_human_input_run_takes_no_scratch_cap():
@@ -352,11 +391,10 @@ def test_human_input_run_takes_no_scratch_cap():
     assert "scratch" not in sig.parameters     # HUMAN_INPUT.run takes no *, scratch cap
 
 
-def test_checkpoint_v8_is_current_version():
-    # the engine's blob version is now 8.0 (MAP synthetic map#/__start__ fan-out topology).
-    # A pre-8.0 blob is not loadable.
+def test_checkpoint_v9_is_current_version():
+    # v9 is the hard cutover after removing AGENT continuation topology.
     from agent_composer.suspension.checkpoint import CHECKPOINT_VERSION
-    assert CHECKPOINT_VERSION == "8.0"
+    assert CHECKPOINT_VERSION == "9.0"
 
 
 def test_checkpoint_v4_blob_rejected_by_loads():
@@ -365,13 +403,13 @@ def test_checkpoint_v4_blob_rejected_by_loads():
     # so it is not loadable.
     blob = RunCheckpoint(pool=VariablePool()).dumps()
     tampered = json.dumps({**json.loads(blob), "version": "4.0"})
-    with pytest.raises(ValueError, match=r"incompatible checkpoint version '4\.0'.*unified GrowRecord expansion ledger"):
+    with pytest.raises(ValueError, match=r"incompatible checkpoint version '4\.0'.*AGENT continuation topology"):
         RunCheckpoint.loads(tampered)
 
 
 def test_checkpoint_carries_expansions_field():
     # RunCheckpoint carries the GrowRecord ledger for runtime-grown subgraphs
-    # so a paused run that has already expanded a CALL/MAP/AGENT/LOOP spawner can be
+    # so a paused run that has already expanded a CALL/MAP/LOOP spawner can be
     # restored top-down on resume.
     from agent_composer.suspension import GrowRecord
     cp = RunCheckpoint(

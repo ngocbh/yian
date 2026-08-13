@@ -385,13 +385,13 @@ def test_llm_config_error_names_the_key_but_carries_no_range():
     assert err.line == 24  # the node header, via the legacy line-map; expected 27 (the `provider:`)
 
 
-def test_agent_controls_error_names_the_item_but_carries_no_range():
-    # e40: e39's twin one container-shape over (a sequence, not a mapping). The message names
-    # `nope_control`; range is None; the frame is the node header via the legacy line-map.
+def test_agent_controls_field_is_retired_and_located():
+    # `controls:` was removed with AGENT continuations. The descriptor rejects the whole
+    # retired field at its value range and directs authors to the ordinary `tools:` surface.
     err = _load_error("e40-agent-controls-no-range.yaml")
-    assert "unknown control tool" in str(err) and "nope_control" in str(err)  # the item IS named
-    assert err.range is None                                                   # ...no range
-    assert err.line == 22  # the node header; expected 25 (the `controls:` entry)
+    assert "field 'controls' is not allowed" in str(err)
+    assert err.range is not None and err.range.start_line == 14
+    assert err.line == 14
 
 
 def test_structured_output_failure_names_whole_field_and_range_is_none():

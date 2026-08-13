@@ -1,16 +1,16 @@
-# 25 — Nested suspension: a HUMAN_INPUT inside a called child (Phase 2).
+# 25 — Nested interaction: a HUMAN_INPUT inside a called child.
 #
-# Pre-Phase-2 a HUMAN_INPUT/WAIT reachable inside a REF/MAP child was compile-rejected
-# (alang §4A — "a child can't suspend yet"). Phase 2 LIFTS that: the parent `call`s an
-# in-file `defs:` callable whose body suspends on a HUMAN_INPUT; the engine grows the live
-# graph via Grow, the inner effect parks under its NAMESPACED leaf id (`review/approve`),
-# and the deliver-as-Output resume feeds the answer into the namespaced child node. Shows:
-# nested suspension via graph-growth, a HUMAN_INPUT in a child, `case … on` routing the
-# answer inside the child, and the child re-exporting its confirmed value to the parent.
+# The parent `call`s an in-file `defs:` callable whose body blocks on HUMAN_INPUT. The
+# engine grows the live graph via Grow, then the namespaced leaf (`review/approve`) calls
+# the host-owned ask_user tool and stays live until the handler returns. Its ordinary typed
+# Output feeds the next child node. Shows: blocking interaction under graph growth, a
+# HUMAN_INPUT in a child, and the child re-exporting its confirmed value to the parent.
+# No checkpoint pause or synthetic continuation is involved.
+# The source layout stays stable because diagnostic tests pin its nested frame locations.
 
 id: nested-suspension
 name: nested_suspension
-description: Call a child that asks a human to approve, then confirm — pausing inside the child.
+description: Call a child that blocks for human approval, then confirm inside the same live run.
 
 typedefs:
   Approval: Literal[approve, reject]
@@ -19,7 +19,7 @@ input:
   action: str
 
 defs:
-  review:                       # an in-file callable that SUSPENDS on a HUMAN_INPUT
+  review:                       # an in-file callable that BLOCKS on a HUMAN_INPUT
     input:
       action: str
     nodes:

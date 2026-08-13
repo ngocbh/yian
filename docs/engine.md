@@ -16,20 +16,21 @@ There are exactly two kinds of thing, and they meet at one method.
    │   • the pool   (every node's output)    │        ┌──────── NODE ────────┐
    │   • the queue  (what can run next)       │        │ a PURE function of   │
    │   • the graph  (boxes + arrows; GROWs)   │  ◀──── │ its inputs. Never    │
-   │   • the event log + checkpoints          │ inputs │ touches the pool.    │
+   │   • events + dormant checkpoints          │ inputs │ touches the pool.    │
    └──────────────────────────────────────────┘        └──────────────────────┘
 ```
 
 The engine owns *state and scheduling*; the node owns *computation*. The node is
-**pure** — handed a plain dict, it returns a value; it cannot read or write shared
-memory. That purity is what makes a run reproducible and resumable: all state lives in
-one place the engine controls.
+**pure at the graph boundary** — handed a plain dict plus declared capabilities,
+it returns a result and cannot read or write shared memory. An LLM/human/clock leaf
+may perform an external effect, but all graph state still lives in one place the
+engine controls.
 
 ## The loop: read → eval → apply
 
 Running a graph is three questions asked over and over: *what can run now? what does it
 produce? what changes?* Each node goes through the same three steps — the engine does
-READ and APPLY, and wraps EVAL:
+READ and APPLY, while the base `Node.run` template owns the uniform EVAL wrapper:
 
 ```python
 def run(flow, inputs):
@@ -38,32 +39,33 @@ def run(flow, inputs):
 
     while (node := queue.pop_ready(state)) is not None:
         inputs  = state.bind(node.params, flow.wiring[node.id])  # READ : memory → plain dict
-        outcome = run_node(node, inputs, caps)                   # EVAL : asserts + run (generic)
+        outcome = node.run(inputs, **caps)                       # EVAL : shared template
         apply(outcome, node, state, queue, flow.graph)           # APPLY: write / grow / pause
     return state.result()                                        # whatever END produced
 
-def run_node(node, inputs, caps):        # the generic wrapper — IDENTICAL for every kind
-    check(node.pre_asserts, inputs)
-    try:
-        out = node.run(inputs, **caps)                 # the ONLY kind-specific step
-    except Exception as exc:
-        out = node.on_failure(exc, inputs, **caps)     # recovery hook (default: re-raise)
+def Node.run(self, inputs, **caps):      # the generic template — IDENTICAL for every kind
+    inputs = apply_defaults(self.params, inputs)
+    check(self.pre_asserts, inputs)
+    out = self._run_impl(inputs, **caps)                # the ONLY kind-specific step
     if isinstance(out, Output):
-        check(node.post_asserts, {**inputs, "output": out.value})
+        check(self.post_asserts, {**inputs, "output": out.value})
     return out
 ```
 
-`run_node` is a fixed recipe applied to *every* node. The read boundary is kind-blind
+This pseudocode is illustrative; the implementation also preserves pristine
+post-assert inputs, source ranges, and dormant generator plumbing.
+
+`Node.run` is a fixed recipe applied to *every* node. The read boundary is kind-blind
 but **node-configured** — a node declares *how* to bind rather than the engine branching
 on kind (e.g. `binds_per_item` on `map`, `bind_reserved` for a `wait`'s `until` or a
-`map`'s `over`). The only kind-specific step is `run` itself.
+`map`'s `over`). The only kind-specific step is `_run_impl`.
 
 A flow's own top-level `asserts:` are not a separate engine phase: at build they are
 lowered onto the synthesized `__start__`/`__end__` boundary nodes. A boundary assert
 (`${input.X}` only) rides `__start__` and fires *inside* `StartNode.run`, after input
 coercion — a dedicated slot the generic `check(node.pre_asserts)` seam leaves alone, since
 it must see the coerced values. A post assert (`${node.output}`) rides `__end__` as an
-ordinary `node.post_asserts` and fires through the `run_node` recipe above. So `run.py`
+ordinary `node.post_asserts` and fires through the `Node.run` recipe above. So `run.py`
 enforces no asserts itself; a false assert comes back as a `NodeFailed`/`RunFailed` event
 like any other node assert.
 
@@ -76,7 +78,7 @@ engine branches on:
 Outcome =
   | Output(value, commit_as=None)   # "here is my result"    → bind it, unlock dependents
   | Route(handle)                   # "route only, no value" → take this branch, skip siblings
-  | Pause(reason)                   # "I need to wait/ask"    → checkpoint and stop
+  | Pause(reason)                   # artificial compatibility → checkpoint and stop
   | Grow(seed, prune=∅)             # "I'm really a subflow"  → build + splice more nodes
 ```
 
@@ -97,13 +99,13 @@ def apply(outcome, node, state, queue, graph, grow_builder):
 ```
 
 `Output` covers ordinary steps. `Route` covers a pure router (`case`): it stores nothing
-and only selects a live out-edge. `Pause` suspends for a human or a timer. `Grow` is how
-a node that *is really a subflow* expands.
+and only selects a live out-edge. `Pause` is dormant custom/artificial compatibility;
+authorable AGENT `ask_user`, HUMAN_INPUT, and WAIT calls block in-process and return
+`Output`. `Grow` is how a node that *is really a subflow* expands.
 
 ## Growth: a node that is really a subflow
 
-`call`, `map`, and `loop` are not single steps — each *is a smaller flow*. The
-temporary AGENT control-pause compatibility path also expands a continuation. A spawner
+`call`, `map`, and `loop` are not single steps — each *is a smaller flow*. A spawner
 returns only a canonical, kind-shaped seed; no node imports the compile layer or builds
 topology. `compile.expand.build_grow` is the sole kind-aware interpreter that turns the
 spawner and seed into a self-describing `Flow`. Package-root `run.py` injects that
@@ -118,12 +120,13 @@ spawner's id. Runtime may consume `compile.model` topology but never imports
 
 The splice carries a few extra concerns (stamp recursion depth, loop bookkeeping),
 but the growth core reads **node-owned traits**
-(`grow_depth_delta`, `grow_restamps_self`, `is_loop`) — never
+(`grow_depth_delta`, `is_loop`) — never
 `node.kind`. A child's asserts are **not** an engine-side splice concern: a called flow's
 `asserts:` are lowered onto its own `__start__`/`__end__` at build (just like the
 top-level flow, below), and those boundary nodes are cloned into the parent along with the
 rest of the child — so the child's boundary asserts fire through `StartNode.run` and its
-post asserts through `run_node`, on the ordinary node path, identically to the top level.
+post asserts through the same base template, on the ordinary node path, identically to
+the top level.
 `prune` is growth's generic inverse: a self-respawning loop retires the
 iteration it just finished in the same step, so it grows without leaking. Adding a new
 spawner kind means setting traits on its node; the core never gains a branch. Details:
@@ -131,37 +134,42 @@ spawner kind means setting traits on its node; the core never gains a branch. De
 
 ## Failure and durability
 
-Failures never crash the loop. `run_node` may raise (a failed assert, a bad LLM
-response); the engine turns any exception into a `NodeFailed` event carrying a source
-locator, so the CLI can point at the offending YAML line. `on_failure` gives the node
-first refusal (default: re-raise) — the future home of retry/fallback policy.
+Node evaluation may raise (a failed assert, a bad LLM response); the engine catches the
+exception and emits a `NodeFailed` event carrying a source locator, so the CLI can point
+at the offending YAML line. The dormant `Node.on_failure` method is reserved for a future
+error-strategy seam but is not driven today.
 
-Because state is write-once and all in the pool, `Pause` serializes the whole run to a
-`RunCheckpoint`; `resume_flow()` rebuilds the graph from the flow spec and continues.
-The topology is *not* stored — only the pool and queue — because the graph is
-reconstructable from the source. See [`suspension/`](reference.md) and the
-[Python API](api.md).
+Because graph-visible values are write-once and scheduling state is centralized,
+the dormant `Pause` compatibility variant can serialize a custom/artificial run
+to a `RunCheckpoint`;
+`resume_flow()` rebuilds the graph from the flow spec and continues. Authorable
+AGENT, HUMAN_INPUT, and WAIT never take this path. The topology is *not* stored —
+it is rebuilt from source, while compatibility run state and dynamic-growth
+descriptors are serialized.
+See [`suspension/`](reference.md) and the [Python API](api.md).
 
 ## Serial and parallel, one contract
 
 The pseudocode above is the serial reference engine. A parallel engine drains several
 ready nodes at once through the *same* read → eval → apply contract — safe precisely
 because nodes are pure and every write happens write-once at `apply` (which stays
-serialized). Only the number of nodes in flight differs.
+serialized). Only the number of nodes in flight differs. A pooled drive owns its workers
+through a full join: abnormal exit during dispatch first signals cooperative stop, while
+closing the stream after a terminal `RunPaused` leaves its resume event untouched.
 
 ## The entire interface the engine sees
 
 | The engine sees | Meaning |
 |---|---|
 | `node.id`, `node.params` | where to store output; input *names* (the flow owns their sources) |
-| `node.pre_asserts` / `node.post_asserts` | conditions `run_node` checks purely, before / after `run` |
-| `node.run(inputs, **caps) → Outcome` | the one kind-specific step |
-| `node.on_failure(...)` | recovery seam (default: re-raise) |
+| `node.pre_asserts` / `node.post_asserts` | conditions the base `run` template checks around the body |
+| `node.run(inputs, **caps) → Outcome` | the shared template the engine drives |
+| `node._run_impl(inputs, **caps) → Outcome` | the one kind-specific body step |
 | `node.is_spawner` | may it return `Grow`? |
-| read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_llm` |
-| growth traits | `grow_depth_delta`, `grow_restamps_self`, `is_loop` |
+| read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event` |
+| growth traits | `grow_depth_delta`, `is_loop` |
 
-That is the complete list — a small set of traits/hooks plus `run`. No `NodeKind` is
+That is the complete list — a small set of traits/hooks plus the run/body pair. No `NodeKind` is
 visible to the engine.
 
 ## Why a closed match, on the right axis

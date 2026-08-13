@@ -1,20 +1,30 @@
-"""Tests for the `ac chat` CLI — exercised through typer's `CliRunner`.
+"""Tests for the broker-driven ``ac chat`` CLI through Typer's ``CliRunner``.
 
-Covers: the subcommand is wired and renders its options; a scripted multi-turn drive; the
-cwd-local fold-module import path; and turn-failure resilience (a failed turn is surfaced
-and the session survives).
+Covers flow-owned exits, broker EOF normalization, multi-turn ordering, a user flow
+that treats exit text as ordinary input, cwd-local imports, and failed-turn recovery.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import sys
+import threading
+import time
+from concurrent.futures import CancelledError
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 import agent_composer.llm_clients as llm_clients_mod
+import agent_composer.tools as tools_module
 from agent_composer.cli import app
+import agent_composer.cli.chat.command as chat_command
+from agent_composer.cli.chat import tools as chat_tools
+import agent_composer.cli.run as run_cli
+from agent_composer.cli.terminal import PromptRequest
+from agent_composer.nodes.base import _HostStop
 
 runner = CliRunner()
 
@@ -62,11 +72,17 @@ class _LoopyModel:
 class _GoodModel:
     """Answers immediately with text (no tool calls)."""
 
+    def __init__(self, content="recovered reply", prompts=None):
+        self.content = content
+        self.prompts = prompts
+
     def bind_tools(self, tools):
         return self
 
     def invoke(self, msgs):
-        return _Msg(content="recovered reply")
+        if self.prompts is not None:
+            self.prompts.append(msgs[-1].content)
+        return _Msg(content=self.content)
 
 
 class _ToolThenAnswer:
@@ -104,35 +120,431 @@ def test_chat_help():
 
 def test_chat_two_turns(tmp_path, monkeypatch):
     # The AGENT node resolves its model via `agent_composer.llm_clients.model_from_config`
-    # (the engine's `_default_llm` re-imports it lazily) — patch it to the fake.
+    # from its selected mode at call time — patch it to the fake.
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: _FakeModel())
     # `--provider openai` makes `_ensure_provider_keys` pick openai for the flow's agent
     # (which sets no provider); satisfy its key check with a dummy env var (no product change).
     monkeypatch.setenv("OPENAI_API_KEY", "x")
 
     # Use the plain example flow (mode: plain) so no tools/keys are needed for the drive test.
-    # It grows the transcript in its `output:` template bindings (no code node), so it needs
-    # nothing on sys.path beyond the package.
+    # Its typed CODE branch records keep transcript growth deterministic.
     flow = EXAMPLE_CHAT
-    # two user turns then EOF (CliRunner closes stdin -> loop breaks)
-    r = runner.invoke(app, ["chat", str(flow), "--provider", "openai"], input="hi\nagain\n")
+    # Two user turns, then the authored CASE routes the textual command to its exit record.
+    r = runner.invoke(
+        app,
+        ["chat", str(flow), "--provider", "openai"],
+        input="hi\nagain\n/exit\n",
+    )
     assert r.exit_code == 0
-    # The assistant reply is rendered as Markdown each turn; two turns -> it appears.
-    assert "hello back" in r.output
+    assert r.output.count("hello back") == 2
     assert "session ended" in r.output
+    # Each reply event is queued before the following HUMAN_INPUT request, so the first
+    # answer must render before the next prompt becomes visible.
+    first_reply = r.output.index("hello back")
+    assert r.output.find("You:", first_reply + len("hello back")) > first_reply
 
 
-def test_chat_eof_exit_is_newline_terminated(tmp_path, monkeypatch):
-    """Ctrl+D (EOF) at the `You:` prompt echoes no newline, so the exit notice must not be
-    glued to the prompt line (`You: session ended`) — the command emits its own newline first.
-    Regression for "the screen doesn't refresh / no trailing newline on exit"."""
-    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: _FakeModel())
+def test_chat_eof_is_normalized_to_flow_owned_exit(monkeypatch):
+    """EOF becomes ``/exit`` at the broker and reaches the flow without a model call."""
+    calls = []
+
+    def factory(config):
+        calls.append(config)
+        return _FakeModel()
+
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", factory)
     monkeypatch.setenv("OPENAI_API_KEY", "x")
-    flow = EXAMPLE_CHAT
-    r = runner.invoke(app, ["chat", str(flow), "--provider", "openai"], input="hi\n")
+    r = runner.invoke(
+        app,
+        ["chat", str(EXAMPLE_CHAT), "--provider", "openai"],
+        input="",
+    )
     assert r.exit_code == 0
+    assert calls == []
     assert "session ended" in r.output
-    assert "You: session ended" not in r.output   # the prompt line was terminated first
+
+
+def test_chat_bundled_exit_commands_skip_reply_model(monkeypatch):
+    """The authored CASE handles both exit spellings before the reply AGENT."""
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    calls = []
+    monkeypatch.setattr(
+        llm_clients_mod,
+        "model_from_config",
+        lambda config: calls.append(config) or _FakeModel(),
+    )
+
+    for command in ("/exit", "/quit"):
+        result = runner.invoke(
+            app,
+            ["chat", str(EXAMPLE_CHAT), "--provider", "openai"],
+            input=f"{command}\n",
+        )
+        assert result.exit_code == 0
+
+    assert calls == []
+
+
+def test_descriptor_chat_prompt_does_not_prefetch_the_next_line(monkeypatch):
+    """Two already-written lines remain independently readable by two prompts."""
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, "r", encoding="utf-8")
+    second_prompted = threading.Event()
+    prompt_count = 0
+    answers = []
+    outcome = {}
+    second = PromptRequest(question="Second:")
+
+    def render_prompt(*args, **kwargs):
+        nonlocal prompt_count
+        prompt_count += 1
+        if prompt_count == 2:
+            second_prompted.set()
+
+    def read_both():
+        try:
+            answers.append(chat_command._prompt_chat_request(PromptRequest(question="First:")))
+            answers.append(chat_command._prompt_chat_request(second))
+        except BaseException as exception:
+            outcome["exception"] = exception
+
+    monkeypatch.setattr(chat_command.sys, "stdin", reader)
+    monkeypatch.setattr(chat_command.console, "print", render_prompt)
+    os.write(write_fd, b"one\ntwo\n")
+    thread = threading.Thread(target=read_both)
+    thread.start()
+    try:
+        assert second_prompted.wait(2)
+        thread.join(0.5)
+        if thread.is_alive():
+            callback = second._cancel()
+            if callback is not None:
+                callback()
+            thread.join(2)
+    finally:
+        os.close(write_fd)
+        thread.join(2)
+        reader.close()
+
+    assert not thread.is_alive()
+    assert "exception" not in outcome
+    assert answers == ["one", "two"]
+
+
+def test_descriptor_chat_prompt_preserves_a_blank_submitted_line(monkeypatch):
+    """A newline is an empty answer, distinct from descriptor EOF."""
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, "r", encoding="utf-8")
+    monkeypatch.setattr(chat_command.sys, "stdin", reader)
+    monkeypatch.setattr(chat_command.console, "print", lambda *args, **kwargs: None)
+    try:
+        os.write(write_fd, b"\n")
+        answer = chat_command._prompt_chat_request(PromptRequest(question="You:"))
+    finally:
+        os.close(write_fd)
+        reader.close()
+
+    assert answer == ""
+
+
+def test_descriptor_chat_prompt_raises_on_actual_eof(monkeypatch):
+    """A closed descriptor with no bytes remains distinct from a blank line."""
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, "r", encoding="utf-8")
+    monkeypatch.setattr(chat_command.sys, "stdin", reader)
+    monkeypatch.setattr(chat_command.console, "print", lambda *args, **kwargs: None)
+    os.close(write_fd)
+    try:
+        with pytest.raises(EOFError):
+            chat_command._prompt_chat_request(PromptRequest(question="You:"))
+    finally:
+        reader.close()
+
+
+def test_tty_ctrl_d_returns_the_partial_line(monkeypatch):
+    """Canonical VEOF terminates existing text instead of stranding the prompt."""
+    pty = pytest.importorskip("pty")
+    master_fd, slave_fd = pty.openpty()
+    reader = os.fdopen(slave_fd, "r", encoding="utf-8")
+    request = PromptRequest(question="You:")
+    outcome = {}
+
+    def prompt():
+        try:
+            outcome["answer"] = chat_command._prompt_chat_request(request)
+        except BaseException as exception:
+            outcome["exception"] = exception
+
+    monkeypatch.setattr(chat_command.sys, "stdin", reader)
+    monkeypatch.setattr(chat_command.console, "print", lambda *args, **kwargs: None)
+    thread = threading.Thread(target=prompt)
+    thread.start()
+    try:
+        os.write(master_fd, b"partial\x04")
+        thread.join(2)
+    finally:
+        if thread.is_alive():
+            callback = request._cancel()
+            if callback is not None:
+                callback()
+        os.close(master_fd)
+        thread.join(2)
+        reader.close()
+
+    assert not thread.is_alive()
+    assert "exception" not in outcome
+    assert outcome.get("answer") == "partial"
+
+
+def test_tty_ctrl_d_on_an_empty_line_is_eof(monkeypatch):
+    """Canonical VEOF with no pending text remains an actual EOF signal."""
+    pty = pytest.importorskip("pty")
+    master_fd, slave_fd = pty.openpty()
+    reader = os.fdopen(slave_fd, "r", encoding="utf-8")
+    request = PromptRequest(question="You:")
+    outcome = {}
+
+    def prompt():
+        try:
+            outcome["answer"] = chat_command._prompt_chat_request(request)
+        except BaseException as exception:
+            outcome["exception"] = exception
+
+    monkeypatch.setattr(chat_command.sys, "stdin", reader)
+    monkeypatch.setattr(chat_command.console, "print", lambda *args, **kwargs: None)
+    thread = threading.Thread(target=prompt)
+    thread.start()
+    try:
+        os.write(master_fd, b"\x04")
+        thread.join(2)
+    finally:
+        if thread.is_alive():
+            callback = request._cancel()
+            if callback is not None:
+                callback()
+        os.close(master_fd)
+        thread.join(2)
+        reader.close()
+
+    assert not thread.is_alive()
+    assert isinstance(outcome.get("exception"), EOFError)
+
+
+def test_descriptor_chat_prompt_cancellation_interrupts_a_partial_line(monkeypatch):
+    """Cancellation remains observable after bytes arrive but before newline."""
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, "r", encoding="utf-8")
+    request = PromptRequest(question="You:")
+    partial_consumed = threading.Event()
+    outcome = {}
+    real_read = os.read
+    seen = bytearray()
+
+    def recording_read(fd, size):
+        chunk = real_read(fd, size)
+        if fd == read_fd and chunk:
+            seen.extend(chunk)
+            if seen == b"partial":
+                partial_consumed.set()
+        return chunk
+
+    def prompt():
+        try:
+            outcome["answer"] = chat_command._prompt_chat_request(request)
+        except BaseException as exception:
+            outcome["exception"] = exception
+
+    monkeypatch.setattr(chat_command.sys, "stdin", reader)
+    monkeypatch.setattr(chat_command.console, "print", lambda *args, **kwargs: None)
+    monkeypatch.setattr(chat_command.os, "read", recording_read)
+    os.write(write_fd, b"partial")
+    thread = threading.Thread(target=prompt)
+    thread.start()
+    consumed = partial_consumed.wait(0.5)
+    callback = request._cancel()
+    if callback is not None:
+        callback()
+    thread.join(0.5)
+    cancelled_prompt_woke = not thread.is_alive()
+    if thread.is_alive():
+        # Regression cleanup: EOF releases a buffered readline so the test cannot leak.
+        os.close(write_fd)
+        write_fd = -1
+        thread.join(2)
+    if write_fd >= 0:
+        os.close(write_fd)
+    reader.close()
+
+    assert consumed
+    assert cancelled_prompt_woke
+    assert isinstance(outcome.get("exception"), CancelledError)
+
+
+def test_delayed_prompt_cancellation_callback_cannot_write_after_cleanup(monkeypatch):
+    """An already-extracted callback becomes inert before its pipe fd is closed."""
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, "r", encoding="utf-8")
+    request = PromptRequest(question="You:")
+    outcome = {}
+
+    def prompt():
+        try:
+            outcome["answer"] = chat_command._prompt_chat_request(request)
+        except BaseException as exception:
+            outcome["exception"] = exception
+
+    monkeypatch.setattr(chat_command.sys, "stdin", reader)
+    monkeypatch.setattr(chat_command.console, "print", lambda *args, **kwargs: None)
+    thread = threading.Thread(target=prompt)
+    thread.start()
+    callback = None
+    writes = []
+    cleaned_up = False
+    real_write = os.write
+
+    def record_late_write(fd, payload):
+        writes.append((fd, payload))
+        raise OSError("late write")
+
+    try:
+        for _ in range(200):
+            with request._lock:
+                registered = request._cancel_callback is not None
+            if registered:
+                callback = request._cancel()
+                break
+            threading.Event().wait(0.01)
+
+        if callback is not None:
+            # Wake select through stdin but deliberately delay the extracted
+            # cancellation callback until prompt cleanup closes its self-pipe.
+            real_write(write_fd, b"\n")
+            thread.join(2)
+            cleaned_up = not thread.is_alive()
+            if cleaned_up:
+                monkeypatch.setattr(chat_command.os, "write", record_late_write)
+                callback()
+    finally:
+        if thread.is_alive():
+            wake = callback if callback is not None else request._cancel()
+            if wake is not None:
+                wake()
+            try:
+                real_write(write_fd, b"\n")
+            except OSError:
+                pass
+            thread.join(2)
+        os.close(write_fd)
+        reader.close()
+
+    assert callback is not None
+    assert cleaned_up
+    assert not thread.is_alive()
+    assert isinstance(outcome.get("exception"), CancelledError)
+    assert writes == []
+
+
+def test_active_chat_prompt_is_woken_by_controller_failure(monkeypatch):
+    """A controller stop cancels a real descriptor-backed terminal read."""
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, "r")
+    prompt_entered = threading.Event()
+    prompt_outcome = {}
+    failure = RuntimeError("sibling failed")
+
+    monkeypatch.setattr(chat_command.sys, "stdin", reader)
+    monkeypatch.setattr(
+        chat_command.console,
+        "print",
+        lambda *args, **kwargs: prompt_entered.set(),
+    )
+
+    def controller(stop_event, on_event, ask_user, render):
+        def block_on_prompt():
+            try:
+                ask_user(question="You:")
+            except BaseException as exception:
+                prompt_outcome["exception"] = exception
+
+        prompt_thread = threading.Thread(target=block_on_prompt)
+        prompt_thread.start()
+        assert prompt_entered.wait(2)
+        stop_event.set()
+        prompt_thread.join(2)
+        assert not prompt_thread.is_alive()
+        raise failure
+
+    try:
+        with pytest.raises(RuntimeError) as caught:
+            run_cli._run_with_terminal_controller(
+                controller,
+                prompt_handler=chat_command._prompt_chat_request,
+                reporter=None,
+                eof_value="/exit",
+            )
+    finally:
+        reader.close()
+        os.close(write_fd)
+
+    assert caught.value is failure
+    assert isinstance(prompt_outcome["exception"], _HostStop)
+
+
+def test_chat_host_does_not_intercept_exit_text_for_user_flow(tmp_path, monkeypatch):
+    """Without an authored exit CASE, ``/exit`` is ordinary HUMAN_INPUT data."""
+    seen = []
+
+    class RecordingModel(_FakeModel):
+        def invoke(self, messages):
+            seen.append(messages[-1].content)
+            return super().invoke(messages)
+
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda config: RecordingModel())
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
+    flow = tmp_path / "one-turn.yaml"
+    flow.write_text(
+        "id: one-turn\n"
+        "name: one_turn\n"
+        "input:\n"
+        "  opening: str\n"
+        "defs:\n"
+        "  turn:\n"
+        "    input:\n"
+        "      transcript: str\n"
+        "      exited: bool\n"
+        "    nodes:\n"
+        "      ask:\n"
+        "        kind: human_input\n"
+        '        prompt: "You:"\n'
+        "        output: str\n"
+        "      reply:\n"
+        "        kind: agent\n"
+        "        mode: plain\n"
+        "        input: {message: '${ask.output}'}\n"
+        "        output: str\n"
+        '        prompt: "Message: ${message}"\n'
+        "    output:\n"
+        "      transcript: '${reply.output}'\n"
+        "      exited: ${input.exited}\n"
+        "nodes:\n"
+        "  chat:\n"
+        "    kind: loop\n"
+        "    call: turn\n"
+        "    input:\n"
+        "      transcript: ${input.opening}\n"
+        "      exited: false\n"
+        "    times: 1\n"
+        "output: ${chat.output.transcript}\n"
+    )
+
+    result = runner.invoke(
+        app,
+        ["chat", str(flow), "--provider", "openai"],
+        input="/exit\n",
+    )
+
+    assert result.exit_code == 0
+    assert seen and "/exit" in seen[0]
 
 
 def test_chat_resolves_cwd_local_fold_module(tmp_path, monkeypatch):
@@ -196,8 +608,7 @@ def test_chat_resolves_cwd_local_fold_module(tmp_path, monkeypatch):
         "    input:\n"
         "      transcript: ${input.opening}\n"
         "      exited: false\n"
-        '    while: "not ${exited}"\n'
-        "    max: 1000\n"
+        "    times: 1\n"
         "output: ${chat.output.transcript}\n"
     )
 
@@ -216,19 +627,23 @@ def test_chat_resolves_cwd_local_fold_module(tmp_path, monkeypatch):
 
 
 def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
-    """A single bad turn must NOT end the session. When the reply agent fails (here: it hits
-    its tool-iteration cap), the run terminates as `failed`; the loop must surface the error,
-    say it is continuing, and RESTART the flow so the next turn works — not print a silent
-    "session ended". Regression for the reported "session ended right after I run a flow" bug.
+    """A bad turn restarts from the last completed transcript, not partial text.
+
+    The reply agent fails on turn two by hitting its tool-iteration cap. The host
+    surfaces the error, starts a fresh run, and carries turn one's completed
+    transcript into turn three without preserving turn two's in-progress message.
     """
-    # First model resolution (turn 1) loops forever -> tool cap -> the turn fails. Every
-    # later resolution (the restarted run's turn) answers cleanly. `model_from_config` is
-    # called once per agent-node run, i.e. once per turn.
+    # `model_from_config` is called once per agent-node run, i.e. once per turn.
     calls = {"n": 0}
+    recovered_prompts = []
 
     def _factory(cfg):
         calls["n"] += 1
-        return _LoopyModel() if calls["n"] == 1 else _GoodModel()
+        if calls["n"] == 1:
+            return _GoodModel(content="first reply")
+        if calls["n"] == 2:
+            return _LoopyModel()
+        return _GoodModel(prompts=recovered_prompts)
 
     monkeypatch.setattr(llm_clients_mod, "model_from_config", _factory)
     monkeypatch.setenv("OPENAI_API_KEY", "x")
@@ -237,10 +652,10 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     # list_flows fast and confined.
     (tmp_path / "f.yaml").write_text("id: f\nname: f\ninput: {}\nkind: agent\noutput: str\nprompt: hi\n")
 
-    # turn 1 fails (loopy), then turn 2 recovers, then EOF ends the session.
+    # Turn 1 completes, turn 2 fails, turn 3 recovers, then the authored exit branch ends.
     r = runner.invoke(
         app, ["chat", "--workspace", str(tmp_path), "--provider", "openai"],
-        input="run something\ngood turn\n",
+        input="first turn\nfailed turn\nrecovered turn\n/exit\n",
     )
     assert r.exit_code == 0
     assert "turn failed" in r.output          # the failure was surfaced, not swallowed
@@ -248,6 +663,16 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     assert "continuing" in r.output           # and the session was kept alive
     assert "recovered reply" in r.output      # the restarted run produced a working turn
     assert "session ended" in r.output
+    assert calls["n"] == 3
+    assert len(recovered_prompts) == 1
+    recovered_prompt = recovered_prompts[0]
+    assert "first turn" in recovered_prompt
+    assert "first reply" in recovered_prompt
+    assert "recovered turn" in recovered_prompt
+    assert "failed turn" not in recovered_prompt
+    # Recovery installed a fresh process-owned handler, which proves the failed
+    # lifecycle released its owner; the final lifecycle releases its owner too.
+    assert "ask_user" not in tools_module.TOOL_REGISTRY
 
 
 def test_chat_missing_key_no_tty_exits_clean(monkeypatch):
@@ -293,12 +718,84 @@ def test_chat_tool_call_through_the_loop(tmp_path, monkeypatch):
     (tmp_path / "a.yaml").write_text(
         "id: a\nname: a\ninput: {}\noutput: int\nkind: code\ncode: tests.seeds.fns:const_one\n"
     )
-    # The bundled composer chat (tool_calling reply). One turn, then EOF ends the session.
+    # The bundled composer chat (tool_calling reply). One turn, then flow-owned exit.
     r = runner.invoke(
         app, ["chat", "--workspace", str(tmp_path), "--provider", "openai"],
-        input="list my flows\n",
+        input="list my flows\n/exit\n",
     )
     assert r.exit_code == 0
     assert "here are your flows" in r.output   # the loop reached a final answer after the tool call
     assert "turn failed" not in r.output       # the tool call was handled, not looped to the cap
 
+
+def test_nested_chat_wait_observes_outer_controller_stop(tmp_path, monkeypatch):
+    """Outer cancellation wakes a WAIT running inside the chat ``run_flow`` tool."""
+    (tmp_path / "wait.yaml").write_text(
+        "id: nested-wait\n"
+        "name: nested_wait\n"
+        "nodes:\n"
+        "  wait:\n"
+        "    kind: wait\n"
+        '    until: "2999-01-01T00:00:00+00:00"\n'
+        "  done:\n"
+        "    kind: code\n"
+        "    runs_after: [wait]\n"
+        "    output: str\n"
+        "    code: |\n"
+        '      return "done"\n'
+        "output: ${done.output}\n"
+    )
+    monkeypatch.setattr(chat_tools, "_WORKSPACE", tmp_path.resolve())
+
+    def controller(stop_event, on_event, ask_user, render):
+        timer = threading.Timer(0.05, stop_event.set)
+        timer.start()
+        try:
+            with chat_tools._bind_controller_stop(stop_event):
+                return chat_tools.run_flow("wait.yaml")
+        finally:
+            timer.cancel()
+            timer.join()
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="terminal controller stopped"):
+        run_cli._run_with_terminal_controller(
+            controller,
+            prompt_handler=lambda request: None,
+            reporter=None,
+        )
+
+    assert time.monotonic() - started < 0.8
+
+
+def test_nested_chat_failure_does_not_set_outer_controller_stop(tmp_path, monkeypatch):
+    """A child engine failure remains a tool result instead of cancelling chat."""
+    (tmp_path / "fail.yaml").write_text(
+        "id: nested-failure\n"
+        "name: nested_failure\n"
+        "nodes:\n"
+        "  fail:\n"
+        "    kind: code\n"
+        "    output: str\n"
+        "    code: |\n"
+        '      raise RuntimeError("nested boom")\n'
+        '      return "unreachable"\n'
+        "output: ${fail.output}\n"
+    )
+    monkeypatch.setattr(chat_tools, "_WORKSPACE", tmp_path.resolve())
+    parent_states = []
+
+    def controller(stop_event, on_event, ask_user, render):
+        with chat_tools._bind_controller_stop(stop_event):
+            result = chat_tools.run_flow("fail.yaml")
+        parent_states.append(stop_event.is_set())
+        return result
+
+    result = run_cli._run_with_terminal_controller(
+        controller,
+        prompt_handler=lambda request: None,
+        reporter=None,
+    )
+
+    assert result == "FAILED: nested boom"
+    assert parent_states == [False]

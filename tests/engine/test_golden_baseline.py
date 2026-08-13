@@ -58,7 +58,7 @@ GOLDEN_EDGE_IDS: dict[str, list[str]] = {
         "research_each->__end__#0",
         "research_each->compare#0",
     ],
-    # human_input + timed WAIT: CASE gate control edges + the `~>` ordering separator
+    # human_input + absolute WAIT: CASE gate control edges + the `~>` ordering separator
     "17-effects-human-wait.yaml": [
         "__start__->propose#0",
         "__start__->settle#0",

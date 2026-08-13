@@ -11,11 +11,11 @@ contract, this locks the engine results end-to-end:
 - the **START_ID..END_ID splice** is exercised: each call splices the namespaced child
   START_ID..END_ID, MAP fans into one END_ID(list-mode), and every synthesized ref is a **bare**
   `${<id>.output}` — no spurious `.output` suffix.
-- **nested suspension resumes to terminal**: a HUMAN_INPUT inside a called child loads,
-  parks on its namespaced leaf id, and resumes via deliver-as-Output.
+- **nested blocking input reaches terminal**: a HUMAN_INPUT inside a called child passes
+  its namespaced leaf id to the trusted host and returns the answer as Output.
 - the goldens still hold (graph-growth must not perturb the static edge ids).
-- `CHECKPOINT_VERSION == "8.0"` round-trips on a NON-paused run (bumped 7.0 -> 8.0 for
-  the MAP synthetic `map#/__start__` fan-out topology).
+- `CHECKPOINT_VERSION == "9.0"` round-trips on a NON-paused run; v8 is rejected because
+  its paused-AGENT continuation topology is no longer replayable.
 - the ONE remaining engine xfail is the commandless durable re-pause, nothing else.
 
 LLM-terminating seeds (00/04/05/14/18) are asserted LOAD+structure only; run assertions use
@@ -31,12 +31,13 @@ import pytest
 
 from agent_composer.compile.expand import build_grow
 from agent_composer.compose import LoadError, load_flow
-from agent_composer.run import resume_command, resume_flow, run_flow
+from agent_composer.run import run_flow
 from agent_composer.nodes.base import NodeKind
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.suspension.checkpoint import CHECKPOINT_VERSION, RunCheckpoint
 from agent_composer.events import RunSucceeded
+from agent_composer.tools import install_ask_user
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -105,11 +106,11 @@ def _run_map(topics):
     return eng, events
 
 
-# --- CHECKPOINT_VERSION unchanged ---------------------------------------- #
+# --- CHECKPOINT_VERSION -------------------------------------------------- #
 
 
 def test_checkpoint_version_is_current():
-    assert CHECKPOINT_VERSION == "8.0"  # bumped 7.0 -> 8.0 (MAP synthetic map#/__start__ fan-out)
+    assert CHECKPOINT_VERSION == "9.0"
 
 
 # --- scratch eliminated structurally ------------------------ #
@@ -194,23 +195,20 @@ def test_synthesized_refs_are_bare_outputs():
                 )
 
 
-# --- nested suspension resumes to terminal ------------------------------- #
+# --- nested blocking interaction reaches terminal ----------------------- #
 
 
-def test_nested_suspension_resumes_to_terminal():
-    # seed 25: a HUMAN_INPUT inside a called child — loadable after reject-removal.
+def test_nested_human_input_reaches_terminal():
+    # Seed 25: a HUMAN_INPUT inside a called child invokes the trusted host with
+    # its live namespaced id and completes in one run.
     loaded = load_flow((_SEEDS / "25-nested-suspension.yaml").read_text(), search_paths=[_SEEDS])
-    res = run_flow(loaded, {"action": "order 10 units"})
-    assert res.status == "paused"
-    reason = res.pause_reasons[0]
-    # the parked HUMAN_INPUT lives under the NAMESPACED live id (callsite "gate" / child "approve")
-    assert reason.node_id == "gate/approve"
-    assert reason.node_id in res.engine.flow.nodes
-    cmd = resume_command(loaded, reason, "approve")  # dispatch on reason.node_id
-    assert cmd.node_id == "gate/approve"  # the live namespaced id rides through
-    done = resume_flow(loaded, engine=res.engine, commands=[cmd])
-    assert done.status == "succeeded"
-    assert done.output == "approve"  # confirm_action(rec={answer:"approve"})
+    requests = []
+    with install_ask_user(lambda **request: requests.append(request) or "approve"):
+        result = run_flow(loaded, {"action": "order 10 units"})
+
+    assert requests[0]["node_id"] == "gate/approve"
+    assert result.status == "succeeded"
+    assert result.output == "approve"  # confirm_action(rec={answer:"approve"})
 
 
 # --- goldens hold (graph-growth must not perturb static edge ids) ----- #
@@ -254,15 +252,15 @@ def test_checkpoint_roundtrip_non_paused():
     events = list(eng.run())
     assert isinstance(events[-1], RunSucceeded) and events[-1].output == 10
     snap = eng.snapshot()
-    assert snap.version == "8.0"
+    assert snap.version == "9.0"
     ck = RunCheckpoint.loads(snap.dumps())  # cross-process round-trip
-    assert ck.version == "8.0"
+    assert ck.version == "9.0"
     eng2 = FlowEngine.restore(loaded.compiled, ck)
     evs2 = list(eng2.resume([]))
     assert isinstance(evs2[-1], RunSucceeded) and evs2[-1].output == 10
 
 
-def test_incompatible_checkpoint_version_message_unchanged():
+def test_incompatible_checkpoint_version_is_clear():
     with pytest.raises(ValueError, match="incompatible checkpoint version"):
         RunCheckpoint.loads('{"version": "1.0"}')
 

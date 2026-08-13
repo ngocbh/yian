@@ -124,8 +124,11 @@ ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--quiet] [--verbose] [
   `name`, `version`, and `description` — unless `--quiet`.
 - Any required input still missing is **prompted interactively** — each prompt
   labelled with the input's type, a required (`*`)/optional mark, and any default.
-- A flow that suspends on a `HUMAN_INPUT` / `WAIT` node is **resumed interactively** —
-  each pause prompts for the awaited value and the run continues to completion.
+- `HUMAN_INPUT` and an authored agent `ask_user` tool block inside the live node
+  call while the CLI's main-thread broker collects the answer. `WAIT` likewise
+  blocks a worker until its absolute UTC deadline and returns `None`. None of
+  these authorable interactions pauses the graph; only a dormant generic
+  `Pause`/checkpoint API for custom or artificial nodes remains until issue #117.
 - Per-node progress prints to **stderr**: each running node shows a spinner that
   becomes a green `✓` on success or a red `✗` (plus the error) on failure.
   `--quiet`/`-q` suppresses it; `--verbose`/`-v` also prints each node's output.
@@ -174,9 +177,10 @@ ac chat [FLOW] [--workspace/-C DIR] [--provider P] [--model M]
 ```
 
 An interactive chat session. The REPL is itself an Agent Composer flow — a
-`loop` node runs one turn per iteration (`human_input` → `agent` → `code` fold),
-so each turn is a durable suspend/resume: the assistant's reply prints, you're
-prompted `You:`, and your line resumes the run.
+`loop` node runs one turn per iteration. Its blocking `human_input` feeds a
+`case`: exact `/exit` and `/quit` values route to an exit record before the
+reply model, while ordinary text runs `agent` and deterministic transcript code.
+The assistant's reply prints before the next `You:` prompt.
 
 - `FLOW` (optional) — a chat flow `.yaml`. The **default** is the bundled
   *composer chat*: a `tool_calling` agent with flow-op tools
@@ -186,11 +190,15 @@ prompted `You:`, and your line resumes the run.
   (default: the current directory).
 - `--provider P` / `--model M` — fill-the-gap overrides for agents that set no
   provider/model of their own (the outermost cascade layer, same as `ac run`).
-- End the session with `/exit`, `/quit`, or EOF (Ctrl-D); the CLI prints
-  `session ended`.
+- The bundled flow ends on exact `/exit` or `/quit`; the broker normalizes EOF
+  (Ctrl-D) to `/exit`. A user-supplied flow must author the same route — otherwise
+  typed or EOF-normalized `/exit` is ordinary input. `ac chat` never intercepts
+  typed text.
 - A single bad turn does not end the session: if the reply agent errors mid-turn
   (a raise, or hitting its tool-iteration cap), the CLI prints the failure and
   continues from your conversation so far.
+- Ctrl-C propagates into a flow running through the bundled `run_flow` tool (including
+  a blocking WAIT); a nested flow failure remains a tool result and does not cancel chat.
 
 ## Examples
 
@@ -202,7 +210,7 @@ The [`examples/`](examples/) directory ships a few generic flows:
 - `classify.yaml` — label text with a constrained `Literal[...]` output.
 - `triage-ticket.yaml` — extract a structured record from a support message, then draft a reply.
 - `decision-brief.yaml` — fan-out to three angles, pick a verdict, route, and finalize.
-- `ask-user.yaml` / `human-approval.yaml` — the model-chosen vs. always-on human-in-the-loop pauses.
+- `ask-user.yaml` / `human-approval.yaml` — model-chosen vs. always-on blocking human interaction.
 - `chat.yaml` — a turn-by-turn conversational REPL (a `loop` per turn; deterministic transcript) — the shape `ac chat` runs.
 
 ## Use it as a library

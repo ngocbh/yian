@@ -89,7 +89,7 @@ def test_agent_unknown_mode_is_loud_loaderror():
 def test_agent_bad_mode_loaderror_is_located_via_load_flow():
     # Through the full load path the loader stamps the node's source line onto the
     # build-time LoadError (`desc.build(ctx)` raises it line-less; the loader's conductor
-    # loop locates it), so an invalid mode:/controls: points the author at the offending node.
+    # loop locates it), so an invalid mode points the author at the offending node.
     from agent_composer.compose.loader import load_flow
 
     bad_mode = (
@@ -105,29 +105,13 @@ def test_agent_bad_mode_loaderror_is_located_via_load_flow():
         load_flow(bad_mode, search_paths=["."])
     assert ei.value.line == 4
 
-    bad_controls = (
-        "id: f\nname: f\n"
-        "nodes:\n"
-        "  a:\n"            # line 4 — the node
-        "    kind: agent\n"
-        "    prompt: hi\n"
-        "    controls:\n"
-        "      - bogus_control\n"
-        "output: ${a.output}\n"
-    )
-    with pytest.raises(LoadError, match="unknown control") as ei:
-        load_flow(bad_controls, search_paths=["."])
-    assert ei.value.line == 4
-
-
 def test_agent_node_knobs():
-    # seed 14 — mode / tools / controls / llm_config carried onto the AgentNode.
+    # seed 14 — mode / tools / llm_config carried onto the AgentNode.
     desc = _seed_nodes("14-agent-tools.yaml")["reviewer"]
     node, _ = _build(desc)
     assert isinstance(node, AgentNode)
     assert node.mode == "tool_calling"
-    assert node.tools == ["get_web_data", "web_search"]
-    assert node.controls == ["ask_user"]
+    assert node.tools == ["get_web_data", "web_search", "ask_user"]
     # llm_config is a plain dict end-to-end.
     assert isinstance(node.llm_config, dict)
     assert node.llm_config["provider"] == "anthropic"

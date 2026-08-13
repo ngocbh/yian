@@ -129,7 +129,7 @@ def test_wrapper_delegates_for_route_kind():
 
 
 def test_wrapper_delegates_for_pause_kind():
-    """A HUMAN_INPUT fake (-> Pause): `run` is the inherited wrapper and returns the Pause."""
+    """A test-only Pause leaf inherits `run` and returns its compatibility result."""
     from agent_composer.nodes.base import Pause
 
     from tests.engine._fakes import PauseNode

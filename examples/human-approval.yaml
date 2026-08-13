@@ -1,18 +1,18 @@
 # human-approval — a deterministic human gate with the HUMAN_INPUT node.
 #
-# A HUMAN_INPUT node ALWAYS suspends the run at a fixed point in the graph and waits
-# for a typed answer from the human; the answer is validated against the node's declared
-# `output:` type before the flow continues. (Contrast with the `ask_user` control —
+# A HUMAN_INPUT node ALWAYS blocks at a fixed point in the graph and waits for a typed
+# answer from the human; the answer is validated against the node's declared
+# `output:` type before the flow continues. (Contrast with the `ask_user` tool —
 # see ask-user.yaml — which is model-CHOSEN, not guaranteed.)
 #
 # The flow: an agent drafts a short plan, a HUMAN_INPUT node asks the human to approve
 # or revise it, `case ... on` routes on the typed answer, and whichever branch ran is
 # combined by an n-ary `|` coalesce into the flow output.
 #
-# Exercises: a Literal typedef as the human answer, the HUMAN_INPUT node (suspend/resume
-# with a typed answer), `case ... on` with `else`, and a coalesce join.
+# Exercises: a Literal typedef as the human answer, the blocking HUMAN_INPUT node,
+# `case ... on` with `else`, and a coalesce join.
 #
-# Run it with (the CLI will pause and prompt you for the approval):
+# Run it with (the CLI will prompt you for the approval):
 #   ac run examples/human-approval.yaml --input task="Plan a team offsite"
 
 id: human-approval

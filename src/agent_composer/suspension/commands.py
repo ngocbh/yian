@@ -1,7 +1,7 @@
 """Commands — external control delivered to a (possibly suspended) run.
 
-`DeliverAnswerCommand` is the vehicle an external watcher/human uses to satisfy a
-pause: it delivers the awaited value (the human's answer, the external-event
+`DeliverAnswerCommand` is the temporary generic vehicle an external watcher/host
+uses to satisfy a pause: it delivers the awaited value (for example an event
 payload) to the parked leaf as that leaf's `Output` (deliver-as-Output).
 `AbortCommand` terminates a run.
 """
@@ -28,7 +28,8 @@ class DeliverAnswerCommand(BaseModel):
     The engine writes `value` to `pool[node_id]` (deliver-as-Output) and fires the
     leaf's existing out-edges — no scratch, no re-run. `node_id` is resolved against
     the LIVE graph (`engine.flow.nodes`), so it may be a runtime-namespaced id. A
-    WAIT release delivers `value=None`."""
+    synthetic scheduled release conventionally delivers `value=None`; authorable
+    WAIT does not use this command."""
 
     type: Literal[CommandType.DELIVER_ANSWER] = CommandType.DELIVER_ANSWER
     node_id: str

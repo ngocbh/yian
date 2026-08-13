@@ -43,8 +43,9 @@ from agent_composer.typesys.pool import VariablePool
 # `*Expansion` union (CallExpansion/MapExpansion/AgentExpansion/LoopExpansion) to a single flat
 # `GrowRecord(spawner_id, seed, children)` — one uniform record per grow, kind-blind replay.
 # Pre-7.0 blobs are NOT loadable (hard cutover). 8.0: MAP grows a synthetic `map#/__start__`
-# fan-out node, so a pre-8.0 checkpoint would replay a topology missing that node — hard cutover.
-CHECKPOINT_VERSION = "8.0"
+# fan-out node, so a pre-8.0 checkpoint would replay a topology missing that node. 9.0 removes
+# AGENT continuation expansion; a v8 paused-agent ledger cannot be replayed by this topology.
+CHECKPOINT_VERSION = "9.0"
 
 
 class RunCheckpoint(BaseModel):
@@ -121,6 +122,6 @@ class RunCheckpoint(BaseModel):
         if raw_version != CHECKPOINT_VERSION:
             raise ValueError(
                 f"incompatible checkpoint version {raw_version!r}; this build reads "
-                f"{CHECKPOINT_VERSION!r} (unified GrowRecord expansion ledger)"
+                f"{CHECKPOINT_VERSION!r} (AGENT continuation topology was removed)"
             )
         return cls.model_validate_json(blob)

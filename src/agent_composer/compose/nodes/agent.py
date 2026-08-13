@@ -45,7 +45,7 @@ def _validate_llm_config(
 
 @dataclass(frozen=True, kw_only=True)
 class AgentDescriptor(NodeDescriptor):
-    """kind=agent — an LLM reasoner (prompt + mode + optional tools/controls/llm).
+    """kind=agent — an LLM reasoner (prompt + mode + optional tools/llm).
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
     `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `inputs:`/
@@ -53,7 +53,7 @@ class AgentDescriptor(NodeDescriptor):
     field legality is the default allowed/required key check + the asserts-list check). Only the
     agent-specific fields are declared here; `inputs`/`outputs` come from the base.
 
-    Class attrs: `kind="agent"`; `allowed` adds `inputs`/`outputs`/`prompt`/`tools`/`controls`/
+    Class attrs: `kind="agent"`; `allowed` adds `inputs`/`outputs`/`prompt`/`tools`/
     `mode`/`llm_config`/`retries`/`asserts` to the commons; `required` is empty (no mandatory
     flat field); `binding_fields=("inputs",)` — a `prompt:`'s `${...}` refs are handled by
     template scanning, not the inline-call desugar, so only `inputs` is walked.
@@ -61,14 +61,13 @@ class AgentDescriptor(NodeDescriptor):
 
     kind = "agent"
     allowed = NodeDescriptor.allow(
-        "inputs", "outputs", "prompt", "tools", "controls", "mode", "llm_config", "retries", "asserts"
+        "inputs", "outputs", "prompt", "tools", "mode", "llm_config", "retries", "asserts"
     )
     required = NodeDescriptor.require()
     binding_fields = ("inputs",)
 
     prompt: Optional[str] = None
     tools: list[str] = field(default_factory=list)
-    controls: list[str] = field(default_factory=list)
     mode: str = "tool_calling"
     llm_config: dict[str, Any] = field(default_factory=dict)
     retries: int = 2
@@ -93,7 +92,6 @@ class AgentDescriptor(NodeDescriptor):
                 self.id,
                 prompt=self.prompt or "",
                 tools=list(self.tools),
-                controls=list(self.controls),
                 llm_config=own_cfg,
                 llm_inherit=inherit,
                 mode=self.mode,
@@ -101,7 +99,7 @@ class AgentDescriptor(NodeDescriptor):
                 title=self.node_name,
             )
         except ValueError as exc:
-            # AgentNode validates mode/controls against the registries; surface a rejection as
+            # AgentNode validates the mode registry; surface a rejection as
             # the loader's one error type (loud), not a bare ValueError.
             raise LoadError(f"node {self.id!r}: {exc}") from exc
 

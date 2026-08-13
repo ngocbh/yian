@@ -53,7 +53,7 @@ just what can.
 | `e37-synth-node-inherits-host-ranges.yaml` | a bad ref in an inline `call(...)` — the synth node is handed the HOST's `field_ranges` | ⚠ **known-wrong caret** (#88 reopened): cross-node collision the `(kind,key)` tuple can't fix |
 | `e38-case-when-ref-locates-node-header.yaml` | a bad ref inside a `case`'s `when:` — desugared to a synthetic `__r1` input | ⚠ **known-wrong caret** (#88 reopened): a locator naming something the author never wrote |
 | `e39-llm-config-no-range.yaml` | a bad `llm_config:` entry (`provider: bogus_provider`) | ⚠ **no range at all**: the message names `provider`, then attaches `range=None`; frame via the legacy line-map |
-| `e40-agent-controls-no-range.yaml` | an unknown AGENT `controls:` entry | ⚠ **no range at all**: e39's twin on a sequence |
+| `e40-agent-controls-no-range.yaml` | retired AGENT `controls:` field | field value (L14) |
 | `e30-inline-syntax-error.yaml` | a malformed inline `code:` body (`return (`) | inline syntax gate → located `LoadError` (padded to the real line) |
 | `e31-inline-no-return.yaml` | an inline `code:` body with no `return` | has-`return` load gate → located `LoadError` |
 | `e32-malformed-code-ref.yaml` | a `code:` value that is neither a valid ref nor inline source (dotted, no colon) | reject bucket → `LoadError` with a "did you mean" hint |

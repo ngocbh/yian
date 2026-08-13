@@ -19,6 +19,7 @@ from agent_composer.compose import load_flow
 from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.events import RunFailed
 from agent_composer.suspension.checkpoint import RunCheckpoint
+from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
 
 
 # A child that re-exports a {report, n} record (the Ollama-free CODE child pattern). The
@@ -137,7 +138,7 @@ def test_call_post_assert_reads_input_true():
 
 # --- 4. durable: the input record survives suspend/resume -------------------- #
 #
-# A `call` whose child contains a HUMAN_INPUT (so the run suspends mid-child). The call's
+# A `call` whose child contains a HUMAN_INPUT-shaped artificial Pause leaf. The call's
 # post-assert reads BOTH a declared input (`action`) and `${output}`. Driving
 # run_flow -> pause -> snapshot/dumps -> loads/restore -> resume must fire the post-assert on
 # the RESUMED leg, recovering the input record from the persisted GrowRecord.seed (no new
@@ -180,20 +181,25 @@ output: ${{gate.output}}
 
 
 def _load_pausing(asserts: str):
-    return load_flow(_pausing_parent(asserts),
-                     child_resolver=_resolver(**{"approver": _PAUSING_CHILD}))
+    loaded = load_flow(
+        _pausing_parent(asserts),
+        child_resolver=_resolver(**{"approver": _PAUSING_CHILD}),
+    )
+    replace_human_inputs_with_artificial_pauses(loaded.compiled)
+    return loaded
 
 
 def _drive_durable(asserts: str, answer: str):
-    """run -> pause -> cross-process snapshot/dumps -> loads/restore -> resume, returning the
-    resumed RunResult. The post-assert fires on the resumed leg over the recovered record."""
+    """Exercise generic Pause compatibility across a checkpoint and resume.
+
+    The post-assert fires on the resumed leg over the recovered record.
+    """
     loaded = _load_pausing(asserts)
     rec = run_flow(loaded, {"action": "deploy"})
     assert rec.status == "paused"
     reason = rec.pause_reasons[0]
     ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())  # cross-process round-trip
-    fresh = load_flow(_pausing_parent(asserts),
-                      child_resolver=_resolver(**{"approver": _PAUSING_CHILD}))
+    fresh = _load_pausing(asserts)
     cmd = resume_command(fresh, reason, answer)
     return resume_flow(fresh, checkpoint=ckpt, commands=[cmd])
 

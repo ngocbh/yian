@@ -43,15 +43,15 @@ CORE_MODULES = {
 # LOWER this as each refactor phase removes dispatch; the final phase drives it to 0.
 # (Measured at P0 baseline 20; dropped to 19 when the `eval_node` grow guard moved from a
 # `node.kind not in _SPAWNER_KINDS` membership test to the kind-blind `not node.is_spawner`.
-# Rose through the CALL/MAP/AGENT->Grow migrations to 27 while the live `_grow_residual` arms
+# Rose through the former spawner migrations to 27 while the live `_grow_residual` arms
 # COEXISTED with the legacy `_apply_enqueue`/`_grow_*` replay path + the `*Expansion` union
 # isinstance dispatch. P3.5 unified the durability ledger to a single `GrowRecord` and made
 # replay kind-blind: the `*Expansion` union + its isinstance dispatch and the legacy
-# `_grow_call`/`_grow_map`/`_grow_agent` replay bodies are gone, dropping the ceiling to 13.
+# per-kind replay bodies are gone, dropping the ceiling to 13.
 # P3.6 deleted `Enqueue`/`_apply_enqueue` (LOOP turn-0 now returns `Grow`) and swapped the 3
 # `_SPAWNER_KINDS` residual stamps + the `eval_node` def for the kind-blind `node.is_spawner`,
 # dropping the ceiling to 8.
-# P5.1 moved the two `eval_node` read-boundary reads (MAP over-mode, WAIT timed) behind the
+# P5.1 moved the two `eval_node` read-boundary reads (MAP over-mode, WAIT until) behind the
 # node-owned `bind_reserved`/`binds_per_item` hooks, dropping the ceiling to 6.
 # P5.2 bound assert-refs at the read boundary (record-first, pool-fallback) so END post-asserts
 # stop being special: the `node.kind == NodeKind.END` post-assert branch in `eval_node` is gone,
@@ -59,9 +59,8 @@ CORE_MODULES = {
 # P5.3 dropped the `target_node.kind == NodeKind.CALL` conjunct on the commit-site post-assert
 # gate (engine.py) — a redirect-commit post-check is now kind-blind, dropping the ceiling to 4.
 # P5.4 dismantles the `_grow_residual` 4-arm switch concern by concern (finish/mark, boundary
-# asserts, depth, `_spawner_expansion` stamping, agent commit_as, loop bookkeeping all lifted into
-# the kind-blind growth core behind node traits/hooks). CALL + MAP fell first (-> 2), then AGENT
-# once its origin `commit_as` override became a generic derived-terminal rule (-> 1); the final
+# asserts, depth, `_spawner_expansion` stamping, and loop bookkeeping all lifted into
+# the kind-blind growth core behind node traits/hooks). The final
 # P5.4 commit gated the LOOP bookkeeping on the `is_loop` trait and deleted the switch entirely.
 # The census is now EMPTY: the engine core dispatches only on node traits/hooks + the closed
 # Outcome sum, never on `NodeKind` / `_SPAWNER_KINDS` / a concrete `*Expansion` type.

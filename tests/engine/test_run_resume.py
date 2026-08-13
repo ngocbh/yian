@@ -5,6 +5,8 @@ from agent_composer.run import resume_command, run_flow, resume_flow
 from agent_composer.suspension.commands import DeliverAnswerCommand
 from agent_composer.suspension.checkpoint import RunCheckpoint
 from agent_composer.suspension.pause import EventAwaited
+from agent_composer.tools import install_ask_user
+from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
 
 FLOW = """
 id: f
@@ -13,8 +15,9 @@ input:
   settle_at: date
 nodes:
   settle:
-    kind: wait
-    until: ${input.settle_at}
+    kind: human_input
+    prompt: "continue?"
+    output: Optional[str]
   done:
     kind: code
     depends_on: [settle]
@@ -24,8 +27,15 @@ output: ${done.output}
 """
 
 
+def _load_artificial_pause_flow(source: str):
+    """Load a flow and replace its human gate for checkpoint-only tests."""
+    loaded = load_flow(source)
+    replace_human_inputs_with_artificial_pauses(loaded.compiled)
+    return loaded
+
+
 def test_run_flow_pauses_carries_handles():
-    loaded = load_flow(FLOW)
+    loaded = _load_artificial_pause_flow(FLOW)
     res = run_flow(loaded, {"settle_at": "2026-07-01"})
     assert res.status == "paused"
     assert res.checkpoint is not None
@@ -34,20 +44,20 @@ def test_run_flow_pauses_carries_handles():
 
 
 def test_resume_via_checkpoint_completes():
-    loaded = load_flow(FLOW)
+    loaded = _load_artificial_pause_flow(FLOW)
     res = run_flow(loaded, {"settle_at": "2026-07-01"})
     blob = res.checkpoint.dumps()
     ckpt = RunCheckpoint.loads(blob)             # cross-process round-trip
-    release = DeliverAnswerCommand(node_id="settle", value=None)   # WAIT release = Output(None)
+    release = DeliverAnswerCommand(node_id="settle", value=None)
     res2 = resume_flow(loaded, checkpoint=ckpt, commands=[release])
     assert res2.status == "succeeded"
     assert res2.output == "cancel"               # confirm_action(rec={}) -> "cancel"
 
 
 def test_resume_via_live_engine_completes():
-    loaded = load_flow(FLOW)
+    loaded = _load_artificial_pause_flow(FLOW)
     res = run_flow(loaded, {"settle_at": "2026-07-01"})
-    release = DeliverAnswerCommand(node_id="settle", value=None)   # WAIT release = Output(None)
+    release = DeliverAnswerCommand(node_id="settle", value=None)
     res2 = resume_flow(loaded, engine=res.engine, commands=[release])
     assert res2.status == "succeeded"
     assert res2.output == "cancel"
@@ -99,8 +109,9 @@ input:
   settle_at: date
 nodes:
   settle:
-    kind: wait
-    until: ${input.settle_at}
+    kind: human_input
+    prompt: "continue?"
+    output: Optional[str]
   pro:
     kind: code
     depends_on: [settle]
@@ -124,49 +135,34 @@ output: ${merge.output}
 
 def test_effects_approve_path():
     loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    assert r1.status == "paused"                       # at human_input
-    r2 = resume_flow(loaded, engine=r1.engine,
-                     commands=[DeliverAnswerCommand(node_id="approve", value="approve")])
-    assert r2.status == "paused"                       # at the timed wait
-    r3 = resume_flow(loaded, engine=r2.engine,
-                     commands=[DeliverAnswerCommand(node_id="settle", value=None)])
-    assert r3.status == "succeeded"
-    assert r3.output == "approve"                      # confirm_action(rec={answer:"approve"})
+    with install_ask_user(lambda **request: "approve"):
+        result = run_flow(loaded, {"settle_at": "2000-01-01"})
+    assert result.status == "succeeded"
+    assert result.output == "approve"
 
 
 def test_effects_reject_path():
     loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    r2 = resume_flow(loaded, engine=r1.engine,
-                     commands=[DeliverAnswerCommand(node_id="approve", value="reject")])
-    assert r2.status == "succeeded"                    # abort branch, no wait
-    assert r2.output == "reject"                       # confirm_action(rec={answer:"reject"})
+    with install_ask_user(lambda **request: "reject"):
+        result = run_flow(loaded, {"settle_at": "2000-01-01"})
+    assert result.status == "succeeded"                # abort branch, no wait
+    assert result.output == "reject"                   # confirm_action(rec={answer:"reject"})
 
 
 def test_effects_typed_answer_rejected():
     loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    r2 = resume_flow(loaded, engine=r1.engine,
-                     commands=[DeliverAnswerCommand(node_id="approve", value="maybe")])
-    assert r2.status == "failed"            # "maybe" not in Literal[approve,reject]: pool.set rejects,
-                                            # guarded -> NodeExecutionError -> RunFailed (resume does NOT crash)
+    with install_ask_user(lambda **request: "maybe"):
+        result = run_flow(loaded, {"settle_at": "2000-01-01"})
+    assert result.status == "failed"  # not in Literal[approve,reject]
 
 
-def test_multi_pause_resume_via_resume_command():
-    # Drive human_input -> wait entirely through the logical contract: each resume reads
-    # the refreshed pause reason and maps it to a command via resume_command (no hardcoded
-    # coordinate). Exercises the loop body more than once.
+def test_wait_after_blocking_human_input_completes_in_same_run():
+    # HUMAN_INPUT answers live, then a past absolute WAIT returns immediately.
     loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    assert r1.status == "paused"                         # at human_input "approve"
-    cmd1 = resume_command(loaded, r1.pause_reasons[0], "approve")
-    r2 = resume_flow(loaded, engine=r1.engine, commands=[cmd1])
-    assert r2.status == "paused"                         # now at the wait
-    cmd2 = resume_command(loaded, r2.pause_reasons[0], True)
-    r3 = resume_flow(loaded, engine=r2.engine, commands=[cmd2])
-    assert r3.status == "succeeded"
-    assert r3.output == "approve"
+    with install_ask_user(lambda **request: "approve"):
+        result = run_flow(loaded, {"settle_at": "2000-01-01"})
+    assert result.status == "succeeded"
+    assert result.output == "approve"
 
 
 def test_resume_command_rejects_non_resumable_reason():
@@ -175,25 +171,13 @@ def test_resume_command_rejects_non_resumable_reason():
         resume_command(loaded, EventAwaited(), "x")  # external-watcher pause, not host-resumable
 
 
-def test_resume_command_builds_deliver_for_human_input():
+def test_blocking_human_then_wait_has_no_checkpoint_round_trip():
     loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    cmd = resume_command(loaded, r1.pause_reasons[0], "approve")
-    assert isinstance(cmd, DeliverAnswerCommand)               # deliver-as-Output, not a variable patch
-    assert cmd.node_id == "approve" and cmd.value == "approve"
-
-
-def test_full_host_round_trip_human_then_wait():
-    loaded = load_flow(EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    assert r1.status == "paused"                               # at human_input "approve"
-    r2 = resume_flow(loaded, engine=r1.engine,
-                     commands=[resume_command(loaded, r1.pause_reasons[0], "approve")])
-    assert r2.status == "paused"                               # at the timed wait "settle"
-    r3 = resume_flow(loaded, engine=r2.engine,
-                     commands=[resume_command(loaded, r2.pause_reasons[0], None)])  # WAIT release
-    assert r3.status == "succeeded"
-    assert r3.output == "approve"
+    with install_ask_user(lambda **request: "approve"):
+        result = run_flow(loaded, {"settle_at": "2000-01-01"})
+    assert result.status == "succeeded"
+    assert result.checkpoint is None
+    assert result.output == "approve"
 
 
 def test_resume_command_does_not_require_node_in_compiled_flow():
@@ -235,11 +219,11 @@ def test_checkpoint_rejects_pre_6_blob():
 
 
 def test_live_pooled_resume_matches_serial():
-    """A run started pooled pauses at the wait; resume() then drives the post-wait fan-out
+    """A run started pooled pauses at an artificial gate; resume drives the fan-out
     under the POOLED driver and reaches the SAME terminal as a serial resume."""
     from agent_composer.run import run_flow, resume_flow
     from agent_composer.suspension.commands import DeliverAnswerCommand
-    loaded = load_flow(_RESUME_FANOUT)
+    loaded = _load_artificial_pause_flow(_RESUME_FANOUT)
 
     serial = run_flow(loaded, {"settle_at": "2026-07-01"}, num_workers=0)
     assert serial.status == "paused"
@@ -261,7 +245,7 @@ def test_resume_flow_num_workers_passthrough():
     from agent_composer.run import run_flow, resume_flow
     from agent_composer.suspension.commands import DeliverAnswerCommand
     from agent_composer.suspension.checkpoint import RunCheckpoint
-    loaded = load_flow(_RESUME_FANOUT)
+    loaded = _load_artificial_pause_flow(_RESUME_FANOUT)
     paused = run_flow(loaded, {"settle_at": "2026-07-01"})
     ckpt = RunCheckpoint.loads(paused.checkpoint.dumps())
     res = resume_flow(loaded, checkpoint=ckpt, num_workers=4,

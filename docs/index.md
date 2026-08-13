@@ -90,13 +90,17 @@ Adopt the monorepo. For a small team the simpler cross-project refactors and sin
   node never mutates shared state. Outputs are immutable, typed, serializable values.
   That referential transparency is what makes runs reproducible, checkpointable, and
   resumable.
+- **Effects stay inside explicit leaves** — an agent's granted `ask_user` tool and a
+  `human_input` gate block in their live node call; `wait` blocks until an absolute UTC
+  deadline. `ask_user` returns its answer into the same agent loop; the graph sees each
+  leaf's eventual ordinary output instead of a rewrite or pause.
 
 ## Where to go next
 
 <div class="grid cards" markdown>
 
 - :material-download: **[Installation](installation.md)** — `pip install agent-composer`, provider extras, and picking a model.
-- :material-console: **[The `ac` CLI](cli.md)** — run a flow from the terminal, supply inputs, resume human pauses.
+- :material-console: **[The `ac` CLI](cli.md)** — run a flow from the terminal, supply inputs, and serve blocking human requests.
 - :material-file-code: **[Flow syntax](syntax.md)** — the full Compose-YAML reference: types, `${...}` refs, node kinds, `case`, coalesce, asserts.
 - :material-lightbulb: **[Examples](examples.md)** — walk through the flows that ship in `examples/`.
 - :material-language-python: **[Python API](api.md)** — use the engine as a library (`load_flow` / `run_flow` / `resume_flow`).

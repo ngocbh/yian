@@ -21,8 +21,7 @@ There are only two big moves, and one long-lived object between them:
 Everything else on this page is just naming the pieces of those two moves.
 
 ```python
-from agent_composer.compose.loader import load_flow
-from agent_composer.compose.run import run_flow
+from agent_composer import load_flow, run_flow
 
 loaded = load_flow(open("flow.yaml").read())      # text  -> ComposedFlow
 result = run_flow(loaded, {"question": "..."})    # graph -> RunResult
@@ -96,7 +95,7 @@ one of four outcomes — it never touches the engine's memory:
 |---------|---------|
 | `Output` | here are my typed results — bind them and continue |
 | `Route`  | a `case` decision — take this branch, skip the others |
-| `Pause`  | I need something from outside (a human, a timer) — checkpoint the run |
+| `Pause`  | dormant custom/artificial compatibility — checkpoint the run |
 | `Grow`   | splice this sub-graph in and continue (how `call`/`map`/`loop` expand) |
 
 The engine's defining rule: **it never asks what *kind* of node this is.** It reads
@@ -105,13 +104,19 @@ node-owned traits (`is_spawner`, `binds_per_item`, …). Adding a brand-new node
 requires zero engine changes — a ratchet test (`tests/engine/test_kind_census.py`)
 keeps the engine's kind-branch count pinned at 0.
 
-Because all state lives in one place the engine controls, a run can stop after *any*
-node and resume later: `Pause` serializes the world to a `RunCheckpoint`, and
-`resume_flow()` rebuilds and continues it.
+Authorable blocking interaction does not use `Pause`: `human_input` and an
+agent's `ask_user` tool block inside the live node call, while WAIT blocks until
+its absolute UTC deadline. The enclosing AGENT, HUMAN_INPUT, and WAIT nodes
+eventually return `Output`. The generic checkpoint path remains dormant for
+custom/artificial compatibility until issue #117 removes it.
+
+Because all state lives in one place the engine controls, the dormant `Pause`
+variant can still serialize the world to a `RunCheckpoint`, and `resume_flow()`
+can rebuild and continue it. No authorable node currently produces that variant.
 
 → **[engine.md](engine.md)** covers the scheduler, the edge-join, growth, and durable
 suspend/resume. **[nodes.md](nodes.md)** covers the node contract and each kind's
-`run()`.
+`_run_impl`.
 
 ---
 
@@ -137,8 +142,8 @@ of a design choice above, not a feature bolted on:
 
 | Property | Falls out of… |
 |----------|---------------|
-| **Reproducible** — same flow, same run | the author fixes the graph; the LLM only fills leaf boxes |
-| **Checkpointable / resumable** | pure nodes + all state in one serializable pool |
+| **Structurally reproducible** — same authored control/data graph | the author fixes the graph; the LLM only fills leaf boxes |
+| **Compatibility checkpointable / resumable** | centralized serializable run state + pure graph boundaries |
 | **Extensible** — new kinds don't touch the core | the kind-blind engine + the per-kind `KINDS` table |
 | **Readable / debuggable** | the flow *is* the plan; source spans point errors back at the YAML |
 
@@ -173,7 +178,7 @@ back-edge**, and **never teach `runtime/` about a `NodeKind`**.
 
 - :material-cog: **[compose.md](compose.md)** — Phase 1 in depth: how YAML is lowered to a `CompiledFlow`.
 - :material-play: **[engine.md](engine.md)** — Phase 2 in depth: the scheduler and the node contract.
-- :material-cube: **[nodes.md](nodes.md)** — every node kind and what its `run()` returns.
+- :material-cube: **[nodes.md](nodes.md)** — every node kind and what its `_run_impl` returns.
 - :material-shape: **[typing.md](typing.md)** — the typed value system and the variable pool.
 - :material-code-braces: **[expressions.md](expressions.md)** — the `${...}` grammar.
 

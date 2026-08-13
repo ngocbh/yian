@@ -22,7 +22,7 @@ def test_cli_builds_llm_config(monkeypatch, tmp_path):
         captured["llm_config"] = llm_config
         return RunResult(input={}, status="succeeded", output="ok")
 
-    monkeypatch.setattr(climod, "run_flow", fake_run_flow)
+    monkeypatch.setattr(climod, "_run_flow_controlled", fake_run_flow)
     monkeypatch.setattr(climod, "_ensure_provider_keys", lambda *a, **k: None)
     f = tmp_path / "f.yaml"
     f.write_text(_FLOW)
@@ -40,7 +40,7 @@ def test_cli_no_flags_passes_none_or_empty(monkeypatch, tmp_path):
         captured["llm_config"] = llm_config
         return RunResult(input={}, status="succeeded", output="ok")
 
-    monkeypatch.setattr(climod, "run_flow", fake_run_flow)
+    monkeypatch.setattr(climod, "_run_flow_controlled", fake_run_flow)
     monkeypatch.setattr(climod, "_ensure_provider_keys", lambda *a, **k: None)
     f = tmp_path / "f.yaml"
     f.write_text(_FLOW)

@@ -96,7 +96,7 @@ def loop_bump(inputs: dict) -> dict:
 def chat_fold(inputs: dict) -> dict:
     # the chat-shaped loop body 'a -> 'a over {messages, exited}: append this turn's human
     # message to the carried list and set exited once the human types "bye". Drives the
-    # pause/resume-per-turn e2e (a human_input leaf feeds `msg` each iteration).
+    # blocking-turn e2e (a human_input leaf feeds `msg` each iteration).
     messages = inputs["messages"] + [inputs["msg"]]
     return {"messages": messages, "exited": inputs["msg"] == "bye"}
 
@@ -104,7 +104,7 @@ def chat_fold(inputs: dict) -> dict:
 def chat_fold_list(inputs: dict) -> dict:
     # like chat_fold but folds a LIST of this turn's messages (a MAP over the turn's elements
     # feeds `msgs`): extend the carried list and exit once any message is "bye". Drives the
-    # MAP-spawner-inside-a-loop-body pause/resume e2e.
+    # MAP-spawner-inside-a-loop-body artificial-pause compatibility e2e.
     messages = inputs["messages"] + list(inputs["msgs"])
     return {"messages": messages, "exited": "bye" in inputs["msgs"]}
 
@@ -121,4 +121,3 @@ def reply_fold(inputs: dict) -> dict:
     # loop body 'a -> 'a over {transcript, exited}: append this turn's agent reply.
     return {"transcript": inputs["transcript"] + "|" + inputs["reply"],
             "exited": bool(inputs["exited"])}
-

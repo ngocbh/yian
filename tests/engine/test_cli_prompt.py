@@ -22,7 +22,8 @@ from agent_composer.cli.run import (
     _render_run_error,
 )
 from agent_composer.compose.loader import load_flow
-from agent_composer.run import RunResult, resume_command, resume_flow, run_flow
+from agent_composer.run import RunResult, run_flow
+from agent_composer.tools import install_ask_user
 from agent_composer.compose.helpers.types import read_flow_inputs
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -345,18 +346,16 @@ def test_run_error_multi_frame_three_levels(monkeypatch):
     assert "e26-three-level-raise.yaml defs:deep:20" in out    # frame 2: `boom` code in `deep`
 
 
-def test_run_error_multi_frame_on_nested_resume_failure(monkeypatch):
-    # Seed 25 suspends on a HUMAN_INPUT inside a called `defs:` child (`gate/approve`). Resuming
-    # with an INVALID answer fails the typed write boundary with a `field` locator. The traceback
+def test_run_error_multi_frame_on_nested_human_input_failure(monkeypatch):
+    # Seed 25 blocks on a HUMAN_INPUT inside a called `defs:` child (`gate/approve`). A host
+    # INVALID answer fails the typed write boundary with a `field` locator. The traceback
     # descends into the def and points at the `output:` line (precise field locator), not the
     # node header — frame 0 the `gate:` call, frame 1 `defs:review` `output:`.
     flow = _SEEDS / "25-nested-suspension.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent])
-    paused = run_flow(loaded, {"action": "ship it"})
-    assert paused.status == "paused"
-    cmds = [resume_command(loaded, rs, "maybe") for rs in paused.pause_reasons]
-    result = resume_flow(loaded, engine=paused.engine, commands=cmds)
+    with install_ask_user(lambda **request: "maybe"):
+        result = run_flow(loaded, {"action": "ship it"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
     _render_run_error(result, flow, text, loaded=loaded)
@@ -395,5 +394,4 @@ def test_ensure_cwd_importable_prepends_cwd(monkeypatch, tmp_path):
     assert sys.path[0] == str(tmp_path)
     cli._ensure_cwd_importable()                      # idempotent: no duplicate entry
     assert sys.path.count(str(tmp_path)) == 1
-
 

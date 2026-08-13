@@ -5,9 +5,9 @@ A node produces exactly ONE value: `store[node_id]` is a single typed `TypedValu
 resolves to `store[<start_id>].X` — the synthesized START_ID node's committed bound-input
 record IS the flow's run-arguments object (the standalone `inputs` namespace is
 retired). The one side namespace is `system` (host-injected ambient — run id / clock /
-tenant; reserved, run-global). There is no engine-private key-addressed namespace:
-the agent tool-loop memo rides as graph data on the agent resume continuation, and
-HUMAN_INPUT/WAIT answers are delivered as the parked leaf's Output.
+tenant; reserved, run-global). There is no engine-private key-addressed namespace;
+live AGENT/HUMAN_INPUT/WAIT results and temporary artificial-pause deliveries all
+become the leaf's ordinary Output.
 
 Two responsibilities:
 - `resolve(head, rest)` backs the `${...}` expression evaluator. Because values

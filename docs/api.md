@@ -1,6 +1,9 @@
 # Python API
 
-Use the engine as a library: load a flow, run it, and (if it pauses) resume it.
+Use the engine as a library: load a flow, run it, and serve blocking human
+interaction from the host. An AGENT's `ask_user` call, HUMAN_INPUT, and WAIT stay
+inside live node calls; their enclosing nodes return ordinary outputs. A generic
+artificial-pause API remains temporarily for compatibility.
 
 ```python
 from agent_composer import load_flow, run_flow
@@ -67,6 +70,37 @@ with `status != "succeeded"`.
   progress). Event types include `NodeStarted`, `RunSucceeded`, `RunPaused`,
   `RunFailed`, `RunAborted`.
 
+## Blocking human interaction
+
+An authored `human_input` node and an agent granted `tools: [ask_user]` call the
+same process-owned tool synchronously. A library host installs one handler for the
+whole run lifecycle; the calling node remains live until the handler returns or
+raises:
+
+```python
+from agent_composer.tools import install_ask_user
+
+approval = load_flow(
+    open("examples/human-approval.yaml").read(),
+    search_paths=["examples"],
+)
+
+def ask(**request):
+    return input(request["question"] + " ")
+
+with install_ask_user(ask):
+    result = run_flow(approval, {"task": "Plan a team offsite"})
+```
+
+The handler receives `question`, `questions`, `answer_schema`, `title`, and
+`node_id`. `human_input` uses the trusted metadata path; model-requested
+`ask_user` calls can supply only the public `question` argument. Only one handler
+may own the reserved tool in a process at a time.
+
+An authored WAIT needs no host handler. It blocks one worker until its absolute
+UTC `until:` deadline, returns `None`, and can be woken cooperatively when the host
+stops the run.
+
 ## `RunResult`
 
 The outcome of one run (or resume):
@@ -82,25 +116,31 @@ The outcome of one run (or resume):
 | `engine` | the live `FlowEngine` when paused (fast in-process resume) |
 | `checkpoint` | a serializable snapshot when paused (durable, cross-process resume) |
 
-## Resuming a paused run
+## Temporary generic pause compatibility
 
-A flow suspends on a `human_input` node, a timed `wait`, or an `ask_user`
-control. When `result.status == "paused"`, deliver an answer per pause reason and
-resume:
+No authorable AGENT, HUMAN_INPUT, or WAIT node produces `RunPaused`. Only a
+custom/artificial compiled node that directly returns the generic `Pause` result can
+reach this dormant checkpoint path; issue #117 removes it. A host maintaining such
+legacy code can deliver one compatibility value per host-resumable reason and resume:
 
 ```python
 from agent_composer.run import resume_flow, resume_command
 
-result = run_flow(loaded, {"task": "Plan a team offsite"})
+def compatibility_value_for(reason):
+    """Return the host-specific legacy answer/event payload for this reason."""
+    ...
+
+# `legacy_flow` contains a custom/artificial node, not an authorable WAIT/HUMAN_INPUT.
+result = run_flow(legacy_flow, {})
 while result.status == "paused":
-    commands = []
-    for reason in result.pause_reasons:
-        if reason.type == "human_input_required":
-            answer = input(reason.prompt + " ")        # collect the typed answer
-            commands.append(resume_command(loaded, reason, answer))
-        elif reason.type == "scheduled_pause":
-            commands.append(resume_command(loaded, reason, None))   # release a wait
-    result = resume_flow(loaded, engine=result.engine, commands=commands)
+    commands = [
+        resume_command(legacy_flow, reason, compatibility_value_for(reason))
+        for reason in result.pause_reasons
+        if reason.node_id is not None
+    ]
+    if not commands:  # a bare external-event reason needs its external watcher
+        break
+    result = resume_flow(legacy_flow, engine=result.engine, commands=commands)
 
 print(result.status, result.output)
 ```
@@ -130,10 +170,10 @@ cross-process — from `result.checkpoint`, e.g. deserialized after a restart).
 resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> Command
 ```
 
-Maps a host-resumable `PauseReason` plus an answer `value` to the engine command
-that delivers it. For a `human_input` the `value` is the typed answer; for a
-`wait` release pass `value=None`. A reason with no `node_id` (a bare external
-event) is not host-resumable and raises.
+Maps a host-resumable compatibility `PauseReason` plus a `value` to the engine
+command that delivers it as the artificial parked leaf's output. A reason with no
+`node_id` (a bare external event) is not host-resumable and raises. This helper is
+not used for authorable WAIT or human interaction.
 
 ## Next
 

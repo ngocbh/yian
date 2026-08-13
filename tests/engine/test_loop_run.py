@@ -17,7 +17,9 @@ next driver by plain wiring.
 
 from agent_composer.compile.expand import build_grow
 from agent_composer.compose.loader import load_flow
-from agent_composer.run import resume_command, resume_flow, run_flow
+from agent_composer.run import run_flow
+from agent_composer.tools import install_ask_user
+from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
 
 
 COUNTER = """
@@ -94,9 +96,8 @@ def test_while_loop_max_permits_exactly_max_body_runs():
     assert run_flow(load_flow(below), {}).status != "succeeded"
 
 
-# The chat-shaped slice: a body that PAUSES each turn on a `human_input` leaf, folds the
-# delivered message into the carried {messages, exited} record, and loops until the human
-# types "bye". Drives run() -> paused -> resume -> paused -> ... -> succeeded in-process.
+# The chat-shaped slice: a body blocks each turn on a `human_input` leaf, folds the
+# returned message into the carried {messages, exited} record, and loops until "bye".
 LOOP_CHAT = """
 id: chat
 name: chat
@@ -132,21 +133,14 @@ output: ${loop.output}
 """
 
 
-def test_loop_body_pauses_and_resumes_each_turn():
+def test_loop_body_blocks_for_each_human_turn():
     loaded = load_flow(LOOP_CHAT)
-    # Turn 1: the body's human_input leaf parks the run.
-    r1 = run_flow(loaded, {})
-    assert r1.status == "paused"
-    assert len(r1.pause_reasons) == 1
-    # Deliver "hi" -> body END fires -> the fresh driver `loop~1` grows the next iteration -> pauses.
-    r2 = resume_flow(loaded, engine=r1.engine,
-                     commands=[resume_command(loaded, r1.pause_reasons[0], "hi")])
-    assert r2.status == "paused"
-    # Deliver "bye" -> fold sets exited=true -> predicate false -> the run succeeds.
-    r3 = resume_flow(loaded, engine=r2.engine,
-                     commands=[resume_command(loaded, r2.pause_reasons[0], "bye")])
-    assert r3.status == "succeeded", r3.error
-    assert r3.output == {"messages": ["hi", "bye"], "exited": True}
+    answers = iter(["hi", "bye"])
+    with install_ask_user(lambda **request: next(answers)):
+        result = run_flow(loaded, {})
+
+    assert result.status == "succeeded", result.error
+    assert result.output == {"messages": ["hi", "bye"], "exited": True}
 
 
 # A loop that is NOT the terminal node: its committed record feeds a downstream code node.
@@ -344,13 +338,15 @@ def test_prune_drops_all_live_overlay_traces():
     `#k`'s nodes/edges, sm state (node_state/edge_state/executing), pool entries — while leaving the
     durable loop `GrowRecord` ledger untouched and the spawner id (no `#k` prefix) alone.
 
-    Deterministic grown-#0 setup: drive `LOOP_CHAT` to its first pause. The body's `human_input`
-    leaf parks the run with iteration #0 fully grown (its `#0/` nodes registered, the START seed
-    committed to `pool.store`). In the self-respawn model the body-END filler `loop#0/__end__`
-    carries NO `commit_as` — it feeds the fresh driver `loop~1` by plain wiring, not a loop-back
-    redirect. The `#0/` overlay is live and un-pruned, the exact state prune must remove.
+    Deterministic grown-#0 setup: load `LOOP_CHAT`, swap its authored HUMAN_INPUT for the
+    test-only artificial Pause leaf, and drive to that first pause. Iteration #0 is then fully
+    grown (its `#0/` nodes registered and the START seed committed to `pool.store`). In the
+    self-respawn model the body-END filler `loop#0/__end__` carries NO `commit_as` — it feeds the
+    fresh driver `loop~1` by plain wiring, not a loop-back redirect. The `#0/` overlay is live and
+    un-pruned, the exact state prune must remove.
     """
     loaded = load_flow(LOOP_CHAT)
+    replace_human_inputs_with_artificial_pauses(loaded.compiled)
     r = run_flow(loaded, {})
     assert r.status == "paused"
     engine = r.engine

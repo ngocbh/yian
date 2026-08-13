@@ -4,11 +4,8 @@ from agent_composer.compose import (
     LoadError,
     load_flow,
 )
-from agent_composer.run import (
-    resume_command,
-    resume_flow,
-    run_flow,
-)
+from agent_composer.run import run_flow
+from agent_composer.tools import install_ask_user
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -104,8 +101,7 @@ def test_golden_map_run_result():
     ]
 
 
-# --- (ii) HUMAN_INPUT pause/resume round-trip (CODE-only, LLM-free) — the in-memory
-#     deliver-as-Output round-trip that must be preserved when END_ID replaces terminal_output().
+# --- (ii) blocking HUMAN_INPUT followed by an absolute UTC WAIT (CODE-only, LLM-free).
 #     Mirrors seed 17's shape, but agent-free so it runs without an LLM.
 _EFFECTS = """
 id: e
@@ -146,19 +142,14 @@ output: ${confirm.output | abort.output}
 """
 
 
-def test_golden_human_input_then_timed_wait_resume_terminal():
-    # HUMAN_INPUT pause -> timed-WAIT pause -> terminal: the exact in-memory deliver-as-Output
-    # round-trip (resume_command on the refreshed pause reason, no hardcoded coords) is preserved.
+def test_golden_human_input_then_past_wait_completes_without_checkpoint():
+    # HUMAN_INPUT completes through its trusted host; the past WAIT returns in the same run.
     loaded = load_flow(_EFFECTS)
-    r1 = run_flow(loaded, {"settle_at": "2026-07-01"})
-    assert r1.status == "paused"                   # parked at human_input "approve"
-    r2 = resume_flow(loaded, engine=r1.engine,
-                     commands=[resume_command(loaded, r1.pause_reasons[0], "approve")])
-    assert r2.status == "paused"                   # now parked at the timed WAIT "settle"
-    r3 = resume_flow(loaded, engine=r2.engine,
-                     commands=[resume_command(loaded, r2.pause_reasons[0], True)])
-    assert r3.status == "succeeded"
-    assert r3.output == "approve"                  # confirm_action(rec={answer:"approve"})
+    with install_ask_user(lambda **request: "approve"):
+        result = run_flow(loaded, {"settle_at": "2000-01-01"})
+    assert result.status == "succeeded"
+    assert result.checkpoint is None
+    assert result.output == "approve"
 
 
 # --- (iii) static edge-id sets for a few flows — LOAD-pinned against the

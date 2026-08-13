@@ -197,10 +197,10 @@ class NodeExpanded:
 
 @dataclass
 class PauseRequested:
-    """A node cannot proceed until an external signal arrives.
+    """A temporary generic/artificial Pause awaits an external signal.
 
     `reason` is a `suspension.pause.PauseReason` (HumanInputRequired /
-    EventAwaited / ...). The engine resets the node and suspends the run.
+    EventAwaited / ...). The engine parks the artificial node and suspends the run.
     """
 
     node_id: str

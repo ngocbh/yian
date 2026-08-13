@@ -5,11 +5,11 @@ A node is a **pure function of its bound input record**: it implements
 `Output | Route | Pause | Grow` (the node-result sum type) — **or**, for a streaming
 kind, a generator that yields `StreamChunk` and then *returns* a `NodeResult`.
 The node never receives the pool: the engine's `runtime.eval_node` seam binds its
-inputs (the read boundary) and hands it a record. The one effectful kind that still
-needs a narrow capability is a mapped `call` (`bind_item`, a keyword-only arg); every other kind
-takes only `inputs`. Failure is **not** a variant — a failing node `raise`s and the
-engine boundary turns it into `NodeFailed`. A returned `Pause` becomes one
-`PauseRequested`; the engine delivers the answer as the parked leaf's `Output`
+inputs (the read boundary) and hands it a record. Narrow effects enter through trait-gated
+capabilities: mapped `call` receives `bind_item`, and a cooperatively blocking node may receive
+`stop_event`. Failure is **not** a variant — a
+failing node `raise`s and the engine boundary turns it into `NodeFailed`. A returned `Pause`
+becomes one `PauseRequested`; the engine delivers the answer as the parked leaf's `Output`
 (deliver-as-Output — the node never re-runs). A streaming kind is a generator that
 yields `StreamChunk` and *returns* its `NodeResult` (drained by `_drain_node_generator`).
 
@@ -90,13 +90,13 @@ class NodeKind(str, Enum):
     MODEL = "model"
     TOOL = "tool"
     CASE = "case"
-    HUMAN_INPUT = "human_input"  # suspend for a person
-    WAIT = "wait"  # internal-only: suspend for an external poke (WATCH uses it)
-    LOOP = "loop"  # internal-only: iterate a callable to a fixpoint (`('a -> 'a) -> 'a -> 'a`)
+    HUMAN_INPUT = "human_input"  # block through the host-owned ask_user tool
+    WAIT = "wait"  # authorable: block until an absolute UTC date/datetime
+    LOOP = "loop"  # authorable: iterate a callable to a fixpoint (`('a -> 'a) -> 'a -> 'a`)
     START = "start"  # internal-only: loader-synthesized input boundary (parameter binding)
     END = "end"      # internal-only: loader-synthesized return boundary (record + list modes)
-    CALL = "call"    # internal-only: consult another flow once (REF — `kind: call`)
-    MAP = "map"      # internal-only: map a callable over a list (`kind: map` + `over:`)
+    CALL = "call"    # authorable: consult another flow once (REF — `kind: call`)
+    MAP = "map"      # authorable: map a callable over a list (`kind: map` + `over:`)
 
 
 # --- the node's return type is a closed sum ----------------------------------------
@@ -129,8 +129,12 @@ class Route:
 
 @dataclass(frozen=True)
 class Pause:
-    """A leaf wait (HUMAN_INPUT / WAIT / an agent mid-loop control-pause). `reason` is a
-    `suspension.pause.PauseReason`. The engine emits `PauseRequested` and suspends."""
+    """A temporary generic leaf pause retained for checkpoint compatibility.
+
+    ``reason`` is a ``suspension.pause.PauseReason``. The engine emits
+    ``PauseRequested`` and suspends. Authorable AGENT, HUMAN_INPUT, and WAIT nodes
+    block inside their live call and do not return this variant.
+    """
 
     reason: Any
 
@@ -141,7 +145,7 @@ class Grow:
 
     Fields:
       - `seed`: the pure input to the compile-owned growth builder. Kind-shaped but opaque to the
-        engine (a call record dict, map records list, agent segment, or loop `(record, index)`).
+        engine (a call record dict, map records list, or loop `(record, index)`).
         The same canonical value is persisted so durable replay rebuilds identical topology without
         re-running the node that produced it.
       - `prune`: ids to retire in the same step (∅ for call/map; a self-respawn loop's finished
@@ -154,6 +158,21 @@ class Grow:
 
 # The closed sum a pure `run(inputs)` returns.
 NodeResult = Union[Output, Route, Pause, Grow]
+
+
+class _HostStop(Exception):
+    """Private control signal: the host requested execution to stop cooperatively.
+
+    This is deliberately outside `NodeResult`: it unwinds node evaluation without becoming
+    a node failure, a flow failure, or the public legacy abort result.
+    """
+
+    def __init__(self, message: str = "", *, primary: bool = True) -> None:
+        super().__init__(message)
+        # False means this exception merely observed an already-set event. A pooled drive
+        # prefers an exact primary exception after every worker has joined, so an initiating
+        # terminal EOF is not replaced by a sibling's derived cancellation wakeup.
+        self.primary = primary
 
 
 class NodeAssertFailed(Exception):
@@ -207,8 +226,8 @@ class Node(ABC):
         commit_as (`str`, *optional*):
             Engine-baked commit redirect: write this node's Output under `commit_as`
             instead of its own id (and fire that target's out-edges). Set by the
-            `_grow_*` expanders on a subflow terminal (a CALL/MAP child END filler,
-            a MAP END-list filler, an agent resume continuation) to point back at the
+            `_grow_*` expanders on a subflow terminal (a CALL/MAP child END filler
+            or a MAP END-list filler) to point back at the
             spawner id; `None` for an ordinary node (commit under its own id).
         origin_id (`str`, *optional*):
             "Attribute my grows and self-commit to this origin node." `None` on every
@@ -221,13 +240,14 @@ class Node(ABC):
             Author-supplied static per-node config (`{str -> literal}`), baked at build
             time from the flow-level `env:` default merged with the node's own `env:`
             (node override wins). Opaque to the engine core — kind-blind: only a node's
-            own `run()` reads the keys it understands (AGENT: `max_tool_iterations`).
+            own `_run_impl()` path reads the keys it understands (AGENT:
+            `max_tool_iterations`).
             Unknown keys are carried but ignored. `{}` when none is authored.
     """
 
     kind: ClassVar[NodeKind]
     # Declares "I may grow the graph" (a spawner returns a `Grow`). Overridden True by
-    # the spawner kinds (CALL/MAP/AGENT/LOOP); the `eval_node` seam gates the grow path on it.
+    # the spawner kinds (CALL/MAP/LOOP); the `eval_node` seam gates the grow path on it.
     is_spawner: ClassVar[bool] = False
     # Declares "I bind my inputs PER ELEMENT via a `bind_item` cap rather than once up front"
     # (MAP). When True, the read seam (`eval_node`) starts the record empty and supplies
@@ -239,16 +259,9 @@ class Node(ABC):
     # bounded by MAX_REF_DEPTH. Possible values:
     #   None  — this grow is NOT REF recursion; the core does NO depth work (LOOP: bounded by
     #           max_iters + MAX_TOTAL_NODES, not depth).
-    #   0     — carry the parent depth UNCHANGED, no bound (AGENT: a K-pause chain is one call).
     #   1     — a nested call, +1 and bounded (CALL/MAP: each child is one deeper level).
-    # Overridden by CALL/MAP (1) and AGENT (0); the default None fits LOOP + any non-spawner.
+    # Overridden by CALL/MAP (1); the default None fits LOOP + any non-spawner.
     grow_depth_delta: ClassVar[Optional[int]] = None
-    # Declares "on a grow, also stamp `_spawner_expansion` at MY OWN bare id" (AGENT). An agent
-    # that pauses, resumes, and pauses AGAIN grows twice at the SAME spawner id, so its record must
-    # be findable under its own id for the re-pause to nest under it (re-pause idempotency). Every
-    # other spawner grows at a FRESH namespaced id per instance, so it needs no self-stamp.
-    # Overridden True by AgentNode.
-    grow_restamps_self: ClassVar[bool] = False
     # Declares "I am the self-respawning fixpoint-iteration driver" (LOOP). The growth core
     # (`_apply_grow`) gates the origin-keyed single-live-record ledger invariant under this trait:
     # each iteration is a fresh driver clone whose grow is attributed to `origin_id` (the compiled
@@ -256,11 +269,10 @@ class Node(ABC):
     # record per loop. A plain trait check suffices — the core never dispatches on the kind.
     # Overridden True by LoopNode; False for every other kind.
     is_loop: ClassVar[bool] = False
-    # Declares "I am LLM-backed" (AGENT). When True, the read seam (`eval_node`) builds the
-    # `caps['llm']` capability — a `model_from_config`-shaped factory the engine owns — and
-    # passes it to `run`; when False (the common case) no LLM cap is built. Mirrors
-    # `binds_per_item` gating. Overridden True by AgentNode.
-    needs_llm: ClassVar[bool] = False
+    # Declares "I can cooperate with a host-owned execution stop". When True, the read seam
+    # (`eval_node`) supplies the exact `caps['stop_event']` object owned by the run. Nodes that
+    # do not opt in receive no stop capability, keeping the effect boundary explicit.
+    needs_stop_event: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -304,7 +316,7 @@ class Node(ABC):
         # Author-supplied static per-node config, opaque to the engine core (kind-blind): a
         # plain `{str -> literal}` map baked at build time from the flow-level `env:` default
         # merged with this node's own `env:` (node override wins; see the compose builder). The
-        # engine NEVER reads it — only a node's own `run()` interprets the keys it understands
+        # engine NEVER reads it — only a node's own `_run_impl()` path interprets understood keys
         # (e.g. AGENT reads `max_tool_iterations`); unknown keys are carried but ignored. `{}`
         # for a node that declares no `env:` and inherits no flow default.
         self.env: dict[str, Any] = {}
@@ -358,10 +370,9 @@ class Node(ABC):
         that `bind_params` binds INTO the record, so there is no pool ref left to fall back to.
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
-        a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
-        cap left is a mapped `call`'s `bind_item` (keyword-only); every other kind takes only
-        `inputs`. A failure is a `raise`, not a variant — the engine boundary turns it into
-        `NodeFailed`."""
+        a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
+        are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
+        A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
         from agent_composer.events import SourceSpan
 
         inputs = apply_defaults(self.params or [], inputs)
@@ -418,23 +429,22 @@ class Node(ABC):
         is instantiated directly in a few tests/fakes; a kind that omits it raises this loud error.
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
-        a generator that yields `StreamChunk` and *returns* a `NodeResult`. The one effectful
-        cap left is a mapped `call`'s `bind_item` (keyword-only); every other kind takes only
-        `inputs`. A failure is a `raise`, not a variant — the engine boundary turns it into
-        `NodeFailed`."""
+        a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
+        are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
+        A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
         raise NotImplementedError(
             f"node {self.id!r} ({type(self).__name__}) defines no _run_impl"
         )
 
     def on_failure(self, exc: Exception, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
-        """Recovery seam: called by the engine wrapper when run() raises. Default: re-raise."""
+        """Reserved recovery seam, not currently driven by ``eval_node``. Default: re-raise."""
         raise exc
 
     def bind_reserved(self, node_wiring: dict, pool) -> dict[str, Any]:
         """Reserved input keys the read seam (`eval_node`) must pre-resolve from
         `node_wiring` + `pool` before `run`, merged into the bound record.
 
-        Possible keys (per kind): a timed WAIT returns `{"until": <ISO ts>}`; a MAP returns
+        Possible keys (per kind): WAIT returns `{"until": <ISO deadline>}`; a MAP returns
         `{"over": <list>}`. Default: `{}` (an ordinary node reserves no keys). `node_wiring`
         is the flow-owned wiring for this node (`flow.wiring[id]`); `pool` is the live
         `VariablePool` the seam reads sources from."""
@@ -444,8 +454,8 @@ class Node(ABC):
         """The reserved AUTHOR-wiring key names this node owns beyond its declared `params`
         — the keys `check_wiring_parity` must allow, and validation treats specially.
 
-        These are the static NAMES of the same keys `bind_reserved` resolves at run (a timed
-        WAIT: `until`; a MAP: `over`), but returned with NO pool — load-time only. Default:
+        These are the static NAMES of the same keys `bind_reserved` resolves at run
+        (WAIT: `until`; MAP: `over`), but returned with NO pool — load-time only. Default:
         the empty set (an ordinary node reserves no keys)."""
         return set()
 

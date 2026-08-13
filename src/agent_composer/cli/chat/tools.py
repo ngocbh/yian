@@ -6,15 +6,31 @@ paths resolve against a workspace root set by `set_workspace` at `ac chat` start
 escapes (absolute paths, `..`) are rejected.
 """
 from __future__ import annotations
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Iterator, Optional
 from agent_composer.tools import register_tool
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.run import run_flow as _run_flow
+from agent_composer.run import _run_flow_controlled, run_flow as _run_flow
 
 # The workspace root every tool path is confined to. Set at `ac chat` startup.
 _WORKSPACE: Path = Path.cwd()
+_CONTROLLER_STOP: ContextVar[Any | None] = ContextVar(
+    "agent_composer_chat_controller_stop",
+    default=None,
+)
+
+
+@contextmanager
+def _bind_controller_stop(stop_event: Any) -> Iterator[None]:
+    """Make the enclosing chat lifecycle visible to flow-op tools on this thread."""
+    token = _CONTROLLER_STOP.set(stop_event)
+    try:
+        yield
+    finally:
+        _CONTROLLER_STOP.reset(token)
 
 
 def set_workspace(root: Path) -> None:
@@ -88,17 +104,29 @@ def run_flow(
     (e.g. {"text": "Alice is 30"}) — pass it as an object, NOT a JSON string; omit it for a
     flow that takes no inputs. If unsure which inputs a flow needs, call `validate_flow`
     first. Returns `OUTPUT: <result>` on success, `FAILED: <error>` if the run errors, or
-    `PAUSED: ...` if the flow needs interactive human input (which cannot be answered here)."""
+    `PAUSED: ...` only for a custom/artificial generic pause. Blocking HUMAN_INPUT is
+    served by the enclosing chat host, while authored WAIT remains live until its deadline."""
     text = _resolve(path).read_text()
     try:
         loaded = load_flow(text, search_paths=[_WORKSPACE])
     except LoadError as err:
         return f"ERROR: {err}"
-    result = _run_flow(loaded, inputs or {})    # on_event=None -> non-interactive
+    parent_stop = _CONTROLLER_STOP.get()
+    if parent_stop is None:
+        result = _run_flow(loaded, inputs or {})  # direct Python use: private lifecycle
+    else:
+        # Outer host cancellation flows down; a nested NodeFailed sets only this
+        # child, preserving the failure as a model-visible tool result.
+        with parent_stop.linked_child() as child_stop:
+            result = _run_flow_controlled(
+                loaded,
+                inputs or {},
+                stop_event=child_stop,
+            )
     if result.status == "succeeded":
         return f"OUTPUT: {result.output}"
     if result.status == "paused":
-        return "PAUSED: this flow needs interactive input; cannot run inside chat."
+        return "PAUSED: this flow entered the temporary generic pause path."
     return f"FAILED: {result.error}"
 
 

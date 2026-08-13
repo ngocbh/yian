@@ -43,7 +43,7 @@ _SEEDS_TO_SCAN = [
     "07-model-rating.yaml",
     "08-tool-news.yaml",
     "14-agent-tools.yaml",
-    "17-effects-human-wait.yaml",  # the ONLY seed with a timed WAIT + a HUMAN_INPUT node
+    "17-effects-human-wait.yaml",  # the ONLY seed with an absolute WAIT + HUMAN_INPUT
     "18-research-pipeline.yaml",
 ]
 
@@ -100,7 +100,7 @@ def test_purity_guard_actually_bites():
     # (a simulated regression — exactly the WaitNode.until / leaf-source class that was removed) is
     # caught by _strings + _POOL_REF, so the green scan above is meaningful.
     loaded = load_flow((_SEEDS / "17-effects-human-wait.yaml").read_text(), search_paths=[_SEEDS])
-    settle = loaded.compiled.nodes["settle"]  # the timed WAIT
+    settle = loaded.compiled.nodes["settle"]  # the absolute-deadline WAIT
     assert not any(_POOL_REF.search(s) for s in _strings(settle, set()))  # clean before
     settle.until = "${input.settle_at}"  # regression: a source put back on the WAIT node
     assert any(_POOL_REF.search(s) for s in _strings(settle, set()))  # ...is detected

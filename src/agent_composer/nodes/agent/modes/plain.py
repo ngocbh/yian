@@ -1,14 +1,15 @@
-"""plain mode — a single LLM call. No tools, no loop.
+"""plain mode — direct generation with no tools or tool loop.
 
-The simplest agent: render the prompt, ask the model once, return its text. Any
-skills on the node are ignored (there is no loop to invoke them). Good for pure
-generation/synthesis nodes.
+The simplest agent: render the prompt and return text, or use structured
+generation (including its configured correction attempts) for a non-text output
+type. Any authored tools are ignored because there is no tool loop.
 """
 
 from __future__ import annotations
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+import agent_composer.llm_clients as llm_clients
 from agent_composer.nodes.agent.modes.common import DEFAULT_SYSTEM, AgentRunContext, register_mode
 from agent_composer.nodes.agent.modes.utils import text_of
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
@@ -17,18 +18,23 @@ from agent_composer.nodes.base import Output
 
 @register_mode("plain")
 def plain(ctx: AgentRunContext) -> Output:
+    ctx.check_stopped()
+    model = llm_clients.model_from_config(ctx.llm_config or {})
+    ctx.check_stopped()
     msgs = [SystemMessage(content=DEFAULT_SYSTEM), HumanMessage(content=ctx.prompt)]
     # A declared non-text type -> structured generation; a bare str/Literal -> text path.
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
     if schema is None:
-        return Output(value=text_of(ctx.model.invoke(msgs)))
+        reply = model.invoke(msgs)
+        ctx.check_stopped()
+        return Output(value=text_of(reply))
     return Output(
         value=generate_structured(
-            ctx.model,
+            model,
             msgs,
             ctx.output_type,
             max_retries=ctx.retries,
             llm_config=ctx.llm_config,
+            check_stopped=ctx.check_stopped,
         )
     )
-

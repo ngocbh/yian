@@ -24,7 +24,7 @@ from lark import Token, Tree
 from agent_composer.compile.model import CompiledFlow, Edge, Flow, FlowOutput
 from agent_composer.expr import ExpressionError, expr_refs, scan_template
 from agent_composer.expr.template import Literal, Span
-from agent_composer.nodes.agent import AgentNode, Fresh, Resume
+from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node, NodeKind
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.case import Case, CaseNode
@@ -77,9 +77,8 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
     NodeKind.END: frozenset({"_mode", "_names", "_n"}),
     NodeKind.AGENT: frozenset(
         {
-            "entry",
+            "prompt",
             "tools",
-            "controls",
             "own_llm_config",
             "llm_inherit",
             "mode",
@@ -93,7 +92,9 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
     NodeKind.HUMAN_INPUT: frozenset(
         {"prompt", "answer_schema", "questions", "questions_input"}
     ),
-    NodeKind.WAIT: frozenset({"is_timed", "event_spec", "poll"}),
+    # WAIT's execution identity is its required flow-owned `until` wiring; the node owns
+    # no additional constructor state.
+    NodeKind.WAIT: frozenset(),
     NodeKind.CALL: frozenset({"flow_id", "flow_version", "child"}),
     NodeKind.MAP: frozenset({"flow_id", "flow_version", "child"}),
     NodeKind.LOOP: frozenset(
@@ -112,8 +113,7 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
 _IGNORED_KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
     NodeKind.START: frozenset(),
     NodeKind.END: frozenset(),
-    # llm_config is always run-resolved. Fresh owns authored config; Resume's own_llm_config is
-    # another copy of the effective layer and is therefore omitted conditionally below.
+    # llm_config is always run-resolved; own_llm_config is the authored identity source.
     NodeKind.AGENT: frozenset({"llm_config"}),
     # _mode/ref are derived from code; _code is a process-local compiled-code cache.
     NodeKind.CODE: frozenset({"_mode", "ref", "_code"}),
@@ -150,8 +150,6 @@ _FLOW_OUTPUT_FIELDS = frozenset({"name", "from_"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
 _DECL_FIELDS = frozenset({"name", "type_str", "required", "default", "type"})
 _CASE_FIELDS = frozenset({"handle", "when"})
-_FRESH_FIELDS = frozenset({"prompt"})
-_RESUME_FIELDS = frozenset({"memo", "iterations", "pending"})
 
 # Config secrets are intentionally absent from identity. Exact names and high-confidence
 # compound suffixes are credentials in every config spelling. Generic auth/token/signature
@@ -1352,22 +1350,6 @@ def _declaration_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[
     }
 
 
-def _entry_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, Any]:
-    """Canonicalize the closed Fresh | Resume agent-entry sum."""
-    if type(value) is Fresh:
-        _check_fields(value, _FRESH_FIELDS, path)
-        return {"kind": "fresh", "prompt": value.prompt}
-    if type(value) is Resume:
-        _check_fields(value, _RESUME_FIELDS, path)
-        return {
-            "iterations": value.iterations,
-            "kind": "resume",
-            "memo": _canonical_value(value.memo, ctx, f"{path}.memo"),
-            "pending": _canonical_value(value.pending, ctx, f"{path}.pending"),
-        }
-    raise TypeError(f"{path}: unsupported agent entry type {type(value).__name__}")
-
-
 def _case_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, Any]:
     """Canonicalize one ordered CASE arm."""
     if type(value) is not Case:
@@ -1419,21 +1401,19 @@ def _node_manifest(
     elif node.kind is NodeKind.AGENT:
         manifest.update(
             {
-                "controls": _canonical_sequence(node.controls, ctx, f"{path}.controls"),
-                "entry": _entry_manifest(node.entry, ctx, f"{path}.entry"),
                 "llm_inherit": node.llm_inherit,
                 "mode": node.mode,
+                "prompt": node.prompt,
                 "retries": node.retries,
                 "tools": _canonical_sequence(node.tools, ctx, f"{path}.tools"),
+                "own_llm_config": _sorted_mapping(
+                    node.own_llm_config,
+                    ctx,
+                    f"{path}.own_llm_config",
+                    redact_credentials=True,
+                ),
             }
         )
-        if type(node.entry) is Fresh:
-            manifest["own_llm_config"] = _sorted_mapping(
-                node.own_llm_config,
-                ctx,
-                f"{path}.own_llm_config",
-                redact_credentials=True,
-            )
     elif node.kind is NodeKind.CODE:
         manifest["code"] = node.code
     elif node.kind is NodeKind.MODEL:
@@ -1471,23 +1451,9 @@ def _node_manifest(
             }
         )
     elif node.kind is NodeKind.WAIT:
-        manifest.update(
-            {
-                "event_spec": _canonical_value(
-                    node.event_spec,
-                    ctx,
-                    f"{path}.event_spec",
-                    redact_credentials=True,
-                ),
-                "is_timed": node.is_timed,
-                "poll": _canonical_value(
-                    node.poll,
-                    ctx,
-                    f"{path}.poll",
-                    redact_credentials=True,
-                ),
-            }
-        )
+        # WAIT owns no constructor state; its absolute deadline is canonicalized through
+        # the ordinary flow `wiring` manifest.
+        pass
     elif node.kind in (NodeKind.CALL, NodeKind.MAP, NodeKind.LOOP):
         manifest.update(
             {

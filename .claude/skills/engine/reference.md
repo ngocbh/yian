@@ -29,13 +29,13 @@ so it preserves node purity, and it happens **exactly once** here in the node (n
 |--------|---------|
 | `Output(value)` | the one produced value; the engine writes it under the node id. Optional `Output(value, commit_as=<id>)` redirects the write to another id (and fires *that* id's out-edges) — the node-chosen commit target; `None` (the default) commits under the node's own id. |
 | `Route(handle)` | a routing-only outcome (a CASE picks an out-edge `handle`); carries no value, writes no pool entry. The engine emits `NodeRouted` and takes the chosen edge, skip-flooding the siblings. |
-| `Pause(reason)` | a leaf wait (HUMAN_INPUT / WAIT / agent control-pause). The engine emits `PauseRequested` and suspends; the answer is delivered as this node's `Output` (the node never re-runs). |
-| `Grow(seed, prune)` | describe one deterministic graph expansion without constructing it. `seed` is the kind-shaped but runtime-opaque builder input (CALL record, MAP records, LOOP carried record/index, or the temporary AGENT segment); `prune` names ids to retire in the same step. Compile-owned `build_grow(spawner, seed)` constructs the self-describing `Flow`, and the engine splices it generically via `_apply_grow`. The canonical seed is persisted for durable replay. Only spawner kinds (`is_spawner`) may return it. |
+| `Pause(reason)` | dormant custom/artificial compatibility. The engine emits `PauseRequested`, parks the leaf, and later delivers a command value as its `Output`; no shipped authorable node returns it. |
+| `Grow(seed, prune)` | describe one deterministic graph expansion without constructing it. `seed` is the kind-shaped but runtime-opaque builder input (CALL record, MAP records, or LOOP carried record/index); `prune` names ids to retire in the same step. Compile-owned `build_grow(spawner, seed)` constructs the self-describing `Flow`, and the engine splices it generically via `_apply_grow`. The canonical seed is persisted for durable replay. Only spawner kinds (`is_spawner`) may return it. |
 
 A streaming kind is a generator that yields `StreamChunk` and *returns* a
 `NodeResult`. **Failure is not a variant** — a node `raise`s and the engine
-boundary turns it into `NodeFailed`; a node may override `on_failure(exc,
-inputs, **caps) -> NodeResult` to recover (default re-raises).
+boundary turns it into `NodeFailed`. `Node.on_failure` is a dormant future seam,
+not currently driven by `eval_node`.
 
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine
@@ -47,15 +47,14 @@ kind-aware constructor; package-root `run.py` injects it into `FlowEngine` for l
 growth and checkpoint replay. Runtime may consume `compile.model` topology but never
 imports `compile.expand`, so the splice remains kind-blind.
 
-**Capabilities (`caps`)** are the narrow, engine-owned effect providers passed as keyword
-args to `run` — the node never imports them itself. Each is gated by a node trait so a node
-receives only what it declares: a mapped `call` gets `caps['bind_item']` (per-element bind,
-gated on `binds_per_item`); an LLM-backed node (`agent`) gets `caps['llm']` — the
-`model_from_config`-shaped model factory the engine owns (`FlowEngine.llm`, defaulting to a
-lazy package-lookup thunk), gated on `needs_llm`. The node builds its chat model from that
-provider on the engine path. A direct no-cap `AgentNode` driver falls back to the lower
-`llm_clients.model_from_config` package attribute at call time, so monkeypatches remain visible
-without introducing a `nodes -> runtime` import.
+**Capabilities (`caps`)** are narrow, engine-owned effects passed as keyword args to
+`run`; each is gated by a node trait. A mapped call gets `caps['bind_item']`
+(per-element bind, gated on `binds_per_item`). AGENT and WAIT get the exact run-owned
+`caps['stop_event']` (gated on `needs_stop_event`): AGENT checks it between external
+model/tool effects, while WAIT blocks on it so host shutdown or sibling failure wakes
+the deadline wait. AGENT is the deliberate model-access exception: its mode imports
+`llm_clients` and calls `model_from_config` directly, while its granted tools use the
+ordinary tool registry.
 
 ## Node-owned traits/hooks (how the core stays kind-blind)
 
@@ -64,13 +63,13 @@ base `Node`; a kind overrides only what it needs.
 
 | Member | Where the core reads it | Default → overrides |
 |--------|-------------------------|---------------------|
+| `is_spawner: bool` | result boundary: permit `Grow` only from a graph-expanding node | `False` → `True` on call/map/loop |
 | `binds_per_item: bool` | read boundary (`eval_node`): bind PER ELEMENT via a `bind_item` cap vs bind `params` once | `False` → `True` on `map` |
-| `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → timed `wait` `{"until": ts}`, `map` `{"over": [...]}` |
-| `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → timed `wait` `{"until"}`, `map` `{"over"}` |
-| `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` (loop/non-REF, no depth work) → `1` call/map, `0` agent |
-| `grow_restamps_self: bool` | growth core: also stamp `_spawner_expansion` at the spawner's OWN bare id (re-pause nesting) | `False` → `True` on `agent` |
+| `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → `wait` `{"until": ts}`, `map` `{"over": [...]}` |
+| `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
+| `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` (loop/non-REF, no depth work) → `1` call/map |
 | `is_loop: bool` | growth core (`_apply_grow`): gate the origin-keyed single-live-record ledger invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior record) | `False` → `True` on `loop` |
-| `needs_llm: bool` | read boundary (`eval_node`): build the `caps['llm']` cap (the engine-owned model factory) and pass it to `run` | `False` → `True` on `agent` |
+| `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
 
 The rest of the splice (add subgraph, enforce `MAX_TOTAL_NODES`, mint one uniform `GrowRecord`,
 finish/mark the spawner, apply the origin `commit_as` to the derived terminal, schedule the
@@ -85,31 +84,27 @@ growth and durable replay both pass the canonical seed persisted in the growth l
 the same injected `compile.expand.build_grow`, so lowering is identical on resume. The moved
 assert's failure names the **child END id**, not the spawner.
 
-An **AGENT** that pauses is a spawner too: its `${output}` node-level `post_asserts` are carried
-onto the **resume terminal** (`expand.clone_continuation_pair`, via `agent_segment_subgraph`), so
-they fire through that terminal's own `run` wrapper when it commits the resumed final answer —
-`${output}`-only (the resume record holds just `answer`, the agent's declared inputs are gone
-after the first turn). The live pause seed and its durable ledger copy are both interpreted by
-the same injected `compile.expand.build_grow`, which reads the asserts from the spawner node; for
-a multi-pause chain each resume terminal propagates them to the next segment via `_ctx`.
+AGENT is now an ordinary non-spawner leaf. Its model/tool loop, including an
+explicitly granted `ask_user`, stays inside one live `_run_impl`; post-asserts fire
+on the final `Output` through the base `Node.run` template. HUMAN_INPUT and WAIT
+are likewise live leaves returning `Output`.
 
 ## `NodeKind` (closed vocabulary)
 
 `NodeKind` is a closed enum (no registry/metaclass), but the engine **core does not dispatch on
 it** — `runtime/engine.py` + `runtime/eval_node.py` branch only on the closed `Outcome` sum and on
-node-owned traits/hooks (below). Ordinary behavior lives in each node's own `run`; growth
+node-owned traits/hooks (below). Ordinary behavior lives in each node's own `_run_impl`; growth
 construction's sanctioned closed kind match lives in `compile.expand.build_grow`, which
 interprets node-produced seeds outside the runtime core. A ratchet test
 (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion` dispatch count at 0.
-Even cross-cutting runtime additions stay kind-blind: the **watchdog**
-(`runtime/watchdog.py`) that logs a node whose `run()` overruns a soft budget — added for inline
-CODE, which runs source **in-process** with no way to kill a runaway — times *every* node and never
-branches on kind, so the census stays 0. (A `code:` node is either a `module:function` reference or
-inline source; both run in-process, and a killable/sandboxed runtime is a deferred later phase.)
+Kind-specific diagnostics stay with their kind. CODE owns
+`nodes/code/watchdog.py`, which wraps only its reference/inline in-process Python
+body and logs one soft-budget warning without killing it. AGENT, HUMAN_INPUT, and
+WAIT are never timed by that watchdog.
 
-| Authorable leaves | Internal-only (loader-synthesized / runtime-expanded) |
-|-------------------|-------------------------------------------------------|
-| `AGENT`, `CODE`, `MODEL`*, `TOOL`, `CASE` (the `case` node kind), `HUMAN_INPUT` | `START`, `END`, `CALL`, `MAP`, `LOOP`, `WAIT` (reserved) |
+| Authorable kinds | Internal-only (loader-synthesized) |
+|------------------|------------------------------------|
+| `AGENT`, `CODE`, `MODEL`*, `TOOL`, `CASE`, `HUMAN_INPUT`, `WAIT`, `CALL`, `MAP`, `LOOP` | `START`, `END` |
 
 \* `MODEL` parses but `run` raises — the ML-serving seam was removed as dead
 plumbing; re-add when real serving lands.
@@ -124,7 +119,7 @@ plumbing; re-add when real serving lands.
 | the variable pool bind | `let (node_id, key) = ...` | immutable, no mutation |
 | `NodeKind` + `match` | a variant + exhaustive `match` | closed set, no registry; the runtime core matches on `Outcome`/traits, while compile's `build_grow` interprets spawner seeds by kind |
 | `Output \| Route \| Pause \| Grow` | a sum type (the result) | failure is a `raise`, not a case |
-| pause / resume | algebraic effect + handler | node *performs* a pause; the scheduler *handles* it |
+| dormant artificial pause / resume | algebraic effect + handler | retained compatibility only; authorable blockers return `Output` live |
 | a package charter (`__init__`) | a module signature (`.mli`) | a narrow declared interface |
 
 When borrowing runtime mechanics from a prior worker engine: **borrow** the
@@ -144,19 +139,17 @@ model made enforceable.
   no special contract.
 - **Composable / recursive** — a node can *be* a flow (`call:`/`uses:`), nestable
   to any depth. Never assume a node is a leaf; preserve recursion through
-  compile + run + checkpoint.
+  compile + run; the dormant checkpoint replay must also preserve existing growth.
 - **Privileges no output type or domain** — prefer the most general primitive that
   composes over a use-case-specific feature.
 - **Node never writes the pool** (purity); **typed, losslessly-serializable state**
   (`TypedValue` / `VariablePool` — the basis for checkpoints + `${...}` refs).
-- **Durable suspend/resume** — a node performs a pause; the run serializes to a
-  `RunCheckpoint`; an external scheduler resumes (re-run-on-resume). The checkpoint
-  carries `num_workers` (the drive mode), and both `run()` and `resume()` drive
-  through the shared `_drive_to_terminal` — so `resume()` is drive-mode-aware:
-  `FlowEngine.restore(flow, ckpt)` rebuilds at the checkpointed count, and
-  `restore(..., num_workers=N)` (also `resume_flow(..., num_workers=N)`) overrides it.
-  A run checkpointed serial can resume pooled and vice-versa (correctness is
-  worker-count-independent).
+- **Blocking authorable effects are live** — AGENT `ask_user`, HUMAN_INPUT, and
+  WAIT return `Output` from the same invocation and never create pause topology.
+  The generic `Pause`/`RunCheckpoint` API remains only for custom/artificial
+  compatibility until issue #117. While it remains, its checkpoint records
+  `num_workers`; `FlowEngine.restore(..., num_workers=N)` and `resume_flow`
+  preserve or explicitly override that drive mode.
 - **Dependency-light core** — no DB / heavy frameworks; external capabilities enter
   through injected seams (plain callables). *Exception:* the AGENT node imports
   langchain + `llm_clients` and builds its model via `model_from_config`.
@@ -179,15 +172,17 @@ model made enforceable.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
   core dispatches on `Outcome` + node-owned traits/hooks, never on `node.kind` (ratchet: census 0).
   **single-writer** (workers are pure
-  executors, the dispatcher is the only mutator); **single-process CLI target**.
+  executors, the dispatcher is the only mutator); a pooled drive signals cooperative stop
+  before fully joining workers after an abnormal dispatch exit, but not after merely yielding
+  a terminal pause; **single-process CLI target**.
 - **AGENT structured output** — a non-text `output:` Type switches an agent from text
   producer to structured generation: `type_to_schema` (`nodes/agent/structured.py`)
   derives a pydantic schema, the mode generates a conforming value (native
   `with_structured_output`, or a JSON prompt-injection fallback gated by
   `supports_native_structured(provider, model)`), with `retries:`-capped self-correction.
   Three-part contract: **generate-tries** (the schema asks), **boundary-enforces**
-  (`pool.set(..., declared=output_type)` validates — on both the primary path and a
-  resumed agent's `commit_as`-redirect path), **retry-catches** (a deviation is fed back and
+  (`pool.set(..., declared=output_type)` validates on both the primary path and
+  any `commit_as`-redirected write), **retry-catches** (a deviation is fed back and
   re-asked). A bare `str`/`Literal[...]` keeps the text path.
 
 ## Layer ladder (where code goes)
@@ -205,10 +200,10 @@ Arrows never reverse: a package imports only lower-level or peer packages. See t
 `structure` skill. An upward import means the code is in the wrong package (extract
 the shared contract to `common.py` / a leaf, or invert via a seam). Dynamic growth is
 the concrete example: nodes return seeds, compile owns `build_grow`, `run.py` injects
-it, and runtime never imports `compile.expand`. The temporary continuation seed
-schema and scheduling-state vocabulary sit in the internal `_growth.py` and
-`_state.py` leaves shared by compile and suspension, so those consumers do not
-import each other.
+it, and runtime never imports `compile.expand`. Spawner seed schemas live in their
+owning node packages. The scheduling-state vocabulary sits in the internal
+`_state.py` leaf shared by compile and suspension, so those consumers do not import
+each other.
 
 ## The `expr` layer (one grammar, everywhere `${...}` appears)
 

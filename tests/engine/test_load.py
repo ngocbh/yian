@@ -173,7 +173,7 @@ def test_seed07_model_fields():
 
 
 # --------------------------------------------------------------------------- #
-# seed 14 — AGENT knobs (mode / tools / controls / llm_config)
+# seed 14 — AGENT knobs (mode / tools / llm_config)
 # --------------------------------------------------------------------------- #
 
 
@@ -182,8 +182,7 @@ def test_seed14_agent_knobs():
     reviewer = flow.nodes["reviewer"]
     assert isinstance(reviewer, AgentNode)
     assert reviewer.mode == "tool_calling"
-    assert reviewer.tools == ["get_web_data", "web_search"]
-    assert reviewer.controls == ["ask_user"]
+    assert reviewer.tools == ["get_web_data", "web_search", "ask_user"]
     assert reviewer.llm_config is not None
     assert reviewer.llm_config["provider"] == "anthropic"
 

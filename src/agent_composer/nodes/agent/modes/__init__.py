@@ -6,9 +6,9 @@ populates `MODES` (before compile). Add a mode: drop a module here that
 `@register_mode("name")`s a function (importing the contract from `.common`),
 then import it below.
 
-Tools/controls (axis 2) are the node's `tools` (data) + `controls` (control
-tools). `plain` ignores them (single call); `tool_calling` binds and loops over
-them. Control tools (e.g. `ask_user`, in `nodes/agent/controls/`) suspend the loop.
+Tools are the node's explicitly authored grants. ``plain`` ignores them;
+``tool_calling`` binds and executes them in returned order. The host-installed
+``ask_user`` follows the same path and blocks inside the live node call.
 """
 
 from agent_composer.nodes.agent.modes.common import (

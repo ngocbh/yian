@@ -8,12 +8,21 @@ from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import Type, ValueKind
 
 from langchain_core.messages import AIMessage
+from pydantic import BaseModel
+
+
+class _TopicToolArgs(BaseModel):
+    """Schema for the fake value tool's one public argument."""
+
+    topic: str
 
 
 class _FakeTool:
     def __init__(self, fn):
         self._fn = fn
         self.seen = []
+        self.args_schema = _TopicToolArgs
+        self.tool_call_schema = _TopicToolArgs
 
     def invoke(self, args):
         self.seen.append(args)

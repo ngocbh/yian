@@ -70,9 +70,9 @@ compile's concrete builders, and runtime. Lower layers never import it. **Arrows
 never reverse.** In particular, nodes return canonical growth seeds and never
 import `compile`; runtime may consume the `compile.model` topology contract but
 never imports `compile.expand`. `run.py` injects `compile.expand.build_grow` into
-runtime instead. The internal `_growth.py` and `_state.py` leaves carry the temporary
-seed schema and scheduling-state vocabulary shared by compile and suspension, so
-neither imports the other for those contracts.
+runtime instead. Spawner seed schemas are owned by their node packages; the
+internal `_state.py` leaf carries the scheduling-state vocabulary shared by
+compile and suspension, so neither imports the other for that contract.
 `tests/engine/test_layer_direction.py` ratchets these boundaries.
 When you add a package, name what it sits *above* and what it sits *below*, and
 record that in its charter's "Knows / Never imports".
@@ -89,7 +89,9 @@ Ask, in order:
    that belongs in one that exists.
 2. **Is it the public behavior of a kind/entity?** Put it in that entity's own
    module (e.g. a node kind in `nodes/<kind>/`), and re-export from the package
-   `__init__` if callers outside need it.
+   `__init__` if callers outside need it. Kind-specific execution support belongs
+   there too: CODE's soft-budget watchdog is `nodes/code/watchdog.py`, not a
+   runtime-wide timer around every node.
 3. **Is it shared *contract* across the entities of a package** — a dataclass, a
    base type, a registry, a `register_*` decorator, an enum the submodules share?
    Put it in `common.py`. Concrete submodules import from `common`; `common`

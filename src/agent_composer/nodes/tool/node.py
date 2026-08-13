@@ -9,6 +9,7 @@ the live pool). The registry tool is a LangChain `BaseTool`, invoked via
 """
 
 from agent_composer.nodes.base import Node, NodeKind, Output
+from agent_composer.tools import invoke_tool
 
 
 class ToolNode(Node):
@@ -34,12 +35,4 @@ class ToolNode(Node):
         self.tool_id = tool_id
 
     def _run_impl(self, inputs: dict) -> Output:
-        from agent_composer.tools import TOOL_REGISTRY
-
-        if self.tool_id not in TOOL_REGISTRY:
-            raise ValueError(
-                f"node {self.id!r} references unknown tool {self.tool_id!r}; "
-                f"known: {sorted(TOOL_REGISTRY)}"
-            )
-        result = TOOL_REGISTRY[self.tool_id].invoke(inputs)
-        return Output(value=result)
+        return Output(value=invoke_tool(self.tool_id, inputs))

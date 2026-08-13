@@ -6,8 +6,9 @@ edge-free, single-value I/O model from
 run via the Compose loader (`agent_composer.load_flow` / `run_flow`); the CODE
 nodes call `tests.seeds.fns`.
 
-> Flows that need not-yet-supported features (REF/MAP runtime · M8, `${system.run_id}`,
-> MATCH, `depends_on`, HUMAN_INPUT/WAIT) live under `_future/` until their milestone lands.
+> Flows that need not-yet-supported features (including MATCH) live under `_future/`
+> until their milestone lands. Settled blocking HUMAN_INPUT and WAIT coverage lives in
+> the main gallery.
 
 The goal: every feature and every syntax convention shows up in at least one seed, so the
 gallery doubles as the spec.
@@ -316,8 +317,8 @@ nodes:
 | `11-reuse-anchors.yaml` | `x-*` extension keys + YAML anchor (`&`/`*`/`<<:`) reuse + `llm_config` |
 | `12-depends-on.yaml` | run-ordering edges — `depends_on` (co-skip) / `runs_after` (pure order); a side-effect node, no data binding, + `bool` output |
 | `13-types-objects.yaml` | the type grammar — Python scalars, `list[X]`, inline/block/nested objects (records), deep dotted access |
-| `14-agent-tools.yaml` | AGENT knobs — `mode` / `tools` / `controls` (`ask_user`) / `llm_config` + structured output |
-| `17-effects-human-wait.yaml` | **(DRAFT/proposed)** effects — `HUMAN_INPUT` (typed answer) + `WAIT` (`until:`) + `case` on the answer + a `depends_on` side-effect |
+| `14-agent-tools.yaml` | AGENT knobs — `mode` / ordinary `tools` including `ask_user` / `llm_config` + structured output |
+| `17-effects-human-wait.yaml` | effects — blocking `HUMAN_INPUT` (typed answer) + absolute UTC `WAIT` (`until:`) + `case` on the answer + a `depends_on` side-effect |
 | `18-research-pipeline.yaml` | **(DRAFT)** realistic end-to-end — fan-out reviewers → typed-`View` synth → `case … on` stance → multi-output + `asserts:` |
 | `19-binding-stances.yaml` | **(DRAFT/proposed)** every input-binding stance — required (plain, co-skip) / optional (`:-`) / branch-join (`\|`) / fail-loud (`:?`); pins the **per-input readiness** model (review-doc CC3 / Problem 2) |
 | `20-call-defs.yaml` | a `call:` resolving to an in-file `defs:` callable (a multi-node sub-flow inline) — `defs:` section + `call` defs-first; loads resolver-free |
@@ -329,9 +330,9 @@ nodes:
 | `29-inline-code.yaml` | inline **`code:`** source — a bare body reading `inputs`, wrapped as `def main(inputs)` and run **in-process** (the alternative to the `module:function` reference form); same one-dict convention as reference mode |
 | `30-reference-code.yaml` | reference **`code:`** source — a `module:function` token imported and called **in-process**; the reference twin of seed 29 (same body as its inline block), showing one computation both ways |
 
-Every node kind (AGENT/CODE/MODEL/TOOL/call/case/loop) and every settled convention appears in
-at least one seed; the effects (`HUMAN_INPUT`/`WAIT`) are **pinned as a DRAFT proposal**
-(17) ahead of building them. Tagged data is modelled as a discriminant record (a `Literal`
+Every node kind (AGENT/CODE/MODEL/TOOL/call/case/loop/HUMAN_INPUT/WAIT) and every settled
+convention appears in at least one seed. Seed 17 pins blocking HUMAN_INPUT and WAIT's
+absolute UTC deadline surface. Tagged data is modelled as a discriminant record (a `Literal`
 field) routed by `case … on <field>` — the `kind: match` + payload-union design was dropped.
 
 ## Negative gallery — `errors/`
@@ -346,9 +347,9 @@ runtime** (`run_flow` → `status="failed"`) failure modes that the engine can a
 each isolates one failure, with a matching test. Failure modes whose check isn't built yet live
 in `_future/errors/` with their milestone. See `errors/README.md` for the full table and rule.
 
-**Deferred / still to build:** `MATCH` and `HUMAN_INPUT`/`WAIT` are **proposed** here (16/17)
-but not yet in the authoritative §0c decisions, and the loader is unbuilt — treat their exact
-syntax as *for review*. The `tests.seeds.fns` CODE module now owes, in addition to
+**Deferred / still to build:** `MATCH` remains proposed in seed 16; treat its exact syntax as
+*for review*. HUMAN_INPUT and WAIT are settled blocking nodes. The `tests.seeds.fns`
+CODE module now owes, in addition to
 `one_line_summary` / `fetch_facts` / `prime_cache` / `build_outline` (seeds 01/03/12/13):
 `confirm_action` (seed 17). *(The `errors/`
 fixtures need no owed fns — they fail before/without running a CODE callable.)*

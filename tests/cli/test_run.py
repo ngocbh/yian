@@ -138,8 +138,7 @@ def test_ctrl_c_mid_run_says_cancelled(tmp_path: Path, monkeypatch):
     def _boom(*args, **kwargs):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(run_mod, "run_flow", _boom)
+    monkeypatch.setattr(run_mod, "_run_flow_controlled", _boom)
     result = runner.invoke(app, ["run", str(flow), "--input", "topic=clouds"])
     assert result.exit_code == 130
     assert "cancelled by user" in result.output
-

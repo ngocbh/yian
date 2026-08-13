@@ -1,10 +1,10 @@
-"""HumanInputRequired carries an optional `questions` list beside `answer_schema`."""
+"""Legacy artificial-pause payloads retain optional question metadata on the wire."""
 
 from agent_composer.suspension.pause import HumanInputRequired
 
 
 def test_questions_defaults_to_empty_list():
-    """Omitting `questions` yields the legacy single-answer form: an empty list."""
+    """Omitting `questions` yields the legacy compatibility form: an empty list."""
     reason = HumanInputRequired(prompt="?")
     assert reason.questions == []
 

@@ -67,7 +67,7 @@ Our north star is a *functional language of agents*. Design the feature as a
   variant and forces an exhaustive `match`. Our closed sets are `NodeKind` (kept
   closed, no registry/metaclass) and the node result `Outcome`. Note the runtime
   *core* matches on `Outcome`, not on `NodeKind`: ordinary behavior belongs in a
-  node's own `run` or node-owned traits/hooks. Growth construction has a
+  node's own `_run_impl` or node-owned traits/hooks. Growth construction has a
   sanctioned compile-layer match: the closed `build_grow` interpreter
   interprets node-produced seeds into fragments before the kind-blind runtime
   splices them.
@@ -102,7 +102,8 @@ Most are just the functional model (above) made enforceable:
   agent and how composite nodes are built. A spawner returns only a canonical
   `Grow(seed, prune)`; the compile-owned `build_grow` interprets that seed after the
   package-root run boundary injects it into runtime. Never assume a node is a leaf;
-  preserve recursion through compile + run + checkpoint.
+  preserve recursion through compile + run (and through the dormant generic
+  checkpoint replay while it remains).
 - **General / expressive** — the engine **privileges no output type** (report,
   classification, decision, number, structured record — whatever the terminal
   node emits) and no domain. When adding a primitive, prefer the most general form
@@ -113,10 +114,13 @@ Most are just the functional model (above) made enforceable:
 - **Typed, losslessly-serializable state** *(the type system)* —
   `TypedValue` / `VariablePool`; the basis for durable checkpoints and `${...}`
   references.
-- **Durable suspend/resume** *(algebraic effects + handlers)* — a node *performs*
-  a pause via `PauseRequested`; the run serializes to a `RunCheckpoint`; an
-  external scheduler is the *handler* that resumes it (re-run-on-resume).
-  `HUMAN_INPUT`/`WAIT` are the effect-performing nodes.
+- **Blocking authorable effects return ordinary outputs** — an AGENT's explicitly
+  granted `ask_user` tool and HUMAN_INPUT call the process-owned handler inside
+  their live invocation; AGENT checks the run-owned stop event between external
+  model/tool effects, and WAIT blocks on that event until its absolute UTC deadline.
+  All three return `Output`; none performs a pause or creates
+  continuation topology. `PauseRequested`/`RunCheckpoint` remain only as dormant
+  custom/artificial compatibility until issue #117 removes them.
 - **Dependency-light core (with a deliberate exception)** — keep the engine free
   of a DB and heavy frameworks; external capabilities enter through **injected
   seams** (plain callables). **Exception (by decision):** the AGENT node is *not*
@@ -131,8 +135,9 @@ Most are just the functional model (above) made enforceable:
   registry/metaclass), but the engine core (`runtime/engine.py` + `runtime/eval_node.py`) does NOT
   branch on it. Ordinary behavior lives in a node's own `_run_impl`; growth construction's
   sanctioned kind match lives in `compile.expand.build_grow`. The core dispatches only on the
-  closed `Outcome` sum and on node-owned traits/hooks (`binds_per_item`, `bind_reserved`,
-  `grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`). A
+  closed `Outcome` sum and on node-owned traits/hooks (`is_spawner`, `binds_per_item`,
+  `bind_reserved`, `reserved_wiring_keys`, `grow_depth_delta`, `is_loop`,
+  `needs_stop_event`). A
   ratchet test (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion`
   dispatch count at 0. A separate layer ratchet forbids `nodes -> compile` and
   `runtime -> compile.expand`: nodes describe seeds, compile constructs fragments,
@@ -141,9 +146,11 @@ Most are just the functional model (above) made enforceable:
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
   only a node's own `_run_impl()` interprets known keys (e.g. AGENT's `max_tool_iterations`). It is the
   kind-blind knob for "tune this node" — add a key by having the node read it, never by an engine
-  branch. A resumed AGENT keeps its cap by threading `env` onto the rebuilt resume node.
+  branch. AGENT stays one live loop, so its node-local `env` remains on that one invocation.
 - **Single-writer invariant** — workers are pure executors; the dispatcher is the
-  only state mutator.
+  only state mutator. A pooled drive owns workers until its full join; abnormal dispatch
+  exit must signal cooperative stop before joining, without setting the event when a
+  consumer closes only after the terminal pause has been yielded.
 - **Single-process CLI target** — favor the simplest thing that works in-process;
   durable/cross-process impls are injected from outside, not baked into the core.
 
@@ -151,8 +158,8 @@ Most are just the functional model (above) made enforceable:
 Write a short plan: the **OCaml analogue** you're borrowing and its type; what you
 simplify/drop and why; where it lands in the layer map
 (`events ← typesys ← nodes ← compile ← compose`, with `expr` feeding nodes and
-`suspension` feeding runtime, plus the internal `_growth.py` and `_state.py` leaves
-shared by compile and suspension); and the **seam** if it touches an external
+`suspension` feeding runtime, plus the internal `_state.py` leaf shared by compile
+and suspension); and the **seam** if it touches an external
 dependency. Flag any non-obvious choice and confirm before coding (CLAUDE.md "ask
 when uncertain").
 
@@ -167,7 +174,7 @@ GitHub issue when the work lands (reference the commit/PR). Commit at green.
 Follow the **`structure` skill** for where files and folders go — package charters
 in `__init__.py`, `common.py` vs `utils.py`, one-way imports, no cycles. The
 engine's layer ladder (`events ← typesys ← nodes ← compile ← compose`, with `expr`
-feeding nodes, `_growth.py` and `_state.py` feeding compile and suspension, and
-suspension feeding runtime) is an instance of that framework.
+feeding nodes, `_state.py` feeding compile and suspension, and suspension feeding
+runtime) is an instance of that framework.
 The package-root `run.py` sits above compose and runtime and wires cross-layer
 capabilities: notably it injects compile's `build_grow` into the kind-blind runtime.

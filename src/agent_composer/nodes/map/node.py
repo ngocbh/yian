@@ -1,10 +1,10 @@
-"""MAP — the `List.map` driver (`kind: map` + `over:`), internal-only build target.
+"""MAP — the authorable `List.map` driver (`kind: map` + `over:`).
 
 `MapNode` is the mapped-call node, distinct from REF's `CallNode`. The two are different typed
 drivers: a `CallNode` applies a callable ONCE (`'a flow -> 'b`); a `MapNode` maps it over a
 list (`list['a] -> list['b]`). The discriminator is the KIND (`NodeKind.MAP`) — `MapNode` carries
 NO `over` attribute and no `${...}` source on the node. The `over` SOURCE binding rides
-`flow.wiring[id]["over"]` (mirroring WaitNode's timed `until`), pre-resolved into `inputs["over"]`
+`flow.wiring[id]["over"]` (mirroring WaitNode's absolute `until`), pre-resolved into `inputs["over"]`
 by the engine's `eval_node` before `run`.
 
 `run` returns one seed-first `Grow` carrying the raw list of per-element records. The compile-owned

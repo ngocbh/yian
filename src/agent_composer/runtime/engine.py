@@ -51,7 +51,7 @@ from agent_composer.events import (
 )
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, NodeState
 from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.base import Grow
+from agent_composer.nodes.base import Grow, _HostStop
 from agent_composer.runtime.eval_node import eval_node
 from agent_composer.runtime.state_manager import StateManager
 from agent_composer.typesys import TypeCheckError
@@ -66,11 +66,18 @@ MAX_TOTAL_NODES = 10_000   # the load-bearing runtime-size bound (nested MAP bre
 MAX_REF_DEPTH = 5          # defense-in-depth depth bound (the static call graph is acyclic+finite)
 
 _POLL = 0.02  # queue poll timeout (s); keeps shutdown responsive
-_JOIN_TIMEOUT = 2.0
 
 
 class _Aborted(Exception):
     """Internal signal raised out of the drain when a cooperative abort is requested."""
+
+
+@dataclass(frozen=True)
+class _WorkerHostStop:
+    """Worker-to-dispatcher signal that host-stop control flow unwound one executor."""
+
+    node_id: str
+    exception: _HostStop
 
 
 class NodeExecutionError(RuntimeError):
@@ -139,6 +146,10 @@ class FlowEngine:
             Required only when a node returns `Grow` or a checkpoint replays growth; static direct
             engines may omit it. Runtime treats the callable generically and never imports the
             compile-owned implementation.
+        stop_event (`threading.Event`, *optional*, defaults to `None`):
+            Host-owned cooperative execution stop injected only into nodes declaring
+            `needs_stop_event`. A fresh private event is created when omitted. This transient
+            process capability is not persisted in checkpoints.
     """
 
     def __init__(
@@ -148,8 +159,8 @@ class FlowEngine:
         *,
         num_workers: int = 0,
         run_inputs: Optional[dict] = None,
-        llm=None,
         grow_builder=None,
+        stop_event=None,
     ) -> None:
         self.flow = flow
         self.pool = pool if pool is not None else VariablePool()
@@ -167,15 +178,15 @@ class FlowEngine:
         # `_seed_start_and_advance` to narrow `${input.X}` to only the passed run args WITHOUT
         # mutating the shared IR (a ComposedFlow is reusable across runs). Empty otherwise.
         self.wiring_overrides: dict[str, dict] = {}
-        # The LLM-client provider handed to LLM-backed nodes via caps['llm'] (the node no
-        # longer imports the factory). Default = the lazy package-lookup thunk so a
-        # monkeypatched `model_from_config` is honored on the direct + engine paths alike.
-        from agent_composer.runtime.eval_node import _default_llm
-        self.llm = llm if llm is not None else _default_llm
         # Pure expansion constructor injected from the package-root run boundary. None is valid
         # for a static direct engine; `_apply_grow` fails loudly before mutation if a dynamic node
         # is driven without the seam.
         self.grow_builder = grow_builder
+        # Host-owned cooperative execution stop. This is intentionally distinct from the
+        # pooled worker-lifecycle `_stop`: `stop_event` is injected into opted-in nodes and may
+        # be set by the host or a primary node failure; `_stop` only tells idle executor threads
+        # that one pooled drive has finished and they should exit.
+        self.stop_event = stop_event if stop_event is not None else threading.Event()
         self.ready: deque[str] = deque()  # serial path; also the serial _ready_snapshot arm
         if self.num_workers >= 1:
             self.ready_q: "queue.Queue[str]" = queue.Queue()
@@ -184,7 +195,7 @@ class FlowEngine:
         self.paused: list[tuple[str, Any]] = []  # (node_id, PauseReason)
         self.deferred: list[str] = []  # became ready while suspending
         # Runtime graph-expansion bookkeeping: the commit redirect a cloned filler carries
-        # (REF child END_ID / MAP END_ID-list / agent resume continuation / loop-body END) now
+        # (CALL child END_ID / MAP END_ID-list / loop-body END) now
         # lives on the node itself as `Node.commit_as` (baked by the `_grow_*` helpers), so
         # `_on_success` writes the filler's value under the spawner id + fires its out-edges; no
         # side dict. `depth` carries each cloned spawner-eligible id's expansion depth for
@@ -196,9 +207,7 @@ class FlowEngine:
         self._spawner_expansion: dict[str, Any] = {}  # cloned spawner_id -> the GrowRecord
             # that contains it. The SOLE lookup for "which record does this spawner belong to"
             # — no scan over `self.expansions` ever happens — and the branch key for
-            # "nest under parent vs new top-level" in `_apply_grow`. For multi-pause AGENTs,
-            # every cloned resume_id AND the original spawner_id are stamped at the SAME
-            # segment-0 record so segment i+1 nests under segment i.
+            # "nest under parent vs new top-level" in `_apply_grow`.
         # Loop ledger bookkeeping: each loop keeps exactly ONE live GrowRecord, keyed by its ORIGIN
         # id (the compiled loop `L`). `_apply_grow` attributes every iteration's grow to `origin`
         # (`flow.nodes[spawner_id].origin_id or spawner_id`) and drops the superseded iteration's
@@ -209,8 +218,9 @@ class FlowEngine:
         self._cancel = False
 
     def request_abort(self) -> None:
-        """Request a cooperative cancel, checked between nodes."""
+        """Request a legacy abort and wake any cooperative blocking node."""
         self._cancel = True
+        self.stop_event.set()
 
     # --- lifecycle ---------------------------------------------------------- #
 
@@ -240,7 +250,14 @@ class FlowEngine:
                 yield from self._drain()
             except _Aborted:
                 yield RunAborted(); return
+            except _HostStop:
+                # request_abort uses the host event only as its worker wakeup. The authored
+                # public outcome remains the legacy RunAborted rather than private host control.
+                if self._cancel:
+                    yield RunAborted(); return
+                raise
             except NodeExecutionError as exc:
+                self.stop_event.set()
                 yield RunFailed(error=exc.error, error_type=exc.error_type, locator=exc.locator,
                                 traceback=exc.traceback, range=exc.range); return
             if self.paused:
@@ -254,6 +271,7 @@ class FlowEngine:
             threading.Thread(target=self._worker, name=f"ac-worker-{i}", daemon=True)
             for i in range(self.num_workers)
         ]
+        host_stop: Optional[_HostStop] = None
         for w in workers:
             w.start()
         try:
@@ -265,13 +283,48 @@ class FlowEngine:
             )
         except _Aborted:
             terminal = RunAborted()
+        except _HostStop as exc:
+            # A request_abort/AbortCommand wakeup can reach the dispatcher as an internal
+            # worker stop before its next `_cancel` check. Preserve the abort as first cause.
+            if not self._cancel:
+                host_stop = exc
+            else:
+                terminal = RunAborted()
         except NodeExecutionError as exc:
+            # First-cause wins: publish cooperative stop before draining sibling workers, but
+            # retain this exact node failure as the run terminal even if a sibling unwinds with
+            # _HostStop while the pool joins.
+            self.stop_event.set()
             terminal = RunFailed(error=exc.error, error_type=exc.error_type, locator=exc.locator,
                                  traceback=exc.traceback, range=exc.range)
+        except BaseException:
+            # An abandoned or externally interrupted drive still owns its live executors.
+            # Wake cooperative blockers before the mandatory full join, then preserve the
+            # initiating exception exactly (including GeneratorExit from ``stream.close()``).
+            self.stop_event.set()
+            raise
         finally:
             self._stop.set()
             for w in workers:
-                w.join(timeout=_JOIN_TIMEOUT)
+                # Opted-in blocking nodes observe `stop_event`; join fully so a completed drive
+                # never leaks an executor into the next run. An uncooperative external call is a
+                # process boundary and intentionally has no pretend timeout-based cleanup.
+                w.join()
+        if host_stop is not None:
+            # All workers are now quiescent, so every exact stop signal is present. Prefer an
+            # initiating exception to a sibling that merely observed the already-set event.
+            while True:
+                try:
+                    message = self.event_q.get_nowait()
+                except queue.Empty:
+                    break
+                if (
+                    isinstance(message, _WorkerHostStop)
+                    and message.exception.primary
+                    and not host_stop.primary
+                ):
+                    host_stop = message.exception
+            raise host_stop
         yield terminal
 
     def _seed_start_and_advance(self):
@@ -340,18 +393,18 @@ class FlowEngine:
 
         Captures pool + ready + node_state + edge_state + paused_nodes +
         deferred_nodes + pause_reasons + num_workers + expansions (the ledger of
-        GrowRecords for runtime-grown CALL/MAP/AGENT/LOOP subgraphs, which
+        GrowRecords for runtime-grown CALL/MAP/LOOP subgraphs, which
         `restore()` replays top-down to re-grow the cloned subgraphs).
 
         Call after `run()` yields `RunPaused`. The checkpoint can be persisted
         (dumps/loads) and resumed in a FRESH process via `restore` + `resume`,
-        including a run paused mid-expansion (a grown CALL/MAP/AGENT subgraph).
+        including a run paused mid-expansion (a grown CALL/MAP/LOOP subgraph).
         """
         from agent_composer.suspension.checkpoint import RunCheckpoint
 
         # Capture by VALUE — a point-in-time snapshot the holder can serialize later. The
         # pool and the GrowRecord ledger are mutable pydantic models that the live engine keeps
-        # advancing (e.g. a multi-pause AGENT nests a segment record under its parent); a shallow
+        # advancing (e.g. a nested CALL grows under its parent's record); a shallow
         # `self.pool` / `list(self.expansions)` would let later live progress retro-mutate an
         # already-taken checkpoint. node_state/edge_state are dict() copies of immutable NodeState
         # enum values, so they need no deep copy.
@@ -375,6 +428,7 @@ class FlowEngine:
         *,
         num_workers: Optional[int] = None,
         grow_builder=None,
+        stop_event=None,
     ) -> "FlowEngine":
         """Rebuild a resumable engine on `flow` from a (deserialized) checkpoint.
 
@@ -383,6 +437,8 @@ class FlowEngine:
         pooled and vice-versa (workers are pure executors; correctness is
         worker-count-independent). `grow_builder` is the same optional pure constructor
         accepted by `__init__`; it is required when the checkpoint contains growth records.
+        `stop_event` supplies the new process-local cooperative-stop capability; when omitted,
+        the restored engine owns a fresh unset event.
 
         Order: build the engine on the pool (at the resolved drive mode) → replay the
         expansions descriptor tree
@@ -404,7 +460,8 @@ class FlowEngine:
         if getattr(checkpoint, "version", None) != CHECKPOINT_VERSION:
             raise ValueError(
                 f"incompatible checkpoint version {getattr(checkpoint, 'version', None)!r}; "
-                f"this build reads {CHECKPOINT_VERSION!r} (adds the num_workers drive-mode field)"
+                f"this build reads {CHECKPOINT_VERSION!r} "
+                "(AGENT continuation topology was removed)"
             )
         # Clean-flow guard (BEFORE replay): a cloned id carries `/` or `#`, so a flow that
         # already has any is a re-grown one — replaying onto it duplicates the overlay.
@@ -417,13 +474,14 @@ class FlowEngine:
         # Consume the checkpoint BY VALUE (symmetric with snapshot()'s write-side deep-copy):
         # a held checkpoint stays a point-in-time value even on the READ side, so a host that
         # reuses a retained snapshot()/loads() object across resume_flow() retries is not
-        # retro-mutated (resume dirties the pool; an AGENT 2nd segment appends in place).
+        # retro-mutated by later execution.
         workers = checkpoint.num_workers if num_workers is None else num_workers
         engine = cls(
             flow,
             pool=checkpoint.pool.model_copy(deep=True),
             num_workers=max(0, workers),
             grow_builder=grow_builder,
+            stop_event=stop_event,
         )
         # Replay re-grows the live topology + sm overlay + alias/depth/_spawner_expansion and
         # rebuilds self.expansions from OUR OWN descriptor copies. schedule=False.
@@ -451,7 +509,7 @@ class FlowEngine:
         (serial or pooled), via the shared _drive_to_terminal."""
         yield RunResumed()
         # A commandless resume of a STILL-paused run re-emits RunPaused and returns
-        # WITHOUT clearing self.paused. An idempotent poll / watcher tick / partial multi-pause
+        # WITHOUT clearing self.paused. An idempotent poll / watcher tick / partial multi-wait
         # delivery must not destroy the pause (a no-op resume stays paused, never falls
         # through to a state-destroying terminal). Guard before the clear below.
         if self.paused and not (commands or []):
@@ -463,6 +521,7 @@ class FlowEngine:
             for command in commands or []:
                 self._apply_command(command)
         except NodeExecutionError as exc:
+            self.stop_event.set()
             yield RunFailed(error=exc.error, error_type=exc.error_type, locator=exc.locator,
                             traceback=exc.traceback, range=exc.range)
             return
@@ -485,7 +544,7 @@ class FlowEngine:
             # its existing out-edges. The node is resolved against the LIVE graph, so a
             # runtime-namespaced id resolves. Wrapped in the SAME TypeCheckError -> NodeExecutionError
             # guard _on_success uses, so a type-invalid answer FAILS the run (it does not crash
-            # resume). A WAIT release delivers value=None (timed WAIT output_type is None).
+            # resume). A compatibility scheduled-release command may deliver value=None.
             node = self.flow.nodes[command.node_id]
             try:
                 self.pool.set(command.node_id, command.value, declared=node.output_type)
@@ -500,6 +559,7 @@ class FlowEngine:
                 self._schedule(nid)
         elif isinstance(command, AbortCommand):
             self._cancel = True
+            self.stop_event.set()
 
     # --- drain -------------------------------------------------------------- #
 
@@ -507,6 +567,8 @@ class FlowEngine:
         while self.ready:
             if self._cancel:
                 raise _Aborted
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             node_id = self.ready.popleft()
             yield from self._run_node(node_id)
 
@@ -514,8 +576,17 @@ class FlowEngine:
         node = self.flow.nodes[node_id]
         succeeded: Optional[NodeSucceeded] = None
         routed: Optional[NodeRouted] = None
-        for event in eval_node(node, self.flow, self.pool, self.llm,
-                               wiring_override=self.wiring_overrides.get(node_id)):
+        for event in eval_node(
+            node,
+            self.flow,
+            self.pool,
+            wiring_override=self.wiring_overrides.get(node_id),
+            stop_event=self.stop_event,
+        ):
+            # A cooperative node may return normally after its event was set. Its late outcome
+            # must not mutate the pool/topology or become externally visible.
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             if isinstance(event, NodeExpanded):
                 # Growth is committed before its event becomes observable. A direct generator
                 # consumer can mutate an event payload while this generator is suspended at
@@ -532,6 +603,8 @@ class FlowEngine:
                 yield event
                 return
             yield event
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             if isinstance(event, NodeSucceeded):
                 succeeded = event
             elif isinstance(event, NodeRouted):
@@ -558,10 +631,18 @@ class FlowEngine:
         while not self.sm.is_complete(self.ready_q.empty()):
             if self._cancel:
                 raise _Aborted
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             try:
                 event = self.event_q.get(timeout=_POLL)
             except queue.Empty:
                 continue
+            if isinstance(event, _WorkerHostStop):
+                raise event.exception
+            # Drop every node outcome produced after another path initiated host stop. An
+            # initiating failure reaches this point before the dispatcher sets the event.
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             if isinstance(event, NodeExpanded):
                 # Match the inline path: construction/application is atomic with respect to
                 # external observation, and a failed construction emits no NodeExpanded.
@@ -575,6 +656,8 @@ class FlowEngine:
                 yield event
                 continue
             yield event  # forward to the caller (streaming)
+            if self.stop_event.is_set():
+                raise _HostStop(primary=False)
             if isinstance(event, NodeSucceeded):
                 self._on_success(event.node_id, event)
             elif isinstance(event, NodeRouted):
@@ -596,11 +679,34 @@ class FlowEngine:
                 node_id = self.ready_q.get(timeout=_POLL)
             except queue.Empty:
                 continue
+            if self.stop_event.is_set():
+                self.event_q.put(
+                    _WorkerHostStop(node_id, _HostStop(primary=False))
+                )
+                return
             node = self.flow.nodes[node_id]
             try:
-                for event in eval_node(node, self.flow, self.pool, self.llm,
-                                       wiring_override=self.wiring_overrides.get(node_id)):
+                for event in eval_node(
+                    node,
+                    self.flow,
+                    self.pool,
+                    wiring_override=self.wiring_overrides.get(node_id),
+                    stop_event=self.stop_event,
+                ):
+                    if self.stop_event.is_set():
+                        self.event_q.put(
+                            _WorkerHostStop(node_id, _HostStop(primary=False))
+                        )
+                        return
                     self.event_q.put(event)
+            except _HostStop as exc:
+                self.event_q.put(_WorkerHostStop(node_id, exc))
+                # A derived stop only observed cancellation already initiated elsewhere. In
+                # particular, an EOF-cancelled sibling must not set the event before the active
+                # prompt worker has recovered and transported the exact EOF-backed exception.
+                if exc.primary:
+                    self.stop_event.set()
+                return
             except Exception as exc:  # noqa: BLE001 — never let a worker die silently
                 self.event_q.put(NodeFailed(node_id, str(exc), type(exc).__name__))
 
@@ -673,7 +779,7 @@ class FlowEngine:
         `children` by deserialization, so the fold only walks it. `_apply_grow` is called with
         `record=rec` so it does NOT re-append (this top-level append owns the ledger); the stamping
         step stamps `_spawner_expansion` at THESE SAME objects, so a later in-place `children.append` (an
-        AGENT re-pause / a LOOP next iteration after a durable hop) grows a record that IS in the
+        LOOP next iteration after a durable hop) grows a record that IS in the
         ledger."""
         for rec in records:
             if is_top_level:
@@ -689,8 +795,8 @@ class FlowEngine:
     def _apply_grow(self, spawner_id, grow, *, schedule=True, record=None):
         """Generic growth core (kind-BLIND): build a `Flow`, validate its bounds, splice/register
         it, record ONE uniform `GrowRecord` in the durable ledger, apply the trait-driven growth
-        bookkeeping (boundary asserts, REF depth, `_spawner_expansion` stamps, origin
-        `commit_as`), finish/mark the spawner, apply `grow.prune` (enabling loop self-prune), and
+        bookkeeping (boundary asserts, REF depth, `_spawner_expansion` stamps), finish/mark the
+        spawner, apply `grow.prune` (enabling loop self-prune), and
         schedule its `start_id` (the single entry, which fans out downstream via `_advance`).
         `schedule=False` suppresses scheduling+budget on replay; `record` reuses
         a deserialized ledger entry on replay (so no new record is minted).
@@ -732,12 +838,9 @@ class FlowEngine:
         # Mint the one GrowRecord for this grow (live), OR reuse the deserialized one on replay.
         rec = record if record is not None else GrowRecord(
             spawner_id=origin, seed=copy.deepcopy(canonical_seed), children=[])
-        # Ledger parent captured BEFORE the stamping step: a self-restamping spawner (AGENT)
-        # stamps `_spawner_expansion[spawner_id]`, which would otherwise shadow the ENCLOSING
-        # spawner's record and make `rec` look like its own parent. A nested grow (its spawner is
-        # stamped at the enclosing record) rides under that record's `children`; a top-level grow is
-        # a `self.expansions` root. On replay (`record is not None`) the record is already attached
-        # (top-level by `_replay_expansions`, nested by deserialization), so this is skipped.
+        # A nested grow whose spawner was stamped at an enclosing record rides under that record's
+        # `children`; a top-level grow is a `self.expansions` root. On replay (`record is not None`)
+        # the record is already attached by deserialization, so this is skipped.
         parent = self._spawner_expansion.get(spawner_id) if record is None else None
         # REF-depth stamping (kind-blind, driven by the `grow_depth_delta` trait): the depth was
         # derived and bounded before the splice; now stamp it on every spawner in the subgraph AND
@@ -745,17 +848,8 @@ class FlowEngine:
         self._stamp_grow_depth(spawner_id, sg, grow_depth)
         # `_spawner_expansion` stamping (kind-blind): point every spawner in the spliced subgraph +
         # its derived terminal(s) at THIS record, so a nested grow nests under it and the CALL
-        # post-assert commit-site recovery finds it. A self-restamping spawner (AGENT) also stamps
-        # its OWN bare id for re-pause idempotency. Runs AFTER `parent` was captured above so the
-        # self-stamp does not shadow the enclosing spawner's record for the ledger attach.
+        # post-assert commit-site recovery finds it.
         self._stamp_spawner_expansion(spawner_id, sg, rec)
-        # Origin `commit_as` override (kind-blind, applied to the derived terminal): re-point the
-        # terminal so a multi-pause AGENT's FINAL non-pausing Output commits under the ORIGINAL agent
-        # id (the origin propagates through the engine-side chain `spawner.commit_as or spawner_id`,
-        # which a pure builder cannot see). A no-op for CALL/MAP/LOOP: their spawner carries no
-        # `commit_as`, so `origin == spawner_id`, which the terminal's `commit_as` already equals.
-        # Runs AFTER the stamps above, which rely on the terminal's PROVISIONAL `commit_as`.
-        self._apply_origin_commit_as(spawner_id, sg)
         # Finish/mark is UNIFORM across every spawner (kind-blind): a spawner that returned a Grow
         # has run and expanded, so it finishes executing and enters EXPANDED. Idempotent for a loop
         # whose repeated iteration grows re-mark the same spawner; runs on replay too (the legacy
@@ -789,7 +883,7 @@ class FlowEngine:
                     container.remove(prev)
                 container.append(rec)
             self._origin_record[origin] = rec          # set on replay too (post-restore continuation)
-        elif record is None:                           # generic CALL/MAP/AGENT — unchanged
+        elif record is None:                           # generic CALL/MAP — unchanged
             if isinstance(parent, GrowRecord):
                 parent.children.append(rec)
             else:
@@ -797,34 +891,17 @@ class FlowEngine:
         if schedule:
             self._schedule(sg.start_id)
 
-    def _apply_origin_commit_as(self, spawner_id, sg) -> None:
-        """Kind-blind origin `commit_as` override on the derived terminal(s). The origin is the
-        engine-side chained target `spawner.commit_as or spawner_id`: for a multi-pause AGENT,
-        segment N's spawner is segment N-1's resume node whose `commit_as` was overridden to the
-        ORIGINAL agent id, so the FINAL Output commits under that origin (multi-pause chaining). The
-        origin can only be computed engine-side (a pure builder cannot see the prior segment). A
-        no-op for CALL/MAP/LOOP: their spawner has no `commit_as`, so `origin == spawner_id` and the
-        terminal's `commit_as` (already `spawner_id`) is unchanged."""
-        spawner = self.flow.nodes[spawner_id]
-        origin = spawner.commit_as or spawner_id
-        for term in self._derived_terminals(sg, spawner_id):
-            self.flow.nodes[term].commit_as = origin
-
     def _stamp_spawner_expansion(self, spawner_id, sg, rec) -> None:
         """Kind-blind `_spawner_expansion` stamping: point every `is_spawner` node in the spliced
         subgraph AND its derived terminal(s) at `rec`, so a grow nested inside one of them nests its
         GrowRecord under `rec` and the commit-site post-assert recovery (`_on_success`) finds the
-        seed. A self-restamping spawner (`grow_restamps_self` — AGENT) also stamps its OWN bare id,
-        so an agent that re-pauses at the same spawner id nests the next pause under `rec`.
+        seed.
 
         A loop CONTINUATION driver `L~(k+1)` in the subgraph is SKIPPED: it carries `origin_id` set
         to the compiled loop and `!= its own id`, so its own grows attribute to the origin (§6b). If
         it were stamped here, `_spawner_expansion[L~(k+1)]` would shadow the stable origin lookup and
         break the single-record collapse. A compiled loop / genuine nested spawner (`origin_id` None,
         or `== id`) is still stamped."""
-        spawner = self.flow.nodes[spawner_id]
-        if spawner.grow_restamps_self:
-            self._spawner_expansion[spawner_id] = rec
         for nid, node in sg.nodes.items():
             if getattr(node, "origin_id", None) is not None and node.origin_id != nid:
                 continue
@@ -835,10 +912,9 @@ class FlowEngine:
 
     def _derived_terminals(self, sg, spawner_id) -> list:
         """The subgraph's terminal filler id(s) — kind-BLIND: the node(s) whose baked
-        `commit_as == spawner_id` (a CALL/MAP/LOOP self-commit terminal, or an AGENT resume
-        terminal's PROVISIONAL commit). The growth core reuses this handle for depth stamping,
-        `_spawner_expansion` stamping, and the AGENT origin `commit_as` override, so none of them
-        names the terminal by kind (`ns(spawner, END_ID)` / `__resume#`)."""
+        `commit_as == spawner_id` (a CALL/MAP/LOOP self-commit terminal). The growth core reuses
+        this handle for depth stamping and `_spawner_expansion` stamping, so neither
+        names the terminal by kind (`ns(spawner, END_ID)`, for example)."""
         return [nid for nid, node in sg.nodes.items() if node.commit_as == spawner_id]
 
     def _validated_grow_depth(self, spawner_id, *, schedule) -> Optional[int]:
@@ -866,7 +942,7 @@ class FlowEngine:
 
     def _on_success(self, node_id: str, event: NodeSucceeded) -> None:
         # The commit target: `commit_as` redirects a subflow terminal's value under its spawner
-        # id (a cloned child END_ID / MAP END_ID-list / agent resume continuation / loop-body END),
+        # id (a cloned child END_ID / MAP END_ID-list / loop-body END),
         # else the node commits under its own id. This one line replaces the former `alias` /
         # `loop_alias` dict lookups.
         target = event.commit_as or node_id

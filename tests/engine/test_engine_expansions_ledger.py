@@ -12,15 +12,15 @@ from typing import Any
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID, FlowOutput
 from agent_composer.nodes.call.node import CallNode
-from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.map.node import MapNode
 from agent_composer.runtime.engine import FlowEngine
-from tests.engine._fakes import FuncNode, stamp_reads
+from agent_composer.suspension.pause import HumanInputRequired
+from tests.engine._fakes import FuncNode, PauseNode, stamp_reads
 from tests.engine._graph_builder import _graph
 
 
 def _inner_pause_child():
-    """A small child CompiledFlow whose body contains an `ask` HUMAN_INPUT leaf
+    """A child flow whose body contains a test-only generic Pause leaf
     and an `unwrap` step that lifts the answer scalar out of the record. The
     unwrap keeps the flow output a bare string so downstream e2e
     tests can assert `evs[-1].output == "approve"` cleanly."""
@@ -29,7 +29,9 @@ def _inner_pause_child():
     return _graph(
         [
             FuncNode("seed", lambda p: {"output": p.get("payload", "x")}),
-            HumanInputNode("ask", prompt="Approve?"),
+            PauseNode(
+                "ask", reason=HumanInputRequired(prompt="Approve?", node_id="ask")
+            ),
             unwrap,
         ],
         [(START_ID, "seed"), ("seed", "ask"), ("ask", "unwrap"), ("unwrap", END_ID)],
@@ -87,7 +89,7 @@ def test_ledger_attributes_exist():
 
 
 def test_ledger_empty_for_static_flow():
-    """A flow with no REF/MAP/AGENT-pause leaves `expansions` empty after a complete run.
+    """A flow with no CALL/MAP/LOOP leaves `expansions` empty after a complete run.
     A static flow has no spawners to fire."""
     g = _graph(
         [FuncNode("a", lambda p: {"output": 1})],
@@ -122,31 +124,6 @@ def test_ledger_records_map_expansion_with_records():
     # seed carries the per-element binding (payload from ${item}):
     payloads = sorted(r.get("payload") for r in maps[0].seed)
     assert payloads == ["a", "b"]
-
-
-def test_ledger_records_agent_expansion_per_pause(monkeypatch):
-    """A multi-pause AGENT creates ONE top-level GrowRecord; each subsequent pause chains a
-    segment under the previous segment's `children` (the nesting chain)."""
-    from langchain_core.messages import AIMessage
-    import agent_composer.llm_clients as llm
-    from agent_composer import load_flow
-    from tests.engine.test_agent_continuation import _chat, _ask, ASK
-    chat = _chat([
-        _ask({"question": "q1?"}, "q1"),
-        _ask({"question": "q2?"}, "q2"),
-        AIMessage(content="FINAL"),
-    ])
-    monkeypatch.setattr(llm, "model_from_config", lambda cfg: chat)
-    loaded = load_flow(ASK)
-    from agent_composer.run import run_flow, resume_command
-    rec = run_flow(loaded, {})  # parks at pause 1
-    agents = [e for e in rec.engine.expansions if e.spawner_id == "agent"]
-    assert len(agents) == 1
-    assert agents[0].children == []  # one segment so far, no nested resume yet
-    # in-memory resume the first pause to trigger segment 2:
-    cmd = resume_command(loaded, rec.pause_reasons[0], "first")
-    list(rec.engine.resume(commands=[cmd]))
-    assert len(agents[0].children) == 1  # second segment chained under the first
 
 
 def test_nested_call_inside_map_is_descriptor_child():

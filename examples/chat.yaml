@@ -1,10 +1,9 @@
 # chat — a turn-by-turn conversational REPL (plain agent; deterministic transcript).
 #
-# The turn boundary is STRUCTURAL: a LOOP body [human_input -> agent] fixes "get the
-# next message, reply" as authored edges. The LLM only fills the reply; the transcript
-# grows deterministically in the turn's `output:` bindings (string concatenation in a
-# `${...}` template, not a model-built fold), so no CODE node is needed.
-# Run it with:  ac chat examples/chat.yaml    (or: ac run, answering each pause)
+# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE; exact exit text builds the
+# exit record, otherwise AGENT + a second CODE node build the normal transcript. The LLM
+# only fills the reply; defaulted bindings rejoin the branches into the carried record.
+# Run it with:  ac chat examples/chat.yaml
 id: chat
 name: chat
 description: A turn-by-turn conversational assistant (plain agent, no tools).
@@ -19,9 +18,27 @@ defs:
       exited: bool
     nodes:
       ask:
-        kind: human_input       # suspends each turn; resumed with the user's message
+        kind: human_input       # blocks a worker until the broker returns the message
         prompt: "You:"
         output: str
+      route:
+        kind: case
+        on: ${ask.output}
+        cases:
+          - when: /exit
+            then: exit_turn
+          - when: /quit
+            then: exit_turn
+        else: reply
+      exit_turn:
+        kind: code
+        input:
+          transcript: ${input.transcript}
+        output:
+          transcript: str
+          exited: bool
+        code: |
+          return {"transcript": inputs["transcript"], "exited": True}
       reply:
         kind: agent
         mode: plain
@@ -36,16 +53,24 @@ defs:
           ${transcript}
 
           User: ${message}
-    # Grow the carried transcript with this turn (user message + assistant reply) via a
-    # template binding — plain string concatenation in `${...}`, no CODE node needed.
+      normal_turn:
+        kind: code
+        input:
+          transcript: ${input.transcript}
+          message: ${ask.output}
+          reply: ${reply.output}
+        output: str
+        code: |
+          return (
+              inputs["transcript"]
+              + "\n\nUser: " + inputs["message"]
+              + "\n\nAssistant: " + inputs["reply"]
+          )
+    # A lone multi-ref coalesce has no inferable type. Adjacent defaulted spans
+    # concatenate as str, while the single defaulted exit span remains bool.
     output:
-      transcript: |-
-        ${input.transcript}
-
-        User: ${ask.output}
-
-        Assistant: ${reply.output}
-      exited: ${input.exited}
+      transcript: '${exit_turn.output.transcript:-""}${normal_turn.output:-""}'
+      exited: ${exit_turn.output.exited:-false}
 
 nodes:
   chat:
@@ -53,7 +78,7 @@ nodes:
     call: turn
     input:
       transcript: ${input.opening}
-      exited: false                 # threaded through; the CLI ends the session via /exit
+      exited: false                 # CASE sets true for exact /exit or /quit input
     while: "not ${exited}"          # a carried-field predicate (verified to parse)
     max: 1000                       # required runaway safety cap
 output: ${chat.output.transcript}

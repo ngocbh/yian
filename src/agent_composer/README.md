@@ -34,7 +34,6 @@ shape of it:
 ```
 typesys/      typed value system (values) + variable pool                 [leaf, no deps]
 events.py     run + node event vocabulary
-_growth.py    shared temporary growth-seed schemas                       [leaf, no deps]
 _state.py     shared scheduler-state vocabulary                           [leaf, no deps]
 expr/         one ${...} expression grammar: parse -> AST -> evaluate / ref-walk on the pool
 nodes/        pure Node contract + per-kind implementations; spawners return growth seeds
@@ -45,20 +44,30 @@ compile/      compiled IR + validation; build_grow; stable manifests/fingerprint
 compose/      the Compose-YAML loader: text -> CompiledFlow
               (helpers/nodes/parse/desugar/edges/validate/build/loader)
 run.py        the run boundary: ComposedFlow + inputs -> RunResult (run/resume)
-runtime/      kind-blind state manager, engine drains, worker pool, node watchdog
-suspension/   pause reasons, commands, checkpoint
+runtime/      kind-blind state manager, engine drains, worker pool
+suspension/   dormant artificial-pause reasons, commands, checkpoint
 llm_clients/  provider clients (lazy-imported) + LLMConfig + model_from_config
-tools/        the tool registry (TOOL_REGISTRY / register_tool / resolve_tools)
-cli/          the `ac` command-line entry point
+tools/        tool registry + process-owned ask_user interaction seam
+cli/          the `ac` entry point + main-thread terminal broker
 _settings.py  env-based default provider/model
 ```
 
 Import direction (acyclic): `events <- typesys <- nodes <- compile <- compose`,
 with `compile`/`typesys`/`nodes`/`expr` feeding `compose` (the front-end that reads
-YAML into the IR), `expr` feeding nodes, `_growth.py` and `_state.py` feeding
-compile and suspension as shared leaves, and `suspension` feeding runtime. The
+YAML into the IR), `expr` feeding nodes, `_state.py` feeding compile and
+suspension as a shared leaf, and `suspension` feeding runtime. The
 package-root `run.py` is the run boundary: it consumes `compose`'s `ComposedFlow` and
 drives the `runtime` engine, sitting above both and imported by neither.
+
+Authorable blocking effects stay inside their node calls. An AGENT may invoke the
+explicitly granted `ask_user` tool, HUMAN_INPUT always invokes the same host-owned
+interaction seam, and WAIT blocks on its absolute UTC deadline. AGENT checks the
+run-owned stop signal between model/tool effects; WAIT blocks on that signal. Each returns
+`Output`; none creates checkpoint topology. The generic `Pause`/checkpoint path is
+dormant custom/artificial compatibility until issue #117 removes it. CODE's
+soft-budget watchdog is package-local under `nodes/code/` and times CODE only.
+Pooled drives own their executors through a full join: an abnormal dispatch exit signals
+cooperative stop before joining, but closing after a terminal pause does not poison resume.
 
 Dynamic growth preserves that direction through dependency inversion. A spawner
 node returns `Grow(seed, prune)` without importing `compile`; the kind-aware

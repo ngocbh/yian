@@ -1,4 +1,4 @@
-"""kind=human_input — the suspend-for-a-person node's descriptor + parse/build handle.
+"""kind=human_input — the blocking human gate's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input` node's
 frozen `HumanInputDescriptor`. It inherits the template `parse` from `NodeDescriptor` (which
@@ -27,7 +27,7 @@ from agent_composer.typesys.values import Type, ValueKind
 
 @dataclass(frozen=True, kw_only=True)
 class HumanInputDescriptor(NodeDescriptor):
-    """kind=human_input — suspend for a person; the typed answer is the node's output.
+    """kind=human_input — block for a person; the typed answer is the node's output.
 
     Three author surfaces, exactly one of which carries the question(s):
     - `questions`: static list (`[{question, header, options, multi_select}, ...]`) OR
@@ -181,7 +181,7 @@ def _answer_schema(typ: Optional[Type]) -> list[dict[str, Any]]:
 
     A record output -> one entry per field (recursively); any other (scalar / enum / list,
     incl. list-of-enum) -> a single `answer` entry. Lets a host renderer prompt against the
-    expected answer type, and the pause reason self-describe."""
+    expected answer type and pass that schema to the host interaction renderer."""
     if typ is None:
         return []
     if typ.kind == ValueKind.OBJECT and typ.fields:

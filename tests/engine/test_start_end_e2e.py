@@ -138,9 +138,9 @@ def test_inputs_default_resolves_via_start_d_b_closed():
 
 def test_author_identical_run_results_hold():
     # LLM-terminating seeds run via the CODE-child goldens (test_golden_run_results.py); re-assert the
-    # REF/MAP run-results + the pause/resume round-trip + the output arity are unchanged.
+    # REF/MAP run-results + blocking interaction + output arity remain covered.
     from tests.engine.test_golden_run_results import (
-        test_golden_human_input_then_timed_wait_resume_terminal,
+        test_golden_human_input_then_past_wait_completes_without_checkpoint,
         test_golden_map_run_result,
         test_golden_output_arity_0,
         test_golden_output_arity_1,
@@ -150,7 +150,7 @@ def test_author_identical_run_results_hold():
 
     test_golden_ref_run_result()
     test_golden_map_run_result()
-    test_golden_human_input_then_timed_wait_resume_terminal()
+    test_golden_human_input_then_past_wait_completes_without_checkpoint()
     test_golden_output_arity_0()
     test_golden_output_arity_1()
     test_golden_output_arity_2()

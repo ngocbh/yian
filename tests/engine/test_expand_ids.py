@@ -1,4 +1,3 @@
-from agent_composer.compile.expand import ask_resume_edge_id
 from agent_composer.nodes.ids import map_callsite, ns
 
 
@@ -10,11 +9,6 @@ def test_ns_joins_callsite_and_child_id():
 def test_map_callsite_is_spawner_hash_index():
     assert map_callsite("each", 0) == "each#0"
     assert map_callsite("each", 12) == "each#12"
-
-
-def test_ask_resume_edge_id():
-    # the agent continuation edge id: f"{callsite}/__ask_resume#0"
-    assert ask_resume_edge_id("agent") == "agent/__ask_resume#0"
 
 
 def test_minting_is_pure_re_callable():

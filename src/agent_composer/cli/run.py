@@ -1,10 +1,12 @@
 """`ac run` — load a flow, gather inputs, drive it to a terminal, render the output.
 
 Inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`); any declared
-input still missing is prompted for interactively (required ones are starred). A run that
-suspends on a HUMAN_INPUT / WAIT effect is resumed interactively — each pause prompts for
-the awaited value and the run continues to a terminal. The answer's type is enforced at
-the engine boundary; an invalid one fails the run.
+input still missing is prompted for interactively (required ones are starred). The engine
+runs behind a main-thread terminal broker: blocking HUMAN_INPUT and agent ``ask_user`` calls
+wait for that broker and then continue inside the same live node call. WAIT stays live in
+its worker until its deadline. A dormant controller loop can still service custom/artificial
+generic pauses through the same terminal surface. Answer types are enforced at the engine
+boundary; an invalid one fails the run.
 
 `--provider`/`--model` feed the outermost layer of the `llm_config` cascade (fill-the-gap,
 not a hard override): they fill only the fields an agent and its enclosing flow leave unset.
@@ -12,12 +14,18 @@ not a hard override): they fill only the fields an agent and its enclosing flow 
 
 from __future__ import annotations
 
+import asyncio
+from concurrent.futures import CancelledError
+from contextlib import contextmanager
+from functools import partial
 import itertools
 import json
 import os
+import signal
 import sys
+import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import typer
 from rich.console import Console, Group
@@ -29,14 +37,18 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from agent_composer.compile.model import END_ID, START_ID
+from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow, top_frame_ranges
-from agent_composer.run import RunResult, resume_command, resume_flow, run_flow
+from agent_composer.run import RunResult, _run_flow_controlled, resume_command, resume_flow
 from agent_composer.events import Diagnostic, NodeFailed, SourceRange, SourceSpan
+from agent_composer.nodes.base import _HostStop
+from agent_composer.tools import install_ask_user
 from agent_composer.typesys.values import ValueKind
 
 console = Console()
 err_console = Console(stderr=True)
+_DEFAULT_BROKER_EOF = object()
 
 
 def _ensure_cwd_importable() -> None:
@@ -486,7 +498,7 @@ class _ProgressReporter:
             self._emit(Text(f"✓ {node_id} → {event.handle}", style="green"))
             self._refresh()
         elif name == "NodeExpanded":
-            # A spawner (CALL/MAP/AGENT/LOOP) grew the graph instead of returning a value: a
+            # A spawner (CALL/MAP/LOOP) grew the graph instead of returning a value: a
             # loop driver continuing to the next iteration, a call/map splicing its child. It has
             # no terminal of its own (its value is committed by the spliced subgraph's terminal),
             # so just clear its spinner — no ✓ line. Without this the driver clones (`polish`,
@@ -504,6 +516,210 @@ class _ProgressReporter:
         body = output if isinstance(output, str) else repr(output)
         for line in body.splitlines() or [""]:
             self._emit(Text(f"    {line}", style="dim"))
+
+
+class _ControllerStopEvent(threading.Event):
+    """One transient stop bit coupled to the broker's prompt-wakeup operation.
+
+    The runtime knows only the ordinary ``threading.Event`` interface. Coupling
+    ``set`` here keeps terminal ownership in the CLI while guaranteeing that a
+    runtime failure wakes an active or queued ``ask_user`` before worker join.
+    """
+
+    def __init__(self, cancel_prompts: Callable[[], None]) -> None:
+        super().__init__()
+        self._cancel_prompts = cancel_prompts
+        self._linked_lock = threading.Lock()
+        self._linked_children: set[threading.Event] = set()
+
+    def set(self) -> None:
+        """Signal this lifecycle, its active child runs, and broker prompt waiters."""
+        super().set()
+        with self._linked_lock:
+            linked_children = tuple(self._linked_children)
+        for child in linked_children:
+            child.set()
+        self._cancel_prompts()
+
+    @contextmanager
+    def linked_child(self):
+        """Yield a one-way child event for one nested engine lifecycle.
+
+        Parent cancellation sets the child. A nested failure sets only the child,
+        so a failed flow invoked as a tool can return its ordinary failure result
+        without cancelling the enclosing chat run.
+        """
+        child = threading.Event()
+        with self._linked_lock:
+            if self.is_set():
+                child.set()
+            else:
+                self._linked_children.add(child)
+        try:
+            yield child
+        finally:
+            with self._linked_lock:
+                self._linked_children.discard(child)
+
+
+def _run_with_terminal_controller(
+    controller: Callable[
+        [
+            threading.Event,
+            Optional[Callable[[Any], None]],
+            Callable[..., Any],
+            Callable[[Callable[[], None]], None],
+        ],
+        RunResult,
+    ],
+    *,
+    prompt_handler: Callable[[PromptRequest], Any],
+    reporter: Optional[_ProgressReporter],
+    eof_value: Any = _DEFAULT_BROKER_EOF,
+) -> RunResult:
+    """Run one complete CLI lifecycle behind a main-thread terminal broker.
+
+    ``controller`` owns the initial run plus any dormant Pause/resume cycles. It
+    receives the shared stop event, a brokered observer, the installed
+    ``ask_user`` handler, and the broker's render enqueue operation. The main
+    thread alone serves the FIFO and joins the controller before registry cleanup.
+    ``eof_value`` optionally normalizes prompt EOF to a caller-owned value; omitted
+    EOF keeps the broker's exception policy.
+    """
+
+    broker: TerminalBroker
+    stop_event = _ControllerStopEvent(lambda: broker.cancel_all())
+
+    def prompt_on_main(request: PromptRequest) -> Any:
+        """Suspend Rich Live while the main thread owns one terminal prompt."""
+        if reporter is not None:
+            reporter.stop()
+        try:
+            return prompt_handler(request)
+        finally:
+            if reporter is not None and not stop_event.is_set() and not request.cancelled:
+                reporter.start()
+
+    broker_kwargs: dict[str, Any] = {"stop_event": stop_event}
+    if eof_value is not _DEFAULT_BROKER_EOF:
+        broker_kwargs["eof_value"] = eof_value
+    broker = TerminalBroker(prompt_on_main, **broker_kwargs)
+
+    def ask_user(**kwargs: Any) -> Any:
+        """Translate broker lifecycle cancellation into the runtime stop signal."""
+        try:
+            return broker.ask_user(**kwargs)
+        except _HostStop:
+            raise
+        except EOFError as exc:
+            raise _HostStop("terminal interaction stopped") from exc
+        except CancelledError as exc:
+            raise _HostStop("terminal interaction stopped", primary=False) from exc
+
+    on_event: Optional[Callable[[Any], None]]
+    if reporter is None:
+        on_event = None
+    else:
+        on_event = lambda event: broker.render(partial(reporter.handle, event))
+
+    controller_finished = threading.Event()
+    controller_signal_mask: Any = None
+
+    def drive() -> None:
+        """Publish exactly one result or exception from the controller thread."""
+        try:
+            # A new POSIX thread inherits the launcher's temporary SIGINT block. Restore the
+            # caller's original mask before this controller can spawn engine workers/processes.
+            if controller_signal_mask is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, controller_signal_mask)
+            result = controller(stop_event, on_event, ask_user, broker.render)
+        except BaseException as exc:
+            stop_event.set()
+            broker.controller_complete(exception=exc)
+        else:
+            broker.controller_complete(result=result)
+        finally:
+            # The main thread waits on this explicit target-lifecycle bit before joining.
+            # A SIGINT-interrupted Thread.join can report a still-running thread as stopped.
+            controller_finished.set()
+
+    controller_thread = threading.Thread(target=drive, name="ac-controller")
+    completion = None
+    host_error: Optional[tuple[BaseException, Any]] = None
+    started = False
+
+    def remember_host_error(exc: BaseException) -> None:
+        """Keep the first host cause while repeated interrupts only reinforce stop."""
+        nonlocal host_error
+        if host_error is None:
+            host_error = (exc, exc.__traceback__)
+        stop_event.set()
+
+    def start_controller() -> None:
+        """Launch with SIGINT deferred until ``started`` records the OS thread.
+
+        CPython's ``Thread.start`` can be interrupted after creating the OS thread but before
+        publishing ``ident``. Blocking SIGINT across that short POSIX launch handshake closes
+        the otherwise unobservable join-before-registry-cleanup race.
+        """
+        nonlocal controller_signal_mask, started
+        pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+        if threading.current_thread() is threading.main_thread() and pthread_sigmask is not None:
+            previous_mask = pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+            controller_signal_mask = previous_mask
+            try:
+                controller_thread.start()
+                started = True
+            finally:
+                # A pending SIGINT is delivered here, after `started` became authoritative.
+                pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            return
+        controller_thread.start()
+        started = True
+
+    with install_ask_user(ask_user):
+        if reporter is not None:
+            reporter.start()
+        try:
+            start_controller()
+            completion = broker.serve()
+        except BaseException as exc:
+            remember_host_error(exc)
+        finally:
+            if started:
+                # Keep registry ownership until the controller target has finished. Repeated
+                # Ctrl-C during a slow cooperative drain is deferred; it must not interrupt
+                # cleanup or replace the first host cause.
+                while not controller_finished.is_set():
+                    try:
+                        controller_finished.wait()
+                    except BaseException as exc:
+                        remember_host_error(exc)
+                while True:
+                    try:
+                        controller_thread.join()
+                        break
+                    except BaseException as exc:
+                        remember_host_error(exc)
+            if reporter is not None:
+                try:
+                    reporter.stop()
+                except BaseException as exc:
+                    remember_host_error(exc)
+
+    if host_error is not None:
+        error, tb = host_error
+        raise error.with_traceback(tb)
+    if completion is None:
+        raise RuntimeError("terminal controller exited without a completion")
+    if completion.exception is not None:
+        if isinstance(completion.exception, _HostStop):
+            cause = completion.exception.__cause__
+            if isinstance(cause, (CancelledError, EOFError)):
+                raise cause
+            raise RuntimeError("terminal controller stopped") from completion.exception
+        raise completion.exception
+    return completion.result
 
 
 def _parse_kv(pairs: List[str]) -> Dict[str, Any]:
@@ -660,7 +876,7 @@ def _q_style() -> Any:
 def assemble_question_answers(questions, ask):
     """Build a human_input answer record from a question list + an `ask` callable.
 
-    `questions` is the pause's question list (each a dict {question, header, options,
+    `questions` is the host request's question list (each a dict {question, header, options,
     multi_select}). `ask(question) -> answer` is the per-question elicitation (the real
     one wraps questionary; tests pass a scripted callable). Returns a record keyed by
     each question's `header`: a single label `str` for a single-select question, a
@@ -672,17 +888,70 @@ def assemble_question_answers(questions, ask):
     return record
 
 
-def _ask_question(question, index=None, total=None):
+def _exit_questionary_prompt(application: Any) -> None:
+    """Wake one active prompt-toolkit application for a controller stop.
+
+    ``Application.exit`` must execute on the application's asyncio loop. The
+    broker's cancellation callback schedules this function thread-safely; a
+    late callback may race with normal application shutdown, so an already
+    closed prompt is deliberately a no-op.
+    """
+    try:
+        application.exit(
+            exception=_HostStop("terminal interaction stopped", primary=False)
+        )
+    except BaseException:
+        return
+
+
+def _ask_widget(widget: Any, request: Optional[PromptRequest] = None) -> Any:
+    """Run one questionary widget, optionally coupled to broker cancellation.
+
+    The ordinary pre-run input prompts have no broker request and keep
+    questionary's legacy ``ask`` behavior. Brokered prompts use the underlying
+    prompt-toolkit application so Ctrl-C remains visible and an engine stop can
+    wake the main-thread widget from a controller worker.
+    """
+    if request is None:
+        return widget.ask()
+    if widget.should_skip_question:
+        return widget.default
+
+    application = widget.application
+    loop_holder: list[Any] = []
+
+    def cancel() -> None:
+        """Schedule prompt exit from any engine/controller worker thread."""
+        if not loop_holder:
+            return
+        loop = loop_holder[0]
+        try:
+            loop.call_soon_threadsafe(_exit_questionary_prompt, application)
+        except RuntimeError:
+            # The prompt loop won the race and has already closed.
+            return
+
+    def pre_run() -> None:
+        """Publish the active prompt loop before accepting controller cancellation."""
+        loop_holder.append(asyncio.get_running_loop())
+        request.set_cancel_callback(cancel)
+
+    try:
+        return application.run(pre_run=pre_run)
+    finally:
+        request.set_cancel_callback(None)
+
+
+def _ask_question(question, index=None, total=None, request=None):
     """Elicit one question via questionary; return its answer (str, list[str], or None).
 
     `index`/`total` (1-based, optional) drive a styled "Question N of M · <header>" rule
-    printed above the widget so a multi-question pause reads as a numbered sequence; omit
+    printed above the widget so a multi-question request reads as a numbered sequence; omit
     them (the default) for a bare single prompt. Decorated choices ("label — description")
     are rendered for display but mapped back to the bare `label` so the returned value is
     always the bare label, never the hint string. An "Other" escape is always offered;
     choosing it routes to a free-text prompt. Returns `None` on cancel (questionary
-    `.ask()` yields None on Ctrl-C/Esc), which the caller treats like the legacy path —
-    stay paused."""
+    `.ask()` yields None on Ctrl-C/Esc) for the caller to interpret."""
     import questionary
 
     text = question["question"]
@@ -702,7 +971,10 @@ def _ask_question(question, index=None, total=None):
 
     # free-text-only question: no choices, just elicit a string.
     if not options:
-        return questionary.text(text, qmark="?", style=style).ask()
+        return _ask_widget(
+            questionary.text(text, qmark="?", style=style),
+            request,
+        )
 
     # map each displayed choice back to its bare label so the return value is the label.
     # The em-dash keeps the label visually distinct from its hint in the choice list.
@@ -717,15 +989,19 @@ def _ask_question(question, index=None, total=None):
     choices.append(_OTHER)
 
     if question.get("multi_select"):
-        picked = questionary.checkbox(
-            text, choices=choices, qmark="?", style=style
-        ).ask()
+        picked = _ask_widget(
+            questionary.checkbox(text, choices=choices, qmark="?", style=style),
+            request,
+        )
         if picked is None:  # cancelled
             return None
         labels = []
         for chosen in picked:
             if chosen == _OTHER:
-                other = questionary.text("Your answer", qmark="✎", style=style).ask()
+                other = _ask_widget(
+                    questionary.text("Your answer", qmark="✎", style=style),
+                    request,
+                )
                 if other is None:
                     return None
                 labels.append(other)
@@ -733,87 +1009,128 @@ def _ask_question(question, index=None, total=None):
                 labels.append(display_to_label[chosen])
         return labels
 
-    chosen = questionary.select(
-        text, choices=choices, qmark="?", style=style, use_indicator=True
-    ).ask()
+    chosen = _ask_widget(
+        questionary.select(
+            text, choices=choices, qmark="?", style=style, use_indicator=True
+        ),
+        request,
+    )
     if chosen is None:  # cancelled
         return None
     if chosen == _OTHER:
-        return questionary.text("Your answer", qmark="✎", style=style).ask()
+        return _ask_widget(
+            questionary.text("Your answer", qmark="✎", style=style),
+            request,
+        )
     return display_to_label[chosen]
 
 
-def _resume_to_terminal(
-    loaded: Any, result: RunResult, reporter: _ProgressReporter, on_event: Any
-) -> RunResult:
-    """Drive a paused run to a terminal, prompting for each pause's awaited value.
-
-    A HUMAN_INPUT pause prompts for the answer; a timed WAIT asks to release it now; an
-    external-event pause can't be satisfied here and stays paused. Cancelling a prompt
-    leaves the run paused (not an error).
-
-    The live spinner region is torn down before each questionary prompt (so the prompt
-    isn't fought over by the animation) and brought back up to stream the resumed run.
-    `on_event` is None under `--quiet`, in which case no spinner is shown."""
+def _prompt_request(request: PromptRequest) -> Any:
+    """Render and answer one broker request on the process main thread."""
     import questionary
 
+    if request.questions:
+        title = request.title or request.node_id or "this step"
+        count = len(request.questions)
+        intro = Text()
+        intro.append("Your input is needed for ", style="bold")
+        intro.append(str(title), style="bold cyan")
+        if request.question:
+            intro.append("\n")
+            intro.append(request.question)
+        plural = "question" if count == 1 else "questions"
+        intro.append(f"\n\n{count} {plural} to answer.", style="dim")
+        err_console.print(
+            Panel(intro, border_style="cyan", expand=False, title="human input")
+        )
+        sequence = itertools.count(1)
+        return assemble_question_answers(
+            request.questions,
+            lambda question: _ask_question(
+                question,
+                index=next(sequence),
+                total=count,
+                request=request,
+            ),
+        )
+
+    label = request.question or f"input for {request.node_id}"
+    return _ask_widget(
+        questionary.text(label, qmark="?", style=_q_style()),
+        request,
+    )
+
+
+def _resume_to_terminal(
+    loaded: Any,
+    result: RunResult,
+    *,
+    on_event: Optional[Callable[[Any], None]],
+    ask_user: Callable[..., Any],
+    render: Callable[[Callable[[], None]], None],
+) -> RunResult:
+    """Drive a paused run to a terminal from the controller thread.
+
+    Artificial ``HumanInputRequired`` and ``ScheduledPause`` reasons are elicited through
+    the brokered ``ask_user`` handler; warnings and progress stay brokered through
+    ``render`` and ``on_event``. Authorable AGENT, HUMAN_INPUT, and WAIT never enter this path.
+    Cancelling a structured compatibility answer keeps the run paused.
+    """
+
     while result.status == "paused":
-        reporter.stop()
         answered: List[Tuple[Any, Any]] = []
         for reason in result.pause_reasons:
             if reason.type == "human_input_required":
-                if reason.questions:
-                    # A boxed intro names the node + how many answers are awaited, then each
-                    # question renders as a numbered, keyed prompt below it.
-                    title = reason.node_title or reason.node_id or "this step"
-                    n = len(reason.questions)
-                    intro = Text()
-                    intro.append("Your input is needed for ", style="bold")
-                    intro.append(str(title), style="bold cyan")
-                    if reason.prompt:
-                        intro.append("\n")
-                        intro.append(reason.prompt)
-                    plural = "question" if n == 1 else "questions"
-                    intro.append(f"\n\n{n} {plural} to answer.", style="dim")
-                    err_console.print(
-                        Panel(intro, border_style="cyan", expand=False, title="human input")
-                    )
-                    # questions form: render each (numbered), assemble a {header: answer}
-                    # record. The closure threads 1-based position/total into the renderer
-                    # while keeping `assemble_question_answers` a pure single-arg seam.
-                    total = len(reason.questions)
-                    seq = itertools.count(1)
-                    record = assemble_question_answers(
-                        reason.questions,
-                        lambda q: _ask_question(q, index=next(seq), total=total),
-                    )
-                    if any(v is None for v in record.values()):
-                        return result  # cancelled — stay paused
-                    answered.append((reason, record))
-                else:
-                    label = reason.prompt or f"input for {reason.node_id}"
-                    answer = questionary.text(label, qmark="?", style=_q_style()).ask()
-                    if answer is None:
-                        return result  # cancelled — stay paused
-                    answered.append((reason, answer))
+                answer = ask_user(
+                    question=reason.prompt or f"input for {reason.node_id}",
+                    questions=reason.questions or None,
+                    answer_schema=reason.answer_schema or None,
+                    title=reason.node_title,
+                    node_id=reason.node_id,
+                )
+                if answer is None or (
+                    isinstance(answer, dict)
+                    and any(value is None for value in answer.values())
+                ):
+                    return result
+                answered.append((reason, answer))
             elif reason.type == "scheduled_pause":
-                if not questionary.confirm(
-                    f"{reason.node_id}: release the wait now?",
-                    default=True,
-                    qmark="?",
-                    style=_q_style(),
-                ).ask():
+                release_label = "Release now"
+                decision = ask_user(
+                    question=f"{reason.node_id}: release this artificial pause now?",
+                    questions=[
+                        {
+                            "header": "action",
+                            "question": "What should this run do?",
+                            "options": [
+                                {
+                                    "label": release_label,
+                                    "description": "Resume this artificial pause immediately.",
+                                },
+                                {
+                                    "label": "Keep waiting",
+                                    "description": "Leave the run paused.",
+                                },
+                            ],
+                            "multi_select": False,
+                        }
+                    ],
+                    title=reason.node_id,
+                    node_id=reason.node_id,
+                )
+                if not isinstance(decision, dict) or decision.get("action") != release_label:
                     return result
                 answered.append((reason, None))  # release: value=None
             else:
-                err_console.print(
-                    "[yellow]awaiting an external event — can't release it here[/yellow]"
+                render(
+                    partial(
+                        err_console.print,
+                        "[yellow]awaiting an external event — can't release it here[/yellow]",
+                    )
                 )
         if not answered:
             return result
         commands = [resume_command(loaded, reason, value) for reason, value in answered]
-        if on_event is not None:
-            reporter.start()
         result = resume_flow(loaded, engine=result.engine, commands=commands, on_event=on_event)
     return result
 
@@ -943,10 +1260,9 @@ def run(
         raise typer.Exit(code=1)
     supplied.update(prompted)
 
-    # `--quiet` silences progress entirely; otherwise stream node events to the reporter.
-    # `--verbose` adds each node's output. `verbose` implies progress even with no spinner.
+    # `--quiet` silences progress entirely; otherwise the main-thread broker streams
+    # node events to this reporter. `--verbose` adds each node's output.
     reporter = _ProgressReporter(err_console, verbose=verbose)
-    on_event = None if quiet else reporter.handle
 
     # The CLI flags supply the OUTERMOST cascade layer (fill-the-gap), not a hard override:
     # an agent's own llm_config and a flow-level llm_config: still win per field.
@@ -959,25 +1275,48 @@ def run(
     except RuntimeError as exc:
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
-    if not quiet:
-        reporter.start()
     try:
-        result = run_flow(
-            loaded, supplied, on_event=on_event, llm_config=cli_cfg or None,
-            num_workers=num_workers,
+        def controller(
+            stop_event: threading.Event,
+            on_event: Optional[Callable[[Any], None]],
+            ask_user: Callable[..., Any],
+            render: Callable[[Callable[[], None]], None],
+        ) -> RunResult:
+            """Own initial execution and every dormant Pause/resume cycle."""
+            current = _run_flow_controlled(
+                loaded,
+                supplied,
+                on_event=on_event,
+                llm_config=cli_cfg or None,
+                num_workers=num_workers,
+                stop_event=stop_event,
+            )
+            if current.status == "paused":
+                current = _resume_to_terminal(
+                    loaded,
+                    current,
+                    on_event=on_event,
+                    ask_user=ask_user,
+                    render=render,
+                )
+            return current
+
+        result = _run_with_terminal_controller(
+            controller,
+            prompt_handler=_prompt_request,
+            reporter=None if quiet else reporter,
         )
-        if result.status == "paused":
-            result = _resume_to_terminal(loaded, result, reporter, on_event)
     except KeyboardInterrupt:
-        # Ctrl+C while nodes are executing (as opposed to at an interactive prompt, which
-        # questionary handles by returning None -> "run cancelled") kills the run. Tear the
-        # live spinner region down first, then say so — without this the run dies silently
-        # mid-spinner and the shell prompt returns with no explanation.
-        reporter.stop()
+        # The controller helper has already stopped progress, signalled the shared
+        # event, woken every prompt, and joined all engine/controller workers.
         err_console.print("[yellow]cancelled by user[/yellow]")
         raise typer.Exit(code=130)
-    finally:
-        reporter.stop()
+    except (CancelledError, EOFError):
+        # A closed input stream or lifecycle cancellation is not Ctrl-C. The
+        # controller boundary has already joined its workers; report the same
+        # ordinary cancellation outcome used by pre-run prompts.
+        err_console.print("[yellow]run cancelled[/yellow]")
+        raise typer.Exit(code=1)
 
     if result.status == "succeeded":
         out = result.output
@@ -986,7 +1325,7 @@ def run(
         else:
             console.print(out)
     elif result.status == "paused":
-        err_console.print("[yellow]run paused (resume cancelled)[/yellow]")
+        err_console.print("[yellow]artificial compatibility pause unresolved[/yellow]")
         raise typer.Exit(code=1)
     else:
         # A node failure points at WHERE in the `.yaml` it raised (boxed frame), mirroring a

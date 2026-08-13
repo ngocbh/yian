@@ -1,28 +1,17 @@
-# e40 — an unknown AGENT `controls:` entry: the error NAMES the offending item but carries NO range.
-# COMPILE: the control-tool registry rejects it. Fails at load; no inputs needed.
+# e40 — the retired AGENT `controls:` field is rejected at its source range.
+# PARSE: the agent descriptor rejects the field. Fails at load; no inputs needed.
 #
-# The twin of e39, one container-shape over: `controls:` is a SEQUENCE where `llm_config:` is a
-# mapping. Same shape of failure — the message names `nope_control`, so the failure site knows
-# exactly which item is bad, and then attaches `range=None`. The frame comes from the LEGACY
-# LINE-MAP (the node header), same as e39.
-#
-# Together e39 + e40 make the point that #88's container table hides: `llm_config`/`controls` are NOT
-# "unbuilt stamps." They already know the answer and throw it away. A path/tuple/any key scheme gives
-# them a range to point AT; it does not make anything point.
-#
-# ⚠ ALSO A PREREQUISITE FOR #91/L4c (see e39): renders only via the legacy line-map.
-#
-#   CURRENT:  err.range is None; caret L22 (the `note:` node header) via the legacy line.
-#   EXPECTED: caret L25 — the offending `controls:` entry.
+# Human access is now authored as the ordinary `tools: [ask_user]` grant. Keeping
+# this seed makes a stale `controls:` spelling loud and precisely located.
 id: err-agent-controls-no-range
 name: err_agent_controls_no_range
 input:
   topic: str
 nodes:
-  note:                                   # L22 — the header the caret falls back to
+  note:
     kind: agent
     mode: tool_calling
-    controls: [ask_user, nope_control]    # L25 — THE ERROR (`nope_control` is not a control tool)
+    controls: [ask_user, nope_control]    # L14 — THE ERROR (the whole field is retired)
     input:
       topic: ${input.topic}
     output: str

@@ -7,6 +7,7 @@ AGENT-in-loop stamping blocker (DEFER) must not apply. Fake LLM + fake tool, no 
 import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
 from langchain_core.messages import AIMessage
+from pydantic import BaseModel
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import run_flow
 
@@ -20,10 +21,16 @@ class _FakeChat:
         return self._replies.pop(0)
 
 
+class _NoToolArgs(BaseModel):
+    """Schema for the fake ping tool, which accepts no arguments."""
+
+
 class _FakeTool:                       # real signature, mirrors tests/engine/test_agent.py
     def __init__(self, fn):
         self._fn = fn
         self.seen = []
+        self.args_schema = _NoToolArgs
+        self.tool_call_schema = _NoToolArgs
     def invoke(self, args):
         self.seen.append(args)
         return self._fn(args)

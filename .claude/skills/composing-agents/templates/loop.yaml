@@ -1,8 +1,8 @@
 # Loop — iterate a body until a predicate goes false (the engine's `while`).
 # The loop threads ONE carried record from each turn into the next: the body maps
 # the carried record to the NEXT carried record ('a -> 'a), and the loop re-runs it
-# while `while:` holds. Here the body PAUSES each turn on a human_input leaf, so
-# this is the shape a chat REPL takes: run -> pause -> resume -> pause -> ... -> done.
+# while `while:` holds. Here the body BLOCKS each turn on a human_input leaf, so
+# this is the shape a live chat REPL takes: one run threads answer -> turn -> answer.
 #
 # The contract ('a -> 'a): the body's `output:` shape must EQUAL the carried record
 # (the loop `input:`), and the names the body reads must be a SUBSET of the carried
@@ -20,7 +20,7 @@
 
 id: loop
 name: loop
-description: Chat-shaped loop — pause per turn, fold the message, stop on "bye".
+description: Chat-shaped loop — block per turn, fold the message, stop on "bye".
 
 defs:
   chat_turn:                       # the body flow ('a -> 'a over {messages, exited})

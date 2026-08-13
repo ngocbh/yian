@@ -110,19 +110,17 @@ note:
     assert node.inputs == {"topic": "${input.topic}"}
     assert node.outputs == "str"
     assert node.tools == []
-    assert node.controls == []
     assert node.mode == "tool_calling"
     assert node.llm_config == {}
 
 
 def test_agent_knobs_parse():
-    # seed 14 — mode / tools / controls / llm_config + object output
+    # seed 14 — mode / tools / llm_config + object output
     f = parse_file((_SEEDS / "14-agent-tools.yaml").read_text())
     node = parse_nodes(NodeReader.spanless(f.nodes))["reviewer"]
     assert isinstance(node, AgentDescriptor)
     assert node.mode == "tool_calling"
-    assert node.tools == ["get_web_data", "web_search"]
-    assert node.controls == ["ask_user"]
+    assert node.tools == ["get_web_data", "web_search", "ask_user"]
     assert node.llm_config == {
         "provider": "anthropic",
         "model": "claude-opus-4-8",

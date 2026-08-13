@@ -7,6 +7,10 @@ A host-agnostic run boundary that drives a loaded `ComposedFlow` through the
 - seed the `input` namespace + the host-ambient `system` clock, and
 - drive the engine to a terminal, mapping engine events to a `RunResult`.
 
+Authorable AGENT ``ask_user``, HUMAN_INPUT, and WAIT calls remain inside live node
+execution and return ordinary outputs. The ``paused`` result shape and resume helpers
+remain only as dormant custom/artificial generic-Pause compatibility.
+
 The flow's `asserts:` are NOT enforced here: they are lowered onto the synthesized
 boundary nodes at build (PRE/boundary asserts -> `StartNode.post_asserts` with each
 `${input.X}` rewritten to `${output.X}`, fired against START's COERCED output through
@@ -35,6 +39,7 @@ turns an already-compiled flow contract into a run. Imports flow DOWN only: `com
 from __future__ import annotations
 
 import copy
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
@@ -89,7 +94,8 @@ class RunResult:
             fresh run arguments.
         status (`str`):
             The terminal state: one of `"succeeded"`, `"failed"`, `"paused"`, or
-            `"aborted"`.
+            `"aborted"`. Authorable nodes do not produce `"paused"`; it is dormant
+            custom/artificial compatibility.
         output (`Any`, *optional*, defaults to `None`):
             The flow's single terminal value — a scalar or a multi-field object.
             Set only when `status == "succeeded"`.
@@ -202,6 +208,32 @@ def run_flow(
         print(result.status, result.output)  # succeeded ...
         ```
     """
+    return _run_flow_controlled(
+        loaded,
+        inputs,
+        run_id=run_id,
+        on_event=on_event,
+        llm_config=llm_config,
+        num_workers=num_workers,
+        stop_event=threading.Event(),
+    )
+
+
+def _run_flow_controlled(
+    loaded: ComposedFlow,
+    inputs: Dict[str, Any],
+    *,
+    run_id: Optional[str] = None,
+    on_event: Optional[EventHook] = None,
+    llm_config: Optional[Dict[str, Any]] = None,
+    num_workers: int = 0,
+    stop_event,
+) -> RunResult:
+    """Drive a fresh run with a host-owned cooperative stop event.
+
+    Private composition seam for the CLI controller. Public `run_flow` deliberately creates
+    its own event and retains its established signature.
+    """
     # Coerce the caller-passed args to declared scalar types (int/float/bool) but do NOT
     # fill declared defaults here — omitted-input defaulting lives solely in START (its
     # `_run_impl` runs apply_defaults; pre-Step-8 eval_node drives `_run_impl` directly), so
@@ -237,6 +269,7 @@ def run_flow(
         num_workers=num_workers,
         run_inputs=coerced,
         grow_builder=build_grow,
+        stop_event=stop_event,
     )
     events: List[Any] = []
     status = "incomplete"
@@ -246,9 +279,21 @@ def run_flow(
     result_range: Optional[SourceRange] = None  # resolved twin of result_locator (concrete range)
     tb: Optional[str] = None  # Python traceback of the aborting node, if one was captured
 
-    for event in engine.run():
+    event_stream = engine.run()
+    for event in event_stream:
         if on_event is not None:
-            on_event(event)
+            try:
+                on_event(event)
+            except BaseException:
+                # Observer/controller failure is the initiating cause. Wake cooperative nodes,
+                # then explicitly close the suspended engine generator so its pooled `finally`
+                # block fully joins workers. Cleanup must not replace the original exception.
+                stop_event.set()
+                try:
+                    event_stream.close()
+                except BaseException:
+                    pass
+                raise
         events.append(event)
         terminal = _STATUS.get(type(event))
         if terminal is not None:
@@ -296,9 +341,9 @@ def resume_flow(
     """
     Drive a suspended run to its next terminal via exactly one resume handle.
 
-    Resume from a live `engine=` (fast, in-process) or a deserialized `checkpoint=`
-    (durable, cross-process) — pass exactly one. The `commands` (typically the injected
-    human answer or a wait release, built with
+    Resume a custom/artificial compatibility pause from a live `engine=` (fast,
+    in-process) or a deserialized `checkpoint=` (durable, cross-process) — pass
+    exactly one. The `commands` (temporary generic-pause values built with
     [`resume_command`][agent_composer.run.resume_command]) are applied before the
     run continues. Mirrors [`run_flow`][agent_composer.run_flow]'s terminal-event loop and
     post-terminal asserts; if the run pauses again, the returned result carries fresh handles.
@@ -314,8 +359,8 @@ def resume_flow(
             A serializable snapshot from a paused `RunResult.checkpoint`, possibly
             deserialized in another process. Mutually exclusive with `engine`.
         commands (`list[Any]`, *optional*, defaults to `None`):
-            Engine commands to apply before resuming (e.g. delivered answers, wait
-            releases). `None` is treated as an empty list.
+            Engine commands to apply before resuming (delivered compatibility values for
+            artificial parked leaves). `None` is treated as an empty list.
         on_event (`Callable[[Any], None]`, *optional*, defaults to `None`):
             Called with each engine event as it occurs. Use it for progress reporting.
         llm_config (`dict[str, Any]`, *optional*, defaults to `None`):
@@ -365,9 +410,20 @@ def resume_flow(
     result_locator: Optional[SourceSpan] = None  # flow-level location (no NodeFailed behind it)
     result_range: Optional[SourceRange] = None  # resolved twin of result_locator (concrete range)
     tb: Optional[str] = None  # Python traceback of the aborting node, if one was captured
-    for event in engine.resume(commands or []):
+    event_stream = engine.resume(commands or [])
+    for event in event_stream:
         if on_event is not None:
-            on_event(event)
+            try:
+                on_event(event)
+            except BaseException:
+                # Match the fresh-run boundary: observer failure is primary, but cooperative
+                # resumed workers must be woken before closing the generator performs full joins.
+                engine.stop_event.set()
+                try:
+                    event_stream.close()
+                except BaseException:
+                    pass
+                raise
         events.append(event)
         terminal = _STATUS.get(type(event))
         if terminal is not None:
@@ -401,12 +457,12 @@ def resume_flow(
 
 def resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> "DeliverAnswerCommand":
     """
-    Map a host-resumable pause reason and an answer to the engine command that delivers it.
+    Map a host-resumable pause reason and a compatibility value to its delivery command.
 
     Dispatch is on the reason's *shape*, never a static-graph lookup: the parked node may be
-    a runtime-namespaced live id (e.g. `call_sub/w`, `agent/__ask#q1`) that exists only on
+    a runtime-namespaced live id (e.g. `call_sub/w`) that exists only on
     the live engine, where the command is resolved. A reason carrying a `node_id` delivers
-    the answer as that leaf's output; a reason without one (a bare external event a watcher
+    the value as that leaf's output; a reason without one (a bare external event a watcher
     satisfies) is not host-resumable.
 
     Args:
@@ -417,8 +473,8 @@ def resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> "DeliverAns
             A `PauseReason` from `RunResult.pause_reasons`. Must expose a `node_id` to be
             host-resumable.
         value (`Any`):
-            The answer to deliver. For a `human_input` it is the typed answer; for a `wait`
-            release pass `None`.
+            The compatibility value to deliver. A synthetic scheduled release
+            conventionally uses `None`; authorable WAIT never enters this path.
 
     Returns:
         `DeliverAnswerCommand`:
@@ -435,4 +491,4 @@ def resume_command(loaded: ComposedFlow, reason: Any, value: Any) -> "DeliverAns
     node_id = getattr(reason, "node_id", None)
     if node_id is None:
         raise ValueError(f"pause reason {getattr(reason, 'type', '?')!r} is not host-resumable")
-    return DeliverAnswerCommand(node_id=node_id, value=value)   # HUMAN_INPUT + WAIT (release: value=None)
+    return DeliverAnswerCommand(node_id=node_id, value=value)

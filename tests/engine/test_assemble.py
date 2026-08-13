@@ -201,7 +201,7 @@ def test_wiring_parity_accepts_matched_keys():
     check_wiring_parity({"n": node}, {"n": wiring})  # params == wiring keys -> no raise
 
 
-def test_wiring_parity_accepts_timed_wait_reserved_until():
+def test_wiring_parity_accepts_wait_reserved_until():
     result = WaitDescriptor(id="w", until="${input.t}").build(BuildContext({}))
     node, wiring = result.node, result.wiring
     check_wiring_parity({"w": node}, {"w": wiring})  # {"until"} reserved key accepted

@@ -1,8 +1,8 @@
 """Node-owned read hooks — `bind_reserved` / `binds_per_item`.
 
-The read boundary's reserved-input resolution (timed WAIT `until`, MAP `over`) lives on the
+The read boundary's reserved-input resolution (WAIT `until`, MAP `over`) lives on the
 node, not in a `node.kind == ...` branch in `eval_node`. These tests pin the hook contract per
-kind: a timed WAIT resolves `until`; MAP declares per-item binding and resolves `over` to a list;
+kind: WAIT resolves `until`; MAP declares per-item binding and resolves `over` to a list;
 an ordinary node reserves nothing and binds up front.
 """
 
@@ -21,19 +21,13 @@ class _PlainNode(Node):
         return None
 
 
-def test_timed_wait_bind_reserved_resolves_until():
-    # A timed WAIT pre-resolves its `until` source (from node_wiring) into a concrete ISO ts.
+def test_wait_bind_reserved_resolves_until():
+    # WAIT pre-resolves its `until` source (from node_wiring) into a concrete ISO deadline.
     pool = VariablePool()
     pool.set("deadline", "2026-01-01T00:00:00")
-    node = WaitNode("w", is_timed=True)
+    node = WaitNode("w")
     got = node.bind_reserved({"until": "${deadline.output}"}, pool)
     assert got == {"until": "2026-01-01T00:00:00"}
-
-
-def test_event_wait_bind_reserved_is_empty():
-    # An event-mode WAIT reserves nothing.
-    assert WaitNode("w", is_timed=False).bind_reserved({}, VariablePool()) == {}
-
 
 def test_map_binds_per_item_and_resolves_over():
     # MAP declares per-element binding and resolves `over` to the list run() maps over.

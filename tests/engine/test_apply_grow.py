@@ -3,8 +3,8 @@
 Drives `FlowEngine._apply_grow` directly with a tiny one-node child `Flow` (a leaf carrying a
 baked `commit_as`), asserting the generic core's contract: the node is spliced into `flow.nodes`,
 registered in the state manager, and its `start_id` scheduled. The spawner stand-in is a plain
-`FuncNode` carrying the default node traits (`grow_depth_delta=None`, `is_loop=False`,
-`grow_restamps_self=False`), so the trait-driven growth bookkeeping is a no-op — the core's
+`FuncNode` carrying the default node traits (`grow_depth_delta=None`, `is_loop=False`),
+so the trait-driven growth bookkeeping is a no-op — the core's
 splice/register/schedule/prune contract is exercised in isolation."""
 
 from agent_composer.compile.model import Edge, END_ID, Flow, START_ID

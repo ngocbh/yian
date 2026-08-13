@@ -12,8 +12,8 @@ from agent_composer.compose.loader import load_flow
 from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.suspension.checkpoint import RunCheckpoint
 
-# An AGENT(ask_user) inside a CALL child: the resume replays the CALL expansion, re-cloning
-# the inner agent. Top flow sets `provider`; the CLI layer (resume kwarg) sets `model`.
+# A HUMAN_INPUT before an AGENT inside a CALL child: resume replays the CALL expansion,
+# re-cloning the not-yet-run agent. Top flow sets `provider`; the CLI layer sets `model`.
 _CALL_WRAPS_AGENT = """
 id: cag
 name: cag
@@ -21,7 +21,13 @@ llm_config: {provider: anthropic}
 defs:
   approver:
     nodes:
-      agent: {kind: agent, prompt: go, controls: [ask_user], output: str}
+      approval: {kind: human_input, prompt: "Continue?", output: str}
+      agent:
+        kind: agent
+        mode: plain
+        input: {approval: "${approval.output}"}
+        prompt: "Approval was ${approval}"
+        output: str
     output: ${agent.output}
 nodes:
   gate:
@@ -42,10 +48,13 @@ output: ${answer.output}
 def test_cli_cascade_survives_cross_process_resume_through_call(monkeypatch):
     from langchain_core.messages import AIMessage
 
-    from tests.engine.test_agent_continuation import _ask, _chat
-
     captured: list = []
-    chat = _chat([_ask({"question": "ok?"}, "q1"), AIMessage(content="FINAL")])
+
+    class _Chat:
+        def invoke(self, messages):
+            return AIMessage(content="FINAL")
+
+    chat = _Chat()
 
     def fake_model_from_config(cfg):
         captured.append(dict(cfg))
@@ -58,7 +67,7 @@ def test_cli_cascade_survives_cross_process_resume_through_call(monkeypatch):
     assert rec.status == "paused"
 
     # Cross-process: recompile fresh, resume from the round-tripped checkpoint with the SAME
-    # CLI layer. The inner agent's 2nd-segment model build must carry provider+model.
+    # CLI layer. The inner agent's first model build after resume must carry provider+model.
     ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())
     fresh = load_flow(_CALL_WRAPS_AGENT)
     captured.clear()

@@ -15,7 +15,7 @@ from agent_composer.nodes.base import NodeResult
 DEFAULT_SYSTEM = (
     "You are an analysis agent inside a larger workflow. Follow the instructions "
     "precisely, use the available tools to gather any facts you need, and return "
-    "a clear, self-contained answer. Do not ask the user questions."
+    "a clear, self-contained answer. Ask the user only through an explicitly granted tool."
 )
 
 
@@ -30,21 +30,13 @@ class AgentRunContext:
     node_id: str
     prompt: str  # already rendered (${...} substituted)
     tools: list[str] = field(default_factory=list)  # ordinary tools
-    controls: list[str] = field(default_factory=list)  # control tools (e.g. ask_user)
-    model: Any = None  # a ready langchain chat model
-    llm_config: dict | None = None  # plain dict; a continuation carries it forward
+    llm_config: dict | None = None  # effective plain-dict model config
     output_type: Any = None  # the node's declared output Type; None = text passthrough
     retries: int = 2  # structured-generation self-correction cap (extra attempts)
     max_tool_iterations: int = -1  # model turns before AgentLoopError; -1 = no cap (default)
-    # The node's node-level POST `asserts:` reading `${output}` and their display texts. A pause
-    # defers the agent's committed output to the resume terminal, so these ride that terminal (via
-    # `agent_segment_subgraph`) and fire through its `run` wrapper — see `clone_continuation_pair`.
-    post_asserts: list[str] = field(default_factory=list)
-    assert_texts: dict = field(default_factory=dict)
 
 
-# A mode: a pure function of its context returning a NodeResult (Output | Grow) — the
-# agent pauses via the continuation `Grow`, never a direct `Pause`.
+# A mode is a pure node-body function of its process-local context.
 AgentMode = Callable[[AgentRunContext], NodeResult]
 
 MODES: dict[str, AgentMode] = {}

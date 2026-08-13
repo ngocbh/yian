@@ -1,12 +1,11 @@
 """Runtime graph-expansion machinery — the pure half.
 
-When a spawner (REF / MAP / LOOP / agent-pause) runs, it does not run a child engine; it
+When a spawner (CALL / MAP / LOOP) runs, it does not run a child engine; it
 returns a seed-first `Grow`. The injected `build_grow` interpreter constructs the fragment and
 the engine grows its live graph. This module holds the
 **pure** machinery that growth keys off:
 
-- `ns` / `map_callsite` (imported from `nodes.ids`) / `ask_resume_edge_id`:
-  deterministic id minting. Every
+- `ns` / `map_callsite` (imported from `nodes.ids`): deterministic id minting. Every
   cloned node/edge id is a pure function of `(callsite, child static id, element index)` —
   NO emission counter — so a re-clone on kill-recovery re-keys identically.
 
@@ -26,7 +25,6 @@ from __future__ import annotations
 import copy
 from typing import Any, Optional
 
-from agent_composer._growth import AgentSegment
 from agent_composer.compile.model import Edge, END_ID, Flow, START_ID
 from agent_composer.expr import rewrite_template_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
@@ -40,11 +38,6 @@ from agent_composer.nodes.start.node import StartNode
 # because the layer ladder forbids `compile` importing from `compose`. Authors cannot write
 # `__`-prefixed ids, so a synth name never collides with an author id.
 _SYNTH_PREFIX = "__assert_"
-
-
-def ask_resume_edge_id(callsite: str) -> str:
-    """The agent continuation edge id: `f"{callsite}/__ask_resume#0"`."""
-    return f"{callsite}/__ask_resume#0"
 
 
 # --------------------------------------------------------------------------- #
@@ -429,148 +422,15 @@ def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) ->
                 start_id=cloned.start_id, end_id=body_end)
 
 
-
-# --------------------------------------------------------------------------- #
-# clone_continuation_pair — the agent-pause continuation cloner
-# --------------------------------------------------------------------------- #
-
-
-def clone_continuation_pair(pair, callsite: str, *, output_type=None, retries: int = 2,
-                            max_tool_iterations: Optional[int] = None,
-                            post_asserts: "list[str] | None" = None,
-                            assert_texts: "dict[str, str] | None" = None) -> Flow:
-    """Materialize the agent-pause continuation PAIR namespaced at `callsite`.
-
-    `pair` is `[human_input_desc, resume_desc]` from `agent_step`'s continuation `Grow`. The
-    `human_input` leaf is the `start_id` (no incoming edge), so the engine's leaf-pause path applies
-    and its `HumanInputRequired.node_id` is the namespaced `hi_id`. The resume node is an `AgentNode`
-    with a `Resume` entry (the continuation arm — same `kind = AGENT`, no separate kind); it
-    reads the human's `answer` via the BARE forward-ref `${<hi_id>.output}` bound to
-    its single `answer` param; the data edge for that ref is synthesized via the SAME producer
-    derivation `clone_child`/`compose/edges/data.py` use (`f"{producer}->{consumer}#{i}"`), so the pool ref
-    and the edge agree on `hi_id`. Returns a `Flow` (`start_id = hi_id`, `end_id = resume_id`). Pure
-    — the dispatcher performs the impure append/register/seed.
-
-    `output_type`/`retries` carry the SPAWNER's declared output Type and self-correction cap
-    onto the resume node so a resumed agent with a non-text `output:` still emits the declared
-    type on its final turn (the dispatcher reads them off `flow.nodes[spawner_id]`; they are
-    not serialized — restore re-grows from the compiled spawner). For a multi-pause chain each
-    resume node becomes the next segment's spawner, so the type propagates segment to segment.
-
-    `max_tool_iterations` carries the spawner's per-node tool-iteration cap (from its `env:`)
-    onto the resume node's own `env` so a resumed agent keeps the same cap across the pause; a
-    `None` falls back to the module default `MAX_TOOL_ITERATIONS`.
-
-    `post_asserts`/`assert_texts` carry the SPAWNER's node-level POST `asserts:` reading `${output}`
-    onto the resume terminal (its `post_asserts`/`assert_texts`). A pause defers the agent's
-    committed output to this resume node, so its `${output}` post-asserts fire through the resume
-    node's own `run` wrapper when it produces the final answer (`{**record, "output": value}`) —
-    the SAME node-owned seam CALL uses on the cloned child END, NOT a bespoke redirect-commit site.
-    Kept `${output}`-only: the resume node's record holds just `answer` (the agent's declared inputs
-    are gone after the first turn), matching main's paused-agent firing scope."""
-    from agent_composer.nodes.agent.node import AgentNode, Resume
-    from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
-    from agent_composer.nodes.human_input import HumanInputNode
-
-    if max_tool_iterations is None:
-        max_tool_iterations = MAX_TOOL_ITERATIONS
-    hi_desc, resume_desc = pair
-    hi_id = ns(callsite, hi_desc["node_id"])              # e.g. agent/__ask#q1
-    resume_id = ns(callsite, "__resume#" + hi_desc["slot"])
-
-    hi_node = HumanInputNode(hi_id, prompt=hi_desc["prompt"])
-    resume_node = AgentNode(
-        resume_id,
-        entry=Resume(
-            memo=resume_desc["memo"],
-            iterations=resume_desc["iterations"],
-            pending=resume_desc["pending"],
-        ),
-        llm_config=resume_desc.get("llm_config"),
-        tools=resume_desc.get("tools"),
-        controls=resume_desc.get("controls"),
-        mode=resume_desc.get("mode", "tool_calling"),
-        retries=retries,
-    )
-    # The Resume entry's declared output Type is set as node DATA (AgentNode.__init__ takes no
-    # output_type param — the compiler stamps it; here the dispatcher supplies the spawner's).
-    resume_node.output_type = output_type
-    # Carry the per-node tool-iteration cap forward so the resumed loop uses the same bound.
-    resume_node.env = {"max_tool_iterations": max_tool_iterations}
-    # Carry the spawner's node-level `${output}` POST asserts onto the resume terminal so its own
-    # `run` wrapper fires them when it commits the final answer (record-only, `{"output": value}`).
-    # A re-pausing resume node propagates them to the next segment via `_ctx` (it reads these).
-    resume_node.post_asserts = list(post_asserts or [])
-    resume_node.assert_texts = dict(assert_texts or {})
-
-    # Rewrite the answer forward-ref to the NAMESPACED node-first ref.
-    answer_ref = f"${{{hi_id}.output}}"
-    producer = _producer_of(answer_ref)                  # == hi_id
-    assert producer is not None                          # a well-formed `${id.output}` always resolves
-    edge = Edge(
-        id=f"{producer}->{resume_id}#0",                 # same shape as compose/edges/data.py's producer edges
-        from_=producer,
-        to=resume_id,
-        input_group="answer",
-    )
-
-    return Flow(
-        nodes={hi_id: hi_node, resume_id: resume_node},
-        edges=[edge],
-        wiring={hi_id: {}, resume_id: {"answer": answer_ref}},
-        start_id=hi_id,
-        end_id=resume_id,
-    )
-
-
-def agent_segment_subgraph(pair, callsite: str, *, output_type=None, retries: int = 2,
-                           max_tool_iterations: Optional[int] = None,
-                           post_asserts: "list[str] | None" = None,
-                           assert_texts: "dict[str, str] | None" = None) -> Flow:
-    """The pure AGENT-pause builder: the continuation fragment an AGENT grows into when it pauses.
-
-    Wraps `clone_continuation_pair` (the deep-namespaced clone of the `[human_input, resume]` PAIR
-    at `callsite`) and returns a `Flow`. Its `start_id` is the `human_input` leaf (a 0-incoming
-    entry, so the engine's leaf-pause path applies and the `HumanInputRequired.node_id` is the
-    namespaced `hi_id`); its `end_id` is the resume terminal. Every cloned id is `ns(callsite, …)`-
-    prefixed (`hi_id = ns(callsite, hi_desc["node_id"])`, `resume_id = ns(callsite,
-    "__resume#" + hi_desc["slot"])`).
-
-    Bakes a PROVISIONAL `commit_as=callsite` on the resume terminal. This is NOT the final
-    commit target: a multi-pause chain routes the FINAL non-pausing Output back to the ORIGINAL
-    spawner, so the engine residual OVERRIDES this provisional value with the true origin (read
-    off the previous segment's baked `commit_as`). The builder is pure and cannot see the prior
-    segment, so it bakes the local callsite and lets the engine chain the origin.
-
-    `output_type`/`retries` carry the SPAWNER's declared output Type + self-correction cap onto
-    the resume node (see `clone_continuation_pair`), so a resumed agent with a non-text `output:`
-    still emits the declared type on its final turn and the type propagates segment to segment.
-    `max_tool_iterations` carries the spawner's per-node tool-iteration cap the same way, so the
-    resumed loop keeps the same bound across the pause.
-
-    `post_asserts`/`assert_texts` carry the SPAWNER's node-level `${output}` POST `asserts:` onto
-    the resume terminal (see `clone_continuation_pair`), so a pausing agent's `${output}` asserts
-    still fire — record-only, through the resume node's own `run` wrapper — on the resumed final
-    answer. The live pause captures `ctx.post_asserts`/`ctx.assert_texts`; durable `build_grow`
-    reads the identical pair off THIS node so a resumed run re-lowers the same asserts."""
-    cloned = clone_continuation_pair(pair, callsite=callsite, output_type=output_type, retries=retries,
-                                     max_tool_iterations=max_tool_iterations,
-                                     post_asserts=post_asserts, assert_texts=assert_texts)
-    cloned.nodes[cloned.end_id].commit_as = callsite   # PROVISIONAL: the engine residual overrides it to the true origin
-    return Flow(nodes=cloned.nodes, edges=cloned.edges, wiring=cloned.wiring,
-                start_id=cloned.start_id, end_id=cloned.end_id)
-
-
 def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
     """Build the deterministic fragment described by one spawner's canonical seed.
 
     This is the sole kind-aware growth-construction path. Nodes calculate only their pure seed;
     the package-root run boundary injects this callable into the kind-blind runtime for both live
-    growth and durable replay. AGENT is a temporary compatibility arm while control continuations
-    remain graph expansions.
+    growth and durable replay.
 
     Args:
-        spawner: The CALL, MAP, LOOP, or temporary AGENT node whose seed is being interpreted.
+        spawner: The CALL, MAP, or LOOP node whose seed is being interpreted.
         canonical_seed: The persisted builder input produced by that node. LOOP accepts the live
             tuple and its JSON-round-tripped two-element list form.
 
@@ -604,17 +464,6 @@ def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
                 dict(carried),
                 iteration,
                 spawner.respawn(iteration + 1),
-            )
-        case NodeKind.AGENT:
-            segment = AgentSegment.model_validate(canonical_seed)
-            return agent_segment_subgraph(
-                [segment.hi_desc, segment.resume_desc],
-                callsite=spawner.id,
-                output_type=spawner.output_type,
-                retries=spawner.retries,
-                max_tool_iterations=spawner._max_tool_iterations(),
-                post_asserts=list(spawner.post_asserts),
-                assert_texts=dict(spawner.assert_texts),
             )
         case _:
             raise ValueError(

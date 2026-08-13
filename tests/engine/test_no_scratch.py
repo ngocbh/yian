@@ -1,7 +1,7 @@
 """Structural-purity lock-in: scratch is fully eliminated.
 
-AGENT rides its memo as graph data (the resume_agent continuation) and R
-delivers HUMAN_INPUT/WAIT answers as the parked leaf's Output — so NO node reads scratch.
+AGENT owns its live loop on the running stack, and the engine delivers HUMAN_INPUT/WAIT
+answers as the parked leaf's Output — so no node reads scratch.
 This pins that the field + helpers are gone and that no node source even references the
 word `scratch`.
 """

@@ -494,7 +494,7 @@ class _ProgressReporter:
             self._emit(Text(f"✓ {node_id} → {event.handle}", style="green"))
             self._refresh()
         elif name == "NodeExpanded":
-            # A spawner (CALL/MAP/AGENT/LOOP) grew the graph instead of returning a value: a
+            # A spawner (CALL/MAP/LOOP) grew the graph instead of returning a value: a
             # loop driver continuing to the next iteration, a call/map splicing its child. It has
             # no terminal of its own (its value is committed by the spliced subgraph's terminal),
             # so just clear its spinner — no ✓ line. Without this the driver clones (`polish`,

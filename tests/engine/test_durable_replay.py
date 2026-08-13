@@ -4,8 +4,8 @@ tree that re-grows a paused, runtime-GROWN run on a FRESH process.
 `snapshot()` is the write half; `restore()` + `_replay_expansions` are the read half. These
 tests pin: the clone+register helpers are deterministic (re-key identically),
 `_replay_expansions` reproduces the live overlay byte-for-byte on a freshly recompiled flow
-(a NESTED oracle), and a true cross-process `dumps->loads->restore(fresh)->resume` of a CALL
-/ MAP / AGENT / nested grown run reaches the SAME terminal as the live engine.
+(a NESTED oracle), and a true cross-process `dumps->loads->restore(fresh)->resume` of a CALL,
+MAP, or nested grown run reaches the SAME terminal as the live engine.
 """
 
 from agent_composer.compile.expand import build_grow
@@ -278,103 +278,6 @@ def test_durable_map_n0_via_sibling_resumes_on_fresh_flow():
     assert term.output == [[], "A"]                         # MAP over [] -> [], sibling -> "A"
 
 
-# --- AGENT durable resume + the 2-hop ledger regression --------------------------------- #
-
-
-def _two_pause_agent_chat():
-    """A 2-pause mock chat (the test_agent_continuation pattern): two ask_user tool calls,
-    then a FINAL answer."""
-    from langchain_core.messages import AIMessage
-    from tests.engine.test_agent_continuation import _ask
-    return [_ask({"question": "q1?"}, "q1"), _ask({"question": "q2?"}, "q2"),
-            AIMessage(content="FINAL")]
-
-
-def test_durable_two_pause_agent_resumes_on_fresh_flow(monkeypatch):
-    """A 2-pause AGENT restored at pause 1 onto a freshly recompiled flow resumes past BOTH
-    pauses -> RunSucceeded 'FINAL'. The segment-2 leaf is deeply namespaced under the
-    segment-1 resume id, and exists in the restored flow after the live segment-2 growth on
-    the restored engine.
-
-    ONE shared mock chat across the simulated processes: the carried memo replays prior turns
-    WITHOUT re-invoking the model, so the 3 replies [q1, q2, FINAL] are consumed exactly once
-    each even across restore (mirrors test_agent_continuation's single-chat invariant)."""
-    import agent_composer.llm_clients as llm
-    from agent_composer import load_flow
-    from agent_composer.run import resume_command, run_flow
-    from tests.engine.test_agent_continuation import _chat, ASK
-
-    chat = _chat(_two_pause_agent_chat())                   # ONE instance shared across processes
-    monkeypatch.setattr(llm, "model_from_config", lambda cfg: chat)
-    loaded = load_flow(ASK)
-    rec = run_flow(loaded, {})                              # parks at pause 1 (invoke #1 -> q1)
-    assert rec.status == "paused"
-    ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())
-
-    fresh = FlowEngine.restore(
-        load_flow(ASK).compiled,
-        ckpt,
-        grow_builder=build_grow,
-    )
-    # resume past pause 1 -> the restored engine grows segment 2 and parks at pause 2 (invoke #2).
-    evs1 = list(fresh.resume(commands=[resume_command(loaded, ckpt.pause_reasons[0], "a1")]))
-    paused2 = [e for e in evs1 if isinstance(e, RunPaused)]
-    assert paused2, "segment-2 pause must surface on the restored engine"
-    seg2_leaf = paused2[-1].reasons[0].node_id
-    assert seg2_leaf.count("/") >= 2 and seg2_leaf in fresh.flow.nodes  # deeply namespaced
-    # deliver pause 2 -> FINAL (invoke #3)
-    evs2 = list(fresh.resume(commands=[resume_command(loaded, paused2[-1].reasons[0], "a2")]))
-    assert isinstance(evs2[-1], RunSucceeded) and evs2[-1].output == "FINAL"
-
-
-def test_two_hop_agent_resnapshot_ledger_matches_live(monkeypatch):
-    """run->snapshot->restore(fresh)->resume-to-2nd-pause->RE-snapshot. The re-snapshot's
-    expansions tree must equal the live engine's: ONE agent GrowRecord whose `children` carries the
-    segment-2 nesting record (NOT two top-level agent records / a truncated 0-child tree). Then a
-    3rd process restore(fresh)->resume reaches RunSucceeded 'FINAL'."""
-    import agent_composer.llm_clients as llm
-    from agent_composer import load_flow
-    from agent_composer.run import resume_command, run_flow
-    from tests.engine.test_agent_continuation import _chat, ASK
-
-    # --- live oracle: run to pause 2 on ONE engine; capture its ledger shape ---
-    # Its OWN chat (consumes its own 3 replies independently of the durable sequence).
-    monkeypatch.setattr(llm, "model_from_config", lambda cfg: _chat(_two_pause_agent_chat()))
-    loaded = load_flow(ASK)
-    live = run_flow(loaded, {})                             # pause 1
-    list(live.engine.resume(commands=[resume_command(loaded, live.pause_reasons[0], "a1")]))  # pause 2
-    live_tree = live.engine.snapshot().expansions
-    assert len(live_tree) == 1 and live_tree[0].spawner_id == "agent"
-    assert len(live_tree[0].children) == 1                  # ONE agent record, segment-2 nested child
-
-    # --- the durable sequence: ONE shared chat across the 3 simulated processes (the memo
-    # replays prior turns without re-invoking, so [q1, q2, FINAL] is consumed once each) ---
-    chat = _chat(_two_pause_agent_chat())
-    monkeypatch.setattr(llm, "model_from_config", lambda cfg: chat)
-    proc1 = run_flow(load_flow(ASK), {})                   # pause 1 (invoke #1)
-    ckpt1 = RunCheckpoint.loads(proc1.checkpoint.dumps())
-    hop1 = FlowEngine.restore(
-        load_flow(ASK).compiled,
-        ckpt1,
-        grow_builder=build_grow,
-    )
-    list(hop1.resume(commands=[resume_command(loaded, ckpt1.pause_reasons[0], "a1")]))  # pause 2 (invoke #2)
-    hop1_tree = hop1.snapshot().expansions
-    # the re-snapshot after a durable hop is the FULL tree, not a truncated/duplicated one.
-    assert len(hop1_tree) == 1 and hop1_tree[0].spawner_id == "agent"
-    assert len(hop1_tree[0].children) == 1
-
-    # --- hop 2: a 3rd process restores the re-snapshot and finishes ---
-    ckpt2 = RunCheckpoint.loads(hop1.snapshot().dumps())
-    hop2 = FlowEngine.restore(
-        load_flow(ASK).compiled,
-        ckpt2,
-        grow_builder=build_grow,
-    )
-    evs = list(hop2.resume(commands=[resume_command(loaded, ckpt2.pause_reasons[0], "a2")]))  # invoke #3
-    assert isinstance(evs[-1], RunSucceeded) and evs[-1].output == "FINAL"
-
-
 # --- NESTED durable resume — CALL-in-CALL + MAP-of-CALL --------------------------------- #
 
 
@@ -461,112 +364,6 @@ def test_durable_map_of_call_resumes_on_fresh_flow():
     assert dur_term.output == live_term.output                 # durable == live
 
 
-# --- AGENT(ask_user) nested under a CALL — durable resume ------------------------------- #
-# The AGENT durable tests cover a TOP-LEVEL agent, and the CALL/MAP durable tests use a
-# HUMAN_INPUT child — but nothing else exercises an AGENT pause whose GrowRecord rides UNDER a
-# CALL's GrowRecord (the nested-spawner arm: the agent spawner is stamped in `_spawner_expansion`
-# at the enclosing call record, so its grow rides under that record's flat `children`). These
-# drive that nesting cross-process.
-
-_CALL_WRAPS_AGENT = """
-id: cag
-name: cag
-defs:
-  approver:
-    nodes:
-      agent: {kind: agent, prompt: go, controls: [ask_user], output: str}
-    output: ${agent.output}
-nodes:
-  gate:
-    kind: call
-    call: approver
-output: ${gate.output}
-"""
-
-
-def test_durable_agent_under_call_resumes_on_fresh_flow(monkeypatch):
-    """An AGENT(ask_user) inside a CALL child pauses ONCE; its GrowRecord rides UNDER the gate
-    call's GrowRecord (the nested-spawner arm). A cross-process
-    dumps->loads->restore(fresh)->resume drives past the pause to RunSucceeded 'FINAL'. The
-    parked leaf is deeply namespaced under BOTH the call AND the agent spawner."""
-    import agent_composer.llm_clients as llm
-    from langchain_core.messages import AIMessage
-
-    from agent_composer import load_flow
-    from agent_composer.run import resume_command, run_flow
-    from tests.engine.test_agent_continuation import _ask, _chat
-
-    chat = _chat([_ask({"question": "ok?"}, "q1"), AIMessage(content="FINAL")])  # ONE shared chat
-    monkeypatch.setattr(llm, "model_from_config", lambda cfg: chat)
-    loaded = load_flow(_CALL_WRAPS_AGENT)
-    rec = run_flow(loaded, {})                                  # invoke #1 -> ask_user -> pause
-    assert rec.status == "paused"
-    reason = rec.pause_reasons[0]
-    assert reason.node_id == "gate/agent/__ask#q1"             # deep: call ns + agent spawner ns
-    assert reason.node_id in rec.engine.flow.nodes
-
-    # the descriptor tree: ONE call GrowRecord whose child is the agent GrowRecord (nesting)
-    ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())
-    calls = [e for e in ckpt.expansions if e.spawner_id == "gate"]
-    assert len(calls) == 1
-    assert [c.spawner_id for c in calls[0].children] == ["gate/agent"]
-
-    fresh = FlowEngine.restore(
-        load_flow(_CALL_WRAPS_AGENT).compiled,
-        ckpt,
-        grow_builder=build_grow,
-    )
-    assert reason.node_id in fresh.flow.nodes                  # the deep leaf rebuilt by replay
-    evs = list(fresh.resume(commands=[resume_command(loaded, ckpt.pause_reasons[0], "yes")]))
-    assert isinstance(evs[-1], RunSucceeded) and evs[-1].output == "FINAL"
-
-
-def test_durable_two_pause_agent_under_call_resumes_on_fresh_flow(monkeypatch):
-    """The multi-pause variant — an AGENT inside a CALL pauses TWICE. Restored at pause 1 onto
-    a freshly recompiled flow, the resume grows segment 2 (still under the gate call GrowRecord)
-    and parks at pause 2; delivering it reaches RunSucceeded 'FINAL'. The segment-2 leaf chains
-    under the segment-1 resume id AND the call namespace (triply deep)."""
-    import agent_composer.llm_clients as llm
-    from langchain_core.messages import AIMessage
-
-    from agent_composer import load_flow
-    from agent_composer.run import resume_command, run_flow
-    from tests.engine.test_agent_continuation import _ask, _chat
-
-    chat = _chat([_ask({"question": "q1?"}, "q1"), _ask({"question": "q2?"}, "q2"),
-                  AIMessage(content="FINAL")])                  # ONE shared chat across processes
-    monkeypatch.setattr(llm, "model_from_config", lambda cfg: chat)
-    loaded = load_flow(_CALL_WRAPS_AGENT)
-    rec = run_flow(loaded, {})                                  # pause 1 (invoke #1)
-    assert rec.status == "paused"
-    ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())
-
-    fresh = FlowEngine.restore(
-        load_flow(_CALL_WRAPS_AGENT).compiled,
-        ckpt,
-        grow_builder=build_grow,
-    )
-    # resume past pause 1 -> the restored engine grows segment 2 and parks at pause 2 (invoke #2).
-    evs1 = list(fresh.resume(commands=[resume_command(loaded, ckpt.pause_reasons[0], "a1")]))
-    paused2 = [e for e in evs1 if isinstance(e, RunPaused)]
-    assert paused2, "segment-2 pause must surface on the restored engine"
-    seg2_leaf = paused2[-1].reasons[0].node_id
-    assert seg2_leaf == "gate/agent/__resume#q1/__ask#q2"      # call ns + agent continuation chain
-    assert seg2_leaf in fresh.flow.nodes
-
-    # the re-snapshot ledger is still ONE call GrowRecord -> ONE agent GrowRecord with a nested
-    # segment-2 child (the K-pause nesting chain).
-    tree = fresh.snapshot().expansions
-    calls = [e for e in tree if e.spawner_id == "gate"]
-    assert len(calls) == 1 and len(calls[0].children) == 1
-    agent_desc = calls[0].children[0]
-    assert agent_desc.spawner_id == "gate/agent" and len(agent_desc.children) == 1
-
-    # deliver pause 2 -> FINAL (invoke #3)
-    evs2 = list(fresh.resume(commands=[resume_command(loaded, paused2[-1].reasons[0], "a2")]))
-    assert isinstance(evs2[-1], RunSucceeded) and evs2[-1].output == "FINAL"
-
-
 # --- review fixes ----------------------------------------------------------- #
 
 
@@ -626,13 +423,13 @@ def test_restore_does_not_mutate_a_held_checkpoint():
 
 
 def test_replay_does_not_promote_a_nested_child(monkeypatch):
-    """A nested child GrowRecord (a grow spliced UNDER a parent — e.g. an AGENT re-pause chained
-    under its segment-1 record, or a CALL inside a MAP element) must NOT be promoted to a top-level
-    ledger entry. `_replay_expansions` appends only when `is_top_level`; a parent's `children` are
+    """A nested child GrowRecord (for example, a CALL inside a MAP element) must not become top-level.
+
+    `_replay_expansions` appends only when `is_top_level`; a parent's `children` are
     walked with `is_top_level=False` (they already ride under the parent by deserialization). This
     pins that gate against a reserved nested slot."""
     inner = GrowRecord(spawner_id="inner", seed={}, children=[])
-    top = GrowRecord(spawner_id="agent", seed={}, children=[inner])
+    top = GrowRecord(spawner_id="outer", seed={}, children=[inner])
     e = FlowEngine(_side_counter_flow([]))
     monkeypatch.setattr(e, "_apply_grow", lambda *a, **k: None)
     e.expansions = []

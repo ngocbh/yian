@@ -316,7 +316,7 @@ nodes:
 | `11-reuse-anchors.yaml` | `x-*` extension keys + YAML anchor (`&`/`*`/`<<:`) reuse + `llm_config` |
 | `12-depends-on.yaml` | run-ordering edges — `depends_on` (co-skip) / `runs_after` (pure order); a side-effect node, no data binding, + `bool` output |
 | `13-types-objects.yaml` | the type grammar — Python scalars, `list[X]`, inline/block/nested objects (records), deep dotted access |
-| `14-agent-tools.yaml` | AGENT knobs — `mode` / `tools` / `controls` (`ask_user`) / `llm_config` + structured output |
+| `14-agent-tools.yaml` | AGENT knobs — `mode` / ordinary `tools` including `ask_user` / `llm_config` + structured output |
 | `17-effects-human-wait.yaml` | **(DRAFT/proposed)** effects — `HUMAN_INPUT` (typed answer) + `WAIT` (`until:`) + `case` on the answer + a `depends_on` side-effect |
 | `18-research-pipeline.yaml` | **(DRAFT)** realistic end-to-end — fan-out reviewers → typed-`View` synth → `case … on` stance → multi-output + `asserts:` |
 | `19-binding-stances.yaml` | **(DRAFT/proposed)** every input-binding stance — required (plain, co-skip) / optional (`:-`) / branch-join (`\|`) / fail-loud (`:?`); pins the **per-input readiness** model (review-doc CC3 / Problem 2) |

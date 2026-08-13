@@ -4,9 +4,9 @@ A node is a pure function of its bound input record; the ENGINE owns both bounda
 the read (bind the inputs from the pool) and the write (the dispatcher stores `Output`).
 This generator is that read seam plus the dispatch normalization, lifted out of
 the node (it replaces the temporary `Node._emit`). It yields `NodeStarted`, binds the
-record, pre-resolves reserved keys (timed WAIT `until` / mapped-call `over`), builds the per-kind
-narrow caps (a mapped call's `bind_item`, the engine-owned `caps['llm']` model factory, and the
-host-owned `caps['stop_event']`, each gated on its node trait), runs the node through its `run`
+record, pre-resolves reserved keys (timed WAIT `until` / mapped-call `over`), builds narrow caps
+(a mapped call's `bind_item` and the host-owned `caps['stop_event']`, each gated on its node
+trait), runs the node through its `run`
 wrapper (which owns pre/post assert firing — record-only), and turns the returned `NodeResult`
 into one terminal `NodeSucceeded`/`NodeFailed` — or a single `PauseRequested` for a returned
 `Pause`.
@@ -47,28 +47,15 @@ from agent_composer.runtime.watchdog import node_watchdog
 from agent_composer.typesys.pool import VariablePool
 
 
-def _default_llm(config):
-    """Default LLM provider for the caps['llm'] seam: a call-time lazy lookup of the package
-    factory, so monkeypatching `agent_composer.llm_clients.model_from_config` is honored."""
-    from agent_composer.llm_clients import model_from_config
-
-    return model_from_config(config)
-
-
 def eval_node(
     node,
     flow,
     pool: VariablePool,
-    llm=_default_llm,
     *,
     wiring_override=None,
     stop_event=None,
 ):
     """Evaluate one node through the engine read/dispatch seam; yield its event stream.
-
-    `llm` is the engine-owned LLM-client provider (a `model_from_config`-shaped callable)
-    handed to LLM-backed nodes via `caps['llm']` (gated on `node.needs_llm`); it defaults to
-    the lazy package-lookup thunk so a monkeypatched factory is honored on the direct path.
 
     `wiring_override` is a per-run wiring dict the engine may supply for THIS node instead of
     the compiled `flow.wiring[node.id]` — used to narrow top-level START's `${input.X}` sources
@@ -106,17 +93,13 @@ def eval_node(
         # -> list (validated in the hook -> NodeFailed). The hook reads its sources from
         # `node_wiring` (the node/flow split) + `pool`; default `{}` for an ordinary node.
         record.update(node.bind_reserved(node_wiring, pool))
-        # Per-kind narrow caps, built by the engine — never the pool itself. A mapped call
-        # gets `bind_item`; an LLM-backed node gets `llm`. HUMAN_INPUT/WAIT receive neither.
+        # Narrow caps built by the engine — never the pool itself. A mapped call gets
+        # `bind_item`; a cooperative blocker gets `stop_event` below.
         caps: dict[str, Any] = {}
         if per_item:
             # Per-element bind from params + flow.wiring (pure). No system cap — the
             # cloned children share the one live pool, so `${system.X}` resolves directly.
             caps["bind_item"] = lambda el: bind_params(node.params or [], node_wiring, pool, item=el)
-        if node.needs_llm:
-            # LLM-backed node (AGENT): hand the engine-driven path its model factory. A
-            # direct no-cap node driver owns a lower-layer llm_clients fallback instead.
-            caps["llm"] = llm
         if node.needs_stop_event:
             # Engine-driven evaluation always passes its run-owned event. Direct evaluation has
             # no host owner, so create one only for an opted-in node; ordinary nodes allocate and
@@ -152,7 +135,7 @@ def eval_node(
                 # the gate is the kind-blind `is_spawner` trait, so the census stays 0.
                 raise RuntimeError(
                     f"node {node.id!r} (kind {node.kind.value}) returned a Grow but is "
-                    f"not a spawner (CALL/MAP/AGENT/LOOP); only spawner kinds may grow the graph"
+                    f"not a spawner (CALL/MAP/LOOP); only spawner kinds may grow the graph"
                 )
             yield NodeExpanded(node.id, result)
             return

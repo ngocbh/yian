@@ -1,5 +1,8 @@
-"""6.1 — the `agent` kind handle: parse records field ranges; descriptor unchanged."""
+"""The `agent` kind handle: parse ranges and reject retired continuation fields."""
 
+import pytest
+
+from agent_composer.compose import LoadError
 from agent_composer.compose.nodes.agent import AgentDescriptor
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
@@ -40,3 +43,15 @@ def test_agent_parse_matches_today_descriptor_and_stamps_ranges():
     assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
     # The prompt value sits on line 4 of the flow (1-based).
     assert desc.field_ranges[("field", "prompt")].start_line == 4
+
+
+def test_agent_descriptor_rejects_controls_field():
+    text = """\
+nodes:
+  writer:
+    kind: agent
+    prompt: hi
+    controls: [ask_user]
+"""
+    with pytest.raises(LoadError, match="controls.*not allowed"):
+        AgentDescriptor.parse("writer", _reader_for(text, "writer"))

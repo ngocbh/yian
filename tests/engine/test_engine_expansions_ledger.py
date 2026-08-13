@@ -87,7 +87,7 @@ def test_ledger_attributes_exist():
 
 
 def test_ledger_empty_for_static_flow():
-    """A flow with no REF/MAP/AGENT-pause leaves `expansions` empty after a complete run.
+    """A flow with no CALL/MAP/LOOP leaves `expansions` empty after a complete run.
     A static flow has no spawners to fire."""
     g = _graph(
         [FuncNode("a", lambda p: {"output": 1})],
@@ -122,31 +122,6 @@ def test_ledger_records_map_expansion_with_records():
     # seed carries the per-element binding (payload from ${item}):
     payloads = sorted(r.get("payload") for r in maps[0].seed)
     assert payloads == ["a", "b"]
-
-
-def test_ledger_records_agent_expansion_per_pause(monkeypatch):
-    """A multi-pause AGENT creates ONE top-level GrowRecord; each subsequent pause chains a
-    segment under the previous segment's `children` (the nesting chain)."""
-    from langchain_core.messages import AIMessage
-    import agent_composer.llm_clients as llm
-    from agent_composer import load_flow
-    from tests.engine.test_agent_continuation import _chat, _ask, ASK
-    chat = _chat([
-        _ask({"question": "q1?"}, "q1"),
-        _ask({"question": "q2?"}, "q2"),
-        AIMessage(content="FINAL"),
-    ])
-    monkeypatch.setattr(llm, "model_from_config", lambda cfg: chat)
-    loaded = load_flow(ASK)
-    from agent_composer.run import run_flow, resume_command
-    rec = run_flow(loaded, {})  # parks at pause 1
-    agents = [e for e in rec.engine.expansions if e.spawner_id == "agent"]
-    assert len(agents) == 1
-    assert agents[0].children == []  # one segment so far, no nested resume yet
-    # in-memory resume the first pause to trigger segment 2:
-    cmd = resume_command(loaded, rec.pause_reasons[0], "first")
-    list(rec.engine.resume(commands=[cmd]))
-    assert len(agents[0].children) == 1  # second segment chained under the first
 
 
 def test_nested_call_inside_map_is_descriptor_child():

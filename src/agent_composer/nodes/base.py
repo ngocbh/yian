@@ -6,8 +6,8 @@ A node is a **pure function of its bound input record**: it implements
 kind, a generator that yields `StreamChunk` and then *returns* a `NodeResult`.
 The node never receives the pool: the engine's `runtime.eval_node` seam binds its
 inputs (the read boundary) and hands it a record. Narrow effects enter through trait-gated
-capabilities: mapped `call` receives `bind_item`, LLM-backed nodes receive `llm`, and a
-cooperatively blocking node may receive `stop_event`. Failure is **not** a variant — a
+capabilities: mapped `call` receives `bind_item`, and a cooperatively blocking node may receive
+`stop_event`. Failure is **not** a variant — a
 failing node `raise`s and the engine boundary turns it into `NodeFailed`. A returned `Pause`
 becomes one `PauseRequested`; the engine delivers the answer as the parked leaf's `Output`
 (deliver-as-Output — the node never re-runs). A streaming kind is a generator that
@@ -222,8 +222,8 @@ class Node(ABC):
         commit_as (`str`, *optional*):
             Engine-baked commit redirect: write this node's Output under `commit_as`
             instead of its own id (and fire that target's out-edges). Set by the
-            `_grow_*` expanders on a subflow terminal (a CALL/MAP child END filler,
-            a MAP END-list filler, an agent resume continuation) to point back at the
+            `_grow_*` expanders on a subflow terminal (a CALL/MAP child END filler
+            or a MAP END-list filler) to point back at the
             spawner id; `None` for an ordinary node (commit under its own id).
         origin_id (`str`, *optional*):
             "Attribute my grows and self-commit to this origin node." `None` on every
@@ -242,7 +242,7 @@ class Node(ABC):
 
     kind: ClassVar[NodeKind]
     # Declares "I may grow the graph" (a spawner returns a `Grow`). Overridden True by
-    # the spawner kinds (CALL/MAP/AGENT/LOOP); the `eval_node` seam gates the grow path on it.
+    # the spawner kinds (CALL/MAP/LOOP); the `eval_node` seam gates the grow path on it.
     is_spawner: ClassVar[bool] = False
     # Declares "I bind my inputs PER ELEMENT via a `bind_item` cap rather than once up front"
     # (MAP). When True, the read seam (`eval_node`) starts the record empty and supplies
@@ -254,16 +254,9 @@ class Node(ABC):
     # bounded by MAX_REF_DEPTH. Possible values:
     #   None  — this grow is NOT REF recursion; the core does NO depth work (LOOP: bounded by
     #           max_iters + MAX_TOTAL_NODES, not depth).
-    #   0     — carry the parent depth UNCHANGED, no bound (AGENT: a K-pause chain is one call).
     #   1     — a nested call, +1 and bounded (CALL/MAP: each child is one deeper level).
-    # Overridden by CALL/MAP (1) and AGENT (0); the default None fits LOOP + any non-spawner.
+    # Overridden by CALL/MAP (1); the default None fits LOOP + any non-spawner.
     grow_depth_delta: ClassVar[Optional[int]] = None
-    # Declares "on a grow, also stamp `_spawner_expansion` at MY OWN bare id" (AGENT). An agent
-    # that pauses, resumes, and pauses AGAIN grows twice at the SAME spawner id, so its record must
-    # be findable under its own id for the re-pause to nest under it (re-pause idempotency). Every
-    # other spawner grows at a FRESH namespaced id per instance, so it needs no self-stamp.
-    # Overridden True by AgentNode.
-    grow_restamps_self: ClassVar[bool] = False
     # Declares "I am the self-respawning fixpoint-iteration driver" (LOOP). The growth core
     # (`_apply_grow`) gates the origin-keyed single-live-record ledger invariant under this trait:
     # each iteration is a fresh driver clone whose grow is attributed to `origin_id` (the compiled
@@ -271,11 +264,6 @@ class Node(ABC):
     # record per loop. A plain trait check suffices — the core never dispatches on the kind.
     # Overridden True by LoopNode; False for every other kind.
     is_loop: ClassVar[bool] = False
-    # Declares "I am LLM-backed" (AGENT). When True, the read seam (`eval_node`) builds the
-    # `caps['llm']` capability — a `model_from_config`-shaped factory the engine owns — and
-    # passes it to `run`; when False (the common case) no LLM cap is built. Mirrors
-    # `binds_per_item` gating. Overridden True by AgentNode.
-    needs_llm: ClassVar[bool] = False
     # Declares "I can cooperate with a host-owned execution stop". When True, the read seam
     # (`eval_node`) supplies the exact `caps['stop_event']` object owned by the run. Nodes that
     # do not opt in receive no stop capability, keeping the effect boundary explicit.
@@ -378,7 +366,7 @@ class Node(ABC):
 
         Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
-        are passed only to nodes whose traits request them (`bind_item`, `llm`, `stop_event`).
+        are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
         A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
         from agent_composer.events import SourceSpan
 

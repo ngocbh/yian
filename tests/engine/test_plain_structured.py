@@ -1,5 +1,6 @@
 """`plain` mode — native structured output when the node declares a non-text type."""
 
+import agent_composer.llm_clients as llm_clients
 from agent_composer.nodes.agent.modes.common import AgentRunContext
 from agent_composer.nodes.agent.modes.plain import plain
 from agent_composer.typesys.values import Type, ValueKind
@@ -22,7 +23,7 @@ class _StructuredModel:
         raise AssertionError("should use with_structured_output for a declared type")
 
 
-def test_plain_uses_structured_output_for_record():
+def test_plain_uses_structured_output_for_record(monkeypatch):
     typ = Type(
         kind=ValueKind.OBJECT,
         fields={
@@ -32,7 +33,13 @@ def test_plain_uses_structured_output_for_record():
         required=frozenset({"name", "score"}),
     )
     model = _StructuredModel()
-    ctx = AgentRunContext(node_id="a", prompt="x", model=model, output_type=typ)
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: model)
+    ctx = AgentRunContext(
+        node_id="a",
+        prompt="x",
+        llm_config={"provider": "openai", "model": "gpt-4o"},
+        output_type=typ,
+    )
     out = plain(ctx)
     assert out.value == {"name": "Ada", "score": 9}  # a plain dict, not a pydantic obj
 
@@ -45,9 +52,10 @@ class _TextModel:
         return R()
 
 
-def test_plain_bare_str_text_passthrough():
+def test_plain_bare_str_text_passthrough(monkeypatch):
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: _TextModel())
     ctx = AgentRunContext(
-        node_id="a", prompt="x", model=_TextModel(),
+        node_id="a", prompt="x",
         output_type=Type.scalar(ValueKind.STRING),
     )
     assert plain(ctx).value == "hello"  # unchanged behavior

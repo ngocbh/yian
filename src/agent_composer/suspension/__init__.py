@@ -13,10 +13,7 @@ from agent_composer.suspension.commands import (
     Command,
     DeliverAnswerCommand,
 )
-from agent_composer.suspension.expansions import (
-    AgentSegment,
-    GrowRecord,
-)
+from agent_composer.suspension.expansions import GrowRecord
 from agent_composer.suspension.pause import (
     EventAwaited,
     HumanInputRequired,
@@ -26,7 +23,6 @@ from agent_composer.suspension.pause import (
 
 __all__ = [
     "AbortCommand",
-    "AgentSegment",
     "Command",
     "DeliverAnswerCommand",
     "EventAwaited",

@@ -12,9 +12,6 @@ ONE uniform record per grow — no per-kind variants:
 
 - CALL   — `seed` is the call-arg record dict; one record per call.
 - MAP    — `seed` is the per-element records list; one record per map.
-- AGENT  — `seed` is one pause's `{hi_desc, resume_desc}` (validated as an `AgentSegment` on
-           read); a K-pause agent is a NESTING CHAIN of K records — segment i+1 rides under
-           segment i's `children`, keyed by the resume-terminal id (`{spawner}/__resume#…`).
 - LOOP   — `seed` is the LIVE iteration's `(record, index)`; exactly ONE record per loop
            spawner (superseded iterations' records are dropped as their overlay is pruned).
 
@@ -26,9 +23,6 @@ regardless of order.
 from typing import Any
 
 from pydantic import BaseModel, Field
-
-from agent_composer._growth import AgentSegment
-
 
 class GrowRecord(BaseModel):
     """Uniform durable record of ONE `Grow` (see the module docstring for the per-kind `seed`

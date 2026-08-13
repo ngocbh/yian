@@ -1,18 +1,10 @@
-"""AGENT node package — one node, behavior = mode (the loop) + skills (tools).
+"""AGENT package — one authored leaf with a process-local model/tool loop.
 
-`node` defines the single `AgentNode` and its `entry: Fresh | Resume` sum (a fresh agent
-vs the resumed continuation of an `ask_user` pause); `modes/` holds the loop/prompting
-methods (one per `mode`, registered in `MODES`). Agent modes talk to an LLM SDK directly
-(see `node`).
+``modes/`` holds the prompting methods. Every granted capability, including
+``ask_user``, is an ordinary tool executed inside the live loop.
 """
 
-from agent_composer.nodes.agent.node import (
-    AgentEntry,
-    AgentNode,
-    DEFAULT_MODE,
-    Fresh,
-    Resume,
-)
+from agent_composer.nodes.agent.node import AgentNode, DEFAULT_MODE
 from agent_composer.nodes.agent.modes import (
     MODES,
     AgentLoopError,
@@ -22,9 +14,6 @@ from agent_composer.nodes.agent.modes import (
 
 __all__ = [
     "AgentNode",
-    "AgentEntry",
-    "Fresh",
-    "Resume",
     "DEFAULT_MODE",
     "MODES",
     "AgentLoopError",

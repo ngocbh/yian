@@ -104,7 +104,7 @@ def test_chat_help():
 
 def test_chat_two_turns(tmp_path, monkeypatch):
     # The AGENT node resolves its model via `agent_composer.llm_clients.model_from_config`
-    # (the engine's `_default_llm` re-imports it lazily) — patch it to the fake.
+    # from its selected mode at call time — patch it to the fake.
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: _FakeModel())
     # `--provider openai` makes `_ensure_provider_keys` pick openai for the flow's agent
     # (which sets no provider); satisfy its key check with a dummy env var (no product change).
@@ -301,4 +301,3 @@ def test_chat_tool_call_through_the_loop(tmp_path, monkeypatch):
     assert r.exit_code == 0
     assert "here are your flows" in r.output   # the loop reached a final answer after the tool call
     assert "turn failed" not in r.output       # the tool call was handled, not looped to the cap
-

@@ -3,7 +3,7 @@
 No API keys: `model_from_config` is monkeypatched to return a scripted fake chat
 model that yields canned `AIMessage`s; tool execution goes through `TOOL_REGISTRY`
 (monkeypatched). Covers `plain` mode, `tool_calling` (plain answer, a tool
-round-trip, the iteration cap), and the `ask_user` control-tool suspend/resume.
+round-trip, strict grants, exception propagation, and the iteration cap).
 
 (The AGENT-through-the-loader run path is covered once the Compose-loader agent
 run lands; AGENT-mode compile-time validation moved with the v0 compiler.)
@@ -16,13 +16,8 @@ from pydantic import BaseModel
 
 import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
-from agent_composer.compile.expand import build_grow
-from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
-from agent_composer.events import NodeFailed, RunSucceeded
+from agent_composer.events import NodeFailed
 from agent_composer.nodes.agent import AgentNode
-from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.llm_clients import LLMConfig
 
@@ -289,51 +284,7 @@ def test_env_max_tool_iterations_rejects_bad_value(monkeypatch):
 
 
 def test_agent_run_has_no_scratch_kwarg():
-    # AgentNode.run is a pure `run(self, inputs)` — the agent memo rides as graph
-    # data through the resume_agent continuation, never a `scratch` cap.
+    # AgentNode.run is a pure `run(self, inputs)` with no engine scratch capability.
     import inspect
 
     assert "scratch" not in inspect.signature(AgentNode.run).parameters
-
-
-def test_ask_user_in_memory_continuation_round_trip(monkeypatch):
-    # The OLD model (checkpoint restore + __agent_state__:agent / answer:q1) is dead.
-    # ask_user now pauses on a NAMESPACED human_input leaf id; resume delivers the
-    # answer as that leaf's Output (deliver-as-Output), and the resume_agent
-    # continuation finishes — without re-invoking turn 1 (memo replayed). Durable
-    # paused-checkpoint resume of an agent is deferred.
-    from types import SimpleNamespace
-
-    from agent_composer.events import RunPaused, RunResumed
-    from agent_composer.run import resume_command
-    from agent_composer.suspension.pause import HumanInputRequired
-
-    chat = _FakeChat([
-        _ai_tool_call("ask_user", {"question": "Approve the action?"}, call_id="q1"),
-        AIMessage(content="FINAL"),
-    ])
-    _patch_model(monkeypatch, chat)
-    node = AgentNode("agent", prompt="go", controls=["ask_user"],
-                     llm_config=LLMConfig(), mode="tool_calling")
-    graph = CompiledFlow.from_parts(
-        {"agent": node, START_ID: StartNode(START_ID, input_decls=[]),
-         END_ID: EndNode.record(END_ID, output_names=["output"])},
-        # END_ID is record-mode; its `output` param binds ${agent.output} via the producer edge.
-        [Edge("e0", START_ID, "agent"),
-         Edge("agent->__end__#0", "agent", END_ID, input_group="output")],
-        outputs=[FlowOutput(name="output", from_="${agent.output}")],
-        wiring={END_ID: {"output": "${agent.output}"}},
-    )
-    eng = FlowEngine(graph, grow_builder=build_grow)
-    evs = list(eng.run())
-    assert isinstance(evs[-1], RunPaused)
-    reason = evs[-1].reasons[0]
-    assert isinstance(reason, HumanInputRequired) and reason.prompt == "Approve the action?"
-    # the parked id is the NAMESPACED leaf (callsite=spawner "agent"), not "agent" itself
-    assert reason.node_id.startswith("agent/") and reason.node_id in eng.flow.nodes
-    assert chat.calls == 1
-    cmd = resume_command(SimpleNamespace(compiled=graph), reason, "yes, approved")
-    evs2 = list(eng.resume(commands=[cmd]))
-    assert isinstance(evs2[0], RunResumed)
-    assert isinstance(evs2[-1], RunSucceeded) and evs2[-1].output == "FINAL"
-    assert chat.calls == 2  # turn 1 replayed from carried memo, NOT re-invoked

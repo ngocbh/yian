@@ -1,9 +1,9 @@
-# ask-user — a model-CHOSEN clarifying question via the ask_user control.
+# ask-user — a model-chosen clarifying question via the blocking ask_user tool.
 #
-# `ask_user` is a *control tool* granted to a `tool_calling` agent. Granting it only
-# ENABLES the capability: the agent suspends to ask the human ONLY when the model
-# decides it needs a fact it can't supply itself, then resumes with the answer fed back
-# as the tool result. (Contrast with the HUMAN_INPUT node — see human-approval.yaml —
+# `ask_user` is an ordinary tool granted to a `tool_calling` agent. Granting it only
+# ENABLES the capability: the live agent loop blocks to ask the human ONLY when the model
+# decides it needs a fact it can't supply itself, then receives the answer as the tool
+# result. (Contrast with the HUMAN_INPUT node — see human-approval.yaml —
 # which ALWAYS pauses at a fixed point. For a guaranteed gate, use HUMAN_INPUT; for an
 # agent that asks "only if needed", use this.)
 #
@@ -11,8 +11,8 @@
 # model: a tool-capable model that judges the request ambiguous will call ask_user; a
 # request that is already clear (or a weak model) may just answer outright.
 #
-# Exercises: an AGENT in `tool_calling` mode with a `controls:` list and no ordinary
-# tools — the loop binds ask_user, suspends on the call, and resumes with the answer.
+# Exercises: an AGENT in `tool_calling` mode with an authored `tools:` grant — the
+# loop binds ask_user and blocks on the call until the answer arrives.
 #
 # Run it with a deliberately ambiguous request (the CLI will prompt if the agent asks):
 #   ac run examples/ask-user.yaml --input request="Book me a table for dinner"
@@ -27,8 +27,8 @@ input:
 nodes:
   assistant:
     kind: agent
-    mode: tool_calling                   # the loop — required for the agent to call a control
-    controls: [ask_user]                 # enable the ask_user capability (no ordinary tools here)
+    mode: tool_calling                   # the loop — required for the agent to call tools
+    tools: [ask_user]                    # explicitly grant the blocking ask_user tool
     input:
       request: ${input.request}
     output: str

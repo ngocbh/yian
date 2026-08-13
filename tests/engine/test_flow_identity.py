@@ -679,6 +679,50 @@ def test_connection_string_keys_keep_sanitized_endpoint_identity(
     assert flow_fingerprint(first) != flow_fingerprint(changed)
 
 
+@pytest.mark.parametrize("quote", ['"', "'"], ids=["double", "single"])
+def test_connection_string_key_redacts_quoted_semicolon_credentials(quote):
+    first = _compiled()
+    rotated = copy.deepcopy(first)
+    first.nodes["step"].env["DATABASE_CONNECTION_STRING"] = (
+        "Server=db.example;Database=app;UserID=alice;"
+        f"Password={quote}first;secret{quote};Encrypt=true"
+    )
+    rotated.nodes["step"].env["DATABASE_CONNECTION_STRING"] = (
+        "Server=db.example;Database=app;UserID=bob;"
+        f"Password={quote}second;secret{quote};Encrypt=true"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first;secret"):
+        assert credential not in manifest_text
+
+    for old, new in (
+        ("Server=db.example", "Server=other.example"),
+        ("Database=app", "Database=other"),
+        ("Encrypt=true", "Encrypt=false"),
+    ):
+        changed = copy.deepcopy(rotated)
+        changed.nodes["step"].env["DATABASE_CONNECTION_STRING"] = changed.nodes[
+            "step"
+        ].env["DATABASE_CONNECTION_STRING"].replace(old, new)
+        assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_unparsed_semicolon_connection_string_is_excluded_safely():
+    first = _compiled()
+    rotated = copy.deepcopy(first)
+    first.nodes["step"].env["DATABASE_CONNECTION_STRING"] = (
+        'Server=db.example;Password="first;secret'
+    )
+    rotated.nodes["step"].env["DATABASE_CONNECTION_STRING"] = (
+        'Server=db.example;Password="second;secret'
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    assert "first;secret" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+
 def test_connection_string_key_keeps_structured_endpoint_identity():
     first = _compiled()
     second = copy.deepcopy(first)

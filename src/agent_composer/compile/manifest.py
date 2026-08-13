@@ -491,7 +491,7 @@ def _redact_hierarchical_uri(value: str) -> str | None:
 def _semicolon_property_spans(
     value: str, start: int
 ) -> list[tuple[int, int, int, str]] | None:
-    """Parse semicolon properties, honoring braces around values containing delimiters."""
+    """Parse semicolon properties, honoring braced and quoted delimiter values."""
     spans: list[tuple[int, int, int, str]] = []
     cursor = start
     while cursor < len(value):
@@ -513,6 +513,25 @@ def _semicolon_property_spans(
                     scan += 1
                     continue
                 if scan + 1 < len(value) and value[scan + 1] == "}":
+                    scan += 2
+                    continue
+                scan += 1
+                break
+            else:
+                return None
+            while scan < len(value) and value[scan].isspace():
+                scan += 1
+            if scan < len(value) and value[scan] != ";":
+                return None
+            end = scan
+        elif scan < len(value) and value[scan] in {"'", '"'}:
+            quote = value[scan]
+            scan += 1
+            while scan < len(value):
+                if value[scan] != quote:
+                    scan += 1
+                    continue
+                if scan + 1 < len(value) and value[scan + 1] == quote:
                     scan += 2
                     continue
                 scan += 1
@@ -660,6 +679,11 @@ def _libpq_property_spans(
                     if cursor + 1 == len(value):
                         return None
                     cursor += 2
+                elif value[cursor] == ";":
+                    # An unescaped semicolon is a DSN property delimiter, not a
+                    # libpq value. Reject it so a failed DSN parse cannot be
+                    # misclassified as sanitized conninfo.
+                    return None
                 else:
                     cursor += 1
         spans.append((value_start, cursor, key))

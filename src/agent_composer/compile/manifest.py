@@ -203,6 +203,7 @@ _HIGH_CONFIDENCE_CREDENTIAL_SUFFIXES = (
     "_api_token",
     "_account_key",
     "_access_token",
+    "_access_key",
     "_access_key_id",
     "_auth_token",
     "_authorization",
@@ -218,9 +219,11 @@ _HIGH_CONFIDENCE_CREDENTIAL_SUFFIXES = (
     "_secret",
     "_secret_access_key",
     "_secret_key",
+    "_session_cookie",
     "_session_token",
     "_shared_access_key",
     "_shared_access_signature",
+    "_subscription_key",
     "_webhook_url",
 )
 _AMBIGUOUS_CREDENTIAL_SUFFIXES = ("_auth", "_signature", "_token")

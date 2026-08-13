@@ -314,6 +314,20 @@ def test_flow_fingerprint_excludes_webhook_bearer_urls():
     assert "FIRST_SECRET" not in json.dumps(flow_manifest(first), sort_keys=True)
 
 
+@pytest.mark.parametrize(
+    "credential_key",
+    ["AZURE_SUBSCRIPTION_KEY", "MINIO_ACCESS_KEY", "SESSION_COOKIE"],
+)
+def test_flow_fingerprint_excludes_standard_flat_credentials(credential_key):
+    first = _compiled()
+    rotated = copy.deepcopy(first)
+    first.nodes["step"].env[credential_key] = "first-credential"
+    rotated.nodes["step"].env[credential_key] = "second-credential"
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    assert "first-credential" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+
 def test_flow_fingerprint_keeps_structured_auth_semantics_without_credentials():
     first = _compiled()
     rotated = copy.deepcopy(first)

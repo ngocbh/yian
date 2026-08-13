@@ -120,7 +120,7 @@ class CompiledFlow(Flow):
     runtime's state manager. The sole mutation is [`add_subgraph`][agent_composer.CompiledFlow.add_subgraph],
     the runtime's append-only overlay used when a spawner node expands the graph at run time.
 
-    Extends [`Flow`][agent_composer.compile.model.Flow] with the runtime-only concerns below;
+    Extends the internal `Flow` topology carrier with the runtime-only concerns below;
     the shared topology core (`nodes`/`edges`/`wiring`/`start_id`/`end_id`) lives on the base.
 
     Attributes:

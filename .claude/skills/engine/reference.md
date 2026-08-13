@@ -80,26 +80,28 @@ subflow commit-under-spawner) rides `Outcome` data (`Route.handle`, `Output.comm
 spawner's own `post_asserts` (a `call` node's `asserts:`) are **lowered onto the cloned child
 `END`** at grow time (`expand._lower_spawner_post_asserts`): `${output}` stays; a declared input
 `${X}` becomes a synth END param wired off the cloned child START's coerced output, so the assert
-fires through the child END's ordinary `run` wrapper — not re-checked at any commit site. This
-lowering runs in BOTH the live grow path AND `replay_grow`, so a resumed CALL fires the same
-post-asserts (dropping it in `replay_grow` would silently skip the assert on resume). The moved
+fires through the child END's ordinary `run` wrapper — not re-checked at any commit site. Live
+growth and durable replay both pass the canonical seed persisted in the growth ledger through
+the same injected `compile.expand.build_grow`, so lowering is identical on resume. The moved
 assert's failure names the **child END id**, not the spawner.
 
 An **AGENT** that pauses is a spawner too: its `${output}` node-level `post_asserts` are carried
 onto the **resume terminal** (`expand.clone_continuation_pair`, via `agent_segment_subgraph`), so
 they fire through that terminal's own `run` wrapper when it commits the resumed final answer —
 `${output}`-only (the resume record holds just `answer`, the agent's declared inputs are gone
-after the first turn). Like CALL, this carry runs on BOTH the live pause path (off the mode
-`ctx`) AND `replay_grow` (off the spawner node), so a resumed agent enforces the same assert; for
+after the first turn). The live pause seed and its durable ledger copy are both interpreted by
+the same injected `compile.expand.build_grow`, which reads the asserts from the spawner node; for
 a multi-pause chain each resume terminal propagates them to the next segment via `_ctx`.
 
 ## `NodeKind` (closed vocabulary)
 
 `NodeKind` is a closed enum (no registry/metaclass), but the engine **core does not dispatch on
 it** — `runtime/engine.py` + `runtime/eval_node.py` branch only on the closed `Outcome` sum and on
-node-owned traits/hooks (below). Any kind-specific `match` lives in a node's own `run`. A ratchet
-test (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion` dispatch count
-at 0. Even cross-cutting runtime additions stay kind-blind: the **watchdog**
+node-owned traits/hooks (below). Ordinary behavior lives in each node's own `run`; growth
+construction's sanctioned closed kind match lives in `compile.expand.build_grow`, which
+interprets node-produced seeds outside the runtime core. A ratchet test
+(`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion` dispatch count at 0.
+Even cross-cutting runtime additions stay kind-blind: the **watchdog**
 (`runtime/watchdog.py`) that logs a node whose `run()` overruns a soft budget — added for inline
 CODE, which runs source **in-process** with no way to kill a runaway — times *every* node and never
 branches on kind, so the census stays 0. (A `code:` node is either a `module:function` reference or
@@ -120,7 +122,7 @@ plumbing; re-add when real serving lands.
 | an agent | a flow whose leaf is an LLM loop | no special contract |
 | `call:` / `uses:` | function application / a module ref | nests to any depth |
 | the variable pool bind | `let (node_id, key) = ...` | immutable, no mutation |
-| `NodeKind` + `match` | a variant + exhaustive `match` | closed set, no registry; but the CORE matches on `Outcome`/traits, not on kind |
+| `NodeKind` + `match` | a variant + exhaustive `match` | closed set, no registry; the runtime core matches on `Outcome`/traits, while compile's `build_grow` interprets spawner seeds by kind |
 | `Output \| Route \| Pause \| Grow` | a sum type (the result) | failure is a `raise`, not a case |
 | pause / resume | algebraic effect + handler | node *performs* a pause; the scheduler *handles* it |
 | a package charter (`__init__`) | a module signature (`.mli`) | a narrow declared interface |
@@ -160,7 +162,7 @@ model made enforceable.
   langchain + `llm_clients` and builds its model via `model_from_config`.
 - **`llm_config` cascade resolved once at run start** — `resolve_llm_cascade`
   (`compile/`) walks the static call tree top-down, per-field fill-the-gap
-  (most-specific wins), deep-copying each CALL/MAP child for per-callsite isolation,
+  (most-specific wins), deep-copying each CALL/MAP/LOOP child for per-callsite isolation,
   and bakes the effective dict onto every `AgentNode`. It also returns a complete map
   keyed by stable slash-separated static paths. The CLI config is the outermost
   authored layer; the run boundary reads process provider/model defaults exactly once

@@ -344,7 +344,7 @@ def resume_flow(
         # Durable restore replays graph growth, so it needs a private clean graph just like a
         # fresh run. A live engine already owns its graph and must keep using that instance.
         flow = copy.deepcopy(loaded.compiled)
-        # Resolve the cascade BEFORE restore: restore's replay re-clones each CALL/MAP child
+        # Resolve the cascade BEFORE restore: restore's replay re-clones each CALL/MAP/LOOP child
         # from the static graph, so the effective config must be baked on first. Snapshot the
         # ambient defaults once each for this durable initialization. In-process resume via
         # engine= already carries the resolved configs and does not read settings again.

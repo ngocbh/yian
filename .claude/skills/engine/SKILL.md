@@ -65,9 +65,12 @@ Our north star is a *functional language of agents*. Design the feature as a
   those shapes rather than inventing ad-hoc control flow.
 - **Sum types + exhaustive match.** OCaml models a closed set of cases as a
   variant and forces an exhaustive `match`. Our closed sets are `NodeKind` (kept
-  closed, no registry/metaclass) and the node result `Outcome`. Note the *core*
-  matches on `Outcome`, not on `NodeKind` — any kind-specific `match` belongs in a
-  node's own `run` or is expressed via node-owned traits/hooks, never in the engine.
+  closed, no registry/metaclass) and the node result `Outcome`. Note the runtime
+  *core* matches on `Outcome`, not on `NodeKind`: ordinary behavior belongs in a
+  node's own `run` or node-owned traits/hooks. Growth construction has a
+  sanctioned compile-layer match: the closed `build_grow` interpreter
+  interprets node-produced seeds into fragments before the kind-blind runtime
+  splices them.
 - **Modules with explicit signatures (`.mli`).** A package exposes a narrow,
   declared interface and hides the rest — which is just the `structure` skill's
   package charters. Honor the boundary.
@@ -126,8 +129,9 @@ Most are just the functional model (above) made enforceable:
   namespace is generic.
 - **Closed `NodeKind` vocabulary; the core is kind-BLIND** — `NodeKind` stays a closed enum (no
   registry/metaclass), but the engine core (`runtime/engine.py` + `runtime/eval_node.py`) does NOT
-  branch on it. Any kind-specific `match` lives in a node's own `_run_impl`; the core dispatches only on
-  the closed `Outcome` sum and on node-owned traits/hooks (`binds_per_item`, `bind_reserved`,
+  branch on it. Ordinary behavior lives in a node's own `_run_impl`; growth construction's
+  sanctioned kind match lives in `compile.expand.build_grow`. The core dispatches only on the
+  closed `Outcome` sum and on node-owned traits/hooks (`binds_per_item`, `bind_reserved`,
   `grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`). A
   ratchet test (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion`
   dispatch count at 0. A separate layer ratchet forbids `nodes -> compile` and

@@ -20,7 +20,7 @@ Fixes #<!-- issue number -->
 <!-- Link the plan comment you posted on the issue before implementing. Note any
      deviations from that plan and why. -->
 
-- Plan: #<!-- issue number --> (comment)
+- Plan: <!-- Paste the URL of the plan comment. -->
 - Deviations from the plan:
 
 ## Invariants respected
@@ -31,13 +31,6 @@ Fixes #<!-- issue number -->
 - [ ] No self-rewriting graph / agentic routing (structural determinism preserved).
 - [ ] No new heavy dependency in the core.
 - [ ] Docs + skills updated in this PR for any surface change (syntax / node kind / CLI / invariant).
-
-## Adversarial self-review
-
-<!-- What did you actively try to break before opening this PR? Edge cases, boundary
-     inputs, resume/concurrency paths, invariant violations. What did you find and fix? -->
-
--
 
 ## Test plan
 

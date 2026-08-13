@@ -1,217 +1,208 @@
 # Contributing
 
-Thanks for your interest in Agent Composer. This guide covers local setup and the
-conventions we hold contributions to — most importantly, the **docstring style**.
+This is the main guide for contributing to Agent Composer. Keep changes small,
+clear, and tied to a GitHub issue.
 
 ## Development setup
+
+Agent Composer supports Python 3.10 or newer.
 
 ```bash
 git clone https://github.com/ngocbh/agent-composer
 cd agent-composer
-pip install -e ".[all,dev]"
+python -m pip install -e ".[all,dev]"
 ```
 
-The `all` extra pulls in every provider client (Anthropic / OpenAI / Google /
-Ollama); `dev` adds the test and build tooling.
+## GitHub workflow
 
-## Contribution workflow
+Every change starts with a GitHub issue, including small fixes.
 
-All work is tracked in **GitHub issues** — there is no in-repo backlog. Every change,
-from a typo fix to a new node kind, follows the same issue-driven workflow.
+1. Search for an existing issue. If none fits, use the right issue template.
+2. Assign the issue to yourself and add the `in progress` label.
+3. Check the issue against the current code. Reproduce bugs and cite
+   `file:line` evidence.
+4. Close a stale or finished issue with evidence instead of changing code.
+5. Split work that is too large for one focused pull request into linked issues.
+6. Create a `dev/<domain>/<short-name>` branch.
+7. Post a short plan as an issue comment before implementation.
+8. Work in small steps: change, test, pass, commit.
+9. Add an issue comment only for useful progress, a blocker, or a plan change.
+10. Open a pull request from the template and link the issue with
+    `Fixes #<number>`.
 
-**Before you write any code:**
+Work is complete only after the pull request merges into `main`.
 
-1. **Find or create the issue.** Search the [issue tracker](https://github.com/ngocbh/agent-composer/issues)
-   first. If nothing covers the work, open one using the matching template under
-   `.github/ISSUE_TEMPLATE/` (bug / feature / setup) and apply sensible labels.
-
-**To address an issue:**
-
-2. **Claim it.** Assign yourself (`gh issue edit <n> --add-assignee @me`) and/or add the
-   `in progress` label so nobody duplicates your effort.
-3. **Read it — but don't trust it.** Read the whole issue, treating every claim as
-   unverified. Issues go stale as the code moves.
-4. **Verify against the current codebase.** Reproduce the bug, or for a feature decide
-   whether it is still necessary and not already implemented. Quote `file:line` evidence.
-   If the issue is already addressed or no longer needed, **close it with that evidence**
-   instead of writing code.
-5. **Treat any proposed solution as one option, not the plan.** A fix proposed earlier may
-   be stale — verify it still holds against today's code before adopting it.
-6. **List the options.** Enumerate candidate approaches with their trade-offs, weighed
-   against the project's design intent (general combinators, a kind-blind engine core,
-   node purity, structural determinism — see [`src/agent_composer/README.md`](src/agent_composer/README.md)).
-7. **Split if it's too big.** Break a large issue into linked sub-issues and tackle them
-   one at a time.
-8. **Finalize, branch, and post a plan.** Choose the approach, cut a branch (below), and
-   post an **implementation plan** as a comment on the issue (see
-   [Implementation plan structure](#implementation-plan-structure)).
-9. **Implement** in small, tested steps — code + test + green, one logical change per commit.
-10. **Run an adversarial self-review** before opening the PR: try to break your own code —
-    edge cases, boundary inputs, resume/concurrency paths, and the engine invariants (layer
-    ladder, kind census, node purity). Fix what you find.
-11. **Open the PR** using `.github/PULL_REQUEST_TEMPLATE.md`, linking the issue with
-    `Fixes #<n>`.
-
-### Branch naming
-
-Never commit a feature straight to `main`. Cut a branch first:
-
-- **Branch off** `main` for independent work, or off another `dev/...` branch when the
-  work builds on an unmerged feature.
-- **Name it** `dev/<domain>/<feature>` — `<domain>` is the area it touches (`engine`,
-  `cli`, `compose`, `docs`, ...) and `<feature>` is a short kebab-case slug, e.g.
-  `dev/engine/loop-until-times` or `dev/cli/chat-repl`.
-- **A feature is finished only once it is merged to `main`** — not when the code is
-  written or tests pass on the branch. Git history and merged PRs are the record.
+Useful commands:
 
 ```bash
-git switch -c dev/engine/loop-until-times   # cut the branch off main
-# ... implement, test, commit ...
-# open a PR; a feature is done only after it merges to main
+gh issue list --state all --search "short search terms"
+gh issue create --template bug_report.yml
+gh issue create --template feature_request.yml
+gh issue edit 123 --add-assignee @me --add-label "in progress"
 ```
 
-### Implementation plan structure
+## Write clear GitHub text
 
-Post the plan as a comment on the issue *before* implementing, so the approach can be
-reviewed while it is still cheap to change. A plan should contain:
+Use short sentences and simple words. Put facts before opinions. Include only
+evidence, decisions, changes, and results that help the next reader.
 
-- **Summary** — one or two sentences: what will change and why. Link the issue.
-- **Problem verification** — how you confirmed the issue is real against the *current*
-  code: `file:line` evidence, reproduction steps for a bug, or the justification that a
-  feature is still needed and not already covered.
-- **Options considered** — the candidate approaches, each with its trade-offs, and which
-  one you chose and why. Note explicitly if you rejected the issue's original proposed
-  solution and the reason.
-- **Chosen approach** — the design in enough detail to review before any code exists:
-  new/changed node kinds, `${...}` syntax, seams, data shapes.
-- **Changes** — the files/modules you expect to touch, and the tests you will add.
-- **Invariants respected** — how the change keeps the layer ladder acyclic, the engine
-  core kind-blind (census stays at 0), nodes pure, and the graph structurally
-  deterministic. Call out any tension.
-- **Test plan** — the specific tests that will prove the change works.
-- **Risks / out of scope** — what could break, and anything deliberately deferred (file a
-  follow-up issue for it).
+### Issues
 
+Use the issue template and keep each answer brief. A useful issue says:
 
-## Running tests
+```text
+Problem
+<What happens now, and when?>
+
+Goal
+<What should happen?>
+
+Evidence
+<A command, error, reproduction, or file:line.>
+
+Done when
+- <One result that can be checked.>
+
+Out of scope
+- <Related work this issue will not do.>
+```
+
+A proposed fix is a suggestion, not a fact. Check it against the current code.
+Only list alternatives when there is a real design choice.
+
+### Plan comments
+
+Post the plan on the issue. Do not create a tracked plan file for routine work.
+Use only the lines that add value:
+
+```text
+## Plan
+
+- Verified: <why the work is still needed, with evidence>
+- Approach: <the small change to make>
+- Decision: <a non-obvious choice and why>
+- Changes: <files or areas to edit>
+- Checks: <tests or commands to run>
+- Docs: <guides or skills to update>
+- Out of scope: <work deliberately left out>
+```
+
+Post a temporary plan file with:
 
 ```bash
-pytest
+gh issue comment 123 --body-file /tmp/issue-123-plan.md
 ```
 
-## Building the docs
+If the approach or scope changes, add a short comment that explains why.
+
+### Progress comments
+
+Comment only when the update helps someone follow the work:
+
+```text
+## Progress
+
+- Done: <finished result>
+- Next: <next useful step>
+- Blocker or plan change: <what changed and why, if needed>
+```
+
+Do not post comments that only say “still working.”
+
+### Pull requests
+
+Use `.github/PULL_REQUEST_TEMPLATE.md`. Keep the body short and complete:
+
+- Summarize what changed and why in one or two sentences.
+- Add `Fixes #123`.
+- List the main code, test, and doc changes.
+- Link the plan comment and explain any deviation.
+- Check the project rules that the change respects.
+- Paste the exact test commands and state their result.
+
+## Branches, tests, and commits
+
+Create a branch from current `main`, unless the work depends on another unmerged
+branch.
 
 ```bash
-pip install -e ".[docs]"
-mkdocs serve   # live preview at http://127.0.0.1:8000
-mkdocs build --strict   # what CI / Read the Docs runs
+git switch main
+git pull --ff-only
+git switch -c dev/engine/short-name
 ```
 
-The API reference is generated from docstrings by
-[mkdocstrings](https://mkdocstrings.github.io/), so a clear docstring is what
-makes the reference useful — see the next section.
+Stay inside the issue scope. Ask when a contract, requirement, name, or
+cross-cutting design choice is unclear.
 
-## Docstring style
+Run focused tests while working, then the relevant suite before opening a pull
+request:
 
-We follow a **HuggingFace-flavored, Google-section** style. It is Google-compatible
-(so mkdocstrings renders `Args:` / `Returns:` / `Raises:` into tables) but uses
-backtick-quoted types and `*optional*, defaults to ...` markers like the
-🤗 Transformers codebase.
+```bash
+PYTHONPATH=src python -m pytest tests/engine
+PYTHONPATH=src python -m pytest
+```
 
-**Every argument must be documented**, and the description must explain the
-argument's *meaning, shape, and constraints* — not merely restate its type.
+Add or update a test for every behavior change. Make one logical change per
+commit, and commit only when its tests pass. Never claim a check passed unless
+you ran it.
 
-### Template
+## Engine rules
+
+Read [`src/agent_composer/README.md`](src/agent_composer/README.md) before an
+engine change.
+
+- Keep `runtime/` kind-blind.
+- Keep nodes pure: they return `Output`, `Route`, `Pause`, or `Grow` and do not
+  write the variable pool.
+- Keep the graph fixed while it runs.
+- Keep package imports acyclic.
+- Prefer general, domain-neutral nodes and combinators over one-off behavior.
+
+## Docs change with code
+
+Update docs and project skills in the same pull request as the code they explain.
+
+| Change | Update |
+| --- | --- |
+| YAML, expressions, or node authoring | `docs/syntax.md` and the `composing-agents` skill |
+| Engine behavior or rules | `src/agent_composer/README.md` and the `engine` skill |
+| Package layout | The package `__init__.py` and the `structure` skill |
+| CLI or public API | `README.md` and rendered docstrings |
+
+Check edited flow templates still load. Build the docs when they change:
+
+```bash
+python -m pip install -e ".[docs]"
+mkdocs build --strict
+```
+
+## Docstrings
+
+Use Google-style `Args`, `Returns`, and `Raises` sections. Put types in backticks.
+Document every argument, including its meaning, shape, limits, and default. List
+only exceptions the function raises. Omit `Returns` when the function returns
+`None`.
 
 ```python
 def fn(required, optional=None):
-    """
-    One-line summary in the imperative mood, ending with a period.
-
-    Optional extended description: the *why*, important behavior, invariants,
-    or edge cases a caller must know. Omit if the summary says everything.
+    """Return the result for the input.
 
     Args:
-        required (`type`):
-            What it is and what it's *for* — not just its type. State the shape
-            (e.g. `dict[node_id -> list[Edge]]`), the allowed values, and any
-            constraint the caller must satisfy.
-        optional (`type`, *optional*, defaults to `None`):
-            Same, plus what the default means when omitted.
+        required (`dict[str, Item]`):
+            Items keyed by node id. Unknown ids are not allowed.
+        optional (`str`, *optional*, defaults to `None`):
+            Name used in messages. `None` uses the default name.
 
     Returns:
-        `ReturnType`:
-            What the value represents and how to interpret its fields/states.
-            (Omit this section entirely for functions that return `None`.)
+        `Result`:
+            The computed value and its status.
 
     Raises:
-        `SomeError`:
-            The exact condition that triggers it. (Omit if it never raises.)
-
-    Example:
-        ```python
-        >>> result = fn(required=...)
-        >>> result.status
-        'succeeded'
-        ```
+        `ValueError`:
+            Raised when `required` contains an unknown node id.
     """
 ```
 
-### Worked example
-
-```python
-def run_flow(loaded, inputs, *, run_id=None, on_event=None):
-    """
-    Coerce inputs, seed the variable pool, enforce asserts, and drive the flow to a terminal.
-
-    Never raises on a flow failure: a failed, paused, or aborted run is returned as a
-    `RunResult` with a non-`"succeeded"` status. A false boundary assert returns a
-    `status="failed"` result *before* any node runs.
-
-    Args:
-        loaded (`ComposedFlow`):
-            A compiled, validated flow from [`load_flow`][agent_composer.load_flow].
-            Carries the IR, the declared input schema, and the assert sets.
-        inputs (`dict[str, Any]`):
-            Run arguments keyed by declared input name. Each value is coerced to its
-            declared type; names omitted here fall back to their declared defaults.
-        run_id (`str`, *optional*, defaults to `None`):
-            Host-injected run id, readable in the flow as `${system.run_id}`. When
-            `None`, a fresh id is minted per run.
-        on_event (`Callable[[Any], None]`, *optional*, defaults to `None`):
-            Called with each engine event as it occurs (`NodeStarted`, `RunSucceeded`,
-            `RunPaused`, `RunFailed`, `RunAborted`). Use it for progress reporting.
-
-    Returns:
-        `RunResult`:
-            Outcome of the run. `status` is one of `"succeeded"`, `"failed"`,
-            `"paused"`, or `"aborted"`; `output` is set on success, `pause_reasons`
-            and resume handles on a pause.
-
-    Example:
-        ```python
-        from agent_composer import load_flow, run_flow
-
-        loaded = load_flow(open("hello.yaml").read(), search_paths=["."])
-        result = run_flow(loaded, {"name": "Ada"})
-        print(result.status, result.output)  # succeeded ...
-        ```
-    """
-```
-
-### Conventions
-
-- **Summary** — one imperative line. Add an extended description only when it
-  conveys non-obvious information (the *why*, an invariant, an edge case).
-- **Args** — document every argument, always. Type in backticks; for keyword
-  arguments add `*optional*, defaults to X`. The description explains *meaning +
-  shape + constraints*, not a restatement of the type.
-- **Returns** — describe what the value *means* and how to read its fields/states.
-  Omit the section for functions that return `None`.
-- **Raises** — list only exceptions the function actually raises, with the exact
-  triggering condition.
-- **Example** — include for public-API symbols; optional for internal helpers.
-- **Cross-references** — link other symbols with
-  `[name][agent_composer.path.name]`; mkdocstrings turns them into links.
-- **Comments vs. docstrings** — docstrings explain *what* a thing is and how to
-  use it; inline comments explain *why* a non-obvious line exists.
+Add examples to public APIs. Docstrings explain what code does; comments explain
+why non-obvious code exists. Do not put task numbers, plan labels, or
+AI-attribution footers in source code.

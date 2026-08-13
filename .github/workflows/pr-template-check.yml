@@ -27,7 +27,6 @@ jobs:
             "## What changed"
             "## Implementation plan"
             "## Invariants respected"
-            "## Adversarial self-review"
             "## Test plan"
           )
           missing=()

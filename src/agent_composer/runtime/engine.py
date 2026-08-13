@@ -27,6 +27,7 @@ Load-bearing orderings (do not reorder):
   skip-flooded by `_skip_edge`.
 """
 
+import copy
 import queue
 import threading
 from collections import deque
@@ -515,6 +516,21 @@ class FlowEngine:
         routed: Optional[NodeRouted] = None
         for event in eval_node(node, self.flow, self.pool, self.llm,
                                wiring_override=self.wiring_overrides.get(node_id)):
+            if isinstance(event, NodeExpanded):
+                # Growth is committed before its event becomes observable. A direct generator
+                # consumer can mutate an event payload while this generator is suspended at
+                # `yield`; exposing NodeExpanded first would therefore let the observer change
+                # the builder input (or the spawner itself) and make live topology diverge from
+                # replay. Failed construction likewise must not claim that expansion happened.
+                try:
+                    self._apply_grow(node_id, event.grow)
+                except NodeExecutionError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — boundary: any apply error -> RunFailed
+                    self.sm.finish_executing(node_id)
+                    raise NodeExecutionError(node_id, str(exc), type(exc).__name__)
+                yield event
+                return
             yield event
             if isinstance(event, NodeSucceeded):
                 succeeded = event
@@ -528,18 +544,6 @@ class FlowEngine:
                 )
             elif isinstance(event, PauseRequested):
                 self._on_pause(node_id, event.reason)
-                return
-            elif isinstance(event, NodeExpanded):
-                # _apply_grow runs OUTSIDE eval_node's try/except; wrap any raise
-                # (boundary-assert / bounds / clone_child error) into
-                # NodeExecutionError so run() yields RunFailed, never an uncaught escape.
-                try:
-                    self._apply_grow(node_id, event.grow)
-                except NodeExecutionError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 — boundary: any apply error -> RunFailed
-                    self.sm.finish_executing(node_id)
-                    raise NodeExecutionError(node_id, str(exc), type(exc).__name__)
                 return
         if succeeded is not None:
             self._on_success(node_id, succeeded)
@@ -558,6 +562,18 @@ class FlowEngine:
                 event = self.event_q.get(timeout=_POLL)
             except queue.Empty:
                 continue
+            if isinstance(event, NodeExpanded):
+                # Match the inline path: construction/application is atomic with respect to
+                # external observation, and a failed construction emits no NodeExpanded.
+                try:
+                    self._apply_grow(event.node_id, event.grow)
+                except NodeExecutionError:
+                    raise
+                except Exception as exc:  # noqa: BLE001 — boundary: any apply error -> RunFailed
+                    self.sm.finish_executing(event.node_id)
+                    raise NodeExecutionError(event.node_id, str(exc), type(exc).__name__)
+                yield event
+                continue
             yield event  # forward to the caller (streaming)
             if isinstance(event, NodeSucceeded):
                 self._on_success(event.node_id, event)
@@ -571,15 +587,6 @@ class FlowEngine:
                 )
             elif isinstance(event, PauseRequested):
                 self._on_pause(event.node_id, event.reason)
-            elif isinstance(event, NodeExpanded):
-                # Same wrap as the inline _run_node branch.
-                try:
-                    self._apply_grow(event.node_id, event.grow)
-                except NodeExecutionError:
-                    raise
-                except Exception as exc:  # noqa: BLE001 — boundary: any apply error -> RunFailed
-                    self.sm.finish_executing(event.node_id)
-                    raise NodeExecutionError(event.node_id, str(exc), type(exc).__name__)
 
     def _worker(self) -> None:
         # Pure executor: pulls a node id, runs eval_node, pushes events. Never
@@ -699,7 +706,11 @@ class FlowEngine:
                 "pass grow_builder=(spawner, canonical_seed) -> Flow"
             )
         spawner_node = self.flow.nodes[spawner_id]
-        sg = self.grow_builder(spawner_node, grow.seed)
+        # Preserve one canonical value for the durable ledger. The event payload remains owned by
+        # eval_node/its observer, while the builder gets a separate disposable copy: neither an
+        # observer's nested mutation nor an impure builder can retroactively alter replay input.
+        canonical_seed = copy.deepcopy(grow.seed)
+        sg = self.grow_builder(spawner_node, copy.deepcopy(canonical_seed))
         with self.sm.lock:
             self.flow.add_subgraph(sg.nodes, sg.edges, sg.wiring)
             self.sm.register(list(sg.nodes), sg.edges)
@@ -716,7 +727,7 @@ class FlowEngine:
         spawner_is_loop = spawner_node.is_loop
         # Mint the one GrowRecord for this grow (live), OR reuse the deserialized one on replay.
         rec = record if record is not None else GrowRecord(
-            spawner_id=origin, seed=grow.seed, children=[])
+            spawner_id=origin, seed=copy.deepcopy(canonical_seed), children=[])
         # Ledger parent captured BEFORE the stamping step: a self-restamping spawner (AGENT)
         # stamps `_spawner_expansion[spawner_id]`, which would otherwise shadow the ENCLOSING
         # spawner's record and make `rec` look like its own parent. A nested grow (its spawner is

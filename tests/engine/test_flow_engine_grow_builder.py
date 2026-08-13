@@ -1,5 +1,6 @@
 """The runtime receives growth construction as an injected plain callable."""
 
+import copy
 import subprocess
 import sys
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compile.model import END_ID, START_ID, Flow
-from agent_composer.events import RunFailed
+from agent_composer.events import NodeExpanded, RunFailed
 from agent_composer.nodes.base import Grow, Node, NodeKind
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.suspension.expansions import GrowRecord
@@ -55,9 +56,36 @@ class _SeedSpawner(Node):
         return Grow(seed={"value": "built"})
 
 
+_CANONICAL_MUTABLE_SEED = {
+    "value": "built",
+    "nested": {"items": [{"label": "stable"}]},
+}
+
+
+class _MutableSeedSpawner(Node):
+    """A spawner exposing mutable nested seed and node state to an event observer."""
+
+    kind = NodeKind.CALL
+    is_spawner = True
+
+    def __init__(self, node_id):
+        super().__init__(node_id)
+        self.env["builder_marker"] = "stable"
+
+    def _run_impl(self, inputs):
+        return Grow(seed=copy.deepcopy(_CANONICAL_MUTABLE_SEED))
+
+
 def _dynamic_flow():
     return _graph(
         [_SeedSpawner("spawn")],
+        [(START_ID, "spawn"), ("spawn", END_ID)],
+    )
+
+
+def _mutable_seed_flow():
+    return _graph(
+        [_MutableSeedSpawner("spawn")],
         [(START_ID, "spawn"), ("spawn", END_ID)],
     )
 
@@ -114,6 +142,64 @@ def test_builder_failure_precedes_topology_and_ledger_mutation(num_workers):
     assert flow.edges == original_edges
     assert flow.wiring == original_wiring
     assert engine.expansions == []
+    assert not any(isinstance(event, NodeExpanded) for event in events)
+
+
+@pytest.mark.parametrize("num_workers", [0, 3])
+def test_expansion_is_applied_before_mutable_event_payload_is_exposed(num_workers):
+    """Observers cannot alter the builder input or durable seed at the expansion event."""
+    builder_inputs = []
+
+    def builder(spawner, seed):
+        builder_inputs.append((spawner.env["builder_marker"], copy.deepcopy(seed)))
+        return _fragment(spawner, seed)
+
+    engine = FlowEngine(
+        _mutable_seed_flow(), num_workers=num_workers, grow_builder=builder
+    )
+    events = []
+    for event in engine.run():
+        events.append(event)
+        if isinstance(event, NodeExpanded):
+            assert "spawn/leaf" in engine.flow.nodes
+            assert engine.expansions[0].seed == _CANONICAL_MUTABLE_SEED
+            assert builder_inputs == [("stable", _CANONICAL_MUTABLE_SEED)]
+            event.grow.seed["nested"]["items"][0]["label"] = "observer-mutated"
+            event.grow.seed["nested"]["items"].append({"label": "observer-added"})
+            engine.flow.nodes["spawn"].env["builder_marker"] = "observer-mutated"
+
+    assert any(isinstance(event, NodeExpanded) for event in events)
+    assert builder_inputs == [("stable", _CANONICAL_MUTABLE_SEED)]
+    assert engine.expansions[0].seed == _CANONICAL_MUTABLE_SEED
+
+
+@pytest.mark.parametrize("num_workers", [0, 3])
+def test_builder_seed_mutation_does_not_change_event_or_replay_seed(num_workers):
+    """The builder gets a disposable seed copy; replay receives the stable ledger value."""
+    builder_inputs = []
+
+    def mutating_builder(spawner, seed):
+        builder_inputs.append(copy.deepcopy(seed))
+        seed["nested"]["items"][0]["label"] = "builder-mutated"
+        seed["nested"]["items"].append({"label": "builder-added"})
+        return _fragment(spawner, seed)
+
+    engine = FlowEngine(
+        _mutable_seed_flow(), num_workers=num_workers, grow_builder=mutating_builder
+    )
+    events = list(engine.run())
+    expanded = next(event for event in events if isinstance(event, NodeExpanded))
+    checkpoint = engine.snapshot()
+
+    restored = FlowEngine.restore(
+        _mutable_seed_flow(), checkpoint, grow_builder=mutating_builder
+    )
+
+    assert builder_inputs == [_CANONICAL_MUTABLE_SEED, _CANONICAL_MUTABLE_SEED]
+    assert expanded.grow.seed == _CANONICAL_MUTABLE_SEED
+    assert engine.expansions[0].seed == _CANONICAL_MUTABLE_SEED
+    assert restored.expansions[0].seed == _CANONICAL_MUTABLE_SEED
+    assert set(restored.flow.nodes) == set(engine.flow.nodes)
 
 
 def test_checkpoint_replay_uses_injected_builder():

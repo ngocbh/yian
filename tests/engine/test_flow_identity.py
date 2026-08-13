@@ -86,6 +86,18 @@ def _compiled(source: str = _INLINE_FLOW):
     return load_flow(source).compiled
 
 
+def _typed_mapping_value(mapping: dict, key: str):
+    """Return one string-keyed value from the manifest's typed mapping form."""
+    canonical_key = {"type": "str", "value": key}
+    matches = [
+        entry["value"]
+        for entry in mapping["entries"]
+        if entry["key"] == canonical_key
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
 def test_flow_fingerprint_is_stable_across_reloads():
     first = _compiled()
     second = _compiled()
@@ -274,6 +286,59 @@ def test_flow_fingerprint_excludes_config_credentials():
     assert "first-secret-key" not in manifest_text
 
 
+def test_flow_fingerprint_excludes_credential_declaration_defaults():
+    source = """
+id: input-credentials
+name: Input credentials
+input:
+  api_key: str = __SECRET__
+nodes:
+  step:
+    kind: code
+    output: str
+    code: |
+      return "ok"
+output: ${step.output}
+"""
+    first = _compiled(source.replace("__SECRET__", "secret-a"))
+    rotated = _compiled(source.replace("__SECRET__", "secret-b"))
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    assert "secret-a" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+
+def test_flow_fingerprint_redacts_uri_credentials_in_declaration_defaults():
+    source = """
+id: input-endpoint
+name: Input endpoint
+input:
+  endpoint: str = __ENDPOINT__
+nodes:
+  step:
+    kind: code
+    output: str
+    code: |
+      return "ok"
+output: ${step.output}
+"""
+    first_uri = "https://alice:first-secret@api.example/v1?region=us&key=first-key"
+    second_uri = "https://bob:second-secret@api.example/v1?region=us&key=second-key"
+    first = _compiled(source.replace("__ENDPOINT__", first_uri))
+    rotated = _compiled(source.replace("__ENDPOINT__", second_uri))
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first-secret", "first-key"):
+        assert credential not in manifest_text
+
+    changed_endpoint = _compiled(
+        source.replace(
+            "__ENDPOINT__", second_uri.replace("api.example", "other.example")
+        )
+    )
+    assert flow_fingerprint(first) != flow_fingerprint(changed_endpoint)
+
+
 def test_flow_fingerprint_redacts_uri_credentials_in_node_env():
     first = _compiled()
     second = copy.deepcopy(first)
@@ -298,6 +363,132 @@ def test_flow_fingerprint_redacts_uri_credentials_in_node_env():
         "first-client-secret",
     ):
         assert credential not in manifest_text
+
+
+def test_flow_fingerprint_redacts_uri_credentials_in_nested_mapping_keys():
+    """Credential-only key changes collapse without losing duplicate entry semantics."""
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["routes"] = {
+        (
+            "https://alice:first-password@api.example/route"
+            "?region=us&token=first-alpha-token"
+        ): {"target": "alpha"},
+        (
+            "https://bob:first-password@api.example/route"
+            "?region=us&token=first-beta-token"
+        ): {"target": "beta"},
+    }
+    # Reverse insertion order and replace only credentials. Both original keys redact to
+    # one canonical key, so the entry list must retain and deterministically sort both
+    # values.
+    second.nodes["step"].env["routes"] = {
+        (
+            "https://dave:second-password@api.example/route"
+            "?region=us&token=second-beta-token"
+        ): {"target": "beta"},
+        (
+            "https://carol:second-password@api.example/route"
+            "?region=us&token=second-alpha-token"
+        ): {"target": "alpha"},
+    }
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest = flow_manifest(first)
+    route_entries = _typed_mapping_value(
+        manifest["nodes"]["step"]["env"], "routes"
+    )["entries"]
+    assert len(route_entries) == 2
+    canonical_keys = {
+        json.dumps(entry["key"], sort_keys=True) for entry in route_entries
+    }
+    assert len(canonical_keys) == 1
+    manifest_text = json.dumps(manifest, sort_keys=True)
+    for credential in (
+        "alice",
+        "bob",
+        "first-password",
+        "first-alpha-token",
+        "first-beta-token",
+    ):
+        assert credential not in manifest_text
+
+    changed_endpoint = copy.deepcopy(second)
+    changed_endpoint.nodes["step"].env["routes"] = {
+        key.replace("api.example", "other.example"): value
+        for key, value in second.nodes["step"].env["routes"].items()
+    }
+    assert flow_fingerprint(first) != flow_fingerprint(changed_endpoint)
+
+
+def test_top_level_node_env_uri_keys_are_redacted_without_collapsing_duplicates():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env = {
+        "https://alice:first-password@api.example/route?region=us": "alpha",
+        "https://bob:first-password@api.example/route?region=us": "beta",
+    }
+    second.nodes["step"].env = {
+        "https://dave:second-password@api.example/route?region=us": "beta",
+        "https://carol:second-password@api.example/route?region=us": "alpha",
+    }
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest = flow_manifest(first)
+    env_entries = manifest["nodes"]["step"]["env"]["entries"]
+    assert len(env_entries) == 2
+    assert len({json.dumps(entry["key"], sort_keys=True) for entry in env_entries}) == 1
+    manifest_text = json.dumps(manifest, sort_keys=True)
+    for credential in ("alice", "bob", "first-password"):
+        assert credential not in manifest_text
+
+    changed_endpoint = copy.deepcopy(second)
+    changed_endpoint.nodes["step"].env = {
+        key.replace("api.example", "other.example"): value
+        for key, value in second.nodes["step"].env.items()
+    }
+    assert flow_fingerprint(first) != flow_fingerprint(changed_endpoint)
+
+
+@pytest.mark.parametrize("scope", ["agent", "flow"])
+def test_authored_llm_uri_keys_use_credential_redacted_typed_mappings(scope):
+    first_uri = "https://alice:first-password@llm.example/v1?region=us"
+    second_uri = "https://bob:second-password@llm.example/v1?region=us"
+
+    if scope == "agent":
+        first = _single_node_flow(
+            AgentNode("node", prompt="p", llm_config={first_uri: "route"})
+        )
+        second = _single_node_flow(
+            AgentNode("node", prompt="p", llm_config={second_uri: "route"})
+        )
+        config_manifest = flow_manifest(first)["nodes"]["node"]["own_llm_config"]
+    else:
+        first = _compiled()
+        second = copy.deepcopy(first)
+        first.flow_llm_config = {first_uri: "route"}
+        second.flow_llm_config = {second_uri: "route"}
+        config_manifest = flow_manifest(first)["flow_llm_config"]
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    assert config_manifest["type"] == "mapping"
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("alice", "first-password"):
+        assert credential not in manifest_text
+
+    changed_endpoint = copy.deepcopy(second)
+    if scope == "agent":
+        config = changed_endpoint.nodes["node"].own_llm_config
+        changed_endpoint.nodes["node"].own_llm_config = {
+            key.replace("llm.example", "other.example"): value
+            for key, value in config.items()
+        }
+    else:
+        changed_endpoint.flow_llm_config = {
+            key.replace("llm.example", "other.example"): value
+            for key, value in changed_endpoint.flow_llm_config.items()
+        }
+    assert flow_fingerprint(first) != flow_fingerprint(changed_endpoint)
 
 
 def test_flow_fingerprint_redacts_uri_credentials_in_authored_llm_config():
@@ -359,6 +550,33 @@ def test_flow_fingerprint_redacts_signed_uri_query_credentials():
         "first-goog-signature",
     ):
         assert credential not in manifest_text
+
+
+def test_flow_fingerprint_redacts_uri_key_parameter_only():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["MODEL_URL"] = (
+        "https://models.example/v1/model?region=us&key=first-google-api-key"
+    )
+    second.nodes["step"].env["MODEL_URL"] = (
+        "https://models.example/v1/model?region=us&key=second-google-api-key"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    assert "first-google-api-key" not in manifest_text
+
+    changed_host = copy.deepcopy(second)
+    changed_host.nodes["step"].env["MODEL_URL"] = changed_host.nodes["step"].env[
+        "MODEL_URL"
+    ].replace("models.example", "other.example")
+    assert flow_fingerprint(first) != flow_fingerprint(changed_host)
+
+    changed_region = copy.deepcopy(second)
+    changed_region.nodes["step"].env["MODEL_URL"] = changed_region.nodes["step"].env[
+        "MODEL_URL"
+    ].replace("region=us", "region=eu")
+    assert flow_fingerprint(first) != flow_fingerprint(changed_region)
 
 
 @pytest.mark.parametrize(
@@ -430,7 +648,7 @@ def test_flow_fingerprint_keeps_noncredential_uri_semantics(changed_uri):
     assert flow_fingerprint(original) != flow_fingerprint(changed)
 
 
-def test_uri_redaction_is_scoped_away_from_prompts_code_wiring_and_model_labels():
+def test_uri_redaction_is_scoped_away_from_prompts_code_and_model_labels():
     first_uri = "https://first-user:first-secret@example.test/path?token=first-token"
     second_uri = "https://second-user:second-secret@example.test/path?token=second-token"
 
@@ -438,10 +656,6 @@ def test_uri_redaction_is_scoped_away_from_prompts_code_wiring_and_model_labels(
     second_prompt = _single_node_flow(AgentNode("node", prompt=second_uri))
     first_code = _single_node_flow(CodeNode("node", code=f"return {first_uri!r}"))
     second_code = _single_node_flow(CodeNode("node", code=f"return {second_uri!r}"))
-    first_wiring = _fragment()
-    second_wiring = copy.deepcopy(first_wiring)
-    first_wiring.wiring["body"]["x"] = first_uri
-    second_wiring.wiring["body"]["x"] = second_uri
     first_model_id = _single_node_flow(ModelNode("node", model_id=first_uri))
     second_model_id = _single_node_flow(ModelNode("node", model_id=second_uri))
     first_runtime = _single_node_flow(
@@ -454,12 +668,57 @@ def test_uri_redaction_is_scoped_away_from_prompts_code_wiring_and_model_labels(
     for first, second in (
         (first_prompt, second_prompt),
         (first_code, second_code),
-        (first_wiring, second_wiring),
         (first_model_id, second_model_id),
         (first_runtime, second_runtime),
     ):
         assert flow_fingerprint(first) != flow_fingerprint(second)
         assert "first-secret" in json.dumps(flow_manifest(first), sort_keys=True)
+
+
+def test_flow_fingerprint_redacts_uri_credentials_in_wiring():
+    first = _fragment()
+    second = copy.deepcopy(first)
+    first.wiring["body"]["x"] = (
+        "https://first-user:first-secret@example.test/path?token=first-token"
+    )
+    second.wiring["body"]["x"] = (
+        "https://second-user:second-secret@example.test/path?token=second-token"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    for credential in ("first-user", "first-secret", "first-token"):
+        assert credential not in manifest_text
+
+
+def test_flow_fingerprint_excludes_wiring_credentials_but_keeps_semantics():
+    source = """
+id: wiring-credentials
+name: Wiring credentials
+nodes:
+  step:
+    kind: code
+    input:
+      api_key: __SECRET__
+      region: __REGION__
+    output: str
+    code: |
+      return inputs["region"]
+output: ${step.output}
+"""
+    first = _compiled(
+        source.replace("__SECRET__", "secret-a").replace("__REGION__", "us")
+    )
+    rotated = _compiled(
+        source.replace("__SECRET__", "secret-b").replace("__REGION__", "us")
+    )
+    changed_region = _compiled(
+        source.replace("__SECRET__", "secret-b").replace("__REGION__", "eu")
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    assert "secret-a" not in json.dumps(flow_manifest(first), sort_keys=True)
+    assert flow_fingerprint(first) != flow_fingerprint(changed_region)
 
 
 def test_flow_fingerprint_redacts_model_weights_uri_credentials():
@@ -493,11 +752,88 @@ def test_flow_fingerprint_redacts_model_weights_uri_credentials():
         assert flow_fingerprint(first) != flow_fingerprint(changed)
 
 
+def test_wait_manifest_redacts_credentials_recursively_but_keeps_semantics():
+    first = WaitNode(
+        "node",
+        event_spec={
+            "topic": "orders",
+            "transport": {
+                "endpoint": (
+                    "https://alice:first-password@events.example/orders"
+                    "?region=us&token=first-event-token"
+                ),
+                "headers": {"GITHUB_TOKEN": "first-github-token"},
+            },
+        },
+        poll={
+            "seconds": 5,
+            "request": {"auth": {"api_key": "first-poll-api-key"}},
+        },
+    )
+    second = WaitNode(
+        "node",
+        event_spec={
+            "topic": "orders",
+            "transport": {
+                "endpoint": (
+                    "https://bob:second-password@events.example/orders"
+                    "?region=us&token=second-event-token"
+                ),
+                "headers": {"GITHUB_TOKEN": "second-github-token"},
+            },
+        },
+        poll={
+            "seconds": 5,
+            "request": {"auth": {"api_key": "second-poll-api-key"}},
+        },
+    )
+
+    first_flow = _single_node_flow(first)
+    second_flow = _single_node_flow(second)
+    assert flow_fingerprint(first_flow) == flow_fingerprint(second_flow)
+    manifest_text = json.dumps(flow_manifest(first_flow), sort_keys=True)
+    for credential in (
+        "alice",
+        "first-password",
+        "first-event-token",
+        "first-github-token",
+        "first-poll-api-key",
+    ):
+        assert credential not in manifest_text
+
+    changed_topic = copy.deepcopy(second)
+    changed_topic.event_spec["topic"] = "payments"
+    assert flow_fingerprint(first_flow) != flow_fingerprint(
+        _single_node_flow(changed_topic)
+    )
+
+    changed_poll = copy.deepcopy(second)
+    changed_poll.poll["seconds"] = 10
+    assert flow_fingerprint(first_flow) != flow_fingerprint(
+        _single_node_flow(changed_poll)
+    )
+
+    changed_endpoint = copy.deepcopy(second)
+    changed_endpoint.event_spec["transport"]["endpoint"] = changed_endpoint.event_spec[
+        "transport"
+    ]["endpoint"].replace("events.example", "other.example")
+    assert flow_fingerprint(first_flow) != flow_fingerprint(
+        _single_node_flow(changed_endpoint)
+    )
+
+
 @pytest.mark.parametrize(
     "credential_key",
     [
+        "DATABRICKS_TOKEN",
         "GITHUB_TOKEN",
         "HUGGINGFACEHUB_API_TOKEN",
+        "NPM_TOKEN",
+        "OPENAI_API_TOKEN",
+        "SERVICE_ACCESS_TOKEN",
+        "AWS_SESSION_TOKEN",
+        "id_token",
+        "X-Amz-Security-Token",
         "AWS_ACCESS_KEY_ID",
         "GOOGLE_APPLICATION_CREDENTIALS",
         "AZURE_APPLICATION_CREDENTIALS",
@@ -531,6 +867,7 @@ def test_flow_fingerprint_redacts_model_weights_uri_credentials():
         "X-Goog-Signature",
         "xAmzSignature",
         "xgoogsignature",
+        "WEBHOOK_SIGNATURE",
     ],
 )
 def test_flow_fingerprint_redacts_common_provider_credentials(credential_key):
@@ -549,7 +886,16 @@ def test_flow_fingerprint_redacts_common_provider_credentials(credential_key):
 
 @pytest.mark.parametrize(
     "config_key",
-    ["tokenizer", "secretariat", "keynote", "apiVersion", "connectionPool"],
+    [
+        "key",
+        "tokenizer",
+        "secretariat",
+        "keynote",
+        "apiVersion",
+        "connectionPool",
+        "output_signature",
+        "eos_token",
+    ],
 )
 def test_compact_credential_matching_keeps_unrelated_config(config_key):
     first = _compiled()

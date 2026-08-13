@@ -149,8 +149,9 @@ _CASE_FIELDS = frozenset({"handle", "when"})
 _FRESH_FIELDS = frozenset({"prompt"})
 _RESUME_FIELDS = frozenset({"memo", "iterations", "pending"})
 
-# Config secrets are intentionally absent from identity. These names cover the flat LLM/env
-# credential forms; suffix matching handles provider-prefixed spellings such as openai_api_key.
+# Config secrets are intentionally absent from identity. Exact names and provider-agnostic
+# suffixes cover common credential spellings; the small semantic-exception set is the explicit
+# extension point for authored names that collide with those broad suffixes.
 _CREDENTIAL_NAMES = frozenset(
     {
         "api_key",
@@ -163,7 +164,9 @@ _CREDENTIAL_NAMES = frozenset(
         "credential",
         "credentials",
         "google_application_credentials",
+        "github_token",
         "hf_token",
+        "id_token",
         "password",
         "passphrase",
         "private_key",
@@ -174,6 +177,9 @@ _CREDENTIAL_NAMES = frozenset(
         "sig",
         "signature",
         "token",
+        "x_amz_security_token",
+        "x_amz_signature",
+        "x_goog_signature",
     }
 )
 _CREDENTIAL_SUFFIXES = (
@@ -201,12 +207,22 @@ _CREDENTIAL_SUFFIXES = (
     "_signature",
     "_token",
 )
+_SEMANTIC_CREDENTIAL_KEY_EXCEPTIONS = frozenset(
+    {
+        "eos_token",
+        "output_signature",
+    }
+)
 _CREDENTIAL_COMPACT_NAMES = frozenset(
     name.replace("_", "") for name in _CREDENTIAL_NAMES
 )
 _CREDENTIAL_COMPACT_SUFFIXES = tuple(
     suffix.replace("_", "") for suffix in _CREDENTIAL_SUFFIXES
 )
+_SEMANTIC_CREDENTIAL_KEY_COMPACT_EXCEPTIONS = frozenset(
+    name.replace("_", "") for name in _SEMANTIC_CREDENTIAL_KEY_EXCEPTIONS
+)
+_URI_CREDENTIAL_PARAM_NAMES = frozenset({"key"})
 _URI_PREFIX = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _REDACTED_URI_CREDENTIAL = "__redacted__"
 _MISSING = object()
@@ -292,12 +308,22 @@ def _check_node_fields(node: Node, path: str) -> None:
         raise ValueError(f"{path}: missing canonical field(s): {missing}")
 
 
-def _credential_key(key: str) -> bool:
-    """Whether a flat config key carries a credential rather than program semantics."""
+def _normalized_key_spellings(key: str) -> tuple[str, str]:
+    """Return separator-preserving and compact forms of one authored key."""
     separated = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", key.strip())
     separated = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", separated)
     normalized = re.sub(r"[^A-Za-z0-9]+", "_", separated).strip("_").lower()
-    compact = normalized.replace("_", "")
+    return normalized, normalized.replace("_", "")
+
+
+def _credential_key(key: str) -> bool:
+    """Whether a flat config key carries a credential rather than program semantics."""
+    normalized, compact = _normalized_key_spellings(key)
+    if (
+        normalized in _SEMANTIC_CREDENTIAL_KEY_EXCEPTIONS
+        or compact in _SEMANTIC_CREDENTIAL_KEY_COMPACT_EXCEPTIONS
+    ):
+        return False
     return (
         normalized in _CREDENTIAL_NAMES
         or any(
@@ -312,12 +338,22 @@ def _credential_key(key: str) -> bool:
     )
 
 
+def _uri_credential_key(key: str) -> bool:
+    """Whether a URI parameter carries a credential, including the URI-specific `key`."""
+    normalized, compact = _normalized_key_spellings(key)
+    return (
+        normalized in _URI_CREDENTIAL_PARAM_NAMES
+        or compact in _URI_CREDENTIAL_PARAM_NAMES
+        or _credential_key(key)
+    )
+
+
 def _redact_uri_params(value: str) -> str:
     """Replace credential parameter values while preserving spelling and ordering."""
     redacted_parts: list[str] = []
     for part in value.split("&"):
         raw_key, separator, _ = part.partition("=")
-        if separator and _credential_key(unquote_plus(raw_key)):
+        if separator and _uri_credential_key(unquote_plus(raw_key)):
             part = f"{raw_key}={_REDACTED_URI_CREDENTIAL}"
         redacted_parts.append(part)
     return "&".join(redacted_parts)
@@ -368,26 +404,31 @@ def _sorted_mapping(
     *,
     redact_credentials: bool = False,
 ) -> dict[str, Any]:
-    """Canonicalize a string-keyed mapping in lexical key order."""
+    """Canonicalize a string-keyed mapping, using typed entries when redacting."""
+    bad_key = next((key for key in value if not isinstance(key, str)), _MISSING)
+    if bad_key is not _MISSING:
+        raise TypeError(
+            f"{path}: mapping keys must be strings, got {type(bad_key).__name__}"
+        )
+    if redact_credentials:
+        return _canonical_mapping(
+            value,
+            ctx,
+            path,
+            redact_credentials=True,
+        )
+
     object_id = id(value)
     if object_id in ctx.values:
         raise ValueError(f"{path}: cyclic value is not manifestable")
     ctx.values.add(object_id)
     try:
         out: dict[str, Any] = {}
-        bad_key = next((key for key in value if not isinstance(key, str)), _MISSING)
-        if bad_key is not _MISSING:
-            raise TypeError(
-                f"{path}: mapping keys must be strings, got {type(bad_key).__name__}"
-            )
         for key in sorted(value):
-            if redact_credentials and _credential_key(key):
-                continue
             out[key] = _canonical_value(
                 value[key],
                 ctx,
                 f"{path}.{key}",
-                redact_credentials=redact_credentials,
             )
         return out
     finally:
@@ -462,10 +503,22 @@ def _canonical_mapping(
     try:
         entries: list[dict[str, Any]] = []
         for index, (key, item) in enumerate(value.items()):
-            if redact_credentials and isinstance(key, str) and _credential_key(key):
+            # A URI used AS a mapping key is semantic endpoint identity, not a credential
+            # field name. Retain it and redact only its userinfo/query values below.
+            if (
+                redact_credentials
+                and isinstance(key, str)
+                and _URI_PREFIX.match(key) is None
+                and _credential_key(key)
+            ):
                 continue
             entry = {
-                "key": _canonical_value(key, ctx, f"{path}.keys[{index}]"),
+                "key": _canonical_value(
+                    key,
+                    ctx,
+                    f"{path}.keys[{index}]",
+                    redact_credentials=redact_credentials,
+                ),
                 "value": _canonical_value(
                     item,
                     ctx,
@@ -608,8 +661,17 @@ def _type_manifest(value: Type | None, ctx: _ManifestContext, path: str) -> Any:
 def _declaration_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, Any]:
     """Canonicalize a ParamDecl or duck-typed flow InputDecl without importing compose."""
     _check_fields(value, _DECL_FIELDS, path)
+    if _credential_key(value.name):
+        default = {"type": "redacted"}
+    else:
+        default = _canonical_value(
+            value.default,
+            ctx,
+            f"{path}.default",
+            redact_credentials=True,
+        )
     return {
-        "default": _canonical_value(value.default, ctx, f"{path}.default"),
+        "default": default,
         "name": value.name,
         "required": value.required,
         "type": _type_manifest(value.type, ctx, f"{path}.type"),
@@ -738,9 +800,19 @@ def _node_manifest(
     elif node.kind is NodeKind.WAIT:
         manifest.update(
             {
-                "event_spec": _canonical_value(node.event_spec, ctx, f"{path}.event_spec"),
+                "event_spec": _canonical_value(
+                    node.event_spec,
+                    ctx,
+                    f"{path}.event_spec",
+                    redact_credentials=True,
+                ),
                 "is_timed": node.is_timed,
-                "poll": _canonical_value(node.poll, ctx, f"{path}.poll"),
+                "poll": _canonical_value(
+                    node.poll,
+                    ctx,
+                    f"{path}.poll",
+                    redact_credentials=True,
+                ),
             }
         )
     elif node.kind in (NodeKind.CALL, NodeKind.MAP, NodeKind.LOOP):
@@ -867,7 +939,10 @@ def _flow_manifest(
                     f"{path}.wiring.{node_id}: expected dict, got {type(node_wiring).__name__}"
                 )
             wiring[node_id] = _sorted_mapping(
-                node_wiring, ctx, f"{path}.wiring.{node_id}"
+                node_wiring,
+                ctx,
+                f"{path}.wiring.{node_id}",
+                redact_credentials=True,
             )
 
         manifest: dict[str, Any] = {

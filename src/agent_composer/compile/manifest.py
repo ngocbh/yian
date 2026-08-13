@@ -867,7 +867,17 @@ def _canonical_mapping(
                     and _connection_property_credential_key(key)
                 )
             ):
-                continue
+                normalized_key, _ = _normalized_key_spellings(key)
+                if isinstance(item, dict) and normalized_key == "auth":
+                    canonical_item = _canonical_value(
+                        item,
+                        ctx,
+                        f"{path}.values[{index}]",
+                        redact_credentials=True,
+                        redact_connection_properties=True,
+                    )
+                else:
+                    continue
             entry = {
                 "key": _canonical_value(
                     key,

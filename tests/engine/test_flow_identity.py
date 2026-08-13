@@ -314,6 +314,48 @@ def test_flow_fingerprint_excludes_webhook_bearer_urls():
     assert "FIRST_SECRET" not in json.dumps(flow_manifest(first), sort_keys=True)
 
 
+def test_flow_fingerprint_keeps_structured_auth_semantics_without_credentials():
+    first = _compiled()
+    rotated = copy.deepcopy(first)
+    first.nodes["step"].env["auth"] = {
+        "type": "basic",
+        "endpoint": "https://login.example/token",
+        "username": "alice",
+        "password": "first-password",
+    }
+    rotated.nodes["step"].env["auth"] = {
+        "type": "basic",
+        "endpoint": "https://login.example/token",
+        "username": "bob",
+        "password": "second-password",
+    }
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    assert "basic" in manifest_text
+    assert "login.example" in manifest_text
+    for credential in ("alice", "first-password"):
+        assert credential not in manifest_text
+
+    for field, value in (
+        ("type", "digest"),
+        ("endpoint", "https://other.example/token"),
+    ):
+        changed = copy.deepcopy(rotated)
+        changed.nodes["step"].env["auth"][field] = value
+        assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_flow_fingerprint_excludes_scalar_auth():
+    first = _compiled()
+    rotated = copy.deepcopy(first)
+    first.nodes["step"].env["auth"] = "Bearer first-secret"
+    rotated.nodes["step"].env["auth"] = "Bearer second-secret"
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    assert "first-secret" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+
 def test_flow_fingerprint_excludes_credential_declaration_defaults():
     source = """
 id: input-credentials

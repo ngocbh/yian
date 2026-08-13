@@ -17,6 +17,7 @@ from typing import Any
 from agent_composer._state import NodeState
 from agent_composer.compile.model import CompiledFlow, Edge
 from agent_composer.events import (
+    NodeFailed,
     NodeRouted,
     NodeSkipped,
     NodeSucceeded,
@@ -25,9 +26,12 @@ from agent_composer.events import (
     RunResumed,
     RunStarted,
     RunSucceeded,
+    SourceRange,
+    SourceSpan,
 )
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
+    NodeFailedRecord,
     NodeRoutedRecord,
     NodeSucceededRecord,
     NodeStartedRecord,
@@ -272,6 +276,40 @@ class _RouteDelta:
     newly_ready_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _FailurePlan:
+    """Opaque authority anchors and one immutable terminal-failure delta."""
+
+    originating_state: RunState
+    originating_flow: CompiledFlow
+    envelope_bytes: bytes
+    start_id: str
+    start_node_identity: int
+    end_id: str
+    end_node_identity: int | None
+    delta: _FailureDelta
+
+
+@dataclass(frozen=True, slots=True)
+class _FailureDelta:
+    """Canonical diagnostic and touched node for one terminal failure."""
+
+    node_id: str
+    error: str
+    error_type: str
+    locator: SourceSpan | None
+    range: SourceRange | None
+    traceback: str | None
+
+
+@dataclass(slots=True)
+class _FailureApply:
+    """Independent terminal result and observers materialized before append."""
+
+    result: RunFailed
+    observers: tuple[Any, ...]
+
+
 @dataclass(slots=True)
 class _DataGroupScratch:
     """Incremental counts for one data-input group in a touched join."""
@@ -308,7 +346,13 @@ class PreparedTransition:
     record: RunRecord
     expected_run_id: str
     expected_sequence: int
-    _plan: _RunStartedPlan | _FrontierPlan | _SuccessPlan | _RoutePlan
+    _plan: (
+        _RunStartedPlan
+        | _FrontierPlan
+        | _SuccessPlan
+        | _RoutePlan
+        | _FailurePlan
+    )
     observers: tuple[Any, ...]
 
 
@@ -535,6 +579,58 @@ def prepare_node_routed(
     )
 
 
+def prepare_node_failed(
+    state: RunState,
+    node_id: str,
+    error: str,
+    *,
+    error_type: str = "",
+    locator: SourceSpan | None = None,
+    range: SourceRange | None = None,
+    traceback: str | None = None,
+) -> PreparedTransition:
+    """Prepare one terminal node failure with its complete durable diagnostic.
+
+    Args:
+        state (`RunState`):
+            Initialized nonterminal state with ``node_id`` in ordered in-flight work.
+        node_id (`str`):
+            Exact non-empty ID of the executing node that failed.
+        error (`str`):
+            Human-readable failure detail, including the empty string when intentional.
+        error_type (`str`, *optional*):
+            Stable exception or synthesized diagnostic category.
+        locator (`SourceSpan | None`, *optional*):
+            Symbolic source location retained alongside the failure.
+        range (`SourceRange | None`, *optional*):
+            Concrete source range retained alongside the failure.
+        traceback (`str | None`, *optional*):
+            Formatted traceback captured at the node boundary.
+
+    Returns:
+        `PreparedTransition`:
+            Canonical ``NodeFailedRecord`` and detached append-before-apply plan.
+
+    Raises:
+        `TypeError`:
+            A scalar or diagnostic carrier has the wrong exact type.
+        `ValueError`:
+            State or the executing node is not eligible to fail.
+    """
+    if type(state) is not RunState:
+        raise TypeError("prepare_node_failed expects a RunState")
+    record = NodeFailedRecord(
+        node_id=node_id,
+        error=error,
+        error_type=error_type,
+        locator=locator,
+        range=range,
+        traceback=traceback,
+    )
+    _require_initialized_nonterminal(state)
+    return _prepare_failure_transition(state, record)
+
+
 def prepare_run_resumed(
     state: RunState,
     *,
@@ -575,15 +671,17 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
     """Validate one supported authoritative record against the current frontier.
 
     This is the shared reducer seam for live dispatch and later historical replay.
-    Dispatch, recovery-frontier, successful-output, and route records are supported
-    here; the remaining node outcomes acquire reducers in later slices.
+    Dispatch, recovery-frontier, successful-output, route, and terminal-failure
+    records are supported here; the remaining node outcomes acquire reducers in
+    later slices.
 
     Args:
         state (`RunState`):
             Initialized nonterminal state immediately before ``record``.
         record (`RunRecord`):
             A ``NodeStartedRecord``, ``RunResumedRecord``,
-            ``NodeSucceededRecord``, or ``NodeRoutedRecord`` to validate and copy.
+            ``NodeSucceededRecord``, ``NodeRoutedRecord``, or ``NodeFailedRecord``
+            to validate and copy.
 
     Returns:
         `PreparedTransition`:
@@ -605,6 +703,8 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
     if isinstance(record, NodeRoutedRecord):
         _validate_route_record(state, record)
         return _prepare_route_transition(state, record)
+    if isinstance(record, NodeFailedRecord):
+        return _prepare_failure_transition(state, record)
     if isinstance(record, NodeStartedRecord):
         _validate_node_started(state, record)
     elif isinstance(record, RunResumedRecord):
@@ -782,6 +882,54 @@ def _prepare_route_transition(
     )
 
 
+def _prepare_failure_transition(
+    state: RunState,
+    record: NodeFailedRecord,
+) -> PreparedTransition:
+    """Freeze one validated terminal diagnostic and its canonical public record."""
+    _validate_failure_record(state, record)
+    run_id = state.run_id
+    if not isinstance(run_id, str):  # established by initialized-state validation
+        raise ValueError("run state is not initialized")
+    canonical_bytes = encode_record(
+        RecordEnvelope(
+            schema=SCHEMA_VERSION,
+            run_id=run_id,
+            seq=state.next_sequence,
+            record=record,
+        )
+    )
+    canonical_envelope = decode_record(canonical_bytes)
+    canonical_record = canonical_envelope.record
+    if not isinstance(canonical_record, NodeFailedRecord):
+        raise TypeError("node-failure envelope decoded to a different record kind")
+    if canonical_record != record:
+        raise ValueError("NodeFailedRecord is not in canonical wire form")
+
+    delta = _failure_delta(canonical_record)
+    start_id = state.flow.start_id
+    end_id = state.flow.end_id
+    plan = _FailurePlan(
+        originating_state=state,
+        originating_flow=state.flow,
+        envelope_bytes=canonical_bytes,
+        start_id=start_id,
+        start_node_identity=id(state.flow.nodes[start_id]),
+        end_id=end_id,
+        end_node_identity=(
+            id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
+        ),
+        delta=delta,
+    )
+    return PreparedTransition(
+        record=canonical_record,
+        expected_run_id=canonical_envelope.run_id,
+        expected_sequence=canonical_envelope.seq,
+        _plan=plan,
+        observers=_failure_observers(delta),
+    )
+
+
 def commit_prepared(
     log: RunLog,
     state: RunState,
@@ -828,6 +976,8 @@ def commit_prepared(
         return _commit_success(log, state, prepared)
     if isinstance(prepared._plan, _RoutePlan):
         return _commit_route(log, state, prepared)
+    if isinstance(prepared._plan, _FailurePlan):
+        return _commit_failure(log, state, prepared)
     raise TypeError("unsupported prepared transition plan")
 
 
@@ -966,9 +1116,43 @@ def _commit_route(
     return observers
 
 
+def _commit_failure(
+    log: RunLog,
+    state: RunState,
+    prepared: PreparedTransition,
+) -> tuple[Any, ...]:
+    """Validate, append, and install one immediately terminal node failure."""
+    plan = prepared._plan
+    if not isinstance(plan, _FailurePlan):
+        raise TypeError("failure commit requires a failure plan")
+    if not isinstance(prepared.record, NodeFailedRecord):
+        raise TypeError("failure plan requires a NodeFailedRecord")
+    _require_prepared_origin(state, plan)
+    _require_initialized_nonterminal(state)
+    _require_authority_coordinates(log, state, prepared, initialized=True)
+    _require_unchanged_record(prepared, plan.envelope_bytes)
+    delta = plan.delta
+    if prepared.record != _failure_record(delta):
+        raise ValueError("failure record and prevalidated delta disagree")
+    apply = _materialize_failure(delta)
+
+    _append_and_verify(log, prepared)
+    state.node_state[delta.node_id] = NodeState.TAKEN
+    del state.in_flight[delta.node_id]
+    state.result = apply.result
+    state.next_sequence = prepared.expected_sequence + 1
+    return apply.observers
+
+
 def _require_prepared_origin(
     state: RunState,
-    plan: _RunStartedPlan | _FrontierPlan | _SuccessPlan | _RoutePlan,
+    plan: (
+        _RunStartedPlan
+        | _FrontierPlan
+        | _SuccessPlan
+        | _RoutePlan
+        | _FailurePlan
+    ),
 ) -> None:
     """Require the exact state, adopted flow, and boundary objects from preparation."""
     if state is not plan.originating_state:
@@ -1142,6 +1326,37 @@ def _require_routing_node(state: RunState, node_id: str) -> None:
         raise ValueError(f"NodeRouted node {node_id!r} is not in-flight")
     if state.in_flight[node_id] is not None:
         raise ValueError("in-flight must be an ordered set with None values")
+
+
+def _require_failing_node(state: RunState, node_id: str) -> None:
+    """Require an existing unknown node in the ordered in-flight frontier."""
+    if not node_id:
+        raise ValueError("NodeFailed node_id must be non-empty")
+    if node_id not in state.flow.nodes:
+        raise ValueError(f"NodeFailed node {node_id!r} does not exist in the flow")
+    if state.node_state.get(node_id) is not NodeState.UNKNOWN:
+        raise ValueError(f"NodeFailed node {node_id!r} must have UNKNOWN disposition")
+    if node_id not in state.in_flight:
+        raise ValueError(f"NodeFailed node {node_id!r} is not in-flight")
+    if state.in_flight[node_id] is not None:
+        raise ValueError("in-flight must be an ordered set with None values")
+
+
+def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
+    """Validate exact diagnostic carriers and the executing node for replay."""
+    if type(record.node_id) is not str:
+        raise TypeError("NodeFailedRecord node_id must be a string")
+    if type(record.error) is not str:
+        raise TypeError("NodeFailedRecord error must be a string")
+    if type(record.error_type) is not str:
+        raise TypeError("NodeFailedRecord error_type must be a string")
+    if record.locator is not None and type(record.locator) is not SourceSpan:
+        raise TypeError("NodeFailedRecord locator must be a SourceSpan or None")
+    if record.range is not None and type(record.range) is not SourceRange:
+        raise TypeError("NodeFailedRecord range must be a SourceRange or None")
+    if record.traceback is not None and type(record.traceback) is not str:
+        raise TypeError("NodeFailedRecord traceback must be a string or None")
+    _require_failing_node(state, record.node_id)
 
 
 def _validate_route_record(state: RunState, record: NodeRoutedRecord) -> None:
@@ -1624,7 +1839,13 @@ def _require_pristine(state: RunState) -> None:
 
 def _require_originating_flow(
     state: RunState,
-    plan: _RunStartedPlan | _FrontierPlan | _SuccessPlan | _RoutePlan,
+    plan: (
+        _RunStartedPlan
+        | _FrontierPlan
+        | _SuccessPlan
+        | _RoutePlan
+        | _FailurePlan
+    ),
 ) -> None:
     """Reject replacement of the adopted flow object or either boundary identity.
 
@@ -1739,11 +1960,90 @@ def _materialize_success(plan: _SuccessPlan) -> _SuccessApply:
     )
 
 
+def _failure_delta(record: NodeFailedRecord) -> _FailureDelta:
+    """Detach one canonical record into immutable scalar diagnostic authority."""
+    return _FailureDelta(
+        node_id=record.node_id,
+        error=record.error,
+        error_type=record.error_type,
+        locator=_copy_source_span(record.locator),
+        range=_copy_source_range(record.range),
+        traceback=record.traceback,
+    )
+
+
+def _failure_record(delta: _FailureDelta) -> NodeFailedRecord:
+    """Construct an independent durable carrier from an immutable failure delta."""
+    return NodeFailedRecord(
+        node_id=delta.node_id,
+        error=delta.error,
+        error_type=delta.error_type,
+        locator=_copy_source_span(delta.locator),
+        range=_copy_source_range(delta.range),
+        traceback=delta.traceback,
+    )
+
+
+def _failure_observers(delta: _FailureDelta) -> tuple[Any, ...]:
+    """Construct ordered, independent node- and run-level failure observers."""
+    return (
+        NodeFailed(
+            node_id=delta.node_id,
+            error=delta.error,
+            error_type=delta.error_type,
+            locator=_copy_source_span(delta.locator),
+            range=_copy_source_range(delta.range),
+            traceback=delta.traceback,
+        ),
+        RunFailed(
+            error=delta.error,
+            error_type=delta.error_type,
+            locator=_copy_source_span(delta.locator),
+            range=_copy_source_range(delta.range),
+            traceback=delta.traceback,
+        ),
+    )
+
+
+def _materialize_failure(delta: _FailureDelta) -> _FailureApply:
+    """Materialize detached state and callback values before durable append."""
+    return _FailureApply(
+        result=RunFailed(
+            error=delta.error,
+            error_type=delta.error_type,
+            locator=_copy_source_span(delta.locator),
+            range=_copy_source_range(delta.range),
+            traceback=delta.traceback,
+        ),
+        observers=_failure_observers(delta),
+    )
+
+
+def _copy_source_span(locator: SourceSpan | None) -> SourceSpan | None:
+    """Return an independent immutable symbolic source locator."""
+    if locator is None:
+        return None
+    return SourceSpan(node=locator.node, kind=locator.kind, key=locator.key)
+
+
+def _copy_source_range(range: SourceRange | None) -> SourceRange | None:
+    """Return an independent immutable concrete source range."""
+    if range is None:
+        return None
+    return SourceRange(
+        start_line=range.start_line,
+        start_col=range.start_col,
+        end_line=range.end_line,
+        end_col=range.end_col,
+    )
+
+
 __all__ = [
     "PreparedTransition",
     "RunStartData",
     "RunState",
     "commit_prepared",
+    "prepare_node_failed",
     "prepare_node_routed",
     "prepare_node_started",
     "prepare_node_succeeded",

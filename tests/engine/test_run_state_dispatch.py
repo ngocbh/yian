@@ -20,7 +20,7 @@ from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.log import (
     MemoryRunLog,
-    NodeFailedRecord,
+    NodeExpandedRecord,
     NodeStartedRecord,
     RecordEnvelope,
     RunResumedRecord,
@@ -465,13 +465,18 @@ def test_prepare_record_accepts_exact_dispatch_and_resume_records():
     )
 
 
-def test_prepare_record_rejects_outcomes_until_their_reducer_slice():
+def test_prepare_record_rejects_expansion_until_its_reducer_slice():
     state, _, _ = _initialized()
 
     with pytest.raises(TypeError, match="unsupported"):
         prepare_record(
             state,
-            NodeFailedRecord(node_id="first", error="boom", error_type="ValueError"),
+            NodeExpandedRecord(
+                spawner_id="first",
+                seed={},
+                prune_ids=(),
+                topology_digest="0" * 64,
+            ),
         )
 
 

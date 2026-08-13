@@ -13,11 +13,20 @@ import pytest
 
 import agent_composer.runtime.state as state_module
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, NodeState, START_ID
-from agent_composer.events import NodeRouted, NodeSkipped, NodeSucceeded
+from agent_composer.events import (
+    NodeFailed,
+    NodeRouted,
+    NodeSkipped,
+    NodeSucceeded,
+    RunFailed,
+    SourceRange,
+    SourceSpan,
+)
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.log import (
     MemoryRunLog,
+    NodeFailedRecord,
     NodeRoutedRecord,
     NodeStartedRecord,
     NodeSucceededRecord,
@@ -29,6 +38,7 @@ from agent_composer.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
+    prepare_node_failed,
     prepare_node_routed,
     prepare_node_started,
     prepare_node_succeeded,
@@ -1438,3 +1448,306 @@ def test_success_reducer_allocation_is_independent_of_total_run_size():
         f"success reducer allocation scaled with total run state: "
         f"small={small_peak}, large={large_peak}"
     )
+
+
+def _failure_flow() -> CompiledFlow:
+    """Return a graph with END and two ordinary nodes concurrently in flight."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "failing": FuncNode("failing", lambda inputs: inputs),
+        "sibling": FuncNode("sibling", lambda inputs: inputs),
+        "queued": FuncNode("queued", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    return CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-end", from_=START_ID, to=END_ID),
+            Edge(id="start-failing", from_=START_ID, to="failing"),
+            Edge(id="start-sibling", from_=START_ID, to="sibling"),
+            Edge(id="start-queued", from_=START_ID, to="queued"),
+        ],
+    )
+
+
+def _failure_in_flight() -> tuple[RunState, MemoryRunLog]:
+    """Return a state where END has output and one failing node has a live sibling."""
+    state, log = _initialized_and_started(_failure_flow())
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, END_ID))
+    commit_prepared(log, state, prepare_node_started(state, "failing"))
+    commit_prepared(log, state, prepare_node_started(state, "sibling"))
+    commit_prepared(log, state, prepare_node_succeeded(state, END_ID, {}))
+    return state, log
+
+
+def test_failure_is_terminal_and_preserves_diagnostics():
+    state, log = _failure_in_flight()
+    locator = SourceSpan(node="failing", kind="assert", key="${value > 0}")
+    source_range = SourceRange(
+        start_line=11,
+        start_col=7,
+        end_line=11,
+        end_col=19,
+    )
+    pool_before = encode_pool(state.pool)
+    edges_before = dict(state.edge_state)
+    ready_before = tuple(state.ready)
+    sequence_before = state.next_sequence
+
+    prepared = prepare_node_failed(
+        state,
+        "failing",
+        "value must be positive",
+        error_type="NodeAssertFailed",
+        locator=locator,
+        range=source_range,
+        traceback="Traceback (most recent call last):\n  boom",
+    )
+
+    expected_record = NodeFailedRecord(
+        node_id="failing",
+        error="value must be positive",
+        error_type="NodeAssertFailed",
+        locator=locator,
+        range=source_range,
+        traceback="Traceback (most recent call last):\n  boom",
+    )
+    expected_result = RunFailed(
+        error="value must be positive",
+        error_type="NodeAssertFailed",
+        locator=locator,
+        range=source_range,
+        traceback="Traceback (most recent call last):\n  boom",
+    )
+    assert prepared.record == expected_record
+    assert prepared.observers == (
+        NodeFailed(
+            node_id="failing",
+            error=expected_result.error,
+            error_type=expected_result.error_type,
+            locator=locator,
+            range=source_range,
+            traceback=expected_result.traceback,
+        ),
+        expected_result,
+    )
+    assert state.result is None
+    assert state.pool.get(END_ID) == {}
+
+    prepared.observers[0].error = "mutated prepared observer"
+    prepared.observers[1].error = "mutated prepared observer"
+    observers = commit_prepared(log, state, prepared)
+
+    assert observers == (
+        NodeFailed(
+            node_id="failing",
+            error="value must be positive",
+            error_type="NodeAssertFailed",
+            locator=locator,
+            range=source_range,
+            traceback="Traceback (most recent call last):\n  boom",
+        ),
+        expected_result,
+    )
+    assert state.result == expected_result
+    assert observers[1] is not state.result
+    observers[1].error = "mutated returned observer"
+    assert state.result.error == "value must be positive"
+    assert state.node_state["failing"] is NodeState.TAKEN
+    assert state.node_state["sibling"] is NodeState.UNKNOWN
+    assert tuple(state.in_flight) == ("sibling",)
+    assert tuple(state.ready) == ready_before == ("queued",)
+    assert encode_pool(state.pool) == pool_before
+    assert state.edge_state == edges_before
+    assert state.next_sequence == sequence_before + 1
+    assert tuple(log)[-1].record == expected_record
+
+
+def test_failure_record_replay_reconstructs_identical_state():
+    live_state, live_log = _failure_in_flight()
+    commit_prepared(
+        live_log,
+        live_state,
+        prepare_node_failed(
+            live_state,
+            "failing",
+            "boom",
+            error_type="ValueError",
+            locator=SourceSpan(node="failing", kind="field", key="code"),
+            range=SourceRange(4, 3, 5, 1),
+            traceback="trace",
+        ),
+    )
+    records = tuple(envelope.record for envelope in live_log)
+    started = records[0]
+    assert isinstance(started, RunStartedRecord)
+
+    replay_state = RunState(_failure_flow())
+    replay_log = MemoryRunLog(_RUN_ID)
+    commit_prepared(
+        replay_log,
+        replay_state,
+        prepare_run_started(
+            replay_state,
+            RunStartData(
+                run_id=_RUN_ID,
+                flow_fingerprint=started.flow_fingerprint,
+                initial_pool=decode_pool(started.initial_pool),
+                start_wiring_override=started.start_wiring_override,
+                effective_llm_by_static_path=started.effective_llm_by_static_path,
+                num_workers=started.num_workers,
+            ),
+        ),
+    )
+    for record in records[1:]:
+        commit_prepared(replay_log, replay_state, prepare_record(replay_state, record))
+
+    assert _reducer_snapshot(replay_state) == _reducer_snapshot(live_state)
+    assert tuple(replay_log) == tuple(live_log)
+
+
+def test_failure_append_failure_leaves_every_state_coordinate_unchanged():
+    state, prior = _failure_in_flight()
+    prepared = prepare_node_failed(state, "failing", "boom")
+    before = _state_snapshot(state)
+    log = _FailingAppendLog(prior)
+
+    with pytest.raises(OSError, match="append failed"):
+        commit_prepared(log, state, prepared)
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == prior.next_sequence
+
+
+def test_failure_requires_exact_diagnostic_carriers_before_append():
+    state, log = _failure_in_flight()
+    invalid_calls = (
+        lambda: prepare_node_failed(state, 1, "boom"),
+        lambda: prepare_node_failed(state, "failing", 1),
+        lambda: prepare_node_failed(state, "failing", "boom", error_type=1),
+        lambda: prepare_node_failed(state, "failing", "boom", locator={}),
+        lambda: prepare_node_failed(state, "failing", "boom", range=(1, 1, 1, 2)),
+        lambda: prepare_node_failed(state, "failing", "boom", traceback=[]),
+    )
+    before = _state_snapshot(state)
+
+    for call in invalid_calls:
+        with pytest.raises(TypeError):
+            call()
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == state.next_sequence
+
+
+@pytest.mark.parametrize(
+    ("node_id", "match"),
+    [("missing", "does not exist"), ("queued", "not in-flight")],
+)
+def test_failure_requires_an_existing_unknown_in_flight_node(
+    node_id: str,
+    match: str,
+):
+    state, log = _failure_in_flight()
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match=match):
+        prepare_node_failed(state, node_id, "boom")
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == state.next_sequence
+
+
+def test_failure_requires_initialized_nonterminal_unknown_state():
+    pristine = RunState(_failure_flow())
+    with pytest.raises(ValueError, match="initialized"):
+        prepare_node_failed(pristine, "failing", "boom")
+
+    state, log = _failure_in_flight()
+    state.node_state["failing"] = NodeState.TAKEN
+    before = _state_snapshot(state)
+    with pytest.raises(ValueError, match="UNKNOWN disposition"):
+        prepare_node_failed(state, "failing", "boom")
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == state.next_sequence
+
+    state.node_state["failing"] = NodeState.UNKNOWN
+    state.result = RunFailed("already terminal")
+    before = _state_snapshot(state)
+    with pytest.raises(ValueError, match="terminal"):
+        prepare_node_failed(state, "failing", "boom")
+    assert _state_snapshot(state) == before
+
+
+def test_failure_replay_rejects_noncanonical_diagnostic_carriers():
+    state, log = _failure_in_flight()
+    before = _state_snapshot(state)
+    record = NodeFailedRecord(
+        node_id="failing",
+        error="boom",
+        locator={"node": "failing", "kind": "field", "key": "code"},  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(TypeError, match="locator"):
+        prepare_record(state, record)
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == state.next_sequence
+
+
+def test_competing_failure_plan_rejects_after_another_same_sequence_outcome():
+    state, log = _failure_in_flight()
+    failure = prepare_node_failed(state, "failing", "boom")
+    sibling_success = prepare_node_succeeded(state, "sibling", {"ok": True})
+
+    commit_prepared(log, state, sibling_success)
+    sequence = log.next_sequence
+    with pytest.raises(ValueError, match="run-state sequence mismatch"):
+        commit_prepared(log, state, failure)
+
+    assert log.next_sequence == sequence
+    assert state.result is None
+    assert tuple(state.in_flight) == ("failing",)
+
+
+def test_failure_commit_uses_only_materialized_data_after_append(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state, prior = _failure_in_flight()
+    prepared = prepare_node_failed(
+        state,
+        "failing",
+        "boom",
+        error_type="RuntimeError",
+    )
+
+    def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("failure commit repeated preparation work")
+
+    monkeypatch.setattr(state_module, "_validate_failure_record", unexpected)
+    monkeypatch.setattr(state.flow, "incoming", unexpected)
+    monkeypatch.setattr(state.flow, "outgoing", unexpected)
+
+    class PoisonAfterAppendLog(MemoryRunLog):
+        """Copy the prefix, then poison observer constructors after durable append."""
+
+        def __init__(self, source: MemoryRunLog) -> None:
+            super().__init__(source.run_id)
+            for envelope in source:
+                super().append(envelope.record)
+
+        def append(self, record: Any):
+            envelope = super().append(record)
+            monkeypatch.setattr(state_module, "NodeFailed", unexpected)
+            monkeypatch.setattr(state_module, "RunFailed", unexpected)
+            return envelope
+
+    log = PoisonAfterAppendLog(prior)
+
+    observers = commit_prepared(log, state, prepared)
+
+    assert observers == (
+        NodeFailed("failing", "boom", "RuntimeError"),
+        RunFailed("boom", "RuntimeError"),
+    )
+    assert state.result == RunFailed("boom", "RuntimeError")

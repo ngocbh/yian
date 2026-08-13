@@ -17,6 +17,8 @@ from typing import Any
 from agent_composer._state import NodeState
 from agent_composer.compile.model import CompiledFlow, Edge
 from agent_composer.events import (
+    NodeRouted,
+    NodeSkipped,
     NodeSucceeded,
     NodeStarted,
     RunFailed,
@@ -26,6 +28,7 @@ from agent_composer.events import (
 )
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
+    NodeRoutedRecord,
     NodeSucceededRecord,
     NodeStartedRecord,
     RecordEnvelope,
@@ -245,6 +248,54 @@ class _SuccessApply:
 
 
 @dataclass(frozen=True, slots=True)
+class _RoutePlan:
+    """Opaque authority anchors and one immutable route/skip delta."""
+
+    originating_state: RunState
+    originating_flow: CompiledFlow
+    envelope_bytes: bytes
+    start_id: str
+    start_node_identity: int
+    end_id: str
+    end_node_identity: int | None
+    delta: _RouteDelta
+
+
+@dataclass(frozen=True, slots=True)
+class _RouteDelta:
+    """Prevalidated ordered operations for one route and its skip closure."""
+
+    node_id: str
+    handle: str
+    edge_updates: tuple[tuple[str, NodeState], ...]
+    skipped_node_ids: tuple[str, ...]
+    newly_ready_ids: tuple[str, ...]
+
+
+@dataclass(slots=True)
+class _DataGroupScratch:
+    """Incremental counts for one data-input group in a touched join."""
+
+    optional: bool
+    total: int = 0
+    skipped: int = 0
+
+
+@dataclass(slots=True)
+class _JoinScratch:
+    """One incoming-adjacency scan reduced to constant-time edge updates."""
+
+    states: dict[str, NodeState]
+    classes: dict[str, tuple[str, str | None]]
+    unknown: int
+    control_total: int
+    control_skipped: int
+    required_data_dead: int
+    required_ordering_skipped: int
+    data_groups: dict[str | None, _DataGroupScratch]
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedTransition:
     """One canonical record plus its already-validated total state-change plan.
 
@@ -257,7 +308,7 @@ class PreparedTransition:
     record: RunRecord
     expected_run_id: str
     expected_sequence: int
-    _plan: _RunStartedPlan | _FrontierPlan | _SuccessPlan
+    _plan: _RunStartedPlan | _FrontierPlan | _SuccessPlan | _RoutePlan
     observers: tuple[Any, ...]
 
 
@@ -441,6 +492,49 @@ def prepare_node_succeeded(
     )
 
 
+def prepare_node_routed(
+    state: RunState,
+    node_id: str,
+    handle: str,
+) -> PreparedTransition:
+    """Prepare one selected route and its derived recursive skip closure.
+
+    Args:
+        state (`RunState`):
+            Initialized nonterminal state with ``node_id`` in ordered in-flight work.
+        node_id (`str`):
+            Exact non-empty ID of the executing router.
+        handle (`str`):
+            Exact non-empty handle selected by the router.
+
+    Returns:
+        `PreparedTransition`:
+            Canonical ``NodeRoutedRecord`` and detached append-before-apply plan.
+
+    Raises:
+        `TypeError`:
+            A carrier has the wrong exact type.
+        `ValueError`:
+            The router/frontier is invalid or no outgoing edge matches ``handle``.
+    """
+    if type(state) is not RunState:
+        raise TypeError("prepare_node_routed expects a RunState")
+    if type(node_id) is not str:
+        raise TypeError("node_id must be a string")
+    if not node_id:
+        raise ValueError("node_id must be non-empty")
+    if type(handle) is not str:
+        raise TypeError("handle must be a string")
+    if not handle:
+        raise ValueError("handle must be non-empty")
+    _require_initialized_nonterminal(state)
+    _require_routing_node(state, node_id)
+    return _prepare_route_transition(
+        state,
+        NodeRoutedRecord(node_id=node_id, handle=handle),
+    )
+
+
 def prepare_run_resumed(
     state: RunState,
     *,
@@ -481,15 +575,15 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
     """Validate one supported authoritative record against the current frontier.
 
     This is the shared reducer seam for live dispatch and later historical replay.
-    Dispatch, recovery-frontier, and successful-outcome records are supported here;
-    the remaining node outcomes acquire reducers in later slices.
+    Dispatch, recovery-frontier, successful-output, and route records are supported
+    here; the remaining node outcomes acquire reducers in later slices.
 
     Args:
         state (`RunState`):
             Initialized nonterminal state immediately before ``record``.
         record (`RunRecord`):
-            A ``NodeStartedRecord``, ``RunResumedRecord``, or
-            ``NodeSucceededRecord`` to validate and copy.
+            A ``NodeStartedRecord``, ``RunResumedRecord``,
+            ``NodeSucceededRecord``, or ``NodeRoutedRecord`` to validate and copy.
 
     Returns:
         `PreparedTransition`:
@@ -508,6 +602,9 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
     if isinstance(record, NodeSucceededRecord):
         typed = _validate_success_value(state, record)
         return _prepare_success_transition(state, record, typed)
+    if isinstance(record, NodeRoutedRecord):
+        _validate_route_record(state, record)
+        return _prepare_route_transition(state, record)
     if isinstance(record, NodeStartedRecord):
         _validate_node_started(state, record)
     elif isinstance(record, RunResumedRecord):
@@ -635,6 +732,56 @@ def _prepare_success_transition(
     )
 
 
+def _prepare_route_transition(
+    state: RunState,
+    record: NodeRoutedRecord,
+) -> PreparedTransition:
+    """Freeze one fully validated route delta and its canonical public record."""
+    delta = _prepare_route_delta(state, record)
+    run_id = state.run_id
+    if not isinstance(run_id, str):  # established by initialized-state validation
+        raise ValueError("run state is not initialized")
+    canonical_bytes = encode_record(
+        RecordEnvelope(
+            schema=SCHEMA_VERSION,
+            run_id=run_id,
+            seq=state.next_sequence,
+            record=record,
+        )
+    )
+    canonical_envelope = decode_record(canonical_bytes)
+    canonical_record = canonical_envelope.record
+    if not isinstance(canonical_record, NodeRoutedRecord):
+        raise TypeError("node-route envelope decoded to a different record kind")
+    if canonical_record != record:
+        raise ValueError("NodeRoutedRecord is not in canonical wire form")
+
+    start_id = state.flow.start_id
+    end_id = state.flow.end_id
+    plan = _RoutePlan(
+        originating_state=state,
+        originating_flow=state.flow,
+        envelope_bytes=canonical_bytes,
+        start_id=start_id,
+        start_node_identity=id(state.flow.nodes[start_id]),
+        end_id=end_id,
+        end_node_identity=(
+            id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
+        ),
+        delta=delta,
+    )
+    observers = (NodeRouted(delta.node_id, delta.handle),) + tuple(
+        NodeSkipped(node_id) for node_id in delta.skipped_node_ids
+    )
+    return PreparedTransition(
+        record=canonical_record,
+        expected_run_id=canonical_envelope.run_id,
+        expected_sequence=canonical_envelope.seq,
+        _plan=plan,
+        observers=observers,
+    )
+
+
 def commit_prepared(
     log: RunLog,
     state: RunState,
@@ -679,6 +826,8 @@ def commit_prepared(
         return _commit_frontier(log, state, prepared)
     if isinstance(prepared._plan, _SuccessPlan):
         return _commit_success(log, state, prepared)
+    if isinstance(prepared._plan, _RoutePlan):
+        return _commit_route(log, state, prepared)
     raise TypeError("unsupported prepared transition plan")
 
 
@@ -780,9 +929,46 @@ def _commit_success(
     return apply.observers
 
 
+def _commit_route(
+    log: RunLog,
+    state: RunState,
+    prepared: PreparedTransition,
+) -> tuple[Any, ...]:
+    """Validate, append, and install one route plus derived skip closure."""
+    plan = prepared._plan
+    if not isinstance(plan, _RoutePlan):
+        raise TypeError("route commit requires a route plan")
+    if not isinstance(prepared.record, NodeRoutedRecord):
+        raise TypeError("route plan requires a NodeRoutedRecord")
+    _require_prepared_origin(state, plan)
+    _require_initialized_nonterminal(state)
+    _require_authority_coordinates(log, state, prepared, initialized=True)
+    _require_unchanged_record(prepared, plan.envelope_bytes)
+    delta = plan.delta
+    if not (
+        prepared.record.node_id == delta.node_id
+        and prepared.record.handle == delta.handle
+    ):
+        raise ValueError("route record and prevalidated delta disagree")
+    observers = (NodeRouted(delta.node_id, delta.handle),) + tuple(
+        NodeSkipped(node_id) for node_id in delta.skipped_node_ids
+    )
+
+    _append_and_verify(log, prepared)
+    state.node_state[delta.node_id] = NodeState.TAKEN
+    for edge_id, disposition in delta.edge_updates:
+        state.edge_state[edge_id] = disposition
+    for node_id in delta.skipped_node_ids:
+        state.node_state[node_id] = NodeState.SKIPPED
+    del state.in_flight[delta.node_id]
+    state.ready.extend(delta.newly_ready_ids)
+    state.next_sequence = prepared.expected_sequence + 1
+    return observers
+
+
 def _require_prepared_origin(
     state: RunState,
-    plan: _RunStartedPlan | _FrontierPlan | _SuccessPlan,
+    plan: _RunStartedPlan | _FrontierPlan | _SuccessPlan | _RoutePlan,
 ) -> None:
     """Require the exact state, adopted flow, and boundary objects from preparation."""
     if state is not plan.originating_state:
@@ -944,6 +1130,33 @@ def _require_succeeding_node(state: RunState, node_id: str) -> None:
         raise ValueError("in-flight must be an ordered set with None values")
 
 
+def _require_routing_node(state: RunState, node_id: str) -> None:
+    """Require an existing unknown router in the ordered in-flight frontier."""
+    if not node_id:
+        raise ValueError("NodeRouted node_id must be non-empty")
+    if node_id not in state.flow.nodes:
+        raise ValueError(f"NodeRouted node {node_id!r} does not exist in the flow")
+    if state.node_state.get(node_id) is not NodeState.UNKNOWN:
+        raise ValueError(f"NodeRouted node {node_id!r} must have UNKNOWN disposition")
+    if node_id not in state.in_flight:
+        raise ValueError(f"NodeRouted node {node_id!r} is not in-flight")
+    if state.in_flight[node_id] is not None:
+        raise ValueError("in-flight must be an ordered set with None values")
+
+
+def _validate_route_record(state: RunState, record: NodeRoutedRecord) -> None:
+    """Validate the exact scalar carrier and executing router for replay."""
+    if type(record.node_id) is not str:
+        raise TypeError("NodeRoutedRecord node_id must be a string")
+    if not record.node_id:
+        raise ValueError("NodeRoutedRecord node_id must be non-empty")
+    if type(record.handle) is not str:
+        raise TypeError("NodeRoutedRecord handle must be a string")
+    if not record.handle:
+        raise ValueError("NodeRoutedRecord handle must be non-empty")
+    _require_routing_node(state, record.node_id)
+
+
 def _validate_success_value(
     state: RunState,
     record: NodeSucceededRecord,
@@ -1049,6 +1262,241 @@ def _prepare_success_delta(
         newly_ready_ids=tuple(newly_ready_ids),
         observer_commit_as=(None if target == record.node_id else target),
     )
+
+
+def _prepare_route_delta(
+    state: RunState,
+    record: NodeRoutedRecord,
+) -> _RouteDelta:
+    """Validate one route locally and freeze its iterative skip-flood operations."""
+    _validate_route_record(state, record)
+    edge_updates: dict[str, NodeState] = {}
+    skipped_node_ids: list[str] = []
+    skipped_nodes: set[str] = set()
+    newly_ready_ids: list[str] = []
+    newly_ready: set[str] = set()
+    joins: dict[str, _JoinScratch] = {}
+
+    root_edges = _route_outgoing(state, record.node_id, edge_updates)
+    matched = tuple(
+        edge
+        for edge in root_edges
+        if (edge.source_handle or "default") == record.handle
+    )
+    if not matched:
+        raise ValueError(
+            f"NodeRouted handle {record.handle!r} matches no outgoing edge of "
+            f"{record.node_id!r}"
+        )
+
+    # A LIFO stack with reversed pushes exactly reproduces recursive stored-order DFS
+    # without depending on Python's recursion limit for deep skip chains.
+    work: list[tuple[Edge, NodeState]] = list(
+        reversed(
+            tuple(
+                (
+                    edge,
+                    NodeState.TAKEN
+                    if (edge.source_handle or "default") == record.handle
+                    else NodeState.SKIPPED,
+                )
+                for edge in root_edges
+            )
+        )
+    )
+    while work:
+        edge, disposition = work.pop()
+        _require_route_edge(state, edge, edge_updates)
+        scratch = joins.get(edge.to)
+        if scratch is None:
+            scratch = _scan_join(state, edge.to)
+            joins[edge.to] = scratch
+        _settle_join_edge(scratch, edge.id, disposition, edge.to)
+        edge_updates[edge.id] = disposition
+
+        head = edge.to
+        head_disposition = state.node_state[head]
+        if head_disposition not in (NodeState.UNKNOWN, NodeState.SKIPPED):
+            raise ValueError(
+                f"route successor {head!r} must have UNKNOWN or SKIPPED disposition"
+            )
+        if head in skipped_nodes or head_disposition is NodeState.SKIPPED:
+            continue
+        join_disposition = _classify_join(scratch)
+        if join_disposition == "wait":
+            continue
+        if join_disposition == "ready":
+            if head_disposition is not NodeState.UNKNOWN:
+                raise ValueError(
+                    f"newly-ready route successor {head!r} must have UNKNOWN disposition"
+                )
+            if head in newly_ready:
+                raise ValueError(
+                    f"route successor {head!r} became ready more than once"
+                )
+            newly_ready.add(head)
+            newly_ready_ids.append(head)
+            continue
+
+        skipped_nodes.add(head)
+        skipped_node_ids.append(head)
+        children = _route_outgoing(state, head, edge_updates)
+        for child in reversed(children):
+            work.append((child, NodeState.SKIPPED))
+
+    return _RouteDelta(
+        node_id=record.node_id,
+        handle=record.handle,
+        edge_updates=tuple(edge_updates.items()),
+        skipped_node_ids=tuple(skipped_node_ids),
+        newly_ready_ids=tuple(newly_ready_ids),
+    )
+
+
+def _route_outgoing(
+    state: RunState,
+    node_id: str,
+    edge_updates: dict[str, NodeState],
+) -> tuple[Edge, ...]:
+    """Return one node's validated outgoing adjacency in stored order."""
+    outgoing = state.flow.outgoing(node_id)
+    seen: set[str] = set()
+    validated: list[Edge] = []
+    for edge in outgoing:
+        if not isinstance(edge, Edge) or edge.from_ != node_id:
+            raise ValueError(f"route node {node_id!r} has an invalid outgoing adjacency")
+        if type(edge.id) is not str or not edge.id or edge.id in seen:
+            raise ValueError(f"route node {node_id!r} has invalid outgoing edge IDs")
+        seen.add(edge.id)
+        if edge.id in edge_updates:
+            raise ValueError(f"route edge {edge.id!r} is reached more than once")
+        if edge.id not in state.edge_state:
+            raise ValueError(f"route edge {edge.id!r} has no disposition")
+        if state.edge_state[edge.id] is not NodeState.UNKNOWN:
+            raise ValueError(f"route edge {edge.id!r} must be UNKNOWN")
+        if edge.to not in state.flow.nodes or edge.to not in state.node_state:
+            raise ValueError(
+                f"route edge {edge.id!r} has unknown successor {edge.to!r}"
+            )
+        validated.append(edge)
+    return tuple(validated)
+
+
+def _require_route_edge(
+    state: RunState,
+    edge: Edge,
+    edge_updates: dict[str, NodeState],
+) -> None:
+    """Recheck a queued edge without scanning any adjacency or global frontier."""
+    if edge.id in edge_updates:
+        raise ValueError(f"route edge {edge.id!r} is reached more than once")
+    if edge.id not in state.edge_state:
+        raise ValueError(f"route edge {edge.id!r} has no disposition")
+    if state.edge_state[edge.id] is not NodeState.UNKNOWN:
+        raise ValueError(f"route edge {edge.id!r} must be UNKNOWN")
+
+
+def _scan_join(state: RunState, node_id: str) -> _JoinScratch:
+    """Scan one touched head's incoming adjacency into incremental gate counts."""
+    incoming = state.flow.incoming(node_id)
+    if not incoming:
+        raise ValueError(f"route successor {node_id!r} has no incoming adjacency")
+    states: dict[str, NodeState] = {}
+    classes: dict[str, tuple[str, str | None]] = {}
+    unknown = 0
+    control_total = 0
+    control_skipped = 0
+    required_data_dead = 0
+    required_ordering_skipped = 0
+    data_groups: dict[str | None, _DataGroupScratch] = {}
+    for edge in incoming:
+        if not isinstance(edge, Edge) or edge.to != node_id:
+            raise ValueError(f"route successor {node_id!r} has invalid incoming adjacency")
+        if type(edge.id) is not str or not edge.id or edge.id in states:
+            raise ValueError(f"route successor {node_id!r} has invalid incoming edge IDs")
+        if edge.id not in state.edge_state:
+            raise ValueError(f"route incoming edge {edge.id!r} has no disposition")
+        disposition = state.edge_state[edge.id]
+        if type(disposition) is not NodeState:
+            raise ValueError(f"route incoming edge {edge.id!r} has invalid disposition")
+        states[edge.id] = disposition
+        unknown += disposition is NodeState.UNKNOWN
+        if edge.source_handle is not None:
+            classes[edge.id] = ("control", None)
+            control_total += 1
+            control_skipped += disposition is NodeState.SKIPPED
+        elif edge.ordering:
+            classes[edge.id] = (
+                "ordering" if edge.optional else "required_ordering",
+                None,
+            )
+            required_ordering_skipped += (
+                not edge.optional and disposition is NodeState.SKIPPED
+            )
+        else:
+            group = data_groups.get(edge.input_group)
+            if group is None:
+                group = _DataGroupScratch(optional=edge.optional)
+                data_groups[edge.input_group] = group
+            group.total += 1
+            group.skipped += disposition is NodeState.SKIPPED
+            classes[edge.id] = ("data", edge.input_group)
+    required_data_dead = sum(
+        not group.optional and group.skipped == group.total
+        for group in data_groups.values()
+    )
+    return _JoinScratch(
+        states=states,
+        classes=classes,
+        unknown=unknown,
+        control_total=control_total,
+        control_skipped=control_skipped,
+        required_data_dead=required_data_dead,
+        required_ordering_skipped=required_ordering_skipped,
+        data_groups=data_groups,
+    )
+
+
+def _settle_join_edge(
+    scratch: _JoinScratch,
+    edge_id: str,
+    disposition: NodeState,
+    node_id: str,
+) -> None:
+    """Apply one UNKNOWN-to-settled update to a cached join in constant time."""
+    if edge_id not in scratch.states:
+        raise ValueError(
+            f"route edge {edge_id!r} is absent from successor {node_id!r} incoming adjacency"
+        )
+    if scratch.states[edge_id] is not NodeState.UNKNOWN:
+        raise ValueError(f"route edge {edge_id!r} must be UNKNOWN in its incoming join")
+    scratch.states[edge_id] = disposition
+    scratch.unknown -= 1
+    if disposition is not NodeState.SKIPPED:
+        return
+    edge_class, group_name = scratch.classes[edge_id]
+    if edge_class == "control":
+        scratch.control_skipped += 1
+    elif edge_class == "required_ordering":
+        scratch.required_ordering_skipped += 1
+    elif edge_class == "data":
+        group = scratch.data_groups[group_name]
+        group.skipped += 1
+        if not group.optional and group.skipped == group.total:
+            scratch.required_data_dead += 1
+
+
+def _classify_join(scratch: _JoinScratch) -> str:
+    """Classify cached gate counts with eager dead before unresolved wait."""
+    if scratch.control_total and scratch.control_skipped == scratch.control_total:
+        return "dead"
+    if scratch.required_data_dead:
+        return "dead"
+    if scratch.required_ordering_skipped:
+        return "dead"
+    if scratch.unknown:
+        return "wait"
+    return "ready"
 
 
 def _sparse_disposition(
@@ -1176,7 +1624,7 @@ def _require_pristine(state: RunState) -> None:
 
 def _require_originating_flow(
     state: RunState,
-    plan: _RunStartedPlan | _FrontierPlan | _SuccessPlan,
+    plan: _RunStartedPlan | _FrontierPlan | _SuccessPlan | _RoutePlan,
 ) -> None:
     """Reject replacement of the adopted flow object or either boundary identity.
 
@@ -1296,6 +1744,7 @@ __all__ = [
     "RunStartData",
     "RunState",
     "commit_prepared",
+    "prepare_node_routed",
     "prepare_node_started",
     "prepare_node_succeeded",
     "prepare_record",

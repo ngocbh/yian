@@ -2,11 +2,14 @@
 
 Two tiers (graphon's "two-tier event model"):
 
-- **Node events** are produced by `Node.run()`. A node emits `NodeStarted`, then
-  optionally `StreamChunk`s (token streaming) and/or a `PauseRequested`, and
-  terminates with `NodeSucceeded` or `NodeFailed`. The node only *describes* its
-  one output value on `NodeSucceeded.output`; the engine — not the node — writes
-  it into the variable pool. That split keeps nodes pure and testable.
+- **Node-level signals** primarily describe evaluation: `eval_node` emits
+  `NodeStarted`, optional `StreamChunk`s and/or `PauseRequested`, then one outcome
+  such as `NodeSucceeded`, `NodeRouted`, or `NodeFailed`. The run-state reducer
+  also returns fresh observer notifications only after their durable record is
+  applied. It reuses the relevant signal carrier and derives `NodeSkipped` from a
+  route's skip closure; `NodeSkipped` itself has no durable record. A node only
+  *describes* its result — the engine writes the variable pool and reduces graph
+  state. That split keeps nodes pure and testable.
 
 - **Run events** are produced by `FlowEngine.run()` and streamed to the caller
   (the CLI): `RunStarted` then one terminal of
@@ -116,7 +119,7 @@ class Diagnostic:
 
 
 # --------------------------------------------------------------------------- #
-# Node-level events
+# Node-level signals and reducer observer notifications
 # --------------------------------------------------------------------------- #
 
 
@@ -159,6 +162,13 @@ class NodeRouted:
 
     node_id: str
     handle: str
+
+
+@dataclass
+class NodeSkipped:
+    """A post-durable observer that a route skip-flood made a node unreachable."""
+
+    node_id: str
 
 
 @dataclass

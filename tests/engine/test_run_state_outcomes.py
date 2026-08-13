@@ -13,11 +13,12 @@ import pytest
 
 import agent_composer.runtime.state as state_module
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, NodeState, START_ID
-from agent_composer.events import NodeSucceeded
+from agent_composer.events import NodeRouted, NodeSkipped, NodeSucceeded
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.log import (
     MemoryRunLog,
+    NodeRoutedRecord,
     NodeStartedRecord,
     NodeSucceededRecord,
     RunStartedRecord,
@@ -28,6 +29,7 @@ from agent_composer.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
+    prepare_node_routed,
     prepare_node_started,
     prepare_node_succeeded,
     prepare_record,
@@ -100,6 +102,648 @@ def _commit_start_success(
             START_ID,
             {"items": ["canonical"]} if output is None else output,
         ),
+    )
+
+
+def _route_flow() -> CompiledFlow:
+    """Return a route whose unselected sibling has a two-node skip chain."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "router": FuncNode("router", lambda inputs: inputs),
+        "chosen": FuncNode("chosen", lambda inputs: inputs),
+        "dead-parent": FuncNode("dead-parent", lambda inputs: inputs),
+        "dead-child": FuncNode("dead-child", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    return CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-router", from_=START_ID, to="router"),
+            Edge(
+                id="route-dead",
+                from_="router",
+                to="dead-parent",
+                source_handle="no",
+            ),
+            Edge(
+                id="route-chosen",
+                from_="router",
+                to="chosen",
+                source_handle="yes",
+            ),
+            Edge(id="dead-child", from_="dead-parent", to="dead-child"),
+        ],
+    )
+
+
+def _route_in_flight(
+    flow: CompiledFlow | None = None,
+) -> tuple[RunState, MemoryRunLog]:
+    """Return a replay-valid state/log with the generic router in flight."""
+    state, log = _initialized_and_started(_route_flow() if flow is None else flow)
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, "router"))
+    return state, log
+
+
+def test_route_derives_skip_closure_without_skip_record():
+    state, log = _route_in_flight()
+    before = _state_snapshot(state)
+
+    prepared = prepare_node_routed(state, "router", "yes")
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == 4
+    assert prepared.record == NodeRoutedRecord(node_id="router", handle="yes")
+    assert prepared.observers == (
+        NodeRouted("router", "yes"),
+        NodeSkipped("dead-parent"),
+        NodeSkipped("dead-child"),
+    )
+    assert prepared._plan.delta.edge_updates == (
+        ("route-dead", NodeState.SKIPPED),
+        ("dead-child", NodeState.SKIPPED),
+        ("route-chosen", NodeState.TAKEN),
+    )
+    with pytest.raises(FrozenInstanceError):
+        prepared._plan.delta.edge_updates = ()  # type: ignore[misc]
+
+    observers = commit_prepared(log, state, prepared)
+
+    assert observers == prepared.observers
+    assert state.node_state["router"] is NodeState.TAKEN
+    assert state.node_state["dead-parent"] is NodeState.SKIPPED
+    assert state.node_state["dead-child"] is NodeState.SKIPPED
+    assert state.node_state["chosen"] is NodeState.UNKNOWN
+    assert tuple(state.ready) == ("chosen",)
+    assert tuple(state.in_flight) == ()
+    assert [type(envelope.record) for envelope in log] == [
+        RunStartedRecord,
+        NodeStartedRecord,
+        NodeSucceededRecord,
+        NodeStartedRecord,
+        NodeRoutedRecord,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("selected", "matching_handles"),
+    [
+        ("default", (None, "")),
+        ("go", ("go", "go")),
+    ],
+)
+def test_route_takes_every_edge_matching_default_or_named_handle(
+    selected: str,
+    matching_handles: tuple[str | None, str | None],
+):
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "router": FuncNode("router", lambda inputs: inputs),
+        "left": FuncNode("left", lambda inputs: inputs),
+        "right": FuncNode("right", lambda inputs: inputs),
+        "dead": FuncNode("dead", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    flow = CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-router", from_=START_ID, to="router"),
+            Edge(
+                id="match-left",
+                from_="router",
+                to="left",
+                source_handle=matching_handles[0],
+            ),
+            Edge(
+                id="match-right",
+                from_="router",
+                to="right",
+                source_handle=matching_handles[1],
+            ),
+            Edge(
+                id="other",
+                from_="router",
+                to="dead",
+                source_handle="other",
+            ),
+        ],
+    )
+    state, log = _route_in_flight(flow)
+
+    commit_prepared(log, state, prepare_node_routed(state, "router", selected))
+
+    assert state.edge_state["match-left"] is NodeState.TAKEN
+    assert state.edge_state["match-right"] is NodeState.TAKEN
+    assert state.edge_state["other"] is NodeState.SKIPPED
+    assert state.node_state["dead"] is NodeState.SKIPPED
+    assert tuple(state.ready) == ("left", "right")
+
+
+def test_route_preserves_dfs_observers_and_existing_fifo_readiness():
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "router": FuncNode("router", lambda inputs: inputs),
+        "existing": FuncNode("existing", lambda inputs: inputs),
+        "dead-a": FuncNode("dead-a", lambda inputs: inputs),
+        "ready-a": FuncNode("ready-a", lambda inputs: inputs),
+        "chosen": FuncNode("chosen", lambda inputs: inputs),
+        "dead-b": FuncNode("dead-b", lambda inputs: inputs),
+        "ready-b": FuncNode("ready-b", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    flow = CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-router", from_=START_ID, to="router"),
+            Edge(id="start-existing", from_=START_ID, to="existing"),
+            Edge(
+                id="route-a", from_="router", to="dead-a", source_handle="no-a"
+            ),
+            Edge(
+                id="route-chosen",
+                from_="router",
+                to="chosen",
+                source_handle="yes",
+            ),
+            Edge(
+                id="route-b", from_="router", to="dead-b", source_handle="no-b"
+            ),
+            Edge(
+                id="a-ready", from_="dead-a", to="ready-a", optional=True
+            ),
+            Edge(
+                id="b-ready", from_="dead-b", to="ready-b", optional=True
+            ),
+        ],
+    )
+    state, log = _route_in_flight(flow)
+
+    observers = commit_prepared(
+        log,
+        state,
+        prepare_node_routed(state, "router", "yes"),
+    )
+
+    assert observers == (
+        NodeRouted("router", "yes"),
+        NodeSkipped("dead-a"),
+        NodeSkipped("dead-b"),
+    )
+    assert tuple(state.ready) == ("existing", "ready-a", "chosen", "ready-b")
+
+
+def test_route_skip_join_matches_control_data_ordering_and_wait_semantics():
+    node_ids = (
+        "router",
+        "dead-parent",
+        "control-dead",
+        "data-dead",
+        "ordering-dead",
+        "waiting",
+        "optional-ready",
+        "runs-after-ready",
+        "unused",
+    )
+    nodes = {
+        START_ID: StartNode(START_ID),
+        **{node_id: FuncNode(node_id, lambda inputs: inputs) for node_id in node_ids},
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    flow = CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-router", from_=START_ID, to="router"),
+            Edge(
+                id="start-control-data",
+                from_=START_ID,
+                to="control-dead",
+                input_group="value",
+            ),
+            Edge(
+                id="route-parent",
+                from_="router",
+                to="dead-parent",
+                source_handle="no",
+            ),
+            Edge(
+                id="route-live",
+                from_="router",
+                to="unused",
+                source_handle="yes",
+            ),
+            Edge(
+                id="parent-control",
+                from_="dead-parent",
+                to="control-dead",
+                source_handle="gate",
+            ),
+            Edge(
+                id="parent-data",
+                from_="dead-parent",
+                to="data-dead",
+                input_group="required",
+            ),
+            Edge(
+                id="parent-ordering",
+                from_="dead-parent",
+                to="ordering-dead",
+                ordering=True,
+            ),
+            Edge(
+                id="parent-ordering-again",
+                from_="dead-parent",
+                to="ordering-dead",
+                ordering=True,
+            ),
+            Edge(
+                id="parent-wait",
+                from_="dead-parent",
+                to="waiting",
+                input_group="both",
+            ),
+            Edge(
+                id="unused-wait",
+                from_="unused",
+                to="waiting",
+                input_group="both",
+            ),
+            Edge(
+                id="parent-optional",
+                from_="dead-parent",
+                to="optional-ready",
+                optional=True,
+            ),
+            Edge(
+                id="parent-runs-after",
+                from_="dead-parent",
+                to="runs-after-ready",
+                optional=True,
+                ordering=True,
+            ),
+        ],
+    )
+    state, log = _route_in_flight(flow)
+
+    observers = commit_prepared(
+        log,
+        state,
+        prepare_node_routed(state, "router", "yes"),
+    )
+
+    assert observers == (
+        NodeRouted("router", "yes"),
+        NodeSkipped("dead-parent"),
+        NodeSkipped("control-dead"),
+        NodeSkipped("data-dead"),
+        NodeSkipped("ordering-dead"),
+    )
+    assert state.node_state["waiting"] is NodeState.UNKNOWN
+    assert state.edge_state["start-control-data"] is NodeState.TAKEN
+    assert state.edge_state["unused-wait"] is NodeState.UNKNOWN
+    assert state.edge_state["parent-ordering-again"] is NodeState.SKIPPED
+    assert tuple(state.ready) == (
+        "optional-ready",
+        "runs-after-ready",
+        "unused",
+    )
+
+
+@pytest.mark.parametrize(
+    ("node_id", "handle", "match"),
+    [
+        ("missing", "yes", "does not exist"),
+        ("chosen", "yes", "not in-flight"),
+        ("router", "missing", "matches no outgoing edge"),
+    ],
+)
+def test_route_rejects_unknown_router_frontier_or_handle(
+    node_id: str,
+    handle: str,
+    match: str,
+):
+    state, log = _route_in_flight()
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match=match):
+        prepare_node_routed(state, node_id, handle)
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == 4
+
+
+@pytest.mark.parametrize("settled", [NodeState.TAKEN, NodeState.SKIPPED])
+def test_route_rejects_a_previously_settled_outgoing_edge(settled: NodeState):
+    state, log = _route_in_flight()
+    state.edge_state["route-dead"] = settled
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match="route edge .* must be UNKNOWN"):
+        prepare_node_routed(state, "router", "yes")
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == 4
+
+
+@pytest.mark.parametrize("field", ["node", "handle"])
+def test_route_requires_exact_nonempty_strings(field: str):
+    state, _ = _route_in_flight()
+    args = ("", "yes") if field == "node" else ("router", "")
+    with pytest.raises(ValueError, match="non-empty"):
+        prepare_node_routed(state, *args)
+
+    invalid = 1
+    args = (invalid, "yes") if field == "node" else ("router", invalid)
+    with pytest.raises(TypeError, match=field):
+        prepare_node_routed(state, *args)
+
+
+def test_route_append_failure_leaves_every_state_coordinate_unchanged():
+    state, prior = _route_in_flight()
+    prepared = prepare_node_routed(state, "router", "yes")
+    before = _state_snapshot(state)
+    log = _FailingAppendLog(prior)
+
+    with pytest.raises(OSError, match="append failed"):
+        commit_prepared(log, state, prepared)
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == prior.next_sequence
+
+
+def test_route_delta_preserves_all_reducer_container_identities():
+    state, log = _route_in_flight()
+    roots = (
+        state.pool,
+        state.pool.store,
+        state.node_state,
+        state.edge_state,
+        state.ready,
+        state.in_flight,
+        state.depth,
+        state.wiring_overrides,
+        state.input,
+        state.effective_llm_by_static_path,
+    )
+    root_ids = tuple(id(root) for root in roots)
+
+    commit_prepared(log, state, prepare_node_routed(state, "router", "yes"))
+
+    assert root_ids == tuple(
+        id(root)
+        for root in (
+            state.pool,
+            state.pool.store,
+            state.node_state,
+            state.edge_state,
+            state.ready,
+            state.in_flight,
+            state.depth,
+            state.wiring_overrides,
+            state.input,
+            state.effective_llm_by_static_path,
+        )
+    )
+
+
+def test_competing_route_plans_reject_the_second_sequence_before_append():
+    state, log = _route_in_flight()
+    first = prepare_node_routed(state, "router", "yes")
+    second = prepare_node_routed(state, "router", "yes")
+
+    commit_prepared(log, state, first)
+    sequence = log.next_sequence
+    with pytest.raises(ValueError, match="run-state sequence mismatch"):
+        commit_prepared(log, state, second)
+
+    assert log.next_sequence == sequence
+
+
+def test_route_observers_are_fresh_and_isolated_from_prepared_mutation():
+    state, log = _route_in_flight()
+    prepared = prepare_node_routed(state, "router", "yes")
+    prepared.observers[0].handle = "mutated"
+    prepared.observers[1].node_id = "mutated"
+
+    observers = commit_prepared(log, state, prepared)
+
+    assert observers == (
+        NodeRouted("router", "yes"),
+        NodeSkipped("dead-parent"),
+        NodeSkipped("dead-child"),
+    )
+
+
+def test_route_record_replay_reconstructs_identical_state():
+    live_state, live_log = _route_in_flight()
+    commit_prepared(
+        live_log,
+        live_state,
+        prepare_node_routed(live_state, "router", "yes"),
+    )
+    records = tuple(envelope.record for envelope in live_log)
+    started = records[0]
+    assert isinstance(started, RunStartedRecord)
+
+    replay_flow = _route_flow()
+    replay_state = RunState(replay_flow)
+    replay_log = MemoryRunLog(_RUN_ID)
+    commit_prepared(
+        replay_log,
+        replay_state,
+        prepare_run_started(
+            replay_state,
+            RunStartData(
+                run_id=_RUN_ID,
+                flow_fingerprint=started.flow_fingerprint,
+                initial_pool=decode_pool(started.initial_pool),
+                start_wiring_override=started.start_wiring_override,
+                effective_llm_by_static_path=started.effective_llm_by_static_path,
+                num_workers=started.num_workers,
+            ),
+        ),
+    )
+    for record in records[1:]:
+        commit_prepared(replay_log, replay_state, prepare_record(replay_state, record))
+
+    assert _reducer_snapshot(replay_state) == _reducer_snapshot(live_state)
+    assert tuple(replay_log) == tuple(live_log)
+
+
+def test_route_commit_uses_only_materialized_delta_after_append(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state, prior = _route_in_flight()
+    prepared = prepare_node_routed(state, "router", "yes")
+    pool_before = encode_pool(state.pool)
+
+    def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("route commit repeated preparation work")
+
+    monkeypatch.setattr(state_module, "_prepare_route_delta", unexpected)
+    monkeypatch.setattr(state_module, "_scan_join", unexpected)
+    monkeypatch.setattr(state_module, "_settle_join_edge", unexpected)
+    monkeypatch.setattr(state_module, "_classify_join", unexpected)
+    monkeypatch.setattr(state.flow, "incoming", unexpected)
+    monkeypatch.setattr(state.flow, "outgoing", unexpected)
+
+    class PoisonAfterAppendLog(MemoryRunLog):
+        """Copy the prefix, then poison observer constructors after durable append."""
+
+        def __init__(self, source: MemoryRunLog) -> None:
+            super().__init__(source.run_id)
+            for envelope in source:
+                super().append(envelope.record)
+
+        def append(self, record: Any):
+            envelope = super().append(record)
+            monkeypatch.setattr(state_module, "NodeRouted", unexpected)
+            monkeypatch.setattr(state_module, "NodeSkipped", unexpected)
+            return envelope
+
+    log = PoisonAfterAppendLog(prior)
+
+    observers = commit_prepared(log, state, prepared)
+
+    assert observers == (
+        NodeRouted("router", "yes"),
+        NodeSkipped("dead-parent"),
+        NodeSkipped("dead-child"),
+    )
+    assert encode_pool(state.pool) == pool_before
+
+
+def test_route_scans_each_touched_head_incoming_adjacency_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "router": FuncNode("router", lambda inputs: inputs),
+        "head": FuncNode("head", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    edges = [Edge(id="start-router", from_=START_ID, to="router")]
+    edges.extend(
+        Edge(
+            id=f"route-{index}",
+            from_="router",
+            to="head",
+            source_handle=f"no-{index}",
+        )
+        for index in range(64)
+    )
+    edges.append(
+        Edge(id="route-live", from_="router", to="head", source_handle="yes")
+    )
+    flow = CompiledFlow.from_parts(nodes=nodes, edges=edges)
+    state, _ = _route_in_flight(flow)
+    original_incoming = flow.incoming
+    scans: dict[str, int] = {}
+
+    def counted_incoming(node_id: str):
+        scans[node_id] = scans.get(node_id, 0) + 1
+        return original_incoming(node_id)
+
+    monkeypatch.setattr(flow, "incoming", counted_incoming)
+
+    prepared = prepare_node_routed(state, "router", "yes")
+
+    assert scans == {"head": 1}
+    assert prepared._plan.delta.newly_ready_ids == ("head",)
+
+
+def test_route_skip_flood_is_iterative_for_a_deep_chain():
+    depth = 1500
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "router": FuncNode("router", lambda inputs: inputs),
+        "chosen": FuncNode("chosen", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    nodes.update(
+        {
+            f"dead-{index}": FuncNode(f"dead-{index}", lambda inputs: inputs)
+            for index in range(depth)
+        }
+    )
+    edges = [
+        Edge(id="start-router", from_=START_ID, to="router"),
+        Edge(
+            id="route-dead",
+            from_="router",
+            to="dead-0",
+            source_handle="no",
+        ),
+        Edge(
+            id="route-live",
+            from_="router",
+            to="chosen",
+            source_handle="yes",
+        ),
+    ]
+    edges.extend(
+        Edge(
+            id=f"dead-edge-{index}",
+            from_=f"dead-{index}",
+            to=f"dead-{index + 1}",
+        )
+        for index in range(depth - 1)
+    )
+    state, log = _route_in_flight(
+        CompiledFlow.from_parts(nodes=nodes, edges=edges)
+    )
+
+    observers = commit_prepared(
+        log,
+        state,
+        prepare_node_routed(state, "router", "yes"),
+    )
+
+    assert len(observers) == depth + 1
+    assert observers[1] == NodeSkipped("dead-0")
+    assert observers[-1] == NodeSkipped(f"dead-{depth - 1}")
+    assert tuple(state.ready) == ("chosen",)
+
+
+def _wide_ready_route_state(size: int) -> RunState:
+    """Return a constant-degree route frontier with unrelated queued work."""
+    state, _ = _route_in_flight()
+    state.ready.extend(f"unrelated-{index}" for index in range(size))
+    return state
+
+
+def _median_route_reducer_peak(state: RunState) -> float:
+    """Return median peak bytes through route preparation and pre-append commit."""
+    log = _AllocationStopLog(state)
+    prepared = prepare_node_routed(state, "router", "yes")
+    with pytest.raises(_AllocationStop):
+        commit_prepared(log, state, prepared)
+    samples: list[int] = []
+    for _ in range(5):
+        gc.collect()
+        tracemalloc.start()
+        prepared = prepare_node_routed(state, "router", "yes")
+        try:
+            commit_prepared(log, state, prepared)
+        except _AllocationStop:
+            pass
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        samples.append(peak)
+        del prepared
+    return median(samples)
+
+
+def test_route_reducer_allocation_is_independent_of_wide_ready_queue():
+    small = _wide_ready_route_state(64)
+    large = _wide_ready_route_state(16_384)
+
+    small_peak = _median_route_reducer_peak(small)
+    large_peak = _median_route_reducer_peak(large)
+
+    assert large_peak / small_peak <= 2.5, (
+        "route reducer allocation scaled with the unrelated ready queue: "
+        f"small={small_peak}, large={large_peak}"
     )
 
 

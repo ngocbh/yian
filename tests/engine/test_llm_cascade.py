@@ -32,6 +32,35 @@ def test_merge_empty_layers():
     assert merge_llm_config({}, {"model": "y"}) == {"model": "y"}
 
 
+def test_merge_treats_none_as_an_unset_field_in_every_layer():
+    specific = {
+        "provider": None,
+        "model": "specific-model",
+        "temperature": None,
+    }
+    base = {
+        "provider": None,
+        "model": None,
+        "temperature": 0.2,
+        "anthropic_effort": None,
+    }
+
+    assert merge_llm_config(specific, base) == {
+        "model": "specific-model",
+        "temperature": 0.2,
+    }
+
+
+def test_merge_with_none_is_associative():
+    node = {"provider": None, "model": "node-model", "temperature": None}
+    flow = {"provider": "anthropic", "model": None, "temperature": 0.4}
+    caller = {"provider": "openai", "model": "caller-model", "temperature": None}
+
+    assert merge_llm_config(node, merge_llm_config(flow, caller)) == merge_llm_config(
+        merge_llm_config(node, flow), caller
+    )
+
+
 def test_merge_does_not_mutate_inputs():
     a, b = {"model": "x"}, {"provider": "p"}
     merge_llm_config(a, b)
@@ -54,6 +83,41 @@ output: ${a.output}
     assert a.llm_config == {
         "model": "claude-opus-4-8", "provider": "anthropic", "temperature": 0.3
     }
+
+
+def test_authored_null_fields_fall_through_the_cascade():
+    text = """
+id: f
+name: f
+llm_config: {provider: null, model: null, temperature: 0.7}
+nodes:
+  a:
+    kind: agent
+    prompt: hi
+    llm_config: {provider: null, model: null, temperature: null}
+output: ${a.output}
+"""
+    loaded = load_flow(text)
+    a = loaded.compiled.nodes["a"]
+    assert loaded.compiled.flow_llm_config == {
+        "provider": None,
+        "model": None,
+        "temperature": 0.7,
+    }
+    assert a.own_llm_config == {
+        "provider": None,
+        "model": None,
+        "temperature": None,
+    }
+
+    effective = resolve_llm_cascade(loaded.compiled, {}, defaults=_DEFAULTS)
+
+    assert effective["a"] == {
+        "provider": "anthropic",
+        "model": "default-model",
+        "temperature": 0.7,
+    }
+    assert a.llm_config == effective["a"]
 
 
 def test_inherit_false_node_ignores_authored_inheritance_layers_but_gets_defaults():

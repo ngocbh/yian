@@ -78,15 +78,15 @@ class LLMConfig(BaseModel):
 
 
 def merge_llm_config(specific: dict, base: dict) -> dict:
-    """Per-field fill-the-gap merge: `specific` wins for every key it sets; `base`
-    fills only the keys `specific` omits. Returns a fresh dict (inputs untouched).
+    """Merge two fill-the-gap layers without mutating either input.
 
-    The cascade primitive — associative, so layering composes in any grouping. A plain
-    `dict.update` is correct because authored configs never carry an explicit `None`
-    value (every `LLMConfig` field is `Optional[...] = None`, so a key is either
-    present-with-value or absent). If a future field can be authored as `null`, switch
-    to an explicit `{k: v for ... if v is not None}` filter and add a test.
+    A non-``None`` value in ``specific`` wins; ``base`` fills every remaining field.
+    Explicit ``None`` has the same meaning as omission at every layer, matching the
+    optional ``LLMConfig`` fields' fallback behavior. Filtering both operands keeps the
+    merge associative, so a cascade can be grouped without changing its result.
     """
-    out = dict(base)
-    out.update(specific)
+    out = {key: value for key, value in base.items() if value is not None}
+    out.update(
+        (key, value) for key, value in specific.items() if value is not None
+    )
     return out

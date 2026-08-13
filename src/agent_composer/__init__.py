@@ -6,20 +6,28 @@ basis for HUMAN_INPUT and WATCH nodes). See the project README for status.
 
 Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never in a cycle):
 
-    events  <-  typesys  <-  nodes  <-  compile  <-  compose  <-  runtime  ->  suspension
+    events  <-  typesys  <-  nodes  <-  compile  <-  compose
                             ^  ^
                 expr  ──────┘  └──────  llm_clients      (both leaves, imported by nodes upward)
 
-Leaves import nothing else in the layer: `events`, `typesys` (the typed value pool), `expr`
-(`${...}` evaluation), and `llm_clients` (provider client wrappers + `LLMConfig` — the AGENT
-node's model seam). `nodes` are the node kinds — the synthesized boundary kinds own their
+    compile.model  <-  runtime  ->  suspension
+    compose + compile.expand + runtime  <-  run.py
+
+`_growth.py` and `_state.py` are internal dependency-free contract leaves shared by
+compile and suspension, so those packages never import each other for data vocabularies.
+Leaves import nothing else in the layer: `events`, `_growth`, `_state`, `typesys` (the typed
+value pool), `expr` (`${...}` evaluation), and `llm_clients` (provider client wrappers +
+`LLMConfig` — the AGENT node's model seam). `nodes` are the node kinds — spawners return canonical growth seeds and
+never import compile; the synthesized boundary kinds own their
 reserved ids (`StartNode.ID == "__start__"`, `EndNode.ID == "__end__"`). `compile` is the
-compiled `CompiledFlow` IR + representation-neutral validation checkers (and re-exports the
-boundary ids as `START_ID`/`END_ID`/`START_ID`/`END_ID`); `compose` reads Compose-shaped YAML into a
-runnable `CompiledFlow`; `runtime` executes it; `suspension` is the checkpoint/resume protocol.
+compiled `CompiledFlow` IR + representation-neutral validation checkers, and owns the
+kind-aware `build_grow` constructor (and re-exports the boundary ids as
+`START_ID`/`END_ID`); `compose` reads Compose-shaped YAML into a
+runnable `CompiledFlow`; runtime executes `compile.model` topology but never imports
+`compile.expand`; `suspension` is the checkpoint/resume protocol.
 `run` (the package-root `run.py`) is the top-level run boundary: it consumes `compose`'s
-`ComposedFlow` and drives the `runtime` engine (coercing inputs + enforcing the flow's asserts),
-so it sits above both and is imported by neither.
+`ComposedFlow`, injects `compile.expand.build_grow`, and drives the runtime engine, so it
+sits above all three and is imported by none.
 Nothing here imports a DB or a server; the durable (cross-process) suspend/resume
 seam lives outside and is injected.
 """

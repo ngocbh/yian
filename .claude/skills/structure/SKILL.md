@@ -57,15 +57,25 @@ Before adding a package, place it on the dependency ladder. The engine reads
 (leaf → root):
 
 ```
-events  <-  typesys  <-  nodes  <-  compile  <-  compose  <-  runtime  ->  suspension
+events  <-  typesys  <-  nodes  <-  compile  <-  compose
                         ^   ^
-            expr  ──────┘   └──────  llm_clients     (both leaves, imported by nodes upward)
+            expr  ──────┘   └──────  llm_clients
+
+compile.model <── runtime ──> suspension
+compose + compile.expand + runtime <── package-root run.py
 ```
 
-A leaf package (`events`, `typesys`, `expr`, `llm_clients`) imports nothing else in
-the layer. A root package (`runtime`) may import everything below it. **Arrows
-never reverse.** When you add a package, name what it sits *above* and what it
-sits *below*, and record that in its charter's "Knows / Never imports".
+The package-root run boundary is the composition root: it may import compose,
+compile's concrete builders, and runtime. Lower layers never import it. **Arrows
+never reverse.** In particular, nodes return canonical growth seeds and never
+import `compile`; runtime may consume the `compile.model` topology contract but
+never imports `compile.expand`. `run.py` injects `compile.expand.build_grow` into
+runtime instead. The internal `_growth.py` and `_state.py` leaves carry the temporary
+seed schema and scheduling-state vocabulary shared by compile and suspension, so
+neither imports the other for those contracts.
+`tests/engine/test_layer_direction.py` ratchets these boundaries.
+When you add a package, name what it sits *above* and what it sits *below*, and
+record that in its charter's "Knows / Never imports".
 
 If you find yourself needing an upward import, you've put the code in the wrong
 package — see §5.
@@ -117,6 +127,8 @@ contract is living in the wrong place. Fixes, in preference order:
 2. **Invert via a seam** — if a lower-level package needs behavior from a
    higher-level one, it should take it as an injected callable/parameter, not
    import it. The high level wires the low level; the low level stays a leaf.
+   Seed-first growth is the repository example: runtime takes a `grow_builder`
+   callable, and package-root `run.py` supplies compile-owned `build_grow`.
 3. **Merge** the two packages if they genuinely can't be separated — better one
    honest package than two that import each other.
 
@@ -137,5 +149,6 @@ split is doing too little.
 - [ ] New folder → charter in `__init__.py` (what / role / Knows / Never imports).
 - [ ] `__init__.py` re-exports only; `__all__` set.
 - [ ] Imports point down or sideways only — no upward, no cycle.
+- [ ] Nodes do not import compile; runtime does not import `compile.expand`.
 - [ ] Shared types → `common.py`; pure helpers → `utils.py`; entity behavior → its own module.
 - [ ] Code added to an existing package's responsibility, not a redundant new one.

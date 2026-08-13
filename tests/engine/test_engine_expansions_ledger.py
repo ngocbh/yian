@@ -9,6 +9,7 @@ Fixtures here are reused by the snapshot/restore and durable-resume tests — ke
 
 from typing import Any
 
+from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID, FlowOutput
 from agent_composer.nodes.call.node import CallNode
 from agent_composer.nodes.human_input import HumanInputNode
@@ -103,7 +104,7 @@ def test_ledger_records_call_expansion():
     its `seed` is the call-arg record. The cloned child's pause leaves `bridge` EXPANDED but
     the ledger entry is independent."""
     g = call_with_inner_pause()
-    engine = FlowEngine(g, run_inputs={"payload": "go"})
+    engine = FlowEngine(g, run_inputs={"payload": "go"}, grow_builder=build_grow)
     list(engine.run())  # parks at the inner ask
     calls = [e for e in engine.expansions if e.spawner_id == "bridge"]
     assert len(calls) == 1
@@ -113,7 +114,7 @@ def test_ledger_records_call_expansion():
 def test_ledger_records_map_expansion_with_records():
     """A MAP spawner adds ONE GrowRecord whose `seed` is the per-element records list."""
     g = map_with_inner_pause()
-    engine = FlowEngine(g, run_inputs={"items": ["a", "b"]})
+    engine = FlowEngine(g, run_inputs={"items": ["a", "b"]}, grow_builder=build_grow)
     list(engine.run())  # parks at both element leaves
     maps = [e for e in engine.expansions if e.spawner_id == "each"]
     assert len(maps) == 1
@@ -170,7 +171,7 @@ def test_nested_call_inside_map_is_descriptor_child():
         [(START_ID, "each"), ("each", END_ID)],
         outputs=[FlowOutput(name="r", from_="${each.output}")],
     )
-    engine = FlowEngine(parent, run_inputs={"items": ["a"]})
+    engine = FlowEngine(parent, run_inputs={"items": ["a"]}, grow_builder=build_grow)
     list(engine.run())  # parks deep inside element 0
     # Top-level: exactly ONE record, the MAP. No top-level inner CALL record.
     assert len(engine.expansions) == 1

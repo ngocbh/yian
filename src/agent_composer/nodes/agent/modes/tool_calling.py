@@ -2,15 +2,14 @@
 
 Bind the node's tools, then loop: ask the model; if it requests ordinary tools,
 run them via `TOOL_REGISTRY` and feed results back; if it requests a *control tool*
-(e.g. `ask_user`), lower the pause to a self-describing continuation `Grow(Flow)`
-(a human_input leaf + a resume_agent node, built by `agent_segment_subgraph`) and let
-the engine splice it into the live graph.
+(e.g. `ask_user`), lower the pause to a seed-first continuation `Grow`. The compile-owned
+builder constructs the human-input + resume-agent fragment and the engine splices it.
 
 The agent loop body is the pure, self-contained `agent_step(messages, pending,
 iterations, ctx) -> Output | Grow`: the re-entry frame rides as
 arguments/return, never a private namespace. On a final answer it returns `Output`;
-on a control call it returns the continuation subgraph as a `Grow` (with the PAIR of
-descriptors carried on `seed` for durable re-grow). The injected answer is delivered to
+on a control call it returns the descriptor pair on `Grow.seed` for durable construction and
+replay. The injected answer is delivered to
 the human_input leaf as its `Output` and read by the resume_agent via the bare
 `${<hi>.output}` forward-ref edge.
 """
@@ -35,7 +34,6 @@ from agent_composer.nodes.agent.modes.common import (
     AgentRunContext,
     register_mode,
 )
-from agent_composer.compile.expand import agent_segment_subgraph
 from agent_composer.nodes.agent.modes.utils import text_of
 from agent_composer.nodes.base import Grow, Output
 
@@ -80,12 +78,12 @@ def agent_step(
     On ENTRY this ALWAYS invokes the model on the passed-in `messages` — there is no
     resume-replay branch (the answer for a `pending` control call is appended as a
     `ToolMessage` by the agent's `Resume` entry — `AgentNode.run` — *before* this is called,
-    so `pending` is `None` here). On a final answer -> `Output`. On a control call -> `Grow` of the
-    continuation subgraph built by `agent_segment_subgraph` from the PAIR: a `human_input`
-    descriptor + a `resume_agent` descriptor carrying the re-entry frame as DATA (memo /
-    iterations / config-as-data / pending) and reading `answer` via the BARE forward-ref
-    `${<hi>.output}` (node-first). The PAIR is also carried on `Grow.seed` for durable re-grow.
-    Data-tool calls in the turn are flushed into `messages` before the `Grow`.
+    so `pending` is `None` here). On a final answer -> `Output`. On a control call -> a seed-first
+    `Grow` carrying a `human_input` descriptor + a `resume_agent` descriptor with the re-entry
+    frame as DATA (memo / iterations / config-as-data / pending). The compile-owned builder turns
+    that pair into the continuation fragment, whose resume node reads `answer` via the BARE
+    forward-ref `${<hi>.output}` (node-first). Data-tool calls in the turn are flushed into
+    `messages` before the `Grow`.
     """
     from agent_composer.tools import resolve_tools
 
@@ -162,13 +160,7 @@ def agent_step(
                 "controls": list(ctx.controls),
                 "mode": "tool_calling",
             }
-            return Grow(
-                agent_segment_subgraph([human_input, resume], callsite=ctx.node_id,
-                                       output_type=ctx.output_type, retries=ctx.retries,
-                                       max_tool_iterations=ctx.max_tool_iterations,
-                                       post_asserts=ctx.post_asserts, assert_texts=ctx.assert_texts),
-                seed={"hi_desc": human_input, "resume_desc": resume},
-            )
+            return Grow(seed={"hi_desc": human_input, "resume_desc": resume})
 
     raise AgentLoopError(
         f"agent node {ctx.node_id!r} hit the tool-iteration cap "

@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 
 import agent_composer.llm_clients as llm_clients_mod
+from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
 from agent_composer.run import resume_command
 from agent_composer.events import RunPaused, RunResumed, RunSucceeded
@@ -88,7 +89,7 @@ def test_structured_output_survives_ask_user_resume(monkeypatch):
         outputs=[FlowOutput(name="output", from_="${agent.output}")],
         wiring={END_ID: {"output": "${agent.output}"}},
     )
-    eng = FlowEngine(graph)
+    eng = FlowEngine(graph, grow_builder=build_grow)
     evs = list(eng.run())
     assert isinstance(evs[-1], RunPaused)
     reason = evs[-1].reasons[0]

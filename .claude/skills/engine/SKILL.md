@@ -65,9 +65,12 @@ Our north star is a *functional language of agents*. Design the feature as a
   those shapes rather than inventing ad-hoc control flow.
 - **Sum types + exhaustive match.** OCaml models a closed set of cases as a
   variant and forces an exhaustive `match`. Our closed sets are `NodeKind` (kept
-  closed, no registry/metaclass) and the node result `Outcome`. Note the *core*
-  matches on `Outcome`, not on `NodeKind` — any kind-specific `match` belongs in a
-  node's own `run` or is expressed via node-owned traits/hooks, never in the engine.
+  closed, no registry/metaclass) and the node result `Outcome`. Note the runtime
+  *core* matches on `Outcome`, not on `NodeKind`: ordinary behavior belongs in a
+  node's own `run` or node-owned traits/hooks. Growth construction has a
+  sanctioned compile-layer match: the closed `build_grow` interpreter
+  interprets node-produced seeds into fragments before the kind-blind runtime
+  splices them.
 - **Modules with explicit signatures (`.mli`).** A package exposes a narrow,
   declared interface and hides the rest — which is just the `structure` skill's
   package charters. Honor the boundary.
@@ -96,8 +99,10 @@ Most are just the functional model (above) made enforceable:
 - **Hierarchical / composable** *(function composition)* — a node can *be*
   another flow (a `call:`/`uses:` reference → a child subgraph seeded from the
   parent's pool), nestable to arbitrary depth. This is how an agent calls another
-  agent and how composite nodes are built. Never assume a node is a leaf; preserve
-  recursion through compile + run + checkpoint.
+  agent and how composite nodes are built. A spawner returns only a canonical
+  `Grow(seed, prune)`; the compile-owned `build_grow` interprets that seed after the
+  package-root run boundary injects it into runtime. Never assume a node is a leaf;
+  preserve recursion through compile + run + checkpoint.
 - **General / expressive** — the engine **privileges no output type** (report,
   classification, decision, number, structured record — whatever the terminal
   node emits) and no domain. When adding a primitive, prefer the most general form
@@ -124,11 +129,14 @@ Most are just the functional model (above) made enforceable:
   namespace is generic.
 - **Closed `NodeKind` vocabulary; the core is kind-BLIND** — `NodeKind` stays a closed enum (no
   registry/metaclass), but the engine core (`runtime/engine.py` + `runtime/eval_node.py`) does NOT
-  branch on it. Any kind-specific `match` lives in a node's own `_run_impl`; the core dispatches only on
-  the closed `Outcome` sum and on node-owned traits/hooks (`binds_per_item`, `bind_reserved`,
+  branch on it. Ordinary behavior lives in a node's own `_run_impl`; growth construction's
+  sanctioned kind match lives in `compile.expand.build_grow`. The core dispatches only on the
+  closed `Outcome` sum and on node-owned traits/hooks (`binds_per_item`, `bind_reserved`,
   `grow_depth_delta`, `grow_restamps_self`, `is_loop`, `needs_llm`). A
   ratchet test (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion`
-  dispatch count at 0.
+  dispatch count at 0. A separate layer ratchet forbids `nodes -> compile` and
+  `runtime -> compile.expand`: nodes describe seeds, compile constructs fragments,
+  and runtime receives the constructor as an injected callable.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
   only a node's own `_run_impl()` interprets known keys (e.g. AGENT's `max_tool_iterations`). It is the
@@ -143,7 +151,8 @@ Most are just the functional model (above) made enforceable:
 Write a short plan: the **OCaml analogue** you're borrowing and its type; what you
 simplify/drop and why; where it lands in the layer map
 (`events ← typesys ← nodes ← compile ← compose`, with `expr` feeding nodes and
-`suspension` feeding runtime); and the **seam** if it touches an external
+`suspension` feeding runtime, plus the internal `_growth.py` and `_state.py` leaves
+shared by compile and suspension); and the **seam** if it touches an external
 dependency. Flag any non-obvious choice and confirm before coding (CLAUDE.md "ask
 when uncertain").
 
@@ -158,4 +167,7 @@ GitHub issue when the work lands (reference the commit/PR). Commit at green.
 Follow the **`structure` skill** for where files and folders go — package charters
 in `__init__.py`, `common.py` vs `utils.py`, one-way imports, no cycles. The
 engine's layer ladder (`events ← typesys ← nodes ← compile ← compose`, with `expr`
-and `suspension` feeding in) is an instance of that framework.
+feeding nodes, `_growth.py` and `_state.py` feeding compile and suspension, and
+suspension feeding runtime) is an instance of that framework.
+The package-root `run.py` sits above compose and runtime and wires cross-layer
+capabilities: notably it injects compile's `build_grow` into the kind-blind runtime.

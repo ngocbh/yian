@@ -20,10 +20,10 @@ import json
 
 from pydantic import BaseModel, Field
 
-from agent_composer.compile.model import NodeState
-from agent_composer.typesys.pool import VariablePool
+from agent_composer._state import NodeState
 from agent_composer.suspension.expansions import GrowRecord
 from agent_composer.suspension.pause import PauseReason
+from agent_composer.typesys.pool import VariablePool
 
 # Checkpoint blob schema version. 1.0 -> 2.0: the single-value store migration
 # (pool.store collapsed node_id->key->TypedValue to node_id->TypedValue). 2.0 -> 3.0: the

@@ -9,6 +9,7 @@ splice stamps nested spawners uniformly, this "falls out for free"; these tests 
 proof.
 """
 
+from agent_composer.compile.expand import build_grow
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.runtime.engine import FlowEngine
@@ -99,7 +100,11 @@ def test_call_in_loop_body_durable_hop_matches_live():
     ckpt = RunCheckpoint.loads(proc1.checkpoint.dumps())
 
     # Restore on a FRESH recompiled flow; the parked (namespaced) leaf must be in the graph.
-    fresh = FlowEngine.restore(load_flow(_CALL_IN_LOOP_BODY).compiled, ckpt)
+    fresh = FlowEngine.restore(
+        load_flow(_CALL_IN_LOOP_BODY).compiled,
+        ckpt,
+        grow_builder=build_grow,
+    )
     assert ckpt.pause_reasons[0].node_id in fresh.flow.nodes
 
     dur2 = resume_flow(loaded, engine=fresh,
@@ -198,7 +203,11 @@ def test_map_in_loop_body_durable_hop_matches_live():
     assert proc1.status == "paused", proc1.error
     ckpt = RunCheckpoint.loads(proc1.checkpoint.dumps())
 
-    fresh = FlowEngine.restore(load_flow(_MAP_IN_LOOP_BODY).compiled, ckpt)
+    fresh = FlowEngine.restore(
+        load_flow(_MAP_IN_LOOP_BODY).compiled,
+        ckpt,
+        grow_builder=build_grow,
+    )
     for pr in ckpt.pause_reasons:
         assert pr.node_id in fresh.flow.nodes
 
@@ -208,4 +217,3 @@ def test_map_in_loop_body_durable_hop_matches_live():
     dur3 = _deliver_all(loaded, dur2, "bye")
     assert dur3.status == "succeeded", dur3.error
     assert dur3.output == live_output
-

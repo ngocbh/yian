@@ -192,11 +192,11 @@ def test_ref_boundary_assert_sees_coerced_present_value():
 
 
 def test_ref_run_expands_not_child_engine():
-    # the CallNode no longer drives a child FlowEngine; its run() returns a self-describing Grow
-    # (the engine splices the built child subgraph and grows the live graph). No `*, system` cap.
-    from agent_composer.compile.expand import ns
+    # The CallNode returns only a seed; compile reconstructs the child fragment for the engine.
+    from agent_composer.compile.expand import build_grow
     from agent_composer.nodes.base import Grow
     from agent_composer.nodes.call import CallNode
+    from agent_composer.nodes.ids import ns
     from tests.engine.test_expand import _child_flow
 
     child = _child_flow()
@@ -204,4 +204,4 @@ def test_ref_run_expands_not_child_engine():
     out = n.run({"topic": "ACME"})          # no *, system cap anymore
     assert isinstance(out, Grow)
     assert out.seed == {"topic": "ACME"}
-    assert out.subgraph.start_id == ns("r", child.start_id)
+    assert build_grow(n, out.seed).start_id == ns("r", child.start_id)

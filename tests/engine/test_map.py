@@ -8,6 +8,7 @@ CODE-only children via `run_flow`.
 
 import pytest
 
+from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import START_ID
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.run import run_flow
@@ -145,10 +146,10 @@ def test_map_over_with_coalesce_resolves_at_run():
     assert result2.output == ["A"]
 
 
-# --- MapNode.run -> Grow(Flow); the END_ID(list-mode) aggregator joins in over order - #
+# --- MapNode.run -> seed; compile builder reconstructs the ordered END-list fan-in --- #
 def test_map_run_returns_grow():
-    from agent_composer.compile.expand import map_callsite, ns
     from agent_composer.nodes.base import Grow
+    from agent_composer.nodes.ids import map_callsite, ns
     from agent_composer.nodes.map import MapNode
 
     from tests.engine.test_expand import _child_flow
@@ -157,16 +158,17 @@ def test_map_run_returns_grow():
     out = n.run({"over": ["A", "B"]}, bind_item=lambda el: {"x": el})  # no system cap
     assert isinstance(out, Grow)
     assert out.seed == [{"x": "A"}, {"x": "B"}]
+    subgraph = build_grow(n, out.seed)
     from agent_composer.compile.model import START_ID
-    assert out.subgraph.start_id == ns("m", START_ID)
+    assert subgraph.start_id == ns("m", START_ID)
     for i in range(2):
-        assert ns(map_callsite("m", i), _child_flow().start_id) in out.subgraph.nodes
+        assert ns(map_callsite("m", i), _child_flow().start_id) in subgraph.nodes
 
 
 def test_map_empty_over_returns_grow_with_lone_list_end():
-    from agent_composer.compile.expand import ns
     from agent_composer.compile.model import END_ID, START_ID
     from agent_composer.nodes.base import Grow
+    from agent_composer.nodes.ids import ns
     from agent_composer.nodes.map import MapNode
 
     from tests.engine.test_expand import _child_flow
@@ -174,8 +176,9 @@ def test_map_empty_over_returns_grow_with_lone_list_end():
     n = MapNode("m", flow_id="c", child=_child_flow(), child_inputs=[])
     out = n.run({"over": []}, bind_item=lambda el: {})
     assert isinstance(out, Grow) and out.seed == []
-    assert set(out.subgraph.nodes) == {ns("m", START_ID), ns("m", END_ID)}
-    assert out.subgraph.start_id == ns("m", START_ID)
+    subgraph = build_grow(n, out.seed)
+    assert set(subgraph.nodes) == {ns("m", START_ID), ns("m", END_ID)}
+    assert subgraph.start_id == ns("m", START_ID)
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
@@ -185,7 +188,7 @@ def test_map_parallel_via_num_workers_preserves_order(num_workers):
     flow = load_flow(_map_flow("echo-one", parallel=False),
                      child_resolver=_resolver(**{"echo-one": _ECHO_CHILD}))
     eng = FlowEngine(flow.compiled, run_inputs={"topics": ["A", "B", "C", "D"]},
-                     num_workers=num_workers)
+                     num_workers=num_workers, grow_builder=build_grow)
     assert list(eng.run())[-1].output == ["A", "B", "C", "D"]   # over-order join (the END_ID-list invariant)
 
 
@@ -195,7 +198,12 @@ def test_map_n_zero_synthesizes_end_list_emitting_empty(num_workers):
 
     flow = load_flow(_map_flow("echo-one", parallel=False),
                      child_resolver=_resolver(**{"echo-one": _ECHO_CHILD}))
-    eng = FlowEngine(flow.compiled, run_inputs={"topics": []}, num_workers=num_workers)
+    eng = FlowEngine(
+        flow.compiled,
+        run_inputs={"topics": []},
+        num_workers=num_workers,
+        grow_builder=build_grow,
+    )
     assert list(eng.run())[-1].output == []     # N=0 -> synthetic map#/__start__ -> list END -> []
 
 
@@ -208,7 +216,12 @@ def test_map_synthesizes_one_end_list_node(num_workers):
 
     flow = load_flow(_map_flow("echo-one", parallel=False),
                      child_resolver=_resolver(**{"echo-one": _ECHO_CHILD}))
-    eng = FlowEngine(flow.compiled, run_inputs={"topics": ["A", "B"]}, num_workers=num_workers)
+    eng = FlowEngine(
+        flow.compiled,
+        run_inputs={"topics": ["A", "B"]},
+        num_workers=num_workers,
+        grow_builder=build_grow,
+    )
     assert list(eng.run())[-1].output == ["A", "B"]
     map_end_id = "each/__end__"                          # ns(spawner, END_ID)
     assert eng.flow.nodes[map_end_id].kind == NodeKind.END

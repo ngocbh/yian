@@ -12,7 +12,7 @@ These pin: a true call post-assert passes, a false one fails the run LOUDLY (Run
 error_type "NodeAssertFailed", a non-null locator at the assert on the child END), a post-assert
 reading BOTH a declared call input AND `${output}` fires correctly (the input mapped onto the
 cloned child START's coerced output), and (durability) the lowered assert survives a checkpoint
-round-trip — `replay_grow` re-lowers it onto the rebuilt child END, no new checkpoint field.
+round-trip — the injected builder re-lowers it onto the rebuilt child END, with no new field.
 """
 
 from agent_composer.compose import load_flow

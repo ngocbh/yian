@@ -87,18 +87,16 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
         # -> list (validated in the hook -> NodeFailed). The hook reads its sources from
         # `node_wiring` (the node/flow split) + `pool`; default `{}` for an ordinary node.
         record.update(node.bind_reserved(node_wiring, pool))
-        # Per-kind narrow caps, built by the engine — never the pool itself.
-        # HUMAN_INPUT/WAIT are deliver-as-Output: they always Pause and the engine
-        # delivers the answer. AGENT lowers a control pause to a continuation `Grow`,
-        # carrying its memo as graph data — so a mapped call's `bind_item` is the only cap now.
+        # Per-kind narrow caps, built by the engine — never the pool itself. A mapped call
+        # gets `bind_item`; an LLM-backed node gets `llm`. HUMAN_INPUT/WAIT receive neither.
         caps: dict[str, Any] = {}
         if per_item:
             # Per-element bind from params + flow.wiring (pure). No system cap — the
             # cloned children share the one live pool, so `${system.X}` resolves directly.
             caps["bind_item"] = lambda el: bind_params(node.params or [], node_wiring, pool, item=el)
         if node.needs_llm:
-            # LLM-backed node (AGENT): hand it the engine-owned model factory. The node no
-            # longer imports `model_from_config` — it builds its model from this provider.
+            # LLM-backed node (AGENT): hand the engine-driven path its model factory. A
+            # direct no-cap node driver owns a lower-layer llm_clients fallback instead.
             caps["llm"] = llm
         # A kind-blind watchdog logs (does not kill) a node whose run overruns a soft
         # budget — so a runaway in-process CODE body is diagnosed, not a silent hang.
@@ -119,9 +117,10 @@ def eval_node(node, flow, pool: VariablePool, llm=_default_llm, *, wiring_overri
                     f"node {node.id!r} run() returned {type(outcome).__name__}, not a NodeResult"
                 )
         if isinstance(result, Grow):
-            # A spawner grows the live graph: hand the self-describing `Grow` to the dispatcher's
-            # `_apply_grow` via NodeExpanded. Any non-spawner kind returning a Grow is a clear error
-            # (the graph only grows from spawners).
+            # A spawner grows the live graph: hand its seed-first `Grow` to the dispatcher's
+            # `_apply_grow` via NodeExpanded. The injected builder constructs topology there. Any
+            # non-spawner kind returning a Grow is a clear error (the graph only grows from
+            # spawners).
             if not node.is_spawner:
                 # `node.kind.value` here is MESSAGE-ONLY (a diagnostic string), not dispatch —
                 # the gate is the kind-blind `is_spawner` trait, so the census stays 0.

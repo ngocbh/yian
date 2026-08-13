@@ -1,13 +1,14 @@
 """LoopNode direct-run unit tests — the self-respawning driver model.
 
 Each iteration is a fresh `LoopNode` driver clone whose `run` owns the whole loop policy:
-STOP → `Output(carried, commit_as=origin)`; CONTINUE → `Grow({body_k, L~(k+1)}, prune=…)`.
-These test `run`/`respawn`/`replay_grow` directly (no engine); e2e loop behavior is in
+STOP → `Output(carried, commit_as=origin)`; CONTINUE → `Grow(seed=(carried, k), prune=…)`.
+These test `run`/`respawn` and compile-owned reconstruction directly (no engine); e2e behavior is in
 `test_loop_run.py`.
 """
-from agent_composer.compile.expand import map_callsite, ns
+from agent_composer.compile.expand import build_grow
 from agent_composer.nodes.base import Grow, NodeKind, Output
 from agent_composer.nodes.loop import LoopNode
+from agent_composer.nodes.ids import map_callsite, ns
 
 from tests.engine.test_expand import _child_flow
 
@@ -37,9 +38,8 @@ def test_run_grows_iteration_zero_with_next_driver_when_continue():
     result = node.run(dict(seed))
     assert isinstance(result, Grow)
     assert result.seed == (seed, 0)
-    assert result.subgraph.start_id == ns(map_callsite("chat_loop", 0), child.start_id)
-    assert "chat_loop~1" in result.subgraph.nodes     # fresh next driver spliced
     assert result.prune == frozenset()                # k==0: no previous body, origin never self-prunes
+    assert not hasattr(result, "subgraph")
 
 
 def test_run_commits_seed_when_while_predicate_false():
@@ -64,7 +64,8 @@ def test_clone_driver_self_prunes_previous_body_and_self():
     # prune = previous body (chat_loop#0/*) + self (chat_loop~1)
     assert "chat_loop~1" in result.prune
     assert any(p.startswith("chat_loop#0/") for p in result.prune)
-    assert "chat_loop~2" in result.subgraph.nodes     # next driver
+    assert result.seed == ({"messages": ["hi"], "exited": False}, 1)
+    assert not hasattr(result, "subgraph")
 
 
 def test_until_do_while_continues_on_iteration_zero():
@@ -87,28 +88,36 @@ def test_times_stops_at_count():
     assert isinstance(result, Output) and result.commit_as == "lp"
 
 
-def test_replay_grow_rebuilds_body_and_next_driver_on_origin():
+def test_build_grow_rebuilds_body_and_next_driver_on_origin():
     child = _child_flow()
     node = LoopNode("lp", flow_id="f", child=child, predicate_kind="while",
                     predicate="${x}", max_iters=10)
     node.params = child.nodes[child.start_id].params
-    sg = node.replay_grow(({"x": 1}, 2))              # rebuild body_2 + lp~3
+    sg = build_grow(node, [{"x": 1}, 2])              # JSON-round-tripped seed: body_2 + lp~3
     assert ns(map_callsite("lp", 2), child.start_id) in sg.nodes
     assert "lp~3" in sg.nodes
 
 
-def test_replay_grow_matches_live_grow_byte_for_byte():
-    # Live grow on a clone L~2 and replay on origin L for the same (carried, k) must produce the
-    # SAME window nodes/edges (origin-keyed bodies): live == replay.
+def test_build_grow_matches_live_clone_and_origin_replay_byte_for_byte():
+    """A live clone and compiled replay origin reconstruct the same origin-keyed window."""
     child = _child_flow()
     origin = LoopNode("lp", flow_id="f", child=child, predicate_kind="while",
                       predicate="${x}", max_iters=10)
     origin.params = child.nodes[child.start_id].params
-    clone = origin.respawn(2)                          # driver@2
-    live = clone.run({"x": 1})                         # k==2 continue -> Grow window {body_2, lp~3}
-    replay = origin.replay_grow(({"x": 1}, 2))
-    assert set(live.subgraph.nodes) == set(replay.nodes)
-    assert {(e.from_, e.to) for e in live.subgraph.edges} == {(e.from_, e.to) for e in replay.edges}
+    clone = origin.respawn(2)
+
+    live_outcome = clone.run({"x": 1})
+    assert isinstance(live_outcome, Grow)
+    live = build_grow(clone, live_outcome.seed)
+    replay = build_grow(origin, [{"x": 1}, 2])       # checkpoint JSON turns the pair into a list
+
+    assert live.start_id == replay.start_id
+    assert live.end_id == replay.end_id
+    assert set(live.nodes) == set(replay.nodes)
+    assert live.edges == replay.edges
+    assert live.wiring == replay.wiring
+    assert live.nodes["lp~3"].origin_id == replay.nodes["lp~3"].origin_id == "lp"
+    assert live.nodes["lp~3"].iteration == replay.nodes["lp~3"].iteration == 3
 
 
 def test_runaway_guard_raises_loop_max_exceeded():

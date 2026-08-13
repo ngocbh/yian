@@ -4,14 +4,13 @@ A node whose `is_spawner` ClassVar is True may return a `Grow` to grow the live 
 funnels it to `NodeExpanded(node.id, grow)`. A non-spawner (`is_spawner=False`) returning a `Grow`
 is a clear error -> `NodeFailed` (only spawner kinds may grow the graph)."""
 
-from agent_composer.compile.model import Flow
 from agent_composer.events import NodeExpanded, NodeFailed, NodeStarted
 from agent_composer.nodes.base import Grow, Node, NodeKind
 from tests.engine._fakes import drive
 
 
 def _grow() -> Grow:
-    return Grow(Flow(nodes={}, edges=[], wiring={}, start_id="", end_id=""))
+    return Grow(seed={})
 
 
 class _FakeSpawner(Node):

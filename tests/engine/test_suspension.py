@@ -10,6 +10,7 @@ import json
 import pytest
 
 from agent_composer.events import RunPaused, RunResumed, RunSucceeded
+from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, NodeState, FlowOutput
 from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.human_input import HumanInputNode
@@ -396,7 +397,7 @@ def test_snapshot_carries_expansions_from_ledger():
     # carries the descriptor tree end-to-end. CALL spawner -> one GrowRecord.
     from tests.engine.test_engine_expansions_ledger import call_with_inner_pause
     g = call_with_inner_pause()
-    engine = FlowEngine(g, run_inputs={"payload": "go"})
+    engine = FlowEngine(g, run_inputs={"payload": "go"}, grow_builder=build_grow)
     assert isinstance(list(engine.run())[-1], RunPaused)
     ckpt = engine.snapshot()
     assert ckpt.expansions  # non-empty: bridge expanded into a child clone

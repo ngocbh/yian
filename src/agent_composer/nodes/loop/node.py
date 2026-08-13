@@ -12,17 +12,17 @@ Names:
 
 Per-iteration (driver@k = `L` when k==0 else `L~k`, run on the carried record):
   STOP → `Output(carried, commit_as=origin)` — generic commit-and-advance under `L`.
-  CONT → `Grow(subgraph = {body_k (NO commit_as), L~(k+1) driver, edge body_k.END→L~(k+1),
-         driver wiring}, prune = {body_{k-1} ids} ∪ ({self.id} if self.id != origin), seed=(carried, k))`.
+  CONT → `Grow(seed=(carried, k),
+         prune={body_{k-1} ids} ∪ ({self.id} if self.id != origin))`.
 
-BOTH `run` (on `L~k`) and `replay_grow` (on `L`) build body/driver at the ORIGIN callsite
+The compile-owned injected builder constructs body/driver at the ORIGIN callsite
 (`self.origin_id`), never `self.id`, so live and durable-replay windows are byte-identical.
 """
 from typing import Any, ClassVar, Optional
 
-from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, ns
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output
+from agent_composer.nodes.ids import map_callsite, ns
 
 
 class LoopMaxExceeded(RuntimeError):
@@ -37,7 +37,7 @@ class LoopNode(Node):
     """A higher-order `('a -> 'a) -> 'a -> 'a` driver over a carried record.
 
     Fields (baked at load by `compose.nodes.loop.build`; copied onto every clone by `respawn`):
-      child          the compiled body subflow (the `'a -> 'a` callable); the Grow subgraph body.
+      child          the compiled body subflow (`'a -> 'a`) used by the injected growth builder.
       child_inputs   the body's declared input decls (subset of the carried record).
       predicate_kind one of "while" | "until" | "times".
       predicate      the boolean source for `while`/`until`, e.g. "not ${exited}" (bare =
@@ -49,7 +49,7 @@ class LoopNode(Node):
     """
 
     kind = NodeKind.LOOP
-    is_spawner: ClassVar[bool] = True  # grows the graph: each iteration splices a Grow(Flow)
+    is_spawner: ClassVar[bool] = True  # each continuing iteration returns a seed-first Grow
     is_loop: ClassVar[bool] = True  # the fixpoint-iteration driver: the ledger stays single-record
 
     def __init__(
@@ -110,13 +110,11 @@ class LoopNode(Node):
         if self.predicate_kind in ("while", "until") and self.should_stop(k):
             raise LoopMaxExceeded(
                 f"loop {self.origin_id!r} exceeded max ({self.max_iters})")
-        driver = self.respawn(k + 1)
         prune = {ns(map_callsite(self.origin_id, k - 1), cid) for cid in self.child.nodes} \
             if k >= 1 else set()
         if self.id != self.origin_id:
             prune.add(self.id)                       # self-prune (never the origin L)
-        sg = loop_continue_subgraph(self.child, self.origin_id, carried, k, driver)
-        return Grow(sg, prune=frozenset(prune), seed=(carried, k))
+        return Grow(seed=(carried, k), prune=frozenset(prune))
 
     def _should_stop_now(self, carried: dict[str, Any], k: int) -> bool:
         """Continue-vs-stop on the carried record at index `k`. Pure. See `run` for the stop rule."""
@@ -154,14 +152,3 @@ class LoopNode(Node):
         baked at load (`compose.nodes.loop.build`). `run` consults this both as the `times`
         stop-count and as the `while`/`until` runaway guard."""
         return iteration >= self.max_iters
-
-    def replay_grow(self, seed: Any):
-        """Durable-replay inverse: rebuild the LIVE window `{body_k, L~(k+1)}` from the persisted
-        `(carried, k)` seed via the SAME CONTINUE builder — pure, no body re-run. Runs on the
-        COMPILED `L` (`self.id == self.origin_id`), so bodies land at `L#k/…` (origin-keyed) exactly
-        as the live grow. The self-pruned `L~k` and pruned `body_{k-1}` are NOT rebuilt (they were
-        gone at snapshot); only the resident window is reproduced. The seed round-trips through JSON
-        as a 2-element list, so unpacking covers tuple and list."""
-        carried, k = seed
-        driver = self.respawn(k + 1)
-        return loop_continue_subgraph(self.child, self.origin_id, dict(carried), k, driver)

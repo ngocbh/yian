@@ -2,8 +2,8 @@
 
 `CompiledFlow` is immutable topology — the nodes and how they connect. All mutable run
 state (which nodes/edges were taken or skipped) lives in the runtime's state manager, so one
-`CompiledFlow` can back many independent runs. `NodeState` is the per-node state vocabulary
-the runtime tracks against that topology.
+`CompiledFlow` can back many independent runs. `NodeState` is the shared per-node state
+vocabulary the runtime tracks against that topology; it is re-exported here for compatibility.
 
 `START_ID` / `END_ID` are the reserved boundary-node ids. Every flow begins with a synthesized
 START node (which binds the run inputs) and ends with a synthesized END node (whose value is the
@@ -12,9 +12,9 @@ and re-exported here so runtime consumers can import them alongside the graph ty
 """
 
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Optional
 
+from agent_composer._state import NodeState
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
@@ -24,22 +24,6 @@ START_ID = StartNode.ID
 END_ID = EndNode.ID
 
 __all__ = ["START_ID", "END_ID", "NodeState", "Edge", "FlowOutput", "Flow", "CompiledFlow"]
-
-
-class NodeState(str, Enum):
-    """Per-node run state, tracked by the runtime's state manager (never on the immutable graph).
-
-    UNKNOWN  — not yet decided; the initial state of every node.
-    TAKEN    — the node ran and its outputs are committed to the pool.
-    SKIPPED  — the node will not run (a branch not taken, or skip-flooded from a skipped input).
-    EXPANDED — a spawner node (CALL/MAP/AGENT/LOOP) that ran and returned a `Grow`: it grew the
-               graph, and its own value is committed by the subgraph terminal via `commit_as`.
-    """
-
-    UNKNOWN = "unknown"
-    TAKEN = "taken"
-    SKIPPED = "skipped"
-    EXPANDED = "expanded"
 
 
 @dataclass(frozen=True)
@@ -130,7 +114,8 @@ class CompiledFlow(Flow):
         flow_llm_config (`dict[str, Any]`):
             The flow's authored `llm_config:` model-selection defaults (the cascade's flow
             layer); `{}` when absent. `resolve_llm_cascade` gap-fills each agent's effective
-            config from this, the parent chain, and the CLI layer at run start.
+            config from this, the parent chain, the CLI layer, and explicit process defaults
+            captured once at run initialization. It returns the complete static-path map.
     """
 
     def __init__(self, nodes: dict[str, Node], edges: list[Edge],

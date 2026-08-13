@@ -1,9 +1,18 @@
-"""Cascade resolution tests — the per-field fill-the-gap merge primitive and the
-recursive `resolve_llm_cascade` walk over the static call tree."""
+"""Cascade resolution and replay over stable paths in the static call tree."""
+
+import copy
+
+import pytest
 
 from agent_composer.llm_clients.config import merge_llm_config
 from agent_composer.compose.loader import load_flow
-from agent_composer.compile.llm_cascade import resolve_llm_cascade
+from agent_composer.compile.llm_cascade import (
+    apply_effective_llm_map,
+    resolve_llm_cascade,
+)
+
+
+_DEFAULTS = {"provider": "anthropic", "model": "default-model"}
 
 
 def test_merge_specific_wins_per_field():
@@ -23,6 +32,35 @@ def test_merge_empty_layers():
     assert merge_llm_config({}, {"model": "y"}) == {"model": "y"}
 
 
+def test_merge_treats_none_as_an_unset_field_in_every_layer():
+    specific = {
+        "provider": None,
+        "model": "specific-model",
+        "temperature": None,
+    }
+    base = {
+        "provider": None,
+        "model": None,
+        "temperature": 0.2,
+        "anthropic_effort": None,
+    }
+
+    assert merge_llm_config(specific, base) == {
+        "model": "specific-model",
+        "temperature": 0.2,
+    }
+
+
+def test_merge_with_none_is_associative():
+    node = {"provider": None, "model": "node-model", "temperature": None}
+    flow = {"provider": "anthropic", "model": None, "temperature": 0.4}
+    caller = {"provider": "openai", "model": "caller-model", "temperature": None}
+
+    assert merge_llm_config(node, merge_llm_config(flow, caller)) == merge_llm_config(
+        merge_llm_config(node, flow), caller
+    )
+
+
 def test_merge_does_not_mutate_inputs():
     a, b = {"model": "x"}, {"provider": "p"}
     merge_llm_config(a, b)
@@ -39,7 +77,7 @@ nodes:
 output: ${a.output}
 """
     loaded = load_flow(text)
-    resolve_llm_cascade(loaded.compiled, {"temperature": 0.3})
+    resolve_llm_cascade(loaded.compiled, {"temperature": 0.3}, defaults=_DEFAULTS)
     a = loaded.compiled.nodes["a"]
     # node sets model; flow fills provider; CLI fills temperature
     assert a.llm_config == {
@@ -47,7 +85,42 @@ output: ${a.output}
     }
 
 
-def test_inherit_false_node_ignores_all_layers():
+def test_authored_null_fields_fall_through_the_cascade():
+    text = """
+id: f
+name: f
+llm_config: {provider: null, model: null, temperature: 0.7}
+nodes:
+  a:
+    kind: agent
+    prompt: hi
+    llm_config: {provider: null, model: null, temperature: null}
+output: ${a.output}
+"""
+    loaded = load_flow(text)
+    a = loaded.compiled.nodes["a"]
+    assert loaded.compiled.flow_llm_config == {
+        "provider": None,
+        "model": None,
+        "temperature": 0.7,
+    }
+    assert a.own_llm_config == {
+        "provider": None,
+        "model": None,
+        "temperature": None,
+    }
+
+    effective = resolve_llm_cascade(loaded.compiled, {}, defaults=_DEFAULTS)
+
+    assert effective["a"] == {
+        "provider": "anthropic",
+        "model": "default-model",
+        "temperature": 0.7,
+    }
+    assert a.llm_config == effective["a"]
+
+
+def test_inherit_false_node_ignores_authored_inheritance_layers_but_gets_defaults():
     text = """
 id: f
 name: f
@@ -57,8 +130,11 @@ nodes:
 output: ${a.output}
 """
     loaded = load_flow(text)
-    resolve_llm_cascade(loaded.compiled, {"temperature": 0.1})
-    assert loaded.compiled.nodes["a"].llm_config == {"model": "m"}
+    resolve_llm_cascade(loaded.compiled, {"temperature": 0.1}, defaults=_DEFAULTS)
+    assert loaded.compiled.nodes["a"].llm_config == {
+        "model": "m",
+        "provider": "anthropic",
+    }
 
 
 def test_resolution_is_idempotent_from_own():
@@ -66,9 +142,16 @@ def test_resolution_is_idempotent_from_own():
     # previously-baked effective dict
     text = "id: f\nname: f\nnodes:\n  a: {kind: agent, prompt: hi, llm_config: {model: m}}\noutput: ${a.output}\n"
     loaded = load_flow(text)
-    resolve_llm_cascade(loaded.compiled, {"provider": "openai"})
-    resolve_llm_cascade(loaded.compiled, {"provider": "google"})
-    assert loaded.compiled.nodes["a"].llm_config == {"model": "m", "provider": "google"}
+    resolve_llm_cascade(
+        loaded.compiled, {"provider": "openai"}, defaults=_DEFAULTS
+    )
+    resolve_llm_cascade(
+        loaded.compiled, {"provider": "google"}, defaults=_DEFAULTS
+    )
+    assert loaded.compiled.nodes["a"].llm_config == {
+        "model": "m",
+        "provider": "google",
+    }
 
 
 def test_cascade_reaches_nested_def_agents():
@@ -86,7 +169,9 @@ nodes:
 output: ${c.output}
 """
     loaded = load_flow(text)
-    resolve_llm_cascade(loaded.compiled, {"model": "claude-opus-4-8"})
+    resolve_llm_cascade(
+        loaded.compiled, {"model": "claude-opus-4-8"}, defaults=_DEFAULTS
+    )
     call = loaded.compiled.nodes["c"]
     inner = call.child.nodes["inner"]
     # inner sets nothing -> fills from top flow (provider) + CLI (model)
@@ -110,11 +195,17 @@ nodes:
 output: ${c.output}
 """
     loaded = load_flow(text)
-    resolve_llm_cascade(loaded.compiled, {"provider": "openai", "model": "x"})
-    resolve_llm_cascade(loaded.compiled, {"provider": "google"})
+    resolve_llm_cascade(
+        loaded.compiled,
+        {"provider": "openai", "model": "x"},
+        defaults=_DEFAULTS,
+    )
+    resolve_llm_cascade(
+        loaded.compiled, {"provider": "google"}, defaults=_DEFAULTS
+    )
     inner = loaded.compiled.nodes["c"].child.nodes["inner"]
     # second run dropped `model` (not in the new CLI layer); did not retain it from run 1
-    assert inner.llm_config == {"provider": "google"}
+    assert inner.llm_config == {"provider": "google", "model": "default-model"}
 
 
 def test_cascade_reaches_loop_body_agents():
@@ -153,7 +244,211 @@ nodes:
 output: ${chat_loop.output}
 """
     loaded = load_flow(text)
-    resolve_llm_cascade(loaded.compiled, {"model": "claude-opus-4-8"})
+    resolve_llm_cascade(
+        loaded.compiled, {"model": "claude-opus-4-8"}, defaults=_DEFAULTS
+    )
     think = loaded.compiled.nodes["chat_loop"].child.nodes["think"]
     # the body agent sets nothing -> fills from top flow (provider) + CLI (model)
     assert think.llm_config == {"provider": "anthropic", "model": "claude-opus-4-8"}
+
+
+_PATH_FLOW = """
+id: path-flow
+name: path_flow
+defs:
+  child:
+    nodes:
+      inner: {kind: agent, prompt: inner}
+    output: ${inner.output}
+nodes:
+  outer: {kind: agent, prompt: outer, llm_config: {model: outer-model}}
+  invoke: {kind: call, call: child}
+output: ${invoke.output}
+"""
+
+
+def test_effective_map_round_trips_static_paths():
+    resolved = load_flow(_PATH_FLOW)
+    effective = resolve_llm_cascade(
+        resolved.compiled,
+        {"provider": "openai"},
+        defaults=_DEFAULTS,
+    )
+
+    assert effective == {
+        "outer": {"provider": "openai", "model": "outer-model"},
+        "invoke/inner": {"provider": "openai", "model": "default-model"},
+    }
+    assert effective["outer"] is not resolved.compiled.nodes["outer"].llm_config
+    assert effective["outer"] is not effective["invoke/inner"]
+    assert (
+        resolved.compiled.nodes["outer"].llm_config
+        is not resolved.compiled.nodes["invoke"].child.nodes["inner"].llm_config
+    )
+
+    replayed = load_flow(_PATH_FLOW)
+    apply_effective_llm_map(replayed.compiled, effective)
+    assert replayed.compiled.nodes["outer"].llm_config == effective["outer"]
+    assert (
+        replayed.compiled.nodes["invoke"].child.nodes["inner"].llm_config
+        == effective["invoke/inner"]
+    )
+    assert replayed.compiled.nodes["outer"].llm_config is not effective["outer"]
+
+
+def test_effective_map_rejects_missing_or_extra_paths():
+    loaded = load_flow(_PATH_FLOW)
+    effective = resolve_llm_cascade(
+        loaded.compiled, {}, defaults=_DEFAULTS
+    )
+
+    missing = copy.deepcopy(effective)
+    missing.pop("invoke/inner")
+    with pytest.raises(ValueError, match=r"missing.*invoke/inner"):
+        apply_effective_llm_map(load_flow(_PATH_FLOW).compiled, missing)
+
+    extra = copy.deepcopy(effective)
+    extra["ghost"] = dict(_DEFAULTS)
+    with pytest.raises(ValueError, match=r"extra.*ghost"):
+        apply_effective_llm_map(load_flow(_PATH_FLOW).compiled, extra)
+
+
+_SHARED_LEAF_FLOW = """
+id: shared-leaf
+name: shared_leaf
+defs:
+  leaf:
+    nodes:
+      agent: {kind: agent, prompt: hi}
+    output: ${agent.output}
+  openai_parent:
+    llm_config: {provider: openai}
+    nodes:
+      leaf_call: {kind: call, call: leaf}
+    output: ${leaf_call.output}
+  anthropic_parent:
+    llm_config: {provider: anthropic}
+    nodes:
+      leaf_call: {kind: call, call: leaf}
+    output: ${leaf_call.output}
+nodes:
+  left: {kind: call, call: openai_parent}
+  right: {kind: call, call: anthropic_parent}
+output: ${right.output}
+"""
+
+
+def test_shared_child_is_dealiased_per_parent_provider():
+    loaded = load_flow(_SHARED_LEAF_FLOW)
+    left_call = loaded.compiled.nodes["left"].child.nodes["leaf_call"]
+    right_call = loaded.compiled.nodes["right"].child.nodes["leaf_call"]
+    assert left_call.child is right_call.child
+
+    effective = resolve_llm_cascade(loaded.compiled, {}, defaults=_DEFAULTS)
+
+    left_call = loaded.compiled.nodes["left"].child.nodes["leaf_call"]
+    right_call = loaded.compiled.nodes["right"].child.nodes["leaf_call"]
+    assert left_call.child is not right_call.child
+    assert effective["left/leaf_call/agent"]["provider"] == "openai"
+    assert effective["right/leaf_call/agent"]["provider"] == "anthropic"
+    assert left_call.child.nodes["agent"].llm_config["provider"] == "openai"
+    assert right_call.child.nodes["agent"].llm_config["provider"] == "anthropic"
+
+
+def test_effective_map_resolves_environment_defaults_once(monkeypatch):
+    import agent_composer.run as run_mod
+    import agent_composer.llm_clients.factory as factory_mod
+
+    calls = {"provider": 0, "model": 0}
+
+    def provider():
+        calls["provider"] += 1
+        # Azure is factory-supported but was outside LLMConfig's old provider Literal.
+        # Baking defaults must not turn this formerly-valid environment choice invalid.
+        return "AZURE"
+
+    def model():
+        calls["model"] += 1
+        return "environment-model"
+
+    seen = []
+
+    class _Client:
+        def get_llm(self):
+            return _Model()
+
+    class _Model:
+        def invoke(self, messages):
+            class _Response:
+                content = "ok"
+
+            return _Response()
+
+    def fake_create_llm_client(*, provider, model, **kwargs):
+        seen.append({"provider": provider, "model": model})
+        return _Client()
+
+    monkeypatch.setattr(run_mod, "default_llm_provider", provider)
+    monkeypatch.setattr(run_mod, "default_llm_model", model)
+    # `model_from_config` imports these names lazily. If cascade resolution left a gap,
+    # either call would increment the count a second time.
+    monkeypatch.setattr("agent_composer._settings.default_llm_provider", provider)
+    monkeypatch.setattr("agent_composer._settings.default_llm_model", model)
+    monkeypatch.setattr(factory_mod, "create_llm_client", fake_create_llm_client)
+
+    loaded = load_flow(
+        "id: f\nname: f\nnodes:\n  a: {kind: agent, mode: plain, prompt: hi, "
+        "llm_config: {inherit: false}}\noutput: ${a.output}\n"
+    )
+
+    result = run_mod.run_flow(loaded, {})
+
+    assert result.status == "succeeded"
+    assert calls == {"provider": 1, "model": 1}
+    assert seen == [{"provider": "azure", "model": "environment-model"}]
+
+
+def test_replay_uses_logged_map_after_environment_changes(monkeypatch):
+    import agent_composer._settings as settings
+    import agent_composer.compile.llm_cascade as cascade_mod
+
+    original = load_flow(_SHARED_LEAF_FLOW)
+    recorded = resolve_llm_cascade(
+        original.compiled,
+        {},
+        defaults={"provider": "openai", "model": "recorded-model"},
+    )
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_PROVIDER", "anthropic")
+    monkeypatch.setenv("AGENT_COMPOSER_DEFAULT_MODEL", "changed-model")
+
+    def unexpected_settings_read():
+        raise AssertionError("replay must not read process LLM defaults")
+
+    monkeypatch.setattr(settings, "default_llm_provider", unexpected_settings_read)
+    monkeypatch.setattr(settings, "default_llm_model", unexpected_settings_read)
+    monkeypatch.setattr(
+        cascade_mod,
+        "default_llm_provider",
+        unexpected_settings_read,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cascade_mod,
+        "default_llm_model",
+        unexpected_settings_read,
+        raising=False,
+    )
+
+    replayed = load_flow(_SHARED_LEAF_FLOW)
+    left_before = replayed.compiled.nodes["left"].child.nodes["leaf_call"].child
+    right_before = replayed.compiled.nodes["right"].child.nodes["leaf_call"].child
+    assert left_before is right_before
+    apply_effective_llm_map(replayed.compiled, recorded)
+
+    left = replayed.compiled.nodes["left"].child.nodes["leaf_call"].child
+    right = replayed.compiled.nodes["right"].child.nodes["leaf_call"].child
+    assert left is not right
+    assert left.nodes["agent"].llm_config == recorded["left/leaf_call/agent"]
+    assert right.nodes["agent"].llm_config == recorded["right/leaf_call/agent"]
+    assert left.nodes["agent"].llm_config["provider"] == "openai"
+    assert right.nodes["agent"].llm_config["provider"] == "anthropic"

@@ -53,3 +53,20 @@ down for the whole engine.
 - Importing *upward* (leaf reaches into a root package) → wrong package, or needs a seam.
 - Two packages import each other → extract shared contract to `common.py`/a leaf, or merge.
 - `from x import y` written *inside a function* to dodge an error → hidden cycle; fix the structure.
+
+## Dependency-inversion example: graph growth
+
+Spawner nodes own the schema of a canonical `Grow(seed, prune)` but do not know how
+to compile it. `compile.expand.build_grow` is the only kind-aware constructor, while
+runtime knows only the injected `(spawner, seed) -> Flow` callable. Package-root
+`run.py` wires them together. This keeps both forbidden edges absent:
+
+- no module under `nodes/` imports `agent_composer.compile`;
+- no module under `runtime/` imports `agent_composer.compile.expand` (imports of
+  the lower `compile.model` topology contract remain allowed).
+
+`tests/engine/test_layer_direction.py` parses imports with `ast` and enforces these
+rules, including equivalent relative-import spellings. The temporary AGENT
+continuation schema and scheduling-state vocabulary live in the internal
+`_growth.py` and `_state.py` leaves because both compile and suspension consume
+them; placing either contract in a consumer would create a cycle.

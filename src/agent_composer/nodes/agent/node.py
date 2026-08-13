@@ -31,8 +31,9 @@ The node builds its chat model from the engine-injected `caps['llm']` provider (
 `model_from_config`-shaped factory the engine owns; gated by the `needs_llm` trait) and hands
 the mode the prompt rendered against its **declared inputs** (strict AGENT — the prompt sees
 only `${name}` bound inputs, not the pool), the tools/controls, and the model. The engine
-imports an LLM SDK by design — the old "engine imports no LLM SDK" rule was dropped;
-a mode talks to langchain directly.
+path always supplies that capability; a direct no-cap driver falls back to the lower
+`llm_clients.model_from_config` package attribute. The engine imports an LLM SDK by design —
+the old "engine imports no LLM SDK" rule was dropped; a mode talks to langchain directly.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, ClassVar, Optional, Union
 
+import agent_composer.llm_clients as llm_clients
 from agent_composer.expr.template import render_template_record
 from agent_composer.nodes.agent.controls import CONTROL_TOOLS
 from agent_composer.nodes.agent.modes import MODES, AgentRunContext
@@ -101,10 +103,12 @@ class AgentNode(Node):
             Plain-dict model selection (normalized to `LLMConfig` by `model_from_config`).
             On construction this is the node's OWN authored config; `resolve_llm_cascade`
             later overwrites `self.llm_config` with the EFFECTIVE config (own gap-filled by
-            the flow/parent/CLI layers). The authored source is kept on `own_llm_config`.
+            the flow/parent/CLI layers and explicit process provider/model defaults captured
+            at run initialization). The authored source is kept on `own_llm_config`.
         llm_inherit (`bool`, *optional*, defaults to `True`):
             Whole-node cascade opt-out. `False` (authored as `llm_config: {inherit: false}`)
-            makes the effective config the node's own dict only — no flow/parent/CLI layers.
+            ignores flow, parent, and CLI layers, but still fills missing provider/model
+            fields from the process defaults captured at run initialization.
         mode (`str`, *optional*, defaults to `"plain"`):
             The loop method; must be a registered mode.
         retries (`int`, *optional*, defaults to `2`):
@@ -119,7 +123,7 @@ class AgentNode(Node):
     """
 
     kind = NodeKind.AGENT
-    is_spawner: ClassVar[bool] = True  # grows the graph: a control pause splices a Grow(Flow)
+    is_spawner: ClassVar[bool] = True  # a control pause returns a seed-first Grow
     grow_depth_delta: ClassVar[int] = 0  # a K-pause chain is ONE call: carry parent depth, no bound
     grow_restamps_self: ClassVar[bool] = True  # re-pause nests under this same spawner id (self-stamp)
     needs_llm: ClassVar[bool] = True  # LLM-backed: engine hands the model factory via caps["llm"]
@@ -216,14 +220,12 @@ class AgentNode(Node):
         )
 
     def _run_impl(self, inputs: dict, **caps: Any) -> NodeResult:
-        # caps['llm'] is the engine-owned model factory (the needs_llm gate). Fall back to the
-        # lazy package thunk for a direct node._run_impl(...) with no caps (direct-driver tests). The
-        # import is lazy to avoid an import cycle (runtime.eval_node imports nodes.base).
+        # caps['llm'] is the engine-owned model factory (the needs_llm gate). A direct
+        # node._run_impl(...) driver has no caps, so read the lower llm_clients package
+        # attribute at call time; monkeypatches remain visible without importing runtime.
         llm = caps.get("llm")
         if llm is None:
-            from agent_composer.runtime.eval_node import _default_llm
-
-            llm = _default_llm
+            llm = llm_clients.model_from_config
         # Dispatch on the closed `entry` sum. A mid-loop control pause lowers to a
         # continuation `Grow`; the engine mints the Resume half and the re-entry
         # frame rides as graph data. `llm_config` carries forward.
@@ -248,25 +250,3 @@ class AgentNode(Node):
         # conversation and runs the loop.
         ctx = self._ctx(prompt=render_template_record(self.entry.prompt, inputs), llm=llm)
         return MODES[self.mode](ctx)
-
-    def replay_grow(self, seed: Any):
-        """Durable-replay inverse of the agent's pause `Grow`: rebuild ONE continuation segment's
-        subgraph from the persisted `{hi_desc, resume_desc}` seed via the SAME
-        `agent_segment_subgraph` builder — no LLM turn re-run. The seed is re-validated through the
-        `AgentSegment` schema so the re-entry frame keeps its round-trip validation. For a K-pause
-        chain each segment's resume terminal becomes the next segment's spawner, so `callsite`/
-        `output_type`/`post_asserts` come off THIS node (the previous segment's terminal on segment 2+),
-        so a resumed run re-lowers the same node-level `${output}` post-asserts onto the resume terminal."""
-        from agent_composer.compile.expand import agent_segment_subgraph
-        from agent_composer.suspension.expansions import AgentSegment
-
-        seg = AgentSegment.model_validate(seed)
-        return agent_segment_subgraph(
-            [seg.hi_desc, seg.resume_desc],
-            callsite=self.id,
-            output_type=self.output_type,
-            retries=self.retries,
-            max_tool_iterations=self._max_tool_iterations(),
-            post_asserts=list(self.post_asserts),
-            assert_texts=dict(self.assert_texts),
-        )

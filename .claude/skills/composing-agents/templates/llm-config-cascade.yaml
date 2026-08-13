@@ -2,8 +2,9 @@
 #
 # A flow-level `llm_config:` sets defaults for every agent below it. Each agent fills only
 # the fields it leaves unset from the flow layer (then the parent flow, then the CLI
-# `--provider`/`--model`, then env defaults in model_from_config). An agent's own field
-# always wins. `inherit: false` opts a node out of the whole cascade — its own dict only.
+# `--provider`/`--model`, then process provider/model defaults captured once when the run
+# initializes). An agent's own field always wins. `inherit: false` skips the authored
+# flow/parent/CLI layers but still receives those process defaults.
 #
 # Try the CLI layer (fills the gaps nothing else set):
 #   ac run llm-config-cascade.yaml --provider anthropic --model claude-opus-4-8
@@ -24,7 +25,7 @@ nodes:
     llm_config:
       model: claude-opus-4-8
 
-  grader:                         # opts out entirely — its own dict, no flow/CLI layer
+  grader:                         # own selection + process defaults; no flow/CLI layer
     kind: agent
     mode: plain
     depends_on: [drafter]

@@ -20,7 +20,7 @@ def _parent_engine() -> FlowEngine:
     # self.ready).
     flow = _graph([FuncNode("s", lambda p: {"output": "x"})],
                   [(START_ID, "s"), ("s", END_ID)])
-    return FlowEngine(flow, num_workers=0)
+    return FlowEngine(flow, num_workers=0, grow_builder=lambda spawner, seed: seed)
 
 
 def _one_node_grow(spawner_id: str) -> Grow:
@@ -30,7 +30,7 @@ def _one_node_grow(spawner_id: str) -> Grow:
     child.commit_as = spawner_id
     sg = Flow(nodes={child.id: child}, edges=[], wiring={child.id: {}},
               start_id=child.id, end_id=child.id)
-    return Grow(sg)
+    return Grow(seed=sg)
 
 
 def test_apply_grow_splices_registers_and_schedules():
@@ -73,7 +73,7 @@ def _two_node_grow(a_id: str, b_id: str) -> Grow:
         start_id=a.id,
         end_id=b.id,
     )
-    return Grow(sg)
+    return Grow(seed=sg)
 
 
 def test_apply_grow_applies_prune_removing_named_ids():
@@ -88,7 +88,7 @@ def test_apply_grow_applies_prune_removing_named_ids():
 
     # Splice S2 whose Grow.prune names S1's ids: the generic core retires them after the splice.
     s2 = _two_node_grow("c", "d")
-    s2 = Grow(s2.subgraph, prune=frozenset({"a", "b"}))
+    s2 = Grow(seed=s2.seed, prune=frozenset({"a", "b"}))
     eng._apply_grow("s", s2)
 
     # The named ids are gone from topology, state, pool, depth, and _spawner_expansion.

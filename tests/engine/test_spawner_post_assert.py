@@ -15,7 +15,7 @@ build-time flow-assert lowering:
   coerced output (`${<callsite>/__start__.output.X:-null}`), with a structural
   `<callsite>/__start__ -> <callsite>/__end__` edge — the same shape build-time uses.
 
-Resume-safety: `replay_grow` rebuilds via the SAME `call_subgraph`, so a resumed run's
+Resume-safety: the injected builder rebuilds via the SAME `call_subgraph`, so a resumed run's
 rebuilt child END carries identical lowered asserts and still fires the post-assert.
 """
 
@@ -201,7 +201,7 @@ def _load_pausing():
 def test_spawner_post_assert_fires_on_resume():
     # Run -> pause -> cross-process snapshot/dumps -> loads/restore -> resume. The human
     # delivers 120, violating ${output} < 100 -> the rebuilt child END fires the post-assert
-    # on the RESUMED leg and the run FAILS. Proves replay_grow re-lowers the same asserts.
+    # on the RESUMED leg and the run FAILS. Proves durable construction re-lowers the same asserts.
     loaded = _load_pausing()
     rec = run_flow(loaded, {"v": 1})
     assert rec.status == "paused"

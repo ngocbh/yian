@@ -1,7 +1,7 @@
 """End-to-end cascade: a 2-level flow run through `run_flow` with a CLI layer. The
 per-agent effective `llm_config` each agent builds its model from must reflect the full
-ladder (node → flow → parent → CLI), and an `inherit: false` agent must see only its own
-dict."""
+authored ladder (node → flow → parent → CLI), and an `inherit: false` agent must skip
+those authored outer layers while retaining process provider/model defaults."""
 
 import agent_composer.llm_clients as llm_clients_mod
 from agent_composer.compose.loader import load_flow
@@ -9,7 +9,8 @@ from agent_composer.run import run_flow
 
 # Top flow sets provider+temperature; calls `sub`. Inside `sub`, `inner` overrides only
 # `model` (so it fills provider/temperature from the flow and the CLI fields), while
-# `solo` opts out entirely with inherit:false.
+# `solo` skips authored outer layers with inherit:false (its own dict already supplies
+# both process-defaulted selection fields in this case).
 _FLOW = """
 id: top
 name: top
@@ -62,5 +63,5 @@ def test_cascade_end_to_end_with_cli_layer(monkeypatch):
         "temperature": 0.2,
         "max_tokens": 256,
     }
-    # solo: inherit:false — its own dict only, no flow/CLI layers
+    # solo: inherit:false — own complete selection, no authored flow/CLI layers
     assert by_model["gpt-5.5"] == {"provider": "openai", "model": "gpt-5.5"}

@@ -11,6 +11,17 @@ from agent_composer.llm_clients import create_llm_client
 from agent_composer.llm_clients.anthropic_client import _supports_effort
 from agent_composer.llm_clients.api_key_env import get_api_key_env
 from agent_composer.llm_clients.capabilities import get_capabilities
+from agent_composer.llm_clients.config import LLMConfig, SUPPORTED_LLM_PROVIDERS
+from agent_composer.llm_clients.factory import (
+    _DEDICATED_PROVIDERS,
+    _OPENAI_COMPATIBLE,
+)
+
+
+_FACTORY_SUPPORTED_PROVIDERS = (
+    *_OPENAI_COMPATIBLE,
+    *_DEDICATED_PROVIDERS,
+)
 
 
 # --- capability table ------------------------------------------------------- #
@@ -81,6 +92,20 @@ def test_azure_temperature_passthrough_and_endpoint_base_stripping(monkeypatch):
 
 
 # --- factory: dual-region providers ----------------------------------------- #
+
+
+@pytest.mark.parametrize("provider", _FACTORY_SUPPORTED_PROVIDERS)
+def test_llm_config_accepts_every_factory_supported_provider(provider):
+    assert LLMConfig(provider=provider).provider == provider
+
+
+def test_llm_config_and_factory_provider_vocabularies_match():
+    assert set(SUPPORTED_LLM_PROVIDERS) == set(_FACTORY_SUPPORTED_PROVIDERS)
+
+
+def test_llm_config_still_rejects_unknown_provider():
+    with pytest.raises(ValueError, match="provider"):
+        LLMConfig(provider="not-a-provider")
 
 
 @pytest.mark.parametrize("provider", ["qwen-cn", "glm-cn", "minimax", "minimax-cn"])

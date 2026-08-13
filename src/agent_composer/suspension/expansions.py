@@ -5,7 +5,7 @@ grows the live graph at runtime; `FlowEngine._apply_grow` captures each grow as 
 `GrowRecord` and attaches it to an ordered ledger on `FlowEngine.expansions` (a nested grow
 rides under its enclosing record's flat `children`), which `snapshot()` persists. READ half
 (`FlowEngine._replay_expansions`): on restore the engine replays the record tree top-down,
-asking each spawner to rebuild its OWN subgraph (`node.replay_grow(seed)`) and re-splicing it
+passing each spawner and canonical seed to the injected growth builder and re-splicing the result
 with effects suppressed, so a run paused mid-expansion resumes in a fresh process.
 
 ONE uniform record per grow — no per-kind variants:
@@ -27,19 +27,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-
-class AgentSegment(BaseModel):
-    """Read-side validation schema for ONE agent-pause seed: the two dicts `agent_step` produces
-    (`agent_composer/nodes/agent/modes/tool_calling.py`) — `hi_desc` (the human_input leaf) +
-    `resume_desc` (the resume continuation carrying the full re-entry frame: memo, iterations,
-    pending, llm_config, tools, controls, mode — as DATA).
-
-    A `GrowRecord.seed` for an AGENT is stored as a plain dict (seed is `Any`, so it round-trips
-    as a dict); `AgentNode.replay_grow` re-validates it through this model so the frame keeps its
-    round-trip validation rather than being trusted as an untyped blob."""
-
-    hi_desc: dict[str, Any]
-    resume_desc: dict[str, Any]
+from agent_composer._growth import AgentSegment
 
 
 class GrowRecord(BaseModel):

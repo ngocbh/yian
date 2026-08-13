@@ -6,6 +6,7 @@ the runtime bounds (MAX_TOTAL_NODES / MAX_REF_DEPTH). The `eval_node` -> `NodeEx
 (spawner Grow grows the graph; a non-spawner Grow fails loud) is pinned in `test_eval_node_grow.py`.
 """
 
+from agent_composer.compile.expand import build_grow
 from tests.engine._fakes import stamp_reads
 
 
@@ -95,7 +96,7 @@ def _child_flow():
 
 
 def _parent_with_spawner(child, record):
-    # spawner "sp" is a real CALL returning Grow(child subgraph); successor "after" reads ${sp.output}.
+    # spawner "sp" is a real CALL returning a seed-first Grow; successor "after" reads ${sp.output}.
     # The call-args come from stamped `${input.<k>}` reads for each key in `record`, so the test
     # seeds them via `run_inputs=record`. The parent declares matching input decls.
     from agent_composer.nodes.call.node import CallNode
@@ -121,7 +122,12 @@ EXPECTED_CHILD_VALUE = 80
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_call_grow_clones_namespaced_and_substitutes_spawner(num_workers):
     parent = _parent_with_spawner(_child_flow(), {"x": 7})
-    eng = FlowEngine(parent, run_inputs={"x": 7}, num_workers=num_workers)
+    eng = FlowEngine(
+        parent,
+        run_inputs={"x": 7},
+        num_workers=num_workers,
+        grow_builder=build_grow,
+    )
     events = list(eng.run())
     assert isinstance(events[-1], RunSucceeded)
     assert events[-1].output == EXPECTED_CHILD_VALUE            # "after" saw the child's value under "sp"
@@ -184,7 +190,12 @@ def test_ref_inside_map_expands_and_runs_uniformly(num_workers):
     # recursion composes the namespacing as each#0/inner/..., each#1/inner/... (the MAP
     # layer adds `#i`; the nested REF callsite is the spawner id `each#i/inner`).
     loaded = load_flow(_REF_INSIDE_MAP)
-    eng = FlowEngine(loaded.compiled, run_inputs={"xs": ["a", "b"]}, num_workers=num_workers)
+    eng = FlowEngine(
+        loaded.compiled,
+        run_inputs={"xs": ["a", "b"]},
+        num_workers=num_workers,
+        grow_builder=build_grow,
+    )
     events = list(eng.run())
     assert isinstance(events[-1], RunSucceeded)
     assert events[-1].output == ["a", "b"]            # both elements ran through the nested REF
@@ -251,7 +262,14 @@ def test_deep_ref_chain_trips_max_ref_depth(num_workers):
     # funnels to RunFailed via the dispatcher-thread wrap (NOT an uncaught raise out of run());
     # the pooled path funnels identically.
     parent = _ref_chain_flow(depth=MAX_REF_DEPTH + 2)
-    events = list(FlowEngine(parent, run_inputs={"v": "go"}, num_workers=num_workers).run())
+    events = list(
+        FlowEngine(
+            parent,
+            run_inputs={"v": "go"},
+            num_workers=num_workers,
+            grow_builder=build_grow,
+        ).run()
+    )
     assert isinstance(events[-1], RunFailed)            # status=="failed", not pytest.raises
     assert "MAX_REF_DEPTH" in events[-1].error
 
@@ -278,6 +296,13 @@ def test_over_budget_expansion_trips_max_total_nodes(num_workers):
     from agent_composer.runtime.engine import FlowEngine, MAX_TOTAL_NODES
 
     parent = _parent_with_spawner(_wide_child(MAX_TOTAL_NODES + 10), {"x": 0})  # one clone busts it
-    events = list(FlowEngine(parent, run_inputs={"x": 0}, num_workers=num_workers).run())
+    events = list(
+        FlowEngine(
+            parent,
+            run_inputs={"x": 0},
+            num_workers=num_workers,
+            grow_builder=build_grow,
+        ).run()
+    )
     assert isinstance(events[-1], RunFailed)            # status=="failed" via the dispatcher wrap
     assert "node budget" in events[-1].error

@@ -3,7 +3,7 @@
 `loop_continue_subgraph(child, origin, carried, k, driver)` splices body_k (NO commit_as — its
 Output feeds the next driver by plain wiring) + the fresh `L~(k+1)` driver + the producer edge
 `body_k.END -> L~(k+1)`. Bodies are keyed on ORIGIN (not the running driver id), so live `run` and
-durable `replay_grow` build the SAME `L#k/…` namespace.
+durable reconstruction builds the SAME `L#k/…` namespace.
 """
 from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, ns
 from agent_composer.compile.model import END_ID, Flow

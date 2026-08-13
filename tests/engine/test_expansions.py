@@ -55,7 +55,7 @@ def test_agent_grow_record_nesting_chain_round_trip() -> None:
 
 
 def test_agent_segment_validates_a_pause_seed() -> None:
-    # `AgentNode.replay_grow` re-validates the opaque seed through this model.
+    # The public model validates the opaque agent seed's descriptor-pair shape.
     seed = {
         "hi_desc": {"kind": "human_input", "node_id": "a/hi#0", "prompt": "?", "slot": "0"},
         "resume_desc": {"kind": "resume_agent", "memo": {}, "iterations": 1, "pending": {}},

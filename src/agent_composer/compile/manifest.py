@@ -19,7 +19,11 @@ from enum import Enum
 from typing import Any
 from urllib.parse import unquote_plus
 
+from lark import Token, Tree
+
 from agent_composer.compile.model import CompiledFlow, Edge, Flow, FlowOutput
+from agent_composer.expr import ExpressionError, expr_refs, scan_template
+from agent_composer.expr.template import Literal, Span
 from agent_composer.nodes.agent import AgentNode, Fresh, Resume
 from agent_composer.nodes.base import Node, NodeKind
 from agent_composer.nodes.call import CallNode
@@ -274,6 +278,7 @@ _URI_PREFIX = re.compile(r"^\s*(?:[A-Za-z][A-Za-z0-9+.-]*:)+//")
 _JDBC_SQLSERVER_PREFIX = re.compile(r"^\s*jdbc:sqlserver://", re.IGNORECASE)
 _JDBC_ORACLE_THIN_PREFIX = re.compile(r"^\s*jdbc:oracle:thin:", re.IGNORECASE)
 _REDACTED_URI_CREDENTIAL = "__redacted__"
+_REDACTED_BINDING_PREFIX = "__redacted_binding__:"
 _MISSING = object()
 
 
@@ -435,18 +440,90 @@ def _connection_property_credential_key(key: str) -> bool:
     )
 
 
-def _redact_uri_params(value: str) -> str:
+def _redacted_expression_shape(node: Tree | Token) -> dict[str, Any]:
+    """Encode expression structure without retaining literal operand values."""
+    if isinstance(node, Token):
+        token_type = str(node.type)
+        shape: dict[str, Any] = {"token": token_type}
+        if token_type in {"NAME", "COMP_OP"}:
+            shape["value"] = str(node)
+        return shape
+    return {
+        "children": [_redacted_expression_shape(child) for child in node.children],
+        "rule": str(node.data),
+    }
+
+
+def _credential_binding_marker(value: str) -> str | None:
+    """Return a secret-free identity marker for a credential template with references.
+
+    Reference paths and expression structure affect execution and therefore identity.
+    Literal runs and literal operands are represented only by their shape, so rotating
+    an embedded credential cannot change the marker or appear in the manifest.
+    """
+    try:
+        segments = scan_template(value)
+    except ExpressionError:
+        return None
+
+    references: list[str] = []
+    shape: list[dict[str, Any]] = []
+    for segment in segments:
+        if isinstance(segment, Literal):
+            shape.append({"segment": "literal"})
+            continue
+        if not isinstance(segment, Span):  # pragma: no cover - closed template sum
+            raise TypeError(f"unsupported template segment {type(segment).__name__}")
+        references.extend(expr_refs(segment.tree))
+        shape.append(
+            {
+                "expression": _redacted_expression_shape(segment.tree),
+                "segment": "expression",
+            }
+        )
+    if not references:
+        return None
+    identity = {"references": references, "shape": shape}
+    return f"{_REDACTED_BINDING_PREFIX}{_digest(identity)}"
+
+
+def _redacted_credential_value(
+    value: str,
+    *,
+    preserve_binding_identity: bool = False,
+) -> str:
+    """Redact a credential, retaining template identity only at the wiring boundary."""
+    if preserve_binding_identity:
+        marker = _credential_binding_marker(value)
+        if marker is not None:
+            return marker
+    return _REDACTED_URI_CREDENTIAL
+
+
+def _redact_uri_params(
+    value: str,
+    *,
+    preserve_binding_identity: bool = False,
+) -> str:
     """Replace credential parameter values while preserving spelling and ordering."""
     redacted_parts: list[str] = []
     for part in value.split("&"):
-        raw_key, separator, _ = part.partition("=")
+        raw_key, separator, raw_value = part.partition("=")
         if separator and _uri_credential_key(unquote_plus(raw_key)):
-            part = f"{raw_key}={_REDACTED_URI_CREDENTIAL}"
+            replacement = _redacted_credential_value(
+                raw_value,
+                preserve_binding_identity=preserve_binding_identity,
+            )
+            part = f"{raw_key}={replacement}"
         redacted_parts.append(part)
     return "&".join(redacted_parts)
 
 
-def _redact_uri_tail_params(value: str) -> str:
+def _redact_uri_tail_params(
+    value: str,
+    *,
+    preserve_binding_identity: bool = False,
+) -> str:
     """Redact credential query/fragment parameters in a URI-like tail."""
     fragment_start = value.find("#")
     if fragment_start == -1:
@@ -460,15 +537,25 @@ def _redact_uri_tail_params(value: str) -> str:
     if query_start != -1:
         before_fragment = (
             before_fragment[: query_start + 1]
-            + _redact_uri_params(before_fragment[query_start + 1 :])
+            + _redact_uri_params(
+                before_fragment[query_start + 1 :],
+                preserve_binding_identity=preserve_binding_identity,
+            )
         )
     redacted_tail = before_fragment
     if fragment is not None:
-        redacted_tail += f"#{_redact_uri_params(fragment)}"
+        redacted_tail += "#" + _redact_uri_params(
+            fragment,
+            preserve_binding_identity=preserve_binding_identity,
+        )
     return redacted_tail
 
 
-def _redact_hierarchical_uri(value: str) -> str | None:
+def _redact_hierarchical_uri(
+    value: str,
+    *,
+    preserve_binding_identity: bool = False,
+) -> str | None:
     """Sanitize a hierarchical URI while retaining its endpoint and path spelling."""
     prefix = _URI_PREFIX.match(value)
     if prefix is None:
@@ -483,8 +570,16 @@ def _redact_hierarchical_uri(value: str) -> str | None:
     authority_end = min(delimiters, default=len(value))
     authority = value[authority_start:authority_end]
     if "@" in authority:
-        authority = authority.rsplit("@", 1)[1]
-    tail = _redact_uri_tail_params(value[authority_end:])
+        userinfo, host = authority.rsplit("@", 1)
+        replacement = _redacted_credential_value(
+            userinfo,
+            preserve_binding_identity=preserve_binding_identity,
+        )
+        authority = f"{replacement}@{host}"
+    tail = _redact_uri_tail_params(
+        value[authority_end:],
+        preserve_binding_identity=preserve_binding_identity,
+    )
     return value[:authority_start] + authority + tail
 
 
@@ -562,47 +657,83 @@ def _semicolon_property_spans(
 
 
 def _redact_semicolon_properties(
-    value: str, start: int
+    value: str,
+    start: int,
+    *,
+    preserve_binding_identity: bool = False,
 ) -> tuple[str, frozenset[str]] | None:
     """Redact credential fields in one fully parsed semicolon property sequence."""
     spans = _semicolon_property_spans(value, start)
     if not spans:
         return None
 
-    replacements: list[tuple[int, int]] = []
+    replacements: list[tuple[int, int, str]] = []
     normalized_keys: set[str] = set()
     for _, end, equal, key in spans:
         normalized, _ = _normalized_key_spellings(key)
         normalized_keys.add(normalized)
         if _connection_property_credential_key(key):
-            replacements.append((equal + 1, end))
+            replacements.append(
+                (
+                    equal + 1,
+                    end,
+                    _redacted_credential_value(
+                        value[equal + 1 : end],
+                        preserve_binding_identity=preserve_binding_identity,
+                    ),
+                )
+            )
 
     redacted = value
-    for value_start, value_end in reversed(replacements):
+    for value_start, value_end, replacement in reversed(replacements):
         redacted = (
             redacted[:value_start]
-            + _REDACTED_URI_CREDENTIAL
+            + replacement
             + redacted[value_end:]
         )
     return redacted, frozenset(normalized_keys)
 
 
-def _redact_jdbc_sqlserver_credentials(value: str) -> str | None:
+def _redact_jdbc_sqlserver_credentials(
+    value: str,
+    *,
+    preserve_binding_identity: bool = False,
+) -> str | None:
     """Sanitize standard SQL Server JDBC semicolon properties."""
     prefix = _JDBC_SQLSERVER_PREFIX.match(value)
     if prefix is None:
         return None
     property_delimiter = value.find(";", prefix.end())
     if property_delimiter == -1:
-        return _redact_hierarchical_uri(value) or value
-    parsed = _redact_semicolon_properties(value, property_delimiter + 1)
+        return (
+            _redact_hierarchical_uri(
+                value,
+                preserve_binding_identity=preserve_binding_identity,
+            )
+            or value
+        )
+    parsed = _redact_semicolon_properties(
+        value,
+        property_delimiter + 1,
+        preserve_binding_identity=preserve_binding_identity,
+    )
     if parsed is None:
         return _REDACTED_URI_CREDENTIAL
     redacted, _ = parsed
-    return _redact_hierarchical_uri(redacted) or redacted
+    return (
+        _redact_hierarchical_uri(
+            redacted,
+            preserve_binding_identity=preserve_binding_identity,
+        )
+        or redacted
+    )
 
 
-def _redact_jdbc_oracle_thin_credentials(value: str) -> str | None:
+def _redact_jdbc_oracle_thin_credentials(
+    value: str,
+    *,
+    preserve_binding_identity: bool = False,
+) -> str | None:
     """Sanitize Oracle thin inline credentials while preserving service/SID identity."""
     prefix = _JDBC_ORACLE_THIN_PREFIX.match(value)
     if prefix is None:
@@ -610,20 +741,38 @@ def _redact_jdbc_oracle_thin_credentials(value: str) -> str | None:
     rest = value[prefix.end() :]
     at = rest.rfind("@")
     if at == -1:
-        return _redact_uri_tail_params(value)
-    endpoint = _redact_uri_tail_params(rest[at + 1 :])
+        return _redact_uri_tail_params(
+            value,
+            preserve_binding_identity=preserve_binding_identity,
+        )
+    endpoint = _redact_uri_tail_params(
+        rest[at + 1 :],
+        preserve_binding_identity=preserve_binding_identity,
+    )
     if at == 0:
         return value[: prefix.end()] + "@" + endpoint
+    credential = _redacted_credential_value(
+        rest[:at],
+        preserve_binding_identity=preserve_binding_identity,
+    )
     return (
         value[: prefix.end()]
-        + f"{_REDACTED_URI_CREDENTIAL}/{_REDACTED_URI_CREDENTIAL}@"
+        + f"{credential}/{credential}@"
         + endpoint
     )
 
 
-def _redact_semicolon_dsn_credentials(value: str) -> str | None:
+def _redact_semicolon_dsn_credentials(
+    value: str,
+    *,
+    preserve_binding_identity: bool = False,
+) -> str | None:
     """Sanitize a recognized key/value DSN without normalizing semantic fields."""
-    parsed = _redact_semicolon_properties(value, 0)
+    parsed = _redact_semicolon_properties(
+        value,
+        0,
+        preserve_binding_identity=preserve_binding_identity,
+    )
     if parsed is None:
         return None
     redacted, keys = parsed
@@ -695,6 +844,7 @@ def _redact_libpq_conninfo_credentials(
     value: str,
     *,
     require_credential: bool = False,
+    preserve_binding_identity: bool = False,
 ) -> str | None:
     """Sanitize a recognized libpq keyword/value connection string."""
     spans = _libpq_property_spans(value)
@@ -713,27 +863,47 @@ def _redact_libpq_conninfo_credentials(
     redacted = value
     for value_start, value_end, key in reversed(spans):
         if _connection_property_credential_key(key):
+            replacement = _redacted_credential_value(
+                value[value_start:value_end],
+                preserve_binding_identity=preserve_binding_identity,
+            )
             redacted = (
                 redacted[:value_start]
-                + _REDACTED_URI_CREDENTIAL
+                + replacement
                 + redacted[value_end:]
             )
     return redacted
 
 
-def _redact_connection_credentials(value: str) -> tuple[str, bool]:
+def _redact_connection_credentials(
+    value: str,
+    *,
+    preserve_binding_identity: bool = False,
+) -> tuple[str, bool]:
     """Return a sanitized recognized URI/DSN and whether its structure was recognized."""
-    sqlserver = _redact_jdbc_sqlserver_credentials(value)
+    sqlserver = _redact_jdbc_sqlserver_credentials(
+        value,
+        preserve_binding_identity=preserve_binding_identity,
+    )
     if sqlserver is not None:
         return sqlserver, True
-    oracle = _redact_jdbc_oracle_thin_credentials(value)
+    oracle = _redact_jdbc_oracle_thin_credentials(
+        value,
+        preserve_binding_identity=preserve_binding_identity,
+    )
     if oracle is not None:
         return oracle, True
-    uri = _redact_hierarchical_uri(value)
+    uri = _redact_hierarchical_uri(
+        value,
+        preserve_binding_identity=preserve_binding_identity,
+    )
     if uri is not None:
         return uri, True
     if ";" in value:
-        dsn = _redact_semicolon_dsn_credentials(value)
+        dsn = _redact_semicolon_dsn_credentials(
+            value,
+            preserve_binding_identity=preserve_binding_identity,
+        )
         if dsn is not None:
             return dsn, True
         # A malformed semicolon DSN can resemble one giant libpq property. Only
@@ -742,17 +912,28 @@ def _redact_connection_credentials(value: str) -> tuple[str, bool]:
         conninfo = _redact_libpq_conninfo_credentials(
             value,
             require_credential=True,
+            preserve_binding_identity=preserve_binding_identity,
         )
     else:
-        conninfo = _redact_libpq_conninfo_credentials(value)
+        conninfo = _redact_libpq_conninfo_credentials(
+            value,
+            preserve_binding_identity=preserve_binding_identity,
+        )
     if conninfo is not None:
         return conninfo, True
     return value, False
 
 
-def _redact_uri_credentials(value: str) -> str:
+def _redact_uri_credentials(
+    value: str,
+    *,
+    preserve_binding_identity: bool = False,
+) -> str:
     """Remove recognized URI/JDBC/DSN credentials without normalizing semantics."""
-    redacted, _ = _redact_connection_credentials(value)
+    redacted, _ = _redact_connection_credentials(
+        value,
+        preserve_binding_identity=preserve_binding_identity,
+    )
     return redacted
 
 
@@ -762,6 +943,7 @@ def _sorted_mapping(
     path: str,
     *,
     redact_credentials: bool = False,
+    preserve_binding_identity: bool = False,
 ) -> dict[str, Any]:
     """Canonicalize a string-keyed mapping, using typed entries when redacting."""
     bad_key = next((key for key in value if not isinstance(key, str)), _MISSING)
@@ -775,6 +957,7 @@ def _sorted_mapping(
             ctx,
             path,
             redact_credentials=True,
+            preserve_binding_identity=preserve_binding_identity,
         )
 
     object_id = id(value)
@@ -855,10 +1038,15 @@ def _canonical_connection_value(
     value: Any,
     ctx: _ManifestContext,
     path: str,
+    *,
+    preserve_binding_identity: bool = False,
 ) -> Any:
     """Canonicalize only a safely recognized connection string or structured mapping."""
     if isinstance(value, str):
-        sanitized, recognized = _redact_connection_credentials(value)
+        sanitized, recognized = _redact_connection_credentials(
+            value,
+            preserve_binding_identity=preserve_binding_identity,
+        )
         if recognized:
             return {"type": "str", "value": sanitized}
     elif isinstance(value, dict):
@@ -879,6 +1067,7 @@ def _canonical_mapping(
     *,
     redact_credentials: bool = False,
     redact_connection_properties: bool = False,
+    preserve_binding_identity: bool = False,
 ) -> dict[str, Any]:
     """Canonicalize an arbitrary-key mapping as sorted typed key/value entries."""
     object_id = id(value)
@@ -896,14 +1085,46 @@ def _canonical_mapping(
                 and isinstance(key, str)
                 and _URI_PREFIX.match(key) is None
             )
+            redacted_credential_key = redacted_string_key and (
+                _connection_string_key(key)
+                or _credential_key(key)
+                or (
+                    redact_connection_properties
+                    and _connection_property_credential_key(key)
+                )
+            )
+            binding_marker = (
+                _credential_binding_marker(item)
+                if (
+                    preserve_binding_identity
+                    and redacted_credential_key
+                    and isinstance(item, str)
+                )
+                else None
+            )
             if redacted_string_key and _connection_string_key(key):
                 canonical_item = _canonical_connection_value(
                     item,
                     ctx,
                     f"{path}.values[{index}]",
+                    preserve_binding_identity=preserve_binding_identity,
                 )
                 if canonical_item is _MISSING:
-                    continue
+                    if binding_marker is None:
+                        continue
+                    canonical_item = _canonical_value(
+                        binding_marker,
+                        ctx,
+                        f"{path}.values[{index}]",
+                    )
+            elif binding_marker is not None:
+                # Dynamic source identity is safe to retain even when the target
+                # slot is credential-named; the marker contains no literal operand.
+                canonical_item = _canonical_value(
+                    binding_marker,
+                    ctx,
+                    f"{path}.values[{index}]",
+                )
             elif redacted_string_key and (
                 _credential_key(key)
                 or (
@@ -939,6 +1160,7 @@ def _canonical_mapping(
                         f"{path}.values[{index}]",
                         redact_credentials=redact_credentials,
                         redact_connection_properties=redact_connection_properties,
+                        preserve_binding_identity=preserve_binding_identity,
                     )
                 ),
             }
@@ -956,6 +1178,7 @@ def _canonical_value(
     *,
     redact_credentials: bool = False,
     redact_connection_properties: bool = False,
+    preserve_binding_identity: bool = False,
 ) -> Any:
     """Encode one value as a deterministic, type-discriminated JSON record."""
     if isinstance(value, Enum):
@@ -981,7 +1204,10 @@ def _canonical_value(
         return {"type": "float", "value": struct.pack("!d", value).hex()}
     if isinstance(value, str):
         if redact_credentials:
-            value = _redact_uri_credentials(value)
+            value = _redact_uri_credentials(
+                value,
+                preserve_binding_identity=preserve_binding_identity,
+            )
         return {"type": "str", "value": value}
     if isinstance(value, bytes):
         return {
@@ -1374,6 +1600,7 @@ def _flow_manifest(
                 ctx,
                 f"{path}.wiring.{node_id}",
                 redact_credentials=True,
+                preserve_binding_identity=True,
             )
 
         manifest: dict[str, Any] = {

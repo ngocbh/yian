@@ -1299,6 +1299,158 @@ output: ${step.output}
     assert flow_fingerprint(first) != flow_fingerprint(changed_region)
 
 
+@pytest.mark.parametrize(
+    ("slot", "primary_source", "backup_source"),
+    [
+        (
+            "password",
+            "${input.primary_password}",
+            "${input.backup_password}",
+        ),
+        (
+            "authorization",
+            '"Bearer ${input.primary_token}"',
+            '"Bearer ${input.backup_token}"',
+        ),
+        (
+            "connection_string",
+            "${input.primary_dsn}",
+            "${input.backup_dsn}",
+        ),
+        (
+            "connection_string",
+            '"postgres://${input.primary_user}:${input.primary_password}@db.example/app"',
+            '"postgres://${input.backup_user}:${input.backup_password}@db.example/app"',
+        ),
+        (
+            "connection_string",
+            '"Server=db.example;Password=${input.primary_password}"',
+            '"Server=db.example;Password=${input.backup_password}"',
+        ),
+        (
+            "endpoint",
+            '"https://api.example/v1?token=${input.primary_token}&region=us"',
+            '"https://api.example/v1?token=${input.backup_token}&region=us"',
+        ),
+        (
+            "endpoint",
+            '"https://${input.primary_user}:literal@api.example/v1"',
+            '"https://${input.backup_user}:literal@api.example/v1"',
+        ),
+    ],
+    ids=[
+        "whole",
+        "embedded",
+        "connection",
+        "connection-uri",
+        "connection-dsn",
+        "uri-query",
+        "uri-userinfo",
+    ],
+)
+def test_flow_fingerprint_keeps_credential_wiring_reference_identity(
+    slot, primary_source, backup_source
+):
+    source = """
+id: credential-routing
+name: Credential routing
+input:
+  primary_password: str
+  backup_password: str
+  primary_token: str
+  backup_token: str
+  primary_dsn: str
+  backup_dsn: str
+  primary_user: str
+  backup_user: str
+nodes:
+  step:
+    kind: code
+    input:
+      __SLOT__: __SOURCE__
+    output: str
+    code: |
+      return inputs["__SLOT__"]
+output: ${step.output}
+"""
+    source = source.replace("__SLOT__", slot)
+    primary = _compiled(source.replace("__SOURCE__", primary_source))
+    backup = _compiled(source.replace("__SOURCE__", backup_source))
+
+    assert flow_fingerprint(primary) != flow_fingerprint(backup)
+    primary_manifest = json.dumps(flow_manifest(primary), sort_keys=True)
+    backup_manifest = json.dumps(flow_manifest(backup), sort_keys=True)
+    assert "__redacted_binding__:" in primary_manifest
+    assert "__redacted_binding__:" in backup_manifest
+
+
+def test_embedded_connection_binding_keeps_endpoint_semantics():
+    first = _fragment()
+    changed = copy.deepcopy(first)
+    first.wiring["body"]["connection_string"] = (
+        "postgres://${input.primary_user}:${input.primary_password}@db.example/app"
+    )
+    changed.wiring["body"]["connection_string"] = first.wiring["body"][
+        "connection_string"
+    ].replace("db.example", "other.example")
+
+    assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_encoded_binding_like_uri_credentials_remain_literal():
+    first = _fragment()
+    rotated = copy.deepcopy(first)
+    first.wiring["body"]["endpoint"] = (
+        "https://api.example/v1?token=%24%7Bfirst.secret%7D&region=us"
+    )
+    rotated.wiring["body"]["endpoint"] = (
+        "https://api.example/v1?token=%24%7Bsecond.secret%7D&region=us"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    assert "first.secret" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+
+def test_credential_binding_marker_redacts_literal_operands():
+    first = _fragment()
+    rotated = copy.deepcopy(first)
+    first.wiring["body"]["authorization"] = (
+        'Bearer ${input.primary_token:-"first-secret"}'
+    )
+    rotated.wiring["body"]["authorization"] = (
+        'Bearer ${input.primary_token:-"second-secret"}'
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    assert "first-secret" not in json.dumps(flow_manifest(first), sort_keys=True)
+
+    changed = copy.deepcopy(rotated)
+    changed.wiring["body"]["authorization"] = changed.wiring["body"][
+        "authorization"
+    ].replace("primary_token", "backup_token")
+    assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_binding_like_static_credentials_remain_literal():
+    for scope in ("env", "structured-env", "nested-wiring"):
+        first = _compiled()
+        rotated = copy.deepcopy(first)
+        if scope == "env":
+            first.nodes["step"].env["password"] = "${first.secret}"
+            rotated.nodes["step"].env["password"] = "${second.secret}"
+        elif scope == "structured-env":
+            first.nodes["step"].env["auth"] = {"password": "${first.secret}"}
+            rotated.nodes["step"].env["auth"] = {"password": "${second.secret}"}
+        else:
+            first.wiring["step"]["auth"] = {"password": "${first.secret}"}
+            rotated.wiring["step"]["auth"] = {"password": "${second.secret}"}
+
+        assert flow_fingerprint(first) == flow_fingerprint(rotated)
+        manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+        assert "first.secret" not in manifest_text
+        assert "__redacted_binding__:" not in manifest_text
+
+
 def test_flow_fingerprint_redacts_model_weights_uri_credentials():
     first_uri = (
         "s3://first-user:first-password@models.example/bucket/model.bin"

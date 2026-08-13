@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import FrozenInstanceError
+import gc
+from statistics import median
+import tracemalloc
 from typing import Any
 
 import pytest
 
+import agent_composer.runtime.state as state_module
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, NodeState, START_ID
 from agent_composer.events import NodeSucceeded
 from agent_composer.nodes.end import EndNode
@@ -406,6 +411,40 @@ def test_success_multiple_edges_to_one_successor_enqueue_it_once():
     assert tuple(state.ready) == ("after-baked",)
 
 
+def _interleaved_successor_flow() -> CompiledFlow:
+    """Return target edges ordered A1, B, A2 so B becomes ready before A."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "target": FuncNode("target", lambda inputs: inputs),
+        "after-a": FuncNode("after-a", lambda inputs: inputs),
+        "after-b": FuncNode("after-b", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    return CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-target", from_=START_ID, to="target"),
+            Edge(id="target-a-1", from_="target", to="after-a", input_group="a"),
+            Edge(id="target-b", from_="target", to="after-b"),
+            Edge(id="target-a-2", from_="target", to="after-a", input_group="a"),
+        ],
+    )
+
+
+def test_success_preserves_sequential_readiness_for_interleaved_successors():
+    state, log = _initialized_and_started(_interleaved_successor_flow())
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, "target"))
+
+    commit_prepared(
+        log,
+        state,
+        prepare_node_succeeded(state, "target", {"done": True}),
+    )
+
+    assert tuple(state.ready) == ("after-b", "after-a")
+
+
 @pytest.mark.parametrize(
     ("node_id", "match"),
     [("missing", "does not exist"), ("first", "not in-flight")],
@@ -451,6 +490,99 @@ def test_success_append_failure_leaves_every_state_coordinate_unchanged():
 
     assert _state_snapshot(state) == before
     assert log.next_sequence == prior.next_sequence
+
+
+def test_success_delta_preserves_all_reducer_container_identities():
+    state, log = _initialized_and_started(_fanout_flow())
+    prepared = prepare_node_succeeded(state, START_ID, {"value": "done"})
+    roots = (
+        state.pool,
+        state.pool.store,
+        state.node_state,
+        state.edge_state,
+        state.ready,
+        state.in_flight,
+        state.depth,
+        state.wiring_overrides,
+        state.input,
+        state.effective_llm_by_static_path,
+    )
+    root_ids = tuple(id(root) for root in roots)
+
+    commit_prepared(log, state, prepared)
+
+    assert root_ids == tuple(
+        id(root)
+        for root in (
+            state.pool,
+            state.pool.store,
+            state.node_state,
+            state.edge_state,
+            state.ready,
+            state.in_flight,
+            state.depth,
+            state.wiring_overrides,
+            state.input,
+            state.effective_llm_by_static_path,
+        )
+    )
+
+
+def test_success_plan_contains_only_an_immutable_sparse_delta():
+    state, _ = _initialized_and_started(_fanout_flow())
+    plan = prepare_node_succeeded(
+        state,
+        START_ID,
+        {"value": "done"},
+    )._plan
+
+    assert isinstance(plan.delta.value_bytes, bytes)
+    assert plan.delta.outgoing_edge_ids == ("start-first", "start-second")
+    assert plan.delta.newly_ready_ids == ("first", "second")
+    with pytest.raises(FrozenInstanceError):
+        plan.delta.newly_ready_ids = ()  # type: ignore[misc]
+
+
+def test_success_commit_uses_only_the_prevalidated_delta(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state, log = _initialized_and_started(_fanout_flow())
+    prepared = prepare_node_succeeded(state, START_ID, {"value": "done"})
+
+    def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("commit repeated success preparation work")
+
+    monkeypatch.setattr(state_module, "_validate_success_value", unexpected)
+    monkeypatch.setattr(state_module, "_prepare_success_delta", unexpected)
+    monkeypatch.setattr(state_module, "canonical_typed", unexpected)
+    monkeypatch.setattr(state_module, "encode_pool", unexpected)
+    monkeypatch.setattr(state_module, "decode_pool", unexpected)
+    monkeypatch.setattr(state.flow, "incoming", unexpected)
+    monkeypatch.setattr(state.flow, "outgoing", unexpected)
+
+    commit_prepared(log, state, prepared)
+
+    assert state.pool.get(START_ID) == {"value": "done"}
+    assert tuple(state.ready) == ("first", "second")
+
+
+@pytest.mark.parametrize("broken", ["edge-state", "successor", "incoming"])
+def test_success_rejects_touched_topology_invariant_breaks(broken: str):
+    state, log = _redirect_ready()
+    if broken == "edge-state":
+        del state.edge_state["baked-after"]
+        match = "has no disposition"
+    elif broken == "successor":
+        del state.node_state["after-baked"]
+        match = "unknown successor"
+    else:
+        state.flow._incoming["after-baked"] = []
+        match = "absent from successor"
+
+    with pytest.raises(ValueError, match=match):
+        prepare_node_succeeded(state, "filler", ("valid",))
+
+    assert log.next_sequence == 4
 
 
 def test_success_canonical_copies_isolate_input_record_pool_and_observers():
@@ -538,3 +670,92 @@ def test_success_record_replay_reconstructs_identical_state():
 
     assert _reducer_snapshot(replay_state) == _reducer_snapshot(live_state)
     assert tuple(replay_log) == tuple(live_log)
+
+
+def _constant_degree_success_state(size: int) -> RunState:
+    """Return a target-in-flight state with ``size`` unrelated degree-one nodes."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "target": FuncNode("target", lambda inputs: inputs),
+        "after": FuncNode("after", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    nodes.update(
+        {
+            f"unused-{index}": FuncNode(
+                f"unused-{index}",
+                lambda inputs: inputs,
+            )
+            for index in range(size)
+        }
+    )
+    edges = [
+        Edge(id="start-target", from_=START_ID, to="target"),
+        Edge(id="target-after", from_="target", to="after"),
+    ]
+    edges.extend(
+        Edge(
+            id=f"unused-edge-{index}",
+            from_=f"unused-{index}",
+            to=f"unused-{index + 1}",
+        )
+        for index in range(size - 1)
+    )
+    state, log = _initialized_and_started(
+        CompiledFlow.from_parts(nodes=nodes, edges=edges)
+    )
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, "target"))
+    return state
+
+
+class _AllocationStop(Exception):
+    """Stop one allocation probe at the append boundary."""
+
+
+class _AllocationStopLog:
+    """Log double that preserves state while measuring all pre-append work."""
+
+    path = None
+
+    def __init__(self, state: RunState) -> None:
+        self.run_id = state.run_id
+        self.next_sequence = state.next_sequence
+
+    def append(self, record: Any) -> Any:
+        raise _AllocationStop
+
+
+def _median_success_reducer_peak(state: RunState) -> float:
+    """Return median peak bytes through preparation and pre-append commit."""
+    log = _AllocationStopLog(state)
+    prepared = prepare_node_succeeded(state, "target", {"done": True})
+    with pytest.raises(_AllocationStop):
+        commit_prepared(log, state, prepared)
+    samples: list[int] = []
+    for _ in range(5):
+        gc.collect()
+        tracemalloc.start()
+        prepared = prepare_node_succeeded(state, "target", {"done": True})
+        try:
+            commit_prepared(log, state, prepared)
+        except _AllocationStop:
+            pass
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        samples.append(peak)
+        del prepared
+    return median(samples)
+
+
+def test_success_reducer_allocation_is_independent_of_total_run_size():
+    small = _constant_degree_success_state(64)
+    large = _constant_degree_success_state(4096)
+
+    small_peak = _median_success_reducer_peak(small)
+    large_peak = _median_success_reducer_peak(large)
+
+    assert large_peak / small_peak <= 2.5, (
+        f"success reducer allocation scaled with total run state: "
+        f"small={small_peak}, large={large_peak}"
+    )

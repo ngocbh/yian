@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_composer._state import NodeState
-from agent_composer.compile.model import CompiledFlow
+from agent_composer.compile.model import CompiledFlow, Edge
 from agent_composer.events import (
     NodeSucceeded,
     NodeStarted,
@@ -212,7 +212,7 @@ class _RunResumedDelta:
 
 @dataclass(frozen=True, slots=True)
 class _SuccessPlan:
-    """Temporary success-plan carrier isolated from sparse frontier reducers."""
+    """Opaque authority anchors and one immutable successful-output delta."""
 
     originating_state: RunState
     originating_flow: CompiledFlow
@@ -221,30 +221,27 @@ class _SuccessPlan:
     start_node_identity: int
     end_id: str
     end_node_identity: int | None
+    delta: _SuccessDelta
+
+
+@dataclass(frozen=True, slots=True)
+class _SuccessDelta:
+    """Prevalidated touched coordinates for one successful output commit."""
+
+    node_id: str
+    commit_target: str
+    value_bytes: bytes
+    outgoing_edge_ids: tuple[str, ...]
+    newly_ready_ids: tuple[str, ...]
+    observer_commit_as: str | None
 
 
 @dataclass(slots=True)
 class _SuccessApply:
-    """Detached success state fully materialized before durable append."""
-
-    pool: VariablePool
-    node_state: dict[str, NodeState]
-    edge_state: dict[str, NodeState]
-    ready: deque[str]
-    in_flight: dict[str, None]
-    next_sequence: int
-    observers: tuple[Any, ...]
-
-
-@dataclass(slots=True)
-class _SuccessDraft:
-    """Validated detached success value, dispositions, and replacement frontier."""
+    """Independent success value and observer materialized before append."""
 
     value: TypedValue
-    node_state: dict[str, NodeState]
-    edge_state: dict[str, NodeState]
-    ready: deque[str]
-    in_flight: dict[str, None]
+    observers: tuple[Any, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -429,14 +426,18 @@ def prepare_node_succeeded(
     target = commit_as if commit_as is not None else node_target or node_id
     if target not in state.flow.nodes:
         raise ValueError(f"success commit target {target!r} does not exist in the flow")
-    value_wire, _ = canonical_typed(output, state.flow.nodes[target].output_type)
-    return prepare_record(
+    value_wire, typed = canonical_typed(
+        output,
+        state.flow.nodes[target].output_type,
+    )
+    return _prepare_success_transition(
         state,
         NodeSucceededRecord(
             node_id=node_id,
             commit_target=target,
             value=value_wire,
         ),
+        typed,
     )
 
 
@@ -504,12 +505,13 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
         raise TypeError("prepare_record expects a RunState")
     _require_initialized_nonterminal(state)
 
+    if isinstance(record, NodeSucceededRecord):
+        typed = _validate_success_value(state, record)
+        return _prepare_success_transition(state, record, typed)
     if isinstance(record, NodeStartedRecord):
         _validate_node_started(state, record)
     elif isinstance(record, RunResumedRecord):
         _validate_run_resumed(state, record)
-    elif isinstance(record, NodeSucceededRecord):
-        _validate_node_succeeded(state, record)
     else:
         raise TypeError(
             f"unsupported run record for state preparation: {type(record).__name__}"
@@ -538,21 +540,8 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
             raise TypeError("run-resume envelope decoded to a different record kind")
         _validate_run_resumed(state, canonical_record)
         observers = (RunResumed(),)
-    else:
-        if not isinstance(canonical_record, NodeSucceededRecord):
-            raise TypeError("node-success envelope decoded to a different record kind")
-        output = _validate_node_succeeded(state, canonical_record).value.to_object()
-        observers = (
-            NodeSucceeded(
-                node_id=canonical_record.node_id,
-                output=output,
-                commit_as=(
-                    None
-                    if canonical_record.commit_target == canonical_record.node_id
-                    else canonical_record.commit_target
-                ),
-            ),
-        )
+    else:  # protected by the supported-record dispatch above
+        raise TypeError("frontier envelope decoded to a different record kind")
 
     start_id = state.flow.start_id
     end_id = state.flow.end_id
@@ -568,11 +557,11 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
         ),
     }
     if isinstance(canonical_record, NodeStartedRecord):
-        plan: _FrontierPlan | _SuccessPlan = _FrontierPlan(
+        plan = _FrontierPlan(
             **common_plan,
             delta=_NodeStartedDelta(node_id=canonical_record.node_id),
         )
-    elif isinstance(canonical_record, RunResumedRecord):
+    else:
         plan = _FrontierPlan(
             **common_plan,
             delta=_RunResumedDelta(
@@ -580,14 +569,69 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
                 num_workers=canonical_record.num_workers,
             ),
         )
-    else:
-        plan = _SuccessPlan(**common_plan)
     return PreparedTransition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
         _plan=plan,
         observers=observers,
+    )
+
+
+def _prepare_success_transition(
+    state: RunState,
+    record: NodeSucceededRecord,
+    typed: TypedValue,
+) -> PreparedTransition:
+    """Freeze one fully validated success delta and its canonical public record."""
+    delta = _prepare_success_delta(state, record, typed)
+    run_id = state.run_id
+    if not isinstance(run_id, str):  # established by initialized-state validation
+        raise ValueError("run state is not initialized")
+    canonical_bytes = encode_record(
+        RecordEnvelope(
+            schema=SCHEMA_VERSION,
+            run_id=run_id,
+            seq=state.next_sequence,
+            record=record,
+        )
+    )
+    canonical_envelope = decode_record(canonical_bytes)
+    canonical_record = canonical_envelope.record
+    if not isinstance(canonical_record, NodeSucceededRecord):
+        raise TypeError("node-success envelope decoded to a different record kind")
+    if canonical_record != record:
+        raise ValueError("NodeSucceededRecord is not in canonical wire form")
+
+    start_id = state.flow.start_id
+    end_id = state.flow.end_id
+    plan = _SuccessPlan(
+        originating_state=state,
+        originating_flow=state.flow,
+        envelope_bytes=canonical_bytes,
+        start_id=start_id,
+        start_node_identity=id(state.flow.nodes[start_id]),
+        end_id=end_id,
+        end_node_identity=(
+            id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
+        ),
+        delta=delta,
+    )
+    observer_value = ANY_VALUE_ADAPTER.validate_json(
+        delta.value_bytes,
+        strict=True,
+    ).to_object()
+    observer = NodeSucceeded(
+        node_id=delta.node_id,
+        output=observer_value,
+        commit_as=delta.observer_commit_as,
+    )
+    return PreparedTransition(
+        record=canonical_record,
+        expected_run_id=canonical_envelope.run_id,
+        expected_sequence=canonical_envelope.seq,
+        _plan=plan,
+        observers=(observer,),
     )
 
 
@@ -716,12 +760,23 @@ def _commit_success(
     _require_prepared_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
-    _validate_node_succeeded(state, prepared.record)
     _require_unchanged_record(prepared, plan.envelope_bytes)
-    apply = _materialize_success(state, prepared)
+    delta = plan.delta
+    if not (
+        prepared.record.node_id == delta.node_id
+        and prepared.record.commit_target == delta.commit_target
+    ):
+        raise ValueError("success record and prevalidated delta disagree")
+    apply = _materialize_success(plan)
 
     _append_and_verify(log, prepared)
-    _apply_success(state, apply)
+    state.pool.store[delta.commit_target] = apply.value
+    state.node_state[delta.node_id] = NodeState.TAKEN
+    for edge_id in delta.outgoing_edge_ids:
+        state.edge_state[edge_id] = NodeState.TAKEN
+    del state.in_flight[delta.node_id]
+    state.ready.extend(delta.newly_ready_ids)
+    state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
 
 
@@ -873,6 +928,8 @@ def _validate_run_resumed(state: RunState, record: RunResumedRecord) -> None:
             raise ValueError(
                 f"RunResumed retry node {node_id!r} must have UNKNOWN disposition"
             )
+        if state.in_flight[node_id] is not None:
+            raise ValueError("in-flight must be an ordered set with None values")
         if node_id in state.ready:
             raise ValueError(f"RunResumed retry node {node_id!r} is already ready")
 
@@ -885,13 +942,15 @@ def _require_succeeding_node(state: RunState, node_id: str) -> None:
         raise ValueError(f"NodeSucceeded node {node_id!r} must have UNKNOWN disposition")
     if node_id not in state.in_flight:
         raise ValueError(f"NodeSucceeded node {node_id!r} is not in-flight")
+    if state.in_flight[node_id] is not None:
+        raise ValueError("in-flight must be an ordered set with None values")
 
 
-def _validate_node_succeeded(
+def _validate_success_value(
     state: RunState,
     record: NodeSucceededRecord,
-) -> _SuccessDraft:
-    """Validate and detach one success value plus its complete frontier change."""
+) -> TypedValue:
+    """Validate one replay value against its explicit commit target exactly once."""
     if type(record.node_id) is not str:
         raise TypeError("NodeSucceededRecord node_id must be a string")
     if type(record.commit_target) is not str:
@@ -911,90 +970,163 @@ def _validate_node_succeeded(
     )
     if wire != record.value:
         raise ValueError("NodeSucceededRecord value is not canonical for its target")
+    return decoded
 
-    outgoing = list(state.flow.outgoing(record.commit_target))
-    for edge in outgoing:
+
+def _prepare_success_delta(
+    state: RunState,
+    record: NodeSucceededRecord,
+    typed: TypedValue,
+) -> _SuccessDelta:
+    """Validate touched topology and freeze one sparse successful-output delta."""
+    if type(state.pool.store) is not dict:
+        raise ValueError("success requires an exact variable-pool store")
+    target = record.commit_target
+    outgoing_edge_ids: list[str] = []
+    newly_ready_ids: list[str] = []
+    settled_edge_ids: set[str] = set()
+    newly_ready: set[str] = set()
+
+    for edge in state.flow.outgoing(target):
+        if not isinstance(edge, Edge) or edge.from_ != target:
+            raise ValueError(
+                f"success target {target!r} has an invalid outgoing adjacency"
+            )
+        if type(edge.id) is not str or not edge.id:
+            raise ValueError("success target has an invalid outgoing edge ID")
+        if edge.id in settled_edge_ids:
+            raise ValueError(f"success target outgoing edge {edge.id!r} is duplicated")
+        if edge.id not in state.edge_state:
+            raise ValueError(
+                f"success target outgoing edge {edge.id!r} has no disposition"
+            )
         if state.edge_state[edge.id] is not NodeState.UNKNOWN:
             raise ValueError(
                 f"success target outgoing edge {edge.id!r} must be UNKNOWN"
             )
+        if edge.to not in state.flow.nodes or edge.to not in state.node_state:
+            raise ValueError(
+                f"success target outgoing edge {edge.id!r} has unknown successor "
+                f"{edge.to!r}"
+            )
 
-    node_state = dict(state.node_state)
-    node_state[record.node_id] = NodeState.TAKEN
-    edge_state = dict(state.edge_state)
-    ready = deque(state.ready)
-    in_flight = dict(state.in_flight)
-    del in_flight[record.node_id]
-    newly_ready: set[str] = set()
-
-    for edge in outgoing:
-        edge_state[edge.id] = NodeState.TAKEN
+        outgoing_edge_ids.append(edge.id)
+        settled_edge_ids.add(edge.id)
         successor = edge.to
-        if _disposition(state.flow, edge_state, successor) != "ready":
-            continue
         if successor in newly_ready:
             continue
-        if node_state.get(successor) is not NodeState.UNKNOWN:
+        if (
+            _sparse_disposition(
+                state.flow,
+                state.edge_state,
+                settled_edge_ids,
+                successor,
+                required_edge_id=edge.id,
+            )
+            != "ready"
+        ):
+            continue
+        if state.node_state[successor] is not NodeState.UNKNOWN:
             raise ValueError(
                 f"newly-ready successor {successor!r} must have UNKNOWN disposition"
             )
-        if successor in ready:
+        if successor in state.ready:
             raise ValueError(f"newly-ready successor {successor!r} is already ready")
-        if successor in in_flight:
+        if successor in state.in_flight:
             raise ValueError(
                 f"newly-ready successor {successor!r} is already in-flight"
             )
-        ready.append(successor)
+        newly_ready_ids.append(successor)
         newly_ready.add(successor)
 
-    return _SuccessDraft(
-        value=decoded,
-        node_state=node_state,
-        edge_state=edge_state,
-        ready=ready,
-        in_flight=in_flight,
+    value_bytes = ANY_VALUE_ADAPTER.dump_json(typed, warnings="error")
+    return _SuccessDelta(
+        node_id=record.node_id,
+        commit_target=target,
+        value_bytes=value_bytes,
+        outgoing_edge_ids=tuple(outgoing_edge_ids),
+        newly_ready_ids=tuple(newly_ready_ids),
+        observer_commit_as=(None if target == record.node_id else target),
     )
 
 
-def _disposition(
+def _sparse_disposition(
     flow: CompiledFlow,
     edge_state: dict[str, NodeState],
+    taken_edge_ids: set[str],
     node_id: str,
+    *,
+    required_edge_id: str,
 ) -> str:
-    """Classify one join using the runtime's edge-class-aware readiness rules."""
-    incoming = list(flow.incoming(node_id))
+    """Classify one touched join over the live state plus sparse TAKEN overlay."""
+    incoming = flow.incoming(node_id)
     if not incoming:
-        return "ready"
-    control = [edge for edge in incoming if edge.source_handle is not None]
-    ordering = [
-        edge
-        for edge in incoming
-        if edge.source_handle is None and edge.ordering
-    ]
-    data = [
-        edge
-        for edge in incoming
-        if edge.source_handle is None and not edge.ordering
-    ]
+        raise ValueError(
+            f"success edge {required_edge_id!r} is absent from successor "
+            f"{node_id!r} incoming adjacency"
+        )
 
-    if control and all(
-        edge_state[edge.id] is NodeState.SKIPPED for edge in control
-    ):
+    found_required = False
+    saw_control = False
+    all_control_skipped = True
+    required_ordering_skipped = False
+    any_unknown = False
+    data_groups: dict[str | None, tuple[bool, bool]] = {}
+    seen_incoming_ids: set[str] = set()
+    for edge in incoming:
+        if not isinstance(edge, Edge) or edge.to != node_id:
+            raise ValueError(f"successor {node_id!r} has an invalid incoming adjacency")
+        if type(edge.id) is not str or not edge.id or edge.id in seen_incoming_ids:
+            raise ValueError(
+                f"successor {node_id!r} has invalid incoming edge IDs"
+            )
+        seen_incoming_ids.add(edge.id)
+        if edge.id == required_edge_id:
+            found_required = True
+        if edge.id not in edge_state:
+            raise ValueError(
+                f"successor incoming edge {edge.id!r} has no disposition"
+            )
+        disposition = (
+            NodeState.TAKEN if edge.id in taken_edge_ids else edge_state[edge.id]
+        )
+        if type(disposition) is not NodeState:
+            raise ValueError(
+                f"successor incoming edge {edge.id!r} has an invalid disposition"
+            )
+        any_unknown = any_unknown or disposition is NodeState.UNKNOWN
+        if edge.source_handle is not None:
+            saw_control = True
+            all_control_skipped = (
+                all_control_skipped and disposition is NodeState.SKIPPED
+            )
+        elif edge.ordering:
+            required_ordering_skipped = required_ordering_skipped or (
+                not edge.optional and disposition is NodeState.SKIPPED
+            )
+        else:
+            optional, all_skipped = data_groups.get(
+                edge.input_group,
+                (edge.optional, True),
+            )
+            data_groups[edge.input_group] = (
+                optional,
+                all_skipped and disposition is NodeState.SKIPPED,
+            )
+
+    if not found_required:
+        raise ValueError(
+            f"success edge {required_edge_id!r} is absent from successor "
+            f"{node_id!r} incoming adjacency"
+        )
+    if saw_control and all_control_skipped:
         return "dead"
-    groups: dict[str | None, list[Any]] = {}
-    for edge in data:
-        groups.setdefault(edge.input_group, []).append(edge)
-    for group in groups.values():
-        if not group[0].optional and all(
-            edge_state[edge.id] is NodeState.SKIPPED for edge in group
-        ):
+    for optional, all_skipped in data_groups.values():
+        if not optional and all_skipped:
             return "dead"
-    if any(
-        not edge.optional and edge_state[edge.id] is NodeState.SKIPPED
-        for edge in ordering
-    ):
+    if required_ordering_skipped:
         return "dead"
-    if any(edge_state[edge.id] is NodeState.UNKNOWN for edge in incoming):
+    if any_unknown:
         return "wait"
     return "ready"
 
@@ -1138,59 +1270,23 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.next_sequence = apply.next_sequence
 
 
-def _materialize_success(
-    state: RunState,
-    prepared: PreparedTransition,
-) -> _SuccessApply:
-    """Build detached pool, dispositions, frontier, and observer before append."""
-    plan = prepared._plan
-    if not isinstance(plan, _SuccessPlan):
-        raise TypeError("success materialization requires a frontier plan")
-    envelope = decode_record(plan.envelope_bytes)
-    record = envelope.record
-    if not (
-        envelope.run_id == prepared.expected_run_id
-        and envelope.seq == prepared.expected_sequence
-        and isinstance(record, NodeSucceededRecord)
-    ):
-        raise ValueError("immutable success plan does not match its transition")
-
-    draft = _validate_node_succeeded(state, record)
-    pool = decode_pool(encode_pool(state.pool))
-    pool.store[record.commit_target] = draft.value
-    _, observer_typed = canonical_typed(
-        draft.value,
-        state.flow.nodes[record.commit_target].output_type,
-    )
+def _materialize_success(plan: _SuccessPlan) -> _SuccessApply:
+    """Decode independent value and observer copies from the immutable delta."""
+    value = ANY_VALUE_ADAPTER.validate_json(plan.delta.value_bytes, strict=True)
+    observer_value = ANY_VALUE_ADAPTER.validate_json(
+        plan.delta.value_bytes,
+        strict=True,
+    ).to_object()
     return _SuccessApply(
-        pool=pool,
-        node_state=draft.node_state,
-        edge_state=draft.edge_state,
-        ready=draft.ready,
-        in_flight=draft.in_flight,
-        next_sequence=envelope.seq + 1,
+        value=value,
         observers=(
             NodeSucceeded(
-                node_id=record.node_id,
-                output=observer_typed.to_object(),
-                commit_as=(
-                    None
-                    if record.commit_target == record.node_id
-                    else record.commit_target
-                ),
+                node_id=plan.delta.node_id,
+                output=observer_value,
+                commit_as=plan.delta.observer_commit_as,
             ),
         ),
     )
-
-
-def _apply_success(state: RunState, apply: _SuccessApply) -> None:
-    """Install an already-detached successful outcome through total assignments."""
-    state.pool = apply.pool
-    state.node_state = apply.node_state
-    state.edge_state = apply.edge_state
-    state.ready = apply.ready
-    state.in_flight = apply.in_flight
-    state.next_sequence = apply.next_sequence
 
 
 __all__ = [

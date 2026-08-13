@@ -189,6 +189,7 @@ _CREDENTIAL_NAMES = frozenset(
         "sig",
         "signature",
         "slack_bot_token",
+        "sslpassword",
         "token",
         "webhook_signature",
         "x_amz_security_token",
@@ -217,6 +218,8 @@ _HIGH_CONFIDENCE_CREDENTIAL_SUFFIXES = (
     "_secret_access_key",
     "_secret_key",
     "_session_token",
+    "_shared_access_key",
+    "_shared_access_signature",
 )
 _AMBIGUOUS_CREDENTIAL_SUFFIXES = ("_auth", "_signature", "_token")
 _CREDENTIAL_COMPACT_NAMES = frozenset(
@@ -236,6 +239,7 @@ _CONNECTION_PROPERTY_CREDENTIAL_NAMES = frozenset(
 )
 _DSN_IDENTITY_PROPERTY_NAMES = frozenset(
     {
+        "account_endpoint",
         "account_name",
         "addr",
         "address",

@@ -272,6 +272,18 @@ def test_flow_fingerprint_excludes_config_credentials():
     ]
     first.nodes["step"].env["credentials"] = {"secret_key": "first-secret-key"}
     second.nodes["step"].env["credentials"] = {"secret_key": "second-secret-key"}
+    first.nodes["step"].env["AZURE_SERVICE_BUS_SHARED_ACCESS_KEY"] = (
+        "first-shared-access-key"
+    )
+    second.nodes["step"].env["AZURE_SERVICE_BUS_SHARED_ACCESS_KEY"] = (
+        "second-shared-access-key"
+    )
+    first.nodes["step"].env["AZURE_SERVICE_BUS_SHARED_ACCESS_SIGNATURE"] = (
+        "first-shared-access-signature"
+    )
+    second.nodes["step"].env["AZURE_SERVICE_BUS_SHARED_ACCESS_SIGNATURE"] = (
+        "second-shared-access-signature"
+    )
 
     assert flow_fingerprint(first) == flow_fingerprint(second)
     manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
@@ -284,6 +296,8 @@ def test_flow_fingerprint_excludes_config_credentials():
     assert "first-private-key" not in manifest_text
     assert "first-secret-access-key" not in manifest_text
     assert "first-secret-key" not in manifest_text
+    assert "first-shared-access-key" not in manifest_text
+    assert "first-shared-access-signature" not in manifest_text
 
 
 def test_flow_fingerprint_excludes_credential_declaration_defaults():
@@ -630,16 +644,18 @@ def test_connection_string_key_keeps_sanitized_libpq_conninfo_identity():
     second = copy.deepcopy(first)
     first.nodes["step"].env["POSTGRES_CONNECTION_STRING"] = (
         "host='db example' port=5432 dbname=app user='alice role' "
-        "password='first\\' secret' sslmode=require application_name=worker\\ one"
+        "password='first\\' secret' sslpassword='first ssl secret' "
+        "sslmode=require application_name=worker\\ one"
     )
     second.nodes["step"].env["POSTGRES_CONNECTION_STRING"] = (
         "host='db example' port=5432 dbname=app user='bob role' "
-        "password='second\\' secret' sslmode=require application_name=worker\\ one"
+        "password='second\\' secret' sslpassword='second ssl secret' "
+        "sslmode=require application_name=worker\\ one"
     )
 
     assert flow_fingerprint(first) == flow_fingerprint(second)
     manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
-    for credential in ("alice role", "first\\' secret"):
+    for credential in ("alice role", "first\\' secret", "first ssl secret"):
         assert credential not in manifest_text
 
     for old, new in (
@@ -689,6 +705,30 @@ def test_connection_string_key_redacts_azure_shared_access_credentials():
             old, new
         )
         assert flow_fingerprint(first) != flow_fingerprint(changed)
+
+
+def test_connection_string_key_keeps_azure_cosmos_account_endpoint_identity():
+    first = _compiled()
+    second = copy.deepcopy(first)
+    first.nodes["step"].env["AZURE_COSMOS_CONNECTION_STRING"] = (
+        "AccountEndpoint=https://account.documents.azure.com:443/;"
+        "AccountKey=first-account-key"
+    )
+    second.nodes["step"].env["AZURE_COSMOS_CONNECTION_STRING"] = (
+        "AccountEndpoint=https://account.documents.azure.com:443/;"
+        "AccountKey=second-account-key"
+    )
+
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    assert "first-account-key" not in manifest_text
+
+    changed = copy.deepcopy(second)
+    changed.nodes["step"].env["AZURE_COSMOS_CONNECTION_STRING"] = (
+        "AccountEndpoint=https://other.documents.azure.com:443/;"
+        "AccountKey=second-account-key"
+    )
+    assert flow_fingerprint(first) != flow_fingerprint(changed)
 
 
 def test_connection_string_key_excludes_unrecognized_scalar():

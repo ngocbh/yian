@@ -1,0 +1,689 @@
+"""Transactional dispatch and recovery-frontier tests for the run-state reducer."""
+
+from __future__ import annotations
+
+from collections import deque
+from copy import deepcopy
+from dataclasses import FrozenInstanceError
+from pathlib import Path
+from typing import Any, Callable
+
+import pytest
+
+from agent_composer.compile.model import CompiledFlow, Edge, END_ID, NodeState, START_ID
+from agent_composer.events import NodeStarted, RunFailed, RunResumed
+from agent_composer.nodes.end import EndNode
+from agent_composer.nodes.start import StartNode
+from agent_composer.runtime.log import (
+    MemoryRunLog,
+    NodeFailedRecord,
+    NodeStartedRecord,
+    RecordEnvelope,
+    RunResumedRecord,
+    RunStartedRecord,
+)
+from agent_composer.runtime.state import (
+    RunStartData,
+    RunState,
+    commit_prepared,
+    prepare_node_started,
+    prepare_record,
+    prepare_run_resumed,
+    prepare_run_started,
+)
+from agent_composer.typesys import VariablePool
+from tests.engine._fakes import FuncNode
+
+
+_FINGERPRINT = "a" * 64
+_RUN_ID = "dispatch-run"
+
+
+class _DictSubclass(dict):
+    """Value-equal mapping with a non-authoritative reducer container type."""
+
+
+def _flow() -> CompiledFlow:
+    """Return a graph with several nodes available for isolated frontier tests."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "first": FuncNode("first", lambda inputs: inputs),
+        "second": FuncNode("second", lambda inputs: inputs),
+        "ordinary": FuncNode("ordinary", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    return CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-first", from_=START_ID, to="first"),
+            Edge(id="first-second", from_="first", to="second"),
+            Edge(id="second-ordinary", from_="second", to="ordinary"),
+            Edge(id="ordinary-end", from_="ordinary", to=END_ID),
+        ],
+    )
+
+
+def _initialized(
+    *, num_workers: int = 2
+) -> tuple[RunState, MemoryRunLog, CompiledFlow]:
+    """Return state and log after their shared authoritative RunStarted record."""
+    flow = _flow()
+    state = RunState(flow)
+    pool = VariablePool(start_id=flow.start_id)
+    pool.set(flow.start_id, {"labels": ["one", "two"]})
+    pool.add_system("run_id", _RUN_ID)
+    data = RunStartData(
+        run_id=_RUN_ID,
+        flow_fingerprint=_FINGERPRINT,
+        initial_pool=pool,
+        start_wiring_override={"metadata": {"labels": ["one", "two"]}},
+        effective_llm_by_static_path={
+            "agent": {"options": {"stop": ["END"]}},
+        },
+        num_workers=num_workers,
+    )
+    log = MemoryRunLog(_RUN_ID)
+    commit_prepared(log, state, prepare_run_started(state, data))
+    _assert_committed_path(log)
+    return state, log, flow
+
+
+def _assert_committed_path(log: MemoryRunLog, *tail: Any) -> None:
+    """Assert one replay-shaped prefix with RunStarted followed by ``tail``."""
+    envelopes = tuple(log)
+    assert [envelope.seq for envelope in envelopes] == list(range(len(envelopes)))
+    assert all(envelope.run_id == _RUN_ID for envelope in envelopes)
+    assert isinstance(envelopes[0].record, RunStartedRecord)
+    assert tuple(envelope.record for envelope in envelopes[1:]) == tail
+
+
+def _state_snapshot(state: RunState) -> dict[str, Any]:
+    """Return every reducer coordinate in an equality-friendly detached form."""
+    return {
+        "flow": state.flow,
+        "pool": state.pool.model_dump(mode="json"),
+        "pool_identity": id(state.pool),
+        "node_state": dict(state.node_state),
+        "node_state_identity": id(state.node_state),
+        "edge_state": dict(state.edge_state),
+        "edge_state_identity": id(state.edge_state),
+        "ready": tuple(state.ready),
+        "ready_identity": id(state.ready),
+        "in_flight": tuple(state.in_flight),
+        "in_flight_identity": id(state.in_flight),
+        "result": state.result,
+        "depth": dict(state.depth),
+        "depth_identity": id(state.depth),
+        "wiring_overrides": deepcopy(state.wiring_overrides),
+        "wiring_identity": id(state.wiring_overrides),
+        "run_id": state.run_id,
+        "flow_fingerprint": state.flow_fingerprint,
+        "next_sequence": state.next_sequence,
+        "num_workers": state.num_workers,
+        "input": deepcopy(state.input),
+        "input_identity": id(state.input),
+        "effective_llm_by_static_path": deepcopy(
+            state.effective_llm_by_static_path
+        ),
+        "effective_identity": id(state.effective_llm_by_static_path),
+    }
+
+
+def test_node_started_requires_and_removes_the_exact_ready_head():
+    state, log, _ = _initialized()
+    before = _state_snapshot(state)
+
+    prepared = prepare_node_started(state, START_ID)
+
+    assert _state_snapshot(state) == before
+    assert prepared.record == NodeStartedRecord(node_id=START_ID)
+    assert prepared.observers == (NodeStarted(node_id=START_ID),)
+
+    observers = commit_prepared(log, state, prepared)
+
+    assert observers == (NodeStarted(node_id=START_ID),)
+    assert tuple(state.ready) == ()
+    assert tuple(state.in_flight) == (START_ID,)
+    assert state.node_state[START_ID] is NodeState.UNKNOWN
+    assert state.next_sequence == 2
+    _assert_committed_path(log, NodeStartedRecord(node_id=START_ID))
+
+
+@pytest.mark.parametrize(
+    ("node_id", "ready", "match"),
+    [
+        ("first", (), "ready head"),
+        ("second", ("first", "second"), "ready head"),
+        ("missing", ("missing",), "does not exist"),
+    ],
+)
+def test_node_started_rejects_an_empty_wrong_or_unknown_ready_head(
+    node_id: str, ready: tuple[str, ...], match: str
+):
+    state, log, _ = _initialized()
+    state.ready = deque(ready)
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match=match):
+        prepare_node_started(state, node_id)
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == 1
+
+
+@pytest.mark.parametrize("invalid", [True, 1, None, object()])
+def test_node_started_requires_a_string_node_id(invalid: Any):
+    state, log, _ = _initialized()
+
+    with pytest.raises(TypeError, match="node_id"):
+        prepare_node_started(state, invalid)
+
+    assert log.next_sequence == 1
+
+
+def test_node_started_requires_unknown_disposition_and_no_existing_flight():
+    state, log, _ = _initialized()
+    state.ready = deque(("first",))
+    state.node_state["first"] = NodeState.TAKEN
+
+    with pytest.raises(ValueError, match="UNKNOWN"):
+        prepare_node_started(state, "first")
+
+    state.node_state["first"] = NodeState.UNKNOWN
+    state.in_flight["first"] = None
+    with pytest.raises(ValueError, match="in-flight"):
+        prepare_node_started(state, "first")
+
+    assert log.next_sequence == 1
+
+
+def test_retried_node_can_start_again_in_a_valid_record_sequence():
+    state, log, _ = _initialized()
+
+    commit_prepared(log, state, prepare_node_started(state, START_ID))
+    commit_prepared(log, state, prepare_run_resumed(state, num_workers=3))
+    commit_prepared(log, state, prepare_node_started(state, START_ID))
+
+    assert tuple(state.ready) == ()
+    assert tuple(state.in_flight) == (START_ID,)
+    _assert_committed_path(
+        log,
+        NodeStartedRecord(node_id=START_ID),
+        RunResumedRecord(retry_node_ids=(START_ID,), num_workers=3),
+        NodeStartedRecord(node_id=START_ID),
+    )
+
+
+def test_node_started_preparation_captures_existing_in_flight_order():
+    state, log, _ = _initialized()
+    state.ready = deque(("ordinary",))
+    state.in_flight = {"first": None, "second": None}
+
+    prepared = prepare_node_started(state, "ordinary")
+
+    assert prepared.record == NodeStartedRecord(node_id="ordinary")
+    assert prepared._plan.expected_in_flight == ("first", "second")
+    assert tuple(state.ready) == ("ordinary",)
+    assert tuple(state.in_flight) == ("first", "second")
+    _assert_committed_path(log)
+
+
+class _InspectingLog(MemoryRunLog):
+    """Assert the captured frontier remains live until append returns."""
+
+    def __init__(
+        self,
+        state: RunState,
+        prior: MemoryRunLog,
+        expected_ready: tuple[str, ...],
+        expected_in_flight: tuple[str, ...],
+    ) -> None:
+        super().__init__(_RUN_ID)
+        for envelope in prior:
+            super().append(envelope.record)
+        self._state = state
+        self._expected_ready = expected_ready
+        self._expected_in_flight = expected_in_flight
+        self.saw_append = False
+
+    def append(self, record):
+        assert tuple(self._state.ready) == self._expected_ready
+        assert tuple(self._state.in_flight) == self._expected_in_flight
+        self.saw_append = True
+        return super().append(record)
+
+
+def test_node_started_appends_before_replacing_the_frontier():
+    state, prior, _ = _initialized()
+    log = _InspectingLog(state, prior, (START_ID,), ())
+
+    commit_prepared(log, state, prepare_node_started(state, START_ID))
+
+    assert log.saw_append
+    assert tuple(state.ready) == ()
+    assert tuple(state.in_flight) == (START_ID,)
+    _assert_committed_path(log, NodeStartedRecord(node_id=START_ID))
+
+
+def test_run_resumed_appends_before_replacing_the_frontier():
+    state, prior, _ = _initialized(num_workers=2)
+    commit_prepared(prior, state, prepare_node_started(state, START_ID))
+    log = _InspectingLog(
+        state,
+        prior,
+        (),
+        (START_ID,),
+    )
+
+    commit_prepared(log, state, prepare_run_resumed(state, num_workers=6))
+
+    assert log.saw_append
+    assert tuple(state.ready) == (START_ID,)
+    assert state.in_flight == {}
+    assert state.num_workers == 6
+    _assert_committed_path(
+        log,
+        NodeStartedRecord(node_id=START_ID),
+        RunResumedRecord(retry_node_ids=(START_ID,), num_workers=6),
+    )
+
+
+def test_run_resumed_preparation_preserves_retry_order_ahead_of_ready_work():
+    state, log, _ = _initialized(num_workers=2)
+    state.in_flight = {"first": None, "second": None}
+    state.ready = deque(("ordinary", END_ID))
+    before = _state_snapshot(state)
+
+    prepared = prepare_run_resumed(state, num_workers=5)
+
+    assert _state_snapshot(state) == before
+    assert prepared.record == RunResumedRecord(
+        retry_node_ids=("first", "second"), num_workers=5
+    )
+    assert prepared.observers == (RunResumed(),)
+
+    assert prepared._plan.expected_ready == ("ordinary", END_ID)
+    assert prepared._plan.expected_in_flight == ("first", "second")
+    assert tuple(state.ready) == ("ordinary", END_ID)
+    assert tuple(state.in_flight) == ("first", "second")
+    assert state.num_workers == 2
+    assert state.node_state["first"] is NodeState.UNKNOWN
+    assert state.node_state["second"] is NodeState.UNKNOWN
+    _assert_committed_path(log)
+
+
+@pytest.mark.parametrize("num_workers", [-1, True, 1.5, "3", None])
+def test_run_resumed_requires_an_exact_nonnegative_worker_count(num_workers: Any):
+    state, log, _ = _initialized()
+    before = _state_snapshot(state)
+
+    with pytest.raises((TypeError, ValueError), match="num_workers"):
+        prepare_run_resumed(state, num_workers=num_workers)
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == 1
+
+
+def test_run_resumed_allows_an_empty_retry_segment_and_changes_workers():
+    state, log, _ = _initialized(num_workers=4)
+
+    prepared = prepare_run_resumed(state, num_workers=0)
+    commit_prepared(log, state, prepared)
+
+    assert prepared.record == RunResumedRecord(retry_node_ids=(), num_workers=0)
+    assert tuple(state.ready) == (START_ID,)
+    assert state.in_flight == {}
+    assert state.num_workers == 0
+    _assert_committed_path(log, RunResumedRecord(retry_node_ids=(), num_workers=0))
+
+
+@pytest.mark.parametrize(
+    ("in_flight", "ready", "node_state", "match"),
+    [
+        (("missing",), (), {}, "does not exist"),
+        (("first",), ("first",), {}, "already ready"),
+        (("first",), (), {"first": NodeState.TAKEN}, "UNKNOWN"),
+    ],
+)
+def test_run_resumed_rejects_invalid_retry_frontiers(
+    in_flight: tuple[str, ...],
+    ready: tuple[str, ...],
+    node_state: dict[str, NodeState],
+    match: str,
+):
+    state, log, _ = _initialized()
+    state.in_flight = dict.fromkeys(in_flight)
+    state.ready = deque(ready)
+    state.node_state.update(node_state)
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match=match):
+        prepare_run_resumed(state, num_workers=3)
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == 1
+
+
+@pytest.mark.parametrize(
+    "retry_node_ids",
+    [
+        (),
+        ("first",),
+        ("second", "first"),
+        ("first", "second", "ordinary"),
+    ],
+)
+def test_prepare_record_requires_the_exact_ordered_resume_retry_list(
+    retry_node_ids: tuple[str, ...],
+):
+    state, log, _ = _initialized()
+    state.in_flight = {"first": None, "second": None}
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match="retry_node_ids"):
+        prepare_record(
+            state,
+            RunResumedRecord(retry_node_ids=retry_node_ids, num_workers=3),
+        )
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == 1
+
+
+def test_prepare_record_accepts_exact_dispatch_and_resume_records():
+    state, log, _ = _initialized()
+
+    started = prepare_record(state, NodeStartedRecord(node_id=START_ID))
+    commit_prepared(log, state, started)
+    resumed = prepare_record(
+        state,
+        RunResumedRecord(retry_node_ids=(START_ID,), num_workers=7),
+    )
+    commit_prepared(log, state, resumed)
+
+    assert tuple(state.ready) == (START_ID,)
+    assert state.in_flight == {}
+    assert state.num_workers == 7
+    _assert_committed_path(
+        log,
+        NodeStartedRecord(node_id=START_ID),
+        RunResumedRecord(retry_node_ids=(START_ID,), num_workers=7),
+    )
+
+
+def test_prepare_record_rejects_outcomes_until_their_reducer_slice():
+    state, _, _ = _initialized()
+
+    with pytest.raises(TypeError, match="unsupported"):
+        prepare_record(
+            state,
+            NodeFailedRecord(node_id="first", error="boom", error_type="ValueError"),
+        )
+
+
+def test_dispatch_and_resume_require_initialized_nonterminal_state():
+    pristine = RunState(_flow())
+    with pytest.raises(ValueError, match="initialized"):
+        prepare_node_started(pristine, START_ID)
+    with pytest.raises(ValueError, match="initialized"):
+        prepare_run_resumed(pristine, num_workers=1)
+
+    state, _, _ = _initialized()
+    state.result = RunFailed(error="done")
+    with pytest.raises(ValueError, match="terminal"):
+        prepare_node_started(state, START_ID)
+    with pytest.raises(ValueError, match="terminal"):
+        prepare_run_resumed(state, num_workers=1)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda state: state.ready.append("ordinary"),
+        lambda state: state.in_flight.__setitem__("ordinary", None),
+        lambda state: state.node_state.__setitem__("first", NodeState.TAKEN),
+        lambda state: state.edge_state.__setitem__("start-first", NodeState.TAKEN),
+        lambda state: state.pool.add_system("stale", True),
+        lambda state: state.depth.__setitem__("first", 1),
+        lambda state: state.wiring_overrides.__setitem__("first", {"x": 1}),
+        lambda state: setattr(state, "run_id", "different"),
+        lambda state: setattr(state, "flow_fingerprint", "b" * 64),
+        lambda state: setattr(state, "next_sequence", state.next_sequence + 1),
+        lambda state: setattr(state, "num_workers", state.num_workers + 1),
+        lambda state: state.input.__setitem__("stale", True),
+        lambda state: state.effective_llm_by_static_path.__setitem__(
+            "agent", {"provider": "changed"}
+        ),
+        lambda state: setattr(state, "result", RunFailed(error="stale")),
+        lambda state: setattr(state, "node_state", _DictSubclass(state.node_state)),
+        lambda state: setattr(state, "edge_state", _DictSubclass(state.edge_state)),
+        lambda state: setattr(state, "input", _DictSubclass(state.input)),
+    ],
+    ids=[
+        "ready",
+        "in-flight",
+        "node-disposition",
+        "edge-disposition",
+        "pool",
+        "depth",
+        "wiring",
+        "run-id",
+        "fingerprint",
+        "sequence",
+        "workers",
+        "input",
+        "effective-config",
+        "result",
+        "node-container-type",
+        "edge-container-type",
+        "input-container-type",
+    ],
+)
+def test_node_started_rejects_any_stale_authority_coordinate_before_append(
+    mutate: Callable[[RunState], None],
+):
+    state, log, _ = _initialized()
+    prepared = prepare_node_started(state, START_ID)
+    mutate(state)
+    before_sequence = log.next_sequence
+
+    with pytest.raises(ValueError):
+        commit_prepared(log, state, prepared)
+
+    assert log.next_sequence == before_sequence
+    _assert_committed_path(log)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda state: state.wiring_overrides[START_ID]["metadata"].__setitem__(
+            "labels", ("one", "two")
+        ),
+        lambda state: state.input.__setitem__("labels", ("one", "two")),
+        lambda state: state.effective_llm_by_static_path["agent"][
+            "options"
+        ].__setitem__("stop", ("END",)),
+        lambda state: state.pool.store[START_ID].value.__setitem__(
+            "labels", ("one", "two")
+        ),
+    ],
+    ids=["wiring", "input", "effective-config", "pool"],
+)
+def test_nested_canonical_type_change_is_rejected_before_append(
+    mutate: Callable[[RunState], None],
+):
+    state, log, _ = _initialized()
+    prepared = prepare_node_started(state, START_ID)
+    mutate(state)
+
+    with pytest.raises(ValueError, match="canonical JSON|authority"):
+        commit_prepared(log, state, prepared)
+
+    _assert_committed_path(log)
+
+
+class _CoordinateLog:
+    """Non-retaining log double used only for pre-append coordinate rejection."""
+
+    path: Path | None = None
+
+    def __init__(self, *, run_id: str, next_sequence: int) -> None:
+        self.run_id = run_id
+        self.next_sequence = next_sequence
+
+    def append(self, record):
+        raise AssertionError("coordinate mismatch must reject before append")
+
+
+@pytest.mark.parametrize("mismatch", ["log-run-id", "log-sequence"])
+def test_non_start_commit_requires_exact_log_identity_before_append(mismatch: str):
+    state, prior, _ = _initialized()
+    prepared = prepare_node_started(state, START_ID)
+    log = _CoordinateLog(
+        run_id="different" if mismatch == "log-run-id" else _RUN_ID,
+        next_sequence=2 if mismatch == "log-sequence" else 1,
+    )
+    before = _state_snapshot(state)
+    before_sequence = log.next_sequence
+
+    with pytest.raises(ValueError, match="run-log .*mismatch"):
+        commit_prepared(log, state, prepared)
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == before_sequence
+    _assert_committed_path(prior)
+
+
+def test_resume_rejects_stale_frontier_and_cross_state_before_append():
+    state, log, flow = _initialized()
+    state.in_flight = {"first": None, "second": None}
+    state.ready = deque(("ordinary",))
+    prepared = prepare_run_resumed(state, num_workers=4)
+    state.in_flight = {"second": None, "first": None}
+
+    with pytest.raises(ValueError, match="in-flight"):
+        commit_prepared(log, state, prepared)
+    assert log.next_sequence == 1
+
+    other = RunState(flow)
+    with pytest.raises(ValueError, match="originating RunState"):
+        commit_prepared(log, other, prepared)
+    assert log.next_sequence == 1
+
+
+def test_dispatch_rejects_adopted_flow_or_boundary_replacement_before_append():
+    state, log, _ = _initialized()
+    state.ready = deque(("first",))
+    prepared = prepare_node_started(state, "first")
+    state.flow.nodes[START_ID] = StartNode(START_ID)
+
+    with pytest.raises(ValueError, match="originating flow"):
+        commit_prepared(log, state, prepared)
+
+    assert log.next_sequence == 1
+
+
+class _FailingLog(MemoryRunLog):
+    """Fail at the append boundary without retaining the candidate record."""
+
+    def __init__(self, prior: MemoryRunLog) -> None:
+        super().__init__(prior.run_id)
+        for envelope in prior:
+            super().append(envelope.record)
+
+    def append(self, record):
+        raise OSError("disk full")
+
+
+@pytest.mark.parametrize("transition", ["start", "resume"])
+def test_append_failure_leaves_dispatch_or_resume_state_exactly_unchanged(
+    transition: str,
+):
+    state, prior, _ = _initialized(num_workers=2)
+    if transition == "start":
+        prepared = prepare_node_started(state, START_ID)
+    else:
+        commit_prepared(prior, state, prepare_node_started(state, START_ID))
+        prepared = prepare_run_resumed(state, num_workers=6)
+    before = _state_snapshot(state)
+
+    with pytest.raises(OSError, match="disk full"):
+        commit_prepared(_FailingLog(prior), state, prepared)
+
+    assert _state_snapshot(state) == before
+
+
+def test_committed_frontiers_do_not_alias_precommit_containers():
+    state, log, _ = _initialized()
+    old_ready = state.ready
+    old_in_flight = state.in_flight
+
+    commit_prepared(log, state, prepare_node_started(state, START_ID))
+
+    old_ready.append("second")
+    old_in_flight["second"] = None
+    assert tuple(state.ready) == ()
+    assert tuple(state.in_flight) == (START_ID,)
+    assert state.ready is not old_ready
+    assert state.in_flight is not old_in_flight
+    _assert_committed_path(log, NodeStartedRecord(node_id=START_ID))
+
+
+def test_commit_returns_fresh_observers_derived_from_the_canonical_plan():
+    state, log, _ = _initialized()
+    prepared = prepare_node_started(state, START_ID)
+    prepared.observers[0].node_id = "caller-mutated"
+
+    observers = commit_prepared(log, state, prepared)
+
+    assert observers == (NodeStarted(node_id=START_ID),)
+    assert observers[0] is not prepared.observers[0]
+    assert tuple(state.in_flight) == (START_ID,)
+    _assert_committed_path(log, NodeStartedRecord(node_id=START_ID))
+
+
+def test_frontier_plan_is_frozen_and_contains_only_immutable_snapshots():
+    state, _, flow = _initialized()
+    state.ready = deque(("first", "second"))
+    prepared = prepare_node_started(state, "first")
+    plan = prepared._plan
+
+    assert plan.originating_state is state
+    assert plan.originating_flow is flow
+    assert plan.expected_ready == ("first", "second")
+    assert plan.expected_in_flight == ()
+    assert isinstance(plan.envelope_bytes, bytes)
+    assert isinstance(plan.authority_signature, bytes)
+    with pytest.raises(FrozenInstanceError):
+        plan.expected_ready = ()  # type: ignore[misc]
+
+
+class _ReturningLog:
+    """Minimal protocol violator used to prove non-start append verification."""
+
+    path: Path | None = None
+
+    def __init__(self, record: NodeStartedRecord) -> None:
+        self.run_id = _RUN_ID
+        self.next_sequence = 1
+        self._record = record
+
+    def append(self, record):
+        return RecordEnvelope(
+            schema=1,
+            run_id=self.run_id,
+            seq=self.next_sequence + 1,
+            record=self._record,
+        )
+
+
+def test_non_start_append_return_mismatch_leaves_state_unapplied():
+    state, _, _ = _initialized()
+    prepared = prepare_node_started(state, START_ID)
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match="append result"):
+        commit_prepared(_ReturningLog(prepared.record), state, prepared)
+
+    assert _state_snapshot(state) == before

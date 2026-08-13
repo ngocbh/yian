@@ -12,16 +12,28 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import json
+import math
 from typing import Any
+
+from pydantic import BaseModel
 
 from agent_composer._state import NodeState
 from agent_composer.compile.model import CompiledFlow
-from agent_composer.events import RunFailed, RunStarted, RunSucceeded
+from agent_composer.events import (
+    NodeStarted,
+    RunFailed,
+    RunResumed,
+    RunStarted,
+    RunSucceeded,
+)
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
+    NodeStartedRecord,
     RecordEnvelope,
     RunLog,
     RunRecord,
+    RunResumedRecord,
     RunStartedRecord,
     canonical_seed,
     decode_pool,
@@ -161,6 +173,39 @@ class _RunStartedApply:
     num_workers: int
     input: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
+    observers: tuple[Any, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _FrontierPlan:
+    """Opaque authority anchors and snapshots for dispatch or recovery apply.
+
+    The plan retains no caller-owned frontier container.  Exact immutable snapshots
+    preserve dispatch order, one canonical signature covers every reducer coordinate,
+    and canonical envelope bytes isolate the transition payload from its public carrier.
+    """
+
+    originating_state: RunState
+    originating_flow: CompiledFlow
+    envelope_bytes: bytes
+    start_id: str
+    start_node_identity: int
+    end_id: str
+    end_node_identity: int | None
+    expected_ready: tuple[str, ...]
+    expected_in_flight: tuple[str, ...]
+    authority_signature: bytes
+
+
+@dataclass(slots=True)
+class _FrontierApply:
+    """Detached replacement frontier fully materialized before durable append."""
+
+    ready: deque[str]
+    in_flight: dict[str, None]
+    next_sequence: int
+    num_workers: int
+    observers: tuple[Any, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +221,7 @@ class PreparedTransition:
     record: RunRecord
     expected_run_id: str
     expected_sequence: int
-    _plan: _RunStartedPlan
+    _plan: _RunStartedPlan | _FrontierPlan
     observers: tuple[Any, ...]
 
 
@@ -271,6 +316,154 @@ def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransiti
     )
 
 
+def prepare_node_started(state: RunState, node_id: str) -> PreparedTransition:
+    """Prepare moving the exact ready-head node into ordered in-flight work.
+
+    Args:
+        state (`RunState`):
+            Initialized nonterminal state whose ready head is being dispatched.
+        node_id (`str`):
+            Exact non-empty ID at the head of ``state.ready``.
+
+    Returns:
+        `PreparedTransition`:
+            Canonical ``NodeStartedRecord`` plus a detached append-before-apply plan.
+
+    Raises:
+        `TypeError`:
+            ``state`` or ``node_id`` has the wrong exact type.
+        `ValueError`:
+            State is uninitialized, terminal, or does not expose ``node_id`` as one
+            unknown, non-in-flight ready head.
+    """
+    if type(state) is not RunState:
+        raise TypeError("prepare_node_started expects a RunState")
+    if type(node_id) is not str:
+        raise TypeError("node_id must be a string")
+    return prepare_record(state, NodeStartedRecord(node_id=node_id))
+
+
+def prepare_run_resumed(
+    state: RunState,
+    *,
+    num_workers: int,
+) -> PreparedTransition:
+    """Prepare a recovery segment from the state's ordered unfinished starts.
+
+    The retry list is derived exclusively from insertion-ordered ``state.in_flight``;
+    callers may choose only the exact non-negative worker count for the new segment.
+
+    Args:
+        state (`RunState`):
+            Initialized nonterminal state reconstructed through a complete log prefix.
+        num_workers (`int`):
+            Exact non-negative worker count; zero selects serial execution.
+
+    Returns:
+        `PreparedTransition`:
+            Canonical ``RunResumedRecord`` whose retries preserve dispatch order.
+    """
+    if type(state) is not RunState:
+        raise TypeError("prepare_run_resumed expects a RunState")
+    if type(num_workers) is not int:
+        raise TypeError("num_workers must be a non-negative integer")
+    if num_workers < 0:
+        raise ValueError("num_workers must be a non-negative integer")
+    _require_initialized_nonterminal(state)
+    return prepare_record(
+        state,
+        RunResumedRecord(
+            retry_node_ids=tuple(state.in_flight),
+            num_workers=num_workers,
+        ),
+    )
+
+
+def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
+    """Validate one supported authoritative record against the current frontier.
+
+    This is the shared reducer seam for live dispatch and later historical replay.
+    Only dispatch and recovery-frontier records are supported here; node outcome
+    records acquire reducers in later slices.
+
+    Args:
+        state (`RunState`):
+            Initialized nonterminal state immediately before ``record``.
+        record (`RunRecord`):
+            A ``NodeStartedRecord`` or ``RunResumedRecord`` to validate and copy.
+
+    Returns:
+        `PreparedTransition`:
+            Canonically copied record, immutable authority snapshots, and observer.
+
+    Raises:
+        `TypeError`:
+            State has the wrong type or the record kind is not implemented yet.
+        `ValueError`:
+            The record is not the exact next transition for this state.
+    """
+    if type(state) is not RunState:
+        raise TypeError("prepare_record expects a RunState")
+    _require_initialized_nonterminal(state)
+
+    if isinstance(record, NodeStartedRecord):
+        _validate_node_started(state, record)
+    elif isinstance(record, RunResumedRecord):
+        _validate_run_resumed(state, record)
+    else:
+        raise TypeError(
+            f"unsupported run record for state preparation: {type(record).__name__}"
+        )
+
+    run_id = state.run_id
+    if not isinstance(run_id, str):  # established by initialized-state validation
+        raise ValueError("run state is not initialized")
+    canonical_bytes = encode_record(
+        RecordEnvelope(
+            schema=SCHEMA_VERSION,
+            run_id=run_id,
+            seq=state.next_sequence,
+            record=record,
+        )
+    )
+    canonical_envelope = decode_record(canonical_bytes)
+    canonical_record = canonical_envelope.record
+    if isinstance(record, NodeStartedRecord):
+        if not isinstance(canonical_record, NodeStartedRecord):
+            raise TypeError("node-start envelope decoded to a different record kind")
+        _validate_node_started(state, canonical_record)
+        observers: tuple[Any, ...] = (NodeStarted(node_id=canonical_record.node_id),)
+    else:
+        if not isinstance(canonical_record, RunResumedRecord):
+            raise TypeError("run-resume envelope decoded to a different record kind")
+        _validate_run_resumed(state, canonical_record)
+        observers = (RunResumed(),)
+
+    start_id = state.flow.start_id
+    end_id = state.flow.end_id
+    plan = _FrontierPlan(
+        originating_state=state,
+        originating_flow=state.flow,
+        envelope_bytes=canonical_bytes,
+        start_id=start_id,
+        start_node_identity=id(state.flow.nodes[start_id]),
+        end_id=end_id,
+        end_node_identity=(
+            id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
+        ),
+        expected_ready=tuple(state.ready),
+        expected_in_flight=tuple(state.in_flight),
+        authority_signature=_authority_signature(state),
+    )
+    return PreparedTransition(
+        record=canonical_record,
+        expected_run_id=canonical_envelope.run_id,
+        expected_sequence=canonical_envelope.seq,
+        _plan=plan,
+        observers=observers,
+    )
+
+
 def commit_prepared(
     log: RunLog,
     state: RunState,
@@ -309,14 +502,87 @@ def commit_prepared(
         raise TypeError("commit_prepared expects a RunState")
     if not isinstance(prepared, PreparedTransition):
         raise TypeError("commit_prepared expects a PreparedTransition")
-    if not isinstance(prepared._plan, _RunStartedPlan):
-        raise TypeError("unsupported prepared transition plan")
+    if isinstance(prepared._plan, _RunStartedPlan):
+        return _commit_run_started(log, state, prepared)
+    if isinstance(prepared._plan, _FrontierPlan):
+        return _commit_frontier(log, state, prepared)
+    raise TypeError("unsupported prepared transition plan")
+
+
+def _commit_run_started(
+    log: RunLog,
+    state: RunState,
+    prepared: PreparedTransition,
+) -> tuple[Any, ...]:
+    """Validate, append, and install one initialization transition."""
+    plan = prepared._plan
+    if not isinstance(plan, _RunStartedPlan):
+        raise TypeError("RunStarted commit requires a RunStarted plan")
     if not isinstance(prepared.record, RunStartedRecord):
         raise TypeError("RunStarted plan requires a RunStartedRecord")
-    if state is not prepared._plan.originating_state:
-        raise ValueError("prepared transition belongs to a different originating RunState")
-    _require_originating_flow(state, prepared._plan)
+    _require_prepared_origin(state, plan)
     _require_pristine(state)
+    _require_authority_coordinates(log, state, prepared, initialized=False)
+    _require_unchanged_record(prepared, plan.envelope_bytes)
+    apply = _materialize_run_started(state, prepared)
+
+    _append_and_verify(log, prepared)
+    _apply_run_started(state, apply)
+    return apply.observers
+
+
+def _commit_frontier(
+    log: RunLog,
+    state: RunState,
+    prepared: PreparedTransition,
+) -> tuple[Any, ...]:
+    """Validate, append, and install one dispatch or recovery transition."""
+    plan = prepared._plan
+    if not isinstance(plan, _FrontierPlan):
+        raise TypeError("frontier commit requires a frontier plan")
+    if not isinstance(prepared.record, (NodeStartedRecord, RunResumedRecord)):
+        raise TypeError("frontier plan requires a dispatch or resume record")
+    _require_prepared_origin(state, plan)
+    _require_initialized_nonterminal(state)
+    _require_authority_coordinates(log, state, prepared, initialized=True)
+    if tuple(state.ready) != plan.expected_ready:
+        raise ValueError("prepared transition ready frontier is stale")
+    if tuple(state.in_flight) != plan.expected_in_flight:
+        raise ValueError("prepared transition in-flight frontier is stale")
+    if _authority_signature(state) != plan.authority_signature:
+        raise ValueError("prepared transition reducer authority is stale")
+    if isinstance(prepared.record, NodeStartedRecord):
+        _validate_node_started(state, prepared.record)
+    else:
+        _validate_run_resumed(state, prepared.record)
+    _require_unchanged_record(prepared, plan.envelope_bytes)
+    apply = _materialize_frontier(state, prepared)
+
+    _append_and_verify(log, prepared)
+    _apply_frontier(state, apply)
+    return apply.observers
+
+
+def _require_prepared_origin(
+    state: RunState,
+    plan: _RunStartedPlan | _FrontierPlan,
+) -> None:
+    """Require the exact state, adopted flow, and boundary objects from preparation."""
+    if state is not plan.originating_state:
+        raise ValueError(
+            "prepared transition belongs to a different originating RunState"
+        )
+    _require_originating_flow(state, plan)
+
+
+def _require_authority_coordinates(
+    log: RunLog,
+    state: RunState,
+    prepared: PreparedTransition,
+    *,
+    initialized: bool,
+) -> None:
+    """Require state, prepared transition, and log to share identity and sequence."""
     if prepared.expected_sequence != state.next_sequence:
         raise ValueError(
             "run-state sequence mismatch: "
@@ -332,9 +598,21 @@ def commit_prepared(
             "run-log run_id mismatch: "
             f"prepared {prepared.expected_run_id!r}, log {log.run_id!r}"
         )
-    if state.run_id is not None:
+    if initialized:
+        if state.run_id != prepared.expected_run_id:
+            raise ValueError(
+                "run-state run_id mismatch: "
+                f"prepared {prepared.expected_run_id!r}, state {state.run_id!r}"
+            )
+    elif state.run_id is not None:
         raise ValueError("RunStarted requires state.run_id to be None")
 
+
+def _require_unchanged_record(
+    prepared: PreparedTransition,
+    envelope_bytes: bytes,
+) -> None:
+    """Reject mutation or mismatched construction of the public record carrier."""
     current_bytes = encode_record(
         RecordEnvelope(
             schema=SCHEMA_VERSION,
@@ -343,11 +621,12 @@ def commit_prepared(
             record=prepared.record,
         )
     )
-    if current_bytes != prepared._plan.envelope_bytes:
+    if current_bytes != envelope_bytes:
         raise ValueError("prepared record changed after validation")
 
-    apply = _materialize_run_started(state, prepared)
 
+def _append_and_verify(log: RunLog, prepared: PreparedTransition) -> None:
+    """Append the canonical record and reject any protocol-poisoned result."""
     envelope = log.append(prepared.record)
     if not isinstance(envelope, RecordEnvelope) or (
         envelope.run_id != prepared.expected_run_id
@@ -357,8 +636,211 @@ def commit_prepared(
     ):
         raise ValueError("run-log append result does not match prepared transition")
 
-    _apply_run_started(state, apply)
-    return prepared.observers
+
+def _require_initialized_nonterminal(state: RunState) -> None:
+    """Reject state that has not applied RunStarted or has already terminated."""
+    exact_containers = (
+        type(state.pool) is VariablePool
+        and type(state.node_state) is dict
+        and type(state.edge_state) is dict
+        and type(state.ready) is deque
+        and type(state.in_flight) is dict
+        and type(state.depth) is dict
+        and type(state.wiring_overrides) is dict
+        and type(state.input) is dict
+        and type(state.effective_llm_by_static_path) is dict
+    )
+    if not exact_containers:
+        raise ValueError("dispatch requires initialized reducer frontier containers")
+    if type(state.run_id) is not str or not state.run_id:
+        raise ValueError("run state is not initialized")
+    if type(state.flow_fingerprint) is not str or not state.flow_fingerprint:
+        raise ValueError("run state is not initialized with a flow fingerprint")
+    if type(state.next_sequence) is not int or state.next_sequence < 1:
+        raise ValueError("run state is not initialized with a valid sequence")
+    if type(state.num_workers) is not int or state.num_workers < 0:
+        raise ValueError("run state has an invalid worker count")
+    if state.result is not None:
+        raise ValueError("terminal run state cannot prepare another transition")
+    if state.flow.start_id not in state.flow.nodes:
+        raise ValueError("initialized run state is missing its START boundary")
+    if not (
+        set(state.node_state) == set(state.flow.nodes)
+        and all(
+            type(node_id) is str and type(disposition) is NodeState
+            for node_id, disposition in state.node_state.items()
+        )
+    ):
+        raise ValueError("node dispositions must exactly cover the adopted flow")
+    expected_edge_ids = {edge.id for edge in state.flow.edges}
+    if not (
+        set(state.edge_state) == expected_edge_ids
+        and all(
+            type(edge_id) is str and type(disposition) is NodeState
+            for edge_id, disposition in state.edge_state.items()
+        )
+    ):
+        raise ValueError("edge dispositions must exactly cover the adopted flow")
+    if any(type(node_id) is not str for node_id in state.ready):
+        raise ValueError("ready frontier must contain only node IDs")
+    if any(type(node_id) is not str for node_id in state.in_flight):
+        raise ValueError("in-flight frontier must contain only node IDs")
+    if any(value is not None for value in state.in_flight.values()):
+        raise ValueError("in-flight must be an ordered set with None values")
+    if any(
+        type(node_id) is not str or type(depth) is not int or depth < 0
+        for node_id, depth in state.depth.items()
+    ):
+        raise ValueError("growth depth must map node IDs to non-negative integers")
+    if any(
+        type(node_id) is not str or type(wiring) is not dict
+        for node_id, wiring in state.wiring_overrides.items()
+    ):
+        raise ValueError("wiring overrides must map node IDs to exact dictionaries")
+
+
+def _authority_signature(state: RunState) -> bytes:
+    """Return canonical bytes for every non-flow coordinate preserved by a step."""
+    authority = {
+        "pool": _canonical_pool_wire(state.pool),
+        "node_state": {
+            node_id: disposition.value
+            for node_id, disposition in state.node_state.items()
+        },
+        "edge_state": {
+            edge_id: disposition.value
+            for edge_id, disposition in state.edge_state.items()
+        },
+        "ready": list(state.ready),
+        "in_flight": list(state.in_flight),
+        "result": state.result,
+        "depth": state.depth,
+        "wiring_overrides": state.wiring_overrides,
+        "run_id": state.run_id,
+        "flow_fingerprint": state.flow_fingerprint,
+        "next_sequence": state.next_sequence,
+        "num_workers": state.num_workers,
+        "input": state.input,
+        "effective_llm_by_static_path": state.effective_llm_by_static_path,
+    }
+    canonical = _strict_canonical_json(authority)
+    return json.dumps(
+        canonical,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _canonical_pool_wire(pool: VariablePool) -> dict[str, Any]:
+    """Return the pool wire only when live values already have its exact shape."""
+    wire = encode_pool(pool)
+    restored = decode_pool(wire)
+    if not _same_runtime_shape(pool, restored):
+        raise ValueError("variable pool contains a non-canonical JSON runtime shape")
+    return wire
+
+
+def _same_runtime_shape(value: Any, canonical: Any) -> bool:
+    """Compare nested values without treating JSON-coercible Python types as equal."""
+    if type(value) is not type(canonical):
+        return False
+    if isinstance(value, BaseModel):
+        return all(
+            _same_runtime_shape(
+                getattr(value, field_name),
+                getattr(canonical, field_name),
+            )
+            for field_name in type(value).model_fields
+        )
+    if type(value) is dict:
+        if value.keys() != canonical.keys():
+            return False
+        return all(
+            type(key) is str
+            and _same_runtime_shape(value[key], canonical[key])
+            for key in value
+        )
+    if type(value) is list:
+        return len(value) == len(canonical) and all(
+            _same_runtime_shape(item, expected)
+            for item, expected in zip(value, canonical)
+        )
+    return value == canonical
+
+
+def _strict_canonical_json(value: Any) -> Any:
+    """Copy exact JSON recursively without coercing tuples, models, or subclasses."""
+    if value is None or type(value) in (bool, int):
+        return value
+    if type(value) is str:
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("Unicode surrogate is not valid canonical JSON") from exc
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError("non-finite numbers are not valid canonical JSON")
+        return value
+    if type(value) is list:
+        return [_strict_canonical_json(item) for item in value]
+    if type(value) is dict:
+        if any(type(key) is not str for key in value):
+            raise ValueError("canonical JSON object keys must be exact strings")
+        return {
+            key: _strict_canonical_json(value[key])
+            for key in sorted(value)
+        }
+    raise ValueError(f"{type(value).__name__} is not an exact canonical JSON value")
+
+
+def _validate_node_started(state: RunState, record: NodeStartedRecord) -> None:
+    """Require ``record`` to dispatch exactly one eligible ready-head node."""
+    node_id = record.node_id
+    if type(node_id) is not str:
+        raise TypeError("NodeStartedRecord node_id must be a string")
+    if not state.ready or state.ready[0] != node_id:
+        found = state.ready[0] if state.ready else None
+        raise ValueError(
+            f"NodeStarted requires ready head {node_id!r}, found {found!r}"
+        )
+    if node_id not in state.flow.nodes:
+        raise ValueError(f"NodeStarted node {node_id!r} does not exist in the flow")
+    if state.node_state.get(node_id) is not NodeState.UNKNOWN:
+        raise ValueError(f"NodeStarted node {node_id!r} must have UNKNOWN disposition")
+    if node_id in state.in_flight:
+        raise ValueError(f"NodeStarted node {node_id!r} is already in-flight")
+
+
+def _validate_run_resumed(state: RunState, record: RunResumedRecord) -> None:
+    """Require a resume record to name the exact ordered unfinished frontier."""
+    if type(record.num_workers) is not int:
+        raise TypeError("num_workers must be a non-negative integer")
+    if record.num_workers < 0:
+        raise ValueError("num_workers must be a non-negative integer")
+    if type(record.retry_node_ids) is not tuple or any(
+        type(node_id) is not str for node_id in record.retry_node_ids
+    ):
+        raise TypeError("RunResumedRecord retry_node_ids must be a tuple of strings")
+    expected_retries = tuple(state.in_flight)
+    if record.retry_node_ids != expected_retries:
+        raise ValueError(
+            "RunResumedRecord retry_node_ids must exactly equal ordered in-flight "
+            f"nodes: expected {expected_retries!r}, found {record.retry_node_ids!r}"
+        )
+    for node_id in record.retry_node_ids:
+        if node_id not in state.flow.nodes:
+            raise ValueError(
+                f"RunResumed retry node {node_id!r} does not exist in the flow"
+            )
+        if state.node_state.get(node_id) is not NodeState.UNKNOWN:
+            raise ValueError(
+                f"RunResumed retry node {node_id!r} must have UNKNOWN disposition"
+            )
+        if node_id in state.ready:
+            raise ValueError(f"RunResumed retry node {node_id!r} is already ready")
 
 
 def _require_pristine(state: RunState) -> None:
@@ -402,7 +884,10 @@ def _require_pristine(state: RunState) -> None:
         raise ValueError("RunStarted requires a pristine RunState at sequence 0")
 
 
-def _require_originating_flow(state: RunState, plan: _RunStartedPlan) -> None:
+def _require_originating_flow(
+    state: RunState,
+    plan: _RunStartedPlan | _FrontierPlan,
+) -> None:
     """Reject replacement of the adopted flow object or either boundary identity.
 
     The graph is a valid private ``CompiledFlow`` whose execution fields are owned by
@@ -422,7 +907,9 @@ def _require_originating_flow(state: RunState, plan: _RunStartedPlan) -> None:
         )
         == plan.end_node_identity
     ):
-        raise ValueError("RunStarted requires its originating flow and boundary identities")
+        raise ValueError(
+            "transition requires its originating flow and boundary identities"
+        )
 
 
 def _materialize_run_started(
@@ -473,6 +960,7 @@ def _materialize_run_started(
         num_workers=record.num_workers,
         input=canonical_input,
         effective_llm_by_static_path=canonical_effective,
+        observers=(RunStarted(),),
     )
 
 
@@ -494,10 +982,57 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.next_sequence = apply.next_sequence
 
 
+def _materialize_frontier(
+    state: RunState,
+    prepared: PreparedTransition,
+) -> _FrontierApply:
+    """Decode and detach a complete frontier replacement before durable append."""
+    plan = prepared._plan
+    if not isinstance(plan, _FrontierPlan):
+        raise TypeError("frontier materialization requires a frontier plan")
+    envelope = decode_record(plan.envelope_bytes)
+    record = envelope.record
+    if not (
+        envelope.run_id == prepared.expected_run_id
+        and envelope.seq == prepared.expected_sequence
+        and isinstance(record, (NodeStartedRecord, RunResumedRecord))
+    ):
+        raise ValueError("immutable frontier plan does not match its transition")
+
+    if isinstance(record, NodeStartedRecord):
+        ready = deque(plan.expected_ready[1:])
+        in_flight = dict.fromkeys((*plan.expected_in_flight, record.node_id))
+        num_workers = state.num_workers
+        observers: tuple[Any, ...] = (NodeStarted(node_id=record.node_id),)
+    else:
+        ready = deque((*record.retry_node_ids, *plan.expected_ready))
+        in_flight = {}
+        num_workers = record.num_workers
+        observers = (RunResumed(),)
+    return _FrontierApply(
+        ready=ready,
+        in_flight=in_flight,
+        next_sequence=envelope.seq + 1,
+        num_workers=num_workers,
+        observers=observers,
+    )
+
+
+def _apply_frontier(state: RunState, apply: _FrontierApply) -> None:
+    """Install an already-detached frontier through total assignments only."""
+    state.ready = apply.ready
+    state.in_flight = apply.in_flight
+    state.next_sequence = apply.next_sequence
+    state.num_workers = apply.num_workers
+
+
 __all__ = [
     "PreparedTransition",
     "RunStartData",
     "RunState",
     "commit_prepared",
+    "prepare_node_started",
+    "prepare_record",
+    "prepare_run_resumed",
     "prepare_run_started",
 ]

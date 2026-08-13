@@ -297,6 +297,12 @@ class FlowEngine:
             self.stop_event.set()
             terminal = RunFailed(error=exc.error, error_type=exc.error_type, locator=exc.locator,
                                  traceback=exc.traceback, range=exc.range)
+        except BaseException:
+            # An abandoned or externally interrupted drive still owns its live executors.
+            # Wake cooperative blockers before the mandatory full join, then preserve the
+            # initiating exception exactly (including GeneratorExit from ``stream.close()``).
+            self.stop_event.set()
+            raise
         finally:
             self._stop.set()
             for w in workers:

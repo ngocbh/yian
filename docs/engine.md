@@ -153,7 +153,9 @@ See [`suspension/`](reference.md) and the [Python API](api.md).
 The pseudocode above is the serial reference engine. A parallel engine drains several
 ready nodes at once through the *same* read → eval → apply contract — safe precisely
 because nodes are pure and every write happens write-once at `apply` (which stays
-serialized). Only the number of nodes in flight differs.
+serialized). Only the number of nodes in flight differs. A pooled drive owns its workers
+through a full join: abnormal exit during dispatch first signals cooperative stop, while
+closing the stream after a terminal `RunPaused` leaves its resume event untouched.
 
 ## The entire interface the engine sees
 

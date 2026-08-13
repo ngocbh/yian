@@ -271,6 +271,63 @@ class _FailAfterSiblingStarts(FailNode):
         return super()._run_impl(inputs)
 
 
+def test_closing_active_pooled_stream_wakes_waiter_and_joins() -> None:
+    """Generator close is an active-drive stop, not an unbounded worker join."""
+    stop_event = threading.Event()
+    entered = threading.Event()
+    saw_stop = threading.Event()
+    graph = _graph(
+        [_CooperativeSibling("blocked", entered, saw_stop)],
+        [(START_ID, "blocked"), ("blocked", END_ID)],
+    )
+    stream = FlowEngine(graph, num_workers=1, stop_event=stop_event).run()
+
+    while True:
+        event = next(stream)
+        if isinstance(event, NodeStarted) and event.node_id == "blocked":
+            assert entered.wait(timeout=1.0)
+            break
+
+    close_errors = []
+
+    def close_stream() -> None:
+        try:
+            stream.close()
+        except BaseException as exception:
+            close_errors.append(exception)
+
+    closer = threading.Thread(target=close_stream, name="test-close-pooled-stream")
+    closer.start()
+    closer.join(timeout=0.2)
+    completed_without_rescue = not closer.is_alive()
+    if not completed_without_rescue:
+        stop_event.set()
+        closer.join(timeout=1.0)
+
+    assert completed_without_rescue
+    assert not closer.is_alive()
+    assert close_errors == []
+    assert stop_event.is_set()
+    assert saw_stop.is_set()
+    assert not any(thread.name.startswith("ac-worker-") for thread in threading.enumerate())
+
+
+def test_closing_stream_after_run_paused_does_not_poison_resume_event() -> None:
+    """A terminal-yield close happens after worker drain and preserves resumability."""
+    stop_event = threading.Event()
+    graph = _graph(
+        [PauseNode("pause")],
+        [(START_ID, "pause"), ("pause", END_ID)],
+    )
+    stream = FlowEngine(graph, num_workers=1, stop_event=stop_event).run()
+
+    while not isinstance(next(stream), RunPaused):
+        pass
+    stream.close()
+
+    assert not stop_event.is_set()
+
+
 def test_node_failure_sets_event_before_cooperative_drain_and_joins_workers():
     stop_event = threading.Event()
     entered = threading.Event()

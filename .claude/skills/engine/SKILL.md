@@ -148,7 +148,9 @@ Most are just the functional model (above) made enforceable:
   kind-blind knob for "tune this node" — add a key by having the node read it, never by an engine
   branch. AGENT stays one live loop, so its node-local `env` remains on that one invocation.
 - **Single-writer invariant** — workers are pure executors; the dispatcher is the
-  only state mutator.
+  only state mutator. A pooled drive owns workers until its full join; abnormal dispatch
+  exit must signal cooperative stop before joining, without setting the event when a
+  consumer closes only after the terminal pause has been yielded.
 - **Single-process CLI target** — favor the simplest thing that works in-process;
   durable/cross-process impls are injected from outside, not baked into the core.
 

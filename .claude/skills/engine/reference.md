@@ -172,7 +172,9 @@ model made enforceable.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
   core dispatches on `Outcome` + node-owned traits/hooks, never on `node.kind` (ratchet: census 0).
   **single-writer** (workers are pure
-  executors, the dispatcher is the only mutator); **single-process CLI target**.
+  executors, the dispatcher is the only mutator); a pooled drive signals cooperative stop
+  before fully joining workers after an abnormal dispatch exit, but not after merely yielding
+  a terminal pause; **single-process CLI target**.
 - **AGENT structured output** — a non-text `output:` Type switches an agent from text
   producer to structured generation: `type_to_schema` (`nodes/agent/structured.py`)
   derives a pydantic schema, the mode generates a conforming value (native

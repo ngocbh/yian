@@ -66,6 +66,8 @@ run-owned stop signal between model/tool effects; WAIT blocks on that signal. Ea
 `Output`; none creates checkpoint topology. The generic `Pause`/checkpoint path is
 dormant custom/artificial compatibility until issue #117 removes it. CODE's
 soft-budget watchdog is package-local under `nodes/code/` and times CODE only.
+Pooled drives own their executors through a full join: an abnormal dispatch exit signals
+cooperative stop before joining, but closing after a terminal pause does not poison resume.
 
 Dynamic growth preserves that direction through dependency inversion. A spawner
 node returns `Grow(seed, prune)` without importing `compile`; the kind-aware

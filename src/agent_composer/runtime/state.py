@@ -848,7 +848,7 @@ def prepare_expanded(
     validated_fragment = _validate_growth_fragment(state, fragment)
     try:
         digest = expansion_digest(fragment)
-    except Exception as exc:  # noqa: BLE001 - manifest rejects node-owned topology
+    except (TypeError, ValueError) as exc:
         _raise_node_data(exc)
     return _prepare_growth_transition(
         state,
@@ -2338,11 +2338,9 @@ def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
     if delta is None:
         return None
     if type(delta) is not int or delta < 0:
-        _raise_node_data(
-            ValueError(
-                f"spawner {spawner_id!r} grow_depth_delta must be None, 0, or a "
-                "positive integer"
-            )
+        raise ValueError(
+            f"spawner {spawner_id!r} grow_depth_delta must be None, 0, or a "
+            "positive integer"
         )
     parent_depth = state.depth.get(spawner_id, 0)
     if type(parent_depth) is not int or parent_depth < 0:

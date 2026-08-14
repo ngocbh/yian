@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 import agent_composer.runtime.engine as engine_module
+import agent_composer.runtime.state as state_module
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
 from agent_composer.events import (
     NodeExpanded,
@@ -568,6 +569,50 @@ def test_grow_raw_outcome_uses_injected_builder_and_flat_record():
     assert expanded[0].spawner_id == "spawn"
     assert expanded[0].seed == {"canonical": [1, 2]}
     assert isinstance(state.result, RunSucceeded)
+
+
+def test_invalid_live_grow_depth_trait_remains_a_host_failure():
+    spawner = _GrowNode("spawn")
+    spawner.grow_depth_delta = "invalid"
+    state, log = _initialized(_flow([spawner]), num_workers=0)
+
+    with pytest.raises(ValueError, match="grow_depth_delta") as caught:
+        list(
+            _RecordedDispatcher(
+                state,
+                log,
+                grow_builder=lambda node, _seed: _growth_fragment(node.id),
+                num_workers=0,
+            ).run()
+        )
+
+    assert type(caught.value) is ValueError
+    assert tuple(state.in_flight) == ("spawn",)
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
+
+
+def test_growth_digest_runtime_error_remains_exact_host_failure(monkeypatch):
+    expected = RuntimeError("digest programming fault")
+    state, log = _initialized(_flow([_GrowNode("spawn")]), num_workers=0)
+
+    def broken_digest(_fragment):
+        raise expected
+
+    monkeypatch.setattr(state_module, "expansion_digest", broken_digest)
+
+    with pytest.raises(RuntimeError) as caught:
+        list(
+            _RecordedDispatcher(
+                state,
+                log,
+                grow_builder=lambda node, _seed: _growth_fragment(node.id),
+                num_workers=0,
+            ).run()
+        )
+
+    assert caught.value is expected
+    assert tuple(state.in_flight) == ("spawn",)
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
 
 
 def test_injected_grow_builder_runtime_error_is_a_durable_node_failure():

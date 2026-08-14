@@ -904,7 +904,7 @@ def test_growth_rejects_invalid_exact_depth_deltas(delta: Any):
             lambda node, seed: _fragment(node.id),
         )
 
-    assert isinstance(caught.value, state_module._NodeDataError)
+    assert not isinstance(caught.value, state_module._NodeDataError)
     assert _snapshot(state) == before
 
 
@@ -928,13 +928,14 @@ def test_growth_treats_corrupt_stored_depth_as_a_host_invariant_error():
 def test_growth_enforces_positive_reference_depth_and_stamps_the_boundary():
     rejected, _ = _initialized_spawner()
     rejected.depth["spawn"] = state_module.MAX_REF_DEPTH
-    with pytest.raises(ValueError, match="MAX_REF_DEPTH"):
+    with pytest.raises(ValueError, match="MAX_REF_DEPTH") as caught:
         prepare_expanded(
             rejected,
             "spawn",
             Grow(seed={}),
             lambda node, seed: _fragment(node.id),
         )
+    assert isinstance(caught.value, state_module._NodeDataError)
 
     accepted, log = _initialized_spawner()
     accepted.depth["spawn"] = state_module.MAX_REF_DEPTH - 1

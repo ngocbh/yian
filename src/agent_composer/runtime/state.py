@@ -10,13 +10,18 @@ execution fields; chronological reducer transitions are the only topology writer
 
 from __future__ import annotations
 
+import copy
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from agent_composer._state import NodeState
-from agent_composer.compile.model import CompiledFlow, Edge
+from agent_composer.compile.manifest import expansion_digest
+from agent_composer.compile.model import CompiledFlow, Edge, Flow
+from agent_composer.compile.validation import _classify_path
 from agent_composer.events import (
+    NodeExpanded,
     NodeFailed,
     NodeRouted,
     NodeSkipped,
@@ -29,8 +34,11 @@ from agent_composer.events import (
     SourceRange,
     SourceSpan,
 )
+from agent_composer.expr import ExpressionError, expr_refs_of
+from agent_composer.nodes.base import Grow, Node
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
+    NodeExpandedRecord,
     NodeFailedRecord,
     NodeRoutedRecord,
     NodeSucceededRecord,
@@ -49,6 +57,16 @@ from agent_composer.runtime.log import (
 )
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import ANY_VALUE_ADAPTER, TypedValue
+
+
+MAX_TOTAL_NODES = 10_000
+"""Maximum live topology size before same-transition pruning."""
+
+MAX_REF_DEPTH = 5
+"""Maximum positive CALL/MAP reference-growth depth."""
+
+GrowBuilder = Callable[[Node, Any], Flow]
+"""Injected kind-aware interpreter from a spawner and canonical seed to a fragment."""
 
 
 class RunState:
@@ -92,6 +110,9 @@ class RunState:
             Canonical caller-supplied START priming record retained across START's commit.
         effective_llm_by_static_path (`dict[str, dict[str, Any]]`):
             Run-resolved agent configuration keyed by stable static node path.
+        initial_static_ids (`frozenset[str]`):
+            Immutable node IDs adopted before any runtime expansion.  Safe pruning
+            may retire only later dynamic-overlay nodes.
     """
 
     def __init__(self, flow: CompiledFlow) -> None:
@@ -117,6 +138,7 @@ class RunState:
         self.num_workers = 0
         self.input: dict[str, Any] = {}
         self.effective_llm_by_static_path: dict[str, dict[str, Any]] = {}
+        self.initial_static_ids = frozenset(flow.nodes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,6 +366,72 @@ class _FailureApply:
     observers: tuple[Any, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _GrowthPlan:
+    """Opaque authority anchors and one fully materialized expansion plan."""
+
+    originating_state: RunState
+    originating_flow: CompiledFlow
+    envelope_bytes: bytes
+    start_id: str
+    start_node_identity: int
+    end_id: str
+    end_node_identity: int | None
+    delta: _GrowthDelta
+    topology: _GrowthTopology
+
+
+@dataclass(frozen=True, slots=True)
+class _GrowthDelta:
+    """Immutable scalar authority for one flat deterministic expansion."""
+
+    spawner_id: str
+    prune_ids: tuple[str, ...]
+    topology_digest: str
+    fragment_start_id: str
+    fragment_end_id: str
+    new_node_ids: tuple[str, ...]
+    new_edge_ids: tuple[str, ...]
+    derived_depth: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _GrowthTopology:
+    """Detached final containers represented by immutable outer tuples."""
+
+    nodes: tuple[tuple[str, Node], ...]
+    edges: tuple[Edge, ...]
+    wiring: tuple[tuple[str, dict[str, Any]], ...]
+    incoming: tuple[tuple[str, tuple[Edge, ...]], ...]
+    outgoing: tuple[tuple[str, tuple[Edge, ...]], ...]
+    pool_store: tuple[tuple[str, TypedValue], ...]
+    node_state: tuple[tuple[str, NodeState], ...]
+    edge_state: tuple[tuple[str, NodeState], ...]
+    ready: tuple[str, ...]
+    in_flight: tuple[str, ...]
+    depth: tuple[tuple[str, int], ...]
+    wiring_overrides: tuple[tuple[str, dict[str, Any]], ...]
+
+
+@dataclass(slots=True)
+class _GrowthApply:
+    """Independent final topology, reducer containers, and observer before append."""
+
+    nodes: dict[str, Node]
+    edges: list[Edge]
+    wiring: dict[str, dict[str, Any]]
+    incoming: dict[str, list[Edge]]
+    outgoing: dict[str, list[Edge]]
+    pool_store: dict[str, TypedValue]
+    node_state: dict[str, NodeState]
+    edge_state: dict[str, NodeState]
+    ready: deque[str]
+    in_flight: dict[str, None]
+    depth: dict[str, int]
+    wiring_overrides: dict[str, dict[str, Any]]
+    observers: tuple[Any, ...]
+
+
 @dataclass(slots=True)
 class _DataGroupScratch:
     """Incremental counts for one data-input group in a touched join."""
@@ -386,6 +474,7 @@ class PreparedTransition:
         | _SuccessPlan
         | _RoutePlan
         | _FailurePlan
+        | _GrowthPlan
     )
     observers: tuple[Any, ...]
 
@@ -613,6 +702,76 @@ def prepare_node_routed(
     )
 
 
+def prepare_expanded(
+    state: RunState,
+    node_id: str,
+    grow: Grow,
+    grow_builder: GrowBuilder,
+) -> PreparedTransition:
+    """Prepare one canonical flat graph expansion without mutating live state.
+
+    Args:
+        state (`RunState`):
+            Initialized nonterminal state with ``node_id`` in ordered in-flight work.
+        node_id (`str`):
+            Exact executing spawner ID, including a dynamic LOOP driver clone ID.
+        grow (`Grow`):
+            Seed-first expansion description and exact dynamic-overlay prune set.
+        grow_builder (`GrowBuilder`):
+            Injected compile-owned interpreter from the spawner and canonical seed
+            to one self-contained `Flow` fragment.
+
+    Returns:
+        `PreparedTransition`:
+            Canonical ``NodeExpandedRecord`` and detached append-before-apply plan.
+
+    Raises:
+        `TypeError`:
+            A carrier, prune member, builder, or built fragment has the wrong type.
+        `ValueError`:
+            The spawner, fragment, budget, depth, or prune set violates growth safety.
+    """
+    if type(state) is not RunState:
+        raise TypeError("prepare_expanded expects a RunState")
+    if type(node_id) is not str:
+        raise TypeError("node_id must be a string")
+    if not node_id:
+        raise ValueError("node_id must be non-empty")
+    if type(grow) is not Grow:
+        raise TypeError("grow must be a Grow")
+    if not callable(grow_builder):
+        raise TypeError("grow_builder must be callable")
+    if type(grow.prune) is not frozenset:
+        raise TypeError("Grow.prune must be a frozenset of node IDs")
+    if any(type(prune_id) is not str for prune_id in grow.prune):
+        raise TypeError("Grow.prune must contain only strings")
+    if any(not prune_id for prune_id in grow.prune):
+        raise ValueError("Grow.prune node IDs must be non-empty")
+    _require_initialized_nonterminal(state)
+    _require_expanding_node(state, node_id)
+
+    seed_wire, builder_seed = canonical_seed(grow.seed)
+    fragment = _build_growth_fragment(
+        state.flow.nodes[node_id],
+        builder_seed,
+        grow_builder,
+    )
+    validated_fragment = _validate_growth_fragment(state, fragment)
+    digest = expansion_digest(fragment)
+    return _prepare_growth_transition(
+        state,
+        NodeExpandedRecord(
+            spawner_id=node_id,
+            seed=seed_wire,
+            prune_ids=tuple(sorted(grow.prune)),
+            topology_digest=digest,
+        ),
+        fragment,
+        actual_digest=digest,
+        validated_fragment=validated_fragment,
+    )
+
+
 def prepare_node_failed(
     state: RunState,
     node_id: str,
@@ -701,21 +860,28 @@ def prepare_run_resumed(
     )
 
 
-def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
+def prepare_record(
+    state: RunState,
+    record: RunRecord,
+    *,
+    grow_builder: GrowBuilder | None = None,
+) -> PreparedTransition:
     """Validate one supported authoritative record against the current frontier.
 
     This is the shared reducer seam for live dispatch and later historical replay.
-    Dispatch, recovery-frontier, successful-output, route, and terminal-failure
-    records are supported here; the remaining node outcomes acquire reducers in
-    later slices.
+    Dispatch, recovery-frontier, successful-output, route, graph-expansion, and
+    terminal-failure records are supported here.
 
     Args:
         state (`RunState`):
             Initialized nonterminal state immediately before ``record``.
         record (`RunRecord`):
             A ``NodeStartedRecord``, ``RunResumedRecord``,
-            ``NodeSucceededRecord``, ``NodeRoutedRecord``, or ``NodeFailedRecord``
-            to validate and copy.
+            ``NodeSucceededRecord``, ``NodeRoutedRecord``, ``NodeExpandedRecord``,
+            or ``NodeFailedRecord`` to validate and copy.
+        grow_builder (`GrowBuilder | None`, *optional*):
+            Required only for ``NodeExpandedRecord`` replay; rebuilds and verifies
+            the recorded fragment through the same injected path used live.
 
     Returns:
         `PreparedTransition`:
@@ -737,6 +903,10 @@ def prepare_record(state: RunState, record: RunRecord) -> PreparedTransition:
     if isinstance(record, NodeRoutedRecord):
         _validate_route_record(state, record)
         return _prepare_route_transition(state, record)
+    if isinstance(record, NodeExpandedRecord):
+        if not callable(grow_builder):
+            raise TypeError("NodeExpandedRecord replay requires a callable grow_builder")
+        return _prepare_growth_record(state, record, grow_builder)
     if isinstance(record, NodeFailedRecord):
         return _prepare_failure_transition(state, record)
     if isinstance(record, NodeStartedRecord):
@@ -987,6 +1157,104 @@ def _prepare_failure_transition(
     )
 
 
+def _prepare_growth_record(
+    state: RunState,
+    record: NodeExpandedRecord,
+    grow_builder: GrowBuilder,
+) -> PreparedTransition:
+    """Rebuild and verify one historical expansion through the live builder path."""
+    _validate_growth_record(state, record)
+    seed_wire, builder_seed = canonical_seed(record.seed)
+    if seed_wire != record.seed:
+        raise ValueError("NodeExpandedRecord seed is not in canonical wire form")
+    fragment = _build_growth_fragment(
+        state.flow.nodes[record.spawner_id],
+        builder_seed,
+        grow_builder,
+    )
+    validated_fragment = _validate_growth_fragment(state, fragment)
+    actual_digest = expansion_digest(fragment)
+    if actual_digest != record.topology_digest:
+        raise ValueError(
+            "NodeExpandedRecord topology digest mismatch: "
+            f"recorded {record.topology_digest!r}, rebuilt {actual_digest!r}"
+        )
+    return _prepare_growth_transition(
+        state,
+        record,
+        fragment,
+        actual_digest=actual_digest,
+        validated_fragment=validated_fragment,
+    )
+
+
+def _prepare_growth_transition(
+    state: RunState,
+    record: NodeExpandedRecord,
+    fragment: Flow,
+    *,
+    actual_digest: str | None = None,
+    validated_fragment: tuple[tuple[str, ...], tuple[str, ...]] | None = None,
+) -> PreparedTransition:
+    """Freeze one validated fragment, final topology, and canonical public record."""
+    _validate_growth_record(state, record)
+    validated = (
+        _validate_growth_fragment(state, fragment)
+        if validated_fragment is None
+        else validated_fragment
+    )
+    digest = expansion_digest(fragment) if actual_digest is None else actual_digest
+    if digest != record.topology_digest:
+        raise ValueError("NodeExpandedRecord topology digest disagrees with its fragment")
+    delta, topology = _prepare_growth_topology(
+        state,
+        record,
+        fragment,
+        validated_fragment=validated,
+    )
+
+    run_id = state.run_id
+    if not isinstance(run_id, str):  # established by initialized-state validation
+        raise ValueError("run state is not initialized")
+    canonical_bytes = encode_record(
+        RecordEnvelope(
+            schema=SCHEMA_VERSION,
+            run_id=run_id,
+            seq=state.next_sequence,
+            record=record,
+        )
+    )
+    canonical_envelope = decode_record(canonical_bytes)
+    canonical_record = canonical_envelope.record
+    if not isinstance(canonical_record, NodeExpandedRecord):
+        raise TypeError("node-expansion envelope decoded to a different record kind")
+    if canonical_record != record:
+        raise ValueError("NodeExpandedRecord is not in canonical wire form")
+
+    start_id = state.flow.start_id
+    end_id = state.flow.end_id
+    plan = _GrowthPlan(
+        originating_state=state,
+        originating_flow=state.flow,
+        envelope_bytes=canonical_bytes,
+        start_id=start_id,
+        start_node_identity=id(state.flow.nodes[start_id]),
+        end_id=end_id,
+        end_node_identity=(
+            id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
+        ),
+        delta=delta,
+        topology=topology,
+    )
+    return PreparedTransition(
+        record=canonical_record,
+        expected_run_id=canonical_envelope.run_id,
+        expected_sequence=canonical_envelope.seq,
+        _plan=plan,
+        observers=(_growth_observer(canonical_record),),
+    )
+
+
 def commit_prepared(
     log: RunLog,
     state: RunState,
@@ -1035,6 +1303,8 @@ def commit_prepared(
         return _commit_route(log, state, prepared)
     if isinstance(prepared._plan, _FailurePlan):
         return _commit_failure(log, state, prepared)
+    if isinstance(prepared._plan, _GrowthPlan):
+        return _commit_growth(log, state, prepared)
     raise TypeError("unsupported prepared transition plan")
 
 
@@ -1203,6 +1473,47 @@ def _commit_failure(
     return apply.observers
 
 
+def _commit_growth(
+    log: RunLog,
+    state: RunState,
+    prepared: PreparedTransition,
+) -> tuple[Any, ...]:
+    """Validate, append, and install one fully materialized flat expansion."""
+    plan = prepared._plan
+    if not isinstance(plan, _GrowthPlan):
+        raise TypeError("growth commit requires a growth plan")
+    if not isinstance(prepared.record, NodeExpandedRecord):
+        raise TypeError("growth plan requires a NodeExpandedRecord")
+    _require_prepared_origin(state, plan)
+    _require_initialized_nonterminal(state)
+    _require_authority_coordinates(log, state, prepared, initialized=True)
+    _require_unchanged_record(prepared, plan.envelope_bytes)
+    delta = plan.delta
+    if not (
+        prepared.record.spawner_id == delta.spawner_id
+        and prepared.record.prune_ids == delta.prune_ids
+        and prepared.record.topology_digest == delta.topology_digest
+    ):
+        raise ValueError("growth record and prevalidated delta disagree")
+    apply = _materialize_growth(plan)
+
+    _append_and_verify(log, prepared)
+    state.flow.nodes = apply.nodes
+    state.flow.edges = apply.edges
+    state.flow.wiring = apply.wiring
+    state.flow._incoming = apply.incoming
+    state.flow._outgoing = apply.outgoing
+    state.pool.store = apply.pool_store
+    state.node_state = apply.node_state
+    state.edge_state = apply.edge_state
+    state.ready = apply.ready
+    state.in_flight = apply.in_flight
+    state.depth = apply.depth
+    state.wiring_overrides = apply.wiring_overrides
+    state.next_sequence = prepared.expected_sequence + 1
+    return apply.observers
+
+
 def _require_prepared_origin(
     state: RunState,
     plan: (
@@ -1211,6 +1522,7 @@ def _require_prepared_origin(
         | _SuccessPlan
         | _RoutePlan
         | _FailurePlan
+        | _GrowthPlan
     ),
 ) -> None:
     """Require the exact state, adopted flow, and boundary objects from preparation."""
@@ -1295,6 +1607,7 @@ def _require_initialized_nonterminal(state: RunState) -> None:
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
+        and type(state.initial_static_ids) is frozenset
     )
     if not exact_containers:
         raise ValueError("dispatch requires initialized reducer frontier containers")
@@ -1312,6 +1625,8 @@ def _require_initialized_nonterminal(state: RunState) -> None:
         raise ValueError("initialized run state is missing its START boundary")
     if state.pool.start_id != state.flow.start_id:
         raise ValueError("initialized pool START must match the adopted flow")
+    if state.flow.start_id not in state.initial_static_ids:
+        raise ValueError("initialized run state START is not an initial static node")
 
 
 def _validate_node_started(state: RunState, record: NodeStartedRecord) -> None:
@@ -1399,6 +1714,559 @@ def _require_failing_node(state: RunState, node_id: str) -> None:
         raise ValueError(f"NodeFailed node {node_id!r} is not in-flight")
     if state.in_flight[node_id] is not None:
         raise ValueError("in-flight must be an ordered set with None values")
+
+
+def _require_expanding_node(state: RunState, node_id: str) -> None:
+    """Require an existing unknown spawner in the ordered in-flight frontier."""
+    if not node_id:
+        raise ValueError("NodeExpanded node_id must be non-empty")
+    if node_id not in state.flow.nodes:
+        raise ValueError(f"NodeExpanded node {node_id!r} does not exist in the flow")
+    if state.node_state.get(node_id) is not NodeState.UNKNOWN:
+        raise ValueError(f"NodeExpanded node {node_id!r} must have UNKNOWN disposition")
+    if node_id not in state.in_flight:
+        raise ValueError(f"NodeExpanded node {node_id!r} is not in-flight")
+    if state.in_flight[node_id] is not None:
+        raise ValueError("in-flight must be an ordered set with None values")
+    if state.flow.nodes[node_id].is_spawner is not True:
+        raise ValueError(f"NodeExpanded node {node_id!r} is not a graph spawner")
+
+
+def _validate_growth_record(state: RunState, record: NodeExpandedRecord) -> None:
+    """Validate exact durable expansion carriers and its executing spawner."""
+    if type(record.spawner_id) is not str:
+        raise TypeError("NodeExpandedRecord spawner_id must be a string")
+    if not record.spawner_id:
+        raise ValueError("NodeExpandedRecord spawner_id must be non-empty")
+    if type(record.prune_ids) is not tuple or any(
+        type(node_id) is not str for node_id in record.prune_ids
+    ):
+        raise TypeError("NodeExpandedRecord prune_ids must be a tuple of strings")
+    if any(not node_id for node_id in record.prune_ids):
+        raise ValueError("NodeExpandedRecord prune IDs must be non-empty")
+    if record.prune_ids != tuple(sorted(set(record.prune_ids))):
+        raise ValueError("NodeExpandedRecord prune IDs must be sorted and unique")
+    if type(record.topology_digest) is not str:
+        raise TypeError("NodeExpandedRecord topology_digest must be a string")
+    if len(record.topology_digest) != 64 or any(
+        char not in "0123456789abcdef" for char in record.topology_digest
+    ):
+        raise ValueError("NodeExpandedRecord topology_digest must be lowercase SHA-256")
+    _require_expanding_node(state, record.spawner_id)
+
+
+def _build_growth_fragment(
+    spawner: Node,
+    builder_seed: Any,
+    grow_builder: GrowBuilder,
+) -> Flow:
+    """Call the injected builder with detached inputs and detach its fragment."""
+    builder_spawner = copy.deepcopy(spawner)
+    if not isinstance(builder_spawner, Node):
+        raise TypeError("growth spawner deepcopy must remain a Node")
+    built = grow_builder(builder_spawner, builder_seed)
+    if not isinstance(built, Flow):
+        raise TypeError("grow_builder must return a Flow")
+    fragment = copy.deepcopy(built)
+    if not isinstance(fragment, Flow):  # defensive against a hostile deepcopy hook
+        raise TypeError("grow_builder fragment deepcopy must remain a Flow")
+    return fragment
+
+
+def _prepare_growth_topology(
+    state: RunState,
+    record: NodeExpandedRecord,
+    fragment: Flow,
+    *,
+    validated_fragment: tuple[tuple[str, ...], tuple[str, ...]],
+) -> tuple[_GrowthDelta, _GrowthTopology]:
+    """Validate growth and materialize every final topology/state container."""
+    new_node_ids, new_edge_ids = validated_fragment
+    if len(state.flow.nodes) + len(new_node_ids) > MAX_TOTAL_NODES:
+        raise ValueError(
+            f"expansion exceeded node budget ({MAX_TOTAL_NODES}) at spawner "
+            f"{record.spawner_id!r}"
+        )
+    derived_depth = _validated_growth_depth(state, record.spawner_id)
+    prune_ids = frozenset(record.prune_ids)
+    _validate_growth_prune(
+        state,
+        record.spawner_id,
+        prune_ids,
+        frozenset(new_node_ids),
+    )
+    _validate_prune_dependencies(state, fragment, prune_ids)
+
+    combined_nodes = dict(state.flow.nodes)
+    combined_nodes.update(fragment.nodes)
+    combined_edges = [*state.flow.edges, *fragment.edges]
+    combined_wiring = copy.deepcopy(state.flow.wiring)
+    combined_wiring.update(copy.deepcopy(fragment.wiring))
+
+    final_nodes = {
+        node_id: node
+        for node_id, node in combined_nodes.items()
+        if node_id not in prune_ids
+    }
+    final_edges = [
+        edge
+        for edge in combined_edges
+        if edge.from_ not in prune_ids and edge.to not in prune_ids
+    ]
+    final_wiring = {
+        node_id: wiring
+        for node_id, wiring in combined_wiring.items()
+        if node_id not in prune_ids
+    }
+    incoming, outgoing = _growth_adjacency(final_nodes, final_edges)
+
+    node_state = dict(state.node_state)
+    node_state.update((node_id, NodeState.UNKNOWN) for node_id in new_node_ids)
+    node_state[record.spawner_id] = NodeState.EXPANDED
+    for node_id in prune_ids:
+        node_state.pop(node_id, None)
+
+    edge_state = dict(state.edge_state)
+    edge_state.update((edge_id, NodeState.UNKNOWN) for edge_id in new_edge_ids)
+    surviving_edge_ids = {edge.id for edge in final_edges}
+    edge_state = {
+        edge_id: disposition
+        for edge_id, disposition in edge_state.items()
+        if edge_id in surviving_edge_ids
+    }
+
+    pool_store = dict(state.pool.store)
+    depth = dict(state.depth)
+    wiring_overrides = copy.deepcopy(state.wiring_overrides)
+    for node_id in prune_ids:
+        pool_store.pop(node_id, None)
+        depth.pop(node_id, None)
+        wiring_overrides.pop(node_id, None)
+    if derived_depth is not None:
+        for node_id, node in fragment.nodes.items():
+            if node.is_spawner is True or node.commit_as == record.spawner_id:
+                depth[node_id] = derived_depth
+
+    ready = tuple(
+        node_id for node_id in state.ready if node_id not in prune_ids
+    ) + (fragment.start_id,)
+    in_flight = tuple(
+        node_id
+        for node_id in state.in_flight
+        if node_id != record.spawner_id and node_id not in prune_ids
+    )
+
+    delta = _GrowthDelta(
+        spawner_id=record.spawner_id,
+        prune_ids=record.prune_ids,
+        topology_digest=record.topology_digest,
+        fragment_start_id=fragment.start_id,
+        fragment_end_id=fragment.end_id,
+        new_node_ids=new_node_ids,
+        new_edge_ids=new_edge_ids,
+        derived_depth=derived_depth,
+    )
+    topology = _GrowthTopology(
+        nodes=tuple(final_nodes.items()),
+        edges=tuple(final_edges),
+        wiring=tuple(final_wiring.items()),
+        incoming=tuple(
+            (node_id, tuple(edges)) for node_id, edges in incoming.items()
+        ),
+        outgoing=tuple(
+            (node_id, tuple(edges)) for node_id, edges in outgoing.items()
+        ),
+        pool_store=tuple(pool_store.items()),
+        node_state=tuple(node_state.items()),
+        edge_state=tuple(edge_state.items()),
+        ready=ready,
+        in_flight=in_flight,
+        depth=tuple(depth.items()),
+        wiring_overrides=tuple(wiring_overrides.items()),
+    )
+    return delta, topology
+
+
+def _validate_growth_fragment(
+    state: RunState,
+    fragment: Flow,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Require a collision-free, self-contained, acyclic fragment."""
+    if type(fragment.nodes) is not dict:
+        raise TypeError("growth fragment nodes must be a dict")
+    if type(fragment.edges) is not list:
+        raise TypeError("growth fragment edges must be a list")
+    if type(fragment.wiring) is not dict:
+        raise TypeError("growth fragment wiring must be a dict")
+    if type(fragment.start_id) is not str or not fragment.start_id:
+        raise ValueError("growth fragment start_id must be a non-empty string")
+    if type(fragment.end_id) is not str or not fragment.end_id:
+        raise ValueError("growth fragment end_id must be a non-empty string")
+    if fragment.start_id not in fragment.nodes:
+        raise ValueError("growth fragment start_id is missing from its nodes")
+    if fragment.end_id not in fragment.nodes:
+        raise ValueError("growth fragment end_id is missing from its nodes")
+
+    new_node_ids: list[str] = []
+    for node_id, node in fragment.nodes.items():
+        if type(node_id) is not str:
+            raise TypeError("growth fragment node IDs must be strings")
+        if not node_id:
+            raise ValueError("growth fragment node IDs must be non-empty")
+        if not isinstance(node, Node):
+            raise TypeError(f"growth fragment node {node_id!r} must be a Node")
+        if node.id != node_id:
+            raise ValueError(
+                f"growth fragment node key {node_id!r} does not equal node.id "
+                f"{node.id!r}"
+            )
+        if node_id in state.flow.nodes:
+            raise ValueError(
+                f"growth fragment node {node_id!r} collides with live topology"
+            )
+        new_node_ids.append(node_id)
+
+    if set(fragment.wiring) != set(fragment.nodes):
+        raise ValueError("growth fragment wiring keys must exactly equal fragment nodes")
+    combined_nodes = dict(state.flow.nodes)
+    combined_nodes.update(fragment.nodes)
+    combined_node_ids = set(combined_nodes)
+    producer_types = {
+        node_id: node.output_type
+        for node_id, node in combined_nodes.items()
+        if node.output_type is not None
+    }
+    for node_id, node in fragment.nodes.items():
+        for attribute in ("commit_as", "origin_id"):
+            target = getattr(node, attribute)
+            if target is not None and type(target) is not str:
+                raise TypeError(
+                    f"growth fragment node {node_id!r} {attribute} must be a "
+                    "string or None"
+                )
+            if target == "":
+                raise ValueError(
+                    f"growth fragment node {node_id!r} {attribute} must be non-empty"
+                )
+            if target is not None and target not in combined_node_ids:
+                raise ValueError(
+                    f"growth fragment node {node_id!r} {attribute} target "
+                    f"{target!r} does not exist"
+                )
+        wiring = fragment.wiring[node_id]
+        if type(wiring) is not dict or any(type(key) is not str for key in wiring):
+            raise TypeError(
+                f"growth fragment wiring for {node_id!r} must be a string-keyed dict"
+            )
+        params = node.params or []
+        if type(params) is not list:
+            raise TypeError(f"growth fragment node {node_id!r} params must be a list")
+        declared: dict[str, bool] = {}
+        for param in params:
+            if type(param.name) is not str or not param.name:
+                raise ValueError(
+                    f"growth fragment node {node_id!r} has an invalid param name"
+                )
+            if param.name in declared:
+                raise ValueError(
+                    f"growth fragment node {node_id!r} has duplicate param "
+                    f"{param.name!r}"
+                )
+            declared[param.name] = bool(param.required)
+        reserved = node.reserved_wiring_keys()
+        if type(reserved) is not set or any(
+            type(key) is not str or not key for key in reserved
+        ):
+            raise TypeError(
+                f"growth fragment node {node_id!r} reserved wiring keys are invalid"
+            )
+        actual = set(wiring)
+        allowed = set(declared) | reserved
+        extras = actual - allowed
+        missing_reserved = reserved - actual
+        missing_required = {
+            name for name, required in declared.items() if required and name not in actual
+        }
+        if extras or missing_reserved or missing_required:
+            raise ValueError(
+                f"growth fragment node {node_id!r} wiring parity failed: "
+                f"extra={sorted(extras)!r}, missing_reserved={sorted(missing_reserved)!r}, "
+                f"missing_required={sorted(missing_required)!r}"
+            )
+        _validate_growth_wiring_refs(
+            node_id,
+            node,
+            wiring,
+            combined_node_ids,
+            producer_types,
+            reserved,
+        )
+
+    live_edge_ids = {edge.id for edge in state.flow.edges}
+    new_edge_ids: list[str] = []
+    seen_edge_ids: set[str] = set()
+    for edge in fragment.edges:
+        if type(edge) is not Edge:
+            raise TypeError("growth fragment edges must contain only Edge values")
+        if type(edge.id) is not str or not edge.id:
+            raise ValueError("growth fragment edge IDs must be non-empty strings")
+        if edge.id in seen_edge_ids:
+            raise ValueError(f"growth fragment edge ID {edge.id!r} is duplicated")
+        if edge.id in live_edge_ids:
+            raise ValueError(
+                f"growth fragment edge {edge.id!r} collides with live topology"
+            )
+        for attribute in ("source_handle", "input_group"):
+            value = getattr(edge, attribute)
+            if value is not None and type(value) is not str:
+                raise TypeError(
+                    f"growth fragment edge {edge.id!r} {attribute} must be a "
+                    "string or None"
+                )
+            if value == "":
+                raise ValueError(
+                    f"growth fragment edge {edge.id!r} {attribute} must be non-empty"
+                )
+        for attribute in ("optional", "ordering"):
+            if type(getattr(edge, attribute)) is not bool:
+                raise TypeError(
+                    f"growth fragment edge {edge.id!r} {attribute} must be a bool"
+                )
+        if type(edge.from_) is not str or edge.from_ not in combined_node_ids:
+            raise ValueError(
+                f"growth fragment edge {edge.id!r} has unknown source {edge.from_!r}"
+            )
+        if type(edge.to) is not str or edge.to not in fragment.nodes:
+            raise ValueError(
+                f"growth fragment edge {edge.id!r} must target a fragment node, "
+                f"found {edge.to!r}"
+            )
+        seen_edge_ids.add(edge.id)
+        new_edge_ids.append(edge.id)
+
+    _validate_growth_reachability(fragment)
+    _reject_growth_cycle(
+        combined_node_ids,
+        [*state.flow.edges, *fragment.edges],
+    )
+    return tuple(new_node_ids), tuple(new_edge_ids)
+
+
+def _validate_growth_reachability(fragment: Flow) -> None:
+    """Require every fragment node to be driven from its sole scheduled entry."""
+    adjacency: dict[str, list[str]] = {
+        node_id: [] for node_id in fragment.nodes
+    }
+    for edge in fragment.edges:
+        if edge.from_ in adjacency:
+            adjacency[edge.from_].append(edge.to)
+    reachable: set[str] = set()
+    pending = [fragment.start_id]
+    while pending:
+        node_id = pending.pop()
+        if node_id in reachable:
+            continue
+        reachable.add(node_id)
+        pending.extend(adjacency[node_id])
+    unreachable = sorted(set(fragment.nodes) - reachable)
+    if unreachable:
+        raise ValueError(
+            f"growth fragment nodes are unreachable from its start: {unreachable!r}"
+        )
+
+
+def _validate_growth_wiring_refs(
+    node_id: str,
+    node: Node,
+    wiring: dict[str, Any],
+    combined_node_ids: set[str],
+    producer_types: dict[str, Any],
+    reserved: set[str],
+) -> None:
+    """Apply the compiled language's closed reference rules to fragment wiring."""
+    for param, source in wiring.items():
+        if not isinstance(source, str):
+            continue
+        try:
+            paths = expr_refs_of(source)
+        except ExpressionError as exc:
+            raise ValueError(
+                f"growth fragment node {node_id!r} wiring {param!r} is invalid: {exc}"
+            ) from exc
+        for path in paths:
+            extra_heads = (
+                ("item",)
+                if node.binds_per_item is True and param not in reserved
+                else ()
+            )
+            error = _classify_path(
+                path,
+                combined_node_ids,
+                set(),
+                extra_heads,
+                producer_types,
+            )
+            if error is not None:
+                raise ValueError(
+                    f"growth fragment node {node_id!r} wiring {param!r}: {error}"
+                )
+
+
+def _reject_growth_cycle(node_ids: set[str], edges: list[Edge]) -> None:
+    """Reject a directed cycle in the predicted combined topology."""
+    adjacency: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
+    in_degree = {node_id: 0 for node_id in node_ids}
+    for edge in edges:
+        if edge.from_ not in node_ids or edge.to not in node_ids:
+            raise ValueError(f"combined growth edge {edge.id!r} has an unknown endpoint")
+        adjacency[edge.from_].append(edge.to)
+        in_degree[edge.to] += 1
+    ready = [node_id for node_id, degree in in_degree.items() if degree == 0]
+    visited = 0
+    while ready:
+        node_id = ready.pop()
+        visited += 1
+        for successor in adjacency[node_id]:
+            in_degree[successor] -= 1
+            if in_degree[successor] == 0:
+                ready.append(successor)
+    if visited != len(node_ids):
+        stuck = sorted(node_id for node_id, degree in in_degree.items() if degree)
+        raise ValueError(f"growth fragment creates a cycle involving {stuck!r}")
+
+
+def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
+    """Derive the exact trait-driven reference depth for one expansion."""
+    delta = state.flow.nodes[spawner_id].grow_depth_delta
+    if delta is None:
+        return None
+    if type(delta) is not int or delta < 0:
+        raise ValueError(
+            f"spawner {spawner_id!r} grow_depth_delta must be None, 0, or a "
+            "positive integer"
+        )
+    parent_depth = state.depth.get(spawner_id, 0)
+    if type(parent_depth) is not int or parent_depth < 0:
+        raise ValueError(f"spawner {spawner_id!r} has an invalid parent depth")
+    depth = parent_depth + delta
+    if delta > 0 and depth > MAX_REF_DEPTH:
+        raise ValueError(
+            f"expansion exceeded MAX_REF_DEPTH ({MAX_REF_DEPTH}) at {spawner_id!r}"
+        )
+    return depth
+
+
+def _validate_growth_prune(
+    state: RunState,
+    spawner_id: str,
+    prune_ids: frozenset[str],
+    new_node_ids: frozenset[str],
+) -> None:
+    """Enforce the exact settled dynamic-overlay prune safety matrix."""
+    ready_ids = set(state.ready)
+    spawner = state.flow.nodes[spawner_id]
+    for node_id in prune_ids:
+        if node_id not in state.flow.nodes:
+            raise ValueError(f"growth prune node {node_id!r} does not exist")
+        if node_id in (state.flow.start_id, state.flow.end_id):
+            raise ValueError(f"growth cannot prune top-level boundary {node_id!r}")
+        if node_id in new_node_ids:
+            raise ValueError(f"growth cannot prune new fragment node {node_id!r}")
+        if node_id in state.initial_static_ids:
+            raise ValueError(f"growth cannot prune initial static node {node_id!r}")
+        if node_id in ready_ids:
+            raise ValueError(f"growth cannot prune ready node {node_id!r}")
+        if node_id in state.in_flight:
+            if node_id != spawner_id:
+                raise ValueError(
+                    f"growth cannot prune unrelated in-flight node {node_id!r}"
+                )
+            origin_id = spawner.origin_id
+            if not (
+                spawner.is_loop is True
+                and type(origin_id) is str
+                and origin_id
+                and origin_id != spawner_id
+                and origin_id in state.flow.nodes
+                and origin_id not in prune_ids
+            ):
+                raise ValueError(
+                    f"growth spawner {spawner_id!r} is not a self-prunable LOOP clone"
+                )
+            continue
+        if state.node_state.get(node_id) not in (
+            NodeState.TAKEN,
+            NodeState.SKIPPED,
+            NodeState.EXPANDED,
+        ):
+            raise ValueError(
+                f"growth prune node {node_id!r} must be settled dynamic overlay"
+            )
+
+
+def _validate_prune_dependencies(
+    state: RunState,
+    fragment: Flow,
+    prune_ids: frozenset[str],
+) -> None:
+    """Reject future work whose edge, wiring, commit, or origin reads a pruned ID."""
+    if not prune_ids:
+        return
+    dependent_ids = set(fragment.nodes)
+    dependent_ids.update(
+        node_id
+        for node_id, disposition in state.node_state.items()
+        if disposition is NodeState.UNKNOWN and node_id not in prune_ids
+    )
+    combined_nodes = dict(state.flow.nodes)
+    combined_nodes.update(fragment.nodes)
+    combined_wiring = dict(state.flow.wiring)
+    combined_wiring.update(fragment.wiring)
+    for edge in [*state.flow.edges, *fragment.edges]:
+        if edge.from_ in prune_ids and edge.to in dependent_ids:
+            raise ValueError(
+                f"surviving node {edge.to!r} depends on pruned edge source "
+                f"{edge.from_!r}"
+            )
+    for node_id in dependent_ids:
+        node = combined_nodes[node_id]
+        if node.commit_as in prune_ids:
+            raise ValueError(
+                f"surviving node {node_id!r} commits to pruned node {node.commit_as!r}"
+            )
+        if node.origin_id in prune_ids:
+            raise ValueError(
+                f"surviving node {node_id!r} has pruned origin {node.origin_id!r}"
+            )
+        for source in combined_wiring.get(node_id, {}).values():
+            if not isinstance(source, str):
+                continue
+            try:
+                paths = expr_refs_of(source)
+            except ExpressionError as exc:
+                raise ValueError(
+                    f"surviving node {node_id!r} has invalid wiring: {exc}"
+                ) from exc
+            for path in paths:
+                if path.split(".", 1)[0] in prune_ids:
+                    raise ValueError(
+                        f"surviving node {node_id!r} wiring depends on pruned node"
+                    )
+
+
+def _growth_adjacency(
+    nodes: dict[str, Node],
+    edges: list[Edge],
+) -> tuple[dict[str, list[Edge]], dict[str, list[Edge]]]:
+    """Build detached incoming/outgoing indexes for a fully validated topology."""
+    incoming: dict[str, list[Edge]] = {}
+    outgoing: dict[str, list[Edge]] = {}
+    for edge in edges:
+        if edge.from_ not in nodes or edge.to not in nodes:
+            raise ValueError(f"final growth edge {edge.id!r} has an unknown endpoint")
+        outgoing.setdefault(edge.from_, []).append(edge)
+        incoming.setdefault(edge.to, []).append(edge)
+    return incoming, outgoing
 
 
 def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
@@ -1953,6 +2821,7 @@ def _require_pristine(state: RunState) -> None:
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
+        and type(state.initial_static_ids) is frozenset
     )
     if not exact_containers:
         raise ValueError("RunStarted requires pristine reducer container types")
@@ -1978,6 +2847,7 @@ def _require_pristine(state: RunState) -> None:
         and state.num_workers == 0
         and not state.input
         and not state.effective_llm_by_static_path
+        and state.initial_static_ids == frozenset(state.flow.nodes)
     ):
         raise ValueError("RunStarted requires a pristine RunState at sequence 0")
 
@@ -1990,6 +2860,7 @@ def _require_originating_flow(
         | _SuccessPlan
         | _RoutePlan
         | _FailurePlan
+        | _GrowthPlan
     ),
 ) -> None:
     """Reject replacement of the adopted flow object or either boundary identity.
@@ -2214,6 +3085,55 @@ def _materialize_failure(delta: _FailureDelta) -> _FailureApply:
     )
 
 
+def _growth_observer(record: NodeExpandedRecord) -> NodeExpanded:
+    """Construct one independent canonical expansion observer."""
+    _, seed = canonical_seed(record.seed)
+    return NodeExpanded(
+        node_id=record.spawner_id,
+        grow=Grow(seed=seed, prune=frozenset(record.prune_ids)),
+    )
+
+
+def _materialize_growth(plan: _GrowthPlan) -> _GrowthApply:
+    """Materialize every final container and fresh observer before durable append."""
+    envelope = decode_record(plan.envelope_bytes)
+    record = envelope.record
+    if not isinstance(record, NodeExpandedRecord):
+        raise TypeError("immutable growth plan does not contain a NodeExpandedRecord")
+    if not (
+        record.spawner_id == plan.delta.spawner_id
+        and record.prune_ids == plan.delta.prune_ids
+        and record.topology_digest == plan.delta.topology_digest
+    ):
+        raise ValueError("immutable growth plan record and delta disagree")
+    topology = plan.topology
+    return _GrowthApply(
+        nodes=dict(topology.nodes),
+        edges=list(topology.edges),
+        wiring={
+            node_id: copy.deepcopy(wiring)
+            for node_id, wiring in topology.wiring
+        },
+        incoming={
+            node_id: list(edges) for node_id, edges in topology.incoming
+        },
+        outgoing={
+            node_id: list(edges) for node_id, edges in topology.outgoing
+        },
+        pool_store=dict(topology.pool_store),
+        node_state=dict(topology.node_state),
+        edge_state=dict(topology.edge_state),
+        ready=deque(topology.ready),
+        in_flight={node_id: None for node_id in topology.in_flight},
+        depth=dict(topology.depth),
+        wiring_overrides={
+            node_id: copy.deepcopy(wiring)
+            for node_id, wiring in topology.wiring_overrides
+        },
+        observers=(_growth_observer(record),),
+    )
+
+
 def _copy_source_span(locator: SourceSpan | None) -> SourceSpan | None:
     """Return an independent immutable symbolic source locator."""
     if locator is None:
@@ -2234,10 +3154,14 @@ def _copy_source_range(range: SourceRange | None) -> SourceRange | None:
 
 
 __all__ = [
+    "GrowBuilder",
+    "MAX_REF_DEPTH",
+    "MAX_TOTAL_NODES",
     "PreparedTransition",
     "RunStartData",
     "RunState",
     "commit_prepared",
+    "prepare_expanded",
     "prepare_node_failed",
     "prepare_node_routed",
     "prepare_node_started",

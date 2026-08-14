@@ -257,10 +257,10 @@ class Node(ABC):
     # REF-depth policy for the engine's growth core. The depth stamped on a grow's subgraph
     # spawners + its terminal is `parent_depth + grow_depth_delta`; a positive delta is also
     # bounded by MAX_REF_DEPTH. Possible values:
-    #   None  — this grow is NOT REF recursion; the core does NO depth work (LOOP: bounded by
-    #           max_iters + MAX_TOTAL_NODES, not depth).
+    #   None  — a non-spawner; the core does no depth work.
+    #   0     — LOOP inherits its parent's REF depth without consuming another level.
     #   1     — a nested call, +1 and bounded (CALL/MAP: each child is one deeper level).
-    # Overridden by CALL/MAP (1); the default None fits LOOP + any non-spawner.
+    # Overridden by LOOP (0) and CALL/MAP (1); the default None fits non-spawners.
     grow_depth_delta: ClassVar[Optional[int]] = None
     # Declares "I am the self-respawning fixpoint-iteration driver" (LOOP). The growth core
     # (`_apply_grow`) gates the origin-keyed single-live-record ledger invariant under this trait:

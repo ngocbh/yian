@@ -6,8 +6,10 @@ Output feeds the next driver by plain wiring) + the fresh `L~(k+1)` driver + the
 durable reconstruction builds the SAME `L#k/…` namespace.
 """
 from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, ns
-from agent_composer.compile.model import END_ID, Flow
+from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
+from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.loop import LoopNode
+from agent_composer.nodes.start import StartNode
 
 from tests.engine.test_expand import _child_flow
 
@@ -17,6 +19,18 @@ def _driver(origin, k, child):
                  predicate="${x}", max_iters=10, iteration=k, origin_id=origin)
     d.params = child.nodes[child.start_id].params
     return d
+
+
+def _empty_child():
+    """Return a valid zero-field loop body."""
+    return CompiledFlow.from_parts(
+        nodes={
+            START_ID: StartNode(START_ID, input_decls=[]),
+            END_ID: EndNode.record(END_ID, output_names=[]),
+        },
+        edges=[Edge("boundary", START_ID, END_ID, ordering=True)],
+        wiring={START_ID: {}, END_ID: {}},
+    )
 
 
 def test_continue_subgraph_body_keyed_on_origin_not_driver():
@@ -44,6 +58,33 @@ def test_continue_splices_next_driver_and_edge():
     body_end = ns(map_callsite("lp", 0), END_ID)
     assert any(e.from_ == body_end and e.to == "lp~1" for e in sg.edges)
     assert sg.wiring["lp~1"] == {"x": f"${{{body_end}.output.x}}"}
+
+
+def test_continue_orders_zero_field_body_before_next_driver():
+    child = _empty_child()
+    driver = LoopNode(
+        "lp~1",
+        flow_id="f",
+        child=child,
+        child_inputs=[],
+        predicate_kind="times",
+        times=2,
+        max_iters=2,
+        iteration=1,
+        origin_id="lp",
+    )
+    driver.params = []
+
+    sg = loop_continue_subgraph(child, "lp", {}, 0, driver)
+    body_end = ns(map_callsite("lp", 0), END_ID)
+
+    assert Edge(
+        id=f"{body_end}->lp~1#0",
+        from_=body_end,
+        to="lp~1",
+        ordering=True,
+    ) in sg.edges
+    assert sg.wiring["lp~1"] == {}
 
 
 def test_continue_keys_body_on_origin_when_driver_id_differs():

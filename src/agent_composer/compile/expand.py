@@ -394,9 +394,10 @@ def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) ->
     Splices: body_k (`clone_child` at `map_callsite(origin, k)`, NO baked `commit_as` — its
     Output commits under its own id `L#k/END` and feeds the next driver by plain wiring), the
     driver `L~(k+1)`, the producer edge `body_k.END -> L~(k+1)` (one input_group per carried
-    field), and the driver's wiring `{field: "${L#k/END.output.field}"}`. The returned `Flow`'s
-    `start_id` is body_k's START (the sole seed point) and `end_id` is body_k's END; the driver is
-    scheduled by normal readiness when the edge fires.
+    field, or one ordering edge for an empty record), and the driver's wiring
+    `{field: "${L#k/END.output.field}"}`. The returned `Flow`'s `start_id` is body_k's START
+    (the sole seed point) and `end_id` is body_k's END; the driver is scheduled by normal
+    readiness when the edge fires.
 
     Unlike `call_subgraph`/`map_subgraph`, the body-END carries NO `commit_as`: the CONTINUE arm
     never commits under the origin (only the STOP arm's `Output(carried, commit_as=origin)` does),
@@ -416,6 +417,10 @@ def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) ->
         driver_edges.append(Edge(
             id=f"{body_end}->{driver.id}#{i}",
             from_=body_end, to=driver.id, input_group=field_name))
+    if not carried:
+        driver_edges.append(Edge(
+            id=f"{body_end}->{driver.id}#0",
+            from_=body_end, to=driver.id, ordering=True))
     wiring[driver.id] = driver_wiring
     edges.extend(driver_edges)
     return Flow(nodes=nodes, edges=edges, wiring=wiring,

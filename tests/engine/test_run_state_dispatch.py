@@ -465,10 +465,10 @@ def test_prepare_record_accepts_exact_dispatch_and_resume_records():
     )
 
 
-def test_prepare_record_rejects_expansion_until_its_reducer_slice():
+def test_prepare_record_requires_a_builder_for_expansion_replay():
     state, _, _ = _initialized()
 
-    with pytest.raises(TypeError, match="unsupported"):
+    with pytest.raises(TypeError, match="grow_builder"):
         prepare_record(
             state,
             NodeExpandedRecord(

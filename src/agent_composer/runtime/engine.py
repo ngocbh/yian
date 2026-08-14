@@ -844,7 +844,8 @@ class FlowEngine:
         parent = self._spawner_expansion.get(spawner_id) if record is None else None
         # REF-depth stamping (kind-blind, driven by the `grow_depth_delta` trait): the depth was
         # derived and bounded before the splice; now stamp it on every spawner in the subgraph AND
-        # its terminal(s). A None delta (LOOP, non-REF) is a no-op.
+        # its terminal(s). None (a non-spawner) is a no-op; zero lets LOOP inherit
+        # the enclosing REF depth without consuming another bounded level.
         self._stamp_grow_depth(spawner_id, sg, grow_depth)
         # `_spawner_expansion` stamping (kind-blind): point every spawner in the spliced subgraph +
         # its derived terminal(s) at THIS record, so a nested grow nests under it and the CALL

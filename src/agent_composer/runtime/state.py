@@ -229,6 +229,7 @@ class _SuccessPlan:
     end_id: str
     end_node_identity: int | None
     delta: _SuccessDelta
+    terminal: _TerminalDelta | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,9 +246,10 @@ class _SuccessDelta:
 
 @dataclass(slots=True)
 class _SuccessApply:
-    """Independent success value and observer materialized before append."""
+    """Independent success value, terminal result, and observers before append."""
 
     value: TypedValue
+    terminal: _TerminalApply | None
     observers: tuple[Any, ...]
 
 
@@ -263,6 +265,7 @@ class _RoutePlan:
     end_id: str
     end_node_identity: int | None
     delta: _RouteDelta
+    terminal: _TerminalDelta | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +277,37 @@ class _RouteDelta:
     edge_updates: tuple[tuple[str, NodeState], ...]
     skipped_node_ids: tuple[str, ...]
     newly_ready_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _TerminalDelta:
+    """Immutable derived terminal authority attached to one causal outcome.
+
+    ``output_bytes`` is a canonical tagged typed value for success and ``None``
+    for ``TerminalSkipped`` failure.  ``succeeded`` distinguishes a typed null
+    output from the failure case; ``skipped_output_name`` preserves the legacy
+    ``None`` fallback when no required dead END group can be identified.
+    """
+
+    succeeded: bool
+    output_bytes: bytes | None
+    skipped_output_name: str | None
+
+
+@dataclass(slots=True)
+class _TerminalApply:
+    """Independent state result and returned observer materialized before append."""
+
+    result: RunSucceeded | RunFailed
+    observer: RunSucceeded | RunFailed
+
+
+@dataclass(slots=True)
+class _RouteApply:
+    """Independent route observers and optional terminal result before append."""
+
+    terminal: _TerminalApply | None
+    observers: tuple[Any, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -782,6 +816,14 @@ def _prepare_success_transition(
 ) -> PreparedTransition:
     """Freeze one fully validated success delta and its canonical public record."""
     delta = _prepare_success_delta(state, record, typed)
+    terminal = _prepare_terminal_delta(
+        state,
+        completing_node_id=delta.node_id,
+        newly_ready_ids=delta.newly_ready_ids,
+        pending_commit_target=delta.commit_target,
+        pending_value_bytes=delta.value_bytes,
+        edge_updates={},
+    )
     run_id = state.run_id
     if not isinstance(run_id, str):  # established by initialized-state validation
         raise ValueError("run state is not initialized")
@@ -813,6 +855,7 @@ def _prepare_success_transition(
             id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
         ),
         delta=delta,
+        terminal=terminal,
     )
     observer_value = ANY_VALUE_ADAPTER.validate_json(
         delta.value_bytes,
@@ -823,12 +866,15 @@ def _prepare_success_transition(
         output=observer_value,
         commit_as=delta.observer_commit_as,
     )
+    observers: tuple[Any, ...] = (observer,)
+    if terminal is not None:
+        observers += (_terminal_observer(terminal),)
     return PreparedTransition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
         _plan=plan,
-        observers=(observer,),
+        observers=observers,
     )
 
 
@@ -837,7 +883,15 @@ def _prepare_route_transition(
     record: NodeRoutedRecord,
 ) -> PreparedTransition:
     """Freeze one fully validated route delta and its canonical public record."""
-    delta = _prepare_route_delta(state, record)
+    delta, edge_updates = _prepare_route_delta(state, record)
+    terminal = _prepare_terminal_delta(
+        state,
+        completing_node_id=delta.node_id,
+        newly_ready_ids=delta.newly_ready_ids,
+        pending_commit_target=None,
+        pending_value_bytes=None,
+        edge_updates=edge_updates,
+    )
     run_id = state.run_id
     if not isinstance(run_id, str):  # established by initialized-state validation
         raise ValueError("run state is not initialized")
@@ -869,10 +923,13 @@ def _prepare_route_transition(
             id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
         ),
         delta=delta,
+        terminal=terminal,
     )
     observers = (NodeRouted(delta.node_id, delta.handle),) + tuple(
         NodeSkipped(node_id) for node_id in delta.skipped_node_ids
     )
+    if terminal is not None:
+        observers += (_terminal_observer(terminal),)
     return PreparedTransition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
@@ -1075,6 +1132,8 @@ def _commit_success(
         state.edge_state[edge_id] = NodeState.TAKEN
     del state.in_flight[delta.node_id]
     state.ready.extend(delta.newly_ready_ids)
+    if apply.terminal is not None:
+        state.result = apply.terminal.result
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
 
@@ -1100,9 +1159,7 @@ def _commit_route(
         and prepared.record.handle == delta.handle
     ):
         raise ValueError("route record and prevalidated delta disagree")
-    observers = (NodeRouted(delta.node_id, delta.handle),) + tuple(
-        NodeSkipped(node_id) for node_id in delta.skipped_node_ids
-    )
+    apply = _materialize_route(plan)
 
     _append_and_verify(log, prepared)
     state.node_state[delta.node_id] = NodeState.TAKEN
@@ -1112,8 +1169,10 @@ def _commit_route(
         state.node_state[node_id] = NodeState.SKIPPED
     del state.in_flight[delta.node_id]
     state.ready.extend(delta.newly_ready_ids)
+    if apply.terminal is not None:
+        state.result = apply.terminal.result
     state.next_sequence = prepared.expected_sequence + 1
-    return observers
+    return apply.observers
 
 
 def _commit_failure(
@@ -1482,8 +1541,8 @@ def _prepare_success_delta(
 def _prepare_route_delta(
     state: RunState,
     record: NodeRoutedRecord,
-) -> _RouteDelta:
-    """Validate one route locally and freeze its iterative skip-flood operations."""
+) -> tuple[_RouteDelta, dict[str, NodeState]]:
+    """Validate one route and return its frozen delta plus transient edge overlay."""
     _validate_route_record(state, record)
     edge_updates: dict[str, NodeState] = {}
     skipped_node_ids: list[str] = []
@@ -1559,13 +1618,99 @@ def _prepare_route_delta(
         for child in reversed(children):
             work.append((child, NodeState.SKIPPED))
 
-    return _RouteDelta(
-        node_id=record.node_id,
-        handle=record.handle,
-        edge_updates=tuple(edge_updates.items()),
-        skipped_node_ids=tuple(skipped_node_ids),
-        newly_ready_ids=tuple(newly_ready_ids),
+    return (
+        _RouteDelta(
+            node_id=record.node_id,
+            handle=record.handle,
+            edge_updates=tuple(edge_updates.items()),
+            skipped_node_ids=tuple(skipped_node_ids),
+            newly_ready_ids=tuple(newly_ready_ids),
+        ),
+        edge_updates,
     )
+
+
+def _prepare_terminal_delta(
+    state: RunState,
+    *,
+    completing_node_id: str,
+    newly_ready_ids: tuple[str, ...],
+    pending_commit_target: str | None,
+    pending_value_bytes: bytes | None,
+    edge_updates: dict[str, NodeState],
+) -> _TerminalDelta | None:
+    """Derive an optional terminal result from one predicted post-outcome state.
+
+    Quiescence depends only on the two frontier roots and the sparse additions in
+    the causal outcome.  A successful END write is read from its pending typed
+    bytes; an already-committed END value is re-encoded so the plan never aliases
+    the live pool.  Terminal-skip diagnosis consults only END's incoming adjacency.
+    """
+    if (
+        state.result is not None
+        or state.ready
+        or newly_ready_ids
+        or len(state.in_flight) != 1
+        or completing_node_id not in state.in_flight
+    ):
+        return None
+
+    end_id = state.flow.end_id
+    if pending_commit_target == end_id:
+        if type(pending_value_bytes) is not bytes:
+            raise ValueError("pending END output must be canonical typed bytes")
+        return _TerminalDelta(
+            succeeded=True,
+            output_bytes=pending_value_bytes,
+            skipped_output_name=None,
+        )
+    if end_id in state.pool.store:
+        output_bytes = ANY_VALUE_ADAPTER.dump_json(
+            state.pool.store[end_id],
+            warnings="error",
+        )
+        return _TerminalDelta(
+            succeeded=True,
+            output_bytes=output_bytes,
+            skipped_output_name=None,
+        )
+    return _TerminalDelta(
+        succeeded=False,
+        output_bytes=None,
+        skipped_output_name=_terminal_skipped_output_name(state, edge_updates),
+    )
+
+
+def _terminal_skipped_output_name(
+    state: RunState,
+    edge_updates: dict[str, NodeState],
+) -> str | None:
+    """Return the first stored-order required END group fully skipped.
+
+    ``edge_updates`` is the pending route overlay; an absent edge reads its live
+    disposition.  Group insertion order preserves the legacy first-occurrence
+    rule, including ``None`` when that is the diagnosed input-group name.
+    """
+    groups: dict[str | None, tuple[bool, bool]] = {}
+    for edge in state.flow.incoming(state.flow.end_id):
+        if edge.source_handle is not None or edge.ordering:
+            continue
+        disposition = edge_updates.get(edge.id, state.edge_state.get(edge.id))
+        if edge.input_group not in groups:
+            groups[edge.input_group] = (
+                edge.optional,
+                disposition is NodeState.SKIPPED,
+            )
+            continue
+        optional, all_skipped = groups[edge.input_group]
+        groups[edge.input_group] = (
+            optional,
+            all_skipped and disposition is NodeState.SKIPPED,
+        )
+    for name, (optional, all_skipped) in groups.items():
+        if not optional and all_skipped:
+            return name
+    return None
 
 
 def _route_outgoing(
@@ -1942,21 +2087,71 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
 
 
 def _materialize_success(plan: _SuccessPlan) -> _SuccessApply:
-    """Decode independent value and observer copies from the immutable delta."""
+    """Decode independent pool, observer, and terminal copies before append."""
     value = ANY_VALUE_ADAPTER.validate_json(plan.delta.value_bytes, strict=True)
     observer_value = ANY_VALUE_ADAPTER.validate_json(
         plan.delta.value_bytes,
         strict=True,
     ).to_object()
+    terminal = (
+        _materialize_terminal(plan.terminal)
+        if plan.terminal is not None
+        else None
+    )
+    observers: tuple[Any, ...] = (
+        NodeSucceeded(
+            node_id=plan.delta.node_id,
+            output=observer_value,
+            commit_as=plan.delta.observer_commit_as,
+        ),
+    )
+    if terminal is not None:
+        observers += (terminal.observer,)
     return _SuccessApply(
         value=value,
-        observers=(
-            NodeSucceeded(
-                node_id=plan.delta.node_id,
-                output=observer_value,
-                commit_as=plan.delta.observer_commit_as,
-            ),
-        ),
+        terminal=terminal,
+        observers=observers,
+    )
+
+
+def _materialize_route(plan: _RoutePlan) -> _RouteApply:
+    """Materialize route observers and independent terminal copies before append."""
+    terminal = (
+        _materialize_terminal(plan.terminal)
+        if plan.terminal is not None
+        else None
+    )
+    observers = (NodeRouted(plan.delta.node_id, plan.delta.handle),) + tuple(
+        NodeSkipped(node_id) for node_id in plan.delta.skipped_node_ids
+    )
+    if terminal is not None:
+        observers += (terminal.observer,)
+    return _RouteApply(terminal=terminal, observers=observers)
+
+
+def _terminal_observer(delta: _TerminalDelta) -> RunSucceeded | RunFailed:
+    """Materialize one detached terminal event from immutable plan authority."""
+    if delta.succeeded:
+        if type(delta.output_bytes) is not bytes:
+            raise ValueError("successful terminal delta requires typed output bytes")
+        output = ANY_VALUE_ADAPTER.validate_json(
+            delta.output_bytes,
+            strict=True,
+        ).to_object()
+        return RunSucceeded(output=output)
+    if delta.output_bytes is not None:
+        raise ValueError("failed terminal delta cannot carry output bytes")
+    return RunFailed(
+        error=f"terminal output {delta.skipped_output_name!r} skipped",
+        error_type="TerminalSkipped",
+    )
+
+
+def _materialize_terminal(delta: _TerminalDelta) -> _TerminalApply:
+    """Build independent state and callback terminal values before durable append."""
+    return _TerminalApply(
+        result=_terminal_observer(delta),
+        observer=_terminal_observer(delta),
     )
 
 

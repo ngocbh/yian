@@ -19,6 +19,7 @@ from agent_composer.events import (
     NodeSkipped,
     NodeSucceeded,
     RunFailed,
+    RunSucceeded,
     SourceRange,
     SourceSpan,
 )
@@ -1448,6 +1449,442 @@ def test_success_reducer_allocation_is_independent_of_total_run_size():
         f"success reducer allocation scaled with total run state: "
         f"small={small_peak}, large={large_peak}"
     )
+
+
+def _end_and_sibling_flow() -> CompiledFlow:
+    """Return a graph whose END, sibling, and queued leaf run concurrently."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "sibling": FuncNode("sibling", lambda inputs: inputs),
+        "queued": FuncNode("queued", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    return CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-end", from_=START_ID, to=END_ID),
+            Edge(id="start-sibling", from_=START_ID, to="sibling"),
+            Edge(id="start-queued", from_=START_ID, to="queued"),
+        ],
+    )
+
+
+def _end_committed_with_sibling_in_flight() -> tuple[RunState, MemoryRunLog]:
+    """Return a live run whose END value exists while its last sibling is running."""
+    state, log = _initialized_and_started(_end_and_sibling_flow())
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, END_ID))
+    commit_prepared(log, state, prepare_node_started(state, "sibling"))
+    commit_prepared(
+        log,
+        state,
+        prepare_node_succeeded(state, END_ID, {"terminal": ["stable"]}),
+    )
+    return state, log
+
+
+def _end_only_in_flight() -> tuple[RunState, MemoryRunLog]:
+    """Return a live run with END as the sole in-flight node and no ready work."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    flow = CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[Edge(id="start-end", from_=START_ID, to=END_ID)],
+    )
+    state, log = _initialized_and_started(flow)
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, END_ID))
+    return state, log
+
+
+def _terminal_skip_route_flow() -> CompiledFlow:
+    """Return a route whose selected control still co-skips two END groups."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "router": FuncNode("router", lambda inputs: inputs),
+        "dead-optional": FuncNode("dead-optional", lambda inputs: inputs),
+        "dead-z": FuncNode("dead-z", lambda inputs: inputs),
+        "dead-a": FuncNode("dead-a", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=["zeta", "alpha"]),
+    }
+    return CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-router", from_=START_ID, to="router"),
+            Edge(
+                id="router-end",
+                from_="router",
+                to=END_ID,
+                source_handle="go",
+            ),
+            Edge(
+                id="router-dead-optional",
+                from_="router",
+                to="dead-optional",
+                source_handle="skip-optional",
+            ),
+            Edge(
+                id="dead-optional-end",
+                from_="dead-optional",
+                to=END_ID,
+                input_group="optional-first",
+                optional=True,
+            ),
+            Edge(
+                id="router-dead-z",
+                from_="router",
+                to="dead-z",
+                source_handle="skip-z",
+            ),
+            Edge(
+                id="dead-z-end",
+                from_="dead-z",
+                to=END_ID,
+                input_group="zeta",
+            ),
+            Edge(
+                id="router-dead-a",
+                from_="router",
+                to="dead-a",
+                source_handle="skip-a",
+            ),
+            Edge(
+                id="dead-a-end",
+                from_="dead-a",
+                to=END_ID,
+                input_group="alpha",
+            ),
+        ],
+    )
+
+
+def _terminal_skip_router_in_flight() -> tuple[RunState, MemoryRunLog]:
+    """Return a live run with the terminal-skipping router as its sole work."""
+    state, log = _initialized_and_started(_terminal_skip_route_flow())
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, "router"))
+    return state, log
+
+
+def _replay_outcome_log(
+    flow: CompiledFlow,
+    source: MemoryRunLog,
+) -> tuple[RunState, MemoryRunLog, tuple[tuple[Any, ...], ...]]:
+    """Replay one outcome log and retain each transition's derived observers."""
+    records = tuple(envelope.record for envelope in source)
+    started = records[0]
+    assert isinstance(started, RunStartedRecord)
+    state = RunState(flow)
+    log = MemoryRunLog(_RUN_ID)
+    observers = [
+        commit_prepared(
+            log,
+            state,
+            prepare_run_started(
+                state,
+                RunStartData(
+                    run_id=_RUN_ID,
+                    flow_fingerprint=started.flow_fingerprint,
+                    initial_pool=decode_pool(started.initial_pool),
+                    start_wiring_override=started.start_wiring_override,
+                    effective_llm_by_static_path=started.effective_llm_by_static_path,
+                    num_workers=started.num_workers,
+                ),
+            ),
+        )
+    ]
+    for record in records[1:]:
+        prepared = prepare_record(state, record)
+        observers.append(commit_prepared(log, state, prepared))
+    return state, log, tuple(observers)
+
+
+def test_end_output_waits_for_full_quiescence():
+    state, log = _end_committed_with_sibling_in_flight()
+
+    assert state.pool.get(END_ID) == {"terminal": ["stable"]}
+    assert state.result is None
+    assert tuple(state.ready) == ("queued",)
+    assert tuple(state.in_flight) == ("sibling",)
+
+    observers = commit_prepared(
+        log,
+        state,
+        prepare_node_succeeded(state, "sibling", {"done": True}),
+    )
+
+    assert observers == (NodeSucceeded("sibling", {"done": True}),)
+    assert state.result is None
+    assert tuple(state.ready) == ("queued",)
+    assert tuple(state.in_flight) == ()
+
+    commit_prepared(log, state, prepare_node_started(state, "queued"))
+    observers = commit_prepared(
+        log,
+        state,
+        prepare_node_succeeded(state, "queued", {"done": "last"}),
+    )
+
+    assert observers == (
+        NodeSucceeded("queued", {"done": "last"}),
+        RunSucceeded({"terminal": ["stable"]}),
+    )
+    assert state.result == RunSucceeded({"terminal": ["stable"]})
+    assert tuple(state.ready) == ()
+    assert tuple(state.in_flight) == ()
+
+
+def test_newly_ready_successor_prevents_quiescence():
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "worker": FuncNode("worker", lambda inputs: inputs),
+        "after": FuncNode("after", lambda inputs: inputs),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    flow = CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-end", from_=START_ID, to=END_ID),
+            Edge(id="start-worker", from_=START_ID, to="worker"),
+            Edge(id="worker-after", from_="worker", to="after"),
+        ],
+    )
+    state, log = _initialized_and_started(flow)
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, END_ID))
+    commit_prepared(log, state, prepare_node_started(state, "worker"))
+    commit_prepared(log, state, prepare_node_succeeded(state, END_ID, "done"))
+
+    observers = commit_prepared(
+        log,
+        state,
+        prepare_node_succeeded(state, "worker", "worker-done"),
+    )
+
+    assert observers == (NodeSucceeded("worker", "worker-done"),)
+    assert state.result is None
+    assert tuple(state.ready) == ("after",)
+    assert tuple(state.in_flight) == ()
+
+
+def test_late_sibling_failure_wins():
+    state, log = _end_committed_with_sibling_in_flight()
+
+    observers = commit_prepared(
+        log,
+        state,
+        prepare_node_failed(
+            state,
+            "sibling",
+            "late boom",
+            error_type="RuntimeError",
+        ),
+    )
+
+    assert observers == (
+        NodeFailed("sibling", "late boom", "RuntimeError"),
+        RunFailed("late boom", "RuntimeError"),
+    )
+    assert state.pool.get(END_ID) == {"terminal": ["stable"]}
+    assert state.result == RunFailed("late boom", "RuntimeError")
+
+
+def test_typed_none_end_membership_succeeds_at_quiescence():
+    state, log = _end_only_in_flight()
+
+    prepared = prepare_node_succeeded(state, END_ID, None)
+
+    assert isinstance(prepared._plan.terminal.output_bytes, bytes)
+    with pytest.raises(FrozenInstanceError):
+        prepared._plan.terminal.output_bytes = b"changed"  # type: ignore[misc]
+    assert prepared.observers == (
+        NodeSucceeded(END_ID, None),
+        RunSucceeded(None),
+    )
+    observers = commit_prepared(log, state, prepared)
+
+    assert END_ID in state.pool.store
+    assert state.pool.get_value(END_ID) is not None
+    assert state.pool.get(END_ID) is None
+    assert state.result == RunSucceeded(None)
+    assert observers == prepared.observers
+
+
+def test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record():
+    state, log = _terminal_skip_router_in_flight()
+
+    prepared = prepare_node_routed(state, "router", "go")
+
+    expected_terminal = RunFailed(
+        error="terminal output 'zeta' skipped",
+        error_type="TerminalSkipped",
+    )
+    assert prepared.observers == (
+        NodeRouted("router", "go"),
+        NodeSkipped("dead-optional"),
+        NodeSkipped("dead-z"),
+        NodeSkipped(END_ID),
+        NodeSkipped("dead-a"),
+        expected_terminal,
+    )
+    observers = commit_prepared(log, state, prepared)
+
+    assert observers == prepared.observers
+    assert state.result == expected_terminal
+    assert tuple(state.ready) == ()
+    assert tuple(state.in_flight) == ()
+    assert [type(envelope.record) for envelope in log][-1:] == [NodeRoutedRecord]
+    assert len(tuple(log)) == 5
+
+
+def test_terminal_skip_diagnosis_scans_only_end_beyond_touched_route_joins(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state, _ = _terminal_skip_router_in_flight()
+    incoming = state.flow.incoming
+    scanned: list[str] = []
+
+    def counted_incoming(node_id: str) -> list[Edge]:
+        scanned.append(node_id)
+        return incoming(node_id)
+
+    monkeypatch.setattr(state.flow, "incoming", counted_incoming)
+
+    prepare_node_routed(state, "router", "go")
+
+    assert scanned == [
+        END_ID,
+        "dead-optional",
+        "dead-z",
+        "dead-a",
+        END_ID,
+    ]
+
+
+@pytest.mark.parametrize("outcome", ["success", "route"])
+def test_terminal_derivation_replays_from_causal_records_only(outcome: str):
+    if outcome == "success":
+        live_state, live_log = _end_only_in_flight()
+        expected_observers = commit_prepared(
+            live_log,
+            live_state,
+            prepare_node_succeeded(live_state, END_ID, {"value": [1, 2]}),
+        )
+        replay_flow = CompiledFlow.from_parts(
+            nodes={
+                START_ID: StartNode(START_ID),
+                END_ID: EndNode.record(END_ID, output_names=[]),
+            },
+            edges=[Edge(id="start-end", from_=START_ID, to=END_ID)],
+        )
+    else:
+        live_state, live_log = _terminal_skip_router_in_flight()
+        expected_observers = commit_prepared(
+            live_log,
+            live_state,
+            prepare_node_routed(live_state, "router", "go"),
+        )
+        replay_flow = _terminal_skip_route_flow()
+
+    replay_state, replay_log, replay_observers = _replay_outcome_log(
+        replay_flow,
+        live_log,
+    )
+
+    assert replay_observers[-1] == expected_observers
+    assert _reducer_snapshot(replay_state) == _reducer_snapshot(live_state)
+    assert tuple(replay_log) == tuple(live_log)
+    assert all(
+        not type(envelope.record).__name__.startswith("RunSucceeded")
+        and not type(envelope.record).__name__.startswith("RunFailed")
+        for envelope in replay_log
+    )
+
+
+@pytest.mark.parametrize("outcome", ["success", "route"])
+def test_terminal_append_failure_leaves_result_frontier_and_pool_unchanged(
+    outcome: str,
+):
+    if outcome == "success":
+        state, prior = _end_only_in_flight()
+        prepared = prepare_node_succeeded(state, END_ID, {"value": [1, 2]})
+    else:
+        state, prior = _terminal_skip_router_in_flight()
+        prepared = prepare_node_routed(state, "router", "go")
+    before = _state_snapshot(state)
+    log = _FailingAppendLog(prior)
+
+    with pytest.raises(OSError, match="append failed"):
+        commit_prepared(log, state, prepared)
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == prior.next_sequence
+
+
+def test_terminal_success_values_are_mutation_isolated():
+    state, log = _end_only_in_flight()
+    raw = {"nested": [["original"]]}
+    prepared = prepare_node_succeeded(state, END_ID, raw)
+    raw["nested"][0].append("raw mutation")
+    prepared.observers[0].output["nested"][0].append("prepared node mutation")
+    prepared.observers[1].output["nested"][0].append("prepared run mutation")
+
+    observers = commit_prepared(log, state, prepared)
+
+    expected = {"nested": [["original"]]}
+    assert state.pool.get(END_ID) == expected
+    assert state.result == RunSucceeded(expected)
+    assert observers == (
+        NodeSucceeded(END_ID, expected),
+        RunSucceeded(expected),
+    )
+    assert observers[0].output is not observers[1].output
+    assert observers[1].output is not state.result.output
+    observers[0].output["nested"][0].append("returned node mutation")
+    observers[1].output["nested"][0].append("returned run mutation")
+    state.result.output["nested"][0].append("state mutation")
+    assert state.pool.get(END_ID) == expected
+
+
+@pytest.mark.parametrize("outcome", ["success", "route"])
+def test_terminal_commit_performs_no_materialization_after_append(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+):
+    if outcome == "success":
+        state, prior = _end_only_in_flight()
+        prepared = prepare_node_succeeded(state, END_ID, {"value": [1, 2]})
+    else:
+        state, prior = _terminal_skip_router_in_flight()
+        prepared = prepare_node_routed(state, "router", "go")
+
+    def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("terminal commit materialized data after append")
+
+    class PoisonAfterAppendLog(MemoryRunLog):
+        """Copy a prefix, then poison terminal work after durable append."""
+
+        def __init__(self, source: MemoryRunLog) -> None:
+            super().__init__(source.run_id)
+            for envelope in source:
+                super().append(envelope.record)
+
+        def append(self, record: Any):
+            envelope = super().append(record)
+            monkeypatch.setattr(state_module, "RunSucceeded", unexpected)
+            monkeypatch.setattr(state_module, "RunFailed", unexpected)
+            monkeypatch.setattr(state_module, "_materialize_terminal", unexpected)
+            monkeypatch.setattr(state.flow, "incoming", unexpected)
+            return envelope
+
+    log = PoisonAfterAppendLog(prior)
+
+    observers = commit_prepared(log, state, prepared)
+
+    assert len(observers) >= 2
+    assert state.result is not None
 
 
 def _failure_flow() -> CompiledFlow:

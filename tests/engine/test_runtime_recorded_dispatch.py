@@ -377,6 +377,34 @@ def test_reducer_programming_failure_is_not_rewritten_as_node_failure(monkeypatc
     assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
 
 
+def test_success_preparation_runtime_error_remains_exact_host_failure(monkeypatch):
+    expected = RuntimeError("success reducer programming fault")
+    state, log = _initialized(
+        _flow([_ActionNode("work", lambda: "done")]),
+        num_workers=0,
+    )
+    real_prepare = engine_module.prepare_node_succeeded
+
+    def broken_prepare(target_state, node_id, output, *, commit_as=None):
+        if node_id == "work":
+            raise expected
+        return real_prepare(
+            target_state,
+            node_id,
+            output,
+            commit_as=commit_as,
+        )
+
+    monkeypatch.setattr(engine_module, "prepare_node_succeeded", broken_prepare)
+
+    with pytest.raises(RuntimeError) as caught:
+        list(_dispatcher(state, log, num_workers=0).run())
+
+    assert caught.value is expected
+    assert tuple(state.in_flight) == ("work",)
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
+
+
 def test_serial_yields_and_callbacks_follow_post_durable_observer_order():
     state, log = _initialized(
         _flow([_ActionNode("work", lambda: "done")]),
@@ -477,6 +505,32 @@ def test_grow_raw_outcome_uses_injected_builder_and_flat_record():
     assert expanded[0].spawner_id == "spawn"
     assert expanded[0].seed == {"canonical": [1, 2]}
     assert isinstance(state.result, RunSucceeded)
+
+
+def test_injected_grow_builder_runtime_error_is_a_durable_node_failure():
+    expected = RuntimeError("builder rejected seed")
+    state, log = _initialized(_flow([_GrowNode("spawn")]), num_workers=0)
+
+    def reject_builder(_spawner, _seed):
+        raise expected
+
+    events = list(
+        _RecordedDispatcher(
+            state,
+            log,
+            grow_builder=reject_builder,
+            num_workers=0,
+        ).run()
+    )
+
+    assert isinstance(events[-2], NodeFailed)
+    assert events[-2].node_id == "spawn"
+    assert (events[-2].error, events[-2].error_type) == (
+        "builder rejected seed",
+        "RuntimeError",
+    )
+    assert isinstance(events[-1], RunFailed)
+    assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
 
 
 def test_positive_worker_count_never_exceeds_the_submission_bound():
@@ -589,6 +643,63 @@ def test_event_callback_failure_signals_drains_and_reraises_same_exception():
     assert released.is_set()
     assert "blocked" in state.in_flight
     assert state.result is None
+
+
+def test_cleanup_failure_never_replaces_callback_error_and_drain_is_attempted(
+    monkeypatch,
+):
+    entered = threading.Event()
+    released = threading.Event()
+    expected = RuntimeError("observer failed first")
+    cleanup = RuntimeError("executor shutdown failed afterward")
+    real_executor = engine_module.ThreadPoolExecutor
+
+    class HostileShutdownExecutor:
+        """Join real workers, then raise to probe first-cause preservation."""
+
+        def __init__(self, **kwargs):
+            self._delegate = real_executor(**kwargs)
+
+        def submit(self, *args, **kwargs):
+            return self._delegate.submit(*args, **kwargs)
+
+        def shutdown(self, *, wait, cancel_futures):
+            self._delegate.shutdown(wait=wait, cancel_futures=cancel_futures)
+            raise cleanup
+
+    monkeypatch.setattr(
+        engine_module,
+        "ThreadPoolExecutor",
+        HostileShutdownExecutor,
+    )
+
+    def trigger():
+        assert entered.wait(2)
+        return "triggered"
+
+    state, log = _initialized(
+        _flow(
+            [
+                _ActionNode("trigger", trigger),
+                _StopAwareNode("blocked", entered, released),
+            ]
+        ),
+        num_workers=2,
+    )
+
+    def reject(event):
+        if isinstance(event, NodeSucceeded) and event.node_id == "trigger":
+            raise expected
+
+    with pytest.raises(RuntimeError) as caught:
+        list(_dispatcher(state, log, num_workers=2, on_event=reject).run())
+
+    assert caught.value is expected
+    assert released.is_set()
+    assert any(
+        "executor shutdown failed afterward" in note
+        for note in getattr(expected, "__notes__", ())
+    )
 
 
 def test_started_observer_failure_prevents_submission_of_that_node():

@@ -52,12 +52,13 @@ from agent_composer.events import (
     PauseRequested,
     StreamChunk,
 )
-from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, NodeState
+from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, Flow, NodeState
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.base import Grow, Output, Route, _HostStop
 from agent_composer.runtime.eval_node import EvaluationFailure, _eval_node_raw, eval_node
 from agent_composer.runtime.log import RunLog
 from agent_composer.runtime.state import (
+    PreparedTransition,
     RunState,
     commit_prepared,
     prepare_expanded,
@@ -107,6 +108,14 @@ class _RecordedCompletion:
 
     node_id: str
     future: Future
+
+
+class _GrowBuilderError(Exception):
+    """Keep an injected builder exception distinct from reducer programming errors."""
+
+    def __init__(self, original: Exception) -> None:
+        super().__init__(str(original))
+        self.original = original
 
 
 class _RecordedDispatcher:
@@ -334,45 +343,65 @@ class _RecordedDispatcher:
                 "raw evaluator returned an unsupported outcome "
                 f"{type(outcome).__name__}"
             )
-        try:
-            if isinstance(outcome, Output):
+        if isinstance(outcome, Output):
+            try:
                 prepared = prepare_node_succeeded(
                     self.state,
                     node_id,
                     outcome.value,
                     commit_as=outcome.commit_as,
                 )
-            elif isinstance(outcome, Route):
+            except (TypeError, ValueError) as exc:
+                prepared = self._prepare_data_failure(node_id, exc)
+        elif isinstance(outcome, Route):
+            try:
                 prepared = prepare_node_routed(
                     self.state,
                     node_id,
                     outcome.handle,
                 )
-            else:
+            except (TypeError, ValueError) as exc:
+                prepared = self._prepare_data_failure(node_id, exc)
+        else:
+            try:
                 prepared = prepare_expanded(
                     self.state,
                     node_id,
                     outcome,
-                    self.grow_builder,
+                    self._build_growth,
                 )
+            except _GrowBuilderError as wrapped:
+                prepared = self._prepare_data_failure(node_id, wrapped.original)
+            except (TypeError, ValueError) as exc:
+                prepared = self._prepare_data_failure(node_id, exc)
+        return commit_prepared(self.log, self.state, prepared)
+
+    def _build_growth(self, spawner: Any, seed: Any) -> Flow:
+        """Call only the injected growth seam under a distinct failure boundary."""
+        try:
+            return self.grow_builder(spawner, seed)
         except _HostStop:
             raise
-        except Exception as exc:  # noqa: BLE001 - node-result validation boundary
-            # Invalid output, route, seed, or built topology is a failure of this
-            # already-started node.  Failure preparation/append itself stays outside
-            # this catch so reducer/programming and durability errors remain exact.
-            locator = getattr(exc, "locator", None)
-            range_ = getattr(exc, "range", None)
-            prepared = prepare_node_failed(
-                self.state,
-                node_id,
-                str(exc),
-                error_type=type(exc).__name__,
-                locator=locator,
-                range=range_,
-                traceback=_tb.format_exc(),
-            )
-        return commit_prepared(self.log, self.state, prepared)
+        except Exception as exc:  # noqa: BLE001 - injected node-data builder boundary
+            raise _GrowBuilderError(exc) from exc
+
+    def _prepare_data_failure(
+        self,
+        node_id: str,
+        exception: Exception,
+    ) -> PreparedTransition:
+        """Prepare one durable failure from invalid node-produced transition data."""
+        locator = getattr(exception, "locator", None)
+        range_ = getattr(exception, "range", None)
+        return prepare_node_failed(
+            self.state,
+            node_id,
+            str(exception),
+            error_type=type(exception).__name__,
+            locator=locator,
+            range=range_,
+            traceback=_tb.format_exc(),
+        )
 
     def _evaluate(
         self,
@@ -425,12 +454,14 @@ class _RecordedDispatcher:
         messages: queue.Queue,
     ) -> None:
         """Fully join submitted work and discard every queued late message."""
-        executor.shutdown(wait=True, cancel_futures=False)
-        while True:
-            try:
-                messages.get_nowait()
-            except queue.Empty:
-                return
+        try:
+            executor.shutdown(wait=True, cancel_futures=False)
+        finally:
+            while True:
+                try:
+                    messages.get_nowait()
+                except queue.Empty:
+                    break
 
     def _shutdown_after_error(
         self,
@@ -440,16 +471,46 @@ class _RecordedDispatcher:
         initiating: BaseException,
     ) -> BaseException:
         """Signal, fully join, discard messages, and preserve the initiating error."""
-        self.stop_event.set()
-        self._shutdown_and_discard(executor, messages)
+        cleanup_errors: list[BaseException] = []
+        try:
+            self.stop_event.set()
+        except BaseException as cleanup_error:
+            cleanup_errors.append(cleanup_error)
+        try:
+            self._shutdown_and_discard(executor, messages)
+        except BaseException as cleanup_error:
+            cleanup_errors.append(cleanup_error)
         if isinstance(initiating, _HostStop) and not initiating.primary:
             for future in submitted:
                 if not future.done() or future.cancelled():
                     continue
-                candidate = future.exception()
+                try:
+                    candidate = future.exception()
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+                    continue
                 if isinstance(candidate, _HostStop) and candidate.primary:
+                    self._note_cleanup_errors(candidate, cleanup_errors)
                     return candidate
+        self._note_cleanup_errors(initiating, cleanup_errors)
         return initiating
+
+    @staticmethod
+    def _note_cleanup_errors(
+        initiating: BaseException,
+        cleanup_errors: list[BaseException],
+    ) -> None:
+        """Annotate cleanup faults without changing the exception that escapes."""
+        for cleanup_error in cleanup_errors:
+            try:
+                initiating.add_note(
+                    "dispatcher cleanup also raised "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            except BaseException:
+                # Notes are diagnostics only; even a hostile exception implementation
+                # cannot replace the exact control/callback error being propagated.
+                pass
 
 
 class NodeExecutionError(RuntimeError):

@@ -3,10 +3,10 @@
 The node package renders and validates authored prompts/questions, calls the
 reserved ``ask_user`` registry entry through the trusted metadata path, and
 returns the handler's answer as ``Output``. It owns no terminal UI and creates no
-checkpoint pause; hosts install the interaction handler outside the node layer.
+durable run state; hosts install the interaction handler outside the node layer.
 
 Knows about: nodes.base, expr, tools, peer HUMAN_INPUT modules, and Pydantic.
-Never imports: compile, compose, runtime, suspension, the run boundary, CLI, or
+Never imports: compile, compose, runtime, the run boundary, CLI, or
                provider SDKs.
 """
 

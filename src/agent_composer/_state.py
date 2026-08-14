@@ -1,7 +1,7 @@
 """Dependency-free scheduler-state vocabulary shared across engine layers.
 
-This internal leaf lets compiled topology and durable checkpoints agree on node
-and edge state without making the lower suspension package import compile.
+This internal leaf lets compiled topology and the authoritative run-log reducer
+agree on node and edge state without introducing an import between those layers.
 """
 
 from enum import Enum

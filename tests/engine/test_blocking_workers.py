@@ -11,7 +11,7 @@ from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.tools import install_ask_user
 from tests.engine._fakes import FuncNode
-from tests.engine._graph_builder import _graph
+from tests.engine._graph_builder import _engine, _graph
 
 
 def _drive_in_thread(engine: FlowEngine):
@@ -68,16 +68,18 @@ def test_independent_node_completes_while_one_worker_waits_for_human():
         ],
     )
 
-    engine = FlowEngine(graph, num_workers=2)
+    engine = _engine(graph, num_workers=2)
     with install_ask_user(answer):
         thread, outcome = _drive_in_thread(engine)
         try:
             assert prompt_entered.wait(2), "HUMAN_INPUT did not occupy a worker"
             assert sibling_completed.wait(2), "the free worker did not run ready work"
-            assert _wait_until(lambda: engine.pool.get_value("sibling") is not None), (
+            assert _wait_until(
+                lambda: engine.state.pool.get_value("sibling") is not None
+            ), (
                 "the dispatcher did not commit the free worker's result while HUMAN_INPUT blocked"
             )
-            assert engine.pool.get("sibling") == "done"
+            assert engine.state.pool.get("sibling") == "done"
         finally:
             release_prompt.set()
             thread.join(2)
@@ -120,7 +122,7 @@ def test_ready_work_waits_while_every_worker_is_blocked():
     )
 
     with install_ask_user(answer):
-        thread, outcome = _drive_in_thread(FlowEngine(graph, num_workers=2))
+        thread, outcome = _drive_in_thread(_engine(graph, num_workers=2))
         try:
             assert all_workers_blocked.wait(2), "both workers did not enter HUMAN_INPUT"
             assert not ready_node_completed.wait(0.05)

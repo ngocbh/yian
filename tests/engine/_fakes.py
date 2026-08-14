@@ -7,9 +7,8 @@ contract and the runtime scheduling in isolation from LLMs/tools.
 from typing import Any, Callable
 
 from agent_composer.events import StreamChunk
-from agent_composer.nodes.base import Node, NodeKind, Output, Pause, Route
+from agent_composer.nodes.base import Node, NodeKind, Output, Route
 from agent_composer.nodes.binding import ParamDecl
-from agent_composer.suspension.pause import HumanInputRequired
 
 
 def stamp_reads(node, reads):
@@ -28,17 +27,23 @@ def derive_wiring(nodes):
     return {nid: getattr(node, "_wiring_src", {}) for nid, node in nodes.items()}
 
 
-def drive(node, pool=None, flow=None):
+def drive(node, pool=None, flow=None, *, emit_stream=None, stop_event=None):
     """Drive a node through the engine's `eval_node` seam (binds purely from `params` +
-    `flow.wiring`) and return its event generator. With no `flow`, derive a stub `flow.wiring`
-    from the node's declared `_wiring_src`."""
+    `flow.wiring`) and return its raw outcome. With no `flow`, derive a stub
+    `flow.wiring` from the node's declared `_wiring_src`."""
     from agent_composer.runtime.eval_node import eval_node
     from agent_composer.typesys.pool import VariablePool
     from types import SimpleNamespace
 
     if flow is None:
         flow = SimpleNamespace(wiring=derive_wiring({node.id: node}))
-    return eval_node(node, flow, pool if pool is not None else VariablePool())
+    return eval_node(
+        node,
+        flow,
+        pool if pool is not None else VariablePool(),
+        emit_stream=emit_stream,
+        stop_event=stop_event,
+    )
 
 
 class FuncNode(Node):
@@ -119,76 +124,6 @@ class BranchNode(Node):
 
     def _run_impl(self, inputs: dict) -> Route:
         return Route(self.handle)
-
-
-class PauseNode(Node):
-    """A generic test-only Pause leaf for dormant checkpoint compatibility.
-
-    Its borrowed kind tag is incidental; authorable HUMAN_INPUT blocks instead.
-    The engine delivers a compatibility value and the fake never re-runs.
-    """
-
-    kind = NodeKind.HUMAN_INPUT
-
-    def __init__(self, node_id: str, *, reason: Any = "needs-input", **kw: Any) -> None:
-        super().__init__(node_id, **kw)
-        self.reason = reason
-
-    def _run_impl(self, inputs: dict) -> Pause:
-        return Pause(self.reason)
-
-
-class ArtificialHumanPauseNode(PauseNode):
-    """A test-only HUMAN_INPUT-shaped leaf for dormant checkpoint coverage.
-
-    Authorable HUMAN_INPUT blocks in-process now. Tests that specifically exercise
-    the temporary generic ``Pause`` compatibility API use this artificial leaf so
-    they do not teach the old authoring behavior. The reason is built at run time so
-    a cloned leaf reports its fully namespaced id.
-    """
-
-    def __init__(self, node_id: str, *, prompt: str = "", **kw: Any) -> None:
-        super().__init__(node_id, reason=None, **kw)
-        self.prompt = prompt
-
-    def _run_impl(self, inputs: dict) -> Pause:
-        return Pause(HumanInputRequired(
-            prompt=self.prompt,
-            node_title=self.title,
-            node_id=self.id,
-        ))
-
-
-def replace_human_inputs_with_artificial_pauses(flow):
-    """Replace authored HUMAN_INPUT leaves recursively for checkpoint-only tests.
-
-    The loaded topology and all render/type metadata stay intact; only execution of
-    each HUMAN_INPUT leaf is swapped for :class:`ArtificialHumanPauseNode`. Static
-    child flows are visited before runtime growth clones them.
-    """
-    from agent_composer.nodes.human_input import HumanInputNode
-
-    for node_id, node in list(flow.nodes.items()):
-        child = getattr(node, "child", None)
-        if child is not None:
-            replace_human_inputs_with_artificial_pauses(child)
-        if not isinstance(node, HumanInputNode):
-            continue
-
-        replacement = ArtificialHumanPauseNode(
-            node.id,
-            prompt=node.prompt or "",
-            title=node.title,
-        )
-        replacement.__dict__.update(node.__dict__)
-        replacement.prompt = node.prompt or ""
-        flow.nodes[node_id] = replacement
-    return flow
-
-
-# Legacy alias: the re-run "pause once then complete" intent is gone (deliver-as-Output);
-# the alias keeps the pause-only call sites (which never injected) unchanged.
-PauseOnceNode = PauseNode
 
 
 # --------------------------------------------------------------------------- #

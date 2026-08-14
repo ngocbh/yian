@@ -1,4 +1,5 @@
 import ast
+from dataclasses import fields
 import importlib
 import inspect
 from pathlib import Path
@@ -28,16 +29,21 @@ def _pause_references(package_name: str) -> list[str]:
     return references
 
 
-def test_update_variables_command_is_gone():
-    cmds = importlib.import_module("agent_composer.suspension.commands")
-    assert not hasattr(cmds, "UpdateVariablesCommand")
-    assert not hasattr(cmds, "VariableUpdate")
-    assert hasattr(cmds, "AbortCommand") and hasattr(cmds, "DeliverAnswerCommand")
-
-
-def test_channels_module_is_gone():
+@pytest.mark.parametrize(
+    "module_name",
+    [
+        "agent_composer.suspension",
+        "agent_composer.suspension.channels",
+        "agent_composer.suspension.checkpoint",
+        "agent_composer.suspension.commands",
+        "agent_composer.suspension.expansions",
+        "agent_composer.suspension.pause",
+        "agent_composer.runtime.state_manager",
+    ],
+)
+def test_checkpoint_and_suspension_modules_are_gone(module_name):
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module("agent_composer.suspension.channels")
+        importlib.import_module(module_name)
 
 
 def test_effect_nodes_drop_scratch_keys():
@@ -132,23 +138,58 @@ output: ${{wait.output}}
         load_flow(text)
 
 
-def test_generic_pause_checkpoint_compatibility_remains_dormant():
-    from agent_composer.nodes.base import Pause
-    from agent_composer.runtime.engine import FlowEngine
-    from agent_composer.suspension.checkpoint import RunCheckpoint
+def test_final_log_only_runtime_and_public_surface():
+    import agent_composer
+    import agent_composer.events as events
+    import agent_composer.nodes.base as base
+    import agent_composer.run as run
+    from agent_composer.runtime import FlowEngine
 
-    assert Pause is not None and RunCheckpoint is not None
-    assert callable(FlowEngine.snapshot)
-    assert callable(FlowEngine.restore)
-    assert callable(FlowEngine.resume)
-    assert importlib.import_module("agent_composer.runtime.state_manager") is not None
+    for name in ("PauseRequested", "RunPaused", "RunAborted", "NodeStreamEvent"):
+        assert not hasattr(events, name)
+    assert not hasattr(base, "Pause")
+
+    for method in ("snapshot", "restore", "resume", "request_abort"):
+        assert not hasattr(FlowEngine, method)
+    assert not hasattr(agent_composer, "FlowEngine")
+    assert "FlowEngine" not in agent_composer.__all__
+
+    assert not hasattr(run, "resume_command")
+    assert list(inspect.signature(run.run_flow).parameters) == [
+        "flow",
+        "inputs",
+        "log",
+        "run_id",
+        "num_workers",
+        "on_event",
+        "on_stream",
+        "llm_config",
+    ]
+    assert list(inspect.signature(run.resume_flow).parameters) == [
+        "flow",
+        "log",
+        "num_workers",
+        "on_event",
+        "on_stream",
+    ]
+    assert [field.name for field in fields(run.RunResult)] == [
+        "input",
+        "status",
+        "run_id",
+        "log",
+        "output",
+        "error",
+        "locator",
+        "range",
+        "traceback",
+        "events",
+    ]
 
 
 def test_agent_continuation_packages_and_builders_are_gone():
     agent = importlib.import_module("agent_composer.nodes.agent")
     expand = importlib.import_module("agent_composer.compile.expand")
     modes = importlib.import_module("agent_composer.nodes.agent.modes.tool_calling")
-    suspension = importlib.import_module("agent_composer.suspension")
     descriptor = importlib.import_module("agent_composer.compose.nodes.agent")
     base = importlib.import_module("agent_composer.nodes.base")
     engine = importlib.import_module("agent_composer.runtime.engine")
@@ -160,7 +201,6 @@ def test_agent_continuation_packages_and_builders_are_gone():
     assert not hasattr(expand, "clone_continuation_pair")
     assert not hasattr(expand, "ask_resume_edge_id")
     assert not hasattr(modes, "agent_step")
-    assert not hasattr(suspension, "AgentSegment")
     assert not hasattr(base.Node, "grow_restamps_self")
     assert not hasattr(engine.FlowEngine, "_apply_origin_commit_as")
     assert "entry" not in descriptor.AgentDescriptor.__dataclass_fields__

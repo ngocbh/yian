@@ -1,10 +1,10 @@
 from agent_composer.compile.expand import clone_child
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
 from agent_composer.compose.helpers.types import InputDecl, read_type
-from agent_composer.events import NodeFailed, NodeSucceeded
 from agent_composer.nodes.base import NodeKind, Output, ParamDecl
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
+from agent_composer.runtime.eval_node import EvaluationFailure
 from agent_composer.typesys.pool import VariablePool
 from tests.engine._fakes import FuncNode, drive, stamp_reads, derive_wiring
 
@@ -137,7 +137,7 @@ def _run_end(end, pool):
     # END binds its declared params (including the synth `__assert_tail`) from its wiring, exactly
     # like a real flow. We derive the wiring from the node's stamped reads so both `out` and the
     # synth param resolve from the pool INTO the record; the post-assert then fires record-scoped.
-    return list(drive(end, pool))
+    return drive(end, pool)
 
 
 def _tail_assert_end():
@@ -156,14 +156,13 @@ def _tail_assert_end():
 def test_child_end_satisfied_synth_param_post_assert_succeeds():
     pool = VariablePool()
     pool.set("each/tail", "ok")                 # binds `__assert_tail` = "ok" into the record
-    events = _run_end(_tail_assert_end(), pool)
-    assert any(isinstance(e, NodeSucceeded) for e in events)
-    assert not any(isinstance(e, NodeFailed) for e in events)
+    result = _run_end(_tail_assert_end(), pool)
+    assert isinstance(result, Output)
 
 
 def test_child_end_violated_synth_param_post_assert_fails():
     pool = VariablePool()
     pool.set("each/tail", "")                    # binds `__assert_tail` = "" -> violates the assert
-    events = _run_end(_tail_assert_end(), pool)
-    failed = [e for e in events if isinstance(e, NodeFailed)]
-    assert failed and "post-assert" in failed[0].error
+    result = _run_end(_tail_assert_end(), pool)
+    assert isinstance(result, EvaluationFailure)
+    assert "post-assert" in result.error

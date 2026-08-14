@@ -5,8 +5,8 @@ An AGENT declares `output:` as a typed `Type`. For a bare `str` (or a `Literal[.
 variant) the agent stays a text producer — `type_to_schema` returns `None` and the mode
 takes the plain-text path. For any richer type (a record, a scalar `int`/`float`/`bool`, a
 list) `type_to_schema` builds a `pydantic.BaseModel` the mode hands to
-`with_structured_output`, so the model emits a value the engine's write boundary
-(`pool.set(..., declared=output_type)`) accepts.
+`with_structured_output`, so the model emits a value that success-record preparation
+can canonicalize against the effective target's declared output type.
 
 Scalars and lists can't be a top-level pydantic model field on their own, so they are wrapped
 in a single-field model (`{"value": <scalar>}` / `{"items": [<element>]}`); `_unwrap` strips

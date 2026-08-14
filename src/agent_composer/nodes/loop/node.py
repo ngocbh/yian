@@ -51,6 +51,7 @@ class LoopNode(Node):
     kind = NodeKind.LOOP
     is_spawner: ClassVar[bool] = True  # each continuing iteration returns a seed-first Grow
     is_loop: ClassVar[bool] = True  # the fixpoint-iteration driver: the ledger stays single-record
+    grow_depth_delta: ClassVar[int] = 0  # inherit enclosing REF depth without consuming a level
 
     def __init__(
         self,
@@ -132,7 +133,7 @@ class LoopNode(Node):
 
         `params` must be copied for `eval_node` to bind the clone's carried inputs off the CONTINUE
         wiring. `output_type`/asserts are copied for clone self-consistency only — the STOP commit
-        reads the COMPILED origin `L`'s type via `_on_success`, not the clone's."""
+        validates against the COMPILED origin `L`'s type via its commit target, not the clone's."""
         clone = LoopNode(
             f"{self.origin_id}~{k}", flow_id=self.flow_id, flow_version=self.flow_version,
             child=self.child, child_inputs=self.child_inputs,

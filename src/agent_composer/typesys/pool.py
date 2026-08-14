@@ -6,16 +6,15 @@ resolves to `store[<start_id>].X` — the synthesized START_ID node's committed 
 record IS the flow's run-arguments object (the standalone `inputs` namespace is
 retired). The one side namespace is `system` (host-injected ambient — run id / clock /
 tenant; reserved, run-global). There is no engine-private key-addressed namespace;
-live AGENT/HUMAN_INPUT/WAIT results and temporary artificial-pause deliveries all
-become the leaf's ordinary Output.
+live AGENT/HUMAN_INPUT/WAIT effects all return the leaf's ordinary Output.
 
 Two responsibilities:
 - `resolve(head, rest)` backs the `${...}` expression evaluator. Because values
   are typed objects (not stringified), `${x.output.ratio}` traverses into an
   object output; `${x.output}` is the node's whole value.
 - `dumps()/loads()` serialize the whole pool losslessly (the discriminated
-  `AnyValue` union round-trips each value's exact type), which is the state
-  half of a durable checkpoint.
+  `AnyValue` union round-trips each value's exact type), matching the pool wire
+  representation recorded at run initialization and reconstructed during replay.
 """
 
 from typing import Any, Optional, Union
@@ -39,7 +38,7 @@ class VariablePool(BaseModel):
     A node produces exactly one typed value (`store[node_id]`), so "multiple outputs"
     are fields of one object. `${input.X}` reads the synthesized START node's committed
     record; `${system.X}` reads host-injected ambients. Backs the `${...}` resolver and
-    serializes losslessly for a durable checkpoint.
+    serializes losslessly for canonical run-record payloads and recovery.
 
     Attributes:
         store (`dict[str, AnyValue]`):
@@ -168,7 +167,7 @@ class VariablePool(BaseModel):
     # --- serialization ------------------------------------------------------ #
 
     def dumps(self) -> str:
-        """Serialize the whole pool to a JSON string (the state half of a checkpoint)."""
+        """Serialize the whole pool with its exact typed-value discriminators."""
         return self.model_dump_json()
 
     @classmethod

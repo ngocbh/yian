@@ -5,7 +5,7 @@ from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.nodes.base import NodeKind, Output
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.eval_node import eval_node
+from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import ValueKind, Type
 
@@ -48,17 +48,14 @@ def test_start_e08_type_mismatch_raises_located_message():
 
 def test_start_through_eval_node_binds_from_wiring():
     # START_ID runs THROUGH the engine seam: bind_params reads its sources from flow.wiring[START_ID],
-    # run coerces, NodeSucceeded carries the bound record. (No direct .run — the real engine path.)
+    # run coerces, and eval_node returns the raw Output record.
     from types import SimpleNamespace
 
-    from agent_composer.events import NodeSucceeded
     node = StartNode("__start__", input_decls=[_decl("topic", "str")])
     pool = VariablePool()
     pool.set(START_ID, {"topic": "ACME"})  # the seed-stand-in source the wiring points at
     flow = SimpleNamespace(wiring={"__start__": {"topic": "${input.topic}"}})
-    events = list(eval_node(node, flow, pool))
-    succeeded = [e for e in events if isinstance(e, NodeSucceeded)]
-    assert succeeded and succeeded[0].output == {"topic": "ACME"}
+    assert eval_node(node, flow, pool) == Output({"topic": "ACME"})
 
 
 def test_start_through_eval_node_fills_omitted_default():
@@ -68,7 +65,6 @@ def test_start_through_eval_node_fills_omitted_default():
     # (Pre-fix the bare params bound it as present-None, so apply_defaults could not fill it.)
     from types import SimpleNamespace
 
-    from agent_composer.events import NodeSucceeded
     node = StartNode("__start__", input_decls=[
         _decl("topic", "str"),
         _decl("window", "int", default="30", typ=Type.scalar(ValueKind.INTEGER)),
@@ -77,9 +73,9 @@ def test_start_through_eval_node_fills_omitted_default():
     pool.set(START_ID, {"topic": "ACME"})
     # wiring binds ONLY topic — `window` has NO edge (the parent omitted it).
     flow = SimpleNamespace(wiring={"__start__": {"topic": "${input.topic}"}})
-    events = list(eval_node(node, flow, pool))
-    succeeded = [e for e in events if isinstance(e, NodeSucceeded)]
-    assert succeeded and succeeded[0].output == {"topic": "ACME", "window": 30}
+    assert eval_node(node, flow, pool) == Output(
+        {"topic": "ACME", "window": 30}
+    )
 
 
 def test_start_through_eval_node_required_unbound_fails():
@@ -87,11 +83,9 @@ def test_start_through_eval_node_required_unbound_fails():
     # fails loudly (a runtime backstop to the load-time _check_ref_bindings gate).
     from types import SimpleNamespace
 
-    from agent_composer.events import NodeFailed
     node = StartNode("__start__", input_decls=[
         _decl("n", "int", required=True, typ=Type.scalar(ValueKind.INTEGER)),
     ])
     pool = VariablePool()
     flow = SimpleNamespace(wiring={"__start__": {}})  # nothing bound
-    events = list(eval_node(node, flow, pool))
-    assert any(isinstance(e, NodeFailed) for e in events)
+    assert isinstance(eval_node(node, flow, pool), EvaluationFailure)

@@ -16,8 +16,8 @@ from pydantic import BaseModel
 
 import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
-from agent_composer.events import NodeFailed
 from agent_composer.nodes.agent import AgentNode
+from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.llm_clients import LLMConfig
 
@@ -77,26 +77,22 @@ def _node(tools=None, prompt="hi", mode="tool_calling"):
 
 
 def _run_node(node, pool=None):
-    """Drive the node's contract like the engine does (via the `eval_node` seam) and
-    return the TERMINAL event — `NodeSucceeded` on a final answer, `NodeFailed` if the
-    node raised (e.g. the iteration cap, converted at the boundary)."""
-    from agent_composer.runtime.eval_node import eval_node
-
-    return list(eval_node(node, None, pool or VariablePool()))[-1]
+    """Evaluate one agent into its raw output or failure carrier."""
+    return eval_node(node, None, pool or VariablePool())
 
 
 def test_plain_mode_single_call_ignores_tools(monkeypatch):
     chat = _FakeChat([AIMessage(content="plain answer")])
     _patch_model(monkeypatch, chat)
     # tools listed but plain mode must not bind or loop — one call, no tool use
-    assert _run_node(_node(tools=["value"], mode="plain")).output == "plain answer"
+    assert _run_node(_node(tools=["value"], mode="plain")).value == "plain answer"
     assert chat.calls == 1
     assert chat.bound_tools is None
 
 
 def test_tool_calling_returns_plain_text(monkeypatch):
     _patch_model(monkeypatch, _FakeChat([AIMessage(content="answer")]))
-    assert _run_node(_node()).output == "answer"
+    assert _run_node(_node()).value == "answer"
 
 
 def test_tool_calling_round_trip(monkeypatch):
@@ -107,7 +103,7 @@ def test_tool_calling_round_trip(monkeypatch):
         AIMessage(content="done"),
     ])
     _patch_model(monkeypatch, chat)
-    assert _run_node(_node(tools=["value"])).output == "done"
+    assert _run_node(_node(tools=["value"])).value == "done"
     assert tool.seen == [{"topic": "ACME"}]   # the tool actually ran
     assert chat.calls == 2                      # ask -> tool -> ask
 
@@ -149,7 +145,7 @@ def test_tool_calling_executes_model_calls_in_returned_order(monkeypatch):
     )
     _patch_model(monkeypatch, chat)
 
-    assert _run_node(_node(tools=["first", "second"])).output == "done"
+    assert _run_node(_node(tools=["first", "second"])).value == "done"
     assert seen == [("first", 1), ("second", 2)]
 
 
@@ -170,7 +166,7 @@ def test_tool_calling_rejects_globally_registered_but_ungranted_tool(monkeypatch
     _patch_model(monkeypatch, chat)
 
     event = _run_node(_node(tools=[]))
-    assert isinstance(event, NodeFailed)
+    assert isinstance(event, EvaluationFailure)
     assert "not granted" in event.error
     assert seen == []
 
@@ -194,7 +190,7 @@ def test_tool_calling_rejects_model_injected_arguments(monkeypatch):
     _patch_model(monkeypatch, chat)
 
     event = _run_node(_node(tools=["lookup"]))
-    assert isinstance(event, NodeFailed)
+    assert isinstance(event, EvaluationFailure)
     assert "unsupported argument" in event.error
     assert seen == []
 
@@ -213,15 +209,15 @@ def test_tool_calling_propagates_tool_exception_as_node_failure(monkeypatch):
     _patch_model(monkeypatch, chat)
 
     event = _run_node(_node(tools=["explode"]))
-    assert isinstance(event, NodeFailed)
+    assert isinstance(event, EvaluationFailure)
     assert event.error_type == "RuntimeError"
     assert "cannot load ACME" in event.error
 
 
 def test_tool_calling_cap_trips_when_bounded(monkeypatch):
     # A POSITIVE env cap bounds the loop: always-asks-for-a-tool -> never answers -> trips
-    # the cap after `cap` turns. The `raise AgentLoopError` is converted to NodeFailed by the
-    # engine boundary (eval_node). (The DEFAULT is -1 / no cap — see the no-cap test below.)
+    # the cap after `cap` turns. The raised AgentLoopError becomes EvaluationFailure at
+    # eval_node. (The DEFAULT is -1 / no cap — see the no-cap test below.)
     cap = 5
     monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "noop", _FakeTool(lambda a: "ok"))
     looping = _FakeChat([_ai_tool_call("noop", {}, str(i)) for i in range(cap)])
@@ -229,7 +225,7 @@ def test_tool_calling_cap_trips_when_bounded(monkeypatch):
     node = _node(tools=["noop"])
     node.env = {"max_tool_iterations": cap}
     ev = _run_node(node)
-    assert isinstance(ev, NodeFailed)
+    assert isinstance(ev, EvaluationFailure)
     assert ev.error_type == "AgentLoopError"
     assert "tool-iteration cap" in ev.error
 
@@ -245,7 +241,7 @@ def test_default_no_cap_runs_unbounded(monkeypatch):
     replies.append(AIMessage(content="done"))
     chat = _FakeChat(replies)
     _patch_model(monkeypatch, chat)
-    assert _run_node(_node(tools=["noop"])).output == "done"
+    assert _run_node(_node(tools=["noop"])).value == "done"
     assert chat.calls == 151          # 150 tool turns + the final answer, all uncapped
 
 
@@ -259,7 +255,7 @@ def test_env_max_tool_iterations_overrides_cap(monkeypatch):
     node = _node(tools=["noop"])
     node.env = {"max_tool_iterations": 2}
     ev = _run_node(node)
-    assert isinstance(ev, NodeFailed)
+    assert isinstance(ev, EvaluationFailure)
     assert ev.error_type == "AgentLoopError"
     assert "(2)" in ev.error          # the cap in the message is the env override, not the default
     assert looping.calls == 2         # stopped at exactly the env bound
@@ -273,13 +269,13 @@ def test_env_max_tool_iterations_minus_one_accepted():
 
 
 def test_env_max_tool_iterations_rejects_bad_value(monkeypatch):
-    # A non-(positive-int-or-(-1)) env value is rejected as a NodeFailed (ValueError at the
+    # A non-(positive-int-or-(-1)) env value is rejected as EvaluationFailure (ValueError at the
     # boundary), not silently coerced. bool is explicitly rejected (isinstance(True, int) is True).
     _patch_model(monkeypatch, _FakeChat([AIMessage(content="unused")]))
     node = _node()
     node.env = {"max_tool_iterations": 0}
     ev = _run_node(node)
-    assert isinstance(ev, NodeFailed)
+    assert isinstance(ev, EvaluationFailure)
     assert "max_tool_iterations" in ev.error
 
 

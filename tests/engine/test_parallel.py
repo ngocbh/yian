@@ -8,21 +8,17 @@ Two things to prove:
 
 import time
 
-from agent_composer.events import RunFailed, RunPaused, RunSucceeded
+from agent_composer.events import RunFailed, RunSucceeded
 from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, NodeState, FlowOutput
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.engine import FlowEngine
-from agent_composer.typesys.pool import VariablePool
 from tests.engine._fakes import (
     BranchNode,
     FailNode,
     FuncNode,
-    PauseOnceNode,
     RecordNode,
-    derive_wiring,
 )
-from tests.engine._graph_builder import _graph
+from tests.engine._graph_builder import _engine, _graph
 
 
 def _run(engine):
@@ -45,7 +41,7 @@ def test_linear_is_deterministic_under_workers():
         [RecordNode("a", log), RecordNode("b", log), RecordNode("c", log)],
         [(START_ID, "a"), ("a", "b"), ("b", "c"), ("c", END_ID)],
     )
-    events = _run(FlowEngine(g, num_workers=4))
+    events = _run(_engine(g, num_workers=4))
     assert log == ["a", "b", "c"]  # a chain serializes regardless of pool size
     assert isinstance(events[-1], RunSucceeded)
 
@@ -56,7 +52,7 @@ def test_diamond_join_once_under_workers():
         [RecordNode("a", log), RecordNode("b", log), RecordNode("c", log), RecordNode("d", log)],
         [(START_ID, "a"), ("a", "b"), ("a", "c"), ("b", "d"), ("c", "d"), ("d", END_ID)],
     )
-    _run(FlowEngine(g, num_workers=4))
+    _run(_engine(g, num_workers=4))
     assert set(log) == {"a", "b", "c", "d"}
     assert log.count("d") == 1  # exact-once join held under concurrency
 
@@ -67,10 +63,10 @@ def test_case_skip_under_workers():
         [BranchNode("cond", "yes"), RecordNode("b", log), RecordNode("c", log)],
         [(START_ID, "cond"), ("cond", "b", "yes"), ("cond", "c", "default"), ("b", END_ID), ("c", END_ID)],
     )
-    engine = FlowEngine(g, num_workers=4)
+    engine = _engine(g, num_workers=4)
     _run(engine)
     assert log == ["b"]
-    assert engine.sm.node_state["c"] == NodeState.SKIPPED
+    assert engine.state.node_state["c"] == NodeState.SKIPPED
 
 
 def test_veto_under_workers_data_edged_branch_skips():
@@ -96,10 +92,10 @@ def test_veto_under_workers_data_edged_branch_skips():
     node_map = {n.id: n for n in nodes}
     node_map[START_ID] = StartNode(START_ID, input_decls=[])
     node_map[END_ID] = EndNode.record(END_ID, output_names=[])
-    engine = FlowEngine(CompiledFlow.from_parts(node_map, edges), num_workers=4)
+    engine = _engine(CompiledFlow.from_parts(node_map, edges), num_workers=4)
     _run(engine)
     assert "pro_note" in log and "con_note" not in log
-    assert engine.sm.node_state["con_note"] == NodeState.SKIPPED
+    assert engine.state.node_state["con_note"] == NodeState.SKIPPED
 
 
 def test_terminal_skipped_fails_under_workers():
@@ -110,7 +106,7 @@ def test_terminal_skipped_fails_under_workers():
         [(START_ID, "gate"), ("gate", "a", "a"), ("gate", "t", "t"), ("a", END_ID), ("t", END_ID)],
         outputs=[FlowOutput("result", "${t.output}")],
     )
-    last = _run(FlowEngine(g, num_workers=4))[-1]
+    last = _run(_engine(g, num_workers=4))[-1]
     assert isinstance(last, RunFailed) and last.error_type == "TerminalSkipped"
 
 
@@ -127,7 +123,7 @@ def test_fan_out_actually_overlaps():
 
     g = _graph(nodes, edges)
     start = time.perf_counter()
-    events = _run(FlowEngine(g, num_workers=4))
+    events = _run(_engine(g, num_workers=4))
     elapsed = time.perf_counter() - start
 
     assert isinstance(events[-1], RunSucceeded)
@@ -141,22 +137,9 @@ def test_failure_under_workers():
         [FuncNode("a", lambda p: {}), FailNode("b", "nope")],
         [(START_ID, "a"), ("a", "b"), ("b", END_ID)],
     )
-    events = _run(FlowEngine(g, num_workers=4))
+    events = _run(_engine(g, num_workers=4))
     assert isinstance(events[-1], RunFailed)
     assert events[-1].error == "nope"
-
-
-def test_pause_under_workers():
-    g = _graph(
-        [
-            FuncNode("a", lambda p: {}),
-            PauseOnceNode("gate", reason="approve?"),
-        ],
-        [(START_ID, "a"), ("a", "gate"), ("gate", END_ID)],
-    )
-    events = _run(FlowEngine(g, num_workers=4))
-    assert isinstance(events[-1], RunPaused)
-    assert events[-1].reasons == ["approve?"]
 
 
 def test_terminal_output_under_workers():
@@ -168,7 +151,7 @@ def test_terminal_output_under_workers():
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],
         outputs=[FlowOutput(name="result", from_="${t.output}")],
     )
-    events = _run(FlowEngine(g, num_workers=4))
+    events = _run(_engine(g, num_workers=4))
     assert events[-1].output == {"output": "final"}
 
 
@@ -179,13 +162,6 @@ def test_no_declared_outputs_yields_none_under_workers():
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final"})],
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],
     )
-    events = _run(FlowEngine(g, num_workers=4))
+    events = _run(_engine(g, num_workers=4))
     assert isinstance(events[-1], RunSucceeded)
     assert events[-1].output is None
-
-
-def test_drive_to_terminal_exists_and_pooled_run_unchanged():
-    """Smoke: the extracted _drive_to_terminal helper exists; golden tests carry the real
-    behavior-preservation coverage."""
-    from agent_composer.runtime.engine import FlowEngine
-    assert hasattr(FlowEngine, "_drive_to_terminal")

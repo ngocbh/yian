@@ -2,24 +2,25 @@
 
 > The node side of the [engine contract](engine.md). Each kind supplies `_run_impl`
 > plus a few static traits and inherits the shared `run` template; the engine reads
-> only those and the returned `Outcome`, never the kind.
+> only those and the returned `NodeResult`, never the kind.
 
 ## A node is a pure function
 
 A flow is a graph of steps; **a node is one step** — "ask an LLM", "run a Python
 function", "repeat until good enough". The engine reads the node's inputs out of the pool
-and hands them over as a plain dict; the node computes and returns an `Outcome`. It
+and hands them over as a plain dict; the node computes and returns a `NodeResult`. It
 **cannot** touch the pool, the queue, or the graph.
 
 ```
-   inputs (plain dict) ──▶  ┌── NODE ──┐  ──▶ Outcome
+   inputs (plain dict) ──▶  ┌── NODE ──┐  ──▶ NodeResult
                             │  pure    │
                             └──────────┘
 ```
 
-Purity here is a boundary rule: the graph state is reproducible and resumable because
-no node mutates it directly. An effectful leaf may still consult an LLM, a human, or the
-wall clock, but its only graph-visible result is the `Outcome` it returns.
+Purity here is a boundary rule: the graph state is reproducible and can be reconstructed
+from its authoritative records because no node mutates it directly. An effectful leaf may
+still consult an LLM, a human, or the wall clock, but its only graph-visible result is the
+`NodeResult` it returns.
 
 ## The contract
 
@@ -34,7 +35,7 @@ class Node:
     pre_asserts / post_asserts       # conditions base run checks before / after the body
     is_spawner: bool = False         # may I return Grow (expand the graph)?
 
-    def run(self, inputs, **caps) -> Outcome:      # shared template; do not override
+    def run(self, inputs, **caps) -> NodeResult:   # shared template; do not override
         inputs = apply_defaults(self.params, inputs)
         check(self.pre_asserts, inputs)
         outcome = self._run_impl(inputs, **caps)   # the ONE kind-specific step
@@ -42,7 +43,7 @@ class Node:
             check(self.post_asserts, {**inputs, "output": outcome.value})
         return outcome
 
-    def _run_impl(self, inputs, **caps) -> Outcome:
+    def _run_impl(self, inputs, **caps) -> NodeResult:
         ...
 ```
 
@@ -58,7 +59,7 @@ class Node:
 
 **Why only `_run_impl`?** Default filling and assertion checks are identical for every
 kind — so they are protocol, not kind behavior, and live in the base template. See
-[the engine loop](engine.md#the-loop-read-eval-apply).
+[the engine loop](engine.md#the-loop-read-eval-record-reduce).
 
 ## Two families
 
@@ -75,10 +76,7 @@ what `run` returns:
 
 - An ordinary **value-producing leaf** does one thing and returns `Output`. AGENT
   `ask_user`, HUMAN_INPUT, and WAIT may block inside the live invocation, but
-  still return `Output`;
-  authorable nodes do not pause the graph. WAIT returns `None` after its absolute
-  UTC deadline. The result sum retains `Pause` only for dormant custom/artificial
-  checkpoint compatibility until issue #117.
+  still return `Output`. WAIT returns `None` after its absolute UTC deadline.
 - A **router** (`case`) is a leaf that returns `Route(handle)` — no value, it just selects
   the live out-edge (siblings skip-flood). Still `is_spawner=False`; routing isn't growth.
 - A **spawner** returns `Grow` with a canonical seed describing the requested work.
@@ -129,8 +127,8 @@ branching on kind.
 
 - **One method to add a kind** — implement `_run_impl`; the wrapper is supplied unchanged.
 - **Structural purity** — nodes never mutate shared graph state, so scheduling and
-  compatibility replay remain reproducible even when a leaf performs an external effect.
-- **The engine stays kind-blind** — all that varies is the `Outcome` a `run` returns.
+  run-record replay remain reproducible even when a leaf performs an external effect.
+- **The engine stays kind-blind** — all that varies is the `NodeResult` a `run` returns.
 
 For the authoring surface of each kind (`kind:`, its fields, examples), see
 [Flow syntax](syntax.md). For each node class, see the [API reference](reference.md).

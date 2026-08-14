@@ -109,7 +109,7 @@ def test_build_grow_matches_live_clone_and_origin_replay_byte_for_byte():
     live_outcome = clone.run({"x": 1})
     assert isinstance(live_outcome, Grow)
     live = build_grow(clone, live_outcome.seed)
-    replay = build_grow(origin, [{"x": 1}, 2])       # checkpoint JSON turns the pair into a list
+    replay = build_grow(origin, [{"x": 1}, 2])       # canonical log JSON turns the pair into a list
 
     assert live.start_id == replay.start_id
     assert live.end_id == replay.end_id

@@ -15,16 +15,20 @@ build-time flow-assert lowering:
   coerced output (`${<callsite>/__start__.output.X:-null}`), with a structural
   `<callsite>/__start__ -> <callsite>/__end__` edge — the same shape build-time uses.
 
-Resume-safety: the injected builder rebuilds via the SAME `call_subgraph`, so a resumed run's
-rebuilt child END carries identical lowered asserts and still fires the post-assert.
+Recovery-safety: authoritative log replay rebuilds via the SAME `call_subgraph`, so a
+recovered run's child END carries identical lowered asserts and still fires the post-assert.
 """
+
+from pathlib import Path
+
+import pytest
 
 from agent_composer.compile.expand import _SYNTH_PREFIX, call_subgraph
 from agent_composer.compose import load_flow
-from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.events import RunFailed
-from agent_composer.suspension.checkpoint import RunCheckpoint
-from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
+from agent_composer.nodes.base import _HostStop
+from agent_composer.run import resume_flow, run_flow
+from agent_composer.tools import install_ask_user
 
 
 # A child that doubles its int input and re-exports it as `${output}` (an int).
@@ -152,11 +156,11 @@ def test_declared_input_post_assert_violating_fails():
 
 
 # =========================================================================== #
-# 3. resume-safety: the lowered spawner post-assert survives a checkpoint hop
+# 3. recovery-safety: the lowered spawner post-assert survives log replay
 # =========================================================================== #
 
-# A child whose HUMAN_INPUT is swapped for a test-only Pause before its END.
-_PAUSING_CHILD = """
+# A child whose live HUMAN_INPUT can be interrupted after its durable start.
+_BLOCKING_CHILD = """
 id: approver
 name: approver
 input:
@@ -172,12 +176,12 @@ output: ${approve.output}
 """
 
 
-def _pausing_parent() -> str:
-    # The call carries a node-level ${output} < 100 post-assert; the test swaps the child's
-    # HUMAN_INPUT for an artificial pause, so the assert can fire only on the resumed leg.
+def _blocking_parent() -> str:
+    # The call carries a node-level ${output} < 100 post-assert. Recovery retries the
+    # unfinished HUMAN_INPUT, then the rebuilt child END evaluates this assertion.
     return """
-id: pause-parent
-name: pause_parent
+id: recovery-parent
+name: recovery_parent
 uses:
   approver: approver
 input:
@@ -194,27 +198,30 @@ output: ${gate.output}
 """
 
 
-def _load_pausing():
-    loaded = load_flow(
-        _pausing_parent(),
-        child_resolver=_resolver(**{"approver": _PAUSING_CHILD}),
+def _load_blocking():
+    return load_flow(
+        _blocking_parent(),
+        child_resolver=_resolver(**{"approver": _BLOCKING_CHILD}),
     )
-    replace_human_inputs_with_artificial_pauses(loaded.compiled)
-    return loaded
 
 
-def test_spawner_post_assert_fires_on_resume():
-    # Run -> artificial pause -> cross-process snapshot/dumps -> loads/restore -> resume.
-    # Delivering 120 violates ${output} < 100, so the rebuilt child END fires the post-assert
-    # on the RESUMED leg and the run FAILS. Proves durable construction re-lowers the same asserts.
-    loaded = _load_pausing()
-    rec = run_flow(loaded, {"v": 1})
-    assert rec.status == "paused"
-    reason = rec.pause_reasons[0]
-    ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())
-    fresh = _load_pausing()
-    cmd = resume_command(fresh, reason, 120)
-    res = resume_flow(fresh, checkpoint=ckpt, commands=[cmd])
+def test_spawner_post_assert_fires_after_log_recovery(tmp_path: Path):
+    # Interrupt the live HUMAN_INPUT after its NodeStarted is durable. Recovery replays the
+    # expansion, retries the whole input node, and delivers 120. The rebuilt child END must
+    # then reject ${output} < 100 through its ordinary post-assert path.
+    path = tmp_path / "spawner-post-assert.jsonl"
+    interruption = _HostStop("interrupt before human answer")
+
+    def interrupt(**request):
+        raise interruption
+
+    with install_ask_user(interrupt), pytest.raises(_HostStop) as caught:
+        run_flow(_load_blocking(), {"v": 1}, log=path)
+    assert caught.value is interruption
+
+    with install_ask_user(lambda **request: 120):
+        res = resume_flow(_load_blocking(), log=path)
+
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
     assert failed and failed[0].error_type == "NodeAssertFailed"

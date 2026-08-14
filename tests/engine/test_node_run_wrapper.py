@@ -1,12 +1,11 @@
 """The base `Node.run` template method fires pre/post asserts (record-only).
 
-Step 2 of the node-owned-asserts refactor: `Node.run` becomes a concrete
-template method that fires `pre_asserts` against the bound record, calls the
+``Node.run`` is a concrete template method that fires ``pre_asserts`` against
+the bound record, calls the
 kind's `_run_impl`, then fires `post_asserts` against `{**record, output}`.
 Firing reads ONLY the bound record (never the pool) — preserving node purity.
 
-These tests exercise the wrapper directly (NOT through `eval_node`, which keeps
-firing asserts itself until a later step). We define a tiny concrete node that
+These tests exercise the wrapper directly. We define a tiny concrete node that
 implements `_run_impl` (the FuncNode fake still defines `run`, which would
 shadow the wrapper), so the wrapper's own firing is under test.
 """
@@ -91,10 +90,10 @@ def test_assert_texts_used_in_message():
     assert "calc.output > 100" in str(excinfo.value)
 
 
-# --- After the Step 3 rename (each kind's `run` -> `_run_impl`), the INHERITED base
+# The inherited base
 # `Node.run` wrapper is the entry point for real/fake kinds: calling `node.run(...)`
 # (with no asserts set) must delegate to the kind's `_run_impl` and return its result
-# unchanged, once per result category (Output / Route / Pause / Grow). These prove the
+# unchanged, once per result category (Output / Route / Grow). These prove the
 # wrapper correctly finds the renamed `_run_impl` — they FAIL before the rename because
 # the kinds still shadow `run` (so `run` is the kind body, not the wrapper), and the base
 # `_run_impl` stub raises NotImplementedError.
@@ -128,20 +127,6 @@ def test_wrapper_delegates_for_route_kind():
     assert result.handle == "yes"
 
 
-def test_wrapper_delegates_for_pause_kind():
-    """A test-only Pause leaf inherits `run` and returns its compatibility result."""
-    from agent_composer.nodes.base import Pause
-
-    from tests.engine._fakes import PauseNode
-
-    node = PauseNode("p", reason="needs-input")
-    assert type(node).run is Node.run
-    result = node.run({})
-
-    assert isinstance(result, Pause)
-    assert result.reason == "needs-input"
-
-
 def test_wrapper_delegates_for_grow_kind():
     """A spawner (CALL -> Grow): `run` is the inherited wrapper and returns the Grow from `_run_impl`."""
     from agent_composer.nodes.base import Grow
@@ -158,8 +143,8 @@ def test_wrapper_delegates_for_grow_kind():
 
 
 # --- eval_node NO LONGER fires asserts itself: the `run` wrapper owns firing. eval_node drives
-# `node.run` (not `_run_impl`), so a node whose `run` is overridden to bypass firing produces NO
-# NodeFailed even with a would-be-failing post-assert — proving eval_node does not fire on its own.
+# `node.run` (not `_run_impl`), so a node whose `run` is overridden to bypass firing returns
+# Output even with a would-be-failing post-assert — proving eval_node does not fire on its own.
 
 
 def test_eval_node_no_longer_has_first_failing_assert():
@@ -196,9 +181,7 @@ class _FireRunNode(_BypassRunNode):
 
 
 def test_eval_node_does_not_fire_when_run_bypasses_firing():
-    """Behavioral: a would-be-failing post-assert produces NO NodeFailed when `run` bypasses
-    firing — eval_node delegates to `run()` and does not fire independently."""
-    from agent_composer.events import NodeFailed, NodeSucceeded
+    """A bypassed wrapper returns Output without independently firing the assert."""
 
     from tests.engine._fakes import drive, stamp_reads
 
@@ -206,15 +189,13 @@ def test_eval_node_does_not_fire_when_run_bypasses_firing():
     node.post_asserts = ["${output} == 'never'"]  # would FAIL if fired
     stamp_reads(node, {})
 
-    events = list(drive(node))
-    assert any(isinstance(e, NodeSucceeded) for e in events)
-    assert not any(isinstance(e, NodeFailed) for e in events)
+    result = drive(node)
+    assert result == Output("v")
 
 
 def test_eval_node_fires_via_wrapper_positive_control():
-    """Positive control: the SAME node WITHOUT the `run` override inherits the wrapper, which
-    fires the failing post-assert -> NodeFailed. Confirms the assert genuinely fails."""
-    from agent_composer.events import NodeFailed
+    """The inherited wrapper converts its failed assert to EvaluationFailure."""
+    from agent_composer.runtime.eval_node import EvaluationFailure
 
     from tests.engine._fakes import drive, stamp_reads
 
@@ -222,6 +203,6 @@ def test_eval_node_fires_via_wrapper_positive_control():
     node.post_asserts = ["${output} == 'never'"]
     stamp_reads(node, {})
 
-    events = list(drive(node))
-    failed = [e for e in events if isinstance(e, NodeFailed)]
-    assert failed and "post-assert" in failed[0].error
+    result = drive(node)
+    assert isinstance(result, EvaluationFailure)
+    assert "post-assert" in result.error

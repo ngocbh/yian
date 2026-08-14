@@ -67,10 +67,12 @@ runtime knows only the injected `(spawner, seed) -> Flow` callable. Package-root
 
 - no module under `nodes/` imports `agent_composer.compile`;
 - no module under `runtime/` imports `agent_composer.compile.expand` (imports of
-  the lower `compile.model` topology contract remain allowed).
+  compile's execution contracts remain allowed).
 
 `tests/engine/test_layer_direction.py` parses imports with `ast` and enforces these
 rules, including equivalent relative-import spellings. Spawner seed schemas live
 with their owning nodes; the scheduling-state vocabulary lives in the internal
-`_state.py` leaf because both compile and suspension consume it. Placing that
-shared contract in either consumer would create a cycle.
+`_state.py` leaf because both compile and runtime consume it. Runtime owns the
+run-record/log codecs, append-before-apply reducer, and dispatcher, while the
+package-root `run.py` owns log lifecycle and recovery. Placing the shared state
+vocabulary in a neutral leaf keeps both consumers from owning the other's contract.

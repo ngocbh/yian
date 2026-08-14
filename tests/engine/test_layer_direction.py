@@ -99,37 +99,9 @@ def test_nodes_never_import_runtime() -> None:
     )
 
 
-def test_suspension_never_imports_nodes() -> None:
-    """Suspension is a lower node dependency and must not import back into nodes."""
-    violations = _forbidden_imports(
-        PACKAGE_ROOT / "suspension", "agent_composer.nodes"
-    )
-    assert not violations, (
-        "suspension must not import nodes; shared pause/growth contracts belong in "
-        "the lower suspension package:\n" + "\n".join(violations)
-    )
-
-
-def test_suspension_never_imports_compile() -> None:
-    """Suspension stays below both nodes and their compiled topology."""
-    violations = _forbidden_imports(
-        PACKAGE_ROOT / "suspension", "agent_composer.compile"
-    )
-    assert not violations, (
-        "suspension must not import compile; shared checkpoint state contracts belong "
-        "in a dependency-free leaf module:\n" + "\n".join(violations)
-    )
-
-
-def test_compile_never_imports_suspension() -> None:
-    """Compile and suspension share only lower leaf contracts, never each other."""
-    violations = _forbidden_imports(
-        PACKAGE_ROOT / "compile", "agent_composer.suspension"
-    )
-    assert not violations, (
-        "compile must not import suspension; extract shared growth contracts to a "
-        "lower leaf module:\n" + "\n".join(violations)
-    )
+def test_checkpoint_era_suspension_package_is_deleted() -> None:
+    """Keep durable lifecycle authority in runtime logs, not a parallel package."""
+    assert not (PACKAGE_ROOT / "suspension").exists()
 
 
 def test_scanner_normalizes_absolute_and_relative_import_spellings() -> None:

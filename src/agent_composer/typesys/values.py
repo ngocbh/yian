@@ -5,7 +5,8 @@ self-describing container carrying its `ValueKind`. The tag is what makes the
 variable pool serialize losslessly — on a JSON round-trip the discriminated
 `AnyValue` union decodes each value back into the right subclass, so an int
 stays an int and a float stays a float regardless of JSON's number ambiguity.
-That losslessness is the primitive durable checkpoint/resume depends on.
+That losslessness lets the append-only run log persist typed values and rebuild
+the same pool during replay.
 
 Trimmed from graphon's `variables/` to the load-bearing core: scalars, lists,
 object — plus a reserved `FILE` placeholder that is never auto-inferred and not
@@ -76,9 +77,9 @@ class ValueKind(str, Enum):
 class FileRef(BaseModel):
     """A minimal, opaque file reference — reserved placeholder.
 
-    Carries only what is needed to round-trip through a checkpoint. Storage,
-    transfer, size and markdown rendering are deliberately absent until file
-    handling is actually built.
+    Carries only what is needed to round-trip through the typed-value wire
+    representation used by run records. Storage, transfer, size and markdown
+    rendering are deliberately absent until file handling is actually built.
     """
 
     model_config = ConfigDict(frozen=True)

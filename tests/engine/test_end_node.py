@@ -52,9 +52,8 @@ def test_end_post_asserts_fire_record_scoped_through_eval_node():
     is the production shape after ref lowering (the pool-fallback in eval_node was retired)."""
     from types import SimpleNamespace
 
-    from agent_composer.events import NodeFailed, NodeSucceeded
     from agent_composer.nodes.base import ParamDecl
-    from agent_composer.runtime.eval_node import eval_node
+    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
     from agent_composer.typesys.pool import VariablePool
 
     pool = VariablePool()
@@ -65,14 +64,14 @@ def test_end_post_asserts_fire_record_scoped_through_eval_node():
     node.params.append(ParamDecl(name="__assert_emit"))
     flow = SimpleNamespace(wiring={"__end__": {"n": "${emit.output.n}",
                                               "__assert_emit": "${emit.output.n:-null}"}})
-    ok = list(eval_node(node, flow, pool))
-    assert any(isinstance(e, NodeSucceeded) for e in ok)
+    assert eval_node(node, flow, pool) == Output(4)
 
     bad = EndNode.record("__end__", output_names=["n"])
     bad.post_asserts = ["${__assert_emit} > 100"]
     bad.params.append(ParamDecl(name="__assert_emit"))
-    failed = list(eval_node(bad, flow, pool))
-    assert any(isinstance(e, NodeFailed) and "post-assert failed" in e.error for e in failed)
+    failed = eval_node(bad, flow, pool)
+    assert isinstance(failed, EvaluationFailure)
+    assert "post-assert failed" in failed.error
 
 
 def test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param():
@@ -82,9 +81,8 @@ def test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param():
     case and no `node.kind` read (the pool-fallback firing path is gone)."""
     from types import SimpleNamespace
 
-    from agent_composer.events import NodeFailed, NodeSucceeded
     from agent_composer.nodes.base import ParamDecl
-    from agent_composer.runtime.eval_node import eval_node
+    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
     from agent_composer.typesys.pool import VariablePool
 
     pool = VariablePool()
@@ -96,11 +94,11 @@ def test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param():
     ok_node = EndNode.record("__end__", output_names=["n"])
     ok_node.post_asserts = ["${__assert_score} > 0"]
     ok_node.params.append(ParamDecl(name="__assert_score"))
-    ok = list(eval_node(ok_node, flow, pool))
-    assert any(isinstance(e, NodeSucceeded) for e in ok)
+    assert eval_node(ok_node, flow, pool) == Output(7)
 
     bad_node = EndNode.record("__end__", output_names=["n"])
     bad_node.post_asserts = ["${__assert_score} > 100"]
     bad_node.params.append(ParamDecl(name="__assert_score"))
-    failed = list(eval_node(bad_node, flow, pool))
-    assert any(isinstance(e, NodeFailed) and "post-assert failed" in e.error for e in failed)
+    failed = eval_node(bad_node, flow, pool)
+    assert isinstance(failed, EvaluationFailure)
+    assert "post-assert failed" in failed.error

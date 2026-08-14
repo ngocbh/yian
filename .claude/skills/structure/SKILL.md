@@ -61,18 +61,21 @@ events  <-  typesys  <-  nodes  <-  compile  <-  compose
                         ^   ^
             expr  ──────┘   └──────  llm_clients
 
-compile.model <── runtime ──> suspension
+_state + compile runtime contracts <── runtime
 compose + compile.expand + runtime <── package-root run.py
 ```
 
 The package-root run boundary is the composition root: it may import compose,
 compile's concrete builders, and runtime. Lower layers never import it. **Arrows
 never reverse.** In particular, nodes return canonical growth seeds and never
-import `compile`; runtime may consume the `compile.model` topology contract but
-never imports `compile.expand`. `run.py` injects `compile.expand.build_grow` into
-runtime instead. Spawner seed schemas are owned by their node packages; the
-internal `_state.py` leaf carries the scheduling-state vocabulary shared by
-compile and suspension, so neither imports the other for that contract.
+import `compile`; runtime may consume compile's topology, identity, and validation
+contracts but never imports `compile.expand`. `run.py` injects
+`compile.expand.build_grow` into runtime instead. Runtime owns run-record/log
+codecs, append-before-apply reducer state, and dispatch; `run.py` owns fresh-log
+creation, locked prefix recovery, and
+log closure. Spawner seed schemas are owned by their node packages; the internal
+`_state.py` leaf carries the scheduling-state vocabulary shared by compile and
+runtime.
 `tests/engine/test_layer_direction.py` ratchets these boundaries.
 When you add a package, name what it sits *above* and what it sits *below*, and
 record that in its charter's "Knows / Never imports".

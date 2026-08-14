@@ -27,25 +27,26 @@ so it preserves node purity, and it happens **exactly once** here in the node (n
 
 | Return | Meaning |
 |--------|---------|
-| `Output(value)` | the one produced value; the engine writes it under the node id. Optional `Output(value, commit_as=<id>)` redirects the write to another id (and fires *that* id's out-edges) — the node-chosen commit target; `None` (the default) commits under the node's own id. |
-| `Route(handle)` | a routing-only outcome (a CASE picks an out-edge `handle`); carries no value, writes no pool entry. The engine emits `NodeRouted` and takes the chosen edge, skip-flooding the siblings. |
-| `Pause(reason)` | dormant custom/artificial compatibility. The engine emits `PauseRequested`, parks the leaf, and later delivers a command value as its `Output`; no shipped authorable node returns it. |
-| `Grow(seed, prune)` | describe one deterministic graph expansion without constructing it. `seed` is the kind-shaped but runtime-opaque builder input (CALL record, MAP records, or LOOP carried record/index); `prune` names ids to retire in the same step. Compile-owned `build_grow(spawner, seed)` constructs the self-describing `Flow`, and the engine splices it generically via `_apply_grow`. The canonical seed is persisted for durable replay. Only spawner kinds (`is_spawner`) may return it. |
+| `Output(value)` | the one produced value. The dispatcher prepares a canonical `NodeSucceededRecord`; after append, the reducer writes it under the resolved commit target and fires that target's out-edges. Optional `Output(value, commit_as=<id>)` chooses another target; `None` uses the node's baked redirect or its own id. |
+| `Route(handle)` | a routing-only outcome (a CASE picks an out-edge `handle`); carries no value and writes no pool entry. The dispatcher records the handle, then the reducer takes the selected edge, skip-floods its siblings, and derives `NodeRouted`. |
+| `Grow(seed, prune)` | describe one deterministic graph expansion without constructing it. `seed` is the kind-shaped but runtime-opaque builder input (CALL record, MAP records, or LOOP carried record/index); `prune` names ids to retire in the same step. Compile-owned `build_grow(spawner, seed)` constructs the self-describing `Flow`; the dispatcher prepares a `NodeExpandedRecord`, then the reducer applies the generic splice. The canonical seed is persisted for replay. Only spawner kinds (`is_spawner`) may return it. |
 
 A streaming kind is a generator that yields `StreamChunk` and *returns* a
 `NodeResult`. **Failure is not a variant** — a node `raise`s and the engine
-boundary turns it into `NodeFailed`. `Node.on_failure` is a dormant future seam,
-not currently driven by `eval_node`.
+evaluation boundary returns `EvaluationFailure`; the dispatcher turns that into a
+`NodeFailedRecord`, and the reducer derives `NodeFailed`/`RunFailed` observers.
+`Node.on_failure` is a dormant future seam, not currently driven by `eval_node`.
 
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine
-performs the write). Keeps nodes pure and the state immutable (`let`-bindings).
+records it, and the reducer performs the write). Nodes stay pure; the dispatcher
+is the sole live state writer.
 
 Growth uses the same inversion boundary. Node modules never import `compile`: a
 spawner returns a canonical seed only. `compile.expand.build_grow` is the sole
 kind-aware constructor; package-root `run.py` injects it into `FlowEngine` for live
-growth and checkpoint replay. Runtime may consume `compile.model` topology but never
-imports `compile.expand`, so the splice remains kind-blind.
+growth and into reducer replay for recovery. Runtime may consume compile's execution
+contracts but never imports `compile.expand`, so the splice remains kind-blind.
 
 **Capabilities (`caps`)** are narrow, engine-owned effects passed as keyword args to
 `run`; each is gated by a node trait. A mapped call gets `caps['bind_item']`
@@ -67,20 +68,20 @@ base `Node`; a kind overrides only what it needs.
 | `binds_per_item: bool` | read boundary (`eval_node`): bind PER ELEMENT via a `bind_item` cap vs bind `params` once | `False` → `True` on `map` |
 | `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → `wait` `{"until": ts}`, `map` `{"over": [...]}` |
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
-| `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` (loop/non-REF, no depth work) → `1` call/map |
-| `is_loop: bool` | growth core (`_apply_grow`): gate the origin-keyed single-live-record ledger invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior record) | `False` → `True` on `loop` |
+| `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
+| `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
 
-The rest of the splice (add subgraph, enforce `MAX_TOTAL_NODES`, mint one uniform `GrowRecord`,
+The rest of the splice (add subgraph, enforce `MAX_TOTAL_NODES`, mint one uniform `NodeExpandedRecord`,
 finish/mark the spawner, apply the origin `commit_as` to the derived terminal, schedule the
 subgraph's `start_id`) is
-uniform. The old per-kind `_grow_*_residual` switch is gone. Success-path routing (CASE branch/skip,
-subflow commit-under-spawner) rides `Outcome` data (`Route.handle`, `Output.commit_as`). A
+uniform. Success-path routing (CASE branch/skip,
+subflow commit-under-spawner) rides node-result data (`Route.handle`, `Output.commit_as`). A
 spawner's own `post_asserts` (a `call` node's `asserts:`) are **lowered onto the cloned child
 `END`** at grow time (`expand._lower_spawner_post_asserts`): `${output}` stays; a declared input
 `${X}` becomes a synth END param wired off the cloned child START's coerced output, so the assert
 fires through the child END's ordinary `run` wrapper — not re-checked at any commit site. Live
-growth and durable replay both pass the canonical seed persisted in the growth ledger through
+growth and durable replay both pass the canonical seed persisted in `NodeExpandedRecord` through
 the same injected `compile.expand.build_grow`, so lowering is identical on resume. The moved
 assert's failure names the **child END id**, not the spawner.
 
@@ -92,9 +93,10 @@ are likewise live leaves returning `Output`.
 ## `NodeKind` (closed vocabulary)
 
 `NodeKind` is a closed enum (no registry/metaclass), but the engine **core does not dispatch on
-it** — `runtime/engine.py` + `runtime/eval_node.py` branch only on the closed `Outcome` sum and on
-node-owned traits/hooks (below). Ordinary behavior lives in each node's own `_run_impl`; growth
-construction's sanctioned closed kind match lives in `compile.expand.build_grow`, which
+it** — `runtime/engine.py` + `runtime/eval_node.py` branch only on the closed
+worker-result and run-record sums and on node-owned traits/hooks (below). Ordinary
+behavior lives in each node's own `_run_impl`; growth construction's sanctioned
+closed kind match lives in `compile.expand.build_grow`, which
 interprets node-produced seeds outside the runtime core. A ratchet test
 (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion` dispatch count at 0.
 Kind-specific diagnostics stay with their kind. CODE owns
@@ -109,6 +111,34 @@ WAIT are never timed by that watchdog.
 \* `MODEL` parses but `run` raises — the ML-serving seam was removed as dead
 plumbing; re-add when real serving lands.
 
+## Durable execution contract
+
+`runtime.log` owns the closed durable vocabulary and its canonical codecs:
+
+| Record | Transition |
+|--------|------------|
+| `RunStartedRecord` | complete initial pool, flow fingerprint, START override, resolved LLM map, and worker count |
+| `RunResumedRecord` | ordered unfinished starts to retry plus the selected worker count |
+| `NodeStartedRecord` | move the exact ready head into the ordered in-flight set before evaluation/submission |
+| `NodeSucceededRecord` | commit one canonical typed value under an already-resolved target |
+| `NodeRoutedRecord` | select one named outgoing handle and derive its skip closure |
+| `NodeExpandedRecord` | rebuild and verify one canonical seed/digest, then splice its fragment |
+| `NodeFailedRecord` | make the run terminal-failed with its captured diagnostic |
+
+`FlowEngine` borrows one initialized `RunState` plus a matching open `RunLog`.
+Workers only evaluate; the dispatcher prepares a total transition, appends its
+record, applies it, then publishes transient observers. `StreamChunk` callbacks are
+explicitly non-durable. The engine never closes its log: package-root `run.py` owns
+`MemoryRunLog`/`JsonlRunLog` creation, locking, recovery, tail repair, and closure.
+
+`run_flow(..., log=None)` uses process-local authority; a path selects a durable
+JSONL log. `resume_flow(flow, *, log=..., num_workers=None)` validates the authored
+flow fingerprint, silently folds the locked contiguous prefix through the same
+reducer, and either returns an already-terminal result unchanged or appends one
+`RunResumedRecord` before retrying unfinished starts in original dispatch order.
+`RunResult` exposes exactly `input`, `status`, `run_id`, `log`, `output`, `error`,
+`locator`, `range`, `traceback`, and this invocation's post-durable `events`.
+
 ## OCaml analogue map (design from this)
 
 | Our construct | OCaml concept | Why it holds |
@@ -117,16 +147,17 @@ plumbing; re-add when real serving lands.
 | an agent | a flow whose leaf is an LLM loop | no special contract |
 | `call:` / `uses:` | function application / a module ref | nests to any depth |
 | the variable pool bind | `let (node_id, key) = ...` | immutable, no mutation |
-| `NodeKind` + `match` | a variant + exhaustive `match` | closed set, no registry; the runtime core matches on `Outcome`/traits, while compile's `build_grow` interprets spawner seeds by kind |
-| `Output \| Route \| Pause \| Grow` | a sum type (the result) | failure is a `raise`, not a case |
-| dormant artificial pause / resume | algebraic effect + handler | retained compatibility only; authorable blockers return `Output` live |
+| `NodeKind` + `match` | a variant + exhaustive `match` | closed set, no registry; runtime matches on worker-result/record variants and traits, while compile's `build_grow` interprets spawner seeds by kind |
+| `Output \| Route \| Grow` | a sum type (the node result) | failure is a `raise`, not a case |
+| append-only `RunRecord` + reducer | an event history folded into state | one explicit transition vocabulary drives live execution and replay |
 | a package charter (`__init__`) | a module signature (`.mli`) | a narrow declared interface |
 
 When borrowing runtime mechanics from a prior worker engine: **borrow** the
 correctness-critical parts (single-writer dispatcher, 3-state edge join,
-outputs-before-successors, recursive skip-flood, layered checkpoint, discriminated
-pause reasons); **drop** scale/framework baggage (external DBs, dynamic worker
-scaling, plugin registries, heavy layering, multi-tenancy).
+outputs-before-successors, recursive skip-flood, recorded starts and outcomes,
+append-before-apply transitions, and one reducer path for live execution and replay);
+**drop** scale/framework baggage (external DBs, dynamic worker scaling, plugin
+registries, heavy layering, multi-tenancy).
 
 ## Non-negotiable invariants (the keep/simplify/drop bar)
 
@@ -139,17 +170,21 @@ model made enforceable.
   no special contract.
 - **Composable / recursive** — a node can *be* a flow (`call:`/`uses:`), nestable
   to any depth. Never assume a node is a leaf; preserve recursion through
-  compile + run; the dormant checkpoint replay must also preserve existing growth.
+  compile + run; run-record replay must rebuild and verify recorded growth.
 - **Privileges no output type or domain** — prefer the most general primitive that
   composes over a use-case-specific feature.
 - **Node never writes the pool** (purity); **typed, losslessly-serializable state**
-  (`TypedValue` / `VariablePool` — the basis for checkpoints + `${...}` refs).
+  (`TypedValue` / `VariablePool` — the basis for canonical record payloads + `${...}` refs).
+- **Append-only durable authority** — `RunStartedRecord` captures complete initial
+  state/configuration, every dispatched node gets a `NodeStartedRecord`, and every
+  accepted outcome gets exactly one success/route/expansion/failure record. A prefix
+  may end after a start when host control interrupts evaluation. Preparation is
+  side-effect-free; `commit_prepared` appends before applying the frozen reducer plan
+  and exposes observers only afterward. Recovery validates a contiguous prefix, folds
+  it through that same path, and records the ordered retry frontier in
+  `RunResumedRecord` before continuing.
 - **Blocking authorable effects are live** — AGENT `ask_user`, HUMAN_INPUT, and
-  WAIT return `Output` from the same invocation and never create pause topology.
-  The generic `Pause`/`RunCheckpoint` API remains only for custom/artificial
-  compatibility until issue #117. While it remains, its checkpoint records
-  `num_workers`; `FlowEngine.restore(..., num_workers=N)` and `resume_flow`
-  preserve or explicitly override that drive mode.
+  WAIT return `Output` from the same invocation and never create continuation topology.
 - **Dependency-light core** — no DB / heavy frameworks; external capabilities enter
   through injected seams (plain callables). *Exception:* the AGENT node imports
   langchain + `llm_clients` and builds its model via `model_from_config`.
@@ -162,28 +197,32 @@ model made enforceable.
   at initialization and passes them as the explicit final fallback. `inherit: false`
   skips authored flow/parent/CLI layers but still receives those process defaults.
   `apply_effective_llm_map` replays a recorded complete map without reading ambient
-  settings and deep-copies every callsite again. Until the run-log cutover, a durable
-  checkpoint resume resolves before `FlowEngine.restore`, whose replay re-clones
-  children from the static graph.
+  settings and deep-copies every callsite again. `RunStartedRecord` stores that complete
+  map; recovery applies it to a private copy of the supplied static graph before folding
+  later records.
 - **Stable program and expansion identity** — compile-owned `flow_manifest`
   canonicalizes execution semantics, `flow_fingerprint` hashes it, and
   `expansion_digest` covers an expanded fragment's entry/end ids and topology.
   Render-only ranges, comments, and object identity do not affect these values.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
-  core dispatches on `Outcome` + node-owned traits/hooks, never on `node.kind` (ratchet: census 0).
-  **single-writer** (workers are pure
-  executors, the dispatcher is the only mutator); a pooled drive signals cooperative stop
-  before fully joining workers after an abnormal dispatch exit, but not after merely yielding
-  a terminal pause; **single-process CLI target**.
+  core dispatches on worker-result/run-record variants + node-owned traits/hooks, never on
+  `node.kind` (ratchet: census 0).
+- **Single writer** — workers are pure executors; the dispatcher is the only
+  ready-frontier consumer and mutator. A pooled drive records starts before submission,
+  records accepted outcomes before applying them, and signals cooperative stop before
+  fully joining workers after an abnormal dispatch exit.
+- **Single-process CLI target** — dispatch and workers stay in-process. The durable
+  seam is `RunLog` with memory and locked JSONL implementations, not a DB, server, or
+  remote scheduler.
 - **AGENT structured output** — a non-text `output:` Type switches an agent from text
   producer to structured generation: `type_to_schema` (`nodes/agent/structured.py`)
   derives a pydantic schema, the mode generates a conforming value (native
   `with_structured_output`, or a JSON prompt-injection fallback gated by
   `supports_native_structured(provider, model)`), with `retries:`-capped self-correction.
   Three-part contract: **generate-tries** (the schema asks), **boundary-enforces**
-  (`pool.set(..., declared=output_type)` validates on both the primary path and
-  any `commit_as`-redirected write), **retry-catches** (a deviation is fed back and
-  re-asked). A bare `str`/`Literal[...]` keeps the text path.
+  (success-record preparation runs `canonical_typed` against the effective target's
+  declared type on both ordinary and `commit_as` paths), **retry-catches** (a deviation
+  is fed back and re-asked). A bare `str`/`Literal[...]` keeps the text path.
 
 ## Layer ladder (where code goes)
 
@@ -192,7 +231,7 @@ events  <-  typesys  <-  nodes  <-  compile  <-  compose
                         ^   ^
             expr  ──────┘   └──────  llm_clients
 
-compile.model <── runtime ──> suspension
+_state + compile runtime contracts <── runtime
 compose + compile.expand + runtime <── package-root run.py
 ```
 
@@ -202,8 +241,9 @@ the shared contract to `common.py` / a leaf, or invert via a seam). Dynamic grow
 the concrete example: nodes return seeds, compile owns `build_grow`, `run.py` injects
 it, and runtime never imports `compile.expand`. Spawner seed schemas live in their
 owning node packages. The scheduling-state vocabulary sits in the internal
-`_state.py` leaf shared by compile and suspension, so those consumers do not import
-each other.
+`_state.py` leaf shared by compile and runtime. Runtime owns records, log codecs,
+append-before-apply reducer state, and dispatch; the package-root run boundary owns
+fresh-log creation, locked prefix recovery, and log closure.
 
 ## The `expr` layer (one grammar, everywhere `${...}` appears)
 
@@ -272,11 +312,12 @@ resolved to a line at the CLI boundary — never a text heuristic.
   `StartNode._run_impl` stamps an `input_decl` span on the e08 `TypeCheckError` (the flow's boundary
   `asserts:` are lowered onto START's `post_asserts` and fire through the same `run` wrapper
   — `run.py` stamps none itself);
-  the engine's typed write boundary stamps a `field` span (`key="output"`) on the
-  `NodeExecutionError` it raises when a node's value fails its declared `output:` Type.
-- **Concrete range (resolved at the failure site):** ALONGSIDE the symbolic `locator`, a concrete
-  **`SourceRange`** (start/end line+col, 1-based; in `events`) is attached. For an `input` /
-  `input_decl` / `field` locator the funnel keys the node's recorded `field_ranges` on the
+  success-transition preparation validates the raw `Output` against the effective
+  target's declared type; invalid node-produced data becomes a durable `NodeFailedRecord`
+  with the original error type and a fallback `field` span (`key="output"`).
+- **Concrete range (when resolved at the failure site):** ALONGSIDE the symbolic `locator`, a
+  **`SourceRange`** (start/end line+col, 1-based; in `events`) may be attached. For an `input` /
+  `input_decl` / `field` locator produced during evaluation, the funnel keys the node's recorded `field_ranges` on the
   locator's **`(kind, key)`** tuple — kind-blind (on the locator, never `node.kind`), and
   `(kind, key)`-tagged so an input never collides with a like-named field. `field_ranges` is a
   **`FieldRanges`** (`nodes/base.py`), a dict subclass whose `get` **raises `TypeError` on a
@@ -292,6 +333,9 @@ resolved to a line at the CLI boundary — never a text heuristic.
   `RunFailed.range` (all default `None`; the flow twin is the boundary node's resolved range —
   `StartNode.field_ranges[("input_decl", name)]` for an e08 input-decl,
   `StartNode.pre_assert_ranges` / `EndNode.post_assert_ranges` for a boundary / post assert).
+  Output-type failures occur after evaluation, so their durable failure may carry only the
+  symbolic `field` locator; the CLI resolves it from the supplied flow when no concrete range
+  was recorded.
 - **Resolution (CLI boundary):** `cli/run.py` prefers the pre-resolved `nf.range` →
   `result.range`; only if both are absent does `_resolve_range` map the span itself, via
   `_top_ranges` (the flow's `SourceFrame` maps, else `loader.top_frame_ranges(text)`): a

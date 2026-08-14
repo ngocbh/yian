@@ -1,21 +1,17 @@
-"""eval_node — the engine's node-evaluation seam.
+"""Node evaluation at the engine's pure read/execution boundary.
 
 A node is a pure function of its bound input record; the ENGINE owns both boundaries —
 the read (bind the inputs from the pool) and the write (the dispatcher stores `Output`).
-This generator is that read seam plus the dispatch normalization, lifted out of
-the node (it replaces the temporary `Node._emit`). It yields `NodeStarted`, binds the
-record, pre-resolves reserved keys (absolute WAIT `until` / mapped-call `over`), builds narrow caps
-(a mapped call's `bind_item` and the host-owned `caps['stop_event']`, each gated on its node
-trait), runs the node through its `run`
-wrapper (which owns pre/post assert firing — record-only), and turns the returned `NodeResult`
-into one terminal `NodeSucceeded`/`NodeFailed` — or a single `PauseRequested` for a returned
-`Pause`.
+``eval_node`` is the append-only dispatcher's evaluation seam: it binds the record,
+pre-resolves reserved keys, builds trait-gated capabilities, runs the node through its
+assert-owning ``run`` wrapper, forwards transient chunks through ``emit_stream``, and
+returns exactly ``Output | Route | Grow | EvaluationFailure``.  It emits no observer
+notifications; durable observer ordering belongs to the dispatcher.
 
-Every node-side failure path funnels to `NodeFailed` so the two engines (serial + parallel)
-agree byte-for-byte on the same input: a node `raise`, a `Grow` returned by a NON-spawner
-kind, and a non-`NodeResult` return all become `NodeFailed` inside the `try` — none
-escape the generator uncaught. `_HostStop` is the deliberate exception: private host control
-flow bypasses the failure funnel. (A spawner's `Grow` instead becomes `NodeExpanded`.)
+Every node-side failure path funnels to ``EvaluationFailure``: a node ``raise``, a
+``Grow`` returned by a non-spawner, and a non-``NodeResult`` return.  ``_HostStop`` and
+an injected stream callback exception are deliberate host-side exceptions and propagate
+unchanged.
 
 The bind is PURE: it reads the node's sources ONLY from `flow.wiring[node.id]` joined to the
 node's `params` — the node carries no source. Direct-drive tests supply a stub `flow` with
@@ -26,34 +22,52 @@ Accepted bind ordering vs the old per-node `_run` on an unreachable loaded-flow 
 not-baked guard; the loader always bakes calls, and either path terminates in `NodeFailed`.
 """
 
+from __future__ import annotations
+
 import inspect
 import threading
 import traceback as _tb
-from dataclasses import replace
-from typing import Any
+from collections.abc import Callable, Generator
+from dataclasses import dataclass, replace
+from typing import Any, TypeAlias
 
-from agent_composer.events import (
-    NodeExpanded,
-    NodeFailed,
-    NodeRouted,
-    NodeStarted,
-    NodeSucceeded,
-    PauseRequested,
-)
-from agent_composer.nodes.base import Grow, Output, Pause, Route, _HostStop
+from agent_composer.events import SourceRange, SourceSpan, StreamChunk
+from agent_composer.nodes.base import Grow, Output, Route, _HostStop
 from agent_composer.nodes.binding import bind_params
 from agent_composer.typesys.pool import VariablePool
 
 
-def eval_node(
+@dataclass(frozen=True, slots=True)
+class EvaluationFailure:
+    """One raw node-evaluation failure for durable dispatcher preparation.
+
+    ``node_id`` identifies the executing node; ``error`` and ``error_type`` are the
+    stable diagnostic strings; ``locator`` and ``range`` retain symbolic and concrete
+    YAML locations; ``traceback`` is the formatted Python stack captured while the
+    exception is active.  Missing optional diagnostics are ``None``.
+    """
+
+    node_id: str
+    error: str
+    error_type: str = ""
+    locator: SourceSpan | None = None
+    range: SourceRange | None = None
+    traceback: str | None = None
+
+
+WorkerOutcome: TypeAlias = Output | Route | Grow | EvaluationFailure
+"""Closed raw worker result consumed by the append-only dispatcher."""
+
+
+def _evaluate_node_stream(
     node,
     flow,
     pool: VariablePool,
     *,
     wiring_override=None,
     stop_event=None,
-):
-    """Evaluate one node through the engine read/dispatch seam; yield its event stream.
+) -> Generator[StreamChunk, None, WorkerOutcome]:
+    """Bind and run one node, yielding chunks and returning one normalized result.
 
     `wiring_override` is a per-run wiring dict the engine may supply for THIS node instead of
     the compiled `flow.wiring[node.id]` — used to narrow top-level START's `${input.X}` sources
@@ -62,11 +76,19 @@ def eval_node(
 
     `stop_event` is the host-owned cooperative-stop signal. Every evaluation checks it before
     running, but only a node declaring `needs_stop_event` receives it as a capability. A direct
-    opted-in evaluation that omits it receives a fresh unset private event."""
-    yield NodeStarted(node.id)
+    opted-in evaluation that omits it receives a fresh unset private event.
+
+    Returns:
+        `WorkerOutcome`:
+            One ``Output``, ``Route``, ``Grow``, or frozen ``EvaluationFailure``.
+            Stream chunks are yielded before that return value.
+
+    Raises:
+        `_HostStop`:
+            Host-control flow is outside the node failure sum and propagates unchanged.
+    """
     try:
-        # Host cancellation is control flow outside the node-result sum. Check only after the
-        # observable NodeStarted boundary, then let _HostStop escape this generator unchanged.
+        # Host cancellation is control flow outside the node-result sum.
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         # The flow-owned wiring for this node (the node/flow split): every kind's sources live here
@@ -109,7 +131,7 @@ def eval_node(
         # Kind-specific execution diagnostics, such as CODE's in-process watchdog, stay in
         # the owning node package rather than timing every engine operation.
         outcome = node.run(record, **caps)
-        if isinstance(outcome, (Output, Route, Pause, Grow)):
+        if isinstance(outcome, (Output, Route, Grow)):
             result = outcome
         elif inspect.isgenerator(outcome):  # a streaming kind: yields StreamChunk, returns a NodeResult
             result = yield from node._drain_node_generator(outcome)
@@ -118,10 +140,8 @@ def eval_node(
                 f"node {node.id!r} run() returned {type(outcome).__name__}, not a NodeResult"
             )
         if isinstance(result, Grow):
-            # A spawner grows the live graph: hand its seed-first `Grow` to the dispatcher's
-            # `_apply_grow` via NodeExpanded. The injected builder constructs topology there. Any
-            # non-spawner kind returning a Grow is a clear error (the graph only grows from
-            # spawners).
+            # Any non-spawner returning Grow is a clear error. A valid raw Grow is returned
+            # untouched; the dispatcher owns construction, durability, and observer emission.
             if not node.is_spawner:
                 # `node.kind.value` here is MESSAGE-ONLY (a diagnostic string), not dispatch —
                 # the gate is the kind-blind `is_spawner` trait, so the census stays 0.
@@ -129,13 +149,11 @@ def eval_node(
                     f"node {node.id!r} (kind {node.kind.value}) returned a Grow but is "
                     f"not a spawner (CALL/MAP/LOOP); only spawner kinds may grow the graph"
                 )
-            yield NodeExpanded(node.id, result)
-            return
+        return result
     except _HostStop:
-        # A host stop is neither a node failure nor a public abort outcome. The serial engine lets
-        # it unwind; a pooled worker translates it to an internal dispatcher signal.
+        # A host stop is neither a node failure nor a durable flow outcome.
         raise
-    except Exception as exc:  # noqa: BLE001 — boundary: any node error -> NodeFailed (both engines)
+    except Exception as exc:  # noqa: BLE001 — boundary: any node error -> EvaluationFailure
         # A failure may carry a `locator` (BindingError stamps a node-less input SourceSpan;
         # the binding layer has no node identity). Fill the node id here — this funnel is the
         # single point that knows it.
@@ -154,19 +172,55 @@ def eval_node(
         # Capture the full formatted traceback here, while the exception is live, so the CLI
         # can surface the raising call's Python stack under `--engine-trace`. The terse
         # default (message + boxed YAML frame) never shows it.
-        yield NodeFailed(node.id, error=str(exc), error_type=type(exc).__name__, locator=loc,
-                         range=rng, traceback=_tb.format_exc())
-        return
+        return EvaluationFailure(
+            node.id,
+            error=str(exc),
+            error_type=type(exc).__name__,
+            locator=loc,
+            range=rng,
+            traceback=_tb.format_exc(),
+        )
 
-    if isinstance(result, Pause):
-        yield PauseRequested(node.id, result.reason)  # suspended; no terminal
-        return
-    if isinstance(result, Route):
-        yield NodeRouted(node.id, result.handle)
-        return
-    # Fold the commit redirect onto the terminal: a node-chosen `Output.commit_as` (roadmap)
-    # wins over the engine-baked `node.commit_as` (the subflow-terminal redirect); both default
-    # None so an ordinary node commits under its own id. This is the sole channel `_on_success`
-    # reads to decide the commit target.
-    yield NodeSucceeded(node.id, output=result.value,
-                        commit_as=(result.commit_as or node.commit_as))
+
+def eval_node(
+    node,
+    flow,
+    pool: VariablePool,
+    *,
+    wiring_override=None,
+    stop_event=None,
+    emit_stream: Callable[[StreamChunk], None] | None = None,
+) -> WorkerOutcome:
+    """Evaluate one node into a raw worker result and transient stream callback.
+
+    ``emit_stream`` is called synchronously for each chunk yielded by the node and is
+    deliberately invoked outside the node-failure funnel.  If it raises, that exact host
+    exception escapes; it must never become a durable node failure.  When omitted, chunks
+    are discarded.  ``_HostStop`` likewise propagates unchanged.
+    """
+    stream = _evaluate_node_stream(
+        node,
+        flow,
+        pool,
+        wiring_override=wiring_override,
+        stop_event=stop_event,
+    )
+    try:
+        while True:
+            try:
+                chunk = next(stream)
+            except StopIteration as stopped:
+                result = stopped.value
+                break
+            if emit_stream is not None:
+                # Host-owned transport/callback boundary: keep this OUTSIDE the evaluator's
+                # exception funnel so callback failures propagate with identity intact.
+                emit_stream(chunk)
+    finally:
+        # A callback can abort while the node's streaming generator is suspended at a
+        # yield.  Close the shared evaluator explicitly so ``yield from`` propagates
+        # GeneratorExit into the node and releases its resources before this boundary
+        # returns the initiating host exception.
+        stream.close()
+
+    return result

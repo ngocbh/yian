@@ -2,12 +2,11 @@
 
 <2-4 sentences: the node's single responsibility — what it consumes (its bound
 input record) and the one value it produces. Name its OCaml analogue if it has
-one. State any effect: does it route (return Route), pause (return Pause), or grow
-the graph (return Grow)? A normal authorable leaf returns Output or Route; Pause
-is dormant custom/artificial compatibility only.>
+one. State any effect: does it route (return Route) or grow the graph (return
+Grow)? A normal authorable leaf returns Output.>
 
 Invariant (every node): reads only its bound `inputs` record, never the pool;
-returns ONE of the closed `Outcome` sum `Output | Route | Pause | Grow`; a failure
+returns ONE of the closed `NodeResult` sum `Output | Route | Grow`; a failure
 is a `raise`, not a variant.
 """
 

@@ -1,19 +1,15 @@
-"""The `NodeResult` closed sum: Output | Route | Pause | Grow.
+"""The `NodeResult` closed sum: Output | Route | Grow.
 
-The FAILED path is `raise` -> engine boundary `NodeFailed` (no `Failure` variant). `Grow` is
-defined in `nodes.base` but produced by spawner nodes and interpreted by the dispatcher's
-`_apply_grow`. Routing rides `Route` (tested in `test_route.py`).
+The FAILED path is ``raise`` -> ``EvaluationFailure`` (no failure result variant).
+``Grow`` is produced by spawner nodes and interpreted by ``FlowEngine``. Routing
+rides ``Route`` (tested in ``test_route.py``).
 """
 
-from agent_composer.nodes.base import Grow, Output, Pause
+from agent_composer.nodes.base import Grow, Output
 
 
 def test_output_carries_value():
     assert Output(value=3).value == 3
-
-
-def test_pause_carries_reason():
-    assert Pause(reason="needs-input").reason == "needs-input"
 
 
 def test_grow_is_defined():

@@ -142,13 +142,12 @@ output: ${confirm.output | abort.output}
 """
 
 
-def test_golden_human_input_then_past_wait_completes_without_checkpoint():
+def test_golden_human_input_then_past_wait_completes_in_one_run():
     # HUMAN_INPUT completes through its trusted host; the past WAIT returns in the same run.
     loaded = load_flow(_EFFECTS)
     with install_ask_user(lambda **request: "approve"):
         result = run_flow(loaded, {"settle_at": "2000-01-01"})
     assert result.status == "succeeded"
-    assert result.checkpoint is None
     assert result.output == "approve"
 
 

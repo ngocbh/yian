@@ -131,21 +131,9 @@ GOLDEN_EDGE_TUPLES: dict[str, list[tuple]] = {
 }
 
 
-@pytest.mark.parametrize("seed", sorted(GOLDEN_EDGE_TUPLES))
-def test_edge_tuples_match_baseline(seed: str):
-    assert _edge_tuples(seed, **GOLDEN_KW.get(seed, {})) == GOLDEN_EDGE_TUPLES[seed]
-
-
-# --- recorded REF/MAP child-message format constants (referenced by the lock-ins) ---------- #
-# Byte-identical message templates the wiring relocation must preserve. The over-not-a-list
-# message moves into the engine bind seam; its exact text is pinned here.
-REF_SUSPENDED_FMT = "subflow {flow_id!r} suspended; suspension inside a REF child is unsupported"
-MAP_SUSPENDED_FMT = "MAP child {flow_id!r} suspended; suspension inside a MAP child is unsupported"
 MAP_OVER_NOT_LIST_FMT = "MAP node {id!r}: `over` ({src}) did not resolve to a list"
 
 
-def test_message_format_constants_are_recorded():
-    # A self-check that the recorded constants are non-empty literals the lock-ins can assert against.
-    assert "REF child" in REF_SUSPENDED_FMT
-    assert "MAP child" in MAP_SUSPENDED_FMT
-    assert "did not resolve to a list" in MAP_OVER_NOT_LIST_FMT
+@pytest.mark.parametrize("seed", sorted(GOLDEN_EDGE_TUPLES))
+def test_edge_tuples_match_baseline(seed: str):
+    assert _edge_tuples(seed, **GOLDEN_KW.get(seed, {})) == GOLDEN_EDGE_TUPLES[seed]

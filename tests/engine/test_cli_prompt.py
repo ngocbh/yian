@@ -230,7 +230,15 @@ def test_run_error_plain_when_unlocatable(monkeypatch):
     # to point -> the plain `run <status>: <message>` line, no frame.
     flow = _ERRORS / "e18-false-boundary-assert.yaml"
     text = flow.read_text()
-    result = RunResult(input={}, status="failed", error="boom", locator=None, events=[])
+    result = RunResult(
+        input={},
+        status="failed",
+        run_id="cli-test",
+        log=None,
+        error="boom",
+        locator=None,
+        events=[],
+    )
     buf = _sink(monkeypatch)
     _render_run_error(result, flow, text)
     out = buf.getvalue()
@@ -264,8 +272,15 @@ def test_run_error_boxes_loop_max_exceeded_at_loop_node(monkeypatch):
     text = flow.read_text()
     nf = NodeFailed("polish~5", error="loop 'polish' exceeded max (5)",
                     error_type="LoopMaxExceeded", locator=None)
-    result = RunResult(input={}, status="failed",
-                       error="loop 'polish' exceeded max (5)", locator=None, events=[nf])
+    result = RunResult(
+        input={},
+        status="failed",
+        run_id="cli-test",
+        log=None,
+        error="loop 'polish' exceeded max (5)",
+        locator=None,
+        events=[nf],
+    )
     buf = _sink(monkeypatch)
     _render_run_error(result, flow, text)
     out = buf.getvalue()
@@ -394,4 +409,3 @@ def test_ensure_cwd_importable_prepends_cwd(monkeypatch, tmp_path):
     assert sys.path[0] == str(tmp_path)
     cli._ensure_cwd_importable()                      # idempotent: no duplicate entry
     assert sys.path.count(str(tmp_path)) == 1
-

@@ -130,7 +130,13 @@ def test_cli_accepts_verbose_flag(monkeypatch, tmp_path):
         if on_event is not None:
             on_event(NodeStarted("a"))
             on_event(NodeSucceeded("a", output="hello"))
-        return RunResult(input={}, status="succeeded", output="hello")
+        return RunResult(
+            input={},
+            status="succeeded",
+            run_id="cli-test",
+            log=None,
+            output="hello",
+        )
 
     monkeypatch.setattr(climod, "_run_flow_controlled", fake_run_flow)
     monkeypatch.setattr(climod, "_ensure_provider_keys", lambda *a, **k: None)
@@ -146,7 +152,13 @@ def test_cli_quiet_suppresses_events(monkeypatch, tmp_path):
 
     def fake_run_flow(loaded, supplied, *, on_event=None, llm_config=None, **kw):
         seen["on_event"] = on_event
-        return RunResult(input={}, status="succeeded", output="hello")
+        return RunResult(
+            input={},
+            status="succeeded",
+            run_id="cli-test",
+            log=None,
+            output="hello",
+        )
 
     monkeypatch.setattr(climod, "_run_flow_controlled", fake_run_flow)
     monkeypatch.setattr(climod, "_ensure_provider_keys", lambda *a, **k: None)
@@ -163,7 +175,13 @@ def test_cli_num_workers_threads_through(monkeypatch, tmp_path):
 
     def fake_run_flow(loaded, supplied, *, on_event=None, llm_config=None, num_workers=0, **kw):
         seen["num_workers"] = num_workers
-        return RunResult(input={}, status="succeeded", output="hello")
+        return RunResult(
+            input={},
+            status="succeeded",
+            run_id="cli-test",
+            log=None,
+            output="hello",
+        )
 
     monkeypatch.setattr(climod, "_run_flow_controlled", fake_run_flow)
     monkeypatch.setattr(climod, "_ensure_provider_keys", lambda *a, **k: None)
@@ -182,7 +200,13 @@ def test_cli_rejects_negative_workers(monkeypatch, tmp_path):
     """`--num-workers` is clamped at the CLI boundary: a negative value is rejected."""
     monkeypatch.setattr(
         climod, "_run_flow_controlled",
-        lambda *a, **k: RunResult(input={}, status="succeeded", output="x"),
+        lambda *a, **k: RunResult(
+            input={},
+            status="succeeded",
+            run_id="cli-test",
+            log=None,
+            output="x",
+        ),
     )
     f = tmp_path / "f.yaml"
     f.write_text(_FLOW)

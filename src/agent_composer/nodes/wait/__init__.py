@@ -2,10 +2,10 @@
 
 Owns absolute-deadline parsing and cooperative stop-event waiting. Its author
 source remains in flow wiring; the node returns ``Output(None)`` and never owns
-checkpoint or scheduler state.
+run-log or scheduler state.
 
 Knows about: nodes.base, expr, typesys, and the Python standard library.
-Never imports: compile, compose, runtime, suspension, the run boundary, CLI, or
+Never imports: compile, compose, runtime, the run boundary, CLI, or
                provider SDKs.
 """
 

@@ -1,11 +1,11 @@
-"""P3 0b: eval_node accepts a spawner's `Grow` result -> a single NodeExpanded (payload IS the Grow).
+"""``eval_node`` accepts only trait-declared spawner ``Grow`` results.
 
-A node whose `is_spawner` ClassVar is True may return a `Grow` to grow the live graph; eval_node
-funnels it to `NodeExpanded(node.id, grow)`. A non-spawner (`is_spawner=False`) returning a `Grow`
-is a clear error -> `NodeFailed` (only spawner kinds may grow the graph)."""
+A node whose ``is_spawner`` trait is true may return ``Grow`` for ``FlowEngine`` to
+interpret. A non-spawner returning ``Grow`` becomes ``EvaluationFailure``.
+"""
 
-from agent_composer.events import NodeExpanded, NodeFailed, NodeStarted
 from agent_composer.nodes.base import Grow, Node, NodeKind
+from agent_composer.runtime.eval_node import EvaluationFailure
 from tests.engine._fakes import drive
 
 
@@ -34,17 +34,14 @@ class _FakeLeaf(Node):
         return _grow()
 
 
-def test_spawner_grow_becomes_node_expanded_carrying_the_grow():
-    evs = list(drive(_FakeSpawner("s")))
-    assert isinstance(evs[0], NodeStarted)
-    assert isinstance(evs[-1], NodeExpanded)
-    assert isinstance(evs[-1].grow, Grow)
-    # No terminal NodeSucceeded/NodeFailed after the expansion.
-    assert not any(isinstance(e, NodeFailed) for e in evs)
+def test_spawner_grow_remains_a_raw_grow_result():
+    result = drive(_FakeSpawner("s"))
+
+    assert result == _grow()
 
 
-def test_leaf_grow_is_node_failed():
-    evs = list(drive(_FakeLeaf("l")))
-    assert isinstance(evs[0], NodeStarted)
-    assert isinstance(evs[-1], NodeFailed)
-    assert not any(isinstance(e, NodeExpanded) for e in evs)
+def test_leaf_grow_is_an_evaluation_failure():
+    result = drive(_FakeLeaf("l"))
+
+    assert isinstance(result, EvaluationFailure)
+    assert "not a spawner" in result.error

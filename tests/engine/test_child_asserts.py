@@ -121,13 +121,13 @@ def test_map_child_assert_one_violating_element_fails():
 # ordinary scheduled node.
 from agent_composer.events import RunFailed
 from agent_composer.compile.expand import build_grow
-from agent_composer.runtime.engine import FlowEngine
+from tests.engine._graph_builder import _engine
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_ref_boundary_failure_fails_run(num_workers):
     loaded = load_flow(_REF_FLOW)
-    eng = FlowEngine(loaded.compiled, run_inputs={"v": -1},   # violates n >= 0 on the cloned child START
+    eng = _engine(loaded.compiled, run_inputs={"v": -1},   # violates n >= 0 on the cloned child START
                      num_workers=num_workers, grow_builder=build_grow)
     events = list(eng.run())
     assert isinstance(events[-1], RunFailed)
@@ -137,7 +137,7 @@ def test_ref_boundary_failure_fails_run(num_workers):
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_map_boundary_failure_fails_run(num_workers):
     loaded = load_flow(_MAP_FLOW)
-    eng = FlowEngine(loaded.compiled, run_inputs={"vs": [1, -1]},  # element 1 violates n >= 0 on its child START
+    eng = _engine(loaded.compiled, run_inputs={"vs": [1, -1]},  # element 1 violates n >= 0 on its child START
                      num_workers=num_workers, grow_builder=build_grow)
     events = list(eng.run())
     assert isinstance(events[-1], RunFailed)

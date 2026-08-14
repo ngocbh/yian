@@ -1,9 +1,10 @@
 """The compiled flow graph: nodes, edges, adjacency, and the node-state vocabulary.
 
-`CompiledFlow` is immutable topology — the nodes and how they connect. All mutable run
-state (which nodes/edges were taken or skipped) lives in the runtime's state manager, so one
-`CompiledFlow` can back many independent runs. `NodeState` is the shared per-node state
-vocabulary the runtime tracks against that topology; it is re-exported here for compatibility.
+`CompiledFlow` carries authored topology — the nodes and how they connect. Mutable
+dispositions live in ``RunState``, and the run boundary deep-copies the graph before a
+growth reducer splices or prunes dynamic topology, so one authored flow can back many
+independent runs. `NodeState` is the shared per-node state vocabulary tracked against
+that topology; it is re-exported here for compatibility.
 
 `START_ID` / `END_ID` are the reserved boundary-node ids. Every flow begins with a synthesized
 START node (which binds the run inputs) and ends with a synthesized END node (whose value is the
@@ -97,12 +98,12 @@ class Flow:
 
 class CompiledFlow(Flow):
     """
-    The immutable compiled graph: nodes, edges, adjacency, and flow-owned input wiring.
+    The compiled graph: nodes, edges, adjacency, and flow-owned input wiring.
 
-    Topology only — it holds no run state, so one instance can back many independent runs.
-    All mutable per-run state (which nodes/edges were taken or skipped) lives in the
-    runtime's state manager. The sole mutation is [`add_subgraph`][agent_composer.CompiledFlow.add_subgraph],
-    the runtime's append-only overlay used when a spawner node expands the graph at run time.
+    It holds no dispositions or variable values. The run boundary copies it for each
+    execution; only that private copy is mutated when the reducer applies a prepared
+    expansion or prunes a retired loop iteration. The authored instance therefore remains
+    reusable across independent runs.
 
     Extends the internal `Flow` topology carrier with the runtime-only concerns below;
     the shared topology core (`nodes`/`edges`/`wiring`/`start_id`/`end_id`) lives on the base.
@@ -162,11 +163,11 @@ class CompiledFlow(Flow):
 
     def add_subgraph(self, nodes: dict[str, Node], edges: list[Edge],
                      wiring: dict[str, dict[str, Any]]) -> None:
-        """Append a (deep-namespaced) subgraph onto the live topology — the one allowed mutation.
+        """Splice a deep-namespaced subgraph into one run's private topology.
 
-        Used by the runtime to grow the graph when a spawner node (CALL/MAP) expands: it adds the
-        child's nodes, edges, and wiring and updates adjacency. The new subgraph's entry nodes are
-        scheduled by the dispatcher, not here."""
+        Called while the reducer applies a prepared expansion from CALL, MAP, or LOOP.
+        Adds the fragment's nodes, edges, and wiring and updates adjacency; the same
+        reducer plan updates dispositions and the ready frontier."""
         self.nodes.update(nodes)
         self.edges.extend(edges)
         for nid, w in wiring.items():
@@ -176,9 +177,11 @@ class CompiledFlow(Flow):
             self._incoming.setdefault(edge.to, []).append(edge)
 
     def remove_subgraph(self, node_ids: set[str]) -> None:
-        """Drop a finished (deep-namespaced) sub-namespace from the live topology — the inverse
-        of add_subgraph, used ONLY to prune a fully-committed loop iteration whose ids are never
-        referenced again. Removes the nodes, their incident edges, wiring, and adjacency.
+        """Prune a finished deep-namespaced fragment from one run's private topology.
+
+        The growth reducer uses this inverse of ``add_subgraph`` for a committed loop
+        iteration whose ids are no longer referenced. It removes nodes, incident edges,
+        wiring, and adjacency.
 
         Leaves the CompiledFlow internally consistent: no surviving edge or adjacency entry keys
         on or points at a removed id, matching what the graph would be had those nodes never been

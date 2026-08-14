@@ -65,7 +65,7 @@ body:
       multiple: true
       options:
         - CLI (`ac run` / `ac chat`)
-        - Engine / runtime (scheduler, suspend/resume, checkpoints)
+        - Engine / runtime (scheduler, run logs, recovery)
         - Compose (YAML parse / typecheck / build / validate)
         - Nodes (agent, code, model, tool, case, call, map, loop, human_input, wait)
         - Expr (`${...}` grammar)

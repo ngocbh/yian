@@ -5,7 +5,7 @@ the MAP half is `nodes.map.MapNode` (`kind: map` + `over:`, `list['a] -> list['b
 distinct typed drivers. `CallNode` carries NO `over`/`parallel`.
 
 `run` returns one seed-first `Grow` carrying the raw call-arg record. The compile-owned injected
-builder constructs the child subgraph, and the engine's generic `_apply_grow` splices it. The child
+builder constructs the child subgraph, and the generic growth reducer splices it. The child
 START_ID owns omitted-input defaulting (its params carry default/required), so the driver no longer
 pre-defaults. `child`/`child_inputs` are baked at load by
 `compose.nodes.call.build`; `child_inputs` is read by compile validation

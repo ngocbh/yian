@@ -65,8 +65,8 @@ ac run examples/classify.yaml --input text="I love this!"
 Exercises the **`human_input`** node. An agent drafts a plan, a `human_input`
 node always blocks for an `approve` / `revise` answer (a `Literal` typedef),
 `case ... on` routes on the typed answer, and a coalesce joins whichever branch
-ran. The gate returns the answer as an ordinary node output; it does not pause or
-checkpoint the flow.
+ran. The gate returns the answer as an ordinary node output from the same live
+invocation.
 
 ```console
 ac run examples/human-approval.yaml --input task="Plan a team offsite"

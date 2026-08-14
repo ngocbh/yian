@@ -124,7 +124,7 @@ skipped) or `runs_after: [a]` (orders only; B still runs).
 **Wait until an absolute deadline.** Give `wait` an ISO `date` or `datetime` via
 `until:`. Dates mean midnight UTC, naive datetimes are UTC, and aware datetimes
 are normalized to UTC. WAIT blocks one worker and returns `None` at the deadline;
-it does not pause/checkpoint the run. See `wait-until.yaml`.
+that value is committed as its ordinary node output. See `wait-until.yaml`.
 
 **Ask the human.** For a *guaranteed* gate use a `human_input` node (it blocks its
 worker until the host answers). For "ask only if the model decides it needs to",
@@ -135,10 +135,9 @@ node execution. A `human_input` gate can present multiple-choice questions
 them from an upstream node (`questions: ${name}`); the answer is then a record
 keyed by each question's `header`.
 
-These are live authoring surfaces, not checkpoint controls: AGENT has no authored
-`entry:`/`controls:` fields, HUMAN_INPUT has no pause fields, and WAIT has no
-event-watch form. The generic `Pause` result is custom/artificial compatibility,
-not flow YAML.
+These are live authoring surfaces: AGENT has no authored `entry:`/`controls:`
+fields, HUMAN_INPUT has no control fields, and WAIT has no event-watch form. Each
+completes through the ordinary node-output path in the active run.
 
 **Reuse a sub-flow.** Factor the repeated work into its own flow file, bind it with
 `uses: <alias>: <filename>`, and `call:` it (once) or `map:` it (per list element).

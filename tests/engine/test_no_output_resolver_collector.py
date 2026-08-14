@@ -10,9 +10,9 @@ import importlib
 
 import pytest
 
-from agent_composer.events import NodeFailed, NodeSucceeded
-from agent_composer.nodes.base import NodeKind, ParamDecl
+from agent_composer.nodes.base import NodeKind, Output, ParamDecl
 from agent_composer.nodes.end import EndNode
+from agent_composer.runtime.eval_node import EvaluationFailure
 from agent_composer.typesys.pool import VariablePool
 from tests.engine._fakes import drive, stamp_reads
 
@@ -48,9 +48,9 @@ def test_child_end_record_scoped_post_assert_fires_via_synth_param():
     pool = VariablePool()
 
     pool.set("each/tail", "ok")
-    ok = list(drive(_end_with_tail_assert(), pool))
-    assert any(isinstance(e, NodeSucceeded) for e in ok)
+    assert isinstance(drive(_end_with_tail_assert(), pool), Output)
 
     pool.set("each/tail", "")
-    failed = list(drive(_end_with_tail_assert(), pool))
-    assert any(isinstance(e, NodeFailed) and "post-assert" in e.error for e in failed)
+    failed = drive(_end_with_tail_assert(), pool)
+    assert isinstance(failed, EvaluationFailure)
+    assert "post-assert" in failed.error

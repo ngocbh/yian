@@ -8,9 +8,9 @@ triple `(constructed_value, spans, yaml_node)` so every field access can raise a
 The three parts must travel together (see `load_with_spans(..., return_root=True)`):
 
 - `value`     — the constructed Python value for THIS node (a `dict` for a mapping).
-- `spans`     — `dict[id(yaml_node) -> SourceRange]` for the whole document; shared by
-                every `NodeReader` descended from the same parse. Keyed by `id()`, so it
-                is only meaningful while the yaml node tree is held alive.
+- `spans`     — a lookup from `id(yaml_node)` to `SourceRange`; normally the shared
+                document dict, or a small copied-node overlay delegating to it. Keyed by
+                `id()`, so it is only meaningful while the yaml node tree is held alive.
 - `yaml_node` — the composed `yaml.Node` for THIS value (a `MappingNode` for a mapping),
                 whose identity indexes into `spans`. Holding it keeps the tree reachable.
 
@@ -25,12 +25,31 @@ already-normalized nodes, or a test's inline dict. Field presence and typing sti
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
+
+
+class _SpanOverlay:
+    """A small span lookup layered over a document's read-only base lookup.
+
+    `own` contains ranges for copied YAML wrappers and key nodes. Every original
+    value node falls through to `base`, so occurrence-local overlays do not copy
+    or mutate the document-wide span table.
+    """
+
+    def __init__(self, own: dict[int, SourceRange], base: Any) -> None:
+        self._own = own
+        self._base = base
+
+    def get(self, key: int, default: Any = None) -> SourceRange | Any:
+        """Return an overlay range first, then delegate the lookup to `base`."""
+        if key in self._own:
+            return self._own[key]
+        return self._base.get(key, default)
 
 
 class NodeReader:
@@ -47,12 +66,12 @@ class NodeReader:
     exist to point at).
     """
 
-    def __init__(self, value: Any, spans: dict, yaml_node: yaml.Node) -> None:
+    def __init__(self, value: Any, spans: Any, yaml_node: yaml.Node) -> None:
         # The constructed Python value for this node — a `dict` for a mapping; the accessors
         # below assume a mapping (they descend `yaml_node.value` pairs).
         self.value = value
-        # Shared document span index: id(yaml_node) -> SourceRange. Meaningful only while
-        # the yaml node tree (reachable via `self.yaml_node`) is held alive.
+        # Span lookup: normally the shared document index, or a copied-node overlay that
+        # delegates to it. Meaningful only while the yaml node tree is held alive.
         self.spans = spans
         # The composed yaml node for THIS value; its identity (and its children's) indexes
         # into `spans`. A `MappingNode` for a mapping.
@@ -103,6 +122,25 @@ class NodeReader:
         if pair is None:
             raise LoadError(f"missing required field {key!r}", range=self._own_range())
         return pair
+
+    def with_overlay(
+        self,
+        value: Any,
+        yaml_node: yaml.Node,
+        range_copies: Iterable[tuple[yaml.Node, yaml.Node]],
+    ) -> "NodeReader":
+        """Return a reader whose copied YAML nodes inherit original-node ranges.
+
+        `range_copies` contains `(copy, original)` node pairs. Their ranges live in
+        a small local lookup; reused value nodes delegate to this reader's lookup.
+        Neither this reader nor its document-wide span table is mutated.
+        """
+        own: dict[int, SourceRange] = {}
+        for copied, original in range_copies:
+            rng = self.spans.get(id(original))
+            if rng is not None:
+                own[id(copied)] = rng
+        return NodeReader(value, _SpanOverlay(own, self.spans), yaml_node)
 
     # -- range ------------------------------------------------------------------
 

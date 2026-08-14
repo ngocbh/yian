@@ -5,6 +5,8 @@ sections) and rewrites them into ordinary descriptors + bindings that the build
 loop then sees as author-written — pure load-time sugar, no new runtime kind. The
 passes:
 
+- `inline_bodies` — occurrence-local located overlays isolate YAML aliases and
+  merged mappings before inline composite-body lowering edits copied keys.
 - `inline_calls` — whole-value `call(<flow-id>, kw=...)` directives in any binding
   position mint a synth `call` node and rewrite the binding to `${<synth>.output}`.
 - `adaptive_questions` — a `human_input` `adaptive_questions:` block lowers to a

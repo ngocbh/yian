@@ -144,26 +144,37 @@ _ORDERED_EFFECTS = f"""
 id: recovery-ordered-effects
 name: recovery_ordered_effects
 nodes:
+  release:
+    kind: code
+    input: {{x: ready}}
+    output: str
+    code: tests.engine._compose_codefns:echo_x
+  wait:
+    kind: wait
+    depends_on: [release]
+    until: {_WAIT_DEADLINE!r}
   agent:
     kind: agent
+    depends_on: [release]
     mode: plain
     prompt: never invoked
     llm_config: {{provider: openai, model: offline-test}}
   human:
     kind: human_input
+    depends_on: [release]
     prompt: never invoked
     output: str
-  wait:
-    kind: wait
-    until: {_WAIT_DEADLINE!r}
-  zz_later:
-    kind: wait
-    until: {_WAIT_DEADLINE!r}
+  later:
+    kind: code
+    depends_on: [release]
+    input: {{x: still-ready}}
+    output: str
+    code: tests.engine._compose_codefns:echo_x
 output:
   agent: ${{agent.output}}
   human: ${{human.output}}
   wait: ${{wait.output}}
-  later: ${{zz_later.output}}
+  later: ${{later.output}}
 """
 
 
@@ -355,30 +366,41 @@ def test_effect_start_prefix_replays_without_running_effect_work(
 
 
 def test_resume_prepends_ordered_effect_retries_before_existing_ready_work() -> None:
-    """Recovery preserves start order and places retries before untouched readiness."""
+    """Recovery preserves nonlexicographic starts ahead of untouched readiness."""
     loaded = load_flow(_ORDERED_EFFECTS)
     state, log = _new_started_run(loaded, num_workers=2)
     commit_prepared(log, state, prepare_node_started(state, START_ID))
     commit_prepared(log, state, prepare_node_succeeded(state, START_ID, {}))
-    assert tuple(state.ready) == ("agent", "human", "wait", "zz_later")
+    commit_prepared(log, state, prepare_node_started(state, "release"))
+    commit_prepared(log, state, prepare_node_succeeded(state, "release", "ready"))
+    assert tuple(state.ready) == ("wait", "agent", "human", "later")
 
-    for node_id in ("agent", "human", "wait"):
+    retry_order = ("wait", "agent", "human")
+    assert retry_order != tuple(sorted(retry_order))
+    for node_id in retry_order:
         commit_prepared(log, state, prepare_node_started(state, node_id))
-    assert tuple(state.in_flight) == ("agent", "human", "wait")
-    assert tuple(state.ready) == ("zz_later",)
+    started_order = tuple(
+        envelope.record.node_id
+        for envelope in log
+        if isinstance(envelope.record, NodeStartedRecord)
+    )
+    assert started_order == (START_ID, "release", *retry_order)
+    assert tuple(state.in_flight) == retry_order
+    assert tuple(state.ready) == ("later",)
 
     recovered = run_module._replay_run_log(loaded, log)
-    assert tuple(recovered.in_flight) == ("agent", "human", "wait")
-    assert tuple(recovered.ready) == ("zz_later",)
+    assert tuple(recovered.in_flight) == retry_order
+    assert tuple(recovered.ready) == ("later",)
 
     prepared = prepare_run_resumed(recovered, num_workers=2)
     assert prepared.record == RunResumedRecord(
-        retry_node_ids=("agent", "human", "wait"),
+        retry_node_ids=retry_order,
         num_workers=2,
     )
     commit_prepared(log, recovered, prepared)
+    assert tuple(log)[-1].record == prepared.record
     assert tuple(recovered.in_flight) == ()
-    assert tuple(recovered.ready) == ("agent", "human", "wait", "zz_later")
+    assert tuple(recovered.ready) == (*retry_order, "later")
 
 
 class _ImmediateTimeoutEvent:

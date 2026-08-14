@@ -4,9 +4,8 @@ Inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`); any de
 input still missing is prompted for interactively (required ones are starred). The engine
 runs behind a main-thread terminal broker: blocking HUMAN_INPUT and agent ``ask_user`` calls
 wait for that broker and then continue inside the same live node call. WAIT stays live in
-its worker until its deadline. A dormant controller loop can still service custom/artificial
-generic pauses through the same terminal surface. Answer types are enforced at the engine
-boundary; an invalid one fails the run.
+its worker until its deadline. Answer types are enforced at the engine boundary; an invalid
+one fails the run.
 
 `--provider`/`--model` feed the outermost layer of the `llm_config` cascade (fill-the-gap,
 not a hard override): they fill only the fields an agent and its enclosing flow leave unset.
@@ -25,7 +24,7 @@ import signal
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 import typer
 from rich.console import Console, Group
@@ -40,7 +39,7 @@ from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow, top_frame_ranges
-from agent_composer.run import RunResult, _run_flow_controlled, resume_command, resume_flow
+from agent_composer.run import RunResult, _run_flow_controlled
 from agent_composer.events import Diagnostic, NodeFailed, SourceRange, SourceSpan
 from agent_composer.nodes.base import _HostStop
 from agent_composer.tools import install_ask_user
@@ -579,8 +578,8 @@ def _run_with_terminal_controller(
 ) -> RunResult:
     """Run one complete CLI lifecycle behind a main-thread terminal broker.
 
-    ``controller`` owns the initial run plus any dormant Pause/resume cycles. It
-    receives the shared stop event, a brokered observer, the installed
+    ``controller`` owns one run attempt. It receives the shared stop event, a
+    brokered observer, the installed
     ``ask_user`` handler, and the broker's render enqueue operation. The main
     thread alone serves the FIFO and joins the controller before registry cleanup.
     ``eof_value`` optionally normalizes prompt EOF to a caller-owned value; omitted
@@ -1061,80 +1060,6 @@ def _prompt_request(request: PromptRequest) -> Any:
     )
 
 
-def _resume_to_terminal(
-    loaded: Any,
-    result: RunResult,
-    *,
-    on_event: Optional[Callable[[Any], None]],
-    ask_user: Callable[..., Any],
-    render: Callable[[Callable[[], None]], None],
-) -> RunResult:
-    """Drive a paused run to a terminal from the controller thread.
-
-    Artificial ``HumanInputRequired`` and ``ScheduledPause`` reasons are elicited through
-    the brokered ``ask_user`` handler; warnings and progress stay brokered through
-    ``render`` and ``on_event``. Authorable AGENT, HUMAN_INPUT, and WAIT never enter this path.
-    Cancelling a structured compatibility answer keeps the run paused.
-    """
-
-    while result.status == "paused":
-        answered: List[Tuple[Any, Any]] = []
-        for reason in result.pause_reasons:
-            if reason.type == "human_input_required":
-                answer = ask_user(
-                    question=reason.prompt or f"input for {reason.node_id}",
-                    questions=reason.questions or None,
-                    answer_schema=reason.answer_schema or None,
-                    title=reason.node_title,
-                    node_id=reason.node_id,
-                )
-                if answer is None or (
-                    isinstance(answer, dict)
-                    and any(value is None for value in answer.values())
-                ):
-                    return result
-                answered.append((reason, answer))
-            elif reason.type == "scheduled_pause":
-                release_label = "Release now"
-                decision = ask_user(
-                    question=f"{reason.node_id}: release this artificial pause now?",
-                    questions=[
-                        {
-                            "header": "action",
-                            "question": "What should this run do?",
-                            "options": [
-                                {
-                                    "label": release_label,
-                                    "description": "Resume this artificial pause immediately.",
-                                },
-                                {
-                                    "label": "Keep waiting",
-                                    "description": "Leave the run paused.",
-                                },
-                            ],
-                            "multi_select": False,
-                        }
-                    ],
-                    title=reason.node_id,
-                    node_id=reason.node_id,
-                )
-                if not isinstance(decision, dict) or decision.get("action") != release_label:
-                    return result
-                answered.append((reason, None))  # release: value=None
-            else:
-                render(
-                    partial(
-                        err_console.print,
-                        "[yellow]awaiting an external event — can't release it here[/yellow]",
-                    )
-                )
-        if not answered:
-            return result
-        commands = [resume_command(loaded, reason, value) for reason, value in answered]
-        result = resume_flow(loaded, engine=result.engine, commands=commands, on_event=on_event)
-    return result
-
-
 def _agent_providers(loaded, cli_cfg: Dict[str, Any]) -> List[str]:
     """Collect the distinct effective LLM providers of every agent node in `loaded`.
 
@@ -1279,11 +1204,11 @@ def run(
         def controller(
             stop_event: threading.Event,
             on_event: Optional[Callable[[Any], None]],
-            ask_user: Callable[..., Any],
-            render: Callable[[Callable[[], None]], None],
+            _ask_user: Callable[..., Any],
+            _render: Callable[[Callable[[], None]], None],
         ) -> RunResult:
-            """Own initial execution and every dormant Pause/resume cycle."""
-            current = _run_flow_controlled(
+            """Drive one run while the helper owns its terminal broker."""
+            return _run_flow_controlled(
                 loaded,
                 supplied,
                 on_event=on_event,
@@ -1291,15 +1216,6 @@ def run(
                 num_workers=num_workers,
                 stop_event=stop_event,
             )
-            if current.status == "paused":
-                current = _resume_to_terminal(
-                    loaded,
-                    current,
-                    on_event=on_event,
-                    ask_user=ask_user,
-                    render=render,
-                )
-            return current
 
         result = _run_with_terminal_controller(
             controller,
@@ -1324,9 +1240,6 @@ def run(
             console.print(Markdown(out))
         else:
             console.print(out)
-    elif result.status == "paused":
-        err_console.print("[yellow]artificial compatibility pause unresolved[/yellow]")
-        raise typer.Exit(code=1)
     else:
         # A node failure points at WHERE in the `.yaml` it raised (boxed frame), mirroring a
         # compile error; a node-less failure (assert/input-coercion) prints the plain message.

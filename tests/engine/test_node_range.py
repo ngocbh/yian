@@ -5,7 +5,8 @@ import pytest
 from agent_composer.compose.loader import load_flow
 from agent_composer.events import SourceRange
 from agent_composer.nodes.start.node import StartNode
-from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
+from agent_composer.run import resume_flow, run_flow
+from agent_composer.tools import install_ask_user
 
 _SEEDS = Path(__file__).resolve().parents[1] / "seeds"
 
@@ -39,8 +40,8 @@ def test_call_map_loop_nodes_carry_range(seed, node_id, want_field):
     assert isinstance(node.field_ranges[("field", want_field)], SourceRange)
 
 
-# An artificial Pause flow so ``run_flow`` produces a compatibility checkpoint.
-_PAUSE_FLOW = """
+# A blocking flow whose successful records must exclude render-only node metadata.
+_RANGE_FLOW = """
 id: f
 name: f
 input:
@@ -59,43 +60,43 @@ output: ${done.output}
 """
 
 
-def test_node_range_does_not_ride_checkpoint():
-    """A stamped `.range`/`.field_ranges` must NOT ride the serialized checkpoint.
+def test_node_range_does_not_ride_run_log(tmp_path: Path):
+    """Stamped render metadata must not ride the authoritative run log.
 
-    The checkpoint stores no topology (it is rebuilt from the flow spec on restore), so
-    render-only Node metadata must never appear in the blob. This stamps a range on a live
-    node, round-trips the checkpoint through `dumps()`/`loads()`, and asserts (a) the blob
-    carries no range/field_ranges keys and (b) the restored run resumes successfully.
+    Recovery rebuilds topology from the supplied authored flow, so node ranges, field maps,
+    and synthetic wiring labels are neither execution identity nor durable state. This stamps
+    all three on the reusable source graph, runs to a durable terminal, verifies the JSONL,
+    then silently reconstructs the same result from a clean flow.
     """
-    from agent_composer.compose.loader import load_flow
-    from agent_composer.run import run_flow, resume_flow
-    from agent_composer.suspension.checkpoint import RunCheckpoint
-    from agent_composer.suspension.commands import DeliverAnswerCommand
-    from agent_composer.events import SourceRange
-
-    loaded = load_flow(_PAUSE_FLOW)
-    replace_human_inputs_with_artificial_pauses(loaded.compiled)
-    # Stamp render-only source metadata on a live node BEFORE the run serializes.
+    path = tmp_path / "range-free.jsonl"
+    loaded = load_flow(_RANGE_FLOW)
+    # Stamp render-only source metadata before RunStarted fingerprints and serializes.
     node = loaded.compiled.nodes["done"]
     node.range = SourceRange(4, 1, 6, 1)
-    node.field_ranges = {("field", "code"): SourceRange(6, 5, 6, 40)}
+    node.field_ranges[("field", "code")] = SourceRange(6, 5, 6, 40)
     node.wiring_labels = {"__r0": "cases[0].when"}  # a synth-param label — also render-only
 
-    res = run_flow(loaded, {"settle_at": "2026-07-01"})
-    assert res.status == "paused"
-    assert res.checkpoint is not None
+    with install_ask_user(lambda **request: None):
+        res = run_flow(
+            loaded,
+            {"settle_at": "2026-07-01"},
+            log=path,
+        )
+    assert res.status == "succeeded"
+    assert res.output == "cancel"
 
-    blob = res.checkpoint.dumps()
-    # The invariant: no render-only Node metadata leaked into the serialized checkpoint.
+    blob = path.read_text()
+    # The invariant: no render-only Node metadata leaked into authoritative records.
     assert "field_ranges" not in blob
     assert "start_line" not in blob  # a serialized SourceRange would carry its fields
     assert "\"range\"" not in blob
     assert "wiring_labels" not in blob
     assert "cases[0].when" not in blob  # the label value must not ride the blob either
 
-    # And the restored run reconstructs + resumes to completion.
-    ckpt = RunCheckpoint.loads(blob)
-    release = DeliverAnswerCommand(node_id="settle", value=None)
-    res2 = resume_flow(loaded, checkpoint=ckpt, commands=[release])
+    # Terminal recovery is read-only and reconstructs the same result from clean topology.
+    before = path.read_bytes()
+    res2 = resume_flow(load_flow(_RANGE_FLOW), log=path)
     assert res2.status == "succeeded"
-    assert res2.output == "cancel"  # confirm_action(rec={}) -> "cancel"
+    assert res2.output == "cancel"
+    assert res2.events == []
+    assert path.read_bytes() == before

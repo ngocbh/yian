@@ -17,11 +17,67 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
+from agent_composer.compile.expand import build_grow
 from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.expr import binding_co_skips, expr_refs_of
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
+from agent_composer.runtime.engine import FlowEngine
+from agent_composer.runtime.log import MemoryRunLog
+from agent_composer.runtime.state import (
+    RunStartData,
+    RunState,
+    commit_prepared,
+    prepare_run_started,
+)
+from agent_composer.typesys.pool import VariablePool
 from tests.engine._fakes import derive_wiring  # the SAME auto-derive test_engine.py:24 imports
+
+
+_TEST_RUN_ID = "direct-engine-test"
+_TEST_FINGERPRINT = "f" * 64
+
+
+def _engine(
+    flow: CompiledFlow,
+    run_inputs: Optional[dict[str, Any]] = None,
+    *,
+    num_workers: int = 0,
+    grow_builder=build_grow,
+    on_event=None,
+    on_stream=None,
+    stop_event=None,
+) -> FlowEngine:
+    """Prepare one in-memory authority and return the final direct engine surface."""
+    inputs = dict(run_inputs or {})
+    state = RunState(flow)
+    pool = VariablePool(start_id=flow.start_id)
+    pool.set(flow.start_id, inputs)
+    pool.add_system("run_id", _TEST_RUN_ID)
+    log = MemoryRunLog(_TEST_RUN_ID)
+    prepared = prepare_run_started(
+        state,
+        RunStartData(
+            run_id=_TEST_RUN_ID,
+            flow_fingerprint=_TEST_FINGERPRINT,
+            initial_pool=pool,
+            start_wiring_override={
+                name: f"${{input.{name}}}" for name in inputs
+            },
+            effective_llm_by_static_path={},
+            num_workers=num_workers,
+        ),
+    )
+    commit_prepared(log, state, prepared)
+    return FlowEngine(
+        state,
+        log,
+        grow_builder=grow_builder,
+        num_workers=num_workers,
+        on_event=on_event,
+        on_stream=on_stream,
+        stop_event=stop_event,
+    )
 
 
 @dataclass(frozen=True)

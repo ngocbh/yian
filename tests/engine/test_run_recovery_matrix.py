@@ -24,11 +24,12 @@ from agent_composer.compile.manifest import flow_fingerprint, flow_manifest
 from agent_composer.compile.model import START_ID
 from agent_composer.compose import load_flow
 from agent_composer.events import NodeStarted, NodeSucceeded, RunSucceeded
-from agent_composer.nodes.base import Output
-from agent_composer.runtime.engine import _RecordedDispatcher
-from agent_composer.runtime.eval_node import _eval_node_raw
+from agent_composer.nodes.base import NodeKind, Output
+from agent_composer.runtime.engine import FlowEngine
+from agent_composer.runtime.eval_node import eval_node
 from agent_composer.runtime.log import (
     MemoryRunLog,
+    NodeExpandedRecord,
     NodeStartedRecord,
     RunResumedRecord,
     encode_pool,
@@ -103,6 +104,105 @@ nodes:
     kind: call
     call: composite
 output: ${outer.output}
+"""
+
+_NESTED_HUMAN_EFFECTS = {
+    "call": """
+id: recovery-nested-human-call
+name: recovery_nested_human_call
+defs:
+  gate:
+    input:
+      token: str
+    nodes:
+      ask:
+        kind: human_input
+        prompt: nested call input
+        output: str
+    output: ${ask.output}
+nodes:
+  invoke:
+    kind: call
+    call: gate
+    input:
+      token: ready
+output: ${invoke.output}
+""",
+    "map": """
+id: recovery-nested-human-map
+name: recovery_nested_human_map
+defs:
+  gate:
+    input:
+      token: str
+    nodes:
+      ask:
+        kind: human_input
+        prompt: nested map input
+        output: str
+    output: ${ask.output}
+nodes:
+  invoke:
+    kind: map
+    call: gate
+    over: ${["a", "b"]}
+    input:
+      token: ${item}
+output: ${invoke.output}
+""",
+}
+
+_LOOP_BODY_SPAWNERS = """
+id: recovery-loop-body-spawners
+name: recovery_loop_body_spawners
+defs:
+  echo_one:
+    input:
+      value: int
+    nodes:
+      echo:
+        kind: code
+        input:
+          x: ${input.value}
+        output: int
+        code: tests.engine._compose_codefns:echo_x
+    output: ${echo.output}
+  turn:
+    input:
+      n: int
+      exited: bool
+    nodes:
+      nested_call:
+        kind: call
+        call: echo_one
+        input:
+          value: ${input.n}
+      nested_map:
+        kind: map
+        call: echo_one
+        over: ${[1, 2]}
+        input:
+          value: ${item}
+      bump:
+        kind: code
+        depends_on: [nested_call, nested_map]
+        input:
+          n: ${input.n}
+          exited: ${input.exited}
+        output:
+          n: int
+          exited: bool
+        code: tests.engine._compose_codefns:loop_bump
+    output: ${bump.output}
+nodes:
+  repeated:
+    kind: loop
+    call: turn
+    input:
+      n: 0
+      exited: false
+    times: 2
+output: ${repeated.output}
 """
 
 _EFFECT_FLOWS = {
@@ -274,7 +374,7 @@ def _pause_after_effect_started(
     """Stop a serial dispatcher at the target's post-durable start yield."""
     loaded = load_flow(source)
     state, log = _new_started_run(loaded, num_workers=0)
-    dispatcher = _RecordedDispatcher(
+    dispatcher = FlowEngine(
         state,
         log,
         grow_builder=build_grow,
@@ -314,7 +414,7 @@ def test_every_nested_growth_prefix_replays_to_the_live_state(
 
     monkeypatch.setattr(engine_module, "commit_prepared", capture_after_commit)
     observers = list(
-        _RecordedDispatcher(
+        FlowEngine(
             state,
             log,
             grow_builder=build_grow,
@@ -335,6 +435,50 @@ def test_every_nested_growth_prefix_replays_to_the_live_state(
         recovered = run_module._replay_run_log(loaded, _prefix_log(log, length))
         assert _state_snapshot(recovered) == expected, (
             f"replayed state diverged after authoritative prefix {length}/{len(records)}"
+        )
+
+
+def test_every_loop_body_call_and_map_prefix_replays_to_the_live_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CALL and MAP nested inside each grown LOOP turn replay after every commit."""
+    loaded = load_flow(_LOOP_BODY_SPAWNERS)
+    state, log = _new_started_run(loaded, num_workers=0)
+    snapshots = [_state_snapshot(state)]
+    original_commit = engine_module.commit_prepared
+
+    def capture_after_commit(cursor, live_state, prepared):
+        observers = original_commit(cursor, live_state, prepared)
+        assert live_state is state
+        snapshots.append(_state_snapshot(live_state))
+        return observers
+
+    monkeypatch.setattr(engine_module, "commit_prepared", capture_after_commit)
+    observers = list(
+        FlowEngine(
+            state,
+            log,
+            grow_builder=build_grow,
+            num_workers=0,
+        ).run()
+    )
+
+    assert isinstance(observers[-1], RunSucceeded)
+    assert observers[-1].output == {"n": 2, "exited": False}
+    expanded_ids = tuple(
+        envelope.record.spawner_id
+        for envelope in log
+        if isinstance(envelope.record, NodeExpandedRecord)
+    )
+    assert any(node_id.endswith("/nested_call") for node_id in expanded_ids)
+    assert any(node_id.endswith("/nested_map") for node_id in expanded_ids)
+    records = tuple(log)
+    assert len(snapshots) == len(records)
+
+    for length, expected in enumerate(snapshots, start=1):
+        recovered = run_module._replay_run_log(loaded, _prefix_log(log, length))
+        assert _state_snapshot(recovered) == expected, (
+            f"replayed state diverged after loop-body prefix {length}/{len(records)}"
         )
 
 
@@ -363,6 +507,51 @@ def test_effect_start_prefix_replays_without_running_effect_work(
     commit_prepared(log, recovered, prepared)
     assert tuple(recovered.in_flight) == ()
     assert tuple(recovered.ready) == ("effect",)
+
+
+@pytest.mark.parametrize(
+    "source",
+    tuple(_NESTED_HUMAN_EFFECTS.values()),
+    ids=tuple(_NESTED_HUMAN_EFFECTS),
+)
+def test_namespaced_human_input_start_replays_without_host_interaction(
+    source: str,
+) -> None:
+    """Unfinished HUMAN_INPUT work under grown CALL/MAP keeps its live namespace."""
+    loaded = load_flow(source)
+    state, log = _new_started_run(loaded, num_workers=0)
+    drive = FlowEngine(
+        state,
+        log,
+        grow_builder=build_grow,
+        num_workers=0,
+    ).run()
+    effect_id = None
+    try:
+        for observer in drive:
+            if not isinstance(observer, NodeStarted):
+                continue
+            node = state.flow.nodes[observer.node_id]
+            if node.kind is NodeKind.HUMAN_INPUT:
+                effect_id = observer.node_id
+                break
+    finally:
+        drive.close()
+
+    assert effect_id is not None
+    assert "/ask" in effect_id
+    assert tuple(state.in_flight) == (effect_id,)
+    assert tuple(log)[-1].record == NodeStartedRecord(node_id=effect_id)
+
+    recovered = run_module._replay_run_log(loaded, log)
+    assert _state_snapshot(recovered) == _state_snapshot(state)
+    assert tuple(recovered.in_flight) == (effect_id,)
+
+    prepared = prepare_run_resumed(recovered, num_workers=0)
+    assert prepared.record == RunResumedRecord(
+        retry_node_ids=(effect_id,),
+        num_workers=0,
+    )
 
 
 def test_resume_prepends_ordered_effect_retries_before_existing_ready_work() -> None:
@@ -450,7 +639,7 @@ def test_recovered_wait_recomputes_from_the_authored_absolute_deadline(
                 tzinfo=timezone.utc,
             ),
         )
-        outcome = _eval_node_raw(
+        outcome = eval_node(
             node,
             recovered.flow,
             recovered.pool,

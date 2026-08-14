@@ -12,9 +12,9 @@ from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.case import Case, CaseNode
 from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
 from tests.engine._fakes import FuncNode, RecordNode, derive_wiring, stamp_reads
+from tests.engine._graph_builder import _engine
 
 
 def _with_boundary(node_map: dict) -> dict:
@@ -308,13 +308,13 @@ def _branch_graph(cases):
 
 def test_case_when_routes_high():
     g, log = _branch_graph([Case(handle="is_high", when="${score} >= 0.7")])
-    list(FlowEngine(g).run())
+    list(_engine(g).run())
     assert log == ["high"]
 
 
 def test_case_when_routes_default():
     g, log = _branch_graph([Case(handle="is_high", when="${score} >= 0.9")])
-    list(FlowEngine(g).run())
+    list(_engine(g).run())
     assert log == ["low"]
 
 
@@ -340,12 +340,12 @@ def test_case_string_equality_routes():
     ]
     node_map = {n.id: n for n in nodes}
     g = CompiledFlow.from_parts(_with_boundary(node_map), edges, wiring=derive_wiring(node_map))
-    list(FlowEngine(g).run())
+    list(_engine(g).run())
     assert log == ["high"]
 
 
 def test_case_case_without_when_errors():
     g = _branch_graph([Case(handle="is_high")])[0]  # no `when`
-    events = list(FlowEngine(g).run())
+    events = list(_engine(g).run())
     # the node raises -> the run fails (not a silent misroute)
     assert type(events[-1]).__name__ == "RunFailed"

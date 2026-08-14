@@ -32,7 +32,7 @@ loader exists (see the backlog). Phase 1 runs inline **in-process** with no isol
 body is *diagnosed* by CODE's package-local watchdog (it logs an over-budget body) but cannot be
 killed; a killable subprocess runtime and a security sandbox are deferred (see the design
 docs). A per-node `run()` **deep serialize-once check** makes a non-serializable inline
-return fail *at the node*, not later at a checkpoint.
+return fail *inside CODE*, before the dispatcher prepares its durable success record.
 """
 
 import ast
@@ -127,7 +127,7 @@ class CodeNode(Node):
     function; inline mode wraps the bare body as `def main(inputs):`, compiles it (padded for
     absolute-YAML-line tracebacks), and calls `main(inputs)`. Node purity is preserved — `run`
     returns `Output(value)` and never touches the pool. Inline runs are synchronous (no
-    suspend/resume interaction).
+    continuation state is created).
 
     Args:
         node_id (`str`):
@@ -207,9 +207,9 @@ class CodeNode(Node):
 
         The generic write-boundary validates the top-level shape only; a nested
         non-serializable value (e.g. a bare object inside a returned dict) would otherwise
-        slip through and detonate later at the next checkpoint. Forcing the pool's own
-        serialization once here — the same `ANY_VALUE_ADAPTER.dump_json` a checkpoint runs —
-        surfaces it here, named to this node. `None` is left to the declared-`output:` check.
+        reach canonical success-record encoding before it fails. Running the typed-value
+        serializer once here surfaces the error inside this CODE invocation. `None` is left
+        to the declared-`output:` check.
         """
         if value is None:
             return

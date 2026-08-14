@@ -8,7 +8,7 @@ discriminates by KIND (`NodeKind.MAP`), carries NO `over` attribute, and the ite
 the N element clones and list-mode END fan-in for the engine to splice.
 
 Knows about: nodes.base, expr, and peer node modules.
-Never imports: compile, compose, runtime, suspension, the run boundary, CLI, or provider SDKs.
+Never imports: compile, compose, runtime, the run boundary, CLI, or provider SDKs.
 """
 
 from agent_composer.nodes.map.node import MapNode

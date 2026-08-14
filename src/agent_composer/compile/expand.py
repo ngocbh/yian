@@ -17,7 +17,7 @@ child START_ID's output object (`${<callsite>/<start>.output.X}`); the dispatche
 consumes the descriptions and performs the (impure) `add_subgraph` + `register` + seed.
 
 Layer: compile — imports `expr`/`nodes` plus the shared growth-schema leaf;
-never `runtime` or `suspension`.
+never `runtime` or the package-root run boundary.
 """
 
 from __future__ import annotations
@@ -402,7 +402,21 @@ def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) ->
     Unlike `call_subgraph`/`map_subgraph`, the body-END carries NO `commit_as`: the CONTINUE arm
     never commits under the origin (only the STOP arm's `Output(carried, commit_as=origin)` does),
     so `_derived_terminals` returns `[]` for a continue grow and the terminal stamping no-ops."""
-    cloned = clone_child(child, callsite=map_callsite(origin, k), record=dict(carried))
+    # The loop's carried record may be wider than the body domain: the authoring
+    # contract permits body inputs to be a subset of carried fields. Seed only those
+    # declared child inputs into its START, while the full record continues through
+    # the next driver below.
+    body_input_names = {
+        param.name for param in (child.nodes[child.start_id].params or [])
+    }
+    body_seed = {
+        name: value for name, value in carried.items() if name in body_input_names
+    }
+    cloned = clone_child(
+        child,
+        callsite=map_callsite(origin, k),
+        record=body_seed,
+    )
     body_end = cloned.end_id                               # ns(map_callsite(origin, k), END_ID)
     nodes = dict(cloned.nodes)
     edges = list(cloned.edges)

@@ -13,6 +13,7 @@ import pytest
 from agent_composer.compose import load_flow
 from agent_composer.run import run_flow
 from agent_composer.compose.helpers.errors import LoadError
+from tests.engine._graph_builder import _engine
 
 
 # --------------------------------------------------------------------------- #
@@ -236,7 +237,6 @@ def test_end_post_assert_reads_output() -> None:
     from agent_composer.compile.model import CompiledFlow, END_ID, START_ID, Edge
     from agent_composer.nodes.end import EndNode
     from agent_composer.nodes.start import StartNode
-    from agent_composer.runtime.engine import FlowEngine
     from agent_composer.typesys.pool import VariablePool
     from tests.engine._fakes import FuncNode, derive_wiring
 
@@ -257,13 +257,13 @@ def test_end_post_assert_reads_output() -> None:
 
     # Pass-case: `${output} > 0` holds since END_ID value = 5 (single-output → bare).
     g_pass = _make_flow("${output} > 0")
-    events_pass = list(FlowEngine(g_pass).run())
+    events_pass = list(_engine(g_pass).run())
     assert type(events_pass[-1]).__name__ == "RunSucceeded", events_pass[-1]
     assert events_pass[-1].output == 5
 
     # Fail-case: `${output} > 100` fires LOUD (pre-fix would have silently held).
     g_fail = _make_flow("${output} > 100")
-    events_fail = list(FlowEngine(g_fail).run())
+    events_fail = list(_engine(g_fail).run())
     assert type(events_fail[-1]).__name__ == "RunFailed", events_fail[-1]
     assert "post-assert failed" in events_fail[-1].error
 

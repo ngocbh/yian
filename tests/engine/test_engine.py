@@ -1,31 +1,26 @@
-"""Unit tests for the single-threaded FlowEngine drain.
+"""Unit tests for the serial and pooled append-only engine drains.
 
 These exercise scheduling semantics with fake nodes (no LLMs/tools):
 ordering, fan-out, exact-once diamond join, CASE branch + skip-flood,
-outputs-before-successors, failure, abort, and pause.
+outputs-before-successors, failure, and typed output commits.
 """
 
 from agent_composer.events import (
-    RunAborted,
     RunFailed,
-    RunPaused,
     RunSucceeded,
 )
 from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, FlowOutput, NodeState
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.engine import FlowEngine
-from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import ValueKind, Type
 from tests.engine._fakes import (
     BranchNode,
     FailNode,
     FuncNode,
-    PauseOnceNode,
     RecordNode,
     derive_wiring,
 )
-from tests.engine._graph_builder import _graph
+from tests.engine._graph_builder import _engine, _graph
 
 
 def _run(engine):
@@ -41,7 +36,7 @@ def test_linear_runs_in_order():
         [RecordNode("a", log), RecordNode("b", log), RecordNode("c", log)],
         [(START_ID, "a"), ("a", "b"), ("b", "c"), ("c", END_ID)],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert log == ["a", "b", "c"]
     assert isinstance(events[-1], RunSucceeded)
 
@@ -57,7 +52,7 @@ def test_terminal_output_surface():
             FlowOutput(name="n", from_="${t.output.n}"),
         ],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert events[-1].output == {"output": "final", "n": 7}
 
 
@@ -68,7 +63,7 @@ def test_no_declared_outputs_yields_none():
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final", "n": 7})],
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert events[-1].output is None
 
 
@@ -83,7 +78,7 @@ def test_terminal_output_coalesce_returns_first_non_none():
         [(START_ID, "b"), ("b", END_ID)],
         outputs=[FlowOutput(name="result", from_="${a.output | b.output}")],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert events[-1].output == "B-RAN"
 
 
@@ -94,7 +89,7 @@ def test_terminal_output_default_when_ref_none():
         [(START_ID, "a"), ("a", END_ID)],
         outputs=[FlowOutput(name="result", from_='${missing.output:-"fallback"}')],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert events[-1].output == "fallback"
 
 
@@ -105,7 +100,7 @@ def test_terminal_output_literal_string_passthrough():
         [(START_ID, "a"), ("a", END_ID)],
         outputs=[FlowOutput(name="result", from_="plain literal")],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert events[-1].output == "plain literal"
 
 
@@ -116,7 +111,7 @@ def test_terminal_output_literal_numeric_passthrough():
         [(START_ID, "a"), ("a", END_ID)],
         outputs=[FlowOutput(name="result", from_=7)],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert events[-1].output == 7
     assert isinstance(events[-1].output, int)
 
@@ -132,7 +127,7 @@ def test_terminal_output_flowoutput_carrier_like_iofield():
             FlowOutput(name="n", from_="${t.output.n}"),
         ],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert events[-1].output == {"output": "final", "n": 7}
 
 
@@ -143,7 +138,7 @@ def test_terminal_output_iofield_still_resolves():
         [(START_ID, "t"), ("t", END_ID)],
         outputs=[FlowOutput(name="result", from_="${t.output.output}")],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert events[-1].output == "final"
 
 
@@ -156,7 +151,7 @@ def test_fan_out_runs_all_branches():
         [RecordNode("a", log), RecordNode("b", log), RecordNode("c", log), RecordNode("d", log)],
         [(START_ID, "a"), ("a", "b"), ("a", "c"), ("b", "d"), ("c", "d"), ("d", END_ID)],
     )
-    _run(FlowEngine(g))
+    _run(_engine(g))
     assert set(log) == {"a", "b", "c", "d"}
 
 
@@ -167,13 +162,13 @@ def test_multiple_roots_all_start():
         [RecordNode("a", log), RecordNode("b", log), RecordNode("j", log)],
         [(START_ID, "a"), (START_ID, "b"), ("a", "j"), ("b", "j"), ("j", END_ID)],
     )
-    engine = FlowEngine(g)
+    engine = _engine(g)
     events = _run(engine)
     assert set(log) == {"a", "b", "j"}
     assert log.count("j") == 1  # join still fires exactly once
     # the single root is the synthesized START_ID; a/b are its out-edge targets.
-    assert engine.flow.start_id == START_ID
-    assert {e.to for e in engine.flow.outgoing(START_ID)} == {"a", "b"}
+    assert engine.state.flow.start_id == START_ID
+    assert {e.to for e in engine.state.flow.outgoing(START_ID)} == {"a", "b"}
     assert isinstance(events[-1], RunSucceeded)
 
 
@@ -183,7 +178,7 @@ def test_diamond_join_fires_exactly_once():
         [RecordNode("a", log), RecordNode("b", log), RecordNode("c", log), RecordNode("d", log)],
         [(START_ID, "a"), ("a", "b"), ("a", "c"), ("b", "d"), ("c", "d"), ("d", END_ID)],
     )
-    _run(FlowEngine(g))
+    _run(_engine(g))
     assert log.count("d") == 1  # join node runs once, not once-per-incoming-edge
 
 
@@ -204,7 +199,7 @@ def test_outputs_written_before_successor_runs():
         ],
         [(START_ID, "up"), ("up", "down"), ("down", END_ID)],
     )
-    _run(FlowEngine(g))
+    _run(_engine(g))
     assert seen["upstream"] == "payload"
 
 
@@ -217,10 +212,10 @@ def test_case_takes_branch_and_skips_other():
         [BranchNode("cond", "yes"), RecordNode("b", log), RecordNode("c", log)],
         [(START_ID, "cond"), ("cond", "b", "yes"), ("cond", "c", "default"), ("b", END_ID), ("c", END_ID)],
     )
-    engine = FlowEngine(g)
+    engine = _engine(g)
     events = _run(engine)
     assert log == ["b"]  # only the selected branch ran
-    assert engine.sm.node_state["c"] == NodeState.SKIPPED
+    assert engine.state.node_state["c"] == NodeState.SKIPPED
     assert isinstance(events[-1], RunSucceeded)
 
 
@@ -230,7 +225,7 @@ def test_case_default_fallback():
         [BranchNode("cond", "default"), RecordNode("b", log), RecordNode("c", log)],
         [(START_ID, "cond"), ("cond", "b", "yes"), ("cond", "c", "default"), ("b", END_ID), ("c", END_ID)],
     )
-    _run(FlowEngine(g))
+    _run(_engine(g))
     assert log == ["c"]
 
 
@@ -241,11 +236,11 @@ def test_skip_floods_through_unreachable_chain():
         [BranchNode("cond", "yes"), RecordNode("b", log), RecordNode("c", log)],
         [(START_ID, "cond"), ("cond", "b", "default"), ("cond", END_ID, "yes"), ("b", "c"), ("c", END_ID)],
     )
-    engine = FlowEngine(g)
+    engine = _engine(g)
     _run(engine)
     assert log == []
-    assert engine.sm.node_state["b"] == NodeState.SKIPPED
-    assert engine.sm.node_state["c"] == NodeState.SKIPPED
+    assert engine.state.node_state["b"] == NodeState.SKIPPED
+    assert engine.state.node_state["c"] == NodeState.SKIPPED
 
 
 def test_data_edged_branch_target_does_not_run_when_skipped():
@@ -273,11 +268,11 @@ def test_data_edged_branch_target_does_not_run_when_skipped():
     node_map[START_ID] = StartNode(START_ID, input_decls=[])
     node_map[END_ID] = EndNode.record(END_ID, output_names=[])
     g = CompiledFlow.from_parts(node_map, edges)
-    engine = FlowEngine(g)
+    engine = _engine(g)
     events = _run(engine)
     assert "pro_note" in log and "con_note" not in log
-    assert engine.sm.node_state["pro_note"] == NodeState.TAKEN
-    assert engine.sm.node_state["con_note"] == NodeState.SKIPPED
+    assert engine.state.node_state["pro_note"] == NodeState.TAKEN
+    assert engine.state.node_state["con_note"] == NodeState.SKIPPED
     assert isinstance(events[-1], RunSucceeded)
 
 
@@ -294,20 +289,20 @@ def _gate_flow(log, output_from):
 
 
 def test_skipped_terminal_producer_fails_run():
-    last = _run(FlowEngine(_gate_flow([], "${t.output}")))[-1]
+    last = _run(_engine(_gate_flow([], "${t.output}")))[-1]
     assert isinstance(last, RunFailed) and "skipped" in last.error
     assert last.error_type == "TerminalSkipped"
 
 
 def test_coalesce_terminal_one_branch_skipped_succeeds():
     # ${a.output | t.output}: a ran, t skipped -> legitimate success (taken branch's value).
-    last = _run(FlowEngine(_gate_flow([], "${a.output | t.output}")))[-1]
+    last = _run(_engine(_gate_flow([], "${a.output | t.output}")))[-1]
     assert isinstance(last, RunSucceeded)
 
 
 def test_does_not_misfire_on_optional_terminal():
     # ${t.output:-null}: t skipped, but the literal escape -> succeeds binding null (not E7).
-    last = _run(FlowEngine(_gate_flow([], "${t.output:-null}")))[-1]
+    last = _run(_engine(_gate_flow([], "${t.output:-null}")))[-1]
     assert isinstance(last, RunSucceeded) and last.output is None
 
 
@@ -318,11 +313,11 @@ def test_genuine_none_terminal_succeeds():
         [(START_ID, "n"), ("n", END_ID)],
         outputs=[FlowOutput("result", "${n.output}")],
     )
-    last = _run(FlowEngine(g))[-1]
+    last = _run(_engine(g))[-1]
     assert isinstance(last, RunSucceeded) and last.output is None
 
 
-# --- failure / abort / pause ------------------------------------------------ #
+# --- failure ---------------------------------------------------------------- #
 
 
 def test_node_failure_produces_graph_failed():
@@ -330,46 +325,9 @@ def test_node_failure_produces_graph_failed():
         [FuncNode("a", lambda p: {}), FailNode("b", "nope"), FuncNode("c", lambda p: {})],
         [(START_ID, "a"), ("a", "b"), ("b", "c"), ("c", END_ID)],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert isinstance(events[-1], RunFailed)
     assert events[-1].error == "nope"
-
-
-def test_abort_stops_the_drain():
-    log: list = []
-
-    class AbortAfterA(FlowEngine):
-        pass
-
-    g = _graph(
-        [RecordNode("a", log), RecordNode("b", log)],
-        [(START_ID, "a"), ("a", "b"), ("b", END_ID)],
-    )
-    engine = FlowEngine(g)
-    gen = engine.run()
-    next(gen)  # RunStarted -> root 'a' enqueued
-    engine.request_abort()
-    events = [e for e in gen]
-    assert any(isinstance(e, RunAborted) for e in events)
-
-
-def test_pause_suspends_run_with_reason():
-    g = _graph(
-        [
-            FuncNode("a", lambda p: {}),
-            PauseOnceNode("gate", reason="approve?"),
-            FuncNode("after", lambda p: {"output": "done"}),
-        ],
-        [(START_ID, "a"), ("a", "gate"), ("gate", "after"), ("after", END_ID)],
-    )
-    engine = FlowEngine(g)
-    events = _run(engine)
-    assert isinstance(events[-1], RunPaused)
-    assert events[-1].reasons == ["approve?"]
-    # downstream did NOT run (no answer yet); the parked gate stays TAKEN (deliver-as-Output:
-    # no UNKNOWN reset / re-run — the engine delivers its answer on resume).
-    assert engine.sm.node_state["after"] == NodeState.UNKNOWN
-    assert engine.sm.node_state["gate"] == NodeState.TAKEN
 
 
 # --- write-boundary output enforcement (slice 2) ---------------------------- #
@@ -380,19 +338,19 @@ def test_output_enforced_rejects_type_mismatch():
         [FuncNode("a", lambda p: "oops", output_type=Type.scalar(ValueKind.NUMBER))],
         [(START_ID, "a"), ("a", END_ID)],
     )
-    events = _run(FlowEngine(g))
+    events = _run(_engine(g))
     assert isinstance(events[-1], RunFailed)
 
 
 def test_output_enforced_coerces_and_types_storage():
-    pool = VariablePool()
     g = _graph(
         [FuncNode("a", lambda p: 3, output_type=Type.scalar(ValueKind.NUMBER))],
         [(START_ID, "a"), ("a", END_ID)],
     )
-    events = _run(FlowEngine(g, pool))
+    engine = _engine(g)
+    events = _run(engine)
     assert isinstance(events[-1], RunSucceeded)
-    seg = pool.get_value("a")
+    seg = engine.state.pool.get_value("a")
     assert seg.kind.value == "float" and seg.value == 3.0  # int coerced to float, typed NUMBER
 
 
@@ -406,41 +364,41 @@ def test_multi_output_record_is_a_closed_type():
         required=frozenset({"a", "b"}),
     )
     g_missing = _graph([FuncNode("n", lambda p: {"a": "x"}, output_type=rec)], [(START_ID, "n"), ("n", END_ID)])
-    assert isinstance(_run(FlowEngine(g_missing))[-1], RunFailed)
+    assert isinstance(_run(_engine(g_missing))[-1], RunFailed)
     g_extra = _graph(
         [FuncNode("n", lambda p: {"a": "x", "b": "y", "c": "z"}, output_type=rec)], [(START_ID, "n"), ("n", END_ID)]
     )
-    assert isinstance(_run(FlowEngine(g_extra))[-1], RunFailed)
-    pool = VariablePool()
+    assert isinstance(_run(_engine(g_extra))[-1], RunFailed)
     g_ok = _graph([FuncNode("n", lambda p: {"a": "x", "b": "y"}, output_type=rec)], [(START_ID, "n"), ("n", END_ID)])
-    assert isinstance(_run(FlowEngine(g_ok, pool))[-1], RunSucceeded)
-    assert pool.get("n") == {"a": "x", "b": "y"}
+    engine = _engine(g_ok)
+    assert isinstance(_run(engine)[-1], RunSucceeded)
+    assert engine.state.pool.get("n") == {"a": "x", "b": "y"}
 
 
 def test_unresolvable_declared_type_is_not_enforced():
     # 'Policy' is unresolvable against the empty registry -> the compiler stamps
     # output_type=None (unenforced); the node's value is stored raw.
-    pool = VariablePool()
     g = _graph(
         [FuncNode("a", lambda p: {"k": 1}, output_type=None)],
         [(START_ID, "a"), ("a", END_ID)],
     )
-    events = _run(FlowEngine(g, pool))
+    engine = _engine(g)
+    events = _run(engine)
     assert isinstance(events[-1], RunSucceeded)
-    assert pool.get("a") == {"k": 1}
+    assert engine.state.pool.get("a") == {"k": 1}
 
 
 def test_undeclared_output_is_not_enforced():
     # No declared output_type -> the node's value is stored whole, unenforced;
     # any object key is reachable via object-walk.
-    pool = VariablePool()
     g = _graph(
         [FuncNode("a", lambda p: {"other": "x"}, output_type=None)],
         [(START_ID, "a"), ("a", END_ID)],
     )
-    events = _run(FlowEngine(g, pool))
+    engine = _engine(g)
+    events = _run(engine)
     assert isinstance(events[-1], RunSucceeded)
-    assert pool.resolve("a", ["output", "other"]) == "x"
+    assert engine.state.pool.resolve("a", ["output", "other"]) == "x"
 
 
 # --- one engine, the num_workers knob --------------------------------------- #
@@ -454,8 +412,8 @@ def test_num_workers_0_and_4_same_terminal():
         )
 
     log0, log4 = [], []
-    ev0 = list(FlowEngine(build(log0), num_workers=0).run())
-    ev4 = list(FlowEngine(build(log4), num_workers=4).run())
+    ev0 = list(_engine(build(log0), num_workers=0).run())
+    ev4 = list(_engine(build(log4), num_workers=4).run())
     assert log0 == ["a", "b", "c"]  # a chain serializes under either knob
     assert set(log4) == {"a", "b", "c"}
     assert isinstance(ev0[-1], RunSucceeded) and isinstance(ev4[-1], RunSucceeded)
@@ -463,53 +421,8 @@ def test_num_workers_0_and_4_same_terminal():
 
 def test_bare_num_workers_defaults_serial():
     # The default knob is serial (num_workers=0) — run.py's run_flow relies on it.
-    eng = FlowEngine(_graph([RecordNode("a", [])], [(START_ID, "a"), ("a", END_ID)]))
+    eng = _engine(_graph([RecordNode("a", [])], [(START_ID, "a"), ("a", END_ID)]))
     assert eng.num_workers == 0
-
-
-def test_pause_works_under_both_knobs():
-    def build():
-        return _graph(
-            [FuncNode("a", lambda p: {}),
-             PauseOnceNode("gate", reason="approve?")],
-            [(START_ID, "a"), ("a", "gate"), ("gate", END_ID)],
-        )
-
-    for nw in (0, 4):
-        ev = list(FlowEngine(build(), num_workers=nw).run())
-        assert isinstance(ev[-1], RunPaused) and ev[-1].reasons == ["approve?"]
-
-
-def test_ready_snapshot_branches_on_num_workers():
-    # _ready_snapshot must branch strictly on num_workers==0
-    # (self.ready) vs the pooled ready_q — so snapshot() is correct under either path.
-    serial = FlowEngine(_graph([RecordNode("a", [])], [(START_ID, "a"), ("a", END_ID)]), num_workers=0)
-    serial.ready.append("queued")
-    assert serial._ready_snapshot() == ["queued"]
-    pooled = FlowEngine(_graph([RecordNode("a", [])], [(START_ID, "a"), ("a", END_ID)]), num_workers=4)
-    pooled.ready_q.put("queued")
-    assert pooled._ready_snapshot() == ["queued"]  # reads ready_q, not the empty serial deque
-
-
-def test_pooled_snapshot_captures_paused_state():
-    # Pooled run pauses, then snapshot() goes through _ready_snapshot's POOLED arm — proves the
-    # single-engine design does not silently break the snapshot path under num_workers>=1.
-    # A test-only Pause node carries a structured reason accepted by the checkpoint model.
-    from agent_composer.suspension.pause import HumanInputRequired
-
-    eng = FlowEngine(
-        _graph([FuncNode("a", lambda p: {}),
-                PauseOnceNode(
-                    "gate",
-                    reason=HumanInputRequired(prompt="approve?", node_id="gate"),
-                )],
-               [(START_ID, "a"), ("a", "gate"), ("gate", END_ID)]),
-        num_workers=4,
-    )
-    ev = list(eng.run())
-    assert isinstance(ev[-1], RunPaused)
-    ckpt = eng.snapshot()  # exercises the pooled _ready_snapshot arm
-    assert [r.prompt for r in ckpt.pause_reasons] == ["approve?"]
 
 
 def test_parallel_module_and_export_are_gone():

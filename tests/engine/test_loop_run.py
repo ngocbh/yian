@@ -19,7 +19,7 @@ from agent_composer.compile.expand import build_grow
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import run_flow
 from agent_composer.tools import install_ask_user
-from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
+from tests.engine._graph_builder import _engine
 
 
 COUNTER = """
@@ -256,9 +256,9 @@ def test_loop_budget_exceeded_in_step_fails_run(monkeypatch):
     # failed run, not an uncaught escape. The COUNTER flow adds ~3 body nodes + 1 driver node per
     # iteration off a base of 3, so a budget of 6 lets iteration 0 grow and trips a later iteration
     # inside `_apply_grow` — exercising the grow boundary specifically.
-    import agent_composer.runtime.engine as engine_mod
+    import agent_composer.runtime.state as state_module
 
-    monkeypatch.setattr(engine_mod, "MAX_TOTAL_NODES", 6)
+    monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", 6)
     result = run_flow(load_flow(COUNTER), {})
     assert result.status != "succeeded"
     assert "node budget" in (result.error or "")
@@ -333,66 +333,6 @@ def test_until_stops_when_predicate_becomes_true():
     assert result.output == {"n": 0}            # 3 -> 2 -> 1 -> 0, then n<=0 true -> stop
 
 
-def test_prune_drops_all_live_overlay_traces():
-    """The generic `_prune(ids)` clears EVERY live-overlay trace of the named id-set — an iteration
-    `#k`'s nodes/edges, sm state (node_state/edge_state/executing), pool entries — while leaving the
-    durable loop `GrowRecord` ledger untouched and the spawner id (no `#k` prefix) alone.
-
-    Deterministic grown-#0 setup: load `LOOP_CHAT`, swap its authored HUMAN_INPUT for the
-    test-only artificial Pause leaf, and drive to that first pause. Iteration #0 is then fully
-    grown (its `#0/` nodes registered and the START seed committed to `pool.store`). In the
-    self-respawn model the body-END filler `loop#0/__end__` carries NO `commit_as` — it feeds the
-    fresh driver `loop~1` by plain wiring, not a loop-back redirect. The `#0/` overlay is live and
-    un-pruned, the exact state prune must remove.
-    """
-    loaded = load_flow(LOOP_CHAT)
-    replace_human_inputs_with_artificial_pauses(loaded.compiled)
-    r = run_flow(loaded, {})
-    assert r.status == "paused"
-    engine = r.engine
-    spawner = "loop"
-    prefix = f"{spawner}#0/"
-
-    # Precondition: the grown #0 overlay is actually present in every registry prune touches,
-    # so a clean assert below is meaningful (not vacuously true on an empty overlay).
-    assert any(n.startswith(prefix) for n in engine.flow.nodes)
-    assert any(n.startswith(prefix) for n in engine.pool.store)
-    assert any(n.startswith(prefix) for n in engine.sm.node_state)
-    # The CONTINUE body-END filler carries NO commit_as (it feeds the next driver `loop~1` by
-    # plain wiring; only the STOP arm commits, under the origin `loop`).
-    assert engine.flow.nodes[f"{spawner}#0/__end__"].commit_as is None
-    # And the fresh next-iteration driver `loop~1` was spliced (bounded live overlay {L, body_0, L~1}).
-    assert "loop~1" in engine.flow.nodes
-
-    # Snapshot the durable ledger BEFORE pruning — it must survive untouched.
-    ledger_len = len(engine.expansions)
-    rec = engine._origin_record[spawner]
-    # The loop GrowRecord's seed is the LIVE iteration's `(record, index)` pair.
-    record_before, index_before = rec.seed
-
-    ids = frozenset(n for n in engine.flow.nodes if n.startswith(prefix))
-    engine._prune(ids)
-
-    # Every per-id registry is clean for the `#0/` prefix.
-    assert not any(n.startswith(prefix) for n in engine.flow.nodes)
-    assert not any(n.startswith(prefix) for n in engine.pool.store)
-    assert not any(k.startswith(prefix) for k in engine.depth)
-    assert not any(k.startswith(prefix) for k in engine._spawner_expansion)
-    assert not any(n.startswith(prefix) for n in engine.sm.node_state)
-    assert not any(n.startswith(prefix) for n in engine.sm.executing)
-    # No surviving edge references a pruned id (from OR to), and no edge_state keys one.
-    assert not any(e.from_.startswith(prefix) or e.to.startswith(prefix)
-                   for e in engine.flow.edges)
-
-    # The durable GrowRecord ledger is UNTOUCHED — replay needs it intact.
-    assert len(engine.expansions) == ledger_len
-    assert engine._origin_record[spawner] is rec
-    assert rec.seed == (dict(record_before), index_before)
-
-    # The spawner id itself (no `#k` prefix) is NOT pruned — it is the durable replay spawner.
-    assert spawner in engine.flow.nodes
-
-
 # A `times: 20` countdown far exceeds a lowered 40-node budget when NOTHING is pruned
 # (each iteration adds ~3 body nodes + 1 driver node off a small base). With the self-respawn
 # model's per-iteration self-prune (each driver retires the previous body + itself), only ~one
@@ -427,11 +367,10 @@ output: ${loop.output}
 
 
 def test_long_loop_stays_within_node_budget(monkeypatch):
-    import agent_composer.runtime.engine as eng
-    from agent_composer.runtime.engine import FlowEngine
+    import agent_composer.runtime.state as state_module
 
-    monkeypatch.setattr(eng, "MAX_TOTAL_NODES", 40)   # a 20-iteration loop blows this un-pruned
-    engine = FlowEngine(
+    monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", 40)
+    engine = _engine(
         load_flow(TIMES_20).compiled,
         run_inputs={},
         grow_builder=build_grow,
@@ -441,8 +380,8 @@ def test_long_loop_stays_within_node_budget(monkeypatch):
 
     assert isinstance(terminal, RunSucceeded)
     # 20 body runs from n=30 -> n=10, and only ~one iteration resident at the end:
-    assert engine.flow.nodes                          # sanity
-    assert len(engine.flow.nodes) < 40                # bounded; un-pruned this would exceed 40
+    assert engine.state.flow.nodes
+    assert len(engine.state.flow.nodes) < 40
     assert terminal.output == {"n": 10}               # 30 - 20 body runs = 10
 
 
@@ -456,9 +395,7 @@ def test_terminate_leaves_exactly_one_dead_final_body_and_driver():
     reading `loop#2/__end__`. So the residue is EXACTLY: one dead body namespace `loop#2/` AND one
     dead driver clone `loop~3`. The committed origin `loop` stays (legitimate result node)."""
     from agent_composer.events import RunSucceeded
-    from agent_composer.runtime.engine import FlowEngine
-
-    engine = FlowEngine(
+    engine = _engine(
         load_flow(TIMES_3).compiled,
         run_inputs={},
         grow_builder=build_grow,
@@ -467,10 +404,14 @@ def test_terminate_leaves_exactly_one_dead_final_body_and_driver():
     assert isinstance(terminal, RunSucceeded)
     assert terminal.output == {"n": 7}
     # (a) residual body namespaces: exactly one, the final iteration's `loop#2/`.
-    body_ns = {n.split("/", 1)[0] for n in engine.flow.nodes if n.startswith("loop#")}
+    body_ns = {
+        n.split("/", 1)[0]
+        for n in engine.state.flow.nodes
+        if n.startswith("loop#")
+    }
     assert body_ns == {"loop#2"}                          # exactly the final body namespace
     # (b) residual driver clones: exactly one, the STOP driver `loop~3` (the origin `loop` is NOT a
     #     `loop~<k>` clone — it is the compiled result node and is excluded by the `~` filter).
-    driver_clones = {n for n in engine.flow.nodes if n.startswith("loop~")}
+    driver_clones = {n for n in engine.state.flow.nodes if n.startswith("loop~")}
     assert driver_clones == {"loop~3"}                    # exactly the STOP driver clone
-    assert "loop" in engine.flow.nodes                    # committed origin stays (not residue)
+    assert "loop" in engine.state.flow.nodes              # committed origin stays

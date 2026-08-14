@@ -1,9 +1,8 @@
-"""Raw node evaluation for the append-only dispatcher migration.
+"""Raw node evaluation for the append-only dispatcher.
 
-The recorded runtime consumes one closed worker result instead of the legacy
-``NodeStarted`` / terminal observer stream.  Streaming remains transient and is
-forwarded only through the injected callback; host-control and callback failures
-stay outside the node-failure sum.
+The runtime consumes one closed worker result. Streaming remains transient and is
+forwarded only through the injected callback; host-control and callback failures stay
+outside the node-failure sum.
 """
 
 import threading
@@ -18,20 +17,19 @@ from agent_composer.nodes.base import (
     Node,
     NodeKind,
     Output,
-    Pause,
     Route,
     _HostStop,
 )
 from agent_composer.nodes.binding import ParamDecl
-from agent_composer.runtime.eval_node import EvaluationFailure, _eval_node_raw
+from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.typesys.pool import VariablePool
 from tests.engine._fakes import BranchNode, FailNode, FuncNode, StreamNode, derive_wiring
 
 
 def _raw(node, *, emit_stream=None, stop_event=None):
-    """Evaluate one fake against the same flow-owned wiring used by legacy tests."""
+    """Evaluate one fake against its flow-owned wiring."""
     flow = SimpleNamespace(wiring=derive_wiring({node.id: node}))
-    return _eval_node_raw(
+    return eval_node(
         node,
         flow,
         VariablePool(),
@@ -57,15 +55,6 @@ class _LeafGrow(Node):
 
     def _run_impl(self, inputs):
         return Grow(seed={})
-
-
-class _PauseNode(Node):
-    """Legacy-only Pause producer retained until the atomic suspension deletion."""
-
-    kind = NodeKind.CODE
-
-    def _run_impl(self, inputs):
-        return Pause("legacy")
 
 
 class _RaisesHostStop(Node):
@@ -125,15 +114,6 @@ def test_raw_node_raise_and_invalid_grow_are_failures_not_observers():
     assert (raised.error, raised.error_type) == ("boom", "RuntimeError")
     assert isinstance(invalid_grow, EvaluationFailure)
     assert "not a spawner" in invalid_grow.error
-
-
-def test_raw_pause_is_a_transitional_failure_not_a_pause_observer():
-    result = _raw(_PauseNode("pause"))
-
-    assert isinstance(result, EvaluationFailure)
-    assert result.node_id == "pause"
-    assert result.error_type == "RuntimeError"
-    assert "Pause" in result.error
 
 
 def test_raw_stream_callback_failure_propagates_unchanged():

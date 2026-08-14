@@ -2,22 +2,16 @@
 
 A node is a pure function of its bound input record; the ENGINE owns both boundaries —
 the read (bind the inputs from the pool) and the write (the dispatcher stores `Output`).
-``_eval_node_raw`` is the append-only dispatcher's private seam: it binds the record,
+``eval_node`` is the append-only dispatcher's evaluation seam: it binds the record,
 pre-resolves reserved keys, builds trait-gated capabilities, runs the node through its
 assert-owning ``run`` wrapper, forwards transient chunks through ``emit_stream``, and
 returns exactly ``Output | Route | Grow | EvaluationFailure``.  It emits no observer
 notifications; durable observer ordering belongs to the dispatcher.
 
-``eval_node`` is the temporary legacy event adapter.  It drives the same internal
-evaluation generator but retains ``NodeStarted`` / terminal events and artificial
-``PauseRequested`` until the atomic runtime cutover deletes suspension.  Keeping one
-evaluation implementation prevents the two runtime paths from drifting while the old
-engine still owns public execution.
-
 Every node-side failure path funnels to ``EvaluationFailure``: a node ``raise``, a
 ``Grow`` returned by a non-spawner, and a non-``NodeResult`` return.  ``_HostStop`` and
 an injected stream callback exception are deliberate host-side exceptions and propagate
-unchanged.  The legacy adapter maps the failure carrier to ``NodeFailed``.
+unchanged.
 
 The bind is PURE: it reads the node's sources ONLY from `flow.wiring[node.id]` joined to the
 node's `params` — the node carries no source. Direct-drive tests supply a stub `flow` with
@@ -37,18 +31,8 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass, replace
 from typing import Any, TypeAlias
 
-from agent_composer.events import (
-    NodeExpanded,
-    NodeFailed,
-    NodeRouted,
-    NodeStarted,
-    NodeSucceeded,
-    PauseRequested,
-    SourceRange,
-    SourceSpan,
-    StreamChunk,
-)
-from agent_composer.nodes.base import Grow, Output, Pause, Route, _HostStop
+from agent_composer.events import SourceRange, SourceSpan, StreamChunk
+from agent_composer.nodes.base import Grow, Output, Route, _HostStop
 from agent_composer.nodes.binding import bind_params
 from agent_composer.typesys.pool import VariablePool
 
@@ -74,9 +58,6 @@ class EvaluationFailure:
 WorkerOutcome: TypeAlias = Output | Route | Grow | EvaluationFailure
 """Closed raw worker result consumed by the append-only dispatcher."""
 
-_EvaluationOutcome: TypeAlias = WorkerOutcome | Pause
-"""Raw result plus the legacy-only Pause retained by the temporary adapter."""
-
 
 def _evaluate_node_stream(
     node,
@@ -85,7 +66,7 @@ def _evaluate_node_stream(
     *,
     wiring_override=None,
     stop_event=None,
-) -> Generator[StreamChunk, None, _EvaluationOutcome]:
+) -> Generator[StreamChunk, None, WorkerOutcome]:
     """Bind and run one node, yielding chunks and returning one normalized result.
 
     `wiring_override` is a per-run wiring dict the engine may supply for THIS node instead of
@@ -98,17 +79,16 @@ def _evaluate_node_stream(
     opted-in evaluation that omits it receives a fresh unset private event.
 
     Returns:
-        `_EvaluationOutcome`:
-            One ``Output``, ``Route``, ``Grow``, legacy-only ``Pause``, or frozen
-            ``EvaluationFailure``.  Stream chunks are yielded before that return value.
+        `WorkerOutcome`:
+            One ``Output``, ``Route``, ``Grow``, or frozen ``EvaluationFailure``.
+            Stream chunks are yielded before that return value.
 
     Raises:
         `_HostStop`:
             Host-control flow is outside the node failure sum and propagates unchanged.
     """
     try:
-        # Host cancellation is control flow outside the node-result sum. The legacy adapter
-        # emits NodeStarted before entering this generator; the raw seam has no observer event.
+        # Host cancellation is control flow outside the node-result sum.
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         # The flow-owned wiring for this node (the node/flow split): every kind's sources live here
@@ -151,7 +131,7 @@ def _evaluate_node_stream(
         # Kind-specific execution diagnostics, such as CODE's in-process watchdog, stay in
         # the owning node package rather than timing every engine operation.
         outcome = node.run(record, **caps)
-        if isinstance(outcome, (Output, Route, Pause, Grow)):
+        if isinstance(outcome, (Output, Route, Grow)):
             result = outcome
         elif inspect.isgenerator(outcome):  # a streaming kind: yields StreamChunk, returns a NodeResult
             result = yield from node._drain_node_generator(outcome)
@@ -202,7 +182,7 @@ def _evaluate_node_stream(
         )
 
 
-def _eval_node_raw(
+def eval_node(
     node,
     flow,
     pool: VariablePool,
@@ -217,10 +197,6 @@ def _eval_node_raw(
     deliberately invoked outside the node-failure funnel.  If it raises, that exact host
     exception escapes; it must never become a durable node failure.  When omitted, chunks
     are discarded.  ``_HostStop`` likewise propagates unchanged.
-
-    A returned ``Pause`` is converted to ``EvaluationFailure`` only during this migration:
-    the legacy ``eval_node`` adapter still supports artificial pause, while the final
-    append-only runtime deletes ``Pause`` entirely.
     """
     stream = _evaluate_node_stream(
         node,
@@ -247,65 +223,4 @@ def _eval_node_raw(
         # returns the initiating host exception.
         stream.close()
 
-    if isinstance(result, Pause):
-        return EvaluationFailure(
-            node.id,
-            error=(
-                f"node {node.id!r} returned Pause, which is unsupported by raw "
-                "append-only evaluation"
-            ),
-            error_type="RuntimeError",
-        )
     return result
-
-
-def eval_node(
-    node,
-    flow,
-    pool: VariablePool,
-    *,
-    wiring_override=None,
-    stop_event=None,
-):
-    """Temporarily adapt raw evaluation to the legacy engine event stream.
-
-    The old engine still consumes ``NodeStarted`` followed by stream chunks and one
-    terminal observer (or ``PauseRequested``).  This wrapper preserves that contract
-    while all binding, execution, normalization, and failure diagnostics are shared with
-    ``_eval_node_raw`` through ``_evaluate_node_stream``.
-    """
-    yield NodeStarted(node.id)
-    result = yield from _evaluate_node_stream(
-        node,
-        flow,
-        pool,
-        wiring_override=wiring_override,
-        stop_event=stop_event,
-    )
-
-    if isinstance(result, EvaluationFailure):
-        yield NodeFailed(
-            result.node_id,
-            error=result.error,
-            error_type=result.error_type,
-            locator=result.locator,
-            range=result.range,
-            traceback=result.traceback,
-        )
-        return
-
-    if isinstance(result, Pause):
-        yield PauseRequested(node.id, result.reason)  # suspended; no terminal
-        return
-    if isinstance(result, Grow):
-        yield NodeExpanded(node.id, result)
-        return
-    if isinstance(result, Route):
-        yield NodeRouted(node.id, result.handle)
-        return
-    # Fold the commit redirect onto the terminal: a node-chosen `Output.commit_as` (roadmap)
-    # wins over the engine-baked `node.commit_as` (the subflow-terminal redirect); both default
-    # None so an ordinary node commits under its own id. This is the sole channel `_on_success`
-    # reads to decide the commit target.
-    yield NodeSucceeded(node.id, output=result.value,
-                        commit_as=(result.commit_as or node.commit_as))

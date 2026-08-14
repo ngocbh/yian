@@ -17,10 +17,8 @@ import pytest
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose import load_flow
 from agent_composer.events import NodeStarted, NodeSucceeded, RunFailed
-from agent_composer.run import resume_flow, run_flow
-from agent_composer.runtime.engine import FlowEngine
-from agent_composer.typesys.pool import VariablePool
-from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
+from agent_composer.run import run_flow
+from tests.engine._graph_builder import _engine
 
 
 # --- boundary assert still gates the run (same behavior), now via START post_assert -------- #
@@ -58,7 +56,7 @@ def test_start_emits_started_and_succeeded():
     # BEHAVIOR CHANGE: START is now an ordinary scheduled node, so it emits
     # NodeStarted + NodeSucceeded (the old bypass emitted neither).
     loaded = load_flow(_AGE_FLOW)
-    eng = FlowEngine(loaded.compiled, run_inputs={"age": 20})
+    eng = _engine(loaded.compiled, run_inputs={"age": 20})
     events = list(eng.run())
     assert any(isinstance(e, NodeStarted) and e.node_id == START_ID for e in events)
     assert any(isinstance(e, NodeSucceeded) and e.node_id == START_ID for e in events)
@@ -86,7 +84,7 @@ def test_string_defaulted_int_coerces_when_omitted():
     # string "5" — START params carry default but no type), and START's _run_impl coerce_inputs
     # coerces it to the integer 5. The whole path runs through eval_node now.
     loaded = load_flow(_DEFAULT_FLOW)
-    eng = FlowEngine(loaded.compiled, run_inputs={})
+    eng = _engine(loaded.compiled, run_inputs={})
     events = list(eng.run())
     succ = next(e for e in events if isinstance(e, NodeSucceeded) and e.node_id == START_ID)
     assert succ.output == {"n": 5}                 # integer, not the raw "5"
@@ -120,46 +118,6 @@ def test_boundary_assert_reads_coerced_default():
     res = run_flow(load_flow(_DEFAULT_ASSERT_FLOW), {})
     assert res.status == "succeeded"
     assert res.output == 5
-
-
-# --- S-3: a test-only Pause after START checkpoints a RAN START + resumes correctly -------- #
-_PAUSE_FLOW = """
-id: w
-name: w
-input:
-  settle_at: date
-nodes:
-  settle:
-    kind: human_input
-    prompt: "continue?"
-    output: Optional[str]
-  done:
-    kind: code
-    depends_on: [settle]
-    output: str
-    code: tests.seeds.fns:confirm_action
-output: ${done.output}
-"""
-
-
-def test_pause_after_start_checkpoints_ran_start_and_resumes():
-    from agent_composer.compile.model import NodeState
-    from agent_composer.suspension.checkpoint import RunCheckpoint
-    from agent_composer.suspension.commands import DeliverAnswerCommand
-
-    loaded = load_flow(_PAUSE_FLOW)
-    replace_human_inputs_with_artificial_pauses(loaded.compiled)
-    res = run_flow(loaded, {"settle_at": "2026-07-01"})
-    assert res.status == "paused"
-    # the checkpoint's frontier reflects a START that already RAN (TAKEN), not one pending.
-    assert res.checkpoint.node_state[START_ID] == NodeState.TAKEN
-    assert res.checkpoint.pool.get(START_ID) == {"settle_at": "2026-07-01"}
-    # cross-process round-trip + resume completes.
-    ckpt = RunCheckpoint.loads(res.checkpoint.dumps())
-    release = DeliverAnswerCommand(node_id="settle", value=None)
-    res2 = resume_flow(loaded, checkpoint=ckpt, commands=[release])
-    assert res2.status == "succeeded"
-    assert res2.output == "cancel"
 
 
 # --- S-1: a def's boundary assert fires from the cloned child START, fails the run --------- #

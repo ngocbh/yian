@@ -9,10 +9,10 @@ Two modes:
 - LIST (a MAP fan-in): params e0..e{n-1}, each <- a MAP element's child
   END_ID; `run` -> Output([inputs[ei]...]) in over order (index); n=0 -> [].
 
-END_ID carries the flow's POST asserts (${X.output}); they fire POOL-scoped via the NodeKind.END
-arm in eval_node. A required terminal output co-skipped is a NORMAL
-required-data-group co-skip via the engine's `disposition` (state_manager) — END_ID has no special
-co-skip logic. Hidden from authors: a reserved __-prefixed id, never parseable.
+END_ID carries the flow's POST asserts (${X.output}); the ordinary node wrapper fires them
+after END builds its output. A required terminal output co-skipped is a normal
+required-data-group co-skip derived by the runtime reducer's edge dispositions — END_ID has
+no special co-skip logic. Hidden from authors: a reserved __-prefixed id, never parseable.
 """
 
 from typing import Optional

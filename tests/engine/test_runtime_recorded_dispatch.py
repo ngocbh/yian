@@ -31,7 +31,7 @@ from agent_composer.events import (
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route, _HostStop
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
-from agent_composer.runtime.engine import _RecordedDispatcher
+from agent_composer.runtime.engine import FlowEngine
 from agent_composer.runtime.log import (
     MemoryRunLog,
     NodeExpandedRecord,
@@ -87,6 +87,15 @@ class _InvalidRouteNode(Node):
 
     def _run_impl(self, inputs: dict[str, Any]) -> Route:
         return Route("absent")
+
+
+class _InvalidCommitTargetNode(Node):
+    """Return malformed node-produced success metadata."""
+
+    kind = NodeKind.CODE
+
+    def _run_impl(self, inputs: dict[str, Any]) -> Output:
+        return Output("done", commit_as=42)  # type: ignore[arg-type]
 
 
 class _GrowNode(Node):
@@ -249,9 +258,9 @@ def _dispatcher(
     *,
     num_workers: int,
     **kwargs: Any,
-) -> _RecordedDispatcher:
+) -> FlowEngine:
     """Construct the private runtime with a growth seam unused by static tests."""
-    return _RecordedDispatcher(
+    return FlowEngine(
         state,
         log,
         grow_builder=lambda _spawner, _seed: None,
@@ -504,6 +513,28 @@ def test_invalid_raw_output_preparation_becomes_durable_node_failure():
     assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
 
 
+@pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
+def test_invalid_output_commit_target_becomes_durable_node_failure(num_workers: int):
+    state, log = _initialized(
+        _flow([_InvalidCommitTargetNode("work")]),
+        num_workers=num_workers,
+    )
+
+    events = list(_dispatcher(state, log, num_workers=num_workers).run())
+
+    assert isinstance(events[-2], NodeFailed)
+    assert events[-2].node_id == "work"
+    assert events[-2].error == "commit_as must be a string or None"
+    assert events[-2].error_type == "TypeError"
+    assert events[-2].locator == engine_module.SourceSpan(
+        node="work",
+        kind="field",
+        key="output",
+    )
+    assert isinstance(events[-1], RunFailed)
+    assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
+
+
 def test_route_raw_outcome_is_prepared_committed_and_reduced():
     ran = []
     router = _RouteNode("route")
@@ -550,7 +581,7 @@ def test_invalid_route_handle_is_a_durable_node_failure():
 
 def test_grow_raw_outcome_uses_injected_builder_and_flat_record():
     state, log = _initialized(_flow([_GrowNode("spawn")]), num_workers=0)
-    dispatcher = _RecordedDispatcher(
+    dispatcher = FlowEngine(
         state,
         log,
         grow_builder=lambda spawner, _seed: _growth_fragment(spawner.id),
@@ -578,7 +609,7 @@ def test_invalid_live_grow_depth_trait_remains_a_host_failure():
 
     with pytest.raises(ValueError, match="grow_depth_delta") as caught:
         list(
-            _RecordedDispatcher(
+            FlowEngine(
                 state,
                 log,
                 grow_builder=lambda node, _seed: _growth_fragment(node.id),
@@ -602,7 +633,7 @@ def test_growth_digest_runtime_error_remains_exact_host_failure(monkeypatch):
 
     with pytest.raises(RuntimeError) as caught:
         list(
-            _RecordedDispatcher(
+            FlowEngine(
                 state,
                 log,
                 grow_builder=lambda node, _seed: _growth_fragment(node.id),
@@ -623,7 +654,7 @@ def test_injected_grow_builder_runtime_error_is_a_durable_node_failure():
         raise expected
 
     events = list(
-        _RecordedDispatcher(
+        FlowEngine(
             state,
             log,
             grow_builder=reject_builder,
@@ -650,7 +681,7 @@ def test_invalid_grow_builder_return_is_a_durable_node_failure():
     state, log = _initialized(_flow([_GrowNode("spawn")]), num_workers=0)
 
     events = list(
-        _RecordedDispatcher(
+        FlowEngine(
             state,
             log,
             grow_builder=lambda _spawner, _seed: object(),

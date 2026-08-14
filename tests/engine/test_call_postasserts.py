@@ -11,15 +11,19 @@ redirect-commit site (naming the spawner); before an earlier fix they were silen
 These pin: a true call post-assert passes, a false one fails the run LOUDLY (RunFailed,
 error_type "NodeAssertFailed", a non-null locator at the assert on the child END), a post-assert
 reading BOTH a declared call input AND `${output}` fires correctly (the input mapped onto the
-cloned child START's coerced output), and (durability) the lowered assert survives a checkpoint
-round-trip — the injected builder re-lowers it onto the rebuilt child END, with no new field.
+cloned child START's coerced output), and (durability) the lowered assert survives authoritative
+log recovery — the injected builder re-lowers it onto the replayed child END.
 """
 
+from pathlib import Path
+
+import pytest
+
 from agent_composer.compose import load_flow
-from agent_composer.run import resume_command, resume_flow, run_flow
 from agent_composer.events import RunFailed
-from agent_composer.suspension.checkpoint import RunCheckpoint
-from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
+from agent_composer.nodes.base import _HostStop
+from agent_composer.run import resume_flow, run_flow
+from agent_composer.tools import install_ask_user
 
 
 # A child that re-exports a {report, n} record (the Ollama-free CODE child pattern). The
@@ -130,21 +134,20 @@ def test_call_post_assert_reads_input_and_output_false():
 
 
 def test_call_post_assert_reads_input_true():
-    # the input ref resolves from the recovered GrowRecord.seed (not None/dropped).
+    # The input ref resolves from the call's canonical growth seed (not None/dropped).
     loaded = _load('      - ${topic} == "ACME" and ${output.n} == 4')
     res = run_flow(loaded, {})
     assert res.status == "succeeded", res.error
 
 
-# --- 4. durable: the input record survives suspend/resume -------------------- #
+# --- 4. durable: the input record survives interruption/recovery ------------- #
 #
-# A `call` whose child contains a HUMAN_INPUT-shaped artificial Pause leaf. The call's
-# post-assert reads BOTH a declared input (`action`) and `${output}`. Driving
-# run_flow -> pause -> snapshot/dumps -> loads/restore -> resume must fire the post-assert on
-# the RESUMED leg, recovering the input record from the persisted GrowRecord.seed (no new
-# checkpoint field). A false assert -> RunFailed on resume; a true one -> success.
+# A `call` whose child contains a live HUMAN_INPUT leaf. The call's post-assert reads BOTH
+# a declared input (`action`) and `${output}`. A host interruption leaves the input node's
+# durable start unfinished; log recovery rebuilds the expansion, retries that node, and fires
+# the post-assert over the recorded call input. A false assert fails; a true one succeeds.
 
-_PAUSING_CHILD = """
+_BLOCKING_CHILD = """
 id: approver
 name: approver
 input:
@@ -160,7 +163,7 @@ output: ${approve.output}
 """
 
 
-def _pausing_parent(asserts: str) -> str:
+def _blocking_parent(asserts: str) -> str:
     return f"""
 id: gate-parent
 name: gate_parent
@@ -180,41 +183,55 @@ output: ${{gate.output}}
 """
 
 
-def _load_pausing(asserts: str):
-    loaded = load_flow(
-        _pausing_parent(asserts),
-        child_resolver=_resolver(**{"approver": _PAUSING_CHILD}),
+def _load_blocking(asserts: str):
+    return load_flow(
+        _blocking_parent(asserts),
+        child_resolver=_resolver(**{"approver": _BLOCKING_CHILD}),
     )
-    replace_human_inputs_with_artificial_pauses(loaded.compiled)
-    return loaded
 
 
-def _drive_durable(asserts: str, answer: str):
-    """Exercise generic Pause compatibility across a checkpoint and resume.
+def _drive_durable(
+    tmp_path: Path,
+    asserts: str,
+    answer: str,
+):
+    """Interrupt one started HUMAN_INPUT, then recover it from its run log.
 
-    The post-assert fires on the resumed leg over the recovered record.
+    The post-assert fires after replay over the recovered call input record.
     """
-    loaded = _load_pausing(asserts)
-    rec = run_flow(loaded, {"action": "deploy"})
-    assert rec.status == "paused"
-    reason = rec.pause_reasons[0]
-    ckpt = RunCheckpoint.loads(rec.checkpoint.dumps())  # cross-process round-trip
-    fresh = _load_pausing(asserts)
-    cmd = resume_command(fresh, reason, answer)
-    return resume_flow(fresh, checkpoint=ckpt, commands=[cmd])
+    path = tmp_path / "call-post-assert.jsonl"
+    interruption = _HostStop("interrupt before human answer")
+
+    def interrupt(**request):
+        raise interruption
+
+    with install_ask_user(interrupt), pytest.raises(_HostStop) as caught:
+        run_flow(_load_blocking(asserts), {"action": "deploy"}, log=path)
+    assert caught.value is interruption
+
+    with install_ask_user(lambda **request: answer):
+        return resume_flow(_load_blocking(asserts), log=path)
 
 
-def test_call_post_assert_survives_resume_true():
-    # a TRUE input+output post-assert fires on the RESUMED leg -> success. Proves the call's
-    # input record (`action`) is recovered from GrowRecord.seed after the checkpoint hop.
-    res = _drive_durable('      - ${action} == "deploy" and ${output} == "yes"', "yes")
+def test_call_post_assert_survives_recovery_true(tmp_path: Path):
+    # A true input+output post-assert fires after recovery. The call's input record
+    # (`action`) comes from the authoritative NodeExpanded seed.
+    res = _drive_durable(
+        tmp_path,
+        '      - ${action} == "deploy" and ${output} == "yes"',
+        "yes",
+    )
     assert res.status == "succeeded", res.error
     assert res.output == "yes"
 
 
-def test_call_post_assert_survives_resume_false():
-    # a FALSE post-assert on the resumed leg -> RunFailed, NodeAssertFailed, located at the call.
-    res = _drive_durable('      - ${action} == "deploy" and ${output} == "no"', "yes")
+def test_call_post_assert_survives_recovery_false(tmp_path: Path):
+    # A false post-assert after recovery fails and remains located at the cloned child END.
+    res = _drive_durable(
+        tmp_path,
+        '      - ${action} == "deploy" and ${output} == "no"',
+        "yes",
+    )
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
     assert failed and failed[0].error_type == "NodeAssertFailed"

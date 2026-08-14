@@ -15,7 +15,7 @@ Flow invocation is NO LONGER a `${...}` construct — it is the compile-time
 whole-value `call(...)` directive (in `compose.calls`), not part of this engine.
 
 Knows about:   `typesys` (the pool, in `expressions`).
-Never imports: `nodes`, `compile`, `runtime`, `suspension` (they import IT).
+Never imports: `nodes`, `compile`, or `runtime` (they import IT).
 """
 
 from agent_composer.expr.expressions import (

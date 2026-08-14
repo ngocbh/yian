@@ -1,29 +1,18 @@
-"""Engine event vocabulary — shared by nodes, the runtime, and callers.
+"""Transient engine observer vocabulary shared by the runtime and callers.
 
-Two tiers (graphon's "two-tier event model"):
+Node observers describe evaluation after their corresponding durable transition
+has been applied: ``NodeStarted`` followed by ``NodeSucceeded``, ``NodeRouted``,
+``NodeExpanded``, or ``NodeFailed``. ``StreamChunk`` is intentionally transient,
+and ``NodeSkipped`` is derived from a route's durable skip closure. A node only
+describes its result; the reducer owns graph state and variable-pool writes.
 
-- **Node-level signals** primarily describe evaluation: `eval_node` emits
-  `NodeStarted`, optional `StreamChunk`s and/or `PauseRequested`, then one outcome
-  such as `NodeSucceeded`, `NodeRouted`, or `NodeFailed`. The run-state reducer
-  also returns fresh observer notifications only after their durable record is
-  applied. It reuses the relevant signal carrier and derives `NodeSkipped` from a
-  route's skip closure; `NodeSkipped` itself has no durable record. A node only
-  *describes* its result — the engine writes the variable pool and reduces graph
-  state. That split keeps nodes pure and testable.
-
-- **Run events** are produced by `FlowEngine.run()` and streamed to the caller
-  (the CLI): `RunStarted` then one terminal of
-  `RunSucceeded | RunFailed | RunPaused | RunAborted`.
-
-Plain dataclasses, not pydantic: these are transient in-process signals, never
-serialized (what *is* serialized is the checkpoint, which captures pause
-*reasons*, not events).
-
-`PauseReason` is typed in `suspension.pause`; referenced here as `Any` to keep
-`events` a dependency-free leaf alongside `typesys`.
+Run observers bracket a fresh or recovered execution segment with ``RunStarted``
+or ``RunResumed`` and one derived terminal ``RunSucceeded | RunFailed`` when the
+run reaches quiescence. Plain dataclasses keep this dependency-free leaf separate
+from the serialized record vocabulary in ``runtime.log``.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
 # --------------------------------------------------------------------------- #
@@ -205,22 +194,6 @@ class NodeExpanded:
     grow: Any = None
 
 
-@dataclass
-class PauseRequested:
-    """A temporary generic/artificial Pause awaits an external signal.
-
-    `reason` is a `suspension.pause.PauseReason` (HumanInputRequired /
-    EventAwaited / ...). The engine parks the artificial node and suspends the run.
-    """
-
-    node_id: str
-    reason: Any
-
-
-# Anything a node's `_run` generator may yield before returning its result.
-NodeStreamEvent = (StreamChunk, PauseRequested)
-
-
 # --------------------------------------------------------------------------- #
 # Run-level events
 # --------------------------------------------------------------------------- #
@@ -235,7 +208,7 @@ class RunStarted:
 
 @dataclass
 class RunResumed:
-    """A resumed run's lead event (the `engine.resume()` twin of `RunStarted`)."""
+    """A recovered run segment began after its unfinished nodes were requeued."""
 
     pass
 
@@ -268,17 +241,3 @@ class RunFailed:
     # exception behind them (boundary assert / input coercion). CLI shows it under
     # `--engine-trace`.
     traceback: Optional[str] = None
-
-
-@dataclass
-class RunPaused:
-    """The run suspended; `reasons` carry what each paused node is waiting for."""
-
-    reasons: list[Any] = field(default_factory=list)
-
-
-@dataclass
-class RunAborted:
-    """The run was aborted by an `AbortCommand` rather than completing or failing."""
-
-    pass

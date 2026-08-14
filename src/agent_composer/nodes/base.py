@@ -2,16 +2,15 @@
 
 A node is a **pure function of its bound input record**: it implements
 `run(inputs, **caps) -> NodeResult` and returns ONE of the closed sum
-`Output | Route | Pause | Grow` (the node-result sum type) — **or**, for a streaming
+`Output | Route | Grow` (the node-result sum type) — **or**, for a streaming
 kind, a generator that yields `StreamChunk` and then *returns* a `NodeResult`.
 The node never receives the pool: the engine's `runtime.eval_node` seam binds its
 inputs (the read boundary) and hands it a record. Narrow effects enter through trait-gated
 capabilities: mapped `call` receives `bind_item`, and a cooperatively blocking node may receive
 `stop_event`. Failure is **not** a variant — a
-failing node `raise`s and the engine boundary turns it into `NodeFailed`. A returned `Pause`
-becomes one `PauseRequested`; the engine delivers the answer as the parked leaf's `Output`
-(deliver-as-Output — the node never re-runs). A streaming kind is a generator that
-yields `StreamChunk` and *returns* its `NodeResult` (drained by `_drain_node_generator`).
+failing node `raise`s and the engine boundary turns it into `NodeFailed`. A streaming
+kind is a generator that yields `StreamChunk` and *returns* its `NodeResult` (drained
+by `_drain_node_generator`).
 
 Invariant: a node never writes the pool. It *describes* its one output value as
 `Output(value)`; the engine performs the write under `node_id`. Keeps nodes pure.
@@ -128,18 +127,6 @@ class Route:
 
 
 @dataclass(frozen=True)
-class Pause:
-    """A temporary generic leaf pause retained for checkpoint compatibility.
-
-    ``reason`` is a ``suspension.pause.PauseReason``. The engine emits
-    ``PauseRequested`` and suspends. Authorable AGENT, HUMAN_INPUT, and WAIT nodes
-    block inside their live call and do not return this variant.
-    """
-
-    reason: Any
-
-
-@dataclass(frozen=True)
 class Grow:
     """A spawner describes one deterministic graph expansion for the engine to build.
 
@@ -157,14 +144,14 @@ class Grow:
 
 
 # The closed sum a pure `run(inputs)` returns.
-NodeResult = Union[Output, Route, Pause, Grow]
+NodeResult = Union[Output, Route, Grow]
 
 
 class _HostStop(Exception):
     """Private control signal: the host requested execution to stop cooperatively.
 
     This is deliberately outside `NodeResult`: it unwinds node evaluation without becoming
-    a node failure, a flow failure, or the public legacy abort result.
+    a node failure or a flow failure.
     """
 
     def __init__(self, message: str = "", *, primary: bool = True) -> None:
@@ -201,7 +188,7 @@ class Node(ABC):
     The base contract every node kind implements: a pure function of its input record.
 
     A node implements [`run`][agent_composer.nodes.base.Node.run] and returns one of the
-    closed sum `Output | Route | Pause | Grow` (or, for a streaming kind, a generator that yields
+    closed sum `Output | Route | Grow` (or, for a streaming kind, a generator that yields
     `StreamChunk` and returns a `NodeResult`). The node never receives the pool — the engine's
     `eval_node` seam binds its inputs and hands it a record — and never writes the pool; it
     *describes* its one output as `Output(value)` and the engine performs the write under the
@@ -265,8 +252,8 @@ class Node(ABC):
     # Declares "I am the self-respawning fixpoint-iteration driver" (LOOP). The growth core
     # (`_apply_grow`) gates the origin-keyed single-live-record ledger invariant under this trait:
     # each iteration is a fresh driver clone whose grow is attributed to `origin_id` (the compiled
-    # loop) and supersedes the prior iteration's GrowRecord, so the ledger stays bounded to one
-    # record per loop. A plain trait check suffices — the core never dispatches on the kind.
+    # loop) and supersedes the prior live iteration. A plain trait check suffices — the core
+    # never dispatches on the kind.
     # Overridden True by LoopNode; False for every other kind.
     is_loop: ClassVar[bool] = False
     # Declares "I can cooperate with a host-owned execution stop". When True, the read seam
@@ -321,8 +308,8 @@ class Node(ABC):
         # for a node that declares no `env:` and inherits no flow default.
         self.env: dict[str, Any] = {}
         # Render-only source-location metadata, populated by the compose builder (never by hand)
-        # and NEVER serialized: a checkpoint stores no topology, so these are rebuilt from the flow
-        # spec on restore, never round-tripped. Purely for diagnostics.
+        # and NEVER serialized: run records store no topology objects, so replay rebuilds these
+        # from the authored flow rather than round-tripping them. Purely for diagnostics.
         # `self.range`: this node's own `SourceRange` in the flow YAML (the whole node block); None
         #   for a fake / directly-constructed node with no known source.
         # `self.field_ranges`: `FieldRanges[(kind, key) -> SourceRange]` for the node's individual
@@ -336,9 +323,9 @@ class Node(ABC):
         self.field_ranges: FieldRanges = FieldRanges()
         # `self.wiring_labels`: wiring param -> author-facing phrase for a reference error, for a
         #   SYNTHESIZED param the author never wrote (a CASE `__rN` from a `when:` ref, `__on` from
-        #   `on:`) — e.g. `"cases[1].when"` / `"on:"`. Render-only, not checkpointed; populated by
-        #   the desugar that mints the param. Empty for every authored param (the default label
-        #   below reproduces the plain `input '<param>'` text).
+        #   `on:`) — e.g. `"cases[1].when"` / `"on:"`. Render-only and absent from run records;
+        #   populated by the desugar that mints the param. Empty for every authored param (the
+        #   default label below reproduces the plain `input '<param>'` text).
         self.wiring_labels: dict[str, str] = {}
         # Positional assert-range lists, aligned 1:1 with `pre_asserts` / `post_asserts` (an entry
         # is None where no span exists — a spanless / in-memory flow). Populated by the loader:
@@ -369,7 +356,7 @@ class Node(ABC):
         grow-path spawner-asserts): a cross-node/namespaced ref is lowered to a synth param
         that `bind_params` binds INTO the record, so there is no pool ref left to fall back to.
 
-        Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
+        Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
         A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
@@ -398,7 +385,7 @@ class Node(ABC):
         # not as the body left them. Only paid when this node declares post-asserts.
         post_input = copy.deepcopy(inputs) if self.post_asserts else None
         result = self._run_impl(inputs, **caps)
-        # Post-asserts fire ONLY for an `Output` result — never Route/Pause/Grow. A spawner's
+        # Post-asserts fire ONLY for an `Output` result — never Route/Grow. A spawner's
         # Grow post-asserts are handled in a later step. A generator (streaming) result also
         # falls through the guard untouched — the DORMANT streaming path: the wrapper must not
         # fire post on it; it is returned unchanged for `eval_node` to drain. No node kind
@@ -428,7 +415,7 @@ class Node(ABC):
         asserts around this body exactly once. Not `@abstractmethod` only because the base `Node`
         is instantiated directly in a few tests/fakes; a kind that omits it raises this loud error.
 
-        Returns a `NodeResult` (`Output | Route | Pause | Grow`), or — for a streaming kind —
+        Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
         A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
@@ -476,9 +463,8 @@ class Node(ABC):
             return False
 
     def _drain_node_generator(self, gen: Generator) -> Generator[Any, Any, "NodeResult"]:
-        """Forward a streaming node's yielded `StreamChunk`s and capture its RETURNED
-        `NodeResult`. A pause is now a *returned* `Pause` (not a yielded event), so a
-        generator only ever yields `StreamChunk`; the dispatch happens in `eval_node`."""
+        """Forward a streaming node's yielded `StreamChunk`s and capture its returned
+        `NodeResult`; generators yield only transient chunks before that result."""
         try:
             event = next(gen)
             while True:
@@ -486,6 +472,6 @@ class Node(ABC):
                 event = next(gen)
         except StopIteration as stop:
             result = stop.value
-            if not isinstance(result, (Output, Route, Pause, Grow)):
+            if not isinstance(result, (Output, Route, Grow)):
                 raise RuntimeError(f"node {self.id!r} generator did not return a NodeResult")
             return result

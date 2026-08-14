@@ -16,35 +16,92 @@ from threading import (
     enumerate as enumerate_threads,
     main_thread,
 )
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 import agent_composer.cli.run as run_cli
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
-from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge
+from agent_composer.compose import load_flow
 from agent_composer.events import NodeStarted
-from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
-from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.start import StartNode
+from agent_composer.nodes.base import _HostStop
 from agent_composer.run import RunResult
 from agent_composer.tools import TOOL_REGISTRY, invoke_tool
 
 
 _TIMEOUT = 2.0
+_CONCURRENT_ASK_BARRIER = Barrier(2)
 
 
-def _pooled_graph(nodes: list[Node], raw_edges: list[tuple[str, str]]) -> CompiledFlow:
-    """Build the parameter-free boundary graph used by pooled controller tests."""
-    node_map = {node.id: node for node in nodes}
-    node_map[START_ID] = StartNode(START_ID)
-    node_map[END_ID] = EndNode.record(END_ID, output_names=[])
-    edges = [
-        Edge(f"e{index}", source, target)
-        for index, (source, target) in enumerate(raw_edges)
-    ]
-    return CompiledFlow.from_parts(node_map, edges)
+def _pooled_ask(inputs: dict[str, Any]) -> str:
+    """Block one real CODE invocation in the host-installed terminal tool."""
+    question = inputs.get("question", "Blocked sibling")
+    return invoke_tool("ask_user", {"question": question})
+
+
+def _pooled_fail_after_prompt(inputs: dict[str, Any]) -> str:
+    """Fail only after the main thread begins serving the sibling prompt."""
+    prompt_active = TerminalBroker._test_prompt_active
+    assert prompt_active.wait(_TIMEOUT)
+    raise RuntimeError("pooled primary failure")
+
+
+def _pooled_concurrent_ask(inputs: dict[str, Any]) -> str:
+    """Enter two broker calls together so active EOF outranks cancellation."""
+    _CONCURRENT_ASK_BARRIER.wait(timeout=_TIMEOUT)
+    return _pooled_ask(inputs)
+
+
+_POOLED_ASK_FLOW = """
+id: terminal-controller-ask
+name: terminal_controller_ask
+nodes:
+  ask:
+    kind: code
+    code: tests.cli.test_terminal_controller:_pooled_ask
+    output: str
+output: ${ask.output}
+"""
+
+
+_POOLED_CONCURRENT_ASK_FLOW = """
+id: terminal-controller-concurrent-ask
+name: terminal_controller_concurrent_ask
+nodes:
+  ask_a:
+    kind: code
+    code: tests.cli.test_terminal_controller:_pooled_concurrent_ask
+    input:
+      question: ask-a
+    output: str
+  ask_b:
+    kind: code
+    code: tests.cli.test_terminal_controller:_pooled_concurrent_ask
+    input:
+      question: ask-b
+    output: str
+output:
+  a: ${ask_a.output}
+  b: ${ask_b.output}
+"""
+
+
+_POOLED_FAILURE_FLOW = """
+id: terminal-controller-failure
+name: terminal_controller_failure
+nodes:
+  ask:
+    kind: code
+    code: tests.cli.test_terminal_controller:_pooled_ask
+    output: str
+  fail:
+    kind: code
+    code: tests.cli.test_terminal_controller:_pooled_fail_after_prompt
+    output: str
+output:
+  ask: ${ask.output}
+  fail: ${fail.output}
+"""
 
 
 class _Reporter:
@@ -66,41 +123,16 @@ class _Reporter:
             raise self.failure
 
 
-class _PooledAskNode(Node):
-    """Block one real engine worker in the host-installed terminal tool."""
-
-    kind = NodeKind.CODE
-
-    def _run_impl(self, inputs):
-        return Output(invoke_tool("ask_user", {"question": "Blocked sibling"}))
-
-
-class _PooledFailAfterPrompt(Node):
-    """Fail only after the main thread is serving the sibling's prompt."""
-
-    kind = NodeKind.CODE
-    prompt_active = Event()
-
-    def _run_impl(self, inputs):
-        assert type(self).prompt_active.wait(_TIMEOUT)
-        raise RuntimeError("pooled primary failure")
-
-
-class _PooledConcurrentAskNode(Node):
-    """Start two broker calls together so EOF must outrank sibling cancellation."""
-
-    kind = NodeKind.CODE
-    barrier = Barrier(2)
-
-    def _run_impl(self, inputs):
-        type(self).barrier.wait(timeout=_TIMEOUT)
-        return Output(invoke_tool("ask_user", {"question": self.id}))
-
-
 def _success(output: Any = "done") -> RunResult:
     """Build one terminal result for controller lifecycle tests."""
 
-    return RunResult(input={}, status="succeeded", output=output)
+    return RunResult(
+        input={},
+        status="succeeded",
+        run_id="controller-test",
+        log=None,
+        output=output,
+    )
 
 
 def test_prompt_free_result_transfers_after_controller_join_and_registry_cleanup() -> None:
@@ -275,13 +307,7 @@ def test_pooled_prompt_eof_preserves_exact_initiating_cause() -> None:
     """Worker-to-dispatcher host stop transport retains the active prompt's EOF."""
 
     expected = EOFError("pooled input closed")
-    loaded = SimpleNamespace(
-        input=[],
-        compiled=_pooled_graph(
-            [_PooledAskNode("ask")],
-            [(START_ID, "ask"), ("ask", END_ID)],
-        ),
-    )
+    loaded = load_flow(_POOLED_ASK_FLOW)
 
     def controller(stop_event, on_event, ask_user, render):
         return run_cli._run_flow_controlled(
@@ -314,7 +340,7 @@ def test_pooled_prompt_eof_outranks_cancelled_sibling(
 ) -> None:
     """Active EOF remains primary even if a cancelled sibling unwinds first."""
 
-    _PooledConcurrentAskNode.barrier.reset()
+    _CONCURRENT_ASK_BARRIER.reset()
     expected = EOFError("active prompt closed")
     both_waiting = Event()
     waiting_lock = Lock()
@@ -330,18 +356,7 @@ def test_pooled_prompt_eof_outranks_cancelled_sibling(
         return original_wait(broker, request)
 
     monkeypatch.setattr(TerminalBroker, "_wait_for_prompt", counted_wait)
-    loaded = SimpleNamespace(
-        input=[],
-        compiled=_pooled_graph(
-            [_PooledConcurrentAskNode("ask-a"), _PooledConcurrentAskNode("ask-b")],
-            [
-                (START_ID, "ask-a"),
-                (START_ID, "ask-b"),
-                ("ask-a", END_ID),
-                ("ask-b", END_ID),
-            ],
-        ),
-    )
+    loaded = load_flow(_POOLED_CONCURRENT_ASK_FLOW)
 
     def controller(stop_event, on_event, ask_user, render):
         return run_cli._run_flow_controlled(
@@ -591,7 +606,13 @@ def test_failed_result_wins_over_sibling_prompt_host_stop() -> None:
     released = Event()
     sibling_errors: Queue[BaseException] = Queue()
     sibling_threads: list[Thread] = []
-    failed = RunResult(input={}, status="failed", error="boom")
+    failed = RunResult(
+        input={},
+        status="failed",
+        run_id="controller-test",
+        log=None,
+        error="boom",
+    )
 
     def prompt(request):
         request.set_cancel_callback(released.set)
@@ -627,27 +648,24 @@ def test_failed_result_wins_over_sibling_prompt_host_stop() -> None:
     assert not sibling_threads[0].is_alive()
 
 
-def test_real_pooled_failure_wakes_prompt_and_joins_every_engine_worker() -> None:
+def test_real_pooled_failure_wakes_prompt_and_joins_every_engine_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A real fan-out failure drains its broker-blocked sibling without cause loss."""
 
-    _PooledFailAfterPrompt.prompt_active.clear()
-    prompt_released = Event()
-    loaded = SimpleNamespace(
-        input=[],
-        compiled=_pooled_graph(
-            [_PooledAskNode("ask"), _PooledFailAfterPrompt("fail")],
-            [
-                (START_ID, "ask"),
-                (START_ID, "fail"),
-                ("ask", END_ID),
-                ("fail", END_ID),
-            ],
-        ),
+    prompt_active = Event()
+    monkeypatch.setattr(
+        TerminalBroker,
+        "_test_prompt_active",
+        prompt_active,
+        raising=False,
     )
+    prompt_released = Event()
+    loaded = load_flow(_POOLED_FAILURE_FLOW)
 
     def prompt(request):
         request.set_cancel_callback(prompt_released.set)
-        _PooledFailAfterPrompt.prompt_active.set()
+        prompt_active.set()
         assert prompt_released.wait(_TIMEOUT)
         return "late answer"
 
@@ -674,66 +692,3 @@ def test_real_pooled_failure_wakes_prompt_and_joins_every_engine_worker() -> Non
         for thread in enumerate_threads()
     )
     assert "ask_user" not in TOOL_REGISTRY
-
-
-def test_dormant_pause_resume_stays_on_controller_and_prompts_on_main(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Legacy Pause remains usable without moving resume or input onto main incorrectly."""
-
-    engine = object()
-    reason = SimpleNamespace(
-        type="human_input_required",
-        prompt="Approve?",
-        questions=[],
-        answer_schema=[],
-        node_title="Approval",
-        node_id="approve",
-    )
-    paused = RunResult(
-        input={},
-        status="paused",
-        engine=engine,
-        pause_reasons=[reason],
-    )
-    resumed = _success("approved")
-    prompt_threads: list[Thread] = []
-    resume_threads: list[Thread] = []
-
-    monkeypatch.setattr(
-        run_cli,
-        "resume_command",
-        lambda loaded, pause_reason, value: (pause_reason.node_id, value),
-    )
-
-    def fake_resume(loaded, *, engine, commands, on_event):
-        resume_threads.append(current_thread())
-        assert commands == [("approve", "yes")]
-        return resumed
-
-    monkeypatch.setattr(run_cli, "resume_flow", fake_resume)
-
-    def prompt(request):
-        prompt_threads.append(current_thread())
-        assert request.question == "Approve?"
-        return "yes"
-
-    def controller(stop_event, on_event, ask_user, render):
-        return run_cli._resume_to_terminal(
-            object(),
-            paused,
-            on_event=on_event,
-            ask_user=ask_user,
-            render=render,
-        )
-
-    observed = run_cli._run_with_terminal_controller(
-        controller,
-        prompt_handler=prompt,
-        reporter=None,
-    )
-
-    assert observed is resumed
-    assert prompt_threads == [main_thread()]
-    assert len(resume_threads) == 1
-    assert resume_threads[0] is not main_thread()

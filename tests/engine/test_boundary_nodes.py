@@ -9,6 +9,7 @@ from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose import load_flow
 from agent_composer.run import run_flow
 from agent_composer.nodes.base import NodeKind
+from tests.engine._graph_builder import _engine
 
 _FLOW = """
 id: f
@@ -135,13 +136,11 @@ def test_engine_schedules_start_and_emits_succeeded():
     # NodeSucceeded like any node and committing its COERCED bound record. The run succeeds and
     # the value flows from the scheduled START, not a hand-seed bypass.
     from agent_composer.events import NodeStarted, NodeSucceeded
-    from agent_composer.runtime.engine import FlowEngine
-
     loaded = load_flow(_FLOW)
-    eng = FlowEngine(loaded.compiled, run_inputs={"x": "ACME"})
+    eng = _engine(loaded.compiled, run_inputs={"x": "ACME"})
     events = list(eng.run())
     assert any(isinstance(e, NodeStarted) and e.node_id == START_ID for e in events)
     assert any(isinstance(e, NodeSucceeded) and e.node_id == START_ID for e in events)
-    assert eng.pool.get(START_ID) == {"x": "ACME"}    # START_ID's bound record committed by eval_node
+    assert eng.state.pool.get(START_ID) == {"x": "ACME"}  # scheduled START commit
     res = run_flow(load_flow(_FLOW), {"x": "ACME"})
     assert res.status == "succeeded" and res.output == "ACME"

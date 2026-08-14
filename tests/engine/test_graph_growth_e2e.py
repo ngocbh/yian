@@ -14,9 +14,8 @@ contract, this locks the engine results end-to-end:
 - **nested blocking input reaches terminal**: a HUMAN_INPUT inside a called child passes
   its namespaced leaf id to the trusted host and returns the answer as Output.
 - the goldens still hold (graph-growth must not perturb the static edge ids).
-- `CHECKPOINT_VERSION == "9.0"` round-trips on a NON-paused run; v8 is rejected because
-  its paused-AGENT continuation topology is no longer replayable.
-- the ONE remaining engine xfail is the commandless durable re-pause, nothing else.
+- authoritative expansion is driven through the prepared-state engine surface.
+- the engine suite carries no expected failures.
 
 LLM-terminating seeds (00/04/05/14/18) are asserted LOAD+structure only; run assertions use
 the CODE-child pattern (mirroring test_golden_run_results.py), plus the new LLM-free nested-suspension
@@ -33,11 +32,10 @@ from agent_composer.compile.expand import build_grow
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.run import run_flow
 from agent_composer.nodes.base import NodeKind
-from agent_composer.runtime.engine import FlowEngine
 from agent_composer.typesys.pool import VariablePool
-from agent_composer.suspension.checkpoint import CHECKPOINT_VERSION, RunCheckpoint
 from agent_composer.events import RunSucceeded
 from agent_composer.tools import install_ask_user
+from tests.engine._graph_builder import _engine
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -97,20 +95,13 @@ def _run_map(topics):
     """Drive a MAP run via FlowEngine directly (run_flow only attaches .engine on pause),
     returning (engine, events) so a test can inspect the GROWN live graph."""
     parent = load_flow(_MAP, child_resolver=_resolver(**{"child-one": _CHILD}))
-    eng = FlowEngine(
+    eng = _engine(
         parent.compiled,
         run_inputs={"topics": topics},
         grow_builder=build_grow,
     )
     events = list(eng.run())
     return eng, events
-
-
-# --- CHECKPOINT_VERSION -------------------------------------------------- #
-
-
-def test_checkpoint_version_is_current():
-    assert CHECKPOINT_VERSION == "9.0"
 
 
 # --- scratch eliminated structurally ------------------------ #
@@ -139,22 +130,22 @@ def test_no_node_attr_or_method_reads_scratch():
 
 def test_live_graph_grows_under_a_map_run():
     parent = load_flow(_MAP, child_resolver=_resolver(**{"child-one": _CHILD}))
-    eng = FlowEngine(
+    eng = _engine(
         parent.compiled,
         run_inputs={"topics": ["ACME", "BETA"]},
         grow_builder=build_grow,
     )
-    before = len(eng.flow.nodes)
+    before = len(eng.state.flow.nodes)
     events = list(eng.run())
     assert isinstance(events[-1], RunSucceeded)
     # the Grow expansion + add_subgraph grew the LIVE graph (child cloned per element)
-    assert len(eng.flow.nodes) > before
+    assert len(eng.state.flow.nodes) > before
 
 
 def test_start_end_splice_is_exercised():
     eng, events = _run_map(["ACME", "BETA"])
     assert isinstance(events[-1], RunSucceeded)
-    ids = list(eng.flow.nodes)
+    ids = list(eng.state.flow.nodes)
     # each element splices the namespaced child START_ID..END_ID; MAP also synthesizes ONE
     # `research_each/__start__` fan-out start + ONE END_ID(list-mode) aggregator under the spawner
     # namespace.
@@ -163,11 +154,17 @@ def test_start_end_splice_is_exercised():
                       "research_each/__start__"]
     map_start_id = "research_each/__start__"                     # ns(spawner, START_ID)
     # the synthetic start fans out to each element START via an ordering edge.
-    fanout = {e.to for e in eng.flow.edges if e.from_ == map_start_id and e.ordering}
+    fanout = {
+        e.to for e in eng.state.flow.edges if e.from_ == map_start_id and e.ordering
+    }
     assert fanout == {"research_each#0/__start__", "research_each#1/__start__"}
     map_end_id = "research_each/__end__"                         # ns(spawner, END_ID)
-    assert eng.flow.nodes[map_end_id].kind == NodeKind.END
-    into_end = {(e.from_, e.input_group) for e in eng.flow.edges if e.to == map_end_id}
+    assert eng.state.flow.nodes[map_end_id].kind == NodeKind.END
+    into_end = {
+        (e.from_, e.input_group)
+        for e in eng.state.flow.edges
+        if e.to == map_end_id
+    }
     assert into_end == {("research_each#0/__end__", "e0"),
                         ("research_each#1/__end__", "e1")}
     # the END_ID(list-mode) aggregator joins in OVER ORDER (element index)
@@ -185,7 +182,7 @@ def test_synthesized_refs_are_bare_outputs():
     # (Legitimate dotted FIELD access like `${<id>/emit.output.report}` is NOT a `.output`
     # suffix and is allowed; the regex only catches a spurious `.output`.)
     eng, _ = _run_map(["ACME", "BETA"])
-    for nid, node_w in eng.flow.wiring.items():
+    for nid, node_w in eng.state.flow.wiring.items():
         if "/" not in nid and "#" not in nid:
             continue  # static node — not minted by expansion
         for src in node_w.values():
@@ -226,43 +223,6 @@ def test_f0_goldens_hold():
     test_golden_ref_run_result()
     test_golden_map_run_result()
     test_golden_static_edge_ids_case_and_call_and_map()
-
-
-# --- non-paused checkpoint round-trip ------------------------------------ #
-
-_CODE_FLOW = """
-id: f
-name: f
-input:
-  x: int
-nodes:
-  d:
-    kind: code
-    input:
-      n: ${input.x}
-    output: int
-    code: tests.engine._compose_codefns:double
-output: ${d.output}
-"""
-
-
-def test_checkpoint_roundtrip_non_paused():
-    loaded = load_flow(_CODE_FLOW)
-    eng = FlowEngine(loaded.compiled, run_inputs={"x": 5})
-    events = list(eng.run())
-    assert isinstance(events[-1], RunSucceeded) and events[-1].output == 10
-    snap = eng.snapshot()
-    assert snap.version == "9.0"
-    ck = RunCheckpoint.loads(snap.dumps())  # cross-process round-trip
-    assert ck.version == "9.0"
-    eng2 = FlowEngine.restore(loaded.compiled, ck)
-    evs2 = list(eng2.resume([]))
-    assert isinstance(evs2[-1], RunSucceeded) and evs2[-1].output == 10
-
-
-def test_incompatible_checkpoint_version_is_clear():
-    with pytest.raises(ValueError, match="incompatible checkpoint version"):
-        RunCheckpoint.loads('{"version": "1.0"}')
 
 
 # --- no engine xfails remain ---------------------------------------------- #

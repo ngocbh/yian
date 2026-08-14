@@ -4,6 +4,7 @@ import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.nodes.agent import AgentNode
+from agent_composer.runtime.eval_node import eval_node
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -63,9 +64,7 @@ class _StructuredFinalChat:
 
 
 def _run_node(node, pool=None):
-    from agent_composer.runtime.eval_node import eval_node
-
-    return list(eval_node(node, None, pool or VariablePool()))[-1]
+    return eval_node(node, None, pool or VariablePool())
 
 
 def test_tool_calling_final_answer_is_structured(monkeypatch):
@@ -83,7 +82,7 @@ def test_tool_calling_final_answer_is_structured(monkeypatch):
         },
         required=frozenset({"name", "score"}),
     )
-    out = _run_node(node).output
+    out = _run_node(node).value
     assert out == {"name": "ACME", "score": 9}  # a plain dict, structured final answer
     assert chat.structured_called_with is not None  # the structured emit turn ran
     assert tool.seen == [{"topic": "ACME"}]  # the mid-loop tool still ran
@@ -95,5 +94,5 @@ def test_tool_calling_text_answer_unchanged(monkeypatch):
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
     node = AgentNode("n", prompt="hi", llm_config=LLMConfig(), mode="tool_calling")
     # no output_type declared -> text passthrough, no structured emit turn
-    assert _run_node(node).output == "plain answer"
+    assert _run_node(node).value == "plain answer"
     assert chat.structured_called_with is None

@@ -28,9 +28,8 @@ author-written kind, keyed by each class's own `kind`/`binding_fields` ClassVars
 kind means adding its import and one entry to that tuple.
 
 The AGENT, HUMAN_INPUT, and WAIT descriptors build ordinary live leaves: AGENT
-has no continuation ``entry``/``controls`` surface, HUMAN_INPUT has no pause
-fields, and WAIT owns only its absolute ``until`` wiring. Generic Pause/checkpoint
-compatibility is not an authoring surface.
+owns its prompt/tool/model surface, HUMAN_INPUT owns its question and answer
+contract, and WAIT owns only its absolute ``until`` wiring.
 
 Importing the kind modules here cannot cycle: each takes its `build` helpers from `nodes.*`
 (the engine node package, below `compose` in the layer ladder) and from `NodeDescriptor` in
@@ -41,7 +40,7 @@ already-defined ClassVars; it never touches `KINDS`.
 
 Knows about: compose helpers/peer phases, compile.model, nodes, typesys, expr,
              events, and llm_clients.
-Never imports: runtime, suspension, the package-root run boundary, CLI, or provider SDKs.
+Never imports: runtime, the package-root run boundary, CLI, or provider SDKs.
 """
 
 from __future__ import annotations

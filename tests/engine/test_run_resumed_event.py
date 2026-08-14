@@ -1,4 +1,4 @@
-from agent_composer.events import RunResumed, RunStarted
+from agent_composer.events import RunFailed, RunResumed, RunStarted, RunSucceeded
 
 
 def test_run_resumed_constructible_no_required_fields():
@@ -7,6 +7,5 @@ def test_run_resumed_constructible_no_required_fields():
 
 
 def test_run_resumed_is_not_a_terminal():
-    # RunResumed must NOT be wired into run.py:_STATUS (it is a lead, not a terminal).
-    from agent_composer.run import _STATUS
-    assert RunResumed not in _STATUS
+    resumed = RunResumed()
+    assert not isinstance(resumed, (RunSucceeded, RunFailed))

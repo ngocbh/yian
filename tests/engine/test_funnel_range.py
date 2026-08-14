@@ -1,7 +1,7 @@
 """The failure funnel resolves a symbolic locator to a concrete SourceRange.
 
 Dual-path: the funnel keeps stamping the symbolic `SourceSpan` locator AND, alongside it,
-attaches a concrete `SourceRange` to the emitted `NodeFailed`. For an input/binding failure it
+attaches a concrete ``SourceRange`` to ``EvaluationFailure``. For an input/binding failure it
 keys `node.field_ranges.get((locator.kind, locator.key))` — kind-BLIND (it keys on the locator's
 `(kind, key)`, never on `node.kind`), and `(kind, key)`-tagged so an input never collides with a
 like-named field. For an assert it is located BY POSITION: `run()` raises `NodeAssertFailed` with
@@ -9,22 +9,23 @@ like-named field. For an assert it is located BY POSITION: `run()` raises `NodeA
 these in a later step; here the test stamps them directly.
 """
 
-from agent_composer.events import NodeFailed, SourceRange
+from agent_composer.events import SourceRange
 from agent_composer.nodes.binding import ParamDecl
+from agent_composer.runtime.eval_node import EvaluationFailure
 from tests.engine._fakes import FuncNode, drive
 
 
 def _drive(node, pool=None):
-    return list(drive(node, pool))
+    return drive(node, pool)
 
 
-def _node_failed(evs):
-    fs = [e for e in evs if isinstance(e, NodeFailed)]
-    return fs[-1] if fs else None
+def _failure(result):
+    assert isinstance(result, EvaluationFailure)
+    return result
 
 
 def test_assert_failure_carries_range():
-    # A failing pre-assert flows to a synthesized NodeFailed with an `assert` locator whose
+    # A failing pre-assert flows to EvaluationFailure with an `assert` locator whose
     # key IS the assert-expr string. The concrete range is located BY POSITION — the failing
     # assert's own `pre_assert_ranges[i]` — and carried ALONGSIDE the unchanged symbolic locator.
     expr = "1 == 2"  # a constant, always-false assert -> pre-assert fails
@@ -32,8 +33,7 @@ def test_assert_failure_carries_range():
     node = FuncNode("n", lambda i: {"output": "ok"})
     node.pre_asserts = [expr]
     node.pre_assert_ranges = [rng]  # positional, aligned 1:1 with pre_asserts
-    nf = _node_failed(_drive(node))
-    assert nf is not None
+    nf = _failure(_drive(node))
     # symbolic locator unchanged (dual-path — we ADD range, do not replace the locator)
     assert nf.locator is not None
     assert nf.locator.node == "n" and nf.locator.kind == "assert" and nf.locator.key == expr
@@ -51,8 +51,7 @@ def test_binding_failure_carries_range():
     node.params = [ParamDecl(name="x", required=True)]
     node._wiring_src = {}  # x omitted -> BindingError through the funnel
     node.field_ranges = {("input", "x"): rng}  # keyed (kind, key) — the input namespace
-    nf = _node_failed(_drive(node))
-    assert nf is not None
+    nf = _failure(_drive(node))
     assert nf.locator is not None
     assert nf.locator.node == "n" and nf.locator.kind == "input" and nf.locator.key == "x"
     assert nf.range == rng

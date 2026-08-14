@@ -12,6 +12,7 @@ from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import START_ID
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.run import run_flow
+from tests.engine._graph_builder import _engine
 
 # topic -> the topic (echo), so MAP results == the over list.
 _ECHO_CHILD = """
@@ -183,22 +184,18 @@ def test_map_empty_over_returns_grow_with_lone_list_end():
 
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_map_parallel_via_num_workers_preserves_order(num_workers):
-    from agent_composer.runtime.engine import FlowEngine
-
     flow = load_flow(_map_flow("echo-one", parallel=False),
                      child_resolver=_resolver(**{"echo-one": _ECHO_CHILD}))
-    eng = FlowEngine(flow.compiled, run_inputs={"topics": ["A", "B", "C", "D"]},
+    eng = _engine(flow.compiled, run_inputs={"topics": ["A", "B", "C", "D"]},
                      num_workers=num_workers, grow_builder=build_grow)
     assert list(eng.run())[-1].output == ["A", "B", "C", "D"]   # over-order join (the END_ID-list invariant)
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_map_n_zero_synthesizes_end_list_emitting_empty(num_workers):
-    from agent_composer.runtime.engine import FlowEngine
-
     flow = load_flow(_map_flow("echo-one", parallel=False),
                      child_resolver=_resolver(**{"echo-one": _ECHO_CHILD}))
-    eng = FlowEngine(
+    eng = _engine(
         flow.compiled,
         run_inputs={"topics": []},
         num_workers=num_workers,
@@ -212,11 +209,10 @@ def test_map_synthesizes_one_end_list_node(num_workers):
     # the MAP fan-in is ONE EndNode.list_ aggregator (replacing COLLECTOR): N=2 inputs e0/e1
     # wired to each element's child END_ID, aliased to the spawner.
     from agent_composer.nodes.base import NodeKind
-    from agent_composer.runtime.engine import FlowEngine
 
     flow = load_flow(_map_flow("echo-one", parallel=False),
                      child_resolver=_resolver(**{"echo-one": _ECHO_CHILD}))
-    eng = FlowEngine(
+    eng = _engine(
         flow.compiled,
         run_inputs={"topics": ["A", "B"]},
         num_workers=num_workers,
@@ -224,7 +220,11 @@ def test_map_synthesizes_one_end_list_node(num_workers):
     )
     assert list(eng.run())[-1].output == ["A", "B"]
     map_end_id = "each/__end__"                          # ns(spawner, END_ID)
-    assert eng.flow.nodes[map_end_id].kind == NodeKind.END
-    into_end = {(e.from_, e.input_group) for e in eng.flow.edges if e.to == map_end_id}
+    assert eng.state.flow.nodes[map_end_id].kind == NodeKind.END
+    into_end = {
+        (e.from_, e.input_group)
+        for e in eng.state.flow.edges
+        if e.to == map_end_id
+    }
     assert into_end == {("each#0/__end__", "e0"), ("each#1/__end__", "e1")}
-    assert eng.flow.nodes[map_end_id].commit_as == "each"
+    assert eng.state.flow.nodes[map_end_id].commit_as == "each"

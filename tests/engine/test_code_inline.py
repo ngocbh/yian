@@ -212,25 +212,27 @@ def test_watchdog_wraps_both_code_modes_but_not_other_blocking_kinds(monkeypatch
     )
 
     empty_flow = SimpleNamespace(wiring={"agent": {}, "human": {}})
-    assert list(eval_node(AgentNode("agent"), empty_flow, VariablePool()))[-1].output == (
+    assert eval_node(AgentNode("agent"), empty_flow, VariablePool()) == Output(
         "agent answer"
     )
-    assert list(eval_node(HumanInputNode("human", prompt="?"), empty_flow, VariablePool()))[
-        -1
-    ].output == "human answer"
-    wait_events = list(eval_node(
+    assert eval_node(
+        HumanInputNode("human", prompt="?"),
+        empty_flow,
+        VariablePool(),
+    ) == Output("human answer")
+    wait_result = eval_node(
         WaitNode("wait"),
         SimpleNamespace(wiring={"wait": {"until": "2026-01-01T00:00:00+00:00"}}),
         VariablePool(),
         stop_event=threading.Event(),
-    ))
+    )
     assert timers == []
     inline_result = CodeNode("inline", code="return inputs['v']").run({"v": 1})
     reference_result = CodeNode(
         "reference", code="tests.engine._fakes:passthrough"
     ).run({"v": 2})
 
-    assert wait_events[-1].output is None
+    assert wait_result == Output(None)
     assert inline_result.value == 1
     assert reference_result.value == 2
     assert [timer.interval for timer in timers] == [30.0, 30.0]

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
 import pytest
 
@@ -17,8 +16,7 @@ from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.events import NodeFailed, NodeStarted, NodeSucceeded, RunFailed
 from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
 from agent_composer.nodes.wait import WaitNode
-from agent_composer.runtime.engine import FlowEngine
-from tests.engine._graph_builder import _graph
+from tests.engine._graph_builder import _engine, _graph
 
 
 _NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -70,6 +68,20 @@ class _FailAfterWaitStarts(Node):
     def _run_impl(self, inputs: dict) -> Output:
         assert self._wait_entered.wait(timeout=_JOIN_TIMEOUT)
         raise RuntimeError("sibling failed")
+
+
+class _CompleteAfterWaitStarts(Node):
+    """Succeed only after the sibling WAIT is observably blocked."""
+
+    kind = NodeKind.CODE
+
+    def __init__(self, node_id: str, wait_entered: threading.Event) -> None:
+        super().__init__(node_id)
+        self._wait_entered = wait_entered
+
+    def _run_impl(self, inputs: dict) -> Output:
+        assert self._wait_entered.wait(timeout=_JOIN_TIMEOUT)
+        return Output("done")
 
 
 class _ObserverError(RuntimeError):
@@ -184,7 +196,7 @@ def test_host_stop_wakes_wait_and_discards_its_outcome(
 ) -> None:
     _patch_now(monkeypatch)
     stop_event = _ObservedEvent()
-    engine = FlowEngine(_wait_graph(), num_workers=num_workers, stop_event=stop_event)
+    engine = _engine(_wait_graph(), num_workers=num_workers, stop_event=stop_event)
     events: list[object] = []
     errors: list[BaseException] = []
 
@@ -214,28 +226,25 @@ def test_host_stop_wakes_wait_and_discards_its_outcome(
 def test_observer_failure_wakes_wait_and_preserves_callback_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agent_composer.run import _run_flow_controlled
-
     _patch_now(monkeypatch)
     stop_event = _ObservedEvent()
-    loaded = SimpleNamespace(input=[], compiled=_wait_graph())
+    sibling = _CompleteAfterWaitStarts("sibling", stop_event.wait_entered)
     original = _ObserverError("observer failed")
     observed: list[object] = []
 
     def observer(event: object) -> None:
         observed.append(event)
-        if isinstance(event, NodeStarted) and event.node_id == "wait":
-            assert stop_event.wait_entered.wait(timeout=_JOIN_TIMEOUT)
+        if isinstance(event, NodeSucceeded) and event.node_id == "sibling":
             raise original
 
+    engine = _engine(
+        _wait_graph(sibling),
+        num_workers=2,
+        on_event=observer,
+        stop_event=stop_event,
+    )
     with pytest.raises(_ObserverError) as caught:
-        _run_flow_controlled(
-            loaded,
-            {},
-            on_event=observer,
-            num_workers=1,
-            stop_event=stop_event,
-        )
+        list(engine.run())
 
     assert caught.value is original
     assert stop_event.is_set()
@@ -250,7 +259,7 @@ def test_sibling_failure_wakes_wait_and_remains_terminal_cause(
     stop_event = _ObservedEvent()
     fail = _FailAfterWaitStarts("fail", stop_event.wait_entered)
     events = list(
-        FlowEngine(_wait_graph(fail), num_workers=2, stop_event=stop_event).run()
+        _engine(_wait_graph(fail), num_workers=2, stop_event=stop_event).run()
     )
 
     assert isinstance(events[-1], RunFailed)

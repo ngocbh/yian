@@ -6,7 +6,7 @@ trusted path for host-injected metadata. ``install_ask_user`` gives the reserved
 entry one process-wide owner for a complete host lifecycle.
 
 Knows about: langchain-core and the Python standard library.
-Never imports: nodes, compile, compose, runtime, suspension, the run boundary, or CLI.
+Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
 """
 
 from __future__ import annotations

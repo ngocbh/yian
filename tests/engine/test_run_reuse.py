@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
 import agent_composer.llm_clients as llm_clients_mod
+import pytest
 
 from agent_composer.compose.loader import load_flow
 from agent_composer.nodes.agent import AgentNode
-from agent_composer.run import resume_command, resume_flow, run_flow
-from agent_composer.suspension.checkpoint import RunCheckpoint
-from tests.engine._fakes import replace_human_inputs_with_artificial_pauses
+from agent_composer.nodes.base import _HostStop
+from agent_composer.run import resume_flow, run_flow
+from agent_composer.tools import install_ask_user
 
 
 _RECURSIVE_FLOW = """
@@ -98,9 +100,9 @@ output:
 """
 
 
-_PAUSING_CALL = """
-id: pausing-call
-name: pausing_call
+_BLOCKING_CALL = """
+id: blocking-call
+name: blocking_call
 defs:
   approval:
     nodes:
@@ -138,11 +140,9 @@ def _graph_snapshot(flow):
     }
 
 
-def _load_pausing_call():
-    """Load the checkpoint fixture with a test-only artificial Pause leaf."""
-    loaded = load_flow(_PAUSING_CALL)
-    replace_human_inputs_with_artificial_pauses(loaded.compiled)
-    return loaded
+def _load_blocking_call():
+    """Load one reusable graph with a live blocking HUMAN_INPUT child."""
+    return load_flow(_BLOCKING_CALL)
 
 
 def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monkeypatch):
@@ -195,19 +195,24 @@ def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monke
     )
 
 
-def test_checkpoint_resume_restores_into_a_private_graph():
-    source = _load_pausing_call()
-    paused = run_flow(source, {})
-    assert paused.status == "paused"
+def test_log_resume_restores_into_a_private_graph(tmp_path: Path):
+    path = tmp_path / "private-recovery-graph.jsonl"
+    interruption = _HostStop("interrupt before human answer")
+    source = _load_blocking_call()
+    source_static = _graph_snapshot(source.compiled)
 
-    checkpoint = RunCheckpoint.loads(paused.checkpoint.dumps())
-    fresh = _load_pausing_call()
+    def interrupt(**request):
+        raise interruption
+
+    with install_ask_user(interrupt), pytest.raises(_HostStop) as caught:
+        run_flow(source, {}, log=path)
+    assert caught.value is interruption
+    assert _graph_snapshot(source.compiled) == source_static
+
+    fresh = _load_blocking_call()
     static = _graph_snapshot(fresh.compiled)
-    resumed = resume_flow(
-        fresh,
-        checkpoint=checkpoint,
-        commands=[resume_command(source, paused.pause_reasons[0], "yes")],
-    )
+    with install_ask_user(lambda **request: "yes"):
+        resumed = resume_flow(fresh, log=path)
 
     assert resumed.status == "succeeded", resumed.error
     assert resumed.output == "yes"

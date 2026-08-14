@@ -2659,7 +2659,10 @@ def _prepare_route_delta(
         for edge in root_edges
         if (edge.source_handle or "default") == record.handle
     )
-    if not matched:
+    # The reserved default route may deliberately have no authored edge: a CASE
+    # without ``else`` selects no branch and skip-floods every outgoing edge. Any
+    # other unknown handle is invalid node-produced data.
+    if not matched and record.handle != "default":
         _raise_node_data(
             ValueError(
                 f"NodeRouted handle {record.handle!r} matches no outgoing edge of "

@@ -704,6 +704,22 @@ def test_chat_missing_key_no_tty_exits_clean(monkeypatch):
     assert "OPENAI_API_KEY" in _ANSI_SGR.sub("", r.stderr)  # the red key message, on stderr
 
 
+def test_chat_log_host_error_exits_cleanly(monkeypatch):
+    """A default-path failure is a concise CLI error, not a raw traceback."""
+    monkeypatch.setattr(chat_command, "_ensure_provider_keys", lambda *args: None)
+
+    def deny_default_path(run_id):
+        raise PermissionError("chat run directory is not writable")
+
+    monkeypatch.setattr(chat_command, "_default_run_log_path", deny_default_path)
+    result = runner.invoke(app, ["chat", str(EXAMPLE_CHAT)], input="")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "chat failed: chat run directory is not writable" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_chat_malformed_flow_exits_clean(tmp_path):
     """A malformed chat flow must exit cleanly (located `.yaml` error on stderr, exit 1), NOT dump a
     raw traceback — the SAME parity with `ac run` as the missing-key path. `load_flow` raises

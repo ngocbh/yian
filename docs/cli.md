@@ -1,7 +1,8 @@
 # The `ac` CLI
 
-`ac` runs a flow file: it loads the YAML, gathers the inputs, drives the flow to
-a terminal state, and prints the output.
+`ac` runs a flow file: it loads the YAML, gathers inputs for a fresh run or
+recovers them from a durable log, drives the flow to a terminal state, and
+prints the output.
 
 ```console
 ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--log PATH] [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
@@ -35,6 +36,10 @@ log. `--resume` therefore rejects `--input`, `--inputs`, `--provider`, `--model`
 and `--log` before input prompts or provider setup. An already terminal log is
 read-only and prints its recorded result. An unfinished log appends a resume
 segment and retries any node with a durable start but no durable outcome.
+
+Expected host-side failures while creating or recovering a log (for example a
+corrupt, mismatched, or locked log) are reported as concise errors. Pass
+`--engine-trace` when debugging the engine to include the Python traceback.
 
 `ac chat` uses the same default directory and reports one new path for its initial
 run. If a failed turn restarts the immutable chat flow from the last completed
@@ -145,10 +150,10 @@ does not cancel the surrounding conversation.
 
 ## Concurrency (`--num-workers`)
 
-By default the engine runs single-threaded: ready nodes execute one at a time in a
-deterministic order. Pass `--num-workers N` / `-w N` to run with a worker pool of
-size `N`, so **independent** ready nodes — the parallel arms of a fan-out — execute
-concurrently:
+Fresh runs default to single-threaded execution: ready nodes run one at a time in
+a deterministic order. Pass `--num-workers N` / `-w N` to run with a worker pool
+of size `N`, so **independent** ready nodes — the parallel arms of a fan-out —
+execute concurrently:
 
 ```console
 # the debate diamond argues both sides at once instead of one after the other
@@ -177,6 +182,7 @@ log before publishing the progress event that the CLI renders.
 | Flow failed | `1` (error printed to stderr) |
 | Flow failed to compile (bad YAML) | `1` (located error printed to stderr) |
 | Run cancelled at the input prompt | `1` |
+| Invalid option or forbidden resume combination | `2` |
 
 ## Compile errors
 

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import stat
+from typing import Any, Callable
 
 import pytest
 from typer.testing import CliRunner
@@ -11,6 +12,8 @@ from agent_composer.cli import app
 import agent_composer.cli.run as run_cli
 from agent_composer.events import NodeStarted
 from agent_composer.runtime.log import (
+    RecordEnvelope,
+    RunRecord,
     RunResumedRecord,
     RunStartedRecord,
     decode_record,
@@ -43,19 +46,19 @@ def _write_flow(tmp_path: Path) -> Path:
     return path
 
 
-def _envelopes(path: Path):
+def _envelopes(path: Path) -> list[RecordEnvelope]:
     """Decode the retained envelopes in one complete JSONL run log."""
     return [decode_record(line) for line in path.read_bytes().splitlines()]
 
 
-def _records(path: Path):
+def _records(path: Path) -> list[RunRecord]:
     """Return the durable records without their common envelopes."""
     return [envelope.record for envelope in _envelopes(path)]
 
 
-def _fail_if_called(name: str, calls: list[str]):
+def _fail_if_called(name: str, calls: list[str]) -> Callable[..., None]:
     """Return a sentinel side effect that makes an early-validation leak visible."""
-    def fail(*args, **kwargs):
+    def fail(*args: Any, **kwargs: Any) -> None:
         calls.append(name)
         raise AssertionError(f"{name} must not run")
 
@@ -136,6 +139,30 @@ def test_existing_explicit_log_is_rejected_before_input_or_provider_side_effects
     assert "already exists" in result.output
     assert calls == []
     assert path.read_text() == "keep"
+
+
+def test_dangling_explicit_log_symlink_is_rejected_before_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A broken symlink is still an occupied directory entry, never a fresh path."""
+    flow = _write_flow(tmp_path)
+    path = tmp_path / "dangling.jsonl"
+    path.symlink_to(tmp_path / "missing-target.jsonl")
+    calls: list[str] = []
+    monkeypatch.setattr(run_cli, "_prompt_missing", _fail_if_called("input", calls))
+    monkeypatch.setattr(
+        run_cli,
+        "_ensure_provider_keys",
+        _fail_if_called("provider", calls),
+    )
+
+    result = runner.invoke(app, ["run", str(flow), "--log", str(path)])
+
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+    assert calls == []
+    assert path.is_symlink()
 
 
 @pytest.mark.parametrize(
@@ -235,8 +262,64 @@ def test_terminal_resume_is_read_only_and_skips_fresh_side_effects(
 
 
 @pytest.mark.parametrize(
+    ("trace_args", "has_traceback"),
+    [([], False), (["--engine-trace"], True)],
+)
+def test_corrupt_resume_is_a_clean_cli_error(
+    trace_args: list[str],
+    has_traceback: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Malformed durable data never leaks a raw exception from the CLI boundary."""
+    flow = _write_flow(tmp_path)
+    log = tmp_path / "corrupt.jsonl"
+    log.write_text("not-json\n")
+    calls: list[str] = []
+    monkeypatch.setattr(run_cli, "_prompt_missing", _fail_if_called("input", calls))
+    monkeypatch.setattr(
+        run_cli,
+        "_ensure_provider_keys",
+        _fail_if_called("provider", calls),
+    )
+
+    result = runner.invoke(
+        app,
+        ["run", str(flow), "--resume", str(log), "--quiet", *trace_args],
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "resume failed: invalid run-record JSON" in result.output
+    assert ("Traceback" in result.output) is has_traceback
+    assert calls == []
+
+
+def test_default_directory_failure_is_a_clean_cli_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Default-path host failures use the same concise error funnel as recovery."""
+    flow = _write_flow(tmp_path)
+
+    def deny_default_path(run_id: str) -> Path:
+        raise PermissionError("private run directory is not writable")
+
+    monkeypatch.setattr(run_cli, "_default_run_log_path", deny_default_path)
+    result = runner.invoke(
+        app,
+        ["run", str(flow), "--input", "topic=blocked", "--quiet"],
+    )
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "run failed: private run directory is not writable" in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize(
     ("worker_args", "expected_workers"),
-    [([], 2), (["-w", "3"], 3)],
+    [([], 2), (["-w", "0"], 0), (["-w", "3"], 3)],
 )
 def test_unfinished_resume_preserves_or_overrides_only_future_workers(
     worker_args: list[str],
@@ -281,3 +364,47 @@ def test_unfinished_resume_preserves_or_overrides_only_future_workers(
     assert len(resumed) == 1
     assert resumed[0].num_workers == expected_workers
     assert "recovered" in result.stdout
+
+
+def test_keyboard_interrupt_leaves_a_reported_unlocked_recoverable_log(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A controller interrupt closes an unfinished log that `--resume` can finish."""
+    flow = _write_flow(tmp_path)
+    controlled_run = run_cli._run_flow_controlled
+
+    def interrupting_run(*args: Any, **kwargs: Any):
+        observer = kwargs.get("on_event")
+
+        def interrupt_after_start(event: Any) -> None:
+            if observer is not None:
+                observer(event)
+            if isinstance(event, NodeStarted) and event.node_id == "echo":
+                raise KeyboardInterrupt
+
+        kwargs["on_event"] = interrupt_after_start
+        return controlled_run(*args, **kwargs)
+
+    monkeypatch.setattr(run_cli, "_run_flow_controlled", interrupting_run)
+    interrupted = runner.invoke(
+        app,
+        ["run", str(flow), "--input", "topic=continued", "--quiet"],
+    )
+
+    assert interrupted.exit_code == 130
+    assert "cancelled by user" in interrupted.output
+    logs = list((Path.home() / ".agent_composer" / "runs").glob("*.jsonl"))
+    assert len(logs) == 1
+    log = logs[0]
+    assert f"Run log: {log}" in interrupted.stderr
+
+    monkeypatch.setattr(run_cli, "_run_flow_controlled", controlled_run)
+    resumed = runner.invoke(
+        app,
+        ["run", str(flow), "--resume", str(log), "--quiet"],
+    )
+
+    assert resumed.exit_code == 0, resumed.output
+    assert "continued" in resumed.stdout
+    assert any(isinstance(record, RunResumedRecord) for record in _records(log))

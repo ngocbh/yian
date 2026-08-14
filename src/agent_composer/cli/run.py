@@ -102,6 +102,29 @@ def _report_run_log(path: Path) -> None:
     err_console.print(message, soft_wrap=True)
 
 
+def _render_host_run_error(
+    action: str,
+    error: BaseException,
+    *,
+    engine_trace: bool,
+) -> None:
+    """Render an expected run-boundary host failure without a default traceback.
+
+    Args:
+        action (`str`):
+            User-facing operation name, either ``"run"`` or ``"resume"``.
+        error (`BaseException`):
+            Documented path, codec, fingerprint, argument, or locking failure.
+        engine_trace (`bool`):
+            Whether to append the active Python traceback for engine debugging.
+    """
+    message = Text(f"{action} failed: ", style="red bold")
+    message.append(str(error), style="red")
+    err_console.print(message)
+    if engine_trace:
+        err_console.print_exception()
+
+
 # Lines of `.yaml` context shown above and below the offending line in the error panel
 # (a window, so a large flow doesn't dump in full — mirrors a Python traceback's code frame).
 _ERR_CONTEXT = 5
@@ -1209,7 +1232,7 @@ def _validate_run_log_options(
             )
         return
 
-    if log is not None and log.exists():
+    if log is not None and os.path.lexists(log):
         raise typer.BadParameter(
             f"--log path already exists: {log}",
             param_hint="--log",
@@ -1237,7 +1260,8 @@ def run(
         dir_okay=False,
         readable=True,
         writable=True,
-        help="Recover the run recorded at PATH; fresh input and model flags are forbidden.",
+        help="Recover the run recorded at PATH; fresh input, model, and log flags "
+        "are forbidden.",
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress per-node progress."),
     verbose: bool = typer.Option(
@@ -1260,9 +1284,8 @@ def run(
     engine_trace: bool = typer.Option(
         False,
         "--engine-trace",
-        help="On a compile error OR a runtime node failure, also print the engine Python "
-        "traceback (for debugging the engine itself); by default only the located `.yaml` "
-        "error is shown.",
+        help="On a compile, run-log, or runtime node failure, also print the engine "
+        "Python traceback; by default only the concise or located error is shown.",
     ),
 ) -> None:
     """Start or recover a durable flow run and print its terminal output."""
@@ -1344,7 +1367,11 @@ def run(
             raise typer.Exit(code=1)
 
         run_id = default_run_id()
-        selected_log = log if log is not None else _default_run_log_path(run_id)
+        try:
+            selected_log = log if log is not None else _default_run_log_path(run_id)
+        except (OSError, TypeError, ValueError) as exc:
+            _render_host_run_error("run", exc, engine_trace=engine_trace)
+            raise typer.Exit(code=1)
         selected_workers = 0 if num_workers is None else num_workers
         _report_run_log(selected_log)
 
@@ -1382,6 +1409,10 @@ def run(
         # controller boundary has already joined its workers; report the same
         # ordinary cancellation outcome used by pre-run prompts.
         err_console.print("[yellow]run cancelled[/yellow]")
+        raise typer.Exit(code=1)
+    except (OSError, TypeError, ValueError) as exc:
+        action = "resume" if resume is not None else "run"
+        _render_host_run_error(action, exc, engine_trace=engine_trace)
         raise typer.Exit(code=1)
 
     if result.status == "succeeded":

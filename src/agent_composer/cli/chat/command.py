@@ -237,5 +237,10 @@ def chat(
     except KeyboardInterrupt:
         err_console.print("[yellow]cancelled by user[/yellow]")
         raise typer.Exit(code=130)
+    except (OSError, TypeError, ValueError) as exc:
+        message = Text("chat failed: ", style="red bold")
+        message.append(str(exc), style="red")
+        err_console.print(message)
+        raise typer.Exit(code=1)
 
     console.print("[dim]session ended[/dim]")

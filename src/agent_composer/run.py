@@ -45,7 +45,11 @@ from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 from agent_composer._settings import default_llm_model, default_llm_provider
 from agent_composer.compile.expand import build_grow
-from agent_composer.compile.llm_cascade import resolve_llm_cascade
+from agent_composer.compile.llm_cascade import (
+    apply_effective_llm_map,
+    resolve_llm_cascade,
+)
+from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.events import (
     RunAborted,
     RunFailed,
@@ -55,6 +59,13 @@ from agent_composer.events import (
     SourceSpan,
 )
 from agent_composer.runtime.engine import FlowEngine
+from agent_composer.runtime.log import (
+    RunLog,
+    RunStartedRecord,
+    decode_record,
+    encode_record,
+)
+from agent_composer.runtime.state import RunState, _replay_records
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.seeding import (
     coerce_inputs,
@@ -74,6 +85,91 @@ _STATUS: Dict[type, str] = {
     RunPaused: "paused",
     RunAborted: "aborted",
 }
+
+
+def _replay_run_log(loaded: ComposedFlow, log: RunLog) -> RunState:
+    """Reconstruct one borrowed authoritative log without changing public APIs.
+
+    The source log is already open, locked, and tail-repaired by its owner.  This
+    seam snapshots a stable canonical prefix, verifies the authored program before
+    copying it, applies only the recorded effective LLM map, and delegates every
+    historical transition to the runtime's live reducer path.  It neither appends
+    to nor closes ``log``.
+
+    Args:
+        loaded (`ComposedFlow`):
+            Fresh authored flow whose fingerprint must match the first record.
+        log (`RunLog`):
+            Borrowed non-empty historical authority for exactly one run.
+
+    Returns:
+        `RunState`:
+            Private reconstructed state at the exact end of the historical prefix.
+    """
+    if not isinstance(loaded, ComposedFlow):
+        raise TypeError("_replay_run_log expects a ComposedFlow")
+    source_run_id = log.run_id
+    source_sequence = log.next_sequence
+    if type(source_run_id) is not str or not source_run_id:
+        raise ValueError("run log run_id must be a non-empty string")
+    if type(source_sequence) is not int or source_sequence < 0:
+        raise ValueError("run log next_sequence must be a non-negative integer")
+
+    supplied = tuple(log)
+    if log.run_id != source_run_id or log.next_sequence != source_sequence:
+        raise ValueError("run log changed while its historical prefix was read")
+    if source_sequence != len(supplied):
+        raise ValueError(
+            "run log sequence mismatch: "
+            f"next_sequence is {source_sequence}, prefix length is {len(supplied)}"
+        )
+    if not supplied:
+        raise ValueError("cannot replay an empty run log")
+
+    canonical = []
+    for expected_sequence, supplied_envelope in enumerate(supplied):
+        encoded = encode_record(supplied_envelope)
+        envelope = decode_record(encoded)
+        if envelope != supplied_envelope:
+            raise ValueError(
+                f"run log envelope {expected_sequence} is not in canonical wire form"
+            )
+        if envelope.seq != expected_sequence:
+            raise ValueError(
+                "run log sequence mismatch: "
+                f"expected {expected_sequence}, found {envelope.seq}"
+            )
+        if envelope.run_id != source_run_id:
+            raise ValueError(
+                "run log run_id mismatch: "
+                f"expected {source_run_id!r}, found {envelope.run_id!r}"
+            )
+        canonical.append(envelope)
+
+    first = canonical[0]
+    if not isinstance(first.record, RunStartedRecord):
+        raise ValueError("the first run log record must be RunStarted")
+    actual_fingerprint = flow_fingerprint(loaded.compiled)
+    recorded_fingerprint = first.record.flow_fingerprint
+    if actual_fingerprint != recorded_fingerprint:
+        raise ValueError(
+            "flow fingerprint mismatch: "
+            f"recorded {recorded_fingerprint!r}, supplied {actual_fingerprint!r}"
+        )
+
+    private_flow = copy.deepcopy(loaded.compiled)
+    apply_effective_llm_map(
+        private_flow,
+        first.record.effective_llm_by_static_path,
+    )
+    state = _replay_records(
+        RunState(private_flow),
+        tuple(canonical),
+        grow_builder=build_grow,
+    )
+    if log.run_id != source_run_id or log.next_sequence != source_sequence:
+        raise ValueError("run log changed while its historical prefix was replayed")
+    return state
 
 
 @dataclass

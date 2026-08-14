@@ -479,6 +479,58 @@ class PreparedTransition:
     observers: tuple[Any, ...]
 
 
+class _HistoricalLogCursor:
+    """Read-only historical authority presented to the live commit reducer.
+
+    The cursor owns canonical immutable envelope bytes.  Its ``append`` operation
+    advances only when the reducer's exact next envelope matches those bytes; it
+    never writes to or closes the source log from which the prefix was obtained.
+    """
+
+    def __init__(self, envelope_bytes: tuple[bytes, ...]) -> None:
+        """Adopt one validated non-empty canonical prefix at sequence zero."""
+        first = decode_record(envelope_bytes[0])
+        self._envelope_bytes = envelope_bytes
+        self._run_id = first.run_id
+        self._next_sequence = 0
+
+    @property
+    def run_id(self) -> str:
+        """Return the sole historical run identity accepted by this cursor."""
+        return self._run_id
+
+    @property
+    def path(self):
+        """Return no path because the cursor borrows already-read authority."""
+        return None
+
+    @property
+    def next_sequence(self) -> int:
+        """Return the historical envelope expected by the next reducer commit."""
+        return self._next_sequence
+
+    def append(self, record: RunRecord) -> RecordEnvelope:
+        """Match and consume one historical envelope without writing it again."""
+        if self._next_sequence >= len(self._envelope_bytes):
+            raise ValueError("replay attempted to append beyond the historical prefix")
+        candidate = encode_record(
+            RecordEnvelope(
+                schema=SCHEMA_VERSION,
+                run_id=self._run_id,
+                seq=self._next_sequence,
+                record=record,
+            )
+        )
+        expected = self._envelope_bytes[self._next_sequence]
+        if candidate != expected:
+            raise ValueError(
+                "prepared transition does not match the historical run record"
+            )
+        envelope = decode_record(expected)
+        self._next_sequence += 1
+        return envelope
+
+
 def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransition:
     """Prepare canonical initialization without mutating ``state``.
 
@@ -1306,6 +1358,91 @@ def commit_prepared(
     if isinstance(prepared._plan, _GrowthPlan):
         return _commit_growth(log, state, prepared)
     raise TypeError("unsupported prepared transition plan")
+
+
+def _replay_records(
+    state: RunState,
+    envelopes: tuple[RecordEnvelope, ...],
+    *,
+    grow_builder: GrowBuilder,
+) -> RunState:
+    """Silently fold one complete historical prefix through the live reducer path.
+
+    The caller supplies a pristine state around an already-private graph.  Every
+    envelope is canonicalized and checked for one contiguous run before any
+    transition is reduced.  ``commit_prepared`` then receives a read-only cursor,
+    so replay exercises the same total apply functions as live dispatch without
+    appending to historical authority or exposing historical observers.
+
+    Args:
+        state (`RunState`):
+            Pristine reducer state around the graph that authored the run.
+        envelopes (`tuple[RecordEnvelope, ...]`):
+            Non-empty sequence-zero historical prefix beginning with ``RunStarted``.
+        grow_builder (`GrowBuilder`):
+            Injected compile-owned builder used to reconstruct and verify growth.
+
+    Returns:
+        `RunState`:
+            The supplied state after every historical record has been applied.
+    """
+    if type(state) is not RunState:
+        raise TypeError("_replay_records expects a RunState")
+    if type(envelopes) is not tuple or any(
+        not isinstance(envelope, RecordEnvelope) for envelope in envelopes
+    ):
+        raise TypeError("replay envelopes must be a tuple of RecordEnvelope values")
+    if not callable(grow_builder):
+        raise TypeError("grow_builder must be callable")
+    _require_pristine(state)
+    if not envelopes:
+        raise ValueError("cannot replay an empty run-record prefix")
+
+    canonical_bytes: list[bytes] = []
+    run_id: str | None = None
+    for expected_sequence, supplied in enumerate(envelopes):
+        encoded = encode_record(supplied)
+        envelope = decode_record(encoded)
+        if envelope.seq != expected_sequence:
+            raise ValueError(
+                "replay sequence mismatch: "
+                f"expected {expected_sequence}, found {envelope.seq}"
+            )
+        if run_id is None:
+            run_id = envelope.run_id
+        elif envelope.run_id != run_id:
+            raise ValueError(
+                "replay run_id mismatch: "
+                f"expected {run_id!r}, found {envelope.run_id!r}"
+            )
+        canonical_bytes.append(encoded)
+
+    first = decode_record(canonical_bytes[0])
+    if not isinstance(first.record, RunStartedRecord):
+        raise ValueError("the first historical run record must be RunStarted")
+    cursor = _HistoricalLogCursor(tuple(canonical_bytes))
+    start = first.record
+    prepared = prepare_run_started(
+        state,
+        RunStartData(
+            run_id=first.run_id,
+            flow_fingerprint=start.flow_fingerprint,
+            initial_pool=decode_pool(start.initial_pool),
+            start_wiring_override=start.start_wiring_override,
+            effective_llm_by_static_path=start.effective_llm_by_static_path,
+            num_workers=start.num_workers,
+        ),
+    )
+    commit_prepared(cursor, state, prepared)
+
+    for encoded in canonical_bytes[1:]:
+        record = decode_record(encoded).record
+        prepared = prepare_record(state, record, grow_builder=grow_builder)
+        commit_prepared(cursor, state, prepared)
+
+    if cursor.next_sequence != len(canonical_bytes):
+        raise ValueError("replay did not consume the complete historical prefix")
+    return state
 
 
 def _commit_run_started(

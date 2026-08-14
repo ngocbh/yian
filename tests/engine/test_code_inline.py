@@ -96,7 +96,7 @@ def test_top_level_non_serializable_return_fails_at_node():
 
 
 def test_serializable_returns_pass_including_coerced_set():
-    # a nested set is coerced to a list by the pool serializer (as a checkpoint would) — OK.
+    # a nested set is coerced to a list by the canonical typed-value serializer — OK.
     assert _run("return {'xs': {1, 2, 3}}", {}).value == {"xs": {1, 2, 3}}
     assert _run("return [1, 'a', {'k': 2.5}]", {}).value == [1, "a", {"k": 2.5}]
 

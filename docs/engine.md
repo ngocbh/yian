@@ -2,46 +2,45 @@
 
 > Phase 2 of the [lifecycle](architecture.md). The [front end](compose.md) produced a
 > typed graph; the engine *interprets* it. The core (`runtime/engine.py` +
-> `runtime/eval_node.py`) is **kind-blind**: it branches on the closed `Outcome` sum
-> and on node-owned traits, never on a node's `NodeKind`. The node side of the same
+> `runtime/eval_node.py`) is **kind-blind**: it branches on the closed `NodeResult`
+> sum and on node-owned traits, never on a node's `NodeKind`. The node side of the same
 > contract is in [Nodes](nodes.md).
 
 ## Two actors, one narrow contract
 
-There are exactly two kinds of thing, and they meet at one method.
+The node and dispatcher meet at one narrow method.
 
 ```
-   ┌──────────────── ENGINE ────────────────┐        node.run(inputs) → Outcome
-   │ owns the mutable world:                 │  ───────────────────────────────▶
-   │   • the pool   (every node's output)    │        ┌──────── NODE ────────┐
-   │   • the queue  (what can run next)       │        │ a PURE function of   │
-   │   • the graph  (boxes + arrows; GROWs)   │  ◀──── │ its inputs. Never    │
-   │   • events + dormant checkpoints          │ inputs │ touches the pool.    │
-   └──────────────────────────────────────────┘        └──────────────────────┘
+   ┌────────────── DISPATCHER ──────────────┐      node.run(inputs) → NodeResult
+   │ sole ready-frontier consumer + writer  │  ───────────────────────────────▶
+   │   • RunState (pool, graph, frontier)    │        ┌──────── NODE ────────┐
+   │   • RunLog   (append-only authority)    │        │ a PURE function of   │
+   │   • post-durable observer publication   │  ◀──── │ its inputs. Never    │
+   └──────────────────────────────────────────┘ inputs │ touches the pool.    │
+                                                       └──────────────────────┘
 ```
 
-The engine owns *state and scheduling*; the node owns *computation*. The node is
+The dispatcher owns *state and scheduling*; the node owns *computation*. The node is
 **pure at the graph boundary** — handed a plain dict plus declared capabilities,
 it returns a result and cannot read or write shared memory. An LLM/human/clock leaf
 may perform an external effect, but all graph state still lives in one place the
-engine controls.
+engine controls. The matching `RunLog` is authoritative: a transition is appended
+before the reducer applies it to `RunState` or publishes its observer.
 
-## The loop: read → eval → apply
+## The loop: read → eval → record → reduce
 
-Running a graph is three questions asked over and over: *what can run now? what does it
-produce? what changes?* Each node goes through the same three steps — the engine does
-READ and APPLY, while the base `Node.run` template owns the uniform EVAL wrapper:
+Running a graph is four questions asked over and over: *what can run now? what does it
+produce? which canonical transition describes that result? what state does that
+transition derive?* The package-root boundary first commits a complete
+`RunStartedRecord`. Each node then follows the same recorded path:
 
 ```python
-def run(flow, inputs):
-    state = StateManager(flow.types); state.seed(inputs)   # the typed memory (the "pool")
-    queue = ReadyQueue(flow.graph);   queue.add(flow.start_id)
-
-    while (node := queue.pop_ready(state)) is not None:
-        inputs  = state.bind(node.params, flow.wiring[node.id])  # READ : memory → plain dict
-        outcome = node.run(inputs, **caps)                       # EVAL : shared template
-        apply(outcome, node, state, queue, flow.graph)           # APPLY: write / grow / pause
-    return state.result()                                        # whatever END produced
+while state.result is None:
+    node_id = state.ready[0]
+    publish(commit_prepared(log, state, prepare_node_started(state, node_id)))
+    result = eval_node(flow.nodes[node_id], flow, state.pool)  # bind + evaluate only
+    prepared = prepare_result(state, node_id, result)          # validate, no mutation
+    publish(commit_prepared(log, state, prepared))             # append, then reduce
 
 def Node.run(self, inputs, **caps):      # the generic template — IDENTICAL for every kind
     inputs = apply_defaults(self.params, inputs)
@@ -52,8 +51,9 @@ def Node.run(self, inputs, **caps):      # the generic template — IDENTICAL fo
     return out
 ```
 
-This pseudocode is illustrative; the implementation also preserves pristine
-post-assert inputs, source ranges, and dormant generator plumbing.
+This pseudocode is illustrative (`prepare_result` stands for the result-specific
+preparation functions). The implementation also preserves pristine post-assert
+inputs, source ranges, and streaming-generator cleanup.
 
 `Node.run` is a fixed recipe applied to *every* node. The read boundary is kind-blind
 but **node-configured** — a node declares *how* to bind rather than the engine branching
@@ -66,42 +66,36 @@ lowered onto the synthesized `__start__`/`__end__` boundary nodes. A boundary as
 coercion — a dedicated slot the generic `check(node.pre_asserts)` seam leaves alone, since
 it must see the coerced values. A post assert (`${node.output}`) rides `__end__` as an
 ordinary `node.post_asserts` and fires through the `Node.run` recipe above. So `run.py`
-enforces no asserts itself; a false assert comes back as a `NodeFailed`/`RunFailed` event
-like any other node assert.
+enforces no asserts itself; a false assert becomes a durable `NodeFailedRecord`, from
+which the reducer derives the `NodeFailed` and `RunFailed` observers.
 
-## `Outcome` — the whole vocabulary between the two actors
+## `NodeResult` — the whole node result vocabulary
 
-A node returns exactly one of four things, and this closed set is the *only* thing the
-engine branches on:
+A node returns exactly one of three things, and this closed set is the only result
+vocabulary the engine branches on:
 
 ```python
-Outcome =
+NodeResult =
   | Output(value, commit_as=None)   # "here is my result"    → bind it, unlock dependents
   | Route(handle)                   # "route only, no value" → take this branch, skip siblings
-  | Pause(reason)                   # artificial compatibility → checkpoint and stop
   | Grow(seed, prune=∅)             # "I'm really a subflow"  → build + splice more nodes
 ```
 
 ```python
-def apply(outcome, node, state, queue, graph, grow_builder):
-    match outcome:                        # the ONLY match in the engine — never on kind
+def prepare_result(state, node_id, result):
+    match result:                         # closed result match — never on node kind
         case Output(value, commit_as):
-            target = commit_as or node.id
-            state.set(target, value); queue.done(target)     # write-once, unlock dependents
+            return prepare_node_succeeded(state, node_id, value, commit_as=commit_as)
         case Route(handle):
-            queue.route(node, handle)                         # take edge, skip-flood siblings
-        case Pause(reason):
-            checkpoint(state, queue); raise Suspended(node, reason)
-        case Grow(seed, prune):
-            subgraph = grow_builder(node, seed)               # injected by run.py
-            graph.splice(subgraph); graph.prune(prune)        # add boxes; retire spent ones
-            queue.add(subgraph.start)
+            return prepare_node_routed(state, node_id, handle)
+        case Grow() as grow:
+            return prepare_expanded(state, node_id, grow, grow_builder)
 ```
 
 `Output` covers ordinary steps. `Route` covers a pure router (`case`): it stores nothing
-and only selects a live out-edge. `Pause` is dormant custom/artificial compatibility;
-authorable AGENT `ask_user`, HUMAN_INPUT, and WAIT calls block in-process and return
-`Output`. `Grow` is how a node that *is really a subflow* expands.
+and only selects a live out-edge. `Grow` is how a node that *is really a subflow*
+expands. Failure is not a `NodeResult`: `eval_node` turns an exception into an
+`EvaluationFailure`, which the dispatcher prepares as a `NodeFailedRecord`.
 
 ## Growth: a node that is really a subflow
 
@@ -109,7 +103,7 @@ authorable AGENT `ask_user`, HUMAN_INPUT, and WAIT calls block in-process and re
 returns only a canonical, kind-shaped seed; no node imports the compile layer or builds
 topology. `compile.expand.build_grow` is the sole kind-aware interpreter that turns the
 spawner and seed into a self-describing `Flow`. Package-root `run.py` injects that
-callable into the kind-blind runtime for live growth and checkpoint replay.
+callable into the kind-blind runtime for both live growth and historical record replay.
 
 One convention unifies all three constructed fragments: **the subgraph is a
 well-formed sub-flow with a single `__start__` and `__end__`**. The engine schedules
@@ -132,39 +126,54 @@ iteration it just finished in the same step, so it grows without leaking. Adding
 spawner kind means setting traits on its node; the core never gains a branch. Details:
 [Nodes](nodes.md).
 
-## Failure and durability
+## Failure and durable recovery
 
 Node evaluation may raise (a failed assert, a bad LLM response); the engine catches the
-exception and emits a `NodeFailed` event carrying a source locator, so the CLI can point
-at the offending YAML line. The dormant `Node.on_failure` method is reserved for a future
-error-strategy seam but is not driven today.
+exception at the evaluation boundary. The dispatcher then prepares and commits a
+`NodeFailedRecord` carrying the source locator and traceback; only after the record is
+appended does the reducer derive `NodeFailed` and terminal `RunFailed` observers. The
+`Node.on_failure` method remains reserved for a future error-strategy seam and is not
+driven today.
 
-Because graph-visible values are write-once and scheduling state is centralized,
-the dormant `Pause` compatibility variant can serialize a custom/artificial run
-to a `RunCheckpoint`;
-`resume_flow()` rebuilds the graph from the flow spec and continues. Authorable
-AGENT, HUMAN_INPUT, and WAIT never take this path. The topology is *not* stored —
-it is rebuilt from source, while compatibility run state and dynamic-growth
-descriptors are serialized.
-See [`suspension/`](reference.md) and the [Python API](api.md).
+Every execution uses one `RunLog`. `MemoryRunLog` gives a process-local run the same
+ordering semantics; `JsonlRunLog` holds a nonblocking exclusive lock and fsyncs each
+canonical JSONL append. The closed record vocabulary is:
+
+```
+RunStartedRecord | RunResumedRecord | NodeStartedRecord |
+NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord
+```
+
+There is no separate terminal record: success is derived when the terminal node's
+success transition reduces. Failure is derived either from `NodeFailedRecord` or
+from a reduced transition that skip-floods the declared terminal output.
+
+`resume_flow(flow, log=path)` locks and validates an existing contiguous prefix,
+checks the authored-flow fingerprint, rebuilds a private graph, and folds every record
+through the same reducer used live. A terminal prefix is returned without a write. For
+a nonterminal prefix, one `RunResumedRecord` places durably started nodes with no durable
+outcome ahead of the ready frontier, then dispatch continues. Original inputs, run ID,
+worker count, typed values, growth seeds, and resolved LLM configuration all come from
+the log rather than current process defaults. See the [Python API](api.md).
 
 ## Serial and parallel, one contract
 
-The pseudocode above is the serial reference engine. A parallel engine drains several
-ready nodes at once through the *same* read → eval → apply contract — safe precisely
-because nodes are pure and every write happens write-once at `apply` (which stays
-serialized). Only the number of nodes in flight differs. A pooled drive owns its workers
-through a full join: abnormal exit during dispatch first signals cooperative stop, while
-closing the stream after a terminal `RunPaused` leaves its resume event untouched.
+The pseudocode above is the serial path. In pooled mode the dispatcher durably records
+each start before submission; workers only evaluate and return raw results or transient
+stream chunks. The dispatcher alone prepares, appends, and applies outcomes, so only the
+number of nodes in flight differs. A pooled drive owns its workers through a full join:
+abnormal dispatch exit first signals cooperative stop, then joins every submitted worker
+before the run boundary releases the log.
 
 ## The entire interface the engine sees
 
 | The engine sees | Meaning |
 |---|---|
+| matching `RunState` + `RunLog` | reducer projection and append-only authority, already initialized to the same sequence |
 | `node.id`, `node.params` | where to store output; input *names* (the flow owns their sources) |
 | `node.pre_asserts` / `node.post_asserts` | conditions the base `run` template checks around the body |
-| `node.run(inputs, **caps) → Outcome` | the shared template the engine drives |
-| `node._run_impl(inputs, **caps) → Outcome` | the one kind-specific body step |
+| `node.run(inputs, **caps) → NodeResult` | the shared template the engine drives |
+| `node._run_impl(inputs, **caps) → NodeResult` | the one kind-specific body step |
 | `node.is_spawner` | may it return `Grow`? |
 | read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event` |
 | growth traits | `grow_depth_delta`, `is_loop` |
@@ -177,5 +186,5 @@ visible to the engine.
 An earlier engine branched on node *kind* in many places. That dispatch is now fully
 removed from the core; a ratchet test (`tests/engine/test_kind_census.py`) holds the
 kind-branch count at **zero**. The design keeps the value of an explicit closed `match`
-— but on the **`Outcome`** (four arms), not the kind (a dozen and growing). New kinds
-extend the node side; the engine never changes.
+— but on the **`NodeResult`** (three arms) and durable `RunRecord` variants, not the
+kind (a dozen and growing). New kinds extend the node side; the engine never changes.

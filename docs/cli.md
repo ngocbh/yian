@@ -4,7 +4,7 @@
 a terminal state, and prints the output.
 
 ```console
-ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--quiet] [--verbose] [--num-workers N] [--engine-trace]
+ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--quiet] [--verbose] [--num-workers N] [--provider NAME] [--model NAME] [--engine-trace]
 ```
 
 ## Supplying inputs
@@ -65,12 +65,13 @@ applies). Cancelling a prompt (Ctrl-C / Esc) cancels the run.
 !!! note
     The prompt needs a real terminal (TTY). In a non-interactive context
     (a CI job, a piped command, `srun` without a pty) supply every required
-    input via `--input` / `--inputs` instead, or the run will abort.
+    input via `--input` / `--inputs` instead, or the command will fail before
+    execution.
 
 ## Blocking interactions
 
-`human_input` and an agent's authored `ask_user` tool are blocking interactions,
-not suspension points. `ac` runs the flow behind a main-thread terminal broker:
+`human_input` and an agent's authored `ask_user` tool are blocking interactions
+inside live node calls. `ac` runs the flow behind a main-thread terminal broker:
 the node's worker waits, the broker collects the answer, and the answer returns
 into that same live node call. A `human_input` always asks; an agent calls
 `ask_user` only when its model chooses to.
@@ -85,17 +86,12 @@ ac run examples/human-approval.yaml --input task="Plan a team offsite"
 
 An authored `wait` also stays in the live run: it occupies one worker until its
 absolute UTC deadline, then returns `None`. It does not ask the terminal for an
-early release and does not create a checkpoint.
+early release or split execution into a later continuation.
 
 In the bundled composer chat, Ctrl-C also reaches a WAIT inside the `run_flow`
 flow-op tool. The nested run uses a one-way child stop signal: host cancellation
 flows into it, but an ordinary nested failure remains a `FAILED` tool result and
 does not cancel the surrounding conversation.
-
-The CLI still contains a compatibility loop for a custom/artificial node that
-directly returns the generic `Pause` result. It can answer legacy human-shaped or
-scheduled reasons; a bare external-event reason remains paused. No authorable
-AGENT, HUMAN_INPUT, or WAIT node enters this path, and issue #117 removes it.
 
 ## Output and progress
 
@@ -131,9 +127,11 @@ ac run examples/debate.yaml --input question="Adopt a monorepo?" --num-workers 4
   flow has parallel branches that each do real work, e.g. separate LLM calls).
 - Each blocking HUMAN_INPUT, agent `ask_user`, or future-deadline WAIT occupies one worker;
   independent ready nodes use any remaining workers and wait when all are occupied.
-- The dormant artificial-pause API preserves the configured worker count on a live
-  resume. A durable compatibility resume uses the checkpointed count unless its caller
-  explicitly overrides it.
+
+The dispatcher records every node start and outcome in an authoritative
+process-local run log before publishing the progress event that the CLI renders.
+The Python API can instead select a durable JSONL log and recover it; the current
+CLI command always starts a fresh process-local run.
 
 ## Exit codes
 
@@ -142,7 +140,6 @@ ac run examples/debate.yaml --input question="Adopt a monorepo?" --num-workers 4
 | Flow succeeded | `0` |
 | Flow failed | `1` (error printed to stderr) |
 | Flow failed to compile (bad YAML) | `1` (located error printed to stderr) |
-| Artificial compatibility pause left unresolved | `1` |
 | Run cancelled at the input prompt | `1` |
 
 ## Compile errors

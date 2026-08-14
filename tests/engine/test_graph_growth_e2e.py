@@ -7,7 +7,7 @@ contract, this locks the engine results end-to-end:
   per-kind scratch cap module, no `Node` attribute or string referencing scratch.
 - **the live graph GROWS** under a REF/MAP run: a `Grow` deep-namespaces the child
   into the live `CompiledFlow` and `len(flow.nodes)` increases — driven via `FlowEngine.run()`
-  directly (run_flow only attaches `.engine` on a pause).
+  directly so the test can inspect the engine-owned projection.
 - the **START_ID..END_ID splice** is exercised: each call splices the namespaced child
   START_ID..END_ID, MAP fans into one END_ID(list-mode), and every synthesized ref is a **bare**
   `${<id>.output}` — no spurious `.output` suffix.
@@ -18,8 +18,8 @@ contract, this locks the engine results end-to-end:
 - the engine suite carries no expected failures.
 
 LLM-terminating seeds (00/04/05/14/18) are asserted LOAD+structure only; run assertions use
-the CODE-child pattern (mirroring test_golden_run_results.py), plus the new LLM-free nested-suspension
-seed 25 for the pause->resume->terminal round trip.
+the CODE-child pattern (mirroring test_golden_run_results.py), plus seed 25 for an LLM-free
+nested blocking interaction.
 """
 
 import importlib
@@ -92,8 +92,7 @@ def _resolver(**children):
 
 
 def _run_map(topics):
-    """Drive a MAP run via FlowEngine directly (run_flow only attaches .engine on pause),
-    returning (engine, events) so a test can inspect the GROWN live graph."""
+    """Drive MAP directly and return its engine/events for live-graph inspection."""
     parent = load_flow(_MAP, child_resolver=_resolver(**{"child-one": _CHILD}))
     eng = _engine(
         parent.compiled,
@@ -229,9 +228,7 @@ def test_f0_goldens_hold():
 
 
 def test_no_remaining_engine_xfails():
-    # the commandless durable re-pause xfail lifted once restore() re-seeds self.paused — the
-    # short-circuit fires on the restored engine. With it gone, the engine suite carries ZERO
-    # xfails: durable PAUSED resume (with OR without a command, static OR grown) all work.
+    # Keep the dedicated engine collection free of tests explicitly selected by an xfail marker.
     import subprocess
     import sys
 
@@ -261,8 +258,8 @@ _REPRESENTATIVE = [
 @pytest.mark.parametrize("seed", _REPRESENTATIVE)
 def test_representative_seed_loads_with_structure(seed):
     # LLM-terminating seeds (00/04/05/14/18) are asserted LOAD + structure only; the
-    # run/pause/resume assertions are covered by the CODE-child MAP run + the seed-25
-    # nested-suspension round trip above.
+    # run assertions are covered by the CODE-child MAP run + seed 25's nested
+    # blocking interaction above.
     loaded = load_flow((_SEEDS / seed).read_text(), search_paths=[_SEEDS])
     assert loaded.compiled.nodes  # loaded + has a body
     assert loaded.compiled.start_id in loaded.compiled.nodes  # a runnable entry

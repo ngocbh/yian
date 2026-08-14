@@ -15,8 +15,6 @@ These are exported from `agent_composer`.
 
 ::: agent_composer.CompiledFlow
 
-::: agent_composer.FlowEngine
-
 ::: agent_composer.VariablePool
 
 ::: agent_composer.evaluate_when
@@ -27,7 +25,7 @@ These are exported from `agent_composer`.
 
 ::: agent_composer.ExpressionError
 
-## Run / resume
+## Run and recovery
 
 The run-loop primitives live in `agent_composer.run`.
 
@@ -35,14 +33,58 @@ The run-loop primitives live in `agent_composer.run`.
 
 ::: agent_composer.run.resume_flow
 
-::: agent_composer.run.resume_command
+## Runtime authority
+
+The lower-level runtime surface is deliberately scoped to
+`agent_composer.runtime`. `FlowEngine` borrows an initialized matching
+`RunState`/`RunLog` pair; normal callers should prefer `run_flow` and
+`resume_flow`, which own log lifecycle and replay.
+
+::: agent_composer.runtime.FlowEngine
+
+::: agent_composer.runtime.RunState
+
+::: agent_composer.runtime.RunStartData
+
+::: agent_composer.runtime.RunLog
+
+::: agent_composer.runtime.MemoryRunLog
+
+::: agent_composer.runtime.JsonlRunLog
+
+::: agent_composer.runtime.prepare_run_started
+
+::: agent_composer.runtime.commit_prepared
+
+### Durable run records
+
+The log stores only this closed transition vocabulary. Run success and failure
+observers are derived by reducing these records; there are no separate terminal
+records.
+
+::: agent_composer.runtime.log.RecordEnvelope
+
+::: agent_composer.runtime.log.RunStartedRecord
+
+::: agent_composer.runtime.log.RunResumedRecord
+
+::: agent_composer.runtime.log.NodeStartedRecord
+
+::: agent_composer.runtime.log.NodeSucceededRecord
+
+::: agent_composer.runtime.log.NodeRoutedRecord
+
+::: agent_composer.runtime.log.NodeExpandedRecord
+
+::: agent_composer.runtime.log.NodeFailedRecord
 
 ## Nodes
 
 Every node implements one contract — a pure function of its bound input record —
 and reports its kind through the closed [`NodeKind`][agent_composer.nodes.base.NodeKind]
 vocabulary. A node returns one of the closed sum
-`Output | Route | Pause | Grow` and never touches the variable pool.
+`Output | Route | Grow` and never touches the variable pool. Failure is a
+raised exception, not a node-result variant.
 
 ::: agent_composer.nodes.base.NodeKind
 
@@ -51,8 +93,6 @@ vocabulary. A node returns one of the closed sum
 ::: agent_composer.nodes.base.Output
 
 ::: agent_composer.nodes.base.Route
-
-::: agent_composer.nodes.base.Pause
 
 ::: agent_composer.nodes.base.Grow
 
@@ -133,10 +173,12 @@ from the environment.
 
 ::: agent_composer._settings.default_llm_model
 
-## Engine events
+## Observer events
 
-The two-tier event vocabulary. Node-level events are produced by `Node.run()`;
-run-level events are streamed to the caller by `FlowEngine.run()`.
+Transition observers are published only after their corresponding record has been
+appended and reduced; they are not the durable authority. `StreamChunk` is the
+callback-only exception: it is delivered during evaluation and never appended to
+the run log.
 
 ::: agent_composer.events.NodeStarted
 
@@ -144,11 +186,13 @@ run-level events are streamed to the caller by `FlowEngine.run()`.
 
 ::: agent_composer.events.NodeSucceeded
 
+::: agent_composer.events.NodeRouted
+
+::: agent_composer.events.NodeSkipped
+
 ::: agent_composer.events.NodeFailed
 
 ::: agent_composer.events.NodeExpanded
-
-::: agent_composer.events.PauseRequested
 
 ::: agent_composer.events.RunStarted
 
@@ -157,7 +201,3 @@ run-level events are streamed to the caller by `FlowEngine.run()`.
 ::: agent_composer.events.RunSucceeded
 
 ::: agent_composer.events.RunFailed
-
-::: agent_composer.events.RunPaused
-
-::: agent_composer.events.RunAborted

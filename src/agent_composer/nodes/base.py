@@ -104,13 +104,13 @@ class NodeKind(str, Enum):
 
 @dataclass(frozen=True)
 class Output:
-    """A produced value. The engine writes `value` into the pool under the node id.
+    """A produced value that the dispatcher records before the reducer binds it.
 
-    `commit_as` is the node-CHOSEN commit redirect: when set, the engine writes `value`
-    under `commit_as` instead of the node's own id (and fires that target's out-edges).
+    `commit_as` is the node-chosen commit redirect: when set, the reducer writes `value`
+    under `commit_as` instead of the node's own id and fires that target's out-edges.
     A `str` target id, or `None` (the common case) to commit under the node's own id.
-    No `run()` sets it today — it is the roadmap seam for a node that names its own commit
-    target; the engine-baked `Node.commit_as` covers the current subflow-terminal redirects.
+    LOOP uses it when its final driver commits under the compiled origin; the baked
+    `Node.commit_as` field covers subflow-terminal redirects.
     """
 
     value: Any = None
@@ -120,15 +120,15 @@ class Output:
 @dataclass(frozen=True)
 class Route:
     """A routing-only outcome (a terminal): carries only the chosen case handle — no value,
-    no post-asserts. Returned by a router (CASE); the engine takes the handle's out-edge and
-    skip-floods the siblings."""
+    no post-asserts. Returned by a router (CASE); the dispatcher records the handle and the
+    reducer takes its out-edge while skip-flooding siblings."""
 
     handle: str
 
 
 @dataclass(frozen=True)
 class Grow:
-    """A spawner describes one deterministic graph expansion for the engine to build.
+    """A spawner describes one deterministic graph expansion for the runtime to record.
 
     Fields:
       - `seed`: the pure input to the compile-owned growth builder. Kind-shaped but opaque to the
@@ -164,17 +164,15 @@ class _HostStop(Exception):
 
 class NodeAssertFailed(Exception):
     """A node-local `asserts:` clause evaluated false (or errored) — raised by a node's own
-    `run()` when it fires its boundary asserts (StartNode after coercion) instead of relying on
-    the `eval_node` pre/post-assert seam. Carries render-only diagnostics so the run boundary can
-    surface a precise caret:
+    `run()` template around its kind body (including StartNode after coercion). Carries
+    render-only diagnostics so the run boundary can surface a precise caret:
 
     - `locator` (`Optional[SourceSpan]`): the failing assert's locator (`node`, `kind="assert"`,
       `key=<display text>`), or `None`.
     - `range` (`Optional[SourceRange]`): the assert expr's `SourceRange` in the flow YAML, or `None`.
 
-    The engine catches this at the START-seed site and turns it into a `RunFailed` with
-    `error_type="NodeAssertFailed"`, matching the shape `eval_node` produces for a failed
-    pre/post assert on an ordinary node.
+    `eval_node` captures it as an `EvaluationFailure`; the dispatcher durably records the
+    corresponding node failure before the reducer derives `RunFailed`.
     """
 
     def __init__(self, message: str, *, locator: Any = None, range: Any = None) -> None:
@@ -187,16 +185,18 @@ class Node(ABC):
     """
     The base contract every node kind implements: a pure function of its input record.
 
-    A node implements [`run`][agent_composer.nodes.base.Node.run] and returns one of the
-    closed sum `Output | Route | Grow` (or, for a streaming kind, a generator that yields
-    `StreamChunk` and returns a `NodeResult`). The node never receives the pool — the engine's
+    A node implements its `_run_impl` body; the inherited
+    [`run`][agent_composer.nodes.base.Node.run] template returns one of the closed sum
+    `Output | Route | Grow` (or, for a streaming kind, a generator that yields `StreamChunk`
+    and returns a `NodeResult`). The node never receives the pool — the engine's
     `eval_node` seam binds its inputs and hands it a record — and never writes the pool; it
     *describes* its one output as `Output(value)` and the engine performs the write under the
     node id. Failure is a `raise`, not a variant.
 
     Attributes:
         kind (`NodeKind`):
-            The closed-vocabulary tag the engine dispatches on. Set per subclass.
+            The closed-vocabulary tag used by compose/compile and node-owned diagnostics.
+            Runtime never dispatches on it. Set per subclass.
         id (`str`):
             The node's unique id within its (possibly namespaced) flow.
         title (`str`, *optional*):
@@ -207,14 +207,14 @@ class Node(ABC):
             The node-side declared params (no source — the flow owns the wiring); `None`
             for a node that declares no inputs.
         pre_asserts (`list[str]`):
-            Node-local `asserts:` checked against the bound record before `run`.
+            Node-local `asserts:` checked against the bound record before `_run_impl`.
         post_asserts (`list[str]`):
-            Node-local `asserts:` (reading `${output}`) checked after `run`.
+            Node-local `asserts:` (reading `${output}`) checked after `_run_impl`.
         commit_as (`str`, *optional*):
             Engine-baked commit redirect: write this node's Output under `commit_as`
             instead of its own id (and fire that target's out-edges). Set by the
-            `_grow_*` expanders on a subflow terminal (a CALL/MAP child END filler
-            or a MAP END-list filler) to point back at the
+            compile-owned growth builders on a subflow terminal (a CALL/MAP child END
+            filler or a MAP END-list filler) to point back at the
             spawner id; `None` for an ordinary node (commit under its own id).
         origin_id (`str`, *optional*):
             "Attribute my grows and self-commit to this origin node." `None` on every
@@ -249,8 +249,8 @@ class Node(ABC):
     #   1     — a nested call, +1 and bounded (CALL/MAP: each child is one deeper level).
     # Overridden by LOOP (0) and CALL/MAP (1); the default None fits non-spawners.
     grow_depth_delta: ClassVar[Optional[int]] = None
-    # Declares "I am the self-respawning fixpoint-iteration driver" (LOOP). The growth core
-    # (`_apply_grow`) gates the origin-keyed single-live-record ledger invariant under this trait:
+    # Declares "I am the self-respawning fixpoint-iteration driver" (LOOP). The growth reducer
+    # gates the origin-keyed single-live-record ledger invariant under this trait:
     # each iteration is a fresh driver clone whose grow is attributed to `origin_id` (the compiled
     # loop) and supersedes the prior live iteration. A plain trait check suffices — the core
     # never dispatches on the kind.
@@ -279,8 +279,8 @@ class Node(ABC):
         # `None` for a fake / directly-constructed node that declares no inputs (== no params).
         self.params: Optional[list[ParamDecl]] = None
         # Node-local `asserts:` (a per-node contract), classified + stamped by the loader and
-        # enforced by the engine's `eval_node` seam: PRE checked against the bound input record
-        # before `run`; POST (reads `${output}`) after `run` against `{**inputs, output}`.
+        # enforced by the inherited `run` template: PRE checked against the bound input record
+        # before `_run_impl`; POST (reads `${output}`) afterward against `{**inputs, output}`.
         # Empty for most nodes.
         self.pre_asserts: list[str] = []
         self.post_asserts: list[str] = []
@@ -293,7 +293,7 @@ class Node(ABC):
         self.assert_texts: dict[str, str] = {}
         # Engine-baked commit redirect (see the class docstring): a subflow terminal
         # commits its Output under this spawner id instead of its own id. Stamped by the
-        # `_grow_*` expanders; `None` for an ordinary node.
+        # compile-owned growth builders; `None` for an ordinary node.
         self.commit_as: Optional[str] = None
         # "Attribute my grows/self-commit to this origin" (see the class docstring). `None`
         # on ordinary nodes; set to the compiled loop id on a loop driver (origin == self on
@@ -424,7 +424,7 @@ class Node(ABC):
         )
 
     def on_failure(self, exc: Exception, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
-        """Reserved recovery seam, not currently driven by ``eval_node``. Default: re-raise."""
+        """Reserved error-strategy seam, not currently driven by ``eval_node``. Default: re-raise."""
         raise exc
 
     def bind_reserved(self, node_wiring: dict, pool) -> dict[str, Any]:

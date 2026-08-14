@@ -219,7 +219,7 @@ Routing on a `Literal` is **exhaustiveness-checked** — omitting a tag with no
 ### `human_input` — a guaranteed human gate
 **Always** calls the host-owned `ask_user` tool and blocks its worker until the
 host returns a typed answer (validated against `output:`). It stays inside the
-live node call; it does not create a resumable checkpoint.
+live node call and returns the answer as an ordinary node output.
 ```yaml
 approve:
   kind: human_input
@@ -264,7 +264,7 @@ settle:
 `until:` resolves to an ISO `date` or `datetime`. Date and naive datetime values
 are UTC; aware values are normalized to UTC. A past/current deadline returns
 immediately. Otherwise WAIT holds one worker until the remaining wall-clock
-duration elapses, then returns `None`; it does not create a checkpoint.
+duration elapses, then returns `None` as an ordinary node output.
 
 ### `call` / `map` — composition over child flows
 A child is itself a flow file. `call` runs it once; `map` runs it per list element
@@ -363,17 +363,14 @@ agent loop and its returned answer becomes the ordinary tool result. For a
 *guaranteed* gate use `human_input`; for "ask only if needed" use `ask_user`.
 AGENT `ask_user` returns its answer to the same live tool loop; HUMAN_INPUT and
 WAIT return ordinary node outputs from their live calls. There is no authored
-agent `entry:`/`controls:` field or event-mode WAIT. Generic `Pause` remains
-custom/artificial compatibility only until issue #117.
+agent `entry:`/`controls:` field or event-mode WAIT.
 
 ## Validate & run
 - **Quick validate** (loads + compiles, no model): `ac run <flow>.yaml` will load
   first; or from Python `load_flow(text, search_paths=[flow_dir])`.
 - **Run:** `ac run <flow>.yaml --input k=v [--inputs file.json]`. Missing required
   inputs are prompted; `human_input` and `ask_user` requests are served by the
-  host while the run remains live. WAIT also remains in the live run. A temporary
-  generic `Pause`/checkpoint path remains only for artificial compatibility until
-  issue #117 removes it.
+  host while the run remains live. WAIT also remains in the live run.
 - A flow with only `code`/`tool` nodes runs with **no provider**; any `agent` node
   needs a provider/model configured (see `docs/installation.md`).
 

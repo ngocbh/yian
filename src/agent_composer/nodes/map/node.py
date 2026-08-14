@@ -8,7 +8,7 @@ NO `over` attribute and no `${...}` source on the node. The `over` SOURCE bindin
 by the engine's `eval_node` before `run`.
 
 `run` returns one seed-first `Grow` carrying the raw list of per-element records. The compile-owned
-injected builder constructs the MAP fan-in, and the engine's generic `_apply_grow` splices it. An
+injected builder constructs the MAP fan-in, and the generic growth reducer splices it. An
 empty `over` builds a synthetic start wired directly to the list END (which emits `[]`). The
 per-element call-args go RAW: the spliced child START_ID owns omitted-input
 defaulting (its params carry default/required), so the driver no longer pre-defaults.

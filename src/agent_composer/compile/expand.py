@@ -2,19 +2,21 @@
 
 When a spawner (CALL / MAP / LOOP) runs, it does not run a child engine; it
 returns a seed-first `Grow`. The injected `build_grow` interpreter constructs the fragment and
-the engine grows its live graph. This module holds the
+the dispatcher prepares a canonical expansion record whose reducer plan splices the fragment.
+This module holds the
 **pure** machinery that growth keys off:
 
 - `ns` / `map_callsite` (imported from `nodes.ids`): deterministic id minting. Every
   cloned node/edge id is a pure function of `(callsite, child static id, element index)` —
-  NO emission counter — so a re-clone on kill-recovery re-keys identically.
+  NO emission counter — so prefix recovery reconstructs identical ids.
 
 The pure cloner (`clone_child`) splices the child's own
 `START_ID..END_ID` (every flow is `START_ID -> body -> END_ID`) into a `Flow`: the child `START_ID`
 is the alias-seed point — SEEDED WITH THE CALL-ARGS AS EDGES (no `_rens` literal-baking) — and the
 child `END_ID` is the alias filler. A child node reading `${input.X}` is re-pointed to the namespaced
-child START_ID's output object (`${<callsite>/<start>.output.X}`); the dispatcher
-consumes the descriptions and performs the (impure) `add_subgraph` + `register` + seed.
+child START_ID's output object (`${<callsite>/<start>.output.X}`). Transition preparation
+validates the fragment and records its canonical seed/digest; the reducer then splices it,
+initializes its dispositions, and queues its START node.
 
 Layer: compile — imports `expr`/`nodes` plus the shared growth-schema leaf;
 never `runtime` or the package-root run boundary.
@@ -189,8 +191,8 @@ def clone_child(child, callsite: str, record: dict, *,
                 input_names: "set[str] | None" = None) -> Flow:
     """Splice a child `CompiledFlow`'s `START_ID..END_ID` at `callsite`. Every child node
     (incl. its `START_ID`/`END_ID`) is cloned deep-namespaced; the child `START_ID` is SEEDED with the
-    call-args as edges (no baking); the child `END_ID` is the alias filler. Pure — the dispatcher
-    performs the impure `add_subgraph`/`register`/seed.
+    call-args as edges (no baking); the child `END_ID` is the alias filler. Pure — the growth
+    reducer applies the returned fragment and updates its dispositions/frontier.
 
     Returns a `Flow` whose `start_id` is the namespaced child START (the sole seed point) and whose
     `end_id` is the namespaced child END (the alias filler for REF / one element input for MAP).
@@ -198,7 +200,7 @@ def clone_child(child, callsite: str, record: dict, *,
     `post_asserts`/`assert_texts`/`input_names` (default empty) carry a SPAWNER's node-level POST
     `asserts:` — a `call` node may declare `asserts:` reading `${output}` (its committed output)
     and its declared inputs. They are LOWERED onto the cloned child END (via
-    `_lower_spawner_post_asserts`) so they fire through the ordinary `eval_node` post-assert seam,
+    `_lower_spawner_post_asserts`) so they fire through the inherited `run` template,
     NOT a bespoke redirect-commit site. Empty for MAP/LOOP and for a CALL without node asserts."""
     nodes: dict[str, Node] = {}
     for nid, node in child.nodes.items():
@@ -208,7 +210,7 @@ def clone_child(child, callsite: str, record: dict, *,
         # compiled loop `L` inside the child: `origin_id == old id`). The cloned loop is a NEW
         # compiled origin at the namespaced callsite, so its origin must follow to `clone.id`;
         # otherwise its `run`/`commit_as=origin` and body callsite key the un-namespaced id and
-        # `_on_success` cannot find `flow.nodes[origin]` (a loop nested in a CALL/MAP).
+        # success-transition preparation cannot resolve that target (a loop nested in CALL/MAP).
         if getattr(node, "origin_id", None) == nid:
             clone.origin_id = clone.id
         nodes[clone.id] = clone

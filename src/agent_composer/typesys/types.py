@@ -5,8 +5,8 @@ resolves a `TypeExpr` against the per-flow type registry into a leaf `Type`
 (`agent_composer.typesys.values`). This is the bridge from the authoring contract
 to the typed value system.
 
-Imports `segments` (peer leaf); imported by compile/validation + the runtime
-write boundary in later slices.
+Imports the peer ``values`` leaf and is consumed by compose/compile type
+resolution. Runtime receives only the resolved ``Type`` values.
 """
 
 from __future__ import annotations

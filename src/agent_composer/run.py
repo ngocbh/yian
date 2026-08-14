@@ -124,6 +124,47 @@ def run_flow(
     Flow failures are returned as ``RunResult(status="failed")``.  Host,
     callback, log, and reducer errors propagate after any active workers have
     been drained and the boundary-owned log has been closed.
+
+    Args:
+        flow (`ComposedFlow`):
+            Compiled, validated flow to copy and execute.
+        inputs (`dict[str, Any]`):
+            Caller values keyed by declared input name. Supplied scalars are
+            coerced into the initial pool; START applies declared defaults and
+            full boundary type checks during its recorded node execution.
+        log (`str | os.PathLike[str] | None`, *optional*, defaults to `None`):
+            New JSONL authority path. ``None`` uses a process-local
+            ``MemoryRunLog``; an existing path is never overwritten.
+        run_id (`str | None`, *optional*, defaults to `None`):
+            Non-empty identity exposed as ``system.run_id`` and retained by every
+            record. ``None`` mints a fresh identity.
+        num_workers (`int`, *optional*, defaults to `0`):
+            Non-negative worker bound recorded at initialization. Zero selects
+            serial evaluation.
+        on_event (`Callable[[Any], None] | None`, *optional*, defaults to `None`):
+            Callback for observers after their records have been appended and
+            reduced.
+        on_stream (`Callable[[StreamChunk], None] | None`, *optional*, defaults to `None`):
+            Callback for transient stream chunks, which are never durable records.
+        llm_config (`dict[str, Any] | None`, *optional*, defaults to `None`):
+            Per-run outer model configuration layer. The fully resolved static map
+            is captured in the initialization record.
+
+    Returns:
+        `RunResult`:
+            Terminal success or failure, including this invocation's post-durable
+            observers and the durable path when one was requested.
+
+    Raises:
+        `TypeError`:
+            A public argument has the wrong type.
+        `ValueError`:
+            Inputs, identity, worker count, model configuration, or prepared run
+            state violates its contract.
+        `FileExistsError`:
+            ``log`` names an existing path.
+        `OSError`:
+            Durable log creation, locking, writing, syncing, or closure fails.
     """
     return _run_flow_controlled(
         flow,
@@ -241,6 +282,38 @@ def resume_flow(
 
     Historical records are folded silently.  Recovery never reads ambient model
     defaults, mints a new identity, or accepts fresh input/configuration.
+
+    Args:
+        flow (`ComposedFlow`):
+            Compiled flow whose authored fingerprint must match the log's initial
+            record. Recovery runs on a private copy.
+        log (`str | os.PathLike[str]`):
+            Existing JSONL run log to lock, repair to its final complete line,
+            validate, and replay.
+        num_workers (`int | None`, *optional*, defaults to `None`):
+            Non-negative worker bound for a new recovery segment. ``None`` preserves
+            the most recently recorded value.
+        on_event (`Callable[[Any], None] | None`, *optional*, defaults to `None`):
+            Callback for observers committed during this invocation only; historical
+            replay and terminal recovery are silent.
+        on_stream (`Callable[[StreamChunk], None] | None`, *optional*, defaults to `None`):
+            Callback for new transient stream chunks, which are never replayed.
+
+    Returns:
+        `RunResult`:
+            Reconstructed terminal result, or the terminal result after retrying
+            ordered unfinished starts and continuing the frontier.
+
+    Raises:
+        `TypeError`:
+            A public argument or decoded carrier has the wrong type.
+        `ValueError`:
+            The prefix is invalid, the flow fingerprint differs, or the selected
+            worker count violates its contract.
+        `FileNotFoundError`:
+            ``log`` does not exist.
+        `OSError`:
+            Locking, tail repair, appending, syncing, or closure fails.
     """
     return _resume_flow_controlled(
         flow,

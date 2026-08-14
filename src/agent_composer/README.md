@@ -50,8 +50,9 @@ _settings.py  environment-based default provider/model
 ```
 
 The main import direction is acyclic: `events <- typesys <- nodes <- compile <-
-compose`, with `expr` feeding nodes. Runtime consumes the leaf state vocabulary
-and `compile.model` topology but never imports `compile.expand` or `compose`.
+compose`, with `expr` feeding nodes. Runtime consumes the internal leaf-state
+vocabulary plus compile's topology, identity, and validation contracts, but never
+imports `compile.expand` or `compose`.
 Package-root `run.py` sits above `compose`, `compile.expand`, and `runtime`: it
 consumes a `ComposedFlow`, injects the kind-aware growth builder, and owns run-log
 creation and recovery. None of those packages imports it back.

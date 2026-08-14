@@ -6,19 +6,23 @@
 
 ## The 10-second model
 
-There are only two big moves, and one long-lived object between them:
+There are two big moves. A durable run adds one authoritative history beside the
+interpreter:
 
 ```
    flow.yaml  ──load──▶  ComposedFlow  ──run──▶  RunResult
-   (text)               (a typed graph)       (output | error | paused)
+   (text)               (a typed graph)       (output | error)
+                              │
+                              └── execute through an append-only RunLog
 ```
 
 - **Load** is a *compiler*. It reads the text once, checks it, and lowers it to a
   frozen, typed graph. All the YAML-awareness lives here and nowhere else.
-- **Run** is an *interpreter*. It walks that graph, handing each box its inputs and
-  collecting what it returns, until there is nothing left to do.
-
-Everything else on this page is just naming the pieces of those two moves.
+- **Run** is an *interpreter*. It walks a private copy of that graph, handing each
+  box its inputs and collecting what it returns, until it derives a terminal.
+- **The run log is authority.** Every state transition is appended before the
+  reducer applies it. A process-local run uses the same protocol in memory; a
+  recoverable run writes canonical JSONL records with fsync.
 
 ```python
 from agent_composer import load_flow, run_flow
@@ -28,8 +32,9 @@ result = run_flow(loaded, {"question": "..."})    # graph -> RunResult
 print(result.output)
 ```
 
-That is the whole public API. The two functions are the seam between the two halves
-of the codebase.
+Those two functions are the ordinary public seam between the two halves of the
+codebase. `resume_flow()` in `agent_composer.run` re-enters the run half from an
+existing durable log.
 
 ---
 
@@ -44,13 +49,13 @@ stages: **parse → desugar → wire → check → freeze.**
   │  parse_file            YAML text -> a span-tagged tree (every value knows its line/col)
   │  parse_nodes           tree      -> one frozen *descriptor* per node (kind-specific)
   │  desugar_*             rewrite sugar into core nodes:
-  │                          inline ${f(x)} calls, adaptive questions, case targets, cases
+  │                          inline call(...) directives, adaptive questions, case targets
   │  build (per kind)      each descriptor -> a runtime Node  (+ its flow-owned wiring;
   │                          a case lowers in its own build, emitting its branch edges)
   │  infer_data_edges      read every ${...} -> draw the edges NOBODY drew by hand
   │                          (+ append each case's own data+control edges)
   │  validate_references   every ${...} points at something real & type-compatible
-  │  reject_cycles         the graph must be a DAG
+  │  reject_cycles         the static graph must be a DAG
   │  check_case_handles    every branch has a home
   ▼
  CompiledFlow  (wrapped, with input decls + asserts + source frame, as a ComposedFlow)
@@ -64,11 +69,11 @@ a *consequence* of the data references, so it can never disagree with them.
 
 **The front end is split on two axes.** Per-node-kind logic lives in
 `compose/nodes/<kind>.py` — each kind module owns its descriptor, its `parse()`, and
-its `build()`, and registers them into the `KINDS` table. Cross-node graph passes live
-in the ordered phase packages `compose/parse/ → compose/desugar/ → compose/edges/ →
-compose/validate/ → compose/build/`. The engine core sees none of it.
+its `build()`. Cross-node graph passes live in the ordered phase packages
+`compose/parse/ → compose/desugar/ → compose/edges/ → compose/validate/ →
+compose/build/`. The engine core sees none of it.
 
-The output is a **`ComposedFlow`**: a `CompiledFlow` (the immutable topology) plus the
+The output is a **`ComposedFlow`**: a `CompiledFlow` (the static topology) plus the
 typed `input:` declarations, the `asserts`, and a render-only *source frame* used to
 draw error tracebacks that point back at your YAML.
 
@@ -77,56 +82,91 @@ pass, the two-axis layout, descriptors vs. nodes, and how a `${...}` becomes an 
 
 ---
 
-## Phase 2 — Run: the interpreter walks the graph
+## Phase 2 — Run: records drive the interpreter
 
-`run_flow()` hands the `CompiledFlow` to a **`FlowEngine`** (`runtime/engine.py`). The
-engine owns everything mutable — the memory, the ready-queue, the growing graph, the
-event log — and it runs one small loop:
+`run_flow()` (in package-root `run.py`) makes a private graph copy, resolves the
+run's inputs and model configuration, creates a `RunState` plus `RunLog`, and
+commits the first `RunStartedRecord`. It then lends the matching state/log pair to
+the **`FlowEngine`** (`runtime/engine.py`).
 
-1. **What can run now?** A node whose every input edge is satisfied.
-2. **What does it produce?** Bind its inputs from memory, call `node.run(inputs)`, get
-   back an *outcome*.
-3. **What changes?** Store the outputs, unlock the successors, repeat.
+The engine is a single-writer dispatcher. In serial mode it evaluates ready nodes
+itself; in pooled mode workers evaluate only and return raw outcomes to the
+dispatcher. For every transition, runtime follows the same order:
 
-The node is a **pure function of its inputs**. It is handed a plain dict and returns
-one of four outcomes — it never touches the engine's memory:
+```
+prepare + validate ──▶ append record ──▶ apply reducer ──▶ publish observers
+```
+
+The append is the authority boundary. If it fails, the reducer does not apply the
+transition and no matching success/failure observer is published. The dispatcher
+is the sole ready-queue consumer and state writer, so worker completion order can
+never create concurrent state mutation.
+
+A node is a **pure function of its inputs**. It receives a plain record and returns
+one of three outcomes — it never touches the variable pool:
 
 | Outcome | Meaning |
 |---------|---------|
-| `Output` | here are my typed results — bind them and continue |
-| `Route`  | a `case` decision — take this branch, skip the others |
-| `Pause`  | dormant custom/artificial compatibility — checkpoint the run |
-| `Grow`   | splice this sub-graph in and continue (how `call`/`map`/`loop` expand) |
+| `Output` | one typed value for the engine to bind and propagate |
+| `Route`  | a `case` decision — take this branch and skip the siblings |
+| `Grow`   | a canonical seed for one deterministic `call`/`map`/`loop` expansion |
 
-The engine's defining rule: **it never asks what *kind* of node this is.** It reads
-inputs, calls `run`, and branches only on the *shape of the outcome* and a few
-node-owned traits (`is_spawner`, `binds_per_item`, …). Adding a brand-new node kind
-requires zero engine changes — a ratchet test (`tests/engine/test_kind_census.py`)
-keeps the engine's kind-branch count pinned at 0.
+Failure is a `raise`, captured at the evaluation boundary and reduced through a
+`NodeFailedRecord`; it is not a fourth node outcome. A `Grow` seed is interpreted
+by the compile-owned `build_grow` callable injected at the package-root boundary,
+then recorded with a topology digest before the reducer splices the fragment.
 
-Authorable blocking interaction does not use `Pause`: `human_input` and an
-agent's `ask_user` tool block inside the live node call, while WAIT blocks until
-its absolute UTC deadline. The enclosing AGENT, HUMAN_INPUT, and WAIT nodes
-eventually return `Output`. The generic checkpoint path remains dormant for
-custom/artificial compatibility until issue #117 removes it.
+The engine's defining rule is that **it never asks what kind of node this is.** It
+branches only on the outcome sum and node-owned traits (`is_spawner`,
+`binds_per_item`, and so on). Adding a node kind requires no engine branch — a
+ratchet test (`tests/engine/test_kind_census.py`) keeps the core's kind-dispatch
+count pinned at 0.
 
-Because all state lives in one place the engine controls, the dormant `Pause`
-variant can still serialize the world to a `RunCheckpoint`, and `resume_flow()`
-can rebuild and continue it. No authorable node currently produces that variant.
+Authorable blocking interaction stays within one live evaluation. `human_input`
+and an agent's `ask_user` tool wait for the host, while WAIT occupies a worker
+until its absolute UTC deadline. Each eventually returns `Output` from that same
+node invocation.
 
-→ **[engine.md](engine.md)** covers the scheduler, the edge-join, growth, and durable
-suspend/resume. **[nodes.md](nodes.md)** covers the node contract and each kind's
+→ **[engine.md](engine.md)** covers the scheduler, reducer, run log, recovery, and
+growth. **[nodes.md](nodes.md)** covers the node contract and each kind's
 `_run_impl`.
+
+---
+
+## Recovery is deterministic prefix replay
+
+Supplying `log=<path>` to `run_flow()` selects `JsonlRunLog`. It exclusively
+creates the path, holds a nonblocking exclusive advisory lock for the run, writes
+one canonical record per line, and fsyncs every append. The initial record retains
+the run identity, flow fingerprint, complete typed pool, worker count, and resolved
+LLM configuration. Later records retain starts and canonical outcomes, including
+growth seeds and digests.
+
+`resume_flow(flow, log=path)` acquires the same lock before reading. It removes an
+incomplete final line, validates the contiguous prefix, verifies the supplied
+flow's fingerprint, and folds every historical record through the same reducer
+used live. Replay itself publishes no observers.
+
+- A terminal prefix is returned without changing the file.
+- A nonterminal prefix gets one `RunResumedRecord`; its ordered unfinished starts
+  are retried before the existing ready frontier, then normal dispatch continues.
+- Current environment model defaults and fresh inputs cannot alter recovery; the
+  initialization record is the source of truth.
+
+This is state recovery, not exactly-once execution of arbitrary external effects.
+A node with a durable start and no durable outcome is retried, so effectful leaf
+code must tolerate that boundary.
 
 ---
 
 ## The stuff that flows through the pipes
 
-Two subsystems are used by *both* phases, so they sit underneath:
+Two subsystems are used by both phases, so they sit underneath:
 
 - **Typed values & the pool** — every input, output, and stored value is a typed,
-  losslessly-serializable `TypedValue`; the engine's memory is a `VariablePool` of
-  them. That serializability is what makes checkpoints possible.
+  losslessly serializable `TypedValue`; the engine's memory is a `VariablePool` of
+  them. The record codec carries those values through a canonical JSON form, so
+  live reduction and prefix replay see the same data.
   → **[typing.md](typing.md)**
 - **The `${...}` grammar** — one small expression language: parse to an AST, then
   either *evaluate* it against the pool (at run time) or *ref-walk* it to find its
@@ -137,38 +177,45 @@ Two subsystems are used by *both* phases, so they sit underneath:
 
 ## Four properties, and where they come from
 
-Everything in the codebase is in service of four guarantees — each is a *consequence*
-of a design choice above, not a feature bolted on:
+Everything in the codebase is in service of four guarantees — each is a
+*consequence* of a design choice above, not a feature bolted on:
 
 | Property | Falls out of… |
 |----------|---------------|
 | **Structurally reproducible** — same authored control/data graph | the author fixes the graph; the LLM only fills leaf boxes |
-| **Compatibility checkpointable / resumable** | centralized serializable run state + pure graph boundaries |
-| **Extensible** — new kinds don't touch the core | the kind-blind engine + the per-kind `KINDS` table |
+| **Durably recoverable** — replay one validated transition prefix | append-before-apply records + typed canonical state |
+| **Extensible** — new kinds don't touch the core | the kind-blind engine + per-kind front-end modules |
 | **Readable / debuggable** | the flow *is* the plan; source spans point errors back at the YAML |
 
 ---
 
 ## Where the code lives
 
-The packages form an acyclic ladder — each layer imports only from those below it:
+The main compiler packages form an acyclic ladder — each layer imports only from
+those below it:
 
 ```
-events        run + node event vocabulary, source spans          [leaf, no deps]
+events        run + node observer vocabulary, source spans          [leaf]
   ▲
 typesys       typed values + the VariablePool
   ▲
-nodes         the Node contract + one package per kind      (expr feeds this)
+nodes         pure Node contract + one package per kind        (expr feeds this)
   ▲
-compile       CompiledFlow IR + representation-neutral validation
+compile       CompiledFlow IR + validation + growth construction
   ▲
-compose       the YAML front end: text -> CompiledFlow       ← all YAML lives here
+compose       YAML front end: text -> CompiledFlow              ← all YAML lives here
 ```
 
-Off to the side: `runtime/` (the engine + worker pool, fed by `suspension/`),
-`llm_clients/` (lazy provider adapters), `tools/` (the tool registry), and `cli/`
-(the `ac` entry point). The rule that keeps the picture honest: **never add a
-back-edge**, and **never teach `runtime/` about a `NodeKind`**.
+`_state.py` is a shared scheduler-state leaf. `runtime/` owns the append-only log,
+reducer-owned `RunState`, kind-blind engine, and worker pool; it consumes compiled
+topology but never imports `compile.expand`. Package-root `run.py` sits above
+`compose`, `compile.expand`, and `runtime`: it owns log creation/recovery and
+injects `build_grow`. `llm_clients/` contains lazy provider adapters, `tools/`
+contains the tool registry and host interaction seam, and `cli/` owns terminal
+presentation.
+
+The rules that keep the picture honest: **never add a back-edge**, and **never
+teach `runtime/` about a `NodeKind`**.
 
 ---
 
@@ -177,7 +224,7 @@ back-edge**, and **never teach `runtime/` about a `NodeKind`**.
 <div class="grid cards" markdown>
 
 - :material-cog: **[compose.md](compose.md)** — Phase 1 in depth: how YAML is lowered to a `CompiledFlow`.
-- :material-play: **[engine.md](engine.md)** — Phase 2 in depth: the scheduler and the node contract.
+- :material-play: **[engine.md](engine.md)** — Phase 2 in depth: records, reducer, scheduler, and recovery.
 - :material-cube: **[nodes.md](nodes.md)** — every node kind and what its `_run_impl` returns.
 - :material-shape: **[typing.md](typing.md)** — the typed value system and the variable pool.
 - :material-code-braces: **[expressions.md](expressions.md)** — the `${...}` grammar.

@@ -91,7 +91,7 @@ def test_with_type_typed_list_validates_elements():
         build_value_as(ValueKind.LIST_STRING, ["ACME", 3])
 
 
-# --- lossless serialization (the checkpoint primitive) ---------------------- #
+# --- lossless serialization (the run-record primitive) ---------------------- #
 
 
 @pytest.mark.parametrize(

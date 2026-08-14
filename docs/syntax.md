@@ -206,7 +206,8 @@ Any richer shape — a record, a `float`/`int`/`bool`, or a list — switches th
 agent to **structured generation**: the engine derives a schema from the declared
 `output:` and asks the model to emit a conforming value (via the provider's native
 structured output, or a JSON prompt-injection fallback for providers that lack it).
-The result is validated at the write boundary like every other node output.
+The result is validated while its canonical success record is prepared, like every
+other node output.
 
 ```yaml
 extract:
@@ -377,7 +378,7 @@ output: ${bullish.output | cautious.output}
 A `human_input` node **always** invokes the host-owned `ask_user` interaction at a
 fixed point and blocks its worker until the human answers. The answer is
 validated against the declared `output:` before the flow continues. This is one
-live node call, not a checkpoint pause.
+live node call; the invocation stays active until the answer arrives.
 
 ```yaml
 approve:
@@ -393,7 +394,8 @@ approve:
   output: Approval             # a typed answer, e.g. a Literal enum
 ```
 
-Instead of (or alongside) a `prompt:`, a gate may carry **questions** —
+The same invocation stays live until the host returns an answer. Instead of (or
+alongside) a `prompt:`, a gate may carry **questions** —
 AskUserQuestion-shaped multiple-choice/free-text prompts. Each question is
 `{question, header, options:[{label, description}], multi_select}`; `options`
 (omit ⇒ free-text) and `multi_select` (default `false`) are optional. 1–4
@@ -458,7 +460,8 @@ settle:
 a naive datetime is UTC; an offset-aware datetime is normalized to UTC. A deadline
 at or before the current instant returns immediately. Otherwise WAIT occupies one
 worker until the remaining wall-clock duration elapses, then returns `None`; it does
-not create a checkpoint. Engine/host shutdown wakes the worker cooperatively.
+not split the run into another execution segment. Engine/host shutdown wakes the
+worker cooperatively.
 
 ### `call` / `map` — composition over child flows
 
@@ -621,9 +624,7 @@ For a *guaranteed* gate use `human_input`; for "ask only if needed" use
 All three authorable blocking surfaces are live calls: `ask_user` returns the
 human's answer to the same AGENT tool loop, HUMAN_INPUT returns it as the node's
 output, and WAIT returns `None` at its deadline.
-There is no authored agent `entry:`/`controls:` surface and no event-mode WAIT;
-the dormant generic `Pause`/checkpoint API is available only to custom or
-artificial nodes until issue #117 removes it.
+There is no authored agent `entry:`/`controls:` surface and no event-mode WAIT.
 
 ## Expression contexts
 

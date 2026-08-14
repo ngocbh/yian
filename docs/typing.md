@@ -10,12 +10,14 @@
 A flow is a function: typed values in, a typed value out, and every node produces a typed
 value the next one reads. Two forces make the typing non-negotiable:
 
-- **Durability.** A run can pause and resume in another process, so the engine serializes
-  the whole pool to JSON and back. JSON is lossy — `1` and `1.0` come back the same. So
-  every value carries its own type tag and decodes back to *exactly* the type it had.
+- **Durability.** A run can be recovered in another process by replaying its
+  authoritative record prefix. The initial record carries the whole pool and later
+  success records carry typed outputs. JSON alone is lossy — `1` and `1.0` can collapse
+  to the same representation — so every value carries its own type tag and decodes back
+  to *exactly* the type it had.
 - **Loud failure at the boundary.** A node returns a plain value; the engine checks it
-  against the node's declared output type *at the moment it is written* to the pool — so a
-  wrong shape fails there, not three nodes later.
+  against the node's declared output type before appending its success record and reducing
+  the write into the pool — so a wrong shape fails there, not three nodes later.
 
 ```
    types.py  → authoring surface: "list[Signal]" / typedefs: → a runtime Type
@@ -47,10 +49,11 @@ AnyValue = Annotated[Union[NoneValue, StringValue, IntegerValue, ...],
 ```
 
 On a round-trip pydantic reads the `kind` tag and decodes to the right subclass — so
-`{"kind": "int", "value": 1}` becomes `IntegerValue(1)`, not a float. **That losslessness
-is the primitive checkpoint/resume is built on.** Node code never touches a `TypedValue`:
-`.to_object()` gives the plain Python value; wrapping happens only at the pool's write
-boundary.
+`{"kind": "int", "value": 1}` becomes `IntegerValue(1)`, not a float. **That
+losslessness is what lets the run-log reducer reconstruct the same pool from canonical
+records.** Node code never touches a `TypedValue`: `.to_object()` gives the plain Python
+value. Initial inputs are wrapped at the pool boundary; a node output is wrapped and
+validated while its canonical success record is prepared, before append and reducer apply.
 
 ## Two constructors: infer vs. check
 
@@ -60,9 +63,9 @@ build_value_as(declared, v)  → wrap v as `declared`, RAISE on mismatch (check)
 ```
 
 `build_value` infers the kind (`bool` checked before `int`; empty list → `list[Any]`).
-`build_value_as` is the **write-boundary check** `VariablePool.set` calls — it validates
-against the declared type, raising `TypeCheckError`; the only coercion is widening (`int`
-fills a `float` slot).
+`build_value_as` is the declared-type check used by both `VariablePool.set` and the
+run log's `canonical_typed` success-record boundary. It raises `TypeCheckError` on a
+mismatch; the only coercion is widening (`int` fills a `float` slot).
 
 ## `Type` — structure beyond the bare tag
 
@@ -101,10 +104,12 @@ The runtime state primitive the engine owns. Narrow by design:
   [Expressions](expressions.md)). Because values are typed *objects*,
   `${x.output.ratio}` traverses **into** an object.
 - **Lossless serialization.** `dumps()`/`loads()` round-trip the whole pool through the
-  `AnyValue` union — the state half of a durable checkpoint.
+  `AnyValue` union. The run-record codec uses the same typed representation for the
+  complete initial pool and for each committed node output.
 
 ## Why this shape
 
-- **Durable by construction** — the discriminated union makes checkpoints lossless.
+- **Durable by construction** — the discriminated union makes canonical record replay
+  lossless.
 - **One vocabulary** — `ValueKind.value` is author token, wire tag, and display name at once.
 - **Fail at the boundary** — nodes stay pure; `build_value_as` catches a wrong type early.

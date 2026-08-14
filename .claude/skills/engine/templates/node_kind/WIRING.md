@@ -11,9 +11,9 @@ for an **authorable leaf** kind (one a flow names directly, like `code`/`tool`).
 > checklist is for a leaf you want authors to write.
 >
 > A normal authorable leaf returns `Output` or `Route` and skips the conditional
-> spawner step below. `Pause` is dormant custom/artificial compatibility only. If
-> the new kind can return `Grow`, it is a spawner as well as authorable and must
-> follow §2a; that requirement does not apply to ordinary leaves.
+> spawner step below. If the new kind can return `Grow`, it is a spawner as well
+> as authorable and must follow §2a; that requirement does not apply to ordinary
+> leaves.
 
 Use `code` (`compose/nodes/code.py`, the simplest real leaf) as the reference
 implementation throughout. Build bottom-up by dependency, **one test green before the

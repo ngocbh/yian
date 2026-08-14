@@ -1,10 +1,9 @@
 """Structural-purity lock-in: scratch is fully eliminated.
 
 AGENT owns its live loop, while HUMAN_INPUT and WAIT block and return ``Output``.
-Only a generic artificial ``Pause`` receives an engine-delivered value, so no node
-reads scratch.
-This pins that the field + helpers are gone and that no node source even references the
-word `scratch`.
+No node receives an engine-delivered continuation value or reads scratch. This pins
+that the field + helpers are gone and that no node source even references the word
+`scratch`.
 """
 
 import importlib

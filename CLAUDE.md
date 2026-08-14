@@ -55,8 +55,10 @@ engine or flow change.
   does not choose the graph.
 - `runtime/` stays kind-blind. Kind-specific work belongs in the node. The kind
   census in `tests/engine/test_kind_census.py` must stay at zero.
-- Nodes do not write the variable pool. They return one of `Output`, `Route`,
-  `Pause`, or `Grow`; the engine binds the result.
+- Nodes do not write the variable pool. They return one of `Output`, `Route`, or
+  `Grow`; the engine records and binds the result.
+- Runtime transitions stay record-authoritative: prepare and validate, append to
+  `RunLog`, then apply through the reducer. Recovery folds the same reducer.
 - Keep imports acyclic: `events <- typesys <- nodes <- compile <- compose`.
 - Prefer general, domain-neutral nodes and combinators over one-off behavior.
 - Put new external dependencies behind small injected callables. Agent modes are

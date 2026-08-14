@@ -357,7 +357,7 @@ def test_output_enforced_coerces_and_types_storage():
 def test_multi_output_record_is_a_closed_type():
     # >=2 declared outputs -> a CLOSED record Type ("several outputs = one object"):
     # all fields required, no extras. A node returning a MISSING or an EXTRA field fails
-    # at the write boundary (NodeExecutionError -> RunFailed); the exact object stores whole.
+    # at success preparation (durable NodeFailed -> RunFailed); the exact object stores whole.
     rec = Type(
         kind=ValueKind.OBJECT,
         fields={"a": Type.scalar(ValueKind.STRING), "b": Type.scalar(ValueKind.STRING)},

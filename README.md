@@ -126,9 +126,8 @@ ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--quiet] [--verbose] [
   labelled with the input's type, a required (`*`)/optional mark, and any default.
 - `HUMAN_INPUT` and an authored agent `ask_user` tool block inside the live node
   call while the CLI's main-thread broker collects the answer. `WAIT` likewise
-  blocks a worker until its absolute UTC deadline and returns `None`. None of
-  these authorable interactions pauses the graph; only a dormant generic
-  `Pause`/checkpoint API for custom or artificial nodes remains until issue #117.
+  blocks a worker until its absolute UTC deadline and returns `None`. Each
+  interaction completes inside the same live node invocation.
 - Per-node progress prints to **stderr**: each running node shows a spinner that
   becomes a green `✓` on success or a red `✗` (plus the error) on failure.
   `--quiet`/`-q` suppresses it; `--verbose`/`-v` also prints each node's output.
@@ -222,6 +221,14 @@ loaded = load_flow(open("hello.yaml").read(), search_paths=["."])
 result = run_flow(loaded, {"name": "Ada"})
 print(result.status, result.output)
 ```
+
+Pass `log="run.jsonl"` to create an authoritative append-only JSONL history for
+the run. If the process is interrupted, load the same flow in a later process and
+recover the durable prefix with `resume_flow(loaded, log="run.jsonl")` from
+`agent_composer.run`. A fresh durable run never overwrites an existing path.
+Run logs retain canonical inputs, node outputs (including human/tool/model data),
+resolved model configuration, and failure tracebacks. Treat them as sensitive:
+choose an access-controlled path and do not commit or publish them.
 
 ## Develop & test
 

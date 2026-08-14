@@ -79,6 +79,15 @@ class _RouteNode(Node):
         return Route("chosen")
 
 
+class _InvalidRouteNode(Node):
+    """Return a handle absent from this node's outgoing topology."""
+
+    kind = NodeKind.CASE
+
+    def _run_impl(self, inputs: dict[str, Any]) -> Route:
+        return Route("absent")
+
+
 class _GrowNode(Node):
     """Return one seed-first expansion through the raw-outcome arm."""
 
@@ -405,6 +414,47 @@ def test_success_preparation_runtime_error_remains_exact_host_failure(monkeypatc
     assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
 
 
+@pytest.mark.parametrize(
+    ("prepare_name", "node_factory"),
+    [
+        (
+            "prepare_node_succeeded",
+            lambda: _ActionNode("work", lambda: "done"),
+        ),
+        ("prepare_node_routed", lambda: _RouteNode("work")),
+        ("prepare_expanded", lambda: _GrowNode("work")),
+    ],
+    ids=("success", "route", "growth"),
+)
+@pytest.mark.parametrize("error_type", [TypeError, ValueError])
+def test_transition_preparation_data_shaped_programming_error_remains_exact_host_failure(
+    monkeypatch,
+    prepare_name,
+    node_factory,
+    error_type,
+):
+    expected = error_type("transition reducer programming fault")
+    state, log = _initialized(
+        _flow([node_factory()]),
+        num_workers=0,
+    )
+    real_prepare = getattr(engine_module, prepare_name)
+
+    def broken_prepare(*args, **kwargs):
+        if args[1] == "work":
+            raise expected
+        return real_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(engine_module, prepare_name, broken_prepare)
+
+    with pytest.raises(error_type) as caught:
+        list(_dispatcher(state, log, num_workers=0).run())
+
+    assert caught.value is expected
+    assert tuple(state.in_flight) == ("work",)
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
+
+
 def test_serial_yields_and_callbacks_follow_post_durable_observer_order():
     state, log = _initialized(
         _flow([_ActionNode("work", lambda: "done")]),
@@ -484,6 +534,19 @@ def test_route_raw_outcome_is_prepared_committed_and_reduced():
     assert isinstance(state.result, RunSucceeded)
 
 
+def test_invalid_route_handle_is_a_durable_node_failure():
+    state, log = _initialized(_flow([_InvalidRouteNode("route")]), num_workers=0)
+
+    events = list(_dispatcher(state, log, num_workers=0).run())
+
+    assert isinstance(events[-2], NodeFailed)
+    assert events[-2].node_id == "route"
+    assert events[-2].error_type == "ValueError"
+    assert "matches no outgoing edge" in events[-2].error
+    assert isinstance(events[-1], RunFailed)
+    assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
+
+
 def test_grow_raw_outcome_uses_injected_builder_and_flat_record():
     state, log = _initialized(_flow([_GrowNode("spawn")]), num_workers=0)
     dispatcher = _RecordedDispatcher(
@@ -530,6 +593,31 @@ def test_injected_grow_builder_runtime_error_is_a_durable_node_failure():
         "RuntimeError",
     )
     assert isinstance(events[-1], RunFailed)
+    failure = tuple(log)[-1].record
+    assert isinstance(failure, NodeFailedRecord)
+    assert failure.traceback is not None
+    assert failure.traceback.rstrip().endswith(
+        "RuntimeError: builder rejected seed"
+    )
+
+
+def test_invalid_grow_builder_return_is_a_durable_node_failure():
+    state, log = _initialized(_flow([_GrowNode("spawn")]), num_workers=0)
+
+    events = list(
+        _RecordedDispatcher(
+            state,
+            log,
+            grow_builder=lambda _spawner, _seed: object(),
+            num_workers=0,
+        ).run()
+    )
+
+    assert isinstance(events[-2], NodeFailed)
+    assert events[-2].node_id == "spawn"
+    assert events[-2].error_type == "TypeError"
+    assert events[-2].error == "grow_builder must return a Flow"
+    assert isinstance(events[-1], RunFailed)
     assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
 
 
@@ -559,22 +647,25 @@ def test_positive_worker_count_never_exceeds_the_submission_bound():
 
 
 def test_parallel_outcomes_commit_in_completion_message_order():
-    release_slow = threading.Event()
+    fast_committed = threading.Event()
 
     def slow():
-        assert release_slow.wait(2)
+        assert fast_committed.wait(2)
         return "slow"
 
     def fast():
-        release_slow.set()
         return "fast"
+
+    def observe(event):
+        if isinstance(event, NodeSucceeded) and event.node_id == "fast":
+            fast_committed.set()
 
     state, log = _initialized(
         _flow([_ActionNode("slow", slow), _ActionNode("fast", fast)]),
         num_workers=2,
     )
 
-    list(_dispatcher(state, log, num_workers=2).run())
+    list(_dispatcher(state, log, num_workers=2, on_event=observe).run())
 
     completed = [
         envelope.record.node_id

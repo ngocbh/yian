@@ -60,6 +60,7 @@ from agent_composer.runtime.log import RunLog
 from agent_composer.runtime.state import (
     PreparedTransition,
     RunState,
+    _NodeDataError,
     commit_prepared,
     prepare_expanded,
     prepare_node_failed,
@@ -351,8 +352,12 @@ class _RecordedDispatcher:
                     outcome.value,
                     commit_as=outcome.commit_as,
                 )
-            except (TypeError, ValueError) as exc:
-                prepared = self._prepare_data_failure(node_id, exc)
+            except _NodeDataError as wrapped:
+                prepared = self._prepare_data_failure(
+                    node_id,
+                    wrapped.original,
+                    traceback_text=self._format_exception(wrapped.original),
+                )
         elif isinstance(outcome, Route):
             try:
                 prepared = prepare_node_routed(
@@ -360,8 +365,12 @@ class _RecordedDispatcher:
                     node_id,
                     outcome.handle,
                 )
-            except (TypeError, ValueError) as exc:
-                prepared = self._prepare_data_failure(node_id, exc)
+            except _NodeDataError as wrapped:
+                prepared = self._prepare_data_failure(
+                    node_id,
+                    wrapped.original,
+                    traceback_text=self._format_exception(wrapped.original),
+                )
         else:
             try:
                 prepared = prepare_expanded(
@@ -371,9 +380,17 @@ class _RecordedDispatcher:
                     self._build_growth,
                 )
             except _GrowBuilderError as wrapped:
-                prepared = self._prepare_data_failure(node_id, wrapped.original)
-            except (TypeError, ValueError) as exc:
-                prepared = self._prepare_data_failure(node_id, exc)
+                prepared = self._prepare_data_failure(
+                    node_id,
+                    wrapped.original,
+                    traceback_text=self._format_exception(wrapped.original),
+                )
+            except _NodeDataError as wrapped:
+                prepared = self._prepare_data_failure(
+                    node_id,
+                    wrapped.original,
+                    traceback_text=self._format_exception(wrapped.original),
+                )
         return commit_prepared(self.log, self.state, prepared)
 
     def _build_growth(self, spawner: Any, seed: Any) -> Flow:
@@ -389,6 +406,8 @@ class _RecordedDispatcher:
         self,
         node_id: str,
         exception: Exception,
+        *,
+        traceback_text: str | None = None,
     ) -> PreparedTransition:
         """Prepare one durable failure from invalid node-produced transition data."""
         locator = getattr(exception, "locator", None)
@@ -400,7 +419,22 @@ class _RecordedDispatcher:
             error_type=type(exception).__name__,
             locator=locator,
             range=range_,
-            traceback=_tb.format_exc(),
+            traceback=(
+                traceback_text
+                if traceback_text is not None
+                else _tb.format_exc()
+            ),
+        )
+
+    @staticmethod
+    def _format_exception(exception: Exception) -> str:
+        """Format a marker's original traceback without the private wrapper tail."""
+        return "".join(
+            _tb.format_exception(
+                type(exception),
+                exception,
+                exception.__traceback__,
+            )
         )
 
     def _evaluate(

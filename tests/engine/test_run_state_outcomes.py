@@ -421,24 +421,26 @@ def test_route_skip_join_matches_control_data_ordering_and_wait_semantics():
 
 
 @pytest.mark.parametrize(
-    ("node_id", "handle", "match"),
+    ("node_id", "handle", "match", "node_data"),
     [
-        ("missing", "yes", "does not exist"),
-        ("chosen", "yes", "not in-flight"),
-        ("router", "missing", "matches no outgoing edge"),
+        ("missing", "yes", "does not exist", False),
+        ("chosen", "yes", "not in-flight", False),
+        ("router", "missing", "matches no outgoing edge", True),
     ],
 )
 def test_route_rejects_unknown_router_frontier_or_handle(
     node_id: str,
     handle: str,
     match: str,
+    node_data: bool,
 ):
     state, log = _route_in_flight()
     before = _state_snapshot(state)
 
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(ValueError, match=match) as caught:
         prepare_node_routed(state, node_id, handle)
 
+    assert isinstance(caught.value, state_module._NodeDataError) is node_data
     assert _state_snapshot(state) == before
     assert log.next_sequence == 4
 
@@ -979,7 +981,7 @@ def test_success_rejects_type_or_missing_target_before_append(
     before = _state_snapshot(state)
     sequence = log.next_sequence
 
-    with pytest.raises(ValueError, match=match):
+    with pytest.raises(ValueError, match=match) as caught:
         prepare_node_succeeded(
             state,
             "filler",
@@ -987,6 +989,7 @@ def test_success_rejects_type_or_missing_target_before_append(
             commit_as=commit_as,
         )
 
+    assert isinstance(caught.value, state_module._NodeDataError)
     assert _state_snapshot(state) == before
     assert log.next_sequence == sequence
 
@@ -997,11 +1000,25 @@ def test_success_rejects_a_previously_settled_target_edge_before_append():
     before = _state_snapshot(state)
     sequence = log.next_sequence
 
-    with pytest.raises(ValueError, match="outgoing edge .* must be UNKNOWN"):
+    with pytest.raises(ValueError, match="outgoing edge .* must be UNKNOWN") as caught:
         prepare_node_succeeded(state, "filler", ("valid",))
 
+    assert not isinstance(caught.value, state_module._NodeDataError)
     assert _state_snapshot(state) == before
     assert log.next_sequence == sequence
+
+
+def test_success_treats_an_invalid_baked_target_as_a_host_invariant_error():
+    state, log = _redirect_ready()
+    state.flow.nodes["filler"].commit_as = "missing"
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match="does not exist") as caught:
+        prepare_node_succeeded(state, "filler", ("valid",))
+
+    assert not isinstance(caught.value, state_module._NodeDataError)
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == 4
 
 
 def test_success_rejects_a_settled_newly_ready_successor_before_append():

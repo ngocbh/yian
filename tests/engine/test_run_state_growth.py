@@ -792,7 +792,7 @@ def test_growth_rejects_invalid_fragments_atomically(case: str):
     state, log = _initialized_spawner()
     before = _snapshot(state)
 
-    with pytest.raises((TypeError, ValueError)):
+    with pytest.raises((TypeError, ValueError)) as caught:
         prepare_expanded(
             state,
             "spawn",
@@ -800,24 +800,47 @@ def test_growth_rejects_invalid_fragments_atomically(case: str):
             lambda spawner, seed: _invalid_fragment(case),
         )
 
+    assert isinstance(caught.value, state_module._NodeDataError)
     assert _snapshot(state) == before
     assert log.next_sequence == 4
 
 
 @pytest.mark.parametrize(
-    ("grow", "builder", "error"),
+    ("grow", "builder", "error", "node_data"),
     [
-        (Grow(seed={}, prune={"old"}), lambda spawner, seed: _fragment(spawner.id), TypeError),
-        (Grow(seed={}, prune=frozenset({""})), lambda spawner, seed: _fragment(spawner.id), ValueError),
-        (Grow(seed={"bad": {1, 2}}), lambda spawner, seed: _fragment(spawner.id), ValueError),
-        (Grow(seed={}), None, TypeError),
+        (
+            Grow(seed={}, prune={"old"}),
+            lambda spawner, seed: _fragment(spawner.id),
+            TypeError,
+            True,
+        ),
+        (
+            Grow(seed={}, prune=frozenset({""})),
+            lambda spawner, seed: _fragment(spawner.id),
+            ValueError,
+            True,
+        ),
+        (
+            Grow(seed={"bad": {1, 2}}),
+            lambda spawner, seed: _fragment(spawner.id),
+            ValueError,
+            True,
+        ),
+        (Grow(seed={}), None, TypeError, False),
     ],
 )
-def test_growth_requires_exact_live_carriers(grow: Grow, builder: Any, error: type[Exception]):
+def test_growth_requires_exact_live_carriers(
+    grow: Grow,
+    builder: Any,
+    error: type[Exception],
+    node_data: bool,
+):
     state, _ = _initialized_spawner()
 
-    with pytest.raises(error):
+    with pytest.raises(error) as caught:
         prepare_expanded(state, "spawn", grow, builder)
+
+    assert isinstance(caught.value, state_module._NodeDataError) is node_data
 
 
 def test_growth_enforces_peak_node_budget_before_same_transition_pruning(monkeypatch):
@@ -873,7 +896,7 @@ def test_growth_rejects_invalid_exact_depth_deltas(delta: Any):
     state, _ = _initialized_spawner(_parent_flow(spawner))
     before = _snapshot(state)
 
-    with pytest.raises(ValueError, match="grow_depth_delta"):
+    with pytest.raises(ValueError, match="grow_depth_delta") as caught:
         prepare_expanded(
             state,
             "spawn",
@@ -881,6 +904,24 @@ def test_growth_rejects_invalid_exact_depth_deltas(delta: Any):
             lambda node, seed: _fragment(node.id),
         )
 
+    assert isinstance(caught.value, state_module._NodeDataError)
+    assert _snapshot(state) == before
+
+
+def test_growth_treats_corrupt_stored_depth_as_a_host_invariant_error():
+    state, _ = _initialized_spawner()
+    state.depth["spawn"] = "corrupt"
+    before = _snapshot(state)
+
+    with pytest.raises(ValueError, match="invalid parent depth") as caught:
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda node, seed: _fragment(node.id),
+        )
+
+    assert not isinstance(caught.value, state_module._NodeDataError)
     assert _snapshot(state) == before
 
 

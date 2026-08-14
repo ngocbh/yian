@@ -14,7 +14,7 @@ import copy
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 from agent_composer._state import NodeState
 from agent_composer.compile.manifest import expansion_digest
@@ -67,6 +67,31 @@ MAX_REF_DEPTH = 5
 
 GrowBuilder = Callable[[Node, Any], Flow]
 """Injected kind-aware interpreter from a spawner and canonical seed to a fragment."""
+
+
+class _NodeDataError(Exception):
+    """Private marker for an outcome-owned value rejected before durability."""
+
+    def __init__(self, original: Exception) -> None:
+        super().__init__(str(original))
+        self.original = original
+
+
+class _NodeDataTypeError(_NodeDataError, TypeError):
+    """Node-data rejection retaining compatibility with ``TypeError`` callers."""
+
+
+class _NodeDataValueError(_NodeDataError, ValueError):
+    """Node-data rejection retaining compatibility with ``ValueError`` callers."""
+
+
+def _raise_node_data(original: Exception) -> NoReturn:
+    """Raise the built-in-compatible marker matching one outcome-data error."""
+    if isinstance(original, TypeError):
+        raise _NodeDataTypeError(original) from original
+    if isinstance(original, ValueError):
+        raise _NodeDataValueError(original) from original
+    raise _NodeDataError(original) from original
 
 
 class RunState:
@@ -684,9 +709,9 @@ def prepare_node_succeeded(
     if type(node_id) is not str:
         raise TypeError("node_id must be a string")
     if commit_as is not None and type(commit_as) is not str:
-        raise TypeError("commit_as must be a string or None")
+        _raise_node_data(TypeError("commit_as must be a string or None"))
     if commit_as == "":
-        raise ValueError("commit_as must be non-empty when supplied")
+        _raise_node_data(ValueError("commit_as must be non-empty when supplied"))
     _require_initialized_nonterminal(state)
     _require_succeeding_node(state, node_id)
 
@@ -695,11 +720,20 @@ def prepare_node_succeeded(
         raise ValueError(f"node {node_id!r} has an invalid baked commit target")
     target = commit_as if commit_as is not None else node_target or node_id
     if target not in state.flow.nodes:
+        if commit_as is not None:
+            _raise_node_data(
+                ValueError(
+                    f"success commit target {target!r} does not exist in the flow"
+                )
+            )
         raise ValueError(f"success commit target {target!r} does not exist in the flow")
-    value_wire, typed = canonical_typed(
-        output,
-        state.flow.nodes[target].output_type,
-    )
+    try:
+        value_wire, typed = canonical_typed(
+            output,
+            state.flow.nodes[target].output_type,
+        )
+    except (TypeError, ValueError) as exc:
+        _raise_node_data(exc)
     return _prepare_success_transition(
         state,
         NodeSucceededRecord(
@@ -743,9 +777,9 @@ def prepare_node_routed(
     if not node_id:
         raise ValueError("node_id must be non-empty")
     if type(handle) is not str:
-        raise TypeError("handle must be a string")
+        _raise_node_data(TypeError("handle must be a string"))
     if not handle:
-        raise ValueError("handle must be non-empty")
+        _raise_node_data(ValueError("handle must be non-empty"))
     _require_initialized_nonterminal(state)
     _require_routing_node(state, node_id)
     return _prepare_route_transition(
@@ -794,22 +828,28 @@ def prepare_expanded(
     if not callable(grow_builder):
         raise TypeError("grow_builder must be callable")
     if type(grow.prune) is not frozenset:
-        raise TypeError("Grow.prune must be a frozenset of node IDs")
+        _raise_node_data(TypeError("Grow.prune must be a frozenset of node IDs"))
     if any(type(prune_id) is not str for prune_id in grow.prune):
-        raise TypeError("Grow.prune must contain only strings")
+        _raise_node_data(TypeError("Grow.prune must contain only strings"))
     if any(not prune_id for prune_id in grow.prune):
-        raise ValueError("Grow.prune node IDs must be non-empty")
+        _raise_node_data(ValueError("Grow.prune node IDs must be non-empty"))
     _require_initialized_nonterminal(state)
     _require_expanding_node(state, node_id)
 
-    seed_wire, builder_seed = canonical_seed(grow.seed)
+    try:
+        seed_wire, builder_seed = canonical_seed(grow.seed)
+    except (TypeError, ValueError) as exc:
+        _raise_node_data(exc)
     fragment = _build_growth_fragment(
         state.flow.nodes[node_id],
         builder_seed,
         grow_builder,
     )
     validated_fragment = _validate_growth_fragment(state, fragment)
-    digest = expansion_digest(fragment)
+    try:
+        digest = expansion_digest(fragment)
+    except Exception as exc:  # noqa: BLE001 - manifest rejects node-owned topology
+        _raise_node_data(exc)
     return _prepare_growth_transition(
         state,
         NodeExpandedRecord(
@@ -1903,10 +1943,15 @@ def _build_growth_fragment(
         raise TypeError("growth spawner deepcopy must remain a Node")
     built = grow_builder(builder_spawner, builder_seed)
     if not isinstance(built, Flow):
-        raise TypeError("grow_builder must return a Flow")
-    fragment = copy.deepcopy(built)
+        _raise_node_data(TypeError("grow_builder must return a Flow"))
+    try:
+        fragment = copy.deepcopy(built)
+    except Exception as exc:  # noqa: BLE001 - builder-owned fragment detachment
+        _raise_node_data(exc)
     if not isinstance(fragment, Flow):  # defensive against a hostile deepcopy hook
-        raise TypeError("grow_builder fragment deepcopy must remain a Flow")
+        _raise_node_data(
+            TypeError("grow_builder fragment deepcopy must remain a Flow")
+        )
     return fragment
 
 
@@ -1920,9 +1965,11 @@ def _prepare_growth_topology(
     """Validate growth and materialize every final topology/state container."""
     new_node_ids, new_edge_ids = validated_fragment
     if len(state.flow.nodes) + len(new_node_ids) > MAX_TOTAL_NODES:
-        raise ValueError(
-            f"expansion exceeded node budget ({MAX_TOTAL_NODES}) at spawner "
-            f"{record.spawner_id!r}"
+        _raise_node_data(
+            ValueError(
+                f"expansion exceeded node budget ({MAX_TOTAL_NODES}) at spawner "
+                f"{record.spawner_id!r}"
+            )
         )
     derived_depth = _validated_growth_depth(state, record.spawner_id)
     prune_ids = frozenset(record.prune_ids)
@@ -2025,6 +2072,19 @@ def _prepare_growth_topology(
 
 
 def _validate_growth_fragment(
+    state: RunState,
+    fragment: Flow,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Mark only fragment-shape rejections as node-owned transition data."""
+    try:
+        return _validate_growth_fragment_data(state, fragment)
+    except _NodeDataError:
+        raise
+    except (TypeError, ValueError) as exc:
+        _raise_node_data(exc)
+
+
+def _validate_growth_fragment_data(
     state: RunState,
     fragment: Flow,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -2278,22 +2338,47 @@ def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
     if delta is None:
         return None
     if type(delta) is not int or delta < 0:
-        raise ValueError(
-            f"spawner {spawner_id!r} grow_depth_delta must be None, 0, or a "
-            "positive integer"
+        _raise_node_data(
+            ValueError(
+                f"spawner {spawner_id!r} grow_depth_delta must be None, 0, or a "
+                "positive integer"
+            )
         )
     parent_depth = state.depth.get(spawner_id, 0)
     if type(parent_depth) is not int or parent_depth < 0:
         raise ValueError(f"spawner {spawner_id!r} has an invalid parent depth")
     depth = parent_depth + delta
     if delta > 0 and depth > MAX_REF_DEPTH:
-        raise ValueError(
-            f"expansion exceeded MAX_REF_DEPTH ({MAX_REF_DEPTH}) at {spawner_id!r}"
+        _raise_node_data(
+            ValueError(
+                f"expansion exceeded MAX_REF_DEPTH ({MAX_REF_DEPTH}) at "
+                f"{spawner_id!r}"
+            )
         )
     return depth
 
 
 def _validate_growth_prune(
+    state: RunState,
+    spawner_id: str,
+    prune_ids: frozenset[str],
+    new_node_ids: frozenset[str],
+) -> None:
+    """Mark only unsafe node-requested prunes as outcome-data errors."""
+    try:
+        _validate_growth_prune_data(
+            state,
+            spawner_id,
+            prune_ids,
+            new_node_ids,
+        )
+    except _NodeDataError:
+        raise
+    except (TypeError, ValueError) as exc:
+        _raise_node_data(exc)
+
+
+def _validate_growth_prune_data(
     state: RunState,
     spawner_id: str,
     prune_ids: frozenset[str],
@@ -2342,6 +2427,20 @@ def _validate_growth_prune(
 
 
 def _validate_prune_dependencies(
+    state: RunState,
+    fragment: Flow,
+    prune_ids: frozenset[str],
+) -> None:
+    """Mark node-requested prune dependency conflicts as outcome-data errors."""
+    try:
+        _validate_prune_dependencies_data(state, fragment, prune_ids)
+    except _NodeDataError:
+        raise
+    except (TypeError, ValueError) as exc:
+        _raise_node_data(exc)
+
+
+def _validate_prune_dependencies_data(
     state: RunState,
     fragment: Flow,
     prune_ids: frozenset[str],
@@ -2563,9 +2662,11 @@ def _prepare_route_delta(
         if (edge.source_handle or "default") == record.handle
     )
     if not matched:
-        raise ValueError(
-            f"NodeRouted handle {record.handle!r} matches no outgoing edge of "
-            f"{record.node_id!r}"
+        _raise_node_data(
+            ValueError(
+                f"NodeRouted handle {record.handle!r} matches no outgoing edge of "
+                f"{record.node_id!r}"
+            )
         )
 
     # A LIFO stack with reversed pushes exactly reproduces recursive stored-order DFS

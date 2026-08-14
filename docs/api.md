@@ -168,6 +168,26 @@ the current call.
     log makes engine state deterministic, but it cannot make an interrupted
     external effect exactly-once.
 
+## CLI path policy
+
+The Python API remains path-neutral: `run_flow(..., log=None)` uses memory and a
+caller chooses any durable path explicitly. The `ac` host adds a user-facing
+policy on top:
+
+- fresh `ac run FLOW` creates and reports
+  `~/.agent_composer/runs/<run_id>.jsonl` unless `--log PATH` selects another new
+  file;
+- `ac run FLOW --resume PATH` calls the same recovery boundary without accepting
+  fresh inputs, a second log path, or provider/model configuration;
+- omitting `-w` on resume preserves the recorded worker count, while an explicit
+  value affects the new segment only;
+- each `ac chat` attempt, including a failed-turn restart, receives a separate
+  reported default path.
+
+The default CLI directories are mode `0700`; `JsonlRunLog` creates files with
+mode `0600`. See [the CLI guide](cli.md#durable-logs-and-recovery) for commands
+and the log-sensitivity warning.
+
 ## Blocking human interaction
 
 An authored `human_input` node and an agent granted `tools: [ask_user]` call the

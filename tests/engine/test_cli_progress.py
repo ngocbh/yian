@@ -6,7 +6,9 @@ CliRunner test confirms the `--verbose` flag is wired and the run still succeeds
 """
 
 from io import StringIO
+from pathlib import Path
 
+import pytest
 import typer
 from rich.console import Console
 from typer.testing import CliRunner
@@ -115,6 +117,14 @@ def test_expanded_clears_spinner_without_check():
 
 
 _FLOW = "id: f\nname: f\nnodes:\n  a: {kind: agent, prompt: hi}\noutput: ${a.output}\n"
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cli_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep default run logs from reaching the developer's real home."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
 
 
 def _app():

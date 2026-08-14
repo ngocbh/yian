@@ -37,6 +37,11 @@ EXAMPLE_CHAT = Path(__file__).resolve().parents[2] / "examples" / "chat.yaml"
 _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
+def _chat_logs() -> list[Path]:
+    """Return the durable top-level chat attempt logs in the isolated test home."""
+    return sorted((Path.home() / ".agent_composer" / "runs").glob("*.jsonl"))
+
+
 class _FakeModel:
     """A stand-in chat model: plain agent mode calls `model.invoke(msgs).content`."""
 
@@ -142,6 +147,9 @@ def test_chat_two_turns(tmp_path, monkeypatch):
     # answer must render before the next prompt becomes visible.
     first_reply = r.output.index("hello back")
     assert r.output.find("You:", first_reply + len("hello back")) > first_reply
+    logs = _chat_logs()
+    assert len(logs) == 1
+    assert f"Run log: {logs[0]}" in r.stderr
 
 
 def test_chat_eof_is_normalized_to_flow_owned_exit(monkeypatch):
@@ -670,6 +678,10 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     assert "first reply" in recovered_prompt
     assert "recovered turn" in recovered_prompt
     assert "failed turn" not in recovered_prompt
+    logs = _chat_logs()
+    assert len(logs) == 2
+    assert len({path.stem for path in logs}) == 2
+    assert all(f"Run log: {path}" in r.stderr for path in logs)
     # Recovery installed a fresh process-owned handler, which proves the failed
     # lifecycle released its owner; the final lifecycle releases its owner too.
     assert "ask_user" not in tools_module.TOOL_REGISTRY
@@ -690,6 +702,22 @@ def test_chat_missing_key_no_tty_exits_clean(monkeypatch):
     assert isinstance(r.exception, SystemExit)          # a clean typer.Exit, not a crash
     assert not isinstance(r.exception, RuntimeError)     # the real regression guard
     assert "OPENAI_API_KEY" in _ANSI_SGR.sub("", r.stderr)  # the red key message, on stderr
+
+
+def test_chat_log_host_error_exits_cleanly(monkeypatch):
+    """A default-path failure is a concise CLI error, not a raw traceback."""
+    monkeypatch.setattr(chat_command, "_ensure_provider_keys", lambda *args: None)
+
+    def deny_default_path(run_id):
+        raise PermissionError("chat run directory is not writable")
+
+    monkeypatch.setattr(chat_command, "_default_run_log_path", deny_default_path)
+    result = runner.invoke(app, ["chat", str(EXAMPLE_CHAT)], input="")
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "chat failed: chat run directory is not writable" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_chat_malformed_flow_exits_clean(tmp_path):

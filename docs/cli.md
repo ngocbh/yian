@@ -1,16 +1,54 @@
 # The `ac` CLI
 
-`ac` runs a flow file: it loads the YAML, gathers the inputs, drives the flow to
-a terminal state, and prints the output.
+`ac` runs a flow file: it loads the YAML, gathers inputs for a fresh run or
+recovers them from a durable log, drives the flow to a terminal state, and
+prints the output.
 
 ```console
-ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--quiet] [--verbose] [--num-workers N] [--provider NAME] [--model NAME] [--engine-trace]
+ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--log PATH] [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
+ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
 ```
+
+## Durable logs and recovery
+
+Every fresh CLI run writes an authoritative JSONL log and reports its path on
+stderr, including under `--quiet`:
+
+```console
+# fresh log: ~/.agent_composer/runs/<run_id>.jsonl
+ac run flow.yaml --input topic=climate
+
+# choose another new path (it must not already exist)
+ac run flow.yaml --input topic=climate --log ./climate.jsonl
+
+# recover a terminal or unfinished prefix with the same authored flow
+ac run flow.yaml --resume ./climate.jsonl
+```
+
+The CLI creates `~/.agent_composer` and its `runs/` directory with mode `0700`;
+the runtime creates each log exclusively with mode `0600`. A log can retain
+canonical inputs, node outputs (including model, tool, and human data), resolved
+model configuration, and failure tracebacks. Treat it as sensitive data: do not
+commit or publish it.
+
+Recovery reads the original inputs, run identity, and resolved model map from the
+log. `--resume` therefore rejects `--input`, `--inputs`, `--provider`, `--model`,
+and `--log` before input prompts or provider setup. An already terminal log is
+read-only and prints its recorded result. An unfinished log appends a resume
+segment and retries any node with a durable start but no durable outcome.
+
+Expected host-side failures while creating or recovering a log (for example a
+corrupt, mismatched, or locked log) are reported as concise errors. Pass
+`--engine-trace` when debugging the engine to include the Python traceback.
+
+`ac chat` uses the same default directory and reports one new path for its initial
+run. If a failed turn restarts the immutable chat flow from the last completed
+transcript, that restart gets a separate log rather than reusing the failed run.
 
 ## Supplying inputs
 
-A flow declares typed `input:` fields. You can supply them three ways, and they
-layer in this order (later overrides earlier):
+A fresh flow declares typed `input:` fields. You can supply them three ways, and
+they layer in this order (later overrides earlier):
 
 1. **`--inputs file.json`** — a JSON object of `{ "key": value, ... }`.
 2. **`--input k=v`** — one input, repeatable. Values arrive as strings and are
@@ -107,20 +145,25 @@ does not cancel the surrounding conversation.
 - Pass `--verbose` / `-v` to also print **each node's output** under its check as
   it finishes — handy for seeing the intermediate values a multi-node flow
   produces, not just the final result.
+- The durable log path is always reported, even under `--quiet`, so an interrupted
+  run remains discoverable.
 
 ## Concurrency (`--num-workers`)
 
-By default the engine runs single-threaded: ready nodes execute one at a time in a
-deterministic order. Pass `--num-workers N` / `-w N` to run with a worker pool of
-size `N`, so **independent** ready nodes — the parallel arms of a fan-out — execute
-concurrently:
+Fresh runs default to single-threaded execution: ready nodes run one at a time in
+a deterministic order. Pass `--num-workers N` / `-w N` to run with a worker pool
+of size `N`, so **independent** ready nodes — the parallel arms of a fan-out —
+execute concurrently:
 
 ```console
 # the debate diamond argues both sides at once instead of one after the other
 ac run examples/debate.yaml --input question="Adopt a monorepo?" --num-workers 4
 ```
 
-- `0` (the default) is the single-threaded, deterministic drain.
+- A fresh run with no worker flag uses `0`, the single-threaded deterministic
+  drain. A resumed run with no flag preserves the latest count in its log.
+- On resume, an explicit `-w N` records `N` for the new segment and changes only
+  future scheduling; it does not rewrite historical work.
 - `>=1` spawns that many workers. Nodes are pure executors and a single-writer
   dispatcher owns all state, so the **terminal output is the same** whatever the
   worker count — only the intra-run scheduling changes (and wall-clock time, when a
@@ -128,10 +171,8 @@ ac run examples/debate.yaml --input question="Adopt a monorepo?" --num-workers 4
 - Each blocking HUMAN_INPUT, agent `ask_user`, or future-deadline WAIT occupies one worker;
   independent ready nodes use any remaining workers and wait when all are occupied.
 
-The dispatcher records every node start and outcome in an authoritative
-process-local run log before publishing the progress event that the CLI renders.
-The Python API can instead select a durable JSONL log and recover it; the current
-CLI command always starts a fresh process-local run.
+The dispatcher appends every node start and outcome to the selected authoritative
+log before publishing the progress event that the CLI renders.
 
 ## Exit codes
 
@@ -140,7 +181,10 @@ CLI command always starts a fresh process-local run.
 | Flow succeeded | `0` |
 | Flow failed | `1` (error printed to stderr) |
 | Flow failed to compile (bad YAML) | `1` (located error printed to stderr) |
+| Run-log creation or recovery failed | `1` (concise error printed to stderr) |
 | Run cancelled at the input prompt | `1` |
+| Invalid option or forbidden resume combination | `2` |
+| Run interrupted with Ctrl-C during execution | `130` |
 
 ## Compile errors
 

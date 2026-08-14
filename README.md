@@ -113,9 +113,18 @@ haven't installed raises a clear `pip install agent-composer[...]` hint.
 ## The `ac` CLI
 
 ```console
-ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--quiet] [--verbose] [--num-workers N] [--engine-trace]
+ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--log PATH] [-w N] [--provider P] [--model M] [--quiet] [--verbose] [--engine-trace]
+ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
 ```
 
+- Every fresh CLI run is durable. By default its reported log is
+  `~/.agent_composer/runs/<run_id>.jsonl`; `--log PATH` selects a different new
+  file. Existing files are never overwritten. The default directories use mode
+  `0700` and JSONL files use `0600`; logs can contain inputs, model/tool/human
+  data, outputs, configuration, and tracebacks, so do not publish them.
+- `--resume PATH` recovers that log with the same flow. It rejects `--input`,
+  `--inputs`, `--provider`, `--model`, and `--log`, so recovery cannot replace
+  recorded inputs or model configuration.
 - `--input k=v` — set one input (repeatable). Values are coerced to each input's
   declared type.
 - `--inputs file.json` — load inputs from a JSON object. `--input` flags override
@@ -131,9 +140,11 @@ ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--quiet] [--verbose] [
 - Per-node progress prints to **stderr**: each running node shows a spinner that
   becomes a green `✓` on success or a red `✗` (plus the error) on failure.
   `--quiet`/`-q` suppresses it; `--verbose`/`-v` also prints each node's output.
-- `--num-workers`/`-w N` — engine worker pool size. `0` (default) is the
-  single-threaded, deterministic drain; `>=1` runs independent ready nodes (a
-  fan-out) concurrently. The output is the same either way.
+- `--num-workers`/`-w N` — engine worker pool size. A fresh run defaults to `0`,
+  the single-threaded deterministic drain. Resume without this flag preserves
+  the latest recorded count; an explicit value changes only future scheduling.
+  `>=1` runs independent ready nodes (a fan-out) concurrently. The output is the
+  same either way.
 - The **current working directory is added to `sys.path`** for the run, so a flow's
   `code: pkg.mod:fn` refs to packages under the dir you invoke `ac` from resolve
   without exporting `PYTHONPATH` (like `python script.py` makes its dir importable).
@@ -195,7 +206,8 @@ The assistant's reply prints before the next `You:` prompt.
   typed text.
 - A single bad turn does not end the session: if the reply agent errors mid-turn
   (a raise, or hitting its tool-iteration cap), the CLI prints the failure and
-  continues from your conversation so far.
+  continues from your conversation so far. The initial attempt and every restart
+  receive separate reported logs under the default runs directory.
 - Ctrl-C propagates into a flow running through the bundled `run_flow` tool (including
   a blocking WAIT); a nested flow failure remains a tool result and does not cancel chat.
 

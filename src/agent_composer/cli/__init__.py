@@ -1,11 +1,13 @@
 """The `ac` command-line interface — a brokered host over the run boundary.
 
-`ac run FLOW.yaml` loads a Compose flow, gathers its inputs (flags first, then an
-interactive prompt for any missing required one), and drives it to a terminal.
-The main thread owns terminal prompts/renders while a controller drives the flow;
+`ac run FLOW.yaml` loads a Compose flow, gathers fresh inputs (flags first, then
+an interactive prompt for any missing required one), selects and reports a
+durable run-log path, and drives it to a terminal. ``--resume`` instead recovers
+an existing path without gathering fresh inputs or model configuration. The
+main thread owns terminal prompts/renders while a controller drives the flow;
 blocking HUMAN_INPUT/``ask_user`` calls cross that broker. WAIT remains live in
-its worker until its deadline. The CLI owns no engine scheduling or durable
-state-transition logic.
+its worker until its deadline. The CLI owns path policy, not engine scheduling
+or durable state-transition logic.
 
 Knows about: compose; compile metadata and LLM-cascade helpers; the package-root run
 boundary; events; node host-stop signals; typed values; tools; LLM API-key metadata;

@@ -148,6 +148,34 @@ def test_raw_stream_callback_failure_propagates_unchanged():
     assert caught.value is expected
 
 
+def test_raw_stream_callback_failure_closes_the_node_generator_before_returning():
+    closed = []
+
+    class ResourceStreamNode(Node):
+        """Streaming fake whose generator records deterministic cleanup."""
+
+        kind = NodeKind.CODE
+
+        def _run_impl(self, inputs):
+            try:
+                yield StreamChunk(self.id, "output", "first")
+                yield StreamChunk(self.id, "output", "second")
+                return Output("done")
+            finally:
+                closed.append(self.id)
+
+    expected = RuntimeError("callback failed")
+
+    def reject(_chunk):
+        raise expected
+
+    with pytest.raises(RuntimeError) as caught:
+        _raw(ResourceStreamNode("resource"), emit_stream=reject)
+
+    assert caught.value is expected
+    assert closed == ["resource"]
+
+
 def test_raw_host_stop_propagates_from_node_and_preset_event():
     with pytest.raises(_HostStop) as raised:
         _raw(_RaisesHostStop("work"))

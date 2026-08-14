@@ -229,16 +229,23 @@ def _eval_node_raw(
         wiring_override=wiring_override,
         stop_event=stop_event,
     )
-    while True:
-        try:
-            chunk = next(stream)
-        except StopIteration as stopped:
-            result = stopped.value
-            break
-        if emit_stream is not None:
-            # Host-owned transport/callback boundary: keep this OUTSIDE the evaluator's
-            # exception funnel so callback failures propagate with identity intact.
-            emit_stream(chunk)
+    try:
+        while True:
+            try:
+                chunk = next(stream)
+            except StopIteration as stopped:
+                result = stopped.value
+                break
+            if emit_stream is not None:
+                # Host-owned transport/callback boundary: keep this OUTSIDE the evaluator's
+                # exception funnel so callback failures propagate with identity intact.
+                emit_stream(chunk)
+    finally:
+        # A callback can abort while the node's streaming generator is suspended at a
+        # yield.  Close the shared evaluator explicitly so ``yield from`` propagates
+        # GeneratorExit into the node and releases its resources before this boundary
+        # returns the initiating host exception.
+        stream.close()
 
     if isinstance(result, Pause):
         return EvaluationFailure(

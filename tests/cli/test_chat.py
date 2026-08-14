@@ -37,6 +37,11 @@ EXAMPLE_CHAT = Path(__file__).resolve().parents[2] / "examples" / "chat.yaml"
 _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
+def _chat_logs() -> list[Path]:
+    """Return the durable top-level chat attempt logs in the isolated test home."""
+    return sorted((Path.home() / ".agent_composer" / "runs").glob("*.jsonl"))
+
+
 class _FakeModel:
     """A stand-in chat model: plain agent mode calls `model.invoke(msgs).content`."""
 
@@ -142,6 +147,9 @@ def test_chat_two_turns(tmp_path, monkeypatch):
     # answer must render before the next prompt becomes visible.
     first_reply = r.output.index("hello back")
     assert r.output.find("You:", first_reply + len("hello back")) > first_reply
+    logs = _chat_logs()
+    assert len(logs) == 1
+    assert f"Run log: {logs[0]}" in r.stderr
 
 
 def test_chat_eof_is_normalized_to_flow_owned_exit(monkeypatch):
@@ -670,6 +678,10 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
     assert "first reply" in recovered_prompt
     assert "recovered turn" in recovered_prompt
     assert "failed turn" not in recovered_prompt
+    logs = _chat_logs()
+    assert len(logs) == 2
+    assert len({path.stem for path in logs}) == 2
+    assert all(f"Run log: {path}" in r.stderr for path in logs)
     # Recovery installed a fresh process-owned handler, which proves the failed
     # lifecycle released its owner; the final lifecycle releases its owner too.
     assert "ask_user" not in tools_module.TOOL_REGISTRY

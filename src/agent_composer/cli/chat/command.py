@@ -9,7 +9,8 @@ A single bad turn does not end the session. The reply agent can fail mid-turn (a
 or hitting its tool-iteration cap), which terminates the underlying flow *run* as
 `failed`. Because the transcript is mirrored host-side off the turn body's terminal
 (`__end__`) output, the loop surfaces the error and RESTARTS the flow seeded with the
-accumulated transcript, so the conversation continues from where it left off.
+accumulated transcript, so the conversation continues from where it left off. Every
+initial run and failed-turn restart gets its own reported durable log.
 """
 
 from __future__ import annotations
@@ -30,10 +31,12 @@ from rich.text import Text
 
 from agent_composer.cli.chat import tools as chat_tools
 from agent_composer.cli.run import (  # reused helpers
+    _default_run_log_path,
     _ensure_cwd_importable,
     _ensure_provider_keys,
     _last_segment,
     _prompt_request,
+    _report_run_log,
     _render_load_error,
     _run_with_terminal_controller,
 )
@@ -41,6 +44,7 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import _run_flow_controlled
 from agent_composer.events import NodeSucceeded
+from agent_composer.typesys.seeding import default_run_id
 
 console = Console()
 err_console = Console(stderr=True)  # errors go to stderr, mirroring `ac run` (run.py:45-46)
@@ -185,9 +189,12 @@ def chat(
     try:
         while True:
             # A node failure sets its run's cooperative stop event to drain siblings.
-            # Start recovery under a fresh broker/controller lifecycle so that terminal
-            # event never leaks into the next immutable flow run.
+            # Start each attempt under a fresh broker/controller lifecycle so that a
+            # failed run's terminal event never leaks into the next immutable run.
             current_flow = load_flow(text, search_paths=search)
+            run_id = default_run_id()
+            log = _default_run_log_path(run_id)
+            _report_run_log(log)
 
             def controller(stop_event, on_event, ask_user, render):
                 """Run one immutable chat attempt on the controller thread."""
@@ -210,6 +217,8 @@ def chat(
                     return _run_flow_controlled(
                         current_flow,
                         {"opening": state["transcript"]},
+                        log=log,
+                        run_id=run_id,
                         on_event=observe,
                         llm_config=cli_cfg or None,
                         stop_event=stop_event,

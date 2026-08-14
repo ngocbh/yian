@@ -1260,8 +1260,8 @@ def run(
         dir_okay=False,
         readable=True,
         writable=True,
-        help="Recover the run recorded at PATH; fresh input, model, and log flags "
-        "are forbidden.",
+        help="Recover the run recorded at PATH; fresh input, provider/model, and "
+        "log flags are forbidden.",
     ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress per-node progress."),
     verbose: bool = typer.Option(

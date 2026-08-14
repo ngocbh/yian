@@ -181,8 +181,10 @@ log before publishing the progress event that the CLI renders.
 | Flow succeeded | `0` |
 | Flow failed | `1` (error printed to stderr) |
 | Flow failed to compile (bad YAML) | `1` (located error printed to stderr) |
+| Run-log creation or recovery failed | `1` (concise error printed to stderr) |
 | Run cancelled at the input prompt | `1` |
 | Invalid option or forbidden resume combination | `2` |
+| Run interrupted with Ctrl-C during execution | `130` |
 
 ## Compile errors
 

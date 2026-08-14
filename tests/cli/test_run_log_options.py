@@ -135,7 +135,7 @@ def test_existing_explicit_log_is_rejected_before_input_or_provider_side_effects
 
     result = runner.invoke(app, ["run", str(flow), "--log", str(path)])
 
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     assert "already exists" in result.output
     assert calls == []
     assert path.read_text() == "keep"
@@ -159,7 +159,7 @@ def test_dangling_explicit_log_symlink_is_rejected_before_side_effects(
 
     result = runner.invoke(app, ["run", str(flow), "--log", str(path)])
 
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     assert "already exists" in result.output
     assert calls == []
     assert path.is_symlink()
@@ -200,7 +200,7 @@ def test_resume_rejects_fresh_options_before_input_or_provider_side_effects(
         ["run", str(flow), "--resume", str(resume_path), *extra],
     )
 
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     assert "--resume cannot be combined" in result.output
     assert conflict in result.output
     assert calls == []
@@ -225,7 +225,7 @@ def test_missing_resume_log_is_rejected_before_command_side_effects(
         ["run", str(flow), "--resume", str(tmp_path / "missing.jsonl")],
     )
 
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     assert "does not exist" in result.output
     assert calls == []
 

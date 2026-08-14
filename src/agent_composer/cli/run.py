@@ -1,11 +1,15 @@
 """`ac run` — load a flow, gather inputs, drive it to a terminal, render the output.
 
-Inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`); any declared
-input still missing is prompted for interactively (required ones are starred). The engine
-runs behind a main-thread terminal broker: blocking HUMAN_INPUT and agent ``ask_user`` calls
-wait for that broker and then continue inside the same live node call. WAIT stays live in
-its worker until its deadline. Answer types are enforced at the engine boundary; an invalid
-one fails the run.
+Fresh inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`); any
+declared input still missing is prompted for interactively (required ones are
+starred). Fresh runs use a reported durable log under
+``~/.agent_composer/runs`` unless ``--log`` selects a new path. ``--resume``
+recovers an existing path without gathering fresh inputs or model configuration.
+
+The engine runs behind a main-thread terminal broker: blocking HUMAN_INPUT and
+agent ``ask_user`` calls wait for that broker and then continue inside the same
+live node call. WAIT stays live in its worker until its deadline. Answer types
+are enforced at the engine boundary; an invalid one fails the run.
 
 `--provider`/`--model` feed the outermost layer of the `llm_config` cascade (fill-the-gap,
 not a hard override): they fill only the fields an agent and its enclosing flow leave unset.
@@ -39,10 +43,15 @@ from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow, top_frame_ranges
-from agent_composer.run import RunResult, _run_flow_controlled
+from agent_composer.run import (
+    RunResult,
+    _resume_flow_controlled,
+    _run_flow_controlled,
+)
 from agent_composer.events import Diagnostic, NodeFailed, SourceRange, SourceSpan
 from agent_composer.nodes.base import _HostStop
 from agent_composer.tools import install_ask_user
+from agent_composer.typesys.seeding import default_run_id
 from agent_composer.typesys.values import ValueKind
 
 console = Console()
@@ -61,6 +70,36 @@ def _ensure_cwd_importable() -> None:
     cwd = os.getcwd()
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
+
+
+def _default_run_log_path(run_id: str) -> Path:
+    """Create the private default CLI directories and return one fresh log path.
+
+    The file itself is deliberately not created here. ``JsonlRunLog.create``
+    retains exclusive creation, owner-only file mode, locking, and durability.
+
+    Args:
+        run_id (`str`):
+            Fresh identity used as the JSONL basename.
+
+    Returns:
+        `Path`:
+            ``~/.agent_composer/runs/<run_id>.jsonl`` with both CLI-owned
+            directories forced to mode ``0700``.
+    """
+    state_dir = Path.home() / ".agent_composer"
+    runs_dir = state_dir / "runs"
+    for directory in (state_dir, runs_dir):
+        directory.mkdir(mode=0o700, exist_ok=True)
+        directory.chmod(0o700)
+    return runs_dir / f"{run_id}.jsonl"
+
+
+def _report_run_log(path: Path) -> None:
+    """Print the durable authority path even when progress is quiet."""
+    message = Text("Run log: ", style="dim")
+    message.append(str(path), style="dim")
+    err_console.print(message, soft_wrap=True)
 
 
 # Lines of `.yaml` context shown above and below the offending line in the error panel
@@ -1119,6 +1158,64 @@ def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
         ensure_api_key(provider)
 
 
+def _validate_run_log_options(
+    *,
+    input_values: List[str],
+    inputs: Optional[Path],
+    provider: Optional[str],
+    model: Optional[str],
+    log: Optional[Path],
+    resume: Optional[Path],
+) -> None:
+    """Reject fresh-only data on recovery and existing fresh-log paths.
+
+    This check runs before input files are read, prompts are shown, or provider
+    configuration is resolved.
+
+    Args:
+        input_values (`List[str]`):
+            Repeated fresh ``--input`` assignments, empty when omitted.
+        inputs (`Path | None`):
+            Fresh ``--inputs`` JSON path, or ``None``.
+        provider (`str | None`):
+            Fresh provider cascade value, or ``None``.
+        model (`str | None`):
+            Fresh model cascade value, or ``None``.
+        log (`Path | None`):
+            Explicit new authority path, or ``None`` for the default.
+        resume (`Path | None`):
+            Existing authority path to recover, or ``None`` for a fresh run.
+
+    Raises:
+        `typer.BadParameter`:
+            Recovery is combined with fresh-only data, or ``--log`` already
+            exists and therefore cannot be exclusively created.
+    """
+    if resume is not None:
+        conflicts = []
+        if input_values:
+            conflicts.append("--input")
+        if inputs is not None:
+            conflicts.append("--inputs")
+        if provider is not None:
+            conflicts.append("--provider")
+        if model is not None:
+            conflicts.append("--model")
+        if log is not None:
+            conflicts.append("--log")
+        if conflicts:
+            raise typer.BadParameter(
+                "--resume cannot be combined with " + ", ".join(conflicts)
+            )
+        return
+
+    if log is not None and log.exists():
+        raise typer.BadParameter(
+            f"--log path already exists: {log}",
+            param_hint="--log",
+        )
+
+
 def run(
     flow: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Path to a flow .yaml"),
     input: List[str] = typer.Option(  # noqa: A002 - matches the user-facing flag name
@@ -1127,17 +1224,32 @@ def run(
     inputs: Optional[Path] = typer.Option(
         None, "--inputs", exists=True, dir_okay=False, readable=True, help="A JSON file of inputs."
     ),
+    log: Optional[Path] = typer.Option(
+        None,
+        "--log",
+        dir_okay=False,
+        help="Create a fresh durable run log at PATH instead of the default location.",
+    ),
+    resume: Optional[Path] = typer.Option(
+        None,
+        "--resume",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        writable=True,
+        help="Recover the run recorded at PATH; fresh input and model flags are forbidden.",
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress per-node progress."),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Also print each node's output as it finishes."
     ),
-    num_workers: int = typer.Option(
-        0,
+    num_workers: Optional[int] = typer.Option(
+        None,
         "--num-workers",
         "-w",
         min=0,
-        help="Worker pool size. 0 = single-threaded (deterministic); "
-        ">=1 runs independent ready nodes (a fan-out) concurrently.",
+        help="Worker pool size. Omitted means 0 for a fresh run and preserves "
+        "the recorded value on resume.",
     ),
     provider: Optional[str] = typer.Option(
         None, "--provider", help="Override the LLM provider for agents that set none (cascade)."
@@ -1153,7 +1265,15 @@ def run(
         "error is shown.",
     ),
 ) -> None:
-    """Run a flow to completion and print its output."""
+    """Start or recover a durable flow run and print its terminal output."""
+    _validate_run_log_options(
+        input_values=input or [],
+        inputs=inputs,
+        provider=provider,
+        model=model,
+        log=log,
+        resume=resume,
+    )
     _ensure_cwd_importable()  # so `code: pkg.mod:fn` refs to repo-local packages resolve
     text = flow.read_text()
     try:
@@ -1173,50 +1293,80 @@ def run(
         if banner is not None:
             err_console.print(banner)
 
-    supplied: Dict[str, Any] = {}
-    if inputs is not None:
-        supplied.update(json.loads(inputs.read_text()))
-    if input:
-        supplied.update(_parse_kv(input))
-
-    prompted = _prompt_missing(loaded.input, supplied)
-    if prompted is None:
-        err_console.print("[yellow]run cancelled[/yellow]")
-        raise typer.Exit(code=1)
-    supplied.update(prompted)
-
     # `--quiet` silences progress entirely; otherwise the main-thread broker streams
     # node events to this reporter. `--verbose` adds each node's output.
     reporter = _ProgressReporter(err_console, verbose=verbose)
 
-    # The CLI flags supply the OUTERMOST cascade layer (fill-the-gap), not a hard override:
-    # an agent's own llm_config and a flow-level llm_config: still win per field.
-    cli_cfg = {k: v for k, v in {"provider": provider, "model": model}.items() if v}
-    # Pre-flight: prompt for any API key the flow's agents will need, so a missing key
-    # is an upfront prompt (or a clean error when non-interactive) rather than a cryptic
-    # failure on the first model call mid-run.
-    try:
-        _ensure_provider_keys(loaded, cli_cfg)
-    except RuntimeError as exc:
-        err_console.print(f"[red]{exc}[/red]")
-        raise typer.Exit(code=1)
-    try:
+    if resume is not None:
+        selected_log = resume
+        _report_run_log(selected_log)
+
         def controller(
             stop_event: threading.Event,
             on_event: Optional[Callable[[Any], None]],
             _ask_user: Callable[..., Any],
             _render: Callable[[Callable[[], None]], None],
         ) -> RunResult:
-            """Drive one run while the helper owns its terminal broker."""
-            return _run_flow_controlled(
+            """Recover one run while the helper owns its terminal broker."""
+            return _resume_flow_controlled(
                 loaded,
-                supplied,
-                on_event=on_event,
-                llm_config=cli_cfg or None,
+                log=selected_log,
                 num_workers=num_workers,
+                on_event=on_event,
                 stop_event=stop_event,
             )
 
+    else:
+        supplied: Dict[str, Any] = {}
+        if inputs is not None:
+            supplied.update(json.loads(inputs.read_text()))
+        if input:
+            supplied.update(_parse_kv(input))
+
+        prompted = _prompt_missing(loaded.input, supplied)
+        if prompted is None:
+            err_console.print("[yellow]run cancelled[/yellow]")
+            raise typer.Exit(code=1)
+        supplied.update(prompted)
+
+        # The CLI flags supply the OUTERMOST cascade layer (fill-the-gap), not a hard
+        # override: an agent's own llm_config and a flow-level llm_config still win.
+        cli_cfg = {
+            key: value
+            for key, value in {"provider": provider, "model": model}.items()
+            if value
+        }
+        # Prompt for any required API key before the run creates its durable file.
+        try:
+            _ensure_provider_keys(loaded, cli_cfg)
+        except RuntimeError as exc:
+            err_console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+
+        run_id = default_run_id()
+        selected_log = log if log is not None else _default_run_log_path(run_id)
+        selected_workers = 0 if num_workers is None else num_workers
+        _report_run_log(selected_log)
+
+        def controller(
+            stop_event: threading.Event,
+            on_event: Optional[Callable[[Any], None]],
+            _ask_user: Callable[..., Any],
+            _render: Callable[[Callable[[], None]], None],
+        ) -> RunResult:
+            """Drive one fresh run while the helper owns its terminal broker."""
+            return _run_flow_controlled(
+                loaded,
+                supplied,
+                log=selected_log,
+                run_id=run_id,
+                on_event=on_event,
+                llm_config=cli_cfg or None,
+                num_workers=selected_workers,
+                stop_event=stop_event,
+            )
+
+    try:
         result = _run_with_terminal_controller(
             controller,
             prompt_handler=_prompt_request,

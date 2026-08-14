@@ -1,6 +1,7 @@
 """CLI coverage for durable run-log path selection and recovery options."""
 
 from pathlib import Path
+import re
 import stat
 from typing import Any, Callable
 
@@ -21,6 +22,9 @@ from agent_composer.runtime.log import (
 
 
 runner = CliRunner()
+
+# CI forces Rich color, which can place style escapes inside rendered option names.
+_ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 _FLOW = """\
 id: cli_log
@@ -44,6 +48,11 @@ def _write_flow(tmp_path: Path) -> Path:
     path = tmp_path / "flow.yaml"
     path.write_text(_FLOW)
     return path
+
+
+def _plain(text: str) -> str:
+    """Remove optional Rich styling so CLI contracts are color-environment neutral."""
+    return _ANSI_SGR.sub("", text)
 
 
 def _envelopes(path: Path) -> list[RecordEnvelope]:
@@ -96,7 +105,7 @@ def test_fresh_run_uses_private_default_path_and_reports_it(
     assert stat.S_IMODE(state_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(runs_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert f"Run log: {path}" in result.stderr
+    assert f"Run log: {path}" in _plain(result.stderr)
     assert "clouds" in result.stdout
 
 
@@ -113,7 +122,7 @@ def test_fresh_run_uses_exact_explicit_log_path(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert path.is_file()
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert f"Run log: {path}" in result.stderr
+    assert f"Run log: {path}" in _plain(result.stderr)
     assert not (Path.home() / ".agent_composer").exists()
 
 
@@ -136,7 +145,7 @@ def test_existing_explicit_log_is_rejected_before_input_or_provider_side_effects
     result = runner.invoke(app, ["run", str(flow), "--log", str(path)])
 
     assert result.exit_code == 2
-    assert "already exists" in result.output
+    assert "already exists" in _plain(result.output)
     assert calls == []
     assert path.read_text() == "keep"
 
@@ -160,7 +169,7 @@ def test_dangling_explicit_log_symlink_is_rejected_before_side_effects(
     result = runner.invoke(app, ["run", str(flow), "--log", str(path)])
 
     assert result.exit_code == 2
-    assert "already exists" in result.output
+    assert "already exists" in _plain(result.output)
     assert calls == []
     assert path.is_symlink()
 
@@ -201,8 +210,9 @@ def test_resume_rejects_fresh_options_before_input_or_provider_side_effects(
     )
 
     assert result.exit_code == 2
-    assert "--resume cannot be combined" in result.output
-    assert conflict in result.output
+    plain_output = _plain(result.output)
+    assert "--resume cannot be combined" in plain_output
+    assert conflict in plain_output
     assert calls == []
 
 
@@ -226,7 +236,7 @@ def test_missing_resume_log_is_rejected_before_command_side_effects(
     )
 
     assert result.exit_code == 2
-    assert "does not exist" in result.output
+    assert "does not exist" in _plain(result.output)
     assert calls == []
 
 
@@ -256,7 +266,7 @@ def test_terminal_resume_is_read_only_and_skips_fresh_side_effects(
     assert result.exit_code == 0, result.output
     assert calls == []
     assert log.read_bytes() == before
-    assert f"Run log: {log}" in result.stderr
+    assert f"Run log: {log}" in _plain(result.stderr)
     assert "mountains" in result.stdout
     assert not (Path.home() / ".agent_composer").exists()
 
@@ -290,8 +300,9 @@ def test_corrupt_resume_is_a_clean_cli_error(
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "resume failed: invalid run-record JSON" in result.output
-    assert ("Traceback" in result.output) is has_traceback
+    plain_output = _plain(result.output)
+    assert "resume failed: invalid run-record JSON" in plain_output
+    assert ("Traceback" in plain_output) is has_traceback
     assert calls == []
 
 
@@ -313,8 +324,9 @@ def test_default_directory_failure_is_a_clean_cli_error(
 
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
-    assert "run failed: private run directory is not writable" in result.output
-    assert "Traceback" not in result.output
+    plain_output = _plain(result.output)
+    assert "run failed: private run directory is not writable" in plain_output
+    assert "Traceback" not in plain_output
 
 
 @pytest.mark.parametrize(
@@ -393,11 +405,11 @@ def test_keyboard_interrupt_leaves_a_reported_unlocked_recoverable_log(
     )
 
     assert interrupted.exit_code == 130
-    assert "cancelled by user" in interrupted.output
+    assert "cancelled by user" in _plain(interrupted.output)
     logs = list((Path.home() / ".agent_composer" / "runs").glob("*.jsonl"))
     assert len(logs) == 1
     log = logs[0]
-    assert f"Run log: {log}" in interrupted.stderr
+    assert f"Run log: {log}" in _plain(interrupted.stderr)
 
     monkeypatch.setattr(run_cli, "_run_flow_controlled", controlled_run)
     resumed = runner.invoke(

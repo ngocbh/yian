@@ -236,7 +236,7 @@ def test_terminal_resume_is_read_only_and_skips_fresh_side_effects(
 
 @pytest.mark.parametrize(
     ("worker_args", "expected_workers"),
-    [([], 2), (["--num-workers", "3"], 3)],
+    [([], 2), (["-w", "3"], 3)],
 )
 def test_unfinished_resume_preserves_or_overrides_only_future_workers(
     worker_args: list[str],

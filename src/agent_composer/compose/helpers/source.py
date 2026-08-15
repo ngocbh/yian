@@ -105,8 +105,8 @@ class SourceFrame:
             external flow it is that file's own text.
         node_ranges (`dict[str, SourceRange]`):
             `node_id -> the node body's `SourceRange` in `text`` for the child's nodes.
-            Empty (frame collapses to the call line) for a compact single-node def with no
-            authored inner `nodes:` mapping.
+            A source-backed compact or single-node form projects its synthesized
+            node header onto the corresponding authored `id:` or `defs:` key.
         field_ranges (`dict[str, dict[tuple[str, str], SourceRange]]`):
             `node_id -> {(kind, key) -> `SourceRange`}` — the per-field precision, keyed by the
             location's `(SourceSpan.kind, key)` (`kind ∈ {input, input_decl, field}`, never

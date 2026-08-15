@@ -28,18 +28,17 @@ from agent_composer.compose.nodes import KINDS
 from agent_composer.compose.helpers.reader import NodeReader, as_cursor
 from agent_composer.compose.source import SourceAccessError, SourceCursor
 
-# Singular source keys the descriptor dataclasses carry in their plural form. The span tree
-# (a raw parse) preserves the author's singular `input:`/`output:`; ComposeFile normalizes
-# them for the dict path, but the span path bypasses ComposeFile, so we back-map here.
+# Singular source keys are projected onto the descriptor dataclasses' plural
+# field names while retaining their original child sources.
 _INPUT_OUTPUT_REMAP = {"input": "inputs", "output": "outputs"}
 
 
 def parse_nodes(nodes_reader: NodeReader | SourceCursor) -> dict[str, Any]:
     """Parse a cursor or legacy reader into typed per-kind descriptors.
 
-    The source is located over the flow's `nodes:` value, or virtual for an
-    already-constructed compact/def/test mapping. Returns descriptors in source
-    order with ranges when physical source exists.
+    The source is physical for a full graph, source-aligned for compact/def
+    projections, or virtual for a programmatic/test mapping. Returns descriptors
+    in source order with ranges whenever an authored source exists.
     """
     cursor = as_cursor(nodes_reader)
     out: dict[str, Any] = {}

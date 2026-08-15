@@ -3,7 +3,7 @@
 The file-I/O front door: own one source document, build the typedefs registry, compose the
 call resolver, load every `defs:` callable, and hand the parsed sections to the
 post-parse conductor (`build.pipeline._assemble`, imported back here) which returns
-the `ComposedFlow`. This module owns the root source cursor, temporary def readers,
+the `ComposedFlow`. This module owns root/def source projections,
 frame ranges, the resolver composition (`make_file_resolver`/
 `_CallableScope`), and the defs loaders (`_load_def`/`_load_single_node_def`) —
 not the assembly pipeline itself.
@@ -284,12 +284,10 @@ def _reject_authored_private_callable_names(
 
 @dataclass
 class _LoadCtx:
-    """Shared state threaded across the mutually-recursive `_load_flow` /
-    `make_file_resolver` (the whole cross-file import graph): a `loading` set =
-    cross-file cycle guard, a `cache` keyed by resolved abs-path = diamond reuse."""
+    """Cross-file cycle state and successful compiled-flow reuse by resolved path."""
 
-    loading: set = field(default_factory=set)
-    cache: dict = field(default_factory=dict)
+    loading: set[Path] = field(default_factory=set)
+    flows: dict[Path, ComposedFlow] = field(default_factory=dict)
 
 
 def _join_path(base, p: str) -> Path:
@@ -354,8 +352,8 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
                 continue
             if not cand.exists():
                 continue  # skip a non-existent search dir / miss (sys.path-style)
-            if cand in ctx.cache:
-                child = ctx.cache[cand]
+            if cand in ctx.flows:
+                child = ctx.flows[cand]
                 _check_version(child, path, version)
                 return child
             if cand in ctx.loading:
@@ -374,7 +372,7 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
             # `name:`). The label is value-stable across sites (same abs-path -> same name).
             if child.source is not None:
                 child = replace(child, source=replace(child.source, label=cand.name))
-            ctx.cache[cand] = child
+            ctx.flows[cand] = child
             _check_version(child, path, version)
             return child
         raise LoadError(
@@ -715,12 +713,12 @@ def _load_def(
 ) -> ComposedFlow:
     """Build one in-file `defs:` entry into a `ComposedFlow` (a callable / sub-flow inline).
 
-    Supports the **multi-node** form only — `{inputs?, nodes, outputs?, asserts?}`,
-    sharing the file's `typedefs:` registry + callable scope (so a def can call other defs,
-    external flows, or compiler-owned children). A **single-node** form (a top-level
-    `kind:`) is deferred -> `LoadError`. ``def_cursor`` is the occurrence-local
-    authored body: it retains absolute locations, and `_assemble` derives the
-    def's `SourceFrame` from its lowered descriptors."""
+    Supports both a multi-node sub-flow (`{inputs?, nodes, outputs?, asserts?}`)
+    and a flat single-node body (`{kind, ...}`). Both share the file's typedef
+    registry and callable scope. ``def_cursor`` is the occurrence-local authored
+    body: it retains absolute locations, and `_assemble` derives the def's
+    `SourceFrame` from its lowered descriptors.
+    """
     if not isinstance(body, dict):
         raise LoadError(
             f"defs entry {name!r}: body must be a mapping, got {type(body).__name__}"

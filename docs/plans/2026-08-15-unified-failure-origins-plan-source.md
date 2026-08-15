@@ -10,8 +10,8 @@ bodies reuse that document without changing compiled or run behavior.
 Public value access returns recursive-alias-preserving defensive copies; compose
 passes use an explicit package-private read-only view. A temporary
 `as_cursor(NodeReader)` bridge keeps every migration commit green and is deleted
-with `NodeReader`/`SpanLoader`. `_LoadCtx` separately caches physical documents
-and compiled flows.
+with `NodeReader`/`SpanLoader`. `_LoadCtx` caches each successfully compiled
+external flow by resolved physical path.
 
 **Tech stack**: Python 3.10+, PyYAML, Pydantic, pytest, MkDocs Material.
 
@@ -39,7 +39,7 @@ This revision resolves every critical item in
   without reparsing. Parser, inline lowering, pipeline, and root loader changes
   land in one green commit; defs then cut over in the next green commit.
 - Multiple-def parse counting moved to the def cutover.
-- `_parse_document_for_load(text, label)` is the one compose-boundary translator
+- `parse_source_document(text, label)` is the one compose-boundary translator
   from `SourceSyntaxError` to current `LoadError`; root and external loading both
   use it.
 - Former multi-hour actions are split into named 2-5 minute test/implementation
@@ -94,6 +94,15 @@ Retained source metadata is therefore linear in the unique YAML node/merge graph
 output-sensitive: asking for `F` logical flattened pairs may return `F` cursors,
 but loading and ordinary effective navigation do not materialize them.
 
+## Correction found during cycle-5 verification
+
+The proposed separate external-document cache had no consumer. The existing
+resolved-path compiled-flow cache already guards the read, parse, and compile as
+one successful operation, so repeated aliases and diamond imports read and parse
+each external path once. Retaining a second document cache would duplicate state
+without changing behavior. Cycle 5 therefore types/renames the single flow cache
+and adds exact per-path read/parse ratchets instead.
+
 ## Scope
 
 In scope:
@@ -104,7 +113,7 @@ In scope:
 - last-effective duplicate/merge lookup with every raw pair still navigable;
 - immutable virtual views for singular/plural keys, CASE's YAML-1.1 `on`, inline
   bodies, compact flows, and single-node defs;
-- separate external document and compiled-flow caches;
+- one successful compiled-flow cache per resolved external path;
 - deletion of `NodeReader`, `SpanLoader`, and full-document reparse helpers;
 - preservation of current descriptors, `SourceFrame`, `SourceRange`, compiled
   graphs, fingerprints, runtime results, and current error presentation;
@@ -316,14 +325,14 @@ compile, runtime, run boundary, or CLI module.
 `compose/parse/file.py` owns exactly one helper:
 
 ```python
-def _parse_document_for_load(text: str, label: str) -> SourceDocument:
+def parse_source_document(text: str, label: str) -> SourceDocument:
     try:
         return SourceDocument.parse(text, label)
     except SourceSyntaxError as exc:
         raise LoadError(f"invalid YAML: {exc}", range=exc.range) from exc
 ```
 
-`parse_file(text)`, root `load_flow`, and external `_document_for_path` all call
+`parse_file(text)`, root `load_flow`, and the external file resolver all call
 this helper. `parse_file(document)` reuses the supplied document. Malformed root
 and malformed external files therefore expose the same current public
 `LoadError`, message prefix, and precise range.
@@ -381,7 +390,7 @@ Principal edits:
 | 2 | Immutable `SourceCursor` | 1 | unchanged, green |
 | 3 | Vertical local/root cutover + temporary bridge | 2 | normal, inline, compact, defs, external all green |
 | 4 | Def/compact cutover | 3 | all local forms green; one parse for multiple defs |
-| 5 | External document/flow cache split | 4 | all imports green; one read/parse per path |
+| 5 | External flow-cache ratchets | 4 | all imports green; one read/parse per path |
 | 6 | Legacy/test migration and deletion | 5 | all paths green; bridge gone |
 | 7 | Docs and skills | 6 | unchanged, green |
 | 8 | Full verification/review/PR | 7 | fully verified |
@@ -618,9 +627,9 @@ smokes all pass.
 
 13. **(3 min, test first)** Add to `tests/compose/test_source_ownership.py`:
     `test_parse_file_reuses_supplied_document` and
-    `test_parse_document_for_load_translates_syntax_error`.
+    `test_parse_source_document_translates_syntax_error`.
 14. **(5 min, implementation)** In `parse/file.py`, add
-    `_parse_document_for_load`; make `parse_file(str | SourceDocument)` reuse a
+    `parse_source_document`; make `parse_file(str | SourceDocument)` reuse a
     supplied document, derive section lines from the root cursor, and remove
     `yaml.safe_load`, `yaml.compose`, and `_top_level_lines`.
 15. **(3 min)** Run the two new tests plus `tests/engine/test_parser.py` and
@@ -630,7 +639,7 @@ smokes all pass.
     `test_root_load_does_not_mutate_captured_document`. Do not include defs in this
     count test.
 17. **(5 min, implementation)** Change `load_flow` to call
-    `_parse_document_for_load(text, "<flow>")`; make `_load_flow` accept a
+    `parse_source_document(text, "<flow>")`; make `_load_flow` accept a
     `SourceDocument`; replace `_nodes_reader` with `_nodes_cursor`; use the root
     cursor for private-name lookup and source text.
 18. **(4 min, implementation)** Change `_boundary_field_ranges`,
@@ -643,7 +652,7 @@ smokes all pass.
     `test_malformed_external_child_is_located_load_error` in
     `test_uses_files.py`.
 21. **(4 min, implementation)** Make the existing file resolver call
-    `_parse_document_for_load(cand.read_text(), cand.name)` before `_load_flow`.
+    `parse_source_document(cand.read_text(), cand.name)` before `_load_flow`.
     Both malformed paths must now share the same translation helper.
 22. **(3 min)** Run those two malformed tests.
 23. **(3 min, test first)** Add
@@ -656,7 +665,7 @@ smokes all pass.
 26. **(3 min, implementation)** Change `top_frame_ranges` to accept an existing
     document/cursor. In `cli/run.py::_top_ranges`, use `loaded.source` normally;
     only the defensive `loaded is None` branch may construct one document through
-    `_parse_document_for_load`. Update
+    `parse_source_document`. Update
     `test_inline_sibling_preserves_outer_and_top_frame_ranges` to construct one
     document and reuse it for both helper calls.
 27. **(3 min)** Run `test_call_source_frame.py` and
@@ -773,32 +782,21 @@ smokes all pass.
     git commit -m "refactor(compose): reuse source cursors for defs"
     ```
 
-## Green cycle 5: separate external document and compiled-flow caches
+## Green cycle 5: ratchet the existing external compiled-flow cache
 
-1. **(3 min, test first)** Add
-   `test_load_context_has_separate_document_and_flow_caches` to
-   `test_uses_files.py`; it must fail against the current single `cache` field.
-2. **(3 min, implementation)** Change `_LoadCtx` to typed `loading`, `documents`,
-   and `flows` fields keyed by resolved `Path`.
-3. **(2 min)** Run the structural cache test.
-4. **(3 min, test first)** Add
-   `test_document_for_path_reads_and_parses_once` by calling the internal helper
-   twice with one context and spying on `Path.read_text` and `_DocumentLoader`.
-5. **(4 min, implementation)** Add `_document_for_path`; resolve the exact path,
-   read on a document-cache miss, and call `_parse_document_for_load` once.
-6. **(2 min)** Run the helper test.
-7. **(3 min, test first)** Add
-   `test_two_aliases_of_one_file_read_and_parse_once`.
-8. **(4 min, implementation)** Rewire `make_file_resolver` to check `ctx.flows`,
-   retain the loading guard, obtain a document from `_document_for_path`, compile
-   it, relabel the frame, and cache only successful flows.
-9. **(3 min)** Run the two-alias test.
-10. **(3 min, test first)** Extend existing diamond reuse with exact per-path read
-    and parse counts for `mid1`, `mid2`, and `leaf`.
-11. **(4 min, implementation)** Fix only cache-key/guard defects found by the
-    diamond assertion; keep per-alias version checks on flow-cache hits.
-12. **(3 min)** Run diamond, version-pin, and cycle cases.
-13. **(4 min)** Run the external gate:
+1. **(3 min, test first)** Add `test_load_context_has_one_typed_flow_cache` to
+   `test_uses_files.py`; require typed `loading` and `flows` fields and reject
+   ambiguous `cache`/unused `documents` state.
+2. **(3 min, implementation)** Rename `_LoadCtx.cache` to
+   `flows: dict[Path, ComposedFlow]` and type the loading set.
+3. **(3 min, test first)** Add
+   `test_two_aliases_of_one_file_read_and_parse_once`, spying on `Path.read_text`
+   and `parse_source_document`.
+4. **(3 min, test first)** Extend diamond reuse with exact per-path read and parse
+   counts for `mid1`, `mid2`, and `leaf`.
+5. **(3 min)** Run both count ratchets plus version-pin and cycle cases. Keep the
+   per-alias version check on flow-cache hits and cache only successful flows.
+6. **(4 min)** Run the external gate:
 
     ```bash
     conda run -n agentcomposer env PYTHONPATH=src python -m pytest -q \
@@ -808,13 +806,13 @@ smokes all pass.
       tests/engine/test_templates_load.py
     ```
 
-14. **(2 min)** Run `git diff --check`, inspect status, and stage exactly:
+7. **(2 min)** Run `git diff --check`, inspect status, and stage exactly:
 
     ```bash
     git add \
       src/agent_composer/compose/loader.py \
       tests/engine/test_uses_files.py
-    git commit -m "refactor(compose): cache external source documents"
+    git commit -m "test(compose): ratchet external source reuse"
     ```
 
 ## Green cycle 6: migrate tests, delete the bridge, and ratchet ownership
@@ -958,8 +956,8 @@ Deleted paths are intentionally named in `git add`; Git stages their deletion.
    `text -> SourceDocument -> SourceCursor -> descriptors`, one document per
    physical file, occurrence identity versus definition range, defensive-copy
    public reads, and immutable virtual projections.
-2. **(4 min)** Update `docs/architecture.md` with the separate document/flow
-   caches and one-parse load phase. Do not add future origin/failure classes or
+2. **(4 min)** Update `docs/architecture.md` with the resolved-path compiled-flow
+   cache and one-parse load phase. Do not add future origin/failure classes or
    Mermaid configuration in this slice.
 3. **(3 min)** Update `src/agent_composer/README.md` layout and inline/def source
    ownership.
@@ -967,7 +965,7 @@ Deleted paths are intentionally named in `git add`; Git stages their deletion.
    the `NodeReader`/span-table account with `SourceDocument`/`SourceCursor`, while
    marking `SourceFrame` as the temporary diagnostic bridge.
 5. **(4 min)** Update `.claude/skills/structure/SKILL.md` and `reference.md`: source
-   owns YAML; parse/desugar/build consume cursors; loader owns the two caches;
+   owns YAML; parse/desugar/build consume cursors; loader owns the flow cache;
    compile/runtime stay YAML-blind.
 6. **(4 min)** Run:
 

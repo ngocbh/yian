@@ -448,7 +448,7 @@ def test_single_node_def_runs():
     assert res.output == "ACME"
 
 
-def test_single_node_def_virtual_header_and_logic_ranges():
+def test_single_node_def_projected_header_and_logic_ranges():
     loaded = load_flow(_SINGLE_NODE_DEF)
     frame = loaded.compiled.nodes["go"].child_source
 

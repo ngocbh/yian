@@ -40,7 +40,8 @@ nodes/        pure Node contract + per-kind implementations; spawners return see
 compile/      compiled IR + validation; growth builder; stable identity;
               effective static-path LLM configuration maps
 compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML
-              construction/navigation; later phases lower file-private children
+              construction/navigation and opaque-origin resolution; later phases
+              lower file-private children
               (source/nodes/parse/desugar/edges/validate/build/loader)
 runtime/      run records/logs, reducer-owned RunState, kind-blind dispatcher,
               and worker pool
@@ -141,6 +142,12 @@ mapping-key range when applicable); a virtual cursor is a defensive, source-free
 value snapshot; a projected cursor replaces or renames values while explicitly
 retaining the physical sources of selected children. Descriptors and nodes carry
 derived ranges afterward, so no phase reparses text or touches parser objects.
+
+`SourceCatalog` is Compose's immutable `OriginResolver`. Its private builder maps
+typed semantic paths to opaque origins while retaining the physical document
+occurrence and an explicit key/value anchor. Resolution replays that occurrence
+into a `DiagnosticFrame`; it neither reparses YAML nor creates a parallel range
+map. Virtual or unanchored cursors produce no origin.
 
 `SourceFrame` is persistent render-only diagnostic metadata on
 `ComposedFlow.source` and composite nodes' `child_source`. It carries source text

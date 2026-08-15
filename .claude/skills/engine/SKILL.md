@@ -226,6 +226,10 @@ virtual cursors are defensive source-free snapshots, and projected cursors retai
 explicitly selected physical child sources while changing a view. Descriptors and
 nodes carry derived ranges thereafter. Never reparse a source slice or mutate
 anchors/aliases/merges.
+`SourceCatalog` is Compose's immutable `OriginResolver`: its private builder maps
+typed semantic paths to opaque origins and retains document occurrences with explicit
+key/value anchors. Resolution replays an occurrence without reparsing or adding a
+parallel range map; virtual or unanchored cursors produce no origin.
 Inline extraction intentionally takes one graph-wide nodes snapshot before
 projection so unchanged aliases retain sharing; field navigation uses cursors or
 their package-private read-only view.

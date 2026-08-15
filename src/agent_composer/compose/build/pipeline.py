@@ -118,7 +118,8 @@ def _flow_outputs(outputs) -> list[FlowOutput]:
 
 def _assemble(
     *,
-    inputs_section: dict,
+    inputs_section: Optional[dict] = None,
+    input_decls: Optional[list[InputDecl]] = None,
     nodes_reader: NodeReader,
     outputs_section,
     asserts_section: list,
@@ -145,14 +146,24 @@ def _assemble(
       -> synthesize roots/terminals -> reject cycles + check if/else handles
       -> CompiledFlow.from_parts.
 
-    `resolver` is the composite call resolver (defs-first); `registry` is the file's
+    Exactly one input representation is required: `inputs_section` is the authored
+    mapping that still needs parsing, while `input_decls` carries declarations already
+    resolved by an earlier compiler pass. `resolver` is the composite call resolver
+    (defs-first); `registry` is the file's
     `read_typedefs(...)`. `n_lines`/`s_lines` are the source maps — each node id / top-level
     section key -> its 1-based HEADER line (`{}` for a nested def, whose errors are unlocated).
     Inline-CODE traceback anchors are derived from each descriptor's own `code:` range."""
+    if (inputs_section is None) == (input_decls is None):
+        raise ValueError("_assemble requires exactly one of inputs_section or input_decls")
+
     # The flow's file label frames inline-CODE tracebacks; each inline node's content start
     # line is derived from its recorded `code:` range in the CODE build. Inert for reference-mode CODE.
     flow_label = source.label if source is not None else "<inline-code>"
-    inputs = read_flow_inputs(inputs_section, registry)
+    if inputs_section is not None:
+        inputs = read_flow_inputs(inputs_section, registry)
+    else:
+        assert input_decls is not None
+        inputs = list(input_decls)
     flow_inputs = {decl.name for decl in inputs}
     descriptors = parse_nodes(nodes_reader)
 

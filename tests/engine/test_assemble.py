@@ -14,12 +14,14 @@ import pytest
 
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.typesys.types import read_typedefs
+from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.compose import LoadError
+from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.validate.wiring_parity import check_wiring_parity
-from agent_composer.compose.build.pipeline import _flow_outputs
+from agent_composer.compose.build.pipeline import _assemble, _flow_outputs
 from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CaseDescriptor,
@@ -31,6 +33,101 @@ from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
+
+
+def _assemble_resolved_input_decls(input_decls):
+    """Assemble an empty flow through the already-resolved input seam."""
+    def inert_resolver(name):
+        raise AssertionError(f"empty flow unexpectedly resolved {name!r}")
+
+    return _assemble(
+        input_decls=input_decls,
+        nodes_reader=NodeReader.spanless({}),
+        outputs_section=None,
+        asserts_section=[],
+        registry={},
+        resolver=inert_resolver,
+        n_lines={},
+        s_lines={},
+    )
+
+
+def test_resolved_input_decls_preserve_structural_declaration_identity():
+    element_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"label": Type(kind=ValueKind.STRING, nullable=True)},
+        required=frozenset(),
+    )
+    structural_type = Type(
+        kind=ValueKind.LIST_OBJECT,
+        element=element_type,
+    )
+    declaration = InputDecl(
+        name="items",
+        type_str="list[object]",
+        default=None,
+        required=True,
+        type=structural_type,
+    )
+
+    flow = _assemble_resolved_input_decls([declaration])
+    start = flow.compiled.nodes[START_ID]
+
+    assert flow.input[0] is declaration
+    assert flow.input[0].type is structural_type
+    assert start.input_decls[0] is declaration
+    assert start.input_decls[0].type is structural_type
+
+
+def test_resolved_input_decls_reject_both_input_representations():
+    with pytest.raises(ValueError, match="exactly one of inputs_section or input_decls"):
+        _assemble(
+            inputs_section={},
+            input_decls=[],
+            nodes_reader=NodeReader.spanless({}),
+            outputs_section=None,
+            asserts_section=[],
+            registry={},
+            resolver=lambda name: None,
+            n_lines={},
+            s_lines={},
+        )
+
+
+def test_resolved_input_decls_reject_missing_input_representation():
+    with pytest.raises(ValueError, match="exactly one of inputs_section or input_decls"):
+        _assemble(
+            nodes_reader=NodeReader.spanless({}),
+            outputs_section=None,
+            asserts_section=[],
+            registry={},
+            resolver=lambda name: None,
+            n_lines={},
+            s_lines={},
+        )
+
+
+def test_resolved_input_decls_accept_zero_args_and_wire_empty_start():
+    flow = _assemble_resolved_input_decls([])
+    start = flow.compiled.nodes[START_ID]
+
+    assert flow.input == []
+    assert start.input_decls == []
+    assert start.params == []
+    assert flow.compiled.wiring[START_ID] == {}
+
+    raw_flow = _assemble(
+        inputs_section={},
+        nodes_reader=NodeReader.spanless({}),
+        outputs_section=None,
+        asserts_section=[],
+        registry={},
+        resolver=lambda name: None,
+        n_lines={},
+        s_lines={},
+    )
+    assert raw_flow.input == []
+    assert raw_flow.compiled.wiring[START_ID] == {}
 
 
 def _end_edges(f, node_ids, edges):

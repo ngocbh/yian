@@ -38,7 +38,8 @@ def _built_flow(text):
 
     Mirrors the loader's leaf-build slice: parse the `nodes:` mapping from one source document,
     build each agent/code leaf, and split into `{nid: node}` / `{nid: wiring}` plus the
-    `{nid: output_type}` producer map — enough to drive `validate_references` in isolation.
+    `{nid: output_contract}` producer map — enough to drive `validate_references` in
+    isolation.
     """
     descriptors = parse_nodes(SourceDocument.parse(text).root.child("nodes"))
     built = {
@@ -49,7 +50,9 @@ def _built_flow(text):
     nodes = {nid: n for nid, (n, _) in built.items()}
     wiring = {nid: w for nid, (_, w) in built.items()}
     producers = {
-        nid: n.output_type for nid, n in nodes.items() if n.output_type is not None
+        nid: n.output_contract
+        for nid, n in nodes.items()
+        if n.output_contract is not None
     }
     return nodes, wiring, producers
 
@@ -212,7 +215,9 @@ def test_check_ref_map_types_moved():
     )
     rng = SourceRange(start_line=7, start_col=5, end_line=8, end_col=20)
     node.field_ranges = {("field", "inputs"): rng}
-    producers = {"src": Type.scalar(ValueKind.STRING)}  # source is a string
+    producers = {
+        "src": ValueContract(Type.scalar(ValueKind.STRING))
+    }  # source is a string
     wiring = {"c": {"n": "${src.output}"}}  # bound to the int-expecting child input
     with pytest.raises(LoadError) as exc:
         check_ref_map_types({"c": node}, producers, {}, wiring, {"c": 7})
@@ -227,23 +232,39 @@ def test_check_loop_type_contract_moved():
     # LoadError carries `.line` (additive) AND anchors its `.range` on the loop node's
     # `input:` mapping span (`field_ranges["inputs"]`).
     from agent_composer.compose.validate.loop_types import check_loop_type_contract
+    from agent_composer.nodes.contracts import ValueContract
     from agent_composer.nodes.loop import LoopNode
     from agent_composer.typesys.values import Type, ValueKind
 
     node = LoopNode("lp", flow_id="body")
     # body returns a record {n: int}; the carried field `n` must be seeded from an int.
-    node.output_type = Type(
-        kind=ValueKind.OBJECT, fields={"n": Type.scalar(ValueKind.INTEGER)}
+    node.output_contract = ValueContract(
+        Type(kind=ValueKind.OBJECT, fields={"n": Type.scalar(ValueKind.INTEGER)})
     )
     rng = SourceRange(start_line=4, start_col=5, end_line=5, end_col=20)
     node.field_ranges = {("field", "inputs"): rng}
-    producers = {"src": Type.scalar(ValueKind.STRING)}  # seed source is a string
+    producers = {
+        "src": ValueContract(Type.scalar(ValueKind.STRING))
+    }  # seed source is a string
     wiring = {"lp": {"n": "${src.output}"}}  # carried `n` seeded from the string
     with pytest.raises(LoadError) as exc:
         check_loop_type_contract({"lp": node}, producers, {}, wiring, {"lp": 4})
     assert "carried field" in str(exc.value)
     assert exc.value.line == 4  # additive: node_lines still feeds `.line`
     assert exc.value.range == rng
+
+
+def test_type_validators_reject_noncanonical_contract_maps_before_walking():
+    """Direct validator calls enforce the same exact-carrier boundary as the pipeline."""
+    from agent_composer.compose.validate.call_types import check_ref_map_types
+    from agent_composer.compose.validate.loop_types import check_loop_type_contract
+    from agent_composer.typesys.values import Type, ValueKind
+
+    bad = {"unused": Type.scalar(ValueKind.STRING)}
+    with pytest.raises(TypeError, match="output producer contracts.*ValueContract"):
+        check_ref_map_types({}, bad, {}, {})  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="flow input contracts.*ValueContract"):
+        check_loop_type_contract({}, {}, bad, {})  # type: ignore[arg-type]
 
 
 def test_check_wiring_parity_moved():

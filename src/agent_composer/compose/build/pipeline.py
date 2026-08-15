@@ -384,10 +384,19 @@ def _assemble(
     else:
         assert input_parameters is not None
         inputs = list(input_parameters)
+    flow_input_contracts: dict[str, ValueContract] = {}
+    for parameter in inputs:
+        contract = parameter.contract
+        if contract is None:
+            continue
+        if type(contract) is not ValueContract:
+            raise TypeError(
+                "flow input contracts must be exact ValueContract values, "
+                f"got {type(contract).__name__} for {parameter.name!r}"
+            )
+        flow_input_contracts[parameter.name] = contract
     flow_input_types = {
-        parameter.name: parameter.contract.type
-        for parameter in inputs
-        if parameter.contract is not None
+        name: contract.type for name, contract in flow_input_contracts.items()
     }
     flow_inputs = {parameter.name for parameter in inputs}
     descriptors = parse_nodes(nodes_cursor)
@@ -496,14 +505,19 @@ def _assemble(
                 raise RuntimeError(
                     "descriptor cache was not initialized before inline child resolution"
                 )
-            output_type = cache.build_one(
+            output_contract = cache.build_one(
                 producer_id,
                 via_label=binding_label,
                 via_range=binding_range,
-            ).node.output_type
-            if output_type is None:
+            ).node.output_contract
+            if output_contract is None:
                 raise unavailable_type()
-            return output_type
+            if type(output_contract) is not ValueContract:
+                raise TypeError(
+                    "output producer contracts must be exact ValueContract values, "
+                    f"got {type(output_contract).__name__} for {producer_id!r}"
+                )
+            return output_contract.type
 
         item_type: Callable[[str, SourceRange | None], Type] | None = None
         if isinstance(descriptor, MapDescriptor):
@@ -628,22 +642,40 @@ def _assemble(
     _flow_env = flow_env or {}
     for nid, node in nodes_built.items():
         node.env = {**_flow_env, **getattr(descriptors[nid], "env", {})}
-    # producers: each built node's declared output_type (drives the case `on:` enum
+    # producers: each built node's declared output contract (drives the case `on:` enum
     # exhaustiveness + the dotted-field walk in ref/assert validation). A case node has no
-    # output_type, so it is naturally excluded by the filter.
-    producers: dict[str, Type] = {
-        nid: node.output_type
-        for nid, node in nodes_built.items()
-        if node.output_type is not None
-    }
+    # contract, so it is naturally excluded.
+    producers: dict[str, ValueContract] = {}
+    for nid, node in nodes_built.items():
+        contract = node.output_contract
+        if contract is None:
+            continue
+        if type(contract) is not ValueContract:
+            raise TypeError(
+                "output producer contracts must be exact ValueContract values, "
+                f"got {type(contract).__name__} for {nid!r}"
+            )
+        producers[nid] = contract
 
     # cross-flow type check: each `call` binding's source type vs the callable
     # input type (needs producers, so it runs after all nodes are built).
-    check_ref_map_types(nodes_built, producers, flow_input_types, flow_wiring, n_lines)
+    check_ref_map_types(
+        nodes_built,
+        producers,
+        flow_input_contracts,
+        flow_wiring,
+        n_lines,
+    )
     # loop `'a -> 'a` type contract (types): each carried field's seed-source Type vs the
     # body output's same-named field Type (needs producers, so it runs alongside the
     # cross-flow call/map type check above).
-    check_loop_type_contract(nodes_built, producers, flow_input_types, flow_wiring, n_lines)
+    check_loop_type_contract(
+        nodes_built,
+        producers,
+        flow_input_contracts,
+        flow_wiring,
+        n_lines,
+    )
     # case `on:` enum-exhaustiveness (a validate-phase check — needs the assembled producer
     # types). Runs right after the type contracts, the same phase-position as the old
     # desugar-time check, so error ordering is preserved.

@@ -54,55 +54,6 @@ class ChildSignature:
 ChildResolver = Callable[[str, Optional[str]], Any]
 
 
-def _output_value_type(
-    from_: Any, producers: dict[str, Type], flow_input_types: dict[str, Type]
-) -> Optional[Type]:
-    """Resolve ONE flow-output binding `from_` to the Type of the value it carries.
-
-    The cases:
-      - a **single lone `${…}` span** — `${<id>.output[.…]}` for a node value or
-        `${input.<name>}` for a flow input — is a typed passthrough (eval_template
-        returns the referenced value unchanged; a multi-ref span stays opaque -> None).
-      - a **template that concatenates** — one or more spans mixed with literal text, or
-        two or more spans — is joined by eval_template, so it always carries a `str`
-        (see `template.py`).
-      - a **pure literal** (no spans) stays None — lenient, so a literal call-arg can
-        still be coerced to the declared type at the boundary.
-    An opaque producer / `${system.X}` in the single-span case -> None (codomain stays
-    opaque). Legacy plural heads were retired."""
-    from_ = binding_source(from_)
-    if not isinstance(from_, str):
-        return None
-    try:
-        segments = scan_template(from_)
-    except ExpressionError:
-        return None
-    spans = [s for s in segments if isinstance(s, Span)]
-    if not spans:
-        return None  # pure literal -> lenient (coerced at the boundary)
-    if not (len(segments) == 1 and isinstance(segments[0], Span)):
-        return Type.scalar(ValueKind.STRING)  # concatenating template -> str
-    refs = template_refs(segments)
-    if len(refs) != 1:
-        return None  # single span, multi-ref expr -> not a single typed value
-    parts = refs[0].split(".")
-    head = parts[0]
-    if head == "input" and len(parts) == 2:
-        return flow_input_types.get(parts[1])
-    # Node-first `<id>.output[.…]`.
-    if len(parts) >= 2 and parts[1] == "output":
-        producer_id = parts[0]
-        fields = parts[2:]
-    else:
-        return None  # ${system.X}/literal/other -> not a typed codomain value
-    typ = producers.get(producer_id)
-    for seg in fields:
-        if typ is None or typ.fields is None:
-            return None  # opaque producer / not a checked record -> lenient
-        typ = typ.fields.get(seg)
-    return typ
-
-
 def _project_output_contract(
     contract: ValueContract,
     fields: list[str],

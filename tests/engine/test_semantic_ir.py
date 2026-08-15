@@ -546,7 +546,7 @@ def test_call_type_error_is_identical_for_raw_and_wrapped_sources() -> None:
             check_ref_map_types(
                 {"call": node},
                 {},
-                {"x": nullable_parent},
+                {"x": ValueContract(nullable_parent)},
                 {"call": {"topic": value}},
             )
         errors.append(str(caught.value))

@@ -1,9 +1,9 @@
 """The Compose-YAML loader.
 
 Reads Compose-shaped YAML flows into the engine's runtime model. The source side
-of a node's `outputs:` / a flow's `inputs:` is read directly into one recursive
-`Type` (see `types.read_type`) rather than a flat `list[IOField]`; nested records
-are native.
+of a node's `outputs:` / a flow's `inputs:` is read directly into one
+`ValueContract` whose recursive `Type` (see `types.read_type`) replaces the old flat
+`list[IOField]`; nested records are native.
 
 Organized along two axes: the per-node-kind axis lives in `nodes/<kind>.py`
 (each owns its descriptor + `parse` + `build(ctx) -> BuildResult` methods; `nodes/__init__.py`

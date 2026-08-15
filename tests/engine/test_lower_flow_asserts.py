@@ -1,7 +1,7 @@
 """Unit tests for `lower_flow_asserts` — the pure flow-assert lowering pass.
 
 This is a PURE function (no engine): it takes a flow's `asserts:` list plus the
-name environment (flow inputs, node ids, producer types) and lowers each assert
+name environment (flow inputs, node ids, producer contracts) and lowers each assert
 into a node-local assert for the synthesized START/END, plus the synth END
 params + wiring needed to make cross-node post-asserts structural. These tests
 pin the exact rewritten-string forms and the synth naming scheme.
@@ -15,11 +15,18 @@ from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import condition_refs
-from agent_composer.nodes.contracts import Assertion, Parameter
+from agent_composer.nodes.contracts import (
+    Assertion,
+    ContractOrigins,
+    Parameter,
+    ValueContract,
+)
+from agent_composer.typesys.values import Type, ValueKind
 
 
-# A small shared environment: two producers (opaque output types) + two flow inputs.
-PRODUCERS = {"emit": None, "classify": None}
+# A small shared environment: two opaque producers + two flow inputs. Opaque
+# producers are absent from the contract map and stay lenient in the Type walker.
+PRODUCERS = {}
 VALID_TARGETS = {"emit", "classify"}
 FLOW_INPUTS = {"age", "threshold"}
 
@@ -113,9 +120,7 @@ def test_dangling_input_ref_raises():
 def test_unknown_field_on_record_producer_raises():
     # A dotted ref against a RECORD producer must name a real field; an unknown field is
     # a loud LoadError (mirrors the old classify_asserts bad-field walk). A typed producer
-    # is needed so the dotted walk actually runs (opaque `None` producers stay lenient).
-    from agent_composer.typesys.values import Type, ValueKind
-
+    # is needed so the dotted walk actually runs (an absent producer contract stays lenient).
     view = Type(
         kind=ValueKind.OBJECT,
         fields={"score": Type.scalar(ValueKind.NUMBER)},
@@ -125,7 +130,40 @@ def test_unknown_field_on_record_producer_raises():
         _lower(
             ["${synth.output.badfield} >= 0"],
             valid_targets={"synth"},
-            producers={"synth": view},
+            producers={"synth": ValueContract(view)},
+        )
+
+
+def test_type_walk_preserves_the_producer_contract_and_origins():
+    """Assert validation projects `.type` without replacing the semantic carrier."""
+    view = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": Type.scalar(ValueKind.NUMBER)},
+        required=frozenset({"score"}),
+    )
+    contract = ValueContract(
+        view,
+        ContractOrigins(default=OriginRef("producer-output")),
+    )
+
+    lowered = _lower(
+        ["${synth.output.score} >= 0"],
+        valid_targets={"synth"},
+        producers={"synth": contract},
+    )
+
+    assert _expressions(lowered.end_post) == ["${__assert_synth.score} >= 0"]
+    assert contract.type is view
+    assert contract.origins.default == OriginRef("producer-output")
+
+
+def test_assert_lowering_rejects_non_contract_producer_map_values():
+    """The flow-assert boundary accepts exact ValueContract values only."""
+    with pytest.raises(TypeError, match="producer contracts.*ValueContract"):
+        _lower(  # type: ignore[dict-item]
+            ["${synth.output} != null"],
+            valid_targets={"synth"},
+            producers={"synth": Type.scalar(ValueKind.STRING)},
         )
 
 

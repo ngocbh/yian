@@ -43,7 +43,7 @@ class ToolDescriptor(NodeDescriptor):
         """Construct the runtime `ToolNode` (+ wiring) for this `ToolDescriptor`.
 
         Node-side `params` (the sink NAMES) + flow-owned `inputs` wiring; a tool declares no
-        `outputs:`, so `output_type` stays unset. Stamps `.range`/`.field_ranges` from the
+        `outputs:`, so `output_contract` stays unset. Stamps `.range`/`.field_ranges` from the
         descriptor via `_finish` (which wraps them in a `BuildResult`). The sink surface is the
         base's `inputs` map, so it uses the inherited `self.sink_params()`/`self.sink_wiring()`.
         `ctx.resolver` is unused (leaf kind) and the inline-CODE anchors on `ctx` are read only

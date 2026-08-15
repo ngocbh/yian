@@ -2691,6 +2691,47 @@ output: ${invoke.output}
     assert caught.value.range == expected_range
 
 
+def test_inline_call_resolver_failure_uses_friendly_child_label(monkeypatch):
+    resolved: list[str] = []
+
+    def fail_private_resolution(self, flow_id, version=None):
+        resolved.append(flow_id)
+        raise RuntimeError("resolver exploded")
+
+    monkeypatch.setattr(
+        compose_loader._CallableScope,
+        "resolve",
+        fail_private_resolution,
+    )
+    source = """id: inline-resolver-failure
+name: inline_resolver_failure
+nodes:
+  wrapper:
+    kind: call
+    nodes:
+      constant:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ready
+        output: str
+    output: ${constant.output}
+output: ${wrapper.output}
+"""
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert resolved == [inline_flow_id(("root", "node", "wrapper", "inline"))]
+    assert (
+        "call node 'wrapper': could not resolve inline body of node 'wrapper': "
+        "resolver exploded"
+    ) in message
+    assert INLINE_FLOW_PREFIX not in message
+    assert resolved[0] not in message
+
+
 def test_inline_map_output_error_uses_friendly_child_label():
     with pytest.raises(LoadError) as caught:
         load_flow(

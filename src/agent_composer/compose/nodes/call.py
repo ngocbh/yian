@@ -14,10 +14,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import Parameter
+from agent_composer.nodes.contracts import ContractOrigins, Parameter, ValueContract
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.map import MapNode
-from agent_composer.typesys.values import ValueKind, Type
+from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.resolver import (
@@ -88,11 +88,12 @@ class CallDescriptor(NodeDescriptor):
         Returns a `BuildResult` (the split): the node carries `params`; the flow owns the sources
         in `wiring`. A MAP's reserved `over:` iteration source rides the wiring under the `"over"`
         key (over-then-inputs order); a REF's wiring is just its `inputs:`. Resolves the callable
-        via `ctx.resolver`, derives its `ChildSignature`, stamps `output_type` (REF re-exports the
-        codomain; MAP wraps it in `list[U]`), name/arity-checks the params, and BAKES the child's
+        via `ctx.resolver`, derives its `ChildSignature`, stamps `output_contract` (REF re-exports
+        the codomain carrier; MAP wraps its type in `list[U]` and retains its default origin),
+        name/arity-checks the params, and BAKES the child's
         compiled flow onto the node. The REF/MAP discriminator is the descriptor CLASS
         (`MapDescriptor` -> `MapNode`, else `CallNode`). `ctx.registry` is unused (call/map resolve
-        their output type from the child signature, not the flow typedefs); the inline-CODE anchors
+        their output contract from the child signature, not the flow typedefs); the inline-CODE anchors
         on `ctx` are read only by the CODE build.
         """
         resolver = ctx.resolver
@@ -141,7 +142,10 @@ class CallDescriptor(NodeDescriptor):
                     f"output value — a mapped call (over:) returns list[U] of that single output"
                 )
             else:
-                node.output_type = _list_of(sig.output)
+                node.output_contract = ValueContract(
+                    type=_list_of(sig.output.type),
+                    origins=ContractOrigins(default=sig.output.origins.default),
+                )
         else:
             node = CallNode(
                 self.id,
@@ -154,7 +158,7 @@ class CallDescriptor(NodeDescriptor):
             )
             node.params = self.sink_params()
             wiring = self.sink_wiring()
-            node.output_type = sig.output         # re-export the child's single codomain value
+            node.output_contract = sig.output
         _check_child_bindings(
             self.id,
             self.call,

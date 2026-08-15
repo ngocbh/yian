@@ -72,9 +72,9 @@ def test_seed03_loads_as_child_flow():
     assert parameters["as_of"].contract.type.kind is ValueKind.DATE
     assert all(parameter.coerce_strings for parameter in sig.inputs)
     # the single codomain value: a {report, asof} record (>=2 outputs -> closed record).
-    assert sig.output is not None
-    assert sig.output.kind == ValueKind.OBJECT
-    assert set(sig.output.fields) == {"report", "asof"}
+    assert type(sig.output) is ValueContract
+    assert sig.output.type.kind == ValueKind.OBJECT
+    assert set(sig.output.type.fields) == {"report", "asof"}
 
 
 # --------------------------------------------------------------------------- #

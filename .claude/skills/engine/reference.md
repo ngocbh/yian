@@ -245,6 +245,44 @@ owning node packages. The scheduling-state vocabulary sits in the internal
 append-before-apply reducer state, and dispatch; the package-root run boundary owns
 fresh-log creation, locked prefix recovery, and log closure.
 
+## Inline composite bodies (compose-only sugar)
+
+An authored CALL/MAP/LOOP may provide a non-empty `nodes:` plus `output:` instead
+of a named `call:`. The implementation boundary is deliberately above compile
+and runtime:
+
+- `compose.desugar.inline_bodies` makes occurrence-local shallow overlays for the
+  enclosing node map, retains the original located child values, and masks each
+  inline occurrence to an ordinary private `call:`. It never mutates authored
+  YAML anchors/aliases/merge values.
+- The private identity is stable: `__inline_flow_` + SHA-256 of the complete
+  lexical owner path. Authored defs/uses/call targets cannot enter that reserved
+  namespace, while diagnostics use the friendly enclosing-node label rather than
+  the digest.
+- One loader-owned callable scope contains authored `defs:`/`uses:` plus a
+  private table. Private builders register during assembly and run lazily;
+  private/def/uses resolution shares one success cache. Private children and
+  defs share the scope's in-progress guard, while the default file resolver's
+  load context guards cross-file recursion. An injected resolver is responsible
+  for any equivalent protection, so the baked call graph remains finite when
+  that seam honors the contract.
+- `compose.build.pipeline` associates retained bodies with final descriptors.
+  Outer `input:` bindings become generated `InputDecl`s through
+  `build.inline_inputs`' strict structural proof. Parent descriptors are built
+  through a lazy success-only descriptor cache when a direct producer reference
+  needs its output type. MAP has a separate one-proof cache: `over:` is inspected
+  only when a lone whole-value `${item...}` binding asks for its element type.
+- The child assembly receives only those generated inputs and its own node map,
+  which prevents parent-pool capture; the ordinary run-global `system` namespace
+  remains available. Nested strings inside literal containers are literals, not
+  wiring. Inline-only child flow config/assert sections do not exist; existing
+  outer-node and enclosing-flow configuration semantics remain unchanged.
+
+The output is the same `CompiledFlow` baked onto the existing CallNode/MapNode/
+LoopNode as a named child. Generated IDs remain ordinary `flow_id`/manifest data,
+but runtime never interprets their prefix or sees the resolver table/inline source
+shape; live growth and replay keep using the kind-blind injected `build_grow` path.
+
 ## The `expr` layer (one grammar, everywhere `${...}` appears)
 
 Bindings, conditions, and prompts share ONE expression grammar — the three

@@ -7,7 +7,9 @@ passes:
 
 - `inline_bodies` — occurrence-local located overlays isolate YAML aliases and
   merged mappings, then retain and mask inline CALL/MAP/LOOP child bodies without
-  editing authored anchors or values.
+  editing authored anchors or values. It assigns each retained child a stable
+  reserved identity from its complete lexical owner path; authored private-prefix
+  targets are rejected before registration.
 - `inline_calls` — whole-value `call(<flow-id>, kw=...)` directives in any binding
   position mint a synth `call` node and rewrite the binding to `${<synth>.output}`.
 - `adaptive_questions` — a `human_input` `adaptive_questions:` block lowers to a
@@ -20,5 +22,7 @@ passes:
 Ladder position: desugar imports DOWN/peer only — `helpers`, `nodes`, `parse`, and
 the engine core (`expr`, `events`, `compile`, `nodes.*`). It NEVER imports the
 later phases (`edges`, `validate`, `build`, `loader`, `cases`); nothing earlier
-imports it back. Only the loader (and the later phases) import this package.
+imports it back. Only the loader (and the later phases) import this package. The
+file-owned callable table and one-build cache stay in the loader; desugar only
+produces retained private-child declarations.
 """

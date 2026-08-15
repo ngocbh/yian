@@ -76,3 +76,21 @@ with their owning nodes; the scheduling-state vocabulary lives in the internal
 run-record/log codecs, append-before-apply reducer, and dispatcher, while the
 package-root `run.py` owns log lifecycle and recovery. Placing the shared state
 vocabulary in a neutral leaf keeps both consumers from owning the other's contract.
+
+## Front-end ownership example: inline composite children
+
+Inline CALL/MAP/LOOP bodies do not earn a runtime package or a new compile
+abstraction. Their responsibilities follow the existing compose phases:
+
+| Responsibility | Owner | Must not know |
+|---|---|---|
+| Located, occurrence-local YAML overlay and stable lexical private identity | `compose/desugar/inline_bodies.py` | later `build`, concrete loader scope, runtime |
+| Strict generated input-type proof | `compose/build/inline_inputs.py` | loader state, runtime |
+| Association, lazy parent-descriptor dependencies, child assembly | `compose/build/pipeline.py` | concrete loader implementation |
+| File-private callable table, one-build cache, recursion guard | `compose/loader.py` | runtime |
+
+`build.pipeline` accepts a narrow registrar/resolver protocol; the higher loader
+supplies its concrete file scope. That seam prevents the tempting `build ->
+loader` back-edge. Once lowered, the child is an ordinary compiled CALL/MAP/LOOP
+child, so neither `compile` nor `runtime` needs to know the private prefix or
+authored inline shape.

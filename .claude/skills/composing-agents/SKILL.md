@@ -17,7 +17,8 @@ that bite.
 **Companions:** [`reference.md`](reference.md) — operators, the three expression
 contexts, type forms, recipes, and gotchas. [`templates/`](templates/) — minimal
 loadable starter flows for each shape (single agent, agent→code pipeline,
-branch+join, tool use, human gate, `call`/`map` composition); copy one and edit.
+branch+join, tool use, human gate, named and inline `call`/`map`/`loop`
+composition); copy one and edit.
 
 ## The workflow — author a flow in order
 
@@ -28,8 +29,9 @@ branch+join, tool use, human gate, `call`/`map` composition); copy one and edit.
 3. **Decompose into leaf nodes.** Each node is one step: an LLM call (`agent`),
    deterministic code (`code`), a registered tool (`tool`), a branch (`case`), a
    blocking human gate (`human_input`), a blocking UTC deadline (`wait`), a child-flow call
-   (`call`/`map`), or an iterated body (`loop`). Prefer many small typed nodes over
-   one mega-prompt.
+   (`call`/`map`), or an iterated body (`loop`). A reusable child lives in
+   `defs:`/`uses:`; a one-off child may put `nodes:` + `output:` directly on
+   CALL/MAP/LOOP. Prefer many small typed nodes over one mega-prompt.
 4. **Wire by reference, not by edges.** A node consumes another by putting
    `${producer.output}` in its `input:` block. That reference *is* the edge.
 5. **Bind the flow `output:`** to the terminal node(s).
@@ -267,8 +269,8 @@ immediately. Otherwise WAIT holds one worker until the remaining wall-clock
 duration elapses, then returns `None` as an ordinary node output.
 
 ### `call` / `map` — composition over child flows
-A child is itself a flow file. `call` runs it once; `map` runs it per list element
-(`${item}` is the current element).
+A child is itself a flow. `call` runs it once; `map` runs it per list element
+(`${item}` is the current element). Name a reusable child with `call:`:
 ```yaml
 uses:
   research-one: 03-research-one   # bind an external sibling flow to a local alias
@@ -278,12 +280,53 @@ nodes:
     kind: map
     over: ${input.topics}         # a list[T]
     call: research-one            # node value is list[U]
-    parallel: true
     input: { topic: ${item} }     # per-element call args (sink-bind the child's params)
 ```
 `call:` resolves **defs-first, else a `uses:` alias** (an external flow on the
-search path, by filename; `alias@v1` adds a version guard). Reference the callee's
-object fields downstream as `${each.output.field}`.
+search path, by filename; `alias@v1` adds a version guard). A CALL's record fields
+are available as `${one.output.field}`; a MAP returns a list at `${each.output}`,
+so project element fields in a downstream CODE/MAP step. `parallel:` is accepted
+but currently inert; run-level `num_workers` controls MAP concurrency.
+
+For a one-off child, replace `call:` with a non-empty `nodes:` body and add the
+required `output:` key:
+
+```yaml
+each:
+  kind: map
+  over: ${input.topics}
+  input:
+    topic: ${item}                # generates child parameter `topic`
+  nodes:
+    normalize:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: str
+      code: |
+        return inputs["topic"].strip()
+  output: ${normalize.output}
+```
+
+Use exactly one of `call:` or `nodes:`. The `output:` key is required; CALL may
+set it to null and return `None`, while MAP/LOOP require their usual output
+shape. The inline child cannot capture the parent pool: pass parent values and
+MAP's item through the outer `input:`, then read generated `${input.X}`
+parameters and child-node outputs inside. Run-global `${system.today}`,
+`${system.now}`, and `${system.run_id}` remain available. Types are inferred
+strictly from YAML null/bool/int/float/string values, structural containers, or
+direct typed refs; refs preserve structure/nullability, and only a lone
+whole-value `${item...}` lazily requires a proven `over:` element type. Actual
+null elements of `list[Optional[record]]` remain a typed-storage limitation
+(issue #128), although nullable intermediate fields work. If inference cannot
+prove a type, write a named `defs:` child with an explicit signature. Strings
+nested in literal containers stay literal and are not reference-scanned. Other
+fields keep their outer-node meaning (LOOP drivers, `env:`, and CALL/LOOP
+asserts; MAP asserts remain invalid); `parallel:` remains accepted but inert.
+Inline child flow configuration is not a separate surface, and `llm_config:`
+remains invalid on composite nodes. The enclosing flow's LLM cascade still
+reaches body agents. See
+[`templates/inline-composites.yaml`](templates/inline-composites.yaml).
 
 ### `loop` — iterate a body until a predicate goes false (the engine's `while`)
 Threads ONE carried record from each turn into the next: the body maps the carried
@@ -298,6 +341,9 @@ turn:
   while: not ${exited}         # pre-check over the carried record; `not` OUTSIDE ${...}
   max: 100                     # REQUIRED runaway guard (LoopMaxExceeded)
 ```
+`loop` accepts the same inline `nodes:` + `output:` form instead of `call:`; its
+generated parameters are the carried `input:` fields, so the same `'a -> 'a`
+contract still applies.
 The body's `output:` shape must **equal** the carried record and read only a
 **subset** of its names (`'a -> 'a`) — names checked at build, types at load. The
 node's value is the final carried record. A body that blocks (a `human_input` leaf)
@@ -350,6 +396,10 @@ embedded flow call to a named `call` node, and split a coalesce-of-calls
 (`${a() | b()}`) into per-node outputs. Pure builtins (`${upper(x)}`) stay legal
 inside `${}`.
 
+Do not confuse this with an inline child body: `call(f, ...)` invokes an already
+named callable and synthesizes a CALL node; `kind: call` + `nodes:` defines a
+one-off child's body on that node.
+
 ## Prompts see only LOCAL inputs
 Inside a `prompt:` you may reference only names the node declares in its own
 `input:` block, written bare (`${name}`). Pool references (`${input.x}`,
@@ -381,5 +431,6 @@ agent `entry:`/`controls:` field or event-mode WAIT.
 - [ ] Every prompt references only the node's own local input names.
 - [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.
 - [ ] `tool` ids are registered; a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
+- [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.
 - [ ] It loads cleanly (`ac run` / `load_flow`) before you wire a model.

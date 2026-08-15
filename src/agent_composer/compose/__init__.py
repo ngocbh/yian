@@ -11,7 +11,9 @@ derives the shared `KINDS` table from those classes), and the cross-node graph-s
 in the ordered phases `parse/ -> desugar/ -> edges/ -> validate/ -> build/`. The shared choke
 points (`parse/nodes.py`, the loader's conductor loop, `nodes/bindings.py`) dispatch through
 `KINDS` kind-blind — there is no per-kind isinstance ladder. `parse/file.py` is the YAML
-text/span front door (`parse_file`).
+text/span front door (`parse_file`). The loader also owns each file's callable scope:
+authored `defs:`/`uses:` plus a resolver-private, lazy cache for inline CALL/MAP/LOOP
+children lowered by `desugar/` and assembled by `build/`.
 
 Errors carry a concrete `SourceRange` (from `events`): a located `NodeReader` records
 each field's range during `parse`, the runtime funnel resolves a failure's range from

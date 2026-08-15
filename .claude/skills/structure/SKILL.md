@@ -80,6 +80,15 @@ runtime.
 When you add a package, name what it sits *above* and what it sits *below*, and
 record that in its charter's "Knows / Never imports".
 
+Compose-only anonymous children are a front-end ownership example. Located,
+read-only occurrence extraction belongs in `compose/desugar`; strict generated
+signature proof and child assembly belong in `compose/build`; the file-lifetime
+private callable table/cache belongs in `compose/loader`, beside the authored
+`defs:`/`uses:` scope it extends. `build` depends only on a small registrar/
+resolver protocol, never imports the loader back, and no private-name mechanism
+is interpreted by `compile` or `runtime` (the generated string remains ordinary
+`flow_id` data).
+
 If you find yourself needing an upward import, you've put the code in the wrong
 package — see §5.
 

@@ -46,8 +46,8 @@ class CallDescriptor(NodeDescriptor):
     `call` names the callable, resolved **defs-first, else an external flow id** (the
     loader composes that resolution). `kind: call` is a single application (built as a plain
     `CallNode`); `kind: map` + `over: ${list}` is `List.map` — iteration with `${item}` in
-    element scope (built as a `MapNode`), and `parallel:` overlaps the element runs. `inputs:`
-    are the (per-element) call-arg bindings.
+    element scope (built as a `MapNode`). `parallel:` is retained but currently inert; run-level
+    workers control concurrency. `inputs:` are the (per-element) call-arg bindings.
 
     The REF/MAP discriminator is the descriptor CLASS: a plain `CallDescriptor` is a REF (built
     as a `CallNode`); a `MapDescriptor` (its subclass, in `map.py`) is a MAP (built as a

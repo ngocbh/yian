@@ -129,6 +129,17 @@ def test_missing_ref_errors(tmp_path):
         load_flow(parent.read_text(), search_paths=[tmp_path])
 
 
+def test_malformed_external_child_is_located_load_error(tmp_path):
+    (tmp_path / "child.yaml").write_text("id: [")
+    parent = _write(tmp_path, "p", "p", call="ch", uses={"ch": "child"})
+
+    with pytest.raises(LoadError, match="invalid YAML") as caught:
+        load_flow(parent.read_text(), search_paths=[tmp_path])
+
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == 1
+
+
 def test_search_path_precedence_own_dir_first(tmp_path):
     d2 = tmp_path / "shared"
     d2.mkdir()

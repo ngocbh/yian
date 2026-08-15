@@ -1,8 +1,8 @@
-"""The section parser: Compose YAML text -> a strict `ComposeFile`.
+"""The section parser: one owned source document -> a strict `ComposeFile`.
 
-This is the analogue of `manifest/parser.py`: `yaml.safe_load` -> wrap as a
-strict Pydantic model -> raise `LoadError` on any violation. Three surface
-rules shape it:
+This is the analogue of `manifest/parser.py`: inspect an existing document
+cursor, copy its semantic value into a strict Pydantic model, and raise
+`LoadError` on any violation. Three surface rules shape it:
 
 - **Top-level sections only** (`id`/`name`/`description?`/`inputs`/`nodes`/
   `outputs`/`asserts`/`typedefs`/`defs`/`uses`/`system`). `extra="forbid"` on the
@@ -11,20 +11,25 @@ rules shape it:
   path — NOT the strict `${system.X}` ambient namespace.)
 - **`x-*` extension keys** at the top level are stripped before validation —
   custom metadata / YAML-anchor holders the engine ignores.
-- **YAML anchors** (`&` / `*` / `<<:` merge) are expanded by PyYAML's
-  `safe_load` *before* the strict schema sees the document.
+- **YAML anchors** (`&` / `*` / `<<:` merge) are expanded by the source
+  document's single safe construction pass before the strict schema sees it.
 
 `nodes` stays a raw `dict` here; per-kind node descriptors are a later step.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Optional
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.source import _section_lines
+from agent_composer.compose.source import (
+    SourceDocument,
+    SourceSyntaxError,
+)
 
 # `AgentDescriptor`/`CodeDescriptor`/`ModelDescriptor`/`ToolDescriptor`/`WaitDescriptor`
 # now live with their parse/build handles in `nodes/<kind>.py`; re-export them here so
@@ -216,40 +221,37 @@ def _desugar_compact(body: dict, lines: dict[str, int]) -> dict:
     return canonical
 
 
-def _top_level_lines(text: str) -> dict[str, int]:
-    """Best-effort map of top-level key -> 1-based source line (for loud errors).
+def parse_source_document(text: str, label: str) -> SourceDocument:
+    """Parse one owned source document and translate syntax failure once."""
 
-    Returns {} if PyYAML can't compose the document (the strict validate below
-    surfaces the real error); full source mapping is a later slice.
-    """
     try:
-        root = yaml.compose(text)
-    except yaml.YAMLError:
-        return {}
-    if not isinstance(root, yaml.MappingNode):
-        return {}
-    lines: dict[str, int] = {}
-    for key_node, _ in root.value:
-        if isinstance(key_node, yaml.ScalarNode):
-            lines[key_node.value] = key_node.start_mark.line + 1
-    return lines
+        return SourceDocument.parse(text, label)
+    except SourceSyntaxError as exc:
+        raise LoadError(f"invalid YAML: {exc}", range=exc.range) from exc
 
 
-def parse_file(text: str) -> ComposeFile:
-    """Parse Compose YAML text into a strict `ComposeFile`.
+def parse_file(source: str | SourceDocument) -> ComposeFile:
+    """Parse a source document into a strict `ComposeFile`.
 
     Raises `LoadError` on malformed YAML, a non-mapping document, an unknown
     top-level key (after stripping `x-*`), or any schema violation.
     """
-    try:
-        raw = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise LoadError(f"invalid YAML: {exc}") from exc
-    if not isinstance(raw, dict):
-        raise LoadError("a flow must be a YAML mapping at the top level")
+    document = (
+        parse_source_document(source, "<flow>")
+        if isinstance(source, str)
+        else source
+    )
+    root = document.root
+    raw = root._value_view()
+    if not isinstance(raw, Mapping):
+        raise LoadError("a flow must be a YAML mapping at the top level", range=root.range)
 
-    lines = _top_level_lines(text)
-    body = {k: v for k, v in raw.items() if not str(k).startswith("x-")}
+    lines = _section_lines(root)
+    body = {
+        key: root.get(key)
+        for key in raw
+        if not str(key).startswith("x-")
+    }
 
     # Compact (single-node) flow: a top-level node `kind:` with no `nodes:` map. Desugar
     # to the canonical one-node form BEFORE the strict-schema checks below, since `nodes:`

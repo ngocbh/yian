@@ -26,6 +26,7 @@ cycling; `parse/file.py` re-exports it as the descriptor base type for its impor
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Optional
 
@@ -36,7 +37,8 @@ from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.types import read_type
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.helpers.reader import NodeReader, as_cursor
+from agent_composer.compose.source import SourceCursor
 from agent_composer.events import SourceRange
 
 
@@ -181,7 +183,7 @@ class NodeDescriptor:
     # --- Parse-side machinery (shared key-legality + common-field reads) ------------------
 
     @classmethod
-    def _check_keys(cls, node_id: str, reader: NodeReader) -> None:
+    def _check_keys(cls, node_id: str, reader: SourceCursor) -> None:
         """Legality check for a node body's surface keys, run by the template `parse`.
 
         Rejects any body key not in `cls.allowed` (the COMPLETE legal key set for this kind —
@@ -190,7 +192,7 @@ class NodeDescriptor:
         unknown key caret-points at that key's value, a missing key at the node body. Reads
         nothing into the descriptor (that is `_read_common_fields` + the template's own-key loop)."""
         allowed_keys = cls.allowed
-        body = reader.value
+        body = reader._value_view()
         for key in body:
             if key not in allowed_keys:
                 raise LoadError(
@@ -202,50 +204,56 @@ class NodeDescriptor:
             if key not in body:
                 raise LoadError(
                     f"node {node_id!r} (kind={cls.kind}): missing required field {key!r}",
-                    range=reader._own_range(),
+                    range=reader.range,
                 )
 
     @classmethod
     def _read_common_fields(
         cls,
         node_id: str,
-        reader: NodeReader,
+        reader: SourceCursor,
         kwargs: dict[str, Any],
         ranges: dict[tuple[str, str], SourceRange],
     ) -> None:
         """Lift the four common author-surface fields into the template `parse` accumulators.
 
-        Reads `node_name`/`depends_on`/`runs_after`/`env` from the node body (`reader.value`)
+        Reads `node_name`/`depends_on`/`runs_after`/`env` from the cursor's read-only body
         into `kwargs`, recording each present field's `SourceRange` into `ranges`; both dicts
         are mutated IN PLACE (the accumulators the template passes to the descriptor
         constructor). `env:` is validated to be a mapping with string keys — a bad shape raises
         a located `LoadError` naming `cls.kind`. The other three are copied through untouched
         (their per-field shape is checked later by the loader edge pass)."""
-        body = reader.value
+        body = reader._value_view()
         for key in ("node_name", "depends_on", "runs_after"):
             if key in body:
-                kwargs[key] = body[key]
+                kwargs[key] = reader.get(key)
                 rng = reader.range_of(key)
                 if rng is not None:
                     ranges[("field", key)] = rng
         if "env" in body:
             env = body["env"]
-            if not isinstance(env, dict) or not all(isinstance(k, str) for k in env):
+            if not isinstance(env, Mapping) or not all(
+                isinstance(k, str) for k in env
+            ):
                 raise LoadError(
                     f"node {node_id!r} (kind={cls.kind}): `env:` must be a mapping "
                     f"with string keys",
                     range=reader.range_of("env"),
                 )
-            kwargs["env"] = env
+            kwargs["env"] = reader.mapping("env")
             rng = reader.range_of("env")
             if rng is not None:
                 ranges[("field", "env")] = rng
 
     @classmethod
-    def parse(cls, node_id: str, reader: NodeReader) -> "NodeDescriptor":
+    def parse(
+        cls,
+        node_id: str,
+        reader: NodeReader | SourceCursor,
+    ) -> "NodeDescriptor":
         """The template `parse` — the whole parse skeleton every kind shares.
 
-        Runs, in order: `_normalize_reader` (pre-check fixup hook), `_check_keys` (key
+        Runs, in order: `_normalize_cursor` (pure pre-check projection), `_check_keys` (key
         legality), the OWN-KEY loop (`cls.allowed - NodeDescriptor.allowed` yields exactly
         this kind's own keys — the commons + `kind` live on the base's set, so the loop never
         touches them; each present key is read into `kwargs` under its `keyword_remap`ped name,
@@ -255,30 +263,40 @@ class NodeDescriptor:
 
         A kind customizes only the two hooks; 8 of 10 kinds inherit this untouched. Returns
         the fully-populated descriptor instance (`cls`, never the abstract base)."""
-        cls._normalize_reader(reader)
-        cls._check_keys(node_id, reader)
-        body = reader.value
-        own_range = reader._own_range()
+        cursor = cls._normalize_cursor(as_cursor(reader))
+        cls._check_keys(node_id, cursor)
+        body = cursor._value_view()
+        own_range = cursor.range
         ranges: FieldRanges = FieldRanges()
         kwargs: dict[str, Any] = {"id": node_id}
         for key in cls.allowed - NodeDescriptor.allowed:  # this kind's OWN keys only
             if key not in body:
                 continue
-            rng = reader.range_of(key)
+            rng = cursor.range_of(key)
             if rng is not None:
                 ranges[("field", key)] = rng
-            kwargs[cls.keyword_remap.get(key, key)] = body[key]
+            kwargs[cls.keyword_remap.get(key, key)] = cursor.get(key)
         cls._validate_fields(node_id, kwargs, ranges, own_range)
-        cls._read_common_fields(node_id, reader, kwargs, ranges)
+        cls._read_common_fields(node_id, cursor, kwargs, ranges)
         return cls(**kwargs, range=own_range, field_ranges=ranges)
 
     @classmethod
-    def _normalize_reader(cls, reader: NodeReader) -> None:
-        """Pre-`_check_keys` fixup of `reader.value`. Default: nothing to fix.
+    def _normalize_cursor(cls, reader: SourceCursor) -> SourceCursor:
+        """Return the cursor view inspected by `_check_keys`; default unchanged.
 
         A hook the template `parse` calls first, before any key is inspected. Only `case`
-        overrides it (to undo YAML 1.1's `on:`->`True` key coercion); every other kind
-        inherits this no-op."""
+        overrides it to project YAML 1.1's `on:` boolean key back to its schema name.
+        """
+
+        return reader
+
+    @classmethod
+    def _normalize_reader(cls, reader: NodeReader) -> None:
+        """Retired no-op kept only for direct legacy compatibility tests.
+
+        Parsing never calls this hook; `_normalize_cursor` is the active pure
+        normalization contract.
+        """
 
     @classmethod
     def _validate_fields(

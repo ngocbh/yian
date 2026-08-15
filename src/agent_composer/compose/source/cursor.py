@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Mapping
+from bisect import bisect_right
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
 from agent_composer.compose.source.common import (
     OccurrencePath,
     SourceAccessError,
+    _ArcSequence,
+    _KeyIndex,
     _MapArc,
+    _MapOccurrence,
     _MapStep,
     _MappingDef,
     _PathLink,
@@ -64,6 +68,11 @@ class SourceCursor:
         repr=False,
         compare=False,
     )
+    _projected_index: _KeyIndex | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     _sequence_sources: tuple[SourceCursor | None, ...] | None = field(
         default=None,
         repr=False,
@@ -93,6 +102,7 @@ class SourceCursor:
             _cycle_cut=cycle_cut,
             _overlay=False,
             _projected_entries=None,
+            _projected_index=None,
             _sequence_sources=None,
         )
 
@@ -123,6 +133,7 @@ class SourceCursor:
             _cycle_cut=False,
             _overlay=False,
             _projected_entries=None,
+            _projected_index=None,
             _sequence_sources=None,
         )
 
@@ -239,23 +250,124 @@ class SourceCursor:
         except (TypeError, ValueError):
             return False
 
-    def _effective_arc(self, key: Any) -> _MapArc | None:
-        """Find the last effective physical mapping arc for `key`."""
+    @staticmethod
+    def _mapping_contains(value: Any, key: Any) -> bool:
+        """Test exact dict membership while treating unhashable keys as absent."""
+
+        if type(value) is not dict:
+            return False
+        try:
+            return key in value
+        except (TypeError, ValueError):
+            return False
+
+    def _effective_occurrence_in_definition(
+        self,
+        definition_id: int,
+        key: Any,
+    ) -> _MapOccurrence | None:
+        """Resolve one key from a compact pair rope's effective index."""
+
+        assert self._document is not None
+        definition = self._document._definitions[definition_id]
+        if not isinstance(definition, _MappingDef):
+            return None
+        return definition.effective_index.get(key)
+
+    def _effective_occurrence(self, key: Any) -> _MapOccurrence | None:
+        """Find the last effective physical mapping occurrence for ``key``."""
 
         definition = self._mapping_definition()
-        if definition is None:
+        if definition is None or not self._mapping_contains(self._value, key):
             return None
-        for ordinal in definition.effective_ordinals:
-            arc = definition.arcs[ordinal]
-            if self._keys_equal(arc.constructed_key, key):
-                return arc
-        return None
+        assert self._definition is not None
+        return self._effective_occurrence_in_definition(self._definition, key)
 
-    def _descend_mapping_arc(self, arc: _MapArc) -> SourceCursor:
-        """Create a child cursor for one physical mapping arc."""
+    def _iter_flat_occurrences(
+        self,
+        sequence: _ArcSequence,
+    ) -> Iterator[_MapOccurrence]:
+        """Yield logical flattened occurrences using an explicit merge-DAG stack."""
+
+        stack: list[tuple[str, Any]] = [("sequence", sequence)]
+        ordinal = 0
+        while stack:
+            kind, item = stack.pop()
+            if kind == "arc":
+                yield _MapOccurrence(item, ordinal)
+                ordinal += 1
+                continue
+            for arc in reversed(item.arcs):
+                stack.append(("arc", arc))
+            for part in reversed(item.parts):
+                stack.append(("sequence", part))
+
+    def _iter_unique_occurrences(
+        self,
+        sequence: _ArcSequence,
+        *,
+        reverse: bool = False,
+    ) -> Iterator[_MapOccurrence]:
+        """Yield shared leaves once at their first or last logical embedding."""
+
+        seen: set[_ArcSequence] = set()
+        stack: list[tuple[_ArcSequence, int]] = [(sequence, 0)]
+        while stack:
+            current, base = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            if current.parts:
+                indices = range(len(current.parts))
+                if not reverse:
+                    indices = reversed(tuple(indices))
+                for index in indices:
+                    stack.append(
+                        (
+                            current.parts[index],
+                            base + current.part_offsets[index],
+                        )
+                    )
+                continue
+            indices = (
+                range(len(current.arcs) - 1, -1, -1)
+                if reverse
+                else range(len(current.arcs))
+            )
+            for index in indices:
+                yield _MapOccurrence(current.arcs[index], base + index)
+
+    def _flat_arc_at(self, sequence: _ArcSequence, ordinal: int) -> _MapArc:
+        """Return one logical flattened arc without enumerating preceding pairs."""
+
+        current = sequence
+        current_ordinal = ordinal
+        while True:
+            if not current.parts:
+                if not 0 <= current_ordinal < len(current.arcs):
+                    raise SourceAccessError(
+                        "invalid mapping occurrence path",
+                        self.range,
+                    )
+                return current.arcs[current_ordinal]
+            part_index = bisect_right(
+                current.part_offsets,
+                current_ordinal,
+            ) - 1
+            if part_index < 0:
+                raise SourceAccessError("invalid mapping occurrence path", self.range)
+            current_ordinal -= current.part_offsets[part_index]
+            current = current.parts[part_index]
+
+    def _descend_mapping_occurrence(
+        self,
+        occurrence: _MapOccurrence,
+    ) -> SourceCursor:
+        """Create a child cursor for one logical physical mapping occurrence."""
 
         assert self._document is not None
         assert self._path_link is not None
+        arc = occurrence.arc
         link = self._path_link
         recursive = False
         while link is not None:
@@ -265,7 +377,7 @@ class SourceCursor:
             link = link.parent
         child_link = _PathLink(
             self._path_link,
-            _MapStep(arc.constructed_key, arc.pair_ordinal),
+            _MapStep(arc.constructed_key, occurrence.pair_ordinal),
             arc.value_definition,
         )
         return SourceCursor._physical(
@@ -303,12 +415,10 @@ class SourceCursor:
     def _projected_entry(self, key: Any) -> _ProjectedEntry | None:
         """Find one effective projected mapping entry."""
 
-        if self._projected_entries is None:
+        if self._projected_entries is None or self._projected_index is None:
             return None
-        for entry in self._projected_entries:
-            if self._keys_equal(entry.key, key):
-                return entry
-        return None
+        index = self._projected_index.get(key)
+        return self._projected_entries[index] if index is not None else None
 
     def _projected_child(self, entry: _ProjectedEntry) -> SourceCursor:
         """Expose a projected value with its optional retained child source."""
@@ -394,10 +504,10 @@ class SourceCursor:
 
         mapping = self._mapping_definition()
         if mapping is not None:
-            arc = self._effective_arc(key)
-            if arc is None:
+            occurrence = self._effective_occurrence(key)
+            if occurrence is None:
                 raise SourceAccessError(f"missing required field {key!r}", self.range)
-            return self._descend_mapping_arc(arc)
+            return self._descend_mapping_occurrence(occurrence)
 
         sequence = self._sequence_definition()
         if sequence is not None:
@@ -453,10 +563,12 @@ class SourceCursor:
 
         mapping = self._mapping_definition()
         if mapping is not None:
-            return tuple(
-                self._descend_mapping_arc(mapping.arcs[ordinal])
-                for ordinal in mapping.effective_ordinals
-            )
+            children = []
+            for key in self._value:
+                occurrence = self._effective_occurrence(key)
+                if occurrence is not None:
+                    children.append(self._descend_mapping_occurrence(occurrence))
+            return tuple(children)
         sequence = self._sequence_definition()
         if sequence is not None:
             return tuple(
@@ -507,10 +619,15 @@ class SourceCursor:
         definition = self._mapping_definition()
         if definition is None:
             return ()
+        if key is not _NO_FILTER and not self._mapping_contains(self._value, key):
+            return ()
         return tuple(
-            self._descend_mapping_arc(arc)
-            for arc in definition.arcs
-            if key is _NO_FILTER or self._keys_equal(arc.constructed_key, key)
+            self._descend_mapping_occurrence(occurrence)
+            for occurrence in self._iter_flat_occurrences(
+                definition.pair_sequence
+            )
+            if key is _NO_FILTER
+            or self._keys_equal(occurrence.arc.constructed_key, key)
         )
 
     @staticmethod
@@ -532,15 +649,25 @@ class SourceCursor:
         self._ensure_traversable()
         if isinstance(step, _MapStep):
             definition = self._mapping_definition()
-            if definition is None or not 0 <= step.pair_ordinal < len(definition.arcs):
+            if (
+                definition is None
+                or not 0
+                <= step.pair_ordinal
+                < definition.pair_sequence.flat_pair_count
+            ):
                 raise SourceAccessError("invalid mapping occurrence path", self.range)
-            arc = definition.arcs[step.pair_ordinal]
+            arc = self._flat_arc_at(
+                definition.pair_sequence,
+                step.pair_ordinal,
+            )
             if not self._path_keys_equal(arc.constructed_key, step.constructed_key):
                 raise SourceAccessError(
                     "mapping occurrence path key does not match",
                     self.range,
                 )
-            return self._descend_mapping_arc(arc)
+            return self._descend_mapping_occurrence(
+                _MapOccurrence(arc, step.pair_ordinal)
+            )
 
         definition = self._sequence_definition()
         if definition is None or not 0 <= step.index < len(definition.item_definitions):
@@ -577,7 +704,7 @@ class SourceCursor:
                 return key in self._value
             except TypeError:
                 return False
-        return self._effective_arc(key) is not None
+        return self._effective_occurrence(key) is not None
 
     def get(self, key: Any, default: Any = None) -> Any:
         """Return a defensive mapping value or fallback copy.
@@ -745,10 +872,10 @@ class SourceCursor:
             return self._projected_child(entry).key_range if entry is not None else None
         if self._overlay or self._document is None:
             return None
-        arc = self._effective_arc(key)
-        if arc is None:
+        occurrence = self._effective_occurrence(key)
+        if occurrence is None:
             return None
-        return self._document._definitions[arc.key_definition].range
+        return self._document._definitions[occurrence.arc.key_definition].range
 
     def _optional_child(self, key: Any) -> SourceCursor | None:
         """Return an effective child, suppressing best-effort range failures."""
@@ -777,6 +904,24 @@ class SourceCursor:
         if isinstance(definition, _ScalarDef):
             return definition.raw
         return None
+
+    @property
+    def source_key_value(self) -> Any:
+        """Return the constructed key selecting this physical occurrence.
+
+        Returns:
+            `Any`:
+                Defensive key copy, or ``None`` for roots, sequence items, and
+                source-free values. Callers that distinguish a YAML null key
+                should pair this with ``key_range``.
+        """
+
+        if self._document is None or self._key_definition is None:
+            return None
+        definition = self._document._definitions[self._key_definition]
+        if not isinstance(definition, _ScalarDef):
+            return None
+        return copy.deepcopy(definition.value)
 
     def _own_item_ranges(self) -> dict[str, SourceRange]:
         """Collect scalar item ranges from this sequence cursor."""
@@ -899,11 +1044,27 @@ class SourceCursor:
         definition = self._mapping_definition()
         if definition is None or self._document is None:
             return {}
-        ranges = {}
-        for arc in definition.arcs:
+        last_ranges: dict[str, SourceRange] = {}
+        for occurrence in self._iter_unique_occurrences(
+            definition.pair_sequence,
+            reverse=True,
+        ):
+            arc = occurrence.arc
             child_range = self._document._definitions[arc.value_definition].range
-            if arc.raw_key is not None and child_range is not None:
-                ranges[arc.raw_key] = child_range
+            if (
+                arc.raw_key is not None
+                and child_range is not None
+                and arc.raw_key not in last_ranges
+            ):
+                last_ranges[arc.raw_key] = child_range
+
+        ranges: dict[str, SourceRange] = {}
+        for occurrence in self._iter_unique_occurrences(definition.pair_sequence):
+            raw_key = occurrence.arc.raw_key
+            if raw_key is not None and raw_key not in ranges:
+                located = last_ranges.get(raw_key)
+                if located is not None:
+                    ranges[raw_key] = located
         return ranges
 
     def mapping_value_ranges(self, key: Any) -> dict[str, SourceRange]:
@@ -946,14 +1107,18 @@ class SourceCursor:
         for definition_id in sequence.item_definitions:
             definition = self._document._definitions[definition_id]
             selected: SourceRange | None = None
-            if isinstance(definition, _MappingDef) and type(definition.value) is dict:
-                for ordinal in definition.effective_ordinals:
-                    arc = definition.arcs[ordinal]
-                    if self._keys_equal(arc.constructed_key, field):
-                        selected = self._document._definitions[
-                            arc.value_definition
-                        ].range
-                        break
+            if (
+                isinstance(definition, _MappingDef)
+                and self._mapping_contains(definition.value, field)
+            ):
+                occurrence = self._effective_occurrence_in_definition(
+                    definition_id,
+                    field,
+                )
+                if occurrence is not None:
+                    selected = self._document._definitions[
+                        occurrence.arc.value_definition
+                    ].range
             ranges.append(selected)
         return ranges
 
@@ -1050,6 +1215,11 @@ class SourceCursor:
             _cycle_cut=self._cycle_cut,
             _overlay=self._document is not None,
             _projected_entries=projected_entries,
+            _projected_index=(
+                _KeyIndex.last_positions(entry.key for entry in projected_entries)
+                if projected_entries is not None
+                else None
+            ),
             _sequence_sources=sequence_sources,
         )
 
@@ -1076,7 +1246,7 @@ class SourceCursor:
         """
 
         displayed: dict[Any, Any] = {}
-        sources: list[SourceCursor | None] = []
+        sources: dict[Any, SourceCursor | None] = {}
         for key, pair in entries.items():
             if type(pair) is not tuple or len(pair) != 2:
                 raise TypeError("projected entries must be (value, source) tuples")
@@ -1084,12 +1254,12 @@ class SourceCursor:
             if source is not None and not isinstance(source, SourceCursor):
                 raise TypeError("projected entry source must be a SourceCursor or None")
             displayed[key] = value
-            sources.append(source)
+            sources[key] = source
 
         snapshot = _snapshot_safe_value(displayed)
         projected_entries = tuple(
-            _ProjectedEntry(key, source)
-            for (key, _value), source in zip(snapshot.items(), sources)
+            _ProjectedEntry(key, sources[key])
+            for key in snapshot
         )
         return SourceCursor(
             _document=self._document,
@@ -1100,6 +1270,9 @@ class SourceCursor:
             _cycle_cut=self._cycle_cut,
             _overlay=self._document is not None,
             _projected_entries=projected_entries,
+            _projected_index=_KeyIndex.last_positions(
+                entry.key for entry in projected_entries
+            ),
             _sequence_sources=None,
         )
 

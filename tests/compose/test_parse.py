@@ -12,6 +12,7 @@ from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.nodes.agent import AgentDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceDocument
 
 
 def _nodes_reader(text):
@@ -78,3 +79,70 @@ def test_parse_nodes_spanless_reader():
     assert desc == AgentDescriptor(id="w", prompt="hi", inputs={"x": "${input.x}"}, outputs="str")
     assert desc.range is None
     assert desc.field_ranges == {}
+
+
+def test_parse_nodes_normalizes_without_mutating_cursor():
+    nodes = SourceDocument.parse(_FLOW).root.child("nodes")
+    before = nodes.value
+
+    desc = parse_nodes(nodes)["writer"]
+
+    assert desc.inputs == {"topic": "${input.topic}"}
+    assert desc.outputs == "string"
+    assert nodes.value == before
+    assert nodes.child("writer").has("input")
+    assert not nodes.child("writer").has("inputs")
+
+
+def test_case_on_normalization_does_not_mutate_cursor():
+    source = """\
+nodes:
+  route:
+    kind: case
+    on: ${score.output}
+    cases:
+      - when: high
+        then: hot
+"""
+    nodes = SourceDocument.parse(source).root.child("nodes")
+    route = nodes.child("route")
+
+    desc = parse_nodes(nodes)["route"]
+
+    assert desc.on == "${score.output}"
+    assert route.has(True)
+    assert not route.has("on")
+
+
+def test_case_normalization_uses_last_effective_boolean_key():
+    source = """\
+nodes:
+  route:
+    kind: case
+    1: ignored
+    on: ${score.output}
+    cases: []
+"""
+    nodes = SourceDocument.parse(source).root.child("nodes")
+
+    desc = parse_nodes(nodes)["route"]
+
+    assert desc.on == "${score.output}"
+
+
+def test_case_normalization_rejects_last_effective_numeric_key():
+    source = """\
+nodes:
+  route:
+    kind: case
+    on: ${score.output}
+    1: ignored
+    cases: []
+"""
+    nodes = SourceDocument.parse(source).root.child("nodes")
+    route = nodes.child("route")
+
+    with pytest.raises(LoadError, match="field 1 is not allowed") as caught:
+        parse_nodes(nodes)
+
+    assert caught.value.range == route.range_of(True)

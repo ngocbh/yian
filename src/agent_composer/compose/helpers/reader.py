@@ -8,9 +8,8 @@ triple `(constructed_value, spans, yaml_node)` so every field access can raise a
 The three parts must travel together (see `load_with_spans(..., return_root=True)`):
 
 - `value`     — the constructed Python value for THIS node (a `dict` for a mapping).
-- `spans`     — a lookup from `id(yaml_node)` to `SourceRange`; normally the shared
-                document dict, or a small copied-node overlay delegating to it. Keyed by
-                `id()`, so it is only meaningful while the yaml node tree is held alive.
+- `spans`     — a lookup from `id(yaml_node)` to `SourceRange`. Keyed by `id()`,
+                so it is only meaningful while the YAML node tree is held alive.
 - `yaml_node` — the composed `yaml.Node` for THIS value (a `MappingNode` for a mapping),
                 whose identity indexes into `spans`. Holding it keeps the tree reachable.
 
@@ -25,31 +24,13 @@ already-normalized nodes, or a test's inline dict. Field presence and typing sti
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
 
 from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.source import SourceCursor, SourceDocument
 from agent_composer.events import SourceRange
-
-
-class _SpanOverlay:
-    """A small span lookup layered over a document's read-only base lookup.
-
-    `own` contains ranges for copied YAML wrappers and key nodes. Every original
-    value node falls through to `base`, so occurrence-local overlays do not copy
-    or mutate the document-wide span table.
-    """
-
-    def __init__(self, own: dict[int, SourceRange], base: Any) -> None:
-        self._own = own
-        self._base = base
-
-    def get(self, key: int, default: Any = None) -> SourceRange | Any:
-        """Return an overlay range first, then delegate the lookup to `base`."""
-        if key in self._own:
-            return self._own[key]
-        return self._base.get(key, default)
 
 
 class NodeReader:
@@ -124,25 +105,6 @@ class NodeReader:
         if pair is None:
             raise LoadError(f"missing required field {key!r}", range=self._own_range())
         return pair
-
-    def with_overlay(
-        self,
-        value: Any,
-        yaml_node: yaml.Node,
-        range_copies: Iterable[tuple[yaml.Node, yaml.Node]],
-    ) -> "NodeReader":
-        """Return a reader whose copied YAML nodes inherit original-node ranges.
-
-        `range_copies` contains `(copy, original)` node pairs. Their ranges live in
-        a small local lookup; reused value nodes delegate to this reader's lookup.
-        Neither this reader nor its document-wide span table is mutated.
-        """
-        own: dict[int, SourceRange] = {}
-        for copied, original in range_copies:
-            rng = self.spans.get(id(original))
-            if rng is not None:
-                own[id(copied)] = rng
-        return NodeReader(value, _SpanOverlay(own, self.spans), yaml_node)
 
     # -- range ------------------------------------------------------------------
 
@@ -338,3 +300,38 @@ class NodeReader:
         """
         _key_node, value_node = self._require_pair(key)
         return NodeReader(self.value[key], self.spans, value_node)
+
+
+def as_cursor(
+    source: NodeReader | SourceCursor,
+    *,
+    label: str = "<legacy>",
+) -> SourceCursor:
+    """Return an immutable source cursor for a cursor or legacy reader.
+
+    Located readers are adapted from their already-constructed tree and span
+    lookup without parsing again. Spanless readers become virtual cursors.
+
+    Args:
+        source (`NodeReader | SourceCursor`):
+            Existing immutable cursor or temporary legacy reader to adapt.
+        label (`str`, *optional*, defaults to `"<legacy>"`):
+            Diagnostic identity for a located adapted reader. Ignored when
+            ``source`` is already a cursor or has no physical source.
+
+    Returns:
+        `SourceCursor`:
+            ``source`` unchanged when already a cursor, otherwise an isolated
+            physical or virtual cursor.
+    """
+
+    if isinstance(source, SourceCursor):
+        return source
+    if source.yaml_node is None:
+        return SourceCursor.virtual(source.value)
+    return SourceDocument._from_constructed(
+        source.value,
+        source.yaml_node,
+        source.spans,
+        label=label,
+    ).root

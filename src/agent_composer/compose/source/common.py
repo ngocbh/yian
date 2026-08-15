@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence, Set
+from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from datetime import date, datetime
 import copy
@@ -74,13 +74,65 @@ class _PathLink:
 
 @dataclass(frozen=True, slots=True)
 class _MapArc:
-    """One flattened mapping pair retained without duplicate collapse."""
+    """One authored non-merge mapping pair retained without duplicate collapse."""
 
     constructed_key: Any = field(repr=False, compare=False)
     raw_key: str | None
     key_definition: int
     value_definition: int
+
+
+@dataclass(frozen=True, slots=True)
+class _MapOccurrence:
+    """One local arc at its logical position in a flattened merge view."""
+
+    arc: _MapArc
     pair_ordinal: int
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _ArcSequence:
+    """Compact persistent sequence of mapping arcs.
+
+    A leaf has ``arcs`` and no ``parts``. A concatenation has ``parts`` and no
+    ``arcs``. ``part_offsets`` stores each child's logical start ordinal.
+    """
+
+    arcs: tuple[_MapArc, ...]
+    parts: tuple[_ArcSequence, ...]
+    part_offsets: tuple[int, ...]
+    flat_pair_count: int
+
+
+class _KeyIndex:
+    """Private dict-semantic key index with no mutation surface."""
+
+    __slots__ = ("_positions",)
+
+    def __init__(self, entries: Iterable[tuple[Any, Any]]) -> None:
+        positions: dict[Any, Any] = {}
+        for key, position in entries:
+            positions[key] = position
+        self._positions = positions
+
+    @classmethod
+    def last_positions(cls, keys: Iterable[Any]) -> _KeyIndex:
+        """Index each key by its last zero-based position."""
+
+        return cls((key, position) for position, key in enumerate(keys))
+
+    def get(self, key: Any) -> Any | None:
+        """Return an indexed value, or ``None`` for absent/unhashable keys."""
+
+        try:
+            return self._positions.get(key)
+        except (TypeError, ValueError):
+            return None
+
+    def __len__(self) -> int:
+        """Return the number of dict-semantic keys retained by the index."""
+
+        return len(self._positions)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,12 +146,12 @@ class _ScalarDef:
 
 @dataclass(frozen=True, slots=True)
 class _MappingDef:
-    """One mapping-shaped YAML definition and its flattened pair arcs."""
+    """One mapping definition backed by a compact persistent pair sequence."""
 
     value: Any = field(repr=False, compare=False)
     range: SourceRange | None
-    arcs: tuple[_MapArc, ...]
-    effective_ordinals: tuple[int, ...]
+    pair_sequence: _ArcSequence
+    effective_index: _KeyIndex = field(repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,6 +3,7 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
+import yaml
 
 from agent_composer.compose.source import document as document_module
 from agent_composer.compose.source import SourceDocument, SourceSyntaxError
@@ -59,6 +60,10 @@ def test_document_uses_one_loader_instance(monkeypatch):
     def counting_dispose(loader):
         calls["dispose"] += 1
         assert loader._source_values == {}
+        assert loader._effective_mappings == {}
+        assert loader._mapping_states == {}
+        assert loader._sequence_values == {}
+        assert loader._forced_string_nodes == set()
         return original_dispose(loader)
 
     monkeypatch.setattr(document_module._DocumentLoader, "__init__", counting_init)
@@ -117,3 +122,132 @@ def test_document_accepts_an_empty_document():
     assert document._root_node is None
     assert document._root_definition == 0
     assert len(document._definitions) == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        """\
+first: &first {shared: first, first_only: 1}
+second: &second {shared: second, second_only: 2}
+target:
+  <<: [*first, *second]
+  local: 3
+""",
+        """\
+first: &first {shared: first, first_only: 1}
+second: &second {shared: second, second_only: 2}
+target:
+  <<: *first
+  <<: *second
+  shared: local
+""",
+        """\
+base: &base
+  true: boolean
+  when: 2001-12-15T02:59:43.1Z
+  blob: !!binary YQ==
+target:
+  <<: *base
+  1: integer-wins
+  =: explicit-value-key
+""",
+        """\
+target:
+  <<: &inline
+    values: !!set {one: null, two: null}
+    ordered: !!omap [{first: 1}, {second: 2}]
+    pairs: !!pairs [{same: 1}, {same: 2}]
+""",
+    ],
+    ids=["sequence", "multiple-merge-keys", "keys", "inline-anchor"],
+)
+def test_merge_construction_matches_safe_loader_without_mutating_nodes(text):
+    expected = yaml.safe_load(text)
+    document = SourceDocument.parse(text)
+
+    assert document.root.value == expected
+
+
+def test_inline_merge_source_keeps_recursive_value_alias_identity():
+    document = SourceDocument.parse(
+        "target:\n"
+        "  <<: &base\n"
+        "    self: *base\n"
+    )
+
+    target = document.root.value["target"]
+
+    assert target["self"]["self"] is target["self"]
+    assert target["self"] is not target
+
+
+def test_recursive_self_merge_matches_safe_loader():
+    text = (
+        "root: &root\n"
+        "  <<: *root\n"
+        "  value: local\n"
+    )
+
+    document = SourceDocument.parse(text)
+
+    assert document.root.value == yaml.safe_load(text)
+    assert [item.value for item in document.root.child("root").mapping_occurrences()] == [
+        "local",
+        "local",
+    ]
+
+
+def test_value_tag_key_alias_is_constructed_as_a_string_everywhere():
+    text = (
+        "first: &equals =\n"
+        "? *equals\n"
+        ": aliased-key\n"
+    )
+
+    assert SourceDocument.parse(text).root.value == yaml.safe_load(text)
+
+
+def test_value_tag_alias_in_a_later_nested_mapping_keeps_safe_loader_error():
+    text = (
+        "first: &equals =\n"
+        "nested: {*equals: aliased-key}\n"
+    )
+
+    with pytest.raises(SourceSyntaxError, match="could not determine a constructor"):
+        SourceDocument.parse(text)
+
+
+def test_syntactic_only_custom_tagged_merge_source_is_not_constructed():
+    text = "target: {<<: !mystery {value: inherited}}\n"
+
+    assert SourceDocument.parse(text).root.value == yaml.safe_load(text)
+
+
+def test_custom_tagged_merge_source_can_force_a_value_tag_alias():
+    text = (
+        "target:\n"
+        "  first: &equals =\n"
+        "  <<: !mystery {*equals: inherited}\n"
+    )
+
+    assert SourceDocument.parse(text).root.value == yaml.safe_load(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        (
+            "root:\n  <<:\n    - {<<: 7}\n    - 8\n",
+            "expected a mapping or list of mappings for merging",
+        ),
+        (
+            "root:\n  <<:\n    - 8\n    - {<<: 7}\n",
+            "expected a mapping for merging",
+        ),
+    ],
+    ids=["nested-first", "outer-first"],
+)
+def test_merge_sequence_reports_the_first_authored_source_error(text, message):
+    with pytest.raises(SourceSyntaxError, match=message):
+        SourceDocument.parse(text)

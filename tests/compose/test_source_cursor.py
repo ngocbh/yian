@@ -1,15 +1,89 @@
 """Tests for immutable, occurrence-aware YAML source cursors."""
 
 from collections.abc import Mapping, Sequence, Set
+from datetime import datetime
 
 import pytest
 
+from agent_composer.compose.helpers.reader import NodeReader, as_cursor
+from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.source import (
     SourceAccessError,
     SourceCursor,
     SourceDocument,
 )
 from agent_composer.events import SourceRange
+
+
+def test_as_cursor_preserves_legacy_ranges_without_parsing(monkeypatch):
+    text = (
+        "nodes:\n"
+        "  route:\n"
+        "    kind: case\n"
+        "    on: ${score.output}\n"
+        "    cases: []\n"
+    )
+    value, spans, root = load_with_spans(text, return_root=True)
+    reader = NodeReader(value, spans, root).child("nodes")
+    loader_calls = 0
+
+    def count_loader(*args, **kwargs):
+        nonlocal loader_calls
+        loader_calls += 1
+        raise AssertionError("legacy adaptation must not parse YAML")
+
+    monkeypatch.setattr(
+        "agent_composer.compose.source.document._DocumentLoader.__init__",
+        count_loader,
+    )
+
+    cursor = as_cursor(reader, label="legacy.yaml")
+
+    assert loader_calls == 0
+    assert cursor.document is not None
+    assert cursor.document.label == "legacy.yaml"
+    assert cursor.range == reader._own_range()
+    assert cursor.key_range_of("route") == reader.key_range_of("route")
+    assert cursor.child("route").range_of(True) == reader.child("route").range_of("on")
+
+
+def test_as_cursor_reuses_exact_constructed_keys_and_effective_collision_ranges():
+    text = """\
+values:
+  0x10: hexadecimal
+  1.50: floating
+  2001-12-15T02:59:43.1Z: timestamp
+  !!binary YQ==: binary
+collision:
+  true: first
+  1:
+    nested: second
+"""
+    value, spans, root = load_with_spans(text, return_root=True)
+    reader = NodeReader(value, spans, root)
+
+    cursor = as_cursor(reader)
+    legacy_values = reader.child("values")
+    values = cursor.child("values")
+    timestamp_key = next(
+        key for key in legacy_values.value if isinstance(key, datetime)
+    )
+
+    assert values.get(16) == "hexadecimal"
+    assert values.get(1.5) == "floating"
+    assert values.get(timestamp_key) == "timestamp"
+    assert values.get(b"a") == "binary"
+    assert values.range_of(16) == legacy_values.range_of("0x10")
+
+    legacy_collision = reader.child("collision")
+    collision = cursor.child("collision").child(True)
+    assert collision.source_key_value == 1
+    assert type(collision.source_key_value) is int
+    assert collision.range == legacy_collision.range_of("1")
+    assert collision.str("nested") == "second"
+
+    legacy_values.value[16] = "mutated"
+    assert values.get(16) == "hexadecimal"
 
 
 def test_root_value_is_a_defensive_copy():
@@ -185,6 +259,191 @@ def test_definition_dag_is_linear_for_binary_alias_graph():
     )
 
 
+def _binary_merge_document(levels: int) -> SourceDocument:
+    """Return a short YAML document with exponentially many logical merge pairs."""
+
+    lines = ["level_0: &level_0", "  value: leaf"]
+    for level in range(1, levels + 1):
+        lines.extend(
+            (
+                f"level_{level}: &level_{level}",
+                f"  <<: [*level_{level - 1}, *level_{level - 1}]",
+            )
+        )
+    lines.append(f"root: *level_{levels}")
+    return SourceDocument.parse("\n".join(lines) + "\n")
+
+
+def test_merge_definition_dag_retains_only_unique_raw_pairs():
+    levels = 16
+    document = _binary_merge_document(levels)
+    pending = [
+        definition.pair_sequence
+        for definition in document._definitions
+        if hasattr(definition, "pair_sequence")
+    ]
+    sequences = {}
+    while pending:
+        sequence = pending.pop()
+        if id(sequence) in sequences:
+            continue
+        sequences[id(sequence)] = sequence
+        pending.extend(sequence.parts)
+    retained_arcs = sum(len(sequence.arcs) for sequence in sequences.values())
+    retained_effective = sum(
+        len(definition.effective_index)
+        for definition in document._definitions
+        if hasattr(definition, "effective_index")
+    )
+    root_node = document._root_node
+    assert root_node is not None
+    deepest_node = next(
+        value_node
+        for key_node, value_node in root_node.value
+        if key_node.value == f"level_{levels}"
+    )
+
+    assert document.root.child("root").get("value") == "leaf"
+    assert retained_arcs < levels * 8
+    assert retained_effective < levels * 8
+    assert len(sequences) < levels * 8
+    assert max(sequence.flat_pair_count for sequence in sequences.values()) >= 2**levels
+    assert len(deepest_node.value) == 1
+
+
+def test_repeated_merge_occurrences_keep_logical_ordinals_and_replay():
+    document = _binary_merge_document(5)
+    target = document.root.child("root")
+
+    occurrences = target.mapping_occurrences("value")
+
+    assert len(occurrences) == 32
+    assert [item.path[-1].pair_ordinal for item in occurrences] == list(range(32))
+    assert {item.range for item in occurrences} == {SourceRange(2, 10, 2, 14)}
+    for item in (occurrences[0], occurrences[-1]):
+        assert document._resolve_occurrence(item.path).path == item.path
+        assert document._resolve_occurrence(item.path).value == "leaf"
+
+
+def test_merge_range_summary_folds_shared_rope_without_enumerating(monkeypatch):
+    document = _binary_merge_document(24)
+
+    def reject_enumeration(*_args, **_kwargs):
+        raise AssertionError("effective range lookup must not flatten occurrences")
+
+    monkeypatch.setattr(
+        SourceCursor,
+        "_iter_flat_occurrences",
+        reject_enumeration,
+    )
+
+    assert document.root.mapping_value_ranges("root") == {
+        "value": SourceRange(2, 10, 2, 14),
+    }
+
+
+def test_recursive_sequence_merge_preserves_order_occurrences_and_replay():
+    document = SourceDocument.parse(
+        "base: &base {base_only: B, clash: base}\n"
+        "root: &root\n"
+        "  <<: [*base, *root]\n"
+        "  root_only: R\n"
+        "  clash: root\n"
+    )
+    root = document.root.child("root")
+    occurrences = root.mapping_occurrences()
+
+    assert list(root.value) == ["root_only", "clash", "base_only"]
+    assert [item.source_key_value for item in occurrences] == [
+        "root_only",
+        "clash",
+        "base_only",
+        "clash",
+        "root_only",
+        "clash",
+    ]
+    assert [item.path[-1].pair_ordinal for item in occurrences] == list(range(6))
+    for item in occurrences:
+        replayed = document._resolve_occurrence(item.path)
+        assert replayed.path == item.path
+        assert replayed.value == item.value
+
+
+def test_double_recursive_merge_retains_four_logical_local_occurrences():
+    root = SourceDocument.parse(
+        "root: &root\n"
+        "  <<: *root\n"
+        "  <<: *root\n"
+        "  value: local\n"
+    ).root.child("root")
+
+    occurrences = root.mapping_occurrences("value")
+
+    assert len(occurrences) == 4
+    assert [item.path[-1].pair_ordinal for item in occurrences] == list(range(4))
+
+
+def test_repeated_self_source_in_one_merge_sequence_retains_three_occurrences():
+    root = SourceDocument.parse(
+        "root: &root\n"
+        "  <<: [*root, *root]\n"
+        "  value: local\n"
+    ).root.child("root")
+
+    occurrences = root.mapping_occurrences("value")
+
+    assert len(occurrences) == 3
+    assert [item.path[-1].pair_ordinal for item in occurrences] == list(range(3))
+
+
+def test_many_recursive_merges_keep_metadata_linear_and_conversion_iterative():
+    width = 1_200
+    lines = ["root: &root"]
+    lines.extend("  <<: *root" for _ in range(width))
+    lines.extend(f"  key_{index}: {index}" for index in range(width))
+
+    document = SourceDocument.parse("\n".join(lines) + "\n")
+    root = document.root.child("root")
+    pending = [
+        definition.pair_sequence
+        for definition in document._definitions
+        if hasattr(definition, "pair_sequence")
+    ]
+    sequences = {}
+    while pending:
+        sequence = pending.pop()
+        if id(sequence) in sequences:
+            continue
+        sequences[id(sequence)] = sequence
+        pending.extend(sequence.parts)
+
+    assert root.get("key_0") == 0
+    assert root.get(f"key_{width - 1}") == width - 1
+    assert root._mapping_definition().pair_sequence.flat_pair_count == width * 2**width
+    assert sum(len(sequence.arcs) for sequence in sequences.values()) < width * 3
+    assert sum(
+        len(definition.effective_index)
+        for definition in document._definitions
+        if hasattr(definition, "effective_index")
+    ) < width * 3
+
+
+def test_nested_mapping_can_merge_its_recursive_value_ancestor():
+    document = SourceDocument.parse(
+        "root: &root\n"
+        "  child: &child\n"
+        "    <<: *root\n"
+        "    leaf: child\n"
+        "  own: root\n"
+    )
+    copied = document.root.value
+    child = copied["root"]["child"]
+
+    assert child["child"] is child
+    assert child["own"] == "root"
+    assert child["leaf"] == "child"
+
+
 def test_deep_alias_path_is_lazy():
     cursor = _binary_alias_document().root.child("root")
 
@@ -213,6 +472,65 @@ def test_mapping_child_and_children_use_effective_order():
         "final",
         {"nested": True},
     ]
+
+
+def test_physical_and_projected_wide_mapping_lookup_is_indexed(monkeypatch):
+    width = 200
+    root = SourceDocument.parse(
+        "".join(f"key_{index}: {index}\n" for index in range(width))
+    ).root
+    projected = root.project_mapping(
+        {
+            f"key_{index}": (index, root.child(f"key_{index}"))
+            for index in range(width)
+        }
+    )
+    comparisons = 0
+    original = SourceCursor._keys_equal
+
+    def counted(left, right):
+        nonlocal comparisons
+        comparisons += 1
+        return original(left, right)
+
+    monkeypatch.setattr(SourceCursor, "_keys_equal", staticmethod(counted))
+
+    assert [child.value for child in root.children()] == list(range(width))
+    for index in range(width):
+        key = f"key_{index}"
+        assert projected.has(key)
+        assert projected.child(key).value == index
+
+    assert comparisons <= width * 4
+
+
+def test_many_one_key_merge_sources_use_root_effective_index(monkeypatch):
+    width = 200
+    lines = [
+        f"source_{index}: &source_{index} {{key_{index}: {index}}}"
+        for index in range(width)
+    ]
+    sources = ", ".join(f"*source_{index}" for index in range(width))
+    lines.extend(("root:", f"  <<: [{sources}]"))
+    root = SourceDocument.parse("\n".join(lines) + "\n").root.child("root")
+    definition = root._mapping_definition()
+    sequence = definition.pair_sequence
+    index_type = type(definition.effective_index)
+    original_get = index_type.get
+    lookups = 0
+
+    def counted(index, key):
+        nonlocal lookups
+        lookups += 1
+        return original_get(index, key)
+
+    monkeypatch.setattr(index_type, "get", counted)
+
+    for index in range(width):
+        assert root.child(f"key_{index}").value == index
+
+    assert len(definition.effective_index) == width
+    assert lookups <= width * 2
 
 
 def test_sequence_child_and_children_follow_indices():

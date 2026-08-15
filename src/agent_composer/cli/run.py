@@ -43,6 +43,7 @@ from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow, top_frame_ranges
+from agent_composer.compose.parse.file import parse_source_document
 from agent_composer.run import (
     RunResult,
     _resume_flow_controlled,
@@ -154,10 +155,16 @@ def _top_ranges(loaded, text: str):
     it; otherwise recomputes the maps from `text` alone (best-effort). Both map a node id to
     its header `SourceRange` and to its per-field `SourceRange`s — the source the single-frame
     renderer boxes a node/field range from."""
-    src = getattr(loaded, "source", None) if loaded is not None else None
-    if src is not None:
-        return src.node_ranges, src.field_ranges
-    return top_frame_ranges(text)
+    if loaded is not None:
+        src = getattr(loaded, "source", None)
+        if src is not None:
+            return src.node_ranges, src.field_ranges
+        return {}, {}
+    try:
+        document = parse_source_document(text, "<flow>")
+    except LoadError:
+        return {}, {}
+    return top_frame_ranges(document)
 
 
 def _render_frame_box(text: str, marks, title: str) -> bool:

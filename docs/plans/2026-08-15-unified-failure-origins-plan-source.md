@@ -68,6 +68,32 @@ This correction also closes three boundary ambiguities before implementation:
   `int`, and `str`. In particular, YAML 1.1's bare `on:` key constructs as
   `True` and must not collide with integer key `1`.
 
+## Correction found during cycle-3 adversarial review
+
+The first definition DAG still inherited an exponential representation from
+`SafeLoader.flatten_mapping`: a short chain that merged the same alias twice per
+level materialized every logical inherited pair before the DAG was built. The
+root-flow cutover therefore stays uncommitted until the source loader and cursor
+use a compact merge representation:
+
+- the private safe loader simulates PyYAML's delete-before-recursion merge
+  semantics as a persistent pair rope, without mutating `MappingNode.value` or
+  reading unfilled alias placeholders; this also preserves recursive merge
+  aliases and their insertion order;
+- each mapping definition references an identity-memoized arc rope whose leaves
+  retain authored pairs and whose concatenations store child offsets, a logical
+  flattened count, and one effective provenance index;
+- effective lookup uses that index, while raw flattened occurrences are
+  generated only when a caller explicitly asks for them; logical pair ordinals
+  still make occurrence paths replayable;
+- projected mappings have their own private key index, and inline lowering takes
+  one graph-wide value snapshot so unchanged aliases retain sharing.
+
+Retained source metadata is therefore linear in the unique YAML node/merge graph
+(plus the ordinary constructed value graph). Explicit occurrence enumeration is
+output-sensitive: asking for `F` logical flattened pairs may return `F` cursors,
+but loading and ordinary effective navigation do not materialize them.
+
 ## Scope
 
 In scope:

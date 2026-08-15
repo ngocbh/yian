@@ -10,9 +10,24 @@ each yaml *node*'s SourceRange keyed by `id(node)`.
 
 from __future__ import annotations
 
+from typing import Any
+
 import yaml
 
 from agent_composer.events import SourceRange
+
+
+class _SpanIndex(dict[int, SourceRange]):
+    """Ranges plus exact constructed values for the temporary reader bridge.
+
+    ``dict`` compatibility preserves the legacy span lookup contract.  The
+    private value index lets ``as_cursor`` align an already-constructed YAML
+    tree without parsing or reconstructing scalar keys.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._source_values: dict[int, Any] = {}
 
 
 def _mark_to_range(start_mark, end_mark) -> SourceRange:
@@ -44,7 +59,25 @@ class SpanLoader(yaml.SafeLoader):
 
     def __init__(self, stream):
         super().__init__(stream)
-        self._span_marks = {}  # id(node) -> SourceRange
+        self._span_marks = _SpanIndex()
+
+    def construct_object(self, node, deep=False):
+        """Construct normally and retain the exact value for this YAML node.
+
+        Args:
+            node (`yaml.Node`):
+                Already-composed node being constructed by ``SafeLoader``.
+            deep (`bool`, *optional*, defaults to `False`):
+                Whether nested generators must be exhausted immediately.
+
+        Returns:
+            `Any`:
+                The ordinary ``SafeLoader`` value, including shared aliases.
+        """
+
+        value = super().construct_object(node, deep=deep)
+        self._span_marks._source_values[id(node)] = value
+        return value
 
     # Each override calls super() first (preserving SafeConstructor's value construction:
     # anchors, `<<:` merge via flatten_mapping, scalar coercion) then records the node's

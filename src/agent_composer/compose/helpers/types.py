@@ -10,13 +10,12 @@ is the thin composition that walks the YAML structure and wraps any type error l
 from dataclasses import dataclass
 from typing import Any, Optional
 
-import yaml
-
 from agent_composer.typesys import TypeCheckError, Type, type_for
 from agent_composer.typesys.values import ValueKind
 from agent_composer.typesys.types import ScalarExpr, TypeRegistry, parse_type
 
 from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.source import SourceSyntaxError, parse_yaml_literal
 
 
 def read_type(node, registry: TypeRegistry) -> Type:
@@ -114,8 +113,8 @@ def read_flow_inputs(mapping, registry: TypeRegistry) -> list[InputDecl]:
             default: Any = None
             if default_part is not None and default_part != "":
                 try:
-                    default = yaml.safe_load(default_part)
-                except yaml.YAMLError as exc:
+                    default = parse_yaml_literal(default_part)
+                except SourceSyntaxError as exc:
                     raise LoadError(
                         f"input {name!r}: bad default {default_part!r}: {exc}"
                     ) from exc

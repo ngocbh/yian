@@ -1,10 +1,10 @@
 """The top-level loader: Compose YAML text -> a runnable `ComposedFlow`.
 
-The file-I/O front door: parse the YAML, build the typedefs registry, compose the
+The file-I/O front door: own one source document, build the typedefs registry, compose the
 call resolver, load every `defs:` callable, and hand the parsed sections to the
 post-parse conductor (`build.pipeline._assemble`, imported back here) which returns
-the `ComposedFlow`. This module owns the span readers (`_nodes_reader`/`_def_nodes_reader`/
-`_frame_ranges`/`top_frame_ranges`), the resolver composition (`make_file_resolver`/
+the `ComposedFlow`. This module owns the root source cursor, temporary def readers,
+frame ranges, the resolver composition (`make_file_resolver`/
 `_CallableScope`), and the defs loaders (`_load_def`/`_load_single_node_def`) —
 not the assembly pipeline itself.
 
@@ -54,26 +54,22 @@ from agent_composer.compose.helpers.source import (
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.parse.file import (
     parse_file,
+    parse_source_document,
+)
+from agent_composer.compose.source import (
+    SourceAccessError,
+    SourceCursor,
+    SourceDocument,
 )
 
 
-def _nodes_reader(text: Optional[str], nodes_section: dict) -> NodeReader:
-    """A `NodeReader` over a flow's `nodes:` mapping for `parse_nodes`.
+def _nodes_cursor(document: SourceDocument, nodes_section: dict) -> SourceCursor:
+    """Return the physical root `nodes:` cursor or a compact virtual fallback."""
 
-    Span-aware over the source when `text` carries a `nodes:` mapping (the top-level flow);
-    otherwise a spanless reader over `nodes_section` — a compact flow (its sole node is
-    desugared in-memory, absent from source), a `defs:` sub-flow (nested, already
-    normalized), or an uncomposable document.
-    """
-    if text:
-        try:
-            value, spans, root = load_with_spans(text, return_root=True)
-        except yaml.YAMLError:
-            pass
-        else:
-            if isinstance(value, dict) and isinstance(value.get("nodes"), dict):
-                return NodeReader(value, spans, root).child("nodes")
-    return NodeReader.spanless(nodes_section)
+    root = document.root
+    if root.has("nodes"):
+        return root.child("nodes")
+    return SourceCursor.virtual(nodes_section)
 
 
 def _def_nodes_reader(parent_text: str, name: str) -> NodeReader:
@@ -139,19 +135,19 @@ def _def_assembly_reader(
 
 
 def _frame_ranges(
-    reader: NodeReader,
-) -> tuple[dict[str, SourceRange], dict[str, dict[str, SourceRange]]]:
+    reader: SourceCursor,
+) -> tuple[dict[str, SourceRange], dict[str, FieldRanges]]:
     """The `(node_ranges, field_ranges)` a `SourceFrame` carries, from a best-effort parse.
 
     Runs `parse_nodes(reader)` and pulls each descriptor's own `.range`/`.field_ranges` — the
-    render-only location maps the CLI's call-traceback boxes. A spanless reader (a compact /
-    single-node def) yields empty maps; a malformed `nodes:` (which the build path rejects with
+    render-only location maps the CLI's call-traceback boxes. A virtual compact cursor yields
+    empty maps; a malformed `nodes:` (which the build path rejects with
     its own located error) is swallowed here to empty maps — this is render metadata, never the
     error path, so it must not raise.
     """
     try:
         descriptors = parse_nodes(reader)
-    except LoadError:
+    except (LoadError, SourceAccessError):
         return {}, {}
     node_ranges: dict[str, SourceRange] = {}
     # `node_id -> FieldRanges` — the OUTER map is keyed by a bare node id (correct: that is not
@@ -169,26 +165,28 @@ def _frame_ranges(
 
 
 def top_frame_ranges(
-    text: str,
-) -> tuple[dict[str, SourceRange], dict[str, dict[str, SourceRange]]]:
-    """Best-effort `(node_ranges, field_ranges)` for a top-level flow from its text alone.
+    source: SourceDocument | SourceCursor,
+) -> tuple[dict[str, SourceRange], dict[str, FieldRanges]]:
+    """Best-effort top-frame ranges from an existing source document or root cursor.
 
     The `(node_id -> header `SourceRange`, node_id -> {field -> `SourceRange`})` maps a
-    `ComposedFlow.source` already carries — recomputed here from `text` for the CLI's error
-    renderer when it does NOT hold the loaded IR (e.g. a `RunResult` handed in on its own).
-    Empty maps when `text` can't be parsed: this is render metadata, never the error path,
-    so it must not raise.
+    `ComposedFlow.source` already carries, derived without reparsing for the CLI's defensive
+    error-rendering path. Empty maps for a source-free cursor or invalid semantic shape:
+    this is render metadata, never the error path, so it must not raise.
     """
+    document = source if isinstance(source, SourceDocument) else source.document
+    if document is None:
+        return {}, {}
     try:
-        cf = parse_file(text)
-    except LoadError:
+        cf = parse_file(document)
+    except (LoadError, SourceAccessError):
         return {}, {}
     try:
         lowered, _inline_bodies = extract_inline_bodies(
-            _nodes_reader(text, cf.nodes),
+            _nodes_cursor(document, cf.nodes),
             owner=("root",),
         )
-    except LoadError:
+    except (LoadError, SourceAccessError):
         return {}, {}
     return _frame_ranges(lowered)
 
@@ -213,7 +211,11 @@ def _validate_system(system: dict) -> None:
         raise LoadError("system: paths must be a list of strings")
 
 
-def _reject_authored_private_callable_names(text: str, defs: dict, uses: dict) -> None:
+def _reject_authored_private_callable_names(
+    root: SourceCursor,
+    defs: dict,
+    uses: dict,
+) -> None:
     """Reject file-scoped callable declarations in the inline-flow namespace.
 
     The inexpensive declaration scan runs before any other loader work. Source
@@ -232,19 +234,11 @@ def _reject_authored_private_callable_names(text: str, defs: dict, uses: dict) -
         if offender is None:
             continue
 
-        declaration_range = None
-        try:
-            value, spans, root = load_with_spans(text, return_root=True)
-        except yaml.YAMLError:
-            pass
-        else:
-            raw_declarations = value.get(section) if isinstance(value, dict) else None
-            if isinstance(raw_declarations, dict):
-                declaration_range = (
-                    NodeReader(value, spans, root)
-                    .child(section)
-                    .key_range_of(offender)
-                )
+        declaration_range = (
+            root.child(section).key_range_of(offender)
+            if root.has(section)
+            else None
+        )
 
         noun = "callable names" if section == "defs" else "aliases"
         raise LoadError(
@@ -334,7 +328,11 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
                 raise LoadError(f"flow-reference cycle across files: {cand}")
             ctx.loading.add(cand)
             try:
-                child = _load_flow(cand.read_text(), None, [cand.parent], ctx)
+                child_document = parse_source_document(
+                    cand.read_text(),
+                    cand.name,
+                )
+                child = _load_flow(child_document, None, [cand.parent], ctx)
             finally:
                 ctx.loading.discard(cand)
             # Relabel the external child's frame to its filename BEFORE caching, so every
@@ -398,12 +396,20 @@ def load_flow(
         loaded = load_flow(open("hello.yaml").read(), search_paths=["."])
         ```
     """
-    return _load_flow(text, child_resolver, search_paths, _LoadCtx())
+    document = parse_source_document(text, "<flow>")
+    return _load_flow(document, child_resolver, search_paths, _LoadCtx())
 
 
-def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedFlow:
-    f = parse_file(text)
-    _reject_authored_private_callable_names(text, f.defs, f.uses)
+def _load_flow(
+    document: SourceDocument,
+    child_resolver,
+    search_paths,
+    ctx: "_LoadCtx",
+) -> ComposedFlow:
+    root = document.root
+    text = document.text
+    f = parse_file(document)
+    _reject_authored_private_callable_names(root, f.defs, f.uses)
     _validate_system(f.system)
 
     try:
@@ -412,7 +418,7 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
         # coarse: the typesys layer doesn't track source lines, so anchor at the
         # `typedefs:` section line (the box's context still shows the offending name).
         raise LoadError(
-            f"bad typedefs: {exc}", line=_section_lines(text).get("typedefs")
+            f"bad typedefs: {exc}", line=_section_lines(root).get("typedefs")
         ) from exc
 
     # `system.paths` is honored only when the file's OWN dir is known (loaded WITH
@@ -452,14 +458,14 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
 
     return _assemble(
         inputs_section=f.inputs,
-        nodes_reader=_nodes_reader(text, f.nodes),
+        nodes_cursor=_nodes_cursor(document, f.nodes),
         outputs_section=f.outputs,
         asserts_section=f.asserts,
         registry=registry,
         scope=callable_scope,
         owner=("root",),
         n_lines={},
-        s_lines=_section_lines(text),
+        s_lines=_section_lines(root),
         uses_aliases=set(f.uses),
         version=f.version,
         name=f.name,
@@ -467,8 +473,8 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
         flow_llm_config=f.llm_config,
         flow_env=f.env,
         source=source,
-        boundary_field_ranges=_boundary_field_ranges(text),
-        boundary_assert_ranges=_boundary_assert_ranges(text),
+        boundary_field_ranges=_boundary_field_ranges(root),
+        boundary_assert_ranges=_boundary_assert_ranges(root),
     )
 
 
@@ -694,7 +700,7 @@ def _load_def(
     try:
         return _assemble(
             inputs_section=body.get("inputs") or {},
-            nodes_reader=nodes_reader,
+            nodes_cursor=nodes_reader,
             outputs_section=body.get("outputs"),
             asserts_section=body.get("asserts") or [],  # enforced at the child seam
             registry=registry,
@@ -752,7 +758,7 @@ def _load_single_node_def(
     try:
         return _assemble(
             inputs_section=param_types,
-            nodes_reader=NodeReader.spanless({name: node_body}),
+            nodes_cursor=NodeReader.spanless({name: node_body}),
             outputs_section={"result": f"${{{name}.output}}"},  # single value re-export (node-first)
             asserts_section=[],
             registry=registry,

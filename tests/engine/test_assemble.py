@@ -190,7 +190,7 @@ def _assemble_resolved_input_decls(input_decls):
     """Assemble an empty flow through the already-resolved input seam."""
     return _assemble(
         input_decls=input_decls,
-        nodes_reader=NodeReader.spanless({}),
+        nodes_cursor=NodeReader.spanless({}),
         outputs_section=None,
         asserts_section=[],
         registry={},
@@ -233,7 +233,7 @@ def test_resolved_input_decls_reject_both_input_representations():
         _assemble(
             inputs_section={},
             input_decls=[],
-            nodes_reader=NodeReader.spanless({}),
+            nodes_cursor=NodeReader.spanless({}),
             outputs_section=None,
             asserts_section=[],
             registry={},
@@ -247,7 +247,7 @@ def test_resolved_input_decls_reject_both_input_representations():
 def test_resolved_input_decls_reject_missing_input_representation():
     with pytest.raises(ValueError, match="exactly one of inputs_section or input_decls"):
         _assemble(
-            nodes_reader=NodeReader.spanless({}),
+            nodes_cursor=NodeReader.spanless({}),
             outputs_section=None,
             asserts_section=[],
             registry={},
@@ -269,7 +269,7 @@ def test_resolved_input_decls_accept_zero_args_and_wire_empty_start():
 
     raw_flow = _assemble(
         inputs_section={},
-        nodes_reader=NodeReader.spanless({}),
+        nodes_cursor=NodeReader.spanless({}),
         outputs_section=None,
         asserts_section=[],
         registry={},

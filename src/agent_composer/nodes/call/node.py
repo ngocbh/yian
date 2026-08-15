@@ -16,6 +16,7 @@ survive the `clone_child` deep-copy of the spliced subgraph.
 from typing import Any, ClassVar, Optional
 
 from agent_composer.nodes.base import Grow, Node, NodeKind
+from agent_composer.nodes.contracts import Parameter
 
 
 class CallNode(Node):
@@ -37,8 +38,8 @@ class CallNode(Node):
             A pinned child flow version, if any.
         child (`Any`, *optional*, defaults to `None`):
             The baked child flow (stamped at load); a `None` child raises at run time.
-        child_inputs (`list`, *optional*, defaults to `None`):
-            The child's input decls, read by compile validation.
+        child_inputs (`list[Parameter]`, *optional*, defaults to `None`):
+            The child's canonical parameters, read by compile validation.
         child_source (`Any`, *optional*, defaults to `None`):
             The child flow's render-only `SourceFrame` (label + node-line maps). Carried
             for the CLI's nested-error traceback only; `run` ignores it entirely.
@@ -51,7 +52,7 @@ class CallNode(Node):
     grow_depth_delta: ClassVar[int] = 1  # each child is one REF level deeper (bounded by MAX_REF_DEPTH)
 
     def __init__(self, node_id: str, *, flow_id: str, flow_version: Optional[int] = None,
-                 child: Any = None, child_inputs: Optional[list] = None,
+                 child: Any = None, child_inputs: Optional[list[Parameter]] = None,
                  child_source: Any = None, title: Optional[str] = None) -> None:
         super().__init__(node_id, title=title)
         self.flow_id = flow_id

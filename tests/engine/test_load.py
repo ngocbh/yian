@@ -1,7 +1,7 @@
 """Integration tests for the top-level loader.
 
 `load_flow(text) -> ComposedFlow` wires every prior slice into one runnable
-`CompiledFlow` + the flow-input decls + the boundary/post-terminal assert split. The
+`CompiledFlow` + canonical flow parameters + the boundary/post-terminal assert split. The
 load-test set is the seeds: flat (00/01), case (02/06), the
 arithmetic asserts (10), anchors (11), MODEL (07), AGENT knobs (14), nested records +
 record-typed inputs (13), the rich integration (18), and every-binding-stance (19).
@@ -139,8 +139,9 @@ def test_seed13_nested_record_output_and_dict_input():
     assert set(meta.fields) == {"as_of", "dry_run"}
     # the record-typed `config:` flow input resolves to a record Type.
     config = next(d for d in loaded.input if d.name == "config")
-    assert config.type.kind == ValueKind.OBJECT
-    assert set(config.type.fields) == {"regroup", "bands"}
+    assert config.contract is not None
+    assert config.contract.type.kind == ValueKind.OBJECT
+    assert set(config.contract.type.fields) == {"regroup", "bands"}
 
 
 # --------------------------------------------------------------------------- #

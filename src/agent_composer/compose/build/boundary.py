@@ -14,7 +14,7 @@ from typing import Any, Optional
 from agent_composer.compile.model import END_ID, START_ID, Edge, FlowOutput
 from agent_composer.expr import binding_co_skips
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import binding_source
+from agent_composer.nodes.contracts import Parameter, binding_source
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.compose.edges.producers import _binding_producers
@@ -38,7 +38,7 @@ from agent_composer.compose.validate.asserts import LoweredAsserts
 
 
 def synthesize_boundary_graph(
-    input_decls: list,
+    input_parameters: list[Parameter],
     outputs: list[FlowOutput],
     node_ids: "set[str]",
     body_edges: list[Edge],
@@ -67,7 +67,7 @@ def synthesize_boundary_graph(
     rule live here too (every input read resolves through the START_ID namespace).
 
     `start_field_ranges` (optional) is the flow-boundary input-declaration source map stamped
-    onto the StartNode (`("input_decl", name) -> SourceRange`) so a boundary input-type failure
+    onto the StartNode (`("input", name) -> SourceRange`) so a boundary input-type failure
     resolves a precise caret. Assertion ranges travel in the positional lists on `lowered`.
     `None` for a spanless flow (compact / in-memory / def).
 
@@ -79,8 +79,11 @@ def synthesize_boundary_graph(
     dependency is STRUCTURAL (a real END input) and survives child cloning. `None` leaves the
     boundary nodes assert-free (a def / in-memory flow with no flow-level asserts).
     """
-    start = StartNode(START_ID, input_decls=list(input_decls),
-                      field_ranges=start_field_ranges)
+    start = StartNode(
+        START_ID,
+        params=input_parameters,
+        field_ranges=start_field_ranges,
+    )
     end = EndNode.record(END_ID, output_names=[o.name for o in outputs])
     boundary_nodes: dict[str, Node] = {START_ID: start, END_ID: end}
 
@@ -147,7 +150,10 @@ def synthesize_boundary_graph(
         # consulting a PER-ENGINE override that narrows this compiled wiring to only the passed
         # keys (an omitted input then binds absent so START's wrapper fills its declared default).
         # This compiled entry is what a direct-driver / hand-seed test (no run_inputs) reads.
-        START_ID: {d.name: f"${{input.{d.name}}}" for d in input_decls},
+        START_ID: {
+            parameter.name: f"${{input.{parameter.name}}}"
+            for parameter in input_parameters
+        },
         END_ID: {o.name: o.binding for o in outputs},
     }
     # Merge each synthesized END param's source so bind_params finds a source per synth param

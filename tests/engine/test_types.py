@@ -151,6 +151,10 @@ def test_resolve_scalar_and_list():
     assert type_for("List[float]", REG).kind == ValueKind.LIST_NUMBER
 
 
+def test_type_for_preserves_its_public_keyword_name():
+    assert type_for(type_str="str", registry=REG).kind == ValueKind.STRING
+
+
 def test_resolve_inline_literal_is_enum():
     from agent_composer.typesys.types import EnumExpr, resolve_type
 

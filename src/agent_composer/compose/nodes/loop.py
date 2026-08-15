@@ -73,7 +73,7 @@ class LoopDescriptor(NodeDescriptor):
         carried record (`inputs:`) and returns the WHOLE next carried record. Returns a
         `BuildResult` (the split): the node carries `params`; the flow owns the carried-record
         seed sources in `wiring`. Resolves the callable through `ctx.resolver` (required — a loop
-        is higher-order), derives its `ChildSignature`, bakes the compiled child + input decls,
+        is higher-order), derives its `ChildSignature`, bakes the compiled child + parameters,
         stamps `output_type` (the body codomain, which IS the carried record type), and enforces
         the FIELD-NAME half of the contract + slice legality (`while:` present, `max:` present).
         The deep TYPE-level half (body output Type == carried record Type) is the loader pass
@@ -98,7 +98,7 @@ class LoopDescriptor(NodeDescriptor):
             flow_id=self.call,
             flow_version=None,
             child=child.compiled,
-            child_inputs=child.input,
+            child_inputs=sig.inputs,
             child_source=child.source,        # render-only; the CLI nested-error traceback
             title=self.node_name,
         )

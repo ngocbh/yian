@@ -18,12 +18,12 @@ from agent_composer.compose.desugar.inline_bodies import (
     inline_flow_id,
 )
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceCursor, SourceDocument
 from agent_composer.events import RunFailed, SourceRange
+from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.run import run_flow
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -32,6 +32,22 @@ def _located_root(text: str) -> tuple[SourceCursor, SourceDocument]:
     """Parse YAML text once and return its physical root cursor and document."""
     document = SourceDocument.parse(text)
     return document.root, document
+
+
+def _parameter(name: str, typ: Type) -> Parameter:
+    """Build the canonical generated parameter expected for an inline body."""
+    return Parameter(
+        name=name,
+        contract=ValueContract(typ),
+        required=not typ.nullable,
+        coerce_strings=True,
+    )
+
+
+def _parameter_type(parameter: Parameter) -> Type:
+    """Return the required semantic type from a generated parameter."""
+    assert parameter.contract is not None
+    return parameter.contract.type
 
 
 def _mapping_snapshot(
@@ -966,13 +982,7 @@ output: ${wrapper.output}
 
     wrapper = loaded.compiled.nodes["wrapper"]
     assert wrapper.child_inputs == [
-        InputDecl(
-            name="value",
-            type_str="Optional[int]",
-            default=None,
-            required=False,
-            type=Type(kind=ValueKind.INTEGER, nullable=True),
-        )
+        _parameter("value", Type(kind=ValueKind.INTEGER, nullable=True))
     ]
 
     result = run_flow(loaded, {"maybe": value})
@@ -1011,13 +1021,17 @@ output: ${wrapper.output}
     )
 
     wrapper = loaded.compiled.nodes["wrapper"]
-    assert [decl.name for decl in wrapper.child_inputs] == ["payload", "marker"]
+    assert [parameter.name for parameter in wrapper.child_inputs] == [
+        "payload",
+        "marker",
+    ]
     payload, marker = wrapper.child_inputs
-    assert payload.type_str == '{"a":int,"z":str}'
+    assert payload.has_default is False
     assert payload.default is None
     assert payload.required is True
-    assert list(payload.type.fields or {}) == ["a", "z"]
-    assert payload.type == Type(
+    payload_type = _parameter_type(payload)
+    assert list(payload_type.fields or {}) == ["a", "z"]
+    assert payload_type == Type(
         kind=ValueKind.OBJECT,
         fields={
             "a": Type.scalar(ValueKind.INTEGER),
@@ -1025,10 +1039,10 @@ output: ${wrapper.output}
         },
         required=frozenset({"a", "z"}),
     )
-    assert marker.type_str == "str"
+    assert marker.has_default is False
     assert marker.default is None
     assert marker.required is True
-    assert marker.type == Type.scalar(ValueKind.STRING)
+    assert _parameter_type(marker) == Type.scalar(ValueKind.STRING)
 
     result = run_flow(loaded, {})
     assert result.status == "succeeded"
@@ -1085,13 +1099,7 @@ output: ${consumer.output}
     assert builds == ["producer"]
     assert body_order == ["consumer", "producer"]
     assert consumer.child_inputs == [
-        InputDecl(
-            name="value",
-            type_str="str",
-            default=None,
-            required=True,
-            type=Type.scalar(ValueKind.STRING),
-        )
+        _parameter("value", Type.scalar(ValueKind.STRING))
     ]
     assert result.status == "succeeded"
     assert result.output == "forward-value"
@@ -1127,13 +1135,7 @@ output: ${consumer.output}
     result = run_flow(loaded, {})
 
     assert consumer.child_inputs == [
-        InputDecl(
-            name="value",
-            type_str="None",
-            default=None,
-            required=True,
-            type=Type.scalar(ValueKind.NONE),
-        )
+        _parameter("value", Type.scalar(ValueKind.NONE))
     ]
     assert result.status == "succeeded"
     assert result.output is None
@@ -1425,11 +1427,15 @@ output: ${wrapper.output}
 
     wrapper = loaded.compiled.nodes["wrapper"]
     assert [
-        (decl.name, decl.type_str, decl.required, decl.type.nullable)
-        for decl in wrapper.child_inputs
+        (
+            parameter.name,
+            parameter.required,
+            _parameter_type(parameter).nullable,
+        )
+        for parameter in wrapper.child_inputs
     ] == [
-        ("root_value", "Optional[str]", False, True),
-        ("nested_value", "Optional[str]", False, True),
+        ("root_value", False, True),
+        ("nested_value", False, True),
     ]
 
     for inputs, expected in [
@@ -1947,9 +1953,10 @@ output: ${each.output}
     each = loaded.compiled.nodes["each"]
 
     assert each.parallel is True
-    assert [decl.name for decl in each.child_inputs] == ["row", "name"]
-    assert each.child_inputs[0].type == loaded.input[0].type.element
-    assert each.child_inputs[1].type == Type.scalar(ValueKind.STRING)
+    assert [parameter.name for parameter in each.child_inputs] == ["row", "name"]
+    parent_type = _parameter_type(loaded.input[0])
+    assert _parameter_type(each.child_inputs[0]) == parent_type.element
+    assert _parameter_type(each.child_inputs[1]) == Type.scalar(ValueKind.STRING)
 
     rows = [
         {"name": "third", "position": 3},
@@ -1990,11 +1997,12 @@ output: ${each.output}
     )
     days = [date(2026, 8, 15), date(2026, 8, 16)]
 
-    assert loaded.input[0].type.kind == ValueKind.LIST_ANY
-    assert loaded.input[0].type.element == Type.scalar(ValueKind.DATE)
-    assert loaded.compiled.nodes["each"].child_inputs[0].type == Type.scalar(
-        ValueKind.DATE
-    )
+    days_type = _parameter_type(loaded.input[0])
+    assert days_type.kind == ValueKind.LIST_ANY
+    assert days_type.element == Type.scalar(ValueKind.DATE)
+    assert _parameter_type(
+        loaded.compiled.nodes["each"].child_inputs[0]
+    ) == Type.scalar(ValueKind.DATE)
 
     result = run_flow(loaded, {"days": days})
     assert result.status == "succeeded"
@@ -2033,14 +2041,8 @@ output: ${each.output}
     monkeypatch.setattr(
         compose_pipeline,
         "read_flow_inputs",
-        lambda _mapping, _registry: [
-            InputDecl(
-                name="items",
-                type_str="list[Any]",
-                default=None,
-                required=True,
-                type=Type(kind=ValueKind.LIST_ANY),
-            )
+        lambda _mapping, _registry, _ranges: [
+            _parameter("items", Type(kind=ValueKind.LIST_ANY))
         ],
     )
 
@@ -2085,15 +2087,15 @@ nodes:
 output: ${each.output}
 """
     )
-    decls = {
-        decl.name: decl
-        for decl in loaded.compiled.nodes["each"].child_inputs
+    parameters = {
+        parameter.name: parameter
+        for parameter in loaded.compiled.nodes["each"].child_inputs
     }
 
-    assert decls["row"].required is False
-    assert decls["row"].type.nullable is True
-    assert decls["name"].required is False
-    assert decls["name"].type == Type(
+    assert parameters["row"].required is False
+    assert _parameter_type(parameters["row"]).nullable is True
+    assert parameters["name"].required is False
+    assert _parameter_type(parameters["name"]) == Type(
         kind=ValueKind.STRING,
         nullable=True,
     )
@@ -2368,20 +2370,8 @@ output: ${repeat.output}
 
     assert repeat.flow_id == inline_flow_id(expected_owner)
     assert repeat.child_inputs == [
-        InputDecl(
-            name="n",
-            type_str="int",
-            default=None,
-            required=True,
-            type=Type.scalar(ValueKind.INTEGER),
-        ),
-        InputDecl(
-            name="exited",
-            type_str="bool",
-            default=None,
-            required=True,
-            type=Type.scalar(ValueKind.BOOLEAN),
-        ),
+        _parameter("n", Type.scalar(ValueKind.INTEGER)),
+        _parameter("exited", Type.scalar(ValueKind.BOOLEAN)),
     ]
     assert repeat.output_type == expected_output
     assert repeat.predicate_kind == "times"
@@ -2838,7 +2828,7 @@ output: ${wrapper.output}
     child_start = loaded.compiled.nodes["wrapper"].child.nodes[START_ID]
 
     assert {
-        name: child_start.field_ranges[("input_decl", name)]
+        name: child_start.field_ranges[("input", name)]
         for name in ("value", "count")
     } == expected_ranges
 

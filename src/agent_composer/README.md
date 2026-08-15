@@ -103,10 +103,10 @@ defaults without replacing their authored payload, and coerces supplied strings
 only when the parameter opts in. A bound null shadows a default but still passes
 through contract validation, so it is accepted only when the parameter is untyped
 or its contract accepts null (a nullable or `None`-kind type).
-Parameter/default/contract origins do not affect
-manifest identity. Compose `InputDecl` remains temporarily at the START/front-end
-boundary; START derives source-neutral parameters from it without duplicating its
-type checks. Stored output value-contract consumers move in later #131 cutovers.
+Parameter/default/contract origins do not affect manifest identity. Compose
+`input:` lowers directly into this same exact carrier shape; `ComposedFlow.input`
+and START use it without a parallel front-end declaration type. Stored output
+value-contract consumers move in later #131 cutovers.
 
 ## One-pass source ownership
 

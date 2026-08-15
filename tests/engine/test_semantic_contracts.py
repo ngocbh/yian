@@ -168,11 +168,28 @@ def test_contract_origins_select_exact_then_ancestor_then_default() -> None:
 
 def test_parameter_distinguishes_explicit_null_from_no_default() -> None:
     """Default presence is explicit and has no second textual type authority."""
-    absent = Parameter("value")
-    explicit_null = Parameter("value", has_default=True, default=None)
+    value_type = Type(kind=ValueKind.INTEGER, nullable=True)
+    contract = ValueContract(value_type)
+    absent = Parameter(
+        "value",
+        contract=contract,
+        coerce_strings=True,
+    )
+    explicit_null = Parameter(
+        "value",
+        contract=contract,
+        has_default=True,
+        default=None,
+        coerce_strings=True,
+    )
 
     assert absent.has_default is False
     assert explicit_null.has_default is True
+    assert absent.contract is contract
+    assert explicit_null.contract is contract
+    assert explicit_null.contract.type is value_type
+    assert absent.required is explicit_null.required is False
+    assert absent.coerce_strings is explicit_null.coerce_strings is True
     assert absent != explicit_null
     assert not hasattr(absent, "type_str")
 

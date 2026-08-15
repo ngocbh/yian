@@ -247,7 +247,7 @@ def test_end_post_assert_reads_output() -> None:
     from tests.engine._fakes import FuncNode, derive_wiring
 
     def _make_flow(post_assert: str) -> CompiledFlow:
-        start = StartNode(START_ID, input_decls=[])
+        start = StartNode(START_ID, params=[])
         n = FuncNode("n", lambda p: 5)
         end = EndNode.record(END_ID, output_names=["result"])
         end.post_asserts = [Assertion(post_assert, post_assert)]
@@ -279,15 +279,15 @@ def test_end_post_assert_reads_output() -> None:
 # --------------------------------------------------------------------------- #
 
 
-# ComposedFlow/RunResult carry .input
+# ComposedFlow exposes a canonical START-parameter view; RunResult stores its input.
 def test_python_carriers_singular() -> None:
     """All Python carriers expose `.input` (singular); `.inputs` no longer exists."""
     from agent_composer.compose.loader import ComposedFlow
     from agent_composer.run import RunResult
 
-    assert "input" in ComposedFlow.__dataclass_fields__
+    assert isinstance(ComposedFlow.input, property)
+    assert "input" not in ComposedFlow.__dataclass_fields__
     assert "inputs" not in ComposedFlow.__dataclass_fields__
-    # RunResult is a dataclass-style class with `inputs: Dict[str, Any]` field today.
     assert "input" in RunResult.__dataclass_fields__
     assert "inputs" not in RunResult.__dataclass_fields__
 

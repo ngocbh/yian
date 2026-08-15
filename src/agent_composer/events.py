@@ -35,18 +35,17 @@ class SourceSpan:
     Attributes:
         node (`str | None`):
             The node id the failure belongs to; `None` for a flow-level location
-            (a boundary/post assert, an input declaration).
-        kind (`Literal["input", "assert", "input_decl", "field"]`):
-            Which family of sub-line to resolve against — a node input binding, an
-            assertion display, a flow input declaration, or a node field (the kind
-            fallback).
+            (a boundary/post assert, a flow input).
+        kind (`Literal["input", "assert", "field"]`):
+            Which family of sub-line to resolve against — an input parameter, an
+            assertion display, or a node field (the kind fallback).
         key (`str`):
             The discriminator within that family — the input name, the assertion's
-            stable display text, the input-decl name, or the field name.
+            stable display text, or the field name.
     """
 
     node: Optional[str]
-    kind: Literal["input", "assert", "input_decl", "field"]
+    kind: Literal["input", "assert", "field"]
     key: str
 
 
@@ -190,7 +189,7 @@ class RunFailed:
     locator: Optional[SourceSpan] = None
     # The concrete source span resolved ALONGSIDE the symbolic locator (the flow-boundary twin
     # of NodeFailed.range). A failing input decl's declaration line is looked up on the
-    # StartNode's `field_ranges[("input_decl", name)]`; a false boundary assert instead carries
+    # StartNode's `field_ranges[("input", name)]`; a false boundary assert instead carries
     # its own range, resolved BY POSITION off `pre_assert_ranges`/`post_assert_ranges` (assert
     # text is not a unique identity, so asserts are deliberately not in `field_ranges`). None
     # when neither is recorded. The CLI prefers this over resolving the locator.

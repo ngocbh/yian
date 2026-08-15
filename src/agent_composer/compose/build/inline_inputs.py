@@ -13,7 +13,6 @@ Never imports: ``compose.loader``, ``compile``, ``runtime``, or node kinds.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
@@ -242,55 +241,6 @@ def canonicalize_inline_type(typ: Type) -> Type:
         element=element,
         nullable=typ.nullable,
     )
-
-
-def canonical_type_label(typ: Type) -> str:
-    """Render one deterministic, unambiguous label for a structural type.
-
-    Record keys and variant tags use compact JSON quoting, while lists render
-    from their structural element rather than their storage kind. Callers must
-    prove the type first; a list without an element raises ``ValueError``.
-
-    Args:
-        typ (`Type`): The proven structural type to label.
-
-    Returns:
-        `str`: The compact canonical label used by generated input declarations.
-
-    Raises:
-        `ValueError`: A list type has no structural element.
-    """
-    label = _canonical_nonnullable_label(typ)
-    return f"Optional[{label}]" if typ.nullable else label
-
-
-def _canonical_nonnullable_label(typ: Type) -> str:
-    """Render ``typ`` without applying its outer nullable wrapper."""
-    if typ.fields is not None:
-        fields = (
-            f"{_json_string(name)}:{canonical_type_label(typ.fields[name])}"
-            for name in sorted(typ.fields)
-        )
-        return "{" + ",".join(fields) + "}"
-
-    if typ.tags is not None:
-        return "Literal[" + ",".join(
-            _json_string(tag) for tag in sorted(typ.tags)
-        ) + "]"
-
-    if typ.kind.is_list():
-        if typ.element is None:
-            raise ValueError(
-                f"cannot label {typ.kind.value!r} without a structural element"
-            )
-        return f"list[{canonical_type_label(typ.element)}]"
-
-    return typ.kind.value
-
-
-def _json_string(value: str) -> str:
-    """Encode one record key or variant tag as compact canonical JSON."""
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _infer_binding_string(
@@ -675,7 +625,6 @@ def _inference_error(
 __all__ = [
     "ItemType",
     "ProducerType",
-    "canonical_type_label",
     "canonicalize_inline_type",
     "infer_inline_binding_type",
     "require_proven_type",

@@ -5,7 +5,7 @@ codomain, and name/arity-checks bindings. (End-to-end RUN lives in test_ref_run.
 test_map.py; the cross-flow type check e06 in test_errors.py.) These assert:
 
 - seed 03 (`research-one`) loads as a child flow (its `ComposedFlow` exposes a
-  resolvable child SIGNATURE — declared `InputDecl`s + the single codomain `Type`);
+  resolvable child SIGNATURE — canonical `Parameter`s + the single codomain `Type`);
 - seed 04 (a plain `call` over 03) loads+compiles; the built `CallNode` (REF)
   `output_type` re-exports the child's single codomain `Type` (a `{report, asof}` record)
   via the test-local child resolver;
@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from agent_composer.nodes.call import CallNode   # nodes/call/__init__.py
-from agent_composer.nodes.contracts import Binding
+from agent_composer.nodes.contracts import Binding, Parameter, ValueContract
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind
 from agent_composer.compose import ComposedFlow, LoadError, load_flow
@@ -59,9 +59,18 @@ def test_seed03_loads_as_child_flow():
     assert isinstance(loaded, ComposedFlow)
     sig = child_signature(loaded)
     assert isinstance(sig, ChildSignature)
-    # declared inputs: topic (required str) + as_of (date, default today -> not required).
-    names = {d.name for d in sig.inputs}
-    assert names == {"topic", "as_of"}
+    # declared inputs: topic (required str) + as_of (typed date default -> not required).
+    parameters = {parameter.name: parameter for parameter in sig.inputs}
+    assert set(parameters) == {"topic", "as_of"}
+    assert all(type(parameter) is Parameter for parameter in sig.inputs)
+    assert all(type(parameter.contract) is ValueContract for parameter in sig.inputs)
+    assert parameters["topic"].required is True
+    assert parameters["topic"].contract.type.kind is ValueKind.STRING
+    assert parameters["as_of"].required is False
+    assert parameters["as_of"].has_default is True
+    assert parameters["as_of"].default == "2026-01-01"
+    assert parameters["as_of"].contract.type.kind is ValueKind.DATE
+    assert all(parameter.coerce_strings for parameter in sig.inputs)
     # the single codomain value: a {report, asof} record (>=2 outputs -> closed record).
     assert sig.output is not None
     assert sig.output.kind == ValueKind.OBJECT

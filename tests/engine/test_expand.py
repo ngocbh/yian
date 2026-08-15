@@ -55,35 +55,40 @@ def test_rens_internal_computed_whole_span_renamespaces_all_leaves():
 
 from agent_composer.events import RunSucceeded
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, NodeState, START_ID, END_ID
-from agent_composer.compose.helpers.types import InputDecl, read_type
+from agent_composer.compose.helpers.types import read_type
 from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import Parameter
+from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from tests.engine._fakes import FuncNode, derive_wiring
 from tests.engine._graph_builder import _engine
 
 
-def _idecl(name: str, type_: str = "str") -> InputDecl:
-    return InputDecl(name, type_, None, True, read_type(type_, {}))
+def _parameter(name: str, type_: str = "str") -> Parameter:
+    return Parameter(
+        name=name,
+        contract=ValueContract(read_type(type_, {})),
+        required=True,
+        coerce_strings=True,
+    )
 
 
 def _with_boundary(
     nodes: dict,
     edges: list,
     outputs: list,
-    input_decls=(),
+    parameters=(),
     node_wiring=None,
 ) -> tuple[dict, list, dict]:
     # inject the real START_ID/END_ID boundary NODES so a manual `from_parts` flow runs. The
-    # child START_ID carries `input_decls` (so its params == the call-arg names the splice seeds);
+    # child START_ID carries params matching the call-arg names the splice seeds;
     # END_ID is RECORD-mode from the declared outputs; the manual `(.., END_ID)` terminal Edge is
     # replaced by the producer edge (input_group = output name) so the engine reads store[END_ID].
     from agent_composer.compose.edges.producers import _binding_producers
 
-    decls = list(input_decls)
+    params = list(parameters)
     nodes = dict(nodes)
-    nodes.setdefault(START_ID, StartNode(START_ID, input_decls=decls))
+    nodes.setdefault(START_ID, StartNode(START_ID, params=params))
     nodes[END_ID] = EndNode.record(END_ID, output_names=[o.name for o in outputs])
     edges = [e for e in edges if e.to != END_ID]
     counts: dict = {}
@@ -94,7 +99,7 @@ def _with_boundary(
             edges.append(Edge(id=f"{producer}->{END_ID}#{i}", from_=producer, to=END_ID,
                               input_group=o.name))
     wiring = dict(node_wiring) if node_wiring is not None else derive_wiring(nodes)
-    wiring[START_ID] = {d.name: f"${{input.{d.name}}}" for d in decls}
+    wiring[START_ID] = {parameter.name: f"${{input.{parameter.name}}}" for parameter in params}
     wiring[END_ID] = {o.name: o.from_ for o in outputs}
     return nodes, edges, wiring
 
@@ -114,7 +119,7 @@ def _child_flow():
         nodes,
         edges,
         outputs,
-        input_decls=[_idecl("x", "int")],
+        parameters=[_parameter("x", "int")],
         node_wiring={
             "head": {"x": "${input.x}"},
             "tail": {"r": "${head.output}"},
@@ -126,7 +131,7 @@ def _child_flow():
 def _parent_with_spawner(child, record):
     # spawner "sp" is a real CALL returning a seed-first Grow; successor "after" reads ${sp.output}.
     # The call-args come from stamped `${input.<k>}` reads for each key in `record`, so the test
-    # seeds them via `run_inputs=record`. The parent declares matching input decls.
+    # seeds them via `run_inputs=record`. The parent declares matching parameters.
     from agent_composer.nodes.call.node import CallNode
     sp = CallNode("sp", flow_id="child", child=child,
                   child_inputs=child.nodes[child.start_id].params)
@@ -137,8 +142,10 @@ def _parent_with_spawner(child, record):
              Edge("sp->after#0", "sp", "after", input_group="v"),
              Edge("after->__end__#0", "after", END_ID)]
     outputs = [FlowOutput("out", "${after.output}")]
-    decls = [_idecl(k, "int") for k in record]
-    nodes, edges, wiring = _with_boundary(nodes, edges, outputs, input_decls=decls)
+    parameters = [_parameter(key, "int") for key in record]
+    nodes, edges, wiring = _with_boundary(
+        nodes, edges, outputs, parameters=parameters
+    )
     return CompiledFlow.from_parts(nodes=nodes, edges=edges, outputs=outputs, wiring=wiring)
 
 
@@ -322,7 +329,7 @@ def _wide_child(n: int) -> CompiledFlow:
         nodes,
         edges,
         outputs,
-        input_decls=[_idecl("x", "int")],
+        parameters=[_parameter("x", "int")],
         node_wiring=node_wiring,
     )
     return CompiledFlow.from_parts(nodes=nodes, edges=edges, outputs=outputs, wiring=wiring)

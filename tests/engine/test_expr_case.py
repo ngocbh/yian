@@ -20,7 +20,7 @@ from tests.engine._graph_builder import _engine
 def _with_boundary(node_map: dict) -> dict:
     # inject the real START_ID/END_ID boundary NODES so a manual `from_parts` flow runs.
     node_map = dict(node_map)
-    node_map.setdefault(START_ID, StartNode(START_ID, input_decls=[]))
+    node_map.setdefault(START_ID, StartNode(START_ID, params=[]))
     node_map.setdefault(END_ID, EndNode.record(END_ID, output_names=[]))
     return node_map
 

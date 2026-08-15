@@ -143,9 +143,18 @@ typedefs:
     note: Optional[str]                # nullable field
 ```
 
-`Optional[X]` (nullable) and a `= default` (omission-fill) are orthogonal: a
-required input has neither; `lookback: int = 30` defaults when omitted;
-`Optional[date]` omitted resolves to null.
+`Optional[X]` (nullable) and a `= default` (omission-fill) are orthogonal. A
+required input has neither; `lookback: int = 30` defaults when omitted; and
+`Optional[date]` with no default may be omitted, resolving to null. An explicit
+`Optional[int] = null` is a present default, distinct from having no `=`. A null
+default for a non-nullable type is invalid, as is an empty `=`.
+
+The default RHS is a YAML literal validated against the declared type while the
+flow loads. Stored defaults are never string-coerced: write `int = 30`, not
+`int = "30"`; a date string must likewise be quoted, such as
+`date = "2026-01-01"`. Compatible payloads retain their authored representation,
+so `float = 30` remains the integer `30`. String coercion applies only to values
+supplied at a flow boundary.
 
 ## Per-node configuration — `env:`
 

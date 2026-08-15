@@ -206,7 +206,7 @@ def _growth_fragment(spawner_id: str) -> Flow:
     """Return one valid dynamic boundary pair committing under ``spawner_id``."""
     start_id = f"{spawner_id}/child/start"
     end_id = f"{spawner_id}/child/end"
-    start = StartNode(start_id, input_decls=[])
+    start = StartNode(start_id, params=[])
     end = EndNode.record(end_id, output_names=[])
     end.commit_as = spawner_id
     return Flow(

@@ -1,9 +1,9 @@
 from agent_composer.compile.expand import clone_child
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
-from agent_composer.compose.helpers.types import InputDecl, read_type
+from agent_composer.compose.helpers.types import read_type
 from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.base import NodeKind, Output
-from agent_composer.nodes.contracts import Assertion, Binding, Parameter
+from agent_composer.nodes.contracts import Assertion, Binding, Parameter, ValueContract
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.eval_node import EvaluationFailure
@@ -11,8 +11,13 @@ from agent_composer.typesys.pool import VariablePool
 from tests.engine._fakes import FuncNode, drive, stamp_reads, derive_wiring
 
 
-def _decl(name: str, type_: str = "str") -> InputDecl:
-    return InputDecl(name, type_, None, True, read_type(type_, {}))
+def _parameter(name: str, type_: str = "str") -> Parameter:
+    return Parameter(
+        name=name,
+        contract=ValueContract(read_type(type_, {})),
+        required=True,
+        coerce_strings=True,
+    )
 
 
 def _child(outputs, *, tail_reads=None, inputs=("topic",)) -> CompiledFlow:
@@ -21,8 +26,8 @@ def _child(outputs, *, tail_reads=None, inputs=("topic",)) -> CompiledFlow:
                        {"topic": "${input.topic}"})
     tail = stamp_reads(FuncNode("tail", lambda i: i["r"]),
                        tail_reads or {"r": "${head.output.r}"})
-    decls = [_decl(n) for n in inputs]
-    start = StartNode(START_ID, input_decls=decls)
+    parameters = [_parameter(name) for name in inputs]
+    start = StartNode(START_ID, params=parameters)
     end = EndNode.record(END_ID, output_names=[o.name for o in outputs])
     nodes = {START_ID: start, "head": head, "tail": tail, END_ID: end}
     edges = [
@@ -35,7 +40,9 @@ def _child(outputs, *, tail_reads=None, inputs=("topic",)) -> CompiledFlow:
         edges.append(Edge(id=f"{producer}->{END_ID}#{i}", from_=producer, to=END_ID,
                           input_group=o.name))
     wiring = derive_wiring({"head": head, "tail": tail})
-    wiring[START_ID] = {d.name: f"${{input.{d.name}}}" for d in decls}
+    wiring[START_ID] = {
+        parameter.name: f"${{input.{parameter.name}}}" for parameter in parameters
+    }
     wiring[END_ID] = {o.name: o.from_ for o in outputs}
     flow = CompiledFlow.from_parts(nodes=nodes, edges=edges, outputs=outputs, wiring=wiring)
     return flow

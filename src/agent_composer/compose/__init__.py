@@ -50,7 +50,7 @@ from agent_composer.compose.parse.file import (
 from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.validate.references import validate_references
-from agent_composer.compose.helpers.types import InputDecl, read_flow_inputs, read_type
+from agent_composer.compose.helpers.types import read_flow_inputs, read_type
 from agent_composer.compose.validate.handles import (
     check_case_handles,
 )
@@ -67,7 +67,6 @@ __all__ = [
     "ToolDescriptor",
     "CaseDescriptor",
     "CallDescriptor",
-    "InputDecl",
     "read_flow_inputs",
     "read_type",
     "child_signature",

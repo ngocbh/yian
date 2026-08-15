@@ -52,8 +52,9 @@ they layer in this order (later overrides earlier):
 
 1. **`--inputs file.json`** — a JSON object of `{ "key": value, ... }`.
 2. **`--input k=v`** — one input, repeatable. Values arrive as strings and are
-   coerced to each input's declared type at the run boundary.
-3. **Interactive prompt** — any *required* input still missing is prompted for.
+   coerced, where supported, against each input's declared type at the run boundary.
+   A default applied by START was already validated at load and is not string-coerced.
+3. **Interactive prompt** — each declared input not already supplied is prompted for.
 
 ```console
 # all from flags
@@ -62,7 +63,7 @@ ac run examples/decision-brief.yaml --input question="Adopt a monorepo?" --input
 # from a JSON file, with one override
 ac run flow.yaml --inputs base.json --input audience="execs"
 
-# supply nothing — get prompted for each required input
+# supply nothing — get prompted for each missing input
 ac run examples/hello.yaml
 ```
 
@@ -84,21 +85,25 @@ A flow with no `name`/`description`/`version` prints no banner.
 
 ### The interactive prompt
 
-When a required input is missing, `ac` prompts for it. The widget follows each
-input's declared type:
+When a declared input is missing, `ac` prompts for it. The widget follows its
+resolved type:
 
 - a `bool` input → a yes/no confirm,
 - a `Literal[...]` enum → a select list of the allowed tags,
 - anything else → a free-text entry.
 
-Each prompt's label carries the input's declared **type**, a required (`*`) /
-`optional` mark, and any **default** — e.g. `topic (str) *`,
+An explicit null default uses free text for every type: leaving it blank preserves
+the null default, while entering text supplies an ordinary boundary value.
+
+Each prompt's label carries the input's canonical resolved **type**, a required
+(`*`) / `optional` mark, and any **default** — e.g. `topic (str) *`,
 `as_of (Optional[date]) [optional]`, `window (int) [default: 30]`. For the
 ISO-8601 `date` / `datetime` scalars — whose accepted string form isn't obvious —
 a label with no default also shows an **example** value (`e.g. 2026-05-21`,
 `e.g. 2026-05-21T14:30`); when a default is present it already shows the format,
-so the example is dropped. An optional input left blank is skipped (its default
-applies). Cancelling a prompt (Ctrl-C / Esc) cancels the run.
+so the example is dropped. An explicit null default is shown as `[default: None]`.
+An optional free-text input left blank is skipped, so its default applies.
+Cancelling a prompt (Ctrl-C / Esc) cancels the run.
 
 !!! note
     The prompt needs a real terminal (TTY). In a non-interactive context

@@ -62,12 +62,12 @@ def test_start_emits_started_and_succeeded():
     assert any(isinstance(e, NodeSucceeded) and e.node_id == START_ID for e in events)
 
 
-# --- C-2: a string-defaulted int input coerces to the integer through the FULL path ------- #
+# --- C-2: a typed default reaches START output through the full engine path ---------------- #
 _DEFAULT_FLOW = """
 id: dflt
 name: dflt
 input:
-  n: int = "5"
+  n: int = 5
 nodes:
   echo:
     kind: code
@@ -79,25 +79,24 @@ output: ${echo.output}
 """
 
 
-def test_string_defaulted_int_coerces_when_omitted():
-    # C-2 regression: the caller OMITS `n`; bind_params fills START's declared default (the RAW
-    # string "5" — START params carry default but no type), and START's _run_impl coerce_inputs
-    # coerces it to the integer 5. The whole path runs through eval_node now.
+def test_typed_int_default_is_used_when_omitted():
+    # C-2 regression: the caller omits `n`; ordinary parameter binding supplies the
+    # already-validated integer default before START runs through `eval_node`.
     loaded = load_flow(_DEFAULT_FLOW)
     eng = _engine(loaded.compiled, run_inputs={})
     events = list(eng.run())
     succ = next(e for e in events if isinstance(e, NodeSucceeded) and e.node_id == START_ID)
-    assert succ.output == {"n": 5}                 # integer, not the raw "5"
+    assert succ.output == {"n": 5}
     res = run_flow(loaded, {})
     assert res.status == "succeeded" and res.output == 5
 
 
-# --- S-a: a boundary assert over a string-defaulted int must read the COERCED output ------- #
+# --- S-a: a boundary assert over a typed default reads START's bound output ---------------- #
 _DEFAULT_ASSERT_FLOW = """
 id: da
 name: da
 input:
-  n: int = "5"
+  n: int = 5
 nodes:
   echo:
     kind: code
@@ -111,10 +110,9 @@ asserts:
 """
 
 
-def test_boundary_assert_reads_coerced_default():
-    # S-a regression: `n` OMITTED -> default "5" coerced to 5. The boundary assert
-    # `${input.n} >= 5` is lowered to `${output.n} >= 5`, reading START's COERCED output
-    # (int 5), so 5 >= 5 holds. A naive `${n}` would read the uncoerced "5" and mis-compare.
+def test_boundary_assert_reads_typed_default():
+    # S-a regression: `n` is omitted, so the boundary assert reads START's bound
+    # integer output after `${input.n}` is lowered to `${output.n}`.
     res = run_flow(load_flow(_DEFAULT_ASSERT_FLOW), {})
     assert res.status == "succeeded"
     assert res.output == 5

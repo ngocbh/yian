@@ -7,14 +7,16 @@ type layer's job (`type_for` recurses over records/lists/Optional); this reader
 is the thin composition that walks the YAML structure and wraps any type error loudly.
 """
 
-from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any, Optional
 
-from agent_composer.typesys import TypeCheckError, Type, type_for
+from agent_composer.nodes.contracts import Parameter, ValueContract
+from agent_composer.typesys import TypeCheckError, Type, build_value_as, type_for
 from agent_composer.typesys.values import ValueKind
-from agent_composer.typesys.types import ScalarExpr, TypeRegistry, parse_type
+from agent_composer.typesys.types import TypeRegistry
 
 from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.events import SourceRange
 from agent_composer.compose.source import SourceSyntaxError, parse_yaml_literal
 
 
@@ -50,26 +52,6 @@ def read_type(node, registry: TypeRegistry) -> Type:
 # ---------- flow `inputs:` declarations ----------
 
 
-@dataclass(frozen=True)
-class InputDecl:
-    """One flow-input parameter: the seeding pipeline's `IOField` duck-type + a `Type`.
-
-    `.type_str` is the raw author declaration — a `str` (the `TYPE [= default]` form) for
-    a scalar/list, or a `dict` (record field map) for a record input. For a scalar it
-    carries the canonical Python-surface name (`str`/`int`/`float`/`bool`/...), which
-    `coerce_param` matches to coerce a passed string (`"30"` -> `30`); a non-scalar
-    `.type_str` is passed through unchanged (lists/records aren't coerced by
-    `coerce_param` anyway).
-    `.type` is the resolved runtime `Type` (via `read_type`) used for ref checks.
-    """
-
-    name: str
-    type_str: str
-    default: Any
-    required: bool
-    type: Type
-
-
 def _split_default(spec: str) -> tuple[str, Optional[str]]:
     """Split a `TYPE = default` spec on the FIRST top-level `=` (outside []/{}/quotes).
 
@@ -98,39 +80,76 @@ def _split_default(spec: str) -> tuple[str, Optional[str]]:
     return spec.strip(), None
 
 
-def read_flow_inputs(mapping, registry: TypeRegistry) -> list[InputDecl]:
-    """Read a Compose `inputs:` mapping into the seeding pipeline's `InputDecl`s.
+def read_flow_inputs(
+    mapping,
+    registry: TypeRegistry,
+    ranges: Mapping[str, SourceRange | None] | None = None,
+) -> list[Parameter]:
+    """Read Compose ``inputs:`` directly into canonical semantic parameters.
 
     A `str` value is the `TYPE [= default]` / `Optional[X]` form; a `dict` value is a
     record type (resolved via `read_type`, no default — the `{type:, default:}`
-    escape-hatch map is intentionally not supported).
+    escape-hatch map is intentionally not supported). Authored defaults must already
+    satisfy their declared type; only supplied boundary strings are coercible.
     """
-    decls: list[InputDecl] = []
+    parameters: list[Parameter] = []
     for name, value in (mapping or {}).items():
-        if isinstance(value, str):
-            type_part, default_part = _split_default(value)
-            typ = read_type(type_part, registry)
-            default: Any = None
-            if default_part is not None and default_part != "":
-                try:
-                    default = parse_yaml_literal(default_part)
-                except SourceSyntaxError as exc:
-                    raise LoadError(
-                        f"input {name!r}: bad default {default_part!r}: {exc}"
-                    ) from exc
-            try:
-                parsed = parse_type(type_part)
-            except TypeCheckError as exc:
-                raise LoadError(f"input {name!r}: {exc}") from exc
-            engine_type = parsed.name if isinstance(parsed, ScalarExpr) else type_part
-            required = not typ.nullable and default is None
-            decls.append(InputDecl(name, engine_type, default, required, typ))
-        elif isinstance(value, dict):
-            typ = read_type(value, registry)
-            decls.append(InputDecl(name, value, None, True, typ))
-        else:
+        source_range = None if ranges is None else ranges.get(name)
+        try:
+            if isinstance(value, str):
+                type_part, default_part = _split_default(value)
+                typ = read_type(type_part, registry)
+                has_default = default_part is not None
+                if has_default and default_part == "":
+                    raise LoadError(f"input {name!r}: default cannot be empty")
+                default: Any = None
+                if has_default:
+                    assert default_part is not None
+                    try:
+                        default = parse_yaml_literal(default_part)
+                    except SourceSyntaxError as exc:
+                        raise LoadError(
+                            f"input {name!r}: bad default {default_part!r}: {exc}"
+                        ) from exc
+                    try:
+                        build_value_as(typ, default)
+                    except ValueError as exc:
+                        raise LoadError(
+                            f"input {name!r}: default {default!r} does not satisfy "
+                            f"the declared type: {exc}"
+                        ) from exc
+                parameters.append(
+                    Parameter(
+                        name=name,
+                        contract=ValueContract(typ),
+                        required=not typ.nullable and not has_default,
+                        has_default=has_default,
+                        default=default,
+                        coerce_strings=True,
+                    )
+                )
+            elif isinstance(value, dict):
+                typ = read_type(value, registry)
+                parameters.append(
+                    Parameter(
+                        name=name,
+                        contract=ValueContract(typ),
+                        required=not typ.nullable,
+                        coerce_strings=True,
+                    )
+                )
+            else:
+                raise LoadError(
+                    f"input {name!r}: declaration must be a type string or a record map, "
+                    f"got {type(value).__name__}"
+                )
+        except LoadError as exc:
+            if exc.range is not None or source_range is None:
+                raise
             raise LoadError(
-                f"input {name!r}: declaration must be a type string or a record map, "
-                f"got {type(value).__name__}"
-            )
-    return decls
+                str(exc),
+                lines=exc.lines,
+                notes=exc.notes,
+                range=source_range,
+            ) from exc
+    return parameters

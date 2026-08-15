@@ -36,6 +36,7 @@ from agent_composer.events import (
     SourceSpan,
     StreamChunk,
 )
+from agent_composer.nodes.binding import coerce_inputs
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.runtime.log import (
     JsonlRunLog,
@@ -54,11 +55,7 @@ from agent_composer.runtime.state import (
     prepare_run_started,
 )
 from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.seeding import (
-    coerce_inputs,
-    default_run_id,
-    seed_system_clock,
-)
+from agent_composer.typesys.seeding import default_run_id, seed_system_clock
 
 
 EventHook = Callable[[Any], None]
@@ -212,6 +209,9 @@ def _run_flow_controlled(
     )
 
     canonical_run_id = run_id if run_id is not None else default_run_id()
+    # Canonicalize supplied boundary strings before RunStarted persists its input.
+    # The generic binder reuses the same idempotent policy and remains the authority
+    # for required/default handling, contract validation, and every child boundary.
     coerced = coerce_inputs(flow.input, inputs)
     pool = VariablePool(start_id=private_flow.start_id)
     pool.set(private_flow.start_id, copy.deepcopy(coerced))

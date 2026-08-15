@@ -3,7 +3,7 @@
 A `call`/`map`/`loop` node names a CALLABLE (a `defs:` entry or an external flow). The child
 resolver is the load-time seam: `(flow_id, version) -> ComposedFlow` (the loader composes the
 defs-first resolution). From the resolved child the kind builder derives its `ChildSignature` —
-declared input types + single codomain `Type` — to stamp the node's `output_type` and to
+canonical parameters + single codomain `Type` — to stamp the node's `output_type` and to
 name/arity- + type-check the bindings, AND bakes the child's compiled flow onto the node
 (resolve-and-bake — the call graph, incl. nested flows, is fixed at compile). The bake itself
 lives in each kind's own `build` (`call.py`/`loop.py`); this module supplies the shared
@@ -22,29 +22,28 @@ from typing import Any, Callable, Optional
 
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.template import Span, scan_template, template_refs
-from agent_composer.nodes.contracts import binding_source
+from agent_composer.nodes.contracts import Parameter, binding_source
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.types import InputDecl
 
 
 @dataclass(frozen=True)
 class ChildSignature:
-    """A child flow's compile-time SIGNATURE: declared input decls + the single
+    """A child flow's compile-time signature: canonical parameters + the single
     codomain `Type` (the value the child returns; `None` when it declares no outputs).
 
-    `inputs` are the child's `read_flow_inputs(...)` `InputDecl`s (the name/arity check
-    reads their names + `.required`/`.default`). `output` is the child's single value:
+    `inputs` are the child's canonical `Parameter`s (the name/arity check reads
+    their names + required/default policy). `output` is the child's single value:
     one declared output -> that output's Type; >=2 -> a closed-record Type keyed by
     name (the same arity rule `terminal_output` assembles: one value out)."""
 
-    inputs: list[InputDecl]
+    inputs: list[Parameter]
     output: Optional[Type]
 
 
 # resolver(flow_id, flow_version) -> ComposedFlow (the load-time child seam; duck-typed
-# on `.compiled`/`.inputs` so `build` need not import `loader`). `flow_version` is an
-# opaque str tag (a `uses:` ref's `@<version>`); the in-file/legacy path passes None.
+# on `.compiled`/`.input` so `build` need not import `loader`). `flow_version` is an
+# opaque str tag (a `uses:` ref's `@<version>`); an in-file def passes None.
 ChildResolver = Callable[[str, Optional[str]], Any]
 
 
@@ -100,7 +99,7 @@ def _output_value_type(
 def child_signature(loaded: Any) -> ChildSignature:
     """A loaded child `ComposedFlow` -> its compile-time `ChildSignature`.
 
-    Duck-typed on `loaded.input` (the `InputDecl`s) + `loaded.compiled` (`.nodes`/`.outputs`)
+    Duck-typed on `loaded.input` (the canonical parameters) + `loaded.compiled`
     so `build` need not import `loader` (which imports `build`). The codomain `Type`
     follows `terminal_output`'s arity rule over the flow outputs: one output -> its value
     Type; >=2 -> a closed record keyed by name (every output is a field; an output whose
@@ -110,7 +109,11 @@ def child_signature(loaded: Any) -> ChildSignature:
         for nid, node in loaded.compiled.nodes.items()
         if node.output_type is not None
     }
-    flow_input_types = {d.name: d.type for d in loaded.input}
+    flow_input_types = {
+        parameter.name: parameter.contract.type
+        for parameter in loaded.input
+        if parameter.contract is not None
+    }
     outs = list(loaded.compiled.outputs)
     if not outs:
         output: Optional[Type] = None

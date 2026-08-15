@@ -14,7 +14,6 @@ import agent_composer.compile.manifest as manifest_module
 from agent_composer.compile.manifest import expansion_digest, flow_fingerprint, flow_manifest
 from agent_composer.compile.model import START_ID, CompiledFlow, Edge, Flow, FlowOutput
 from agent_composer.compose import load_flow
-from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.agent.structured import type_to_schema
@@ -221,13 +220,11 @@ output: ${wrapper.output}
 
     wrapper_manifest = flow_manifest(compiled)["nodes"]["wrapper"]
     child_start = wrapper_manifest["child"]["nodes"][START_ID]
-    generated = child_start["input_decls"][0]
+    generated = child_start["params"][0]
 
-    assert generated["type_str"] == {
-        "type": "str",
-        "value": '{"a":Optional[str],"z":int}',
-    }
-    assert [field["name"] for field in generated["type"]["fields"]] == ["a", "z"]
+    assert [
+        field["name"] for field in generated["contract"]["type"]["fields"]
+    ] == ["a", "z"]
 
 
 def test_flow_fingerprint_changes_with_node_kind_and_execution_source():
@@ -2095,7 +2092,7 @@ def test_field_census_detects_pydantic_extra_fields_without_internal_slots():
 
 def _fragment() -> Flow:
     """Build a small valid fragment with literal wiring and two ordered edges."""
-    start = StartNode("entry", input_decls=[])
+    start = StartNode("entry", params=[])
     body = CodeNode("body", code='return inputs["x"]')
     body.params = [
         Parameter(
@@ -2411,42 +2408,26 @@ def test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schema(
     assert flow_fingerprint(first) != flow_fingerprint(second)
 
 
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"name": "renamed"},
-        {"type_str": "float"},
-        {"required": False},
-        {"default": 7},
-        {"type": Type.scalar(ValueKind.NUMBER)},
-    ],
-    ids=["name", "type-str", "required", "default", "type"],
-)
-def test_flow_fingerprint_covers_each_start_input_declaration_field(changes):
-    declaration = InputDecl(
-        name="x",
-        type_str="int",
+def test_start_manifest_uses_canonical_parameters():
+    parameter = Parameter(
+        "x",
+        contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
         required=True,
-        default=None,
-        type=Type.scalar(ValueKind.INTEGER),
+        coerce_strings=True,
     )
-    first = StartNode("node", input_decls=[])
-    second = StartNode("node", input_decls=[])
-    first.input_decls = [declaration]
-    second.input_decls = [replace(declaration, **changes)]
+    start = StartNode("node", params=[parameter])
 
-    assert flow_fingerprint(_single_node_flow(first)) != flow_fingerprint(
-        _single_node_flow(second)
-    )
+    manifest = flow_manifest(_single_node_flow(start))["nodes"]["node"]
+
+    assert manifest["params"][0]["name"] == "x"
+    assert manifest["params"][0]["contract"]["type"]["kind"] == "int"
 
 
-def test_flow_fingerprint_preserves_start_input_declaration_order():
-    string_type = Type.scalar(ValueKind.STRING)
-    first_decl = InputDecl("first", "str", None, True, string_type)
-    second_decl = InputDecl("second", "str", None, True, string_type)
-    first = StartNode("node", input_decls=[first_decl, second_decl])
-    second = StartNode("node", input_decls=[second_decl, first_decl])
-    first.params = second.params = []
+def test_flow_fingerprint_preserves_start_parameter_order():
+    first_parameter = Parameter("first")
+    second_parameter = Parameter("second")
+    first = StartNode("node", params=[first_parameter, second_parameter])
+    second = StartNode("node", params=[second_parameter, first_parameter])
 
     assert flow_fingerprint(_single_node_flow(first)) != flow_fingerprint(
         _single_node_flow(second)

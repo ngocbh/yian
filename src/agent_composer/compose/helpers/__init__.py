@@ -11,8 +11,8 @@ Modules:
                   `SourceRange`), the one exception type the CLI boxes as a diagnostic.
   - `source`      `SourceFrame` + parse-free location helpers over an existing
                   `SourceCursor`; render-only metadata, never a YAML parser.
-  - `types`       `read_type` / `read_flow_inputs` / `InputDecl`: the `outputs:`/`inputs:`
-                  source side read into one recursive `Type` (nested records native).
+  - `types`       `read_type` / `read_flow_inputs`: the `outputs:`/`inputs:` source
+                  side read into recursive `Type` / `Parameter` values.
   - `uses`        `UsesRef` / `parse_uses_ref`: the `uses:` child-flow reference parser.
 
 The sibling `compose.source` package exclusively owns YAML parsing and its private

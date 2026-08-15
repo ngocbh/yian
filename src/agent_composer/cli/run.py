@@ -52,6 +52,7 @@ from agent_composer.run import (
 from agent_composer.events import Diagnostic, NodeFailed, SourceRange, SourceSpan
 from agent_composer.nodes.base import _HostStop
 from agent_composer.tools import install_ask_user
+from agent_composer.typesys import canonical_type_label
 from agent_composer.typesys.seeding import default_run_id
 from agent_composer.typesys.values import ValueKind
 
@@ -832,14 +833,16 @@ def _input_label(decl: Any) -> str:
         `window (int) [default: 30]`                         (optional, has a default)
     """
     parts = [decl.name]
-    if getattr(decl, "type_str", None):
-        parts.append(f"({decl.type_str})")
-    hint = _format_hint(decl.type)
+    contract = getattr(decl, "contract", None)
+    typ = None if contract is None else contract.type
+    if typ is not None:
+        parts.append(f"({canonical_type_label(typ)})")
+    hint = _format_hint(typ)
     if decl.required:
         parts.append("*")
         if hint:
             parts.append(hint)
-    elif decl.default is not None:
+    elif decl.has_default:
         # The default value itself shows the accepted format, so skip the example.
         parts.append(f"[default: {decl.default}]")
     else:
@@ -885,12 +888,20 @@ def _prompt_missing(decls: List[Any], have: Dict[str, Any]) -> Optional[Dict[str
         if decl.name in have:
             continue
         label = _input_label(decl)
-        typ = decl.type
-        if typ.kind == ValueKind.BOOLEAN:
+        contract = getattr(decl, "contract", None)
+        typ = None if contract is None else contract.type
+        if decl.has_default and decl.default is None:
+            # Confirm/select widgets cannot represent "omit this parameter". Free
+            # text preserves the explicit null default on blank while still allowing
+            # a textual override that the ordinary boundary policy validates/coerces.
+            value = questionary.text(
+                label, default="", qmark="?", style=style
+            ).ask()
+        elif typ is not None and typ.kind == ValueKind.BOOLEAN:
             value = questionary.confirm(
                 label, default=bool(decl.default), qmark="?", style=style
             ).ask()
-        elif typ.tags:  # a Literal[...] enum
+        elif typ is not None and typ.tags:  # a Literal[...] enum
             value = questionary.select(
                 label, choices=sorted(typ.tags), qmark="?", style=style
             ).ask()

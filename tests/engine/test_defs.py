@@ -20,8 +20,10 @@ from agent_composer.compose import LoadError, load_flow
 from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.source import document as source_document
 from agent_composer.events import SourceRange
+from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.run import run_flow
 from agent_composer.compose.parse.file import parse_file
+from agent_composer.typesys import Type, ValueKind
 
 # --------------------------------------------------------------------------- #
 # A multi-node def, called as a plain application (no over:).
@@ -835,6 +837,64 @@ def test_parent_null_shadows_child_default():
     res = run_flow(loaded, {"x": None})
     assert res.status == "succeeded", res.error
     assert res.output is None  # the parent's explicit null shadows the child default
+
+
+def test_omitted_child_input_applies_explicit_null_default():
+    loaded = load_flow(
+        """id: omitted-null-default
+name: omitted_null_default
+defs:
+  child:
+    kind: code
+    code: |
+      return inputs["maybe"]
+    input:
+      maybe: Optional[int] = null
+    output: Optional[int]
+nodes:
+  go:
+    kind: call
+    call: child
+output: ${go.output}
+"""
+    )
+    parameter = loaded.compiled.nodes["go"].child_inputs[0]
+
+    assert type(parameter) is Parameter
+    assert type(parameter.contract) is ValueContract
+    assert parameter.contract.type == Type(kind=ValueKind.INTEGER, nullable=True)
+    assert parameter.has_default is True
+    assert parameter.default is None
+    assert parameter.coerce_strings is True
+
+    result = run_flow(loaded, {})
+    assert result.status == "succeeded", result.error
+    assert result.output is None
+
+
+def test_invalid_def_default_keeps_absolute_range_and_def_context():
+    source = """id: invalid-def-default
+name: invalid_def_default
+defs:
+  child:
+    kind: code
+    code: |
+      return inputs["value"]
+    input:
+      value: int = null
+    output: int
+nodes:
+  go:
+    kind: call
+    call: child
+output: ${go.output}
+"""
+
+    with pytest.raises(LoadError, match="defs entry 'child'") as caught:
+        load_flow(source)
+
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == 9
 
 
 def test_def_yaml_merge_uses_local_nodes_override():

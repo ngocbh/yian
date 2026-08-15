@@ -25,11 +25,10 @@ Imports flow DOWN only: this module composes the compose package's own slices pl
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Optional
-
-import yaml
+from typing import Any, Callable, Optional
 
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges
@@ -43,8 +42,6 @@ from agent_composer.compose.desugar.inline_bodies import (
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.uses import parse_uses_ref
-from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.helpers.source import (
     SourceFrame,
     _boundary_assert_ranges,
@@ -53,6 +50,7 @@ from agent_composer.compose.helpers.source import (
 )
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.parse.file import (
+    flow_nodes_cursor,
     parse_file,
     parse_source_document,
 )
@@ -61,38 +59,6 @@ from agent_composer.compose.source import (
     SourceCursor,
     SourceDocument,
 )
-
-
-def _nodes_cursor(document: SourceDocument, nodes_section: dict) -> SourceCursor:
-    """Return the physical root `nodes:` cursor or a compact virtual fallback."""
-
-    root = document.root
-    if root.has("nodes"):
-        return root.child("nodes")
-    return SourceCursor.virtual(nodes_section)
-
-
-def _def_nodes_reader(parent_text: str, name: str) -> NodeReader:
-    """A span-aware `NodeReader` over a `defs:<name>:nodes:` mapping in the parent file.
-
-    Descends a fresh span parse to the raw author surface, where nested node keys remain
-    singular and ranges retain their absolute parent-file lines. Spanless when `parent_text`
-    does not compose or lacks that subtree (a programmatic or single-node def).
-    """
-    if parent_text:
-        try:
-            value, spans, root = load_with_spans(parent_text, return_root=True)
-        except yaml.YAMLError:
-            pass
-        else:
-            defs = value.get("defs") if isinstance(value, dict) else None
-            body = defs.get(name) if isinstance(defs, dict) else None
-            if isinstance(body, dict) and isinstance(body.get("nodes"), dict):
-                return (
-                    NodeReader(value, spans, root)
-                    .child("defs").child(name).child("nodes")
-                )
-    return NodeReader.spanless({})
 
 
 def _restore_node_surface(nodes):
@@ -122,16 +88,84 @@ def _restore_node_surface(nodes):
     return restored
 
 
-def _def_assembly_reader(
-    parent_text: str,
-    name: str,
+def _def_assembly_cursor(
+    def_cursor: SourceCursor | None,
     normalized_nodes,
-) -> NodeReader:
-    """Return a fresh raw def reader, or a surface-restored spanless fallback."""
-    located = _def_nodes_reader(parent_text, name)
-    if located.yaml_node is not None:
-        return located
-    return NodeReader.spanless(_restore_node_surface(normalized_nodes))
+) -> SourceCursor:
+    """Return the authored def cursor, or a surface-restored virtual fallback."""
+
+    if def_cursor is not None:
+        try:
+            return def_cursor.child("nodes")
+        except SourceAccessError:
+            pass
+    return SourceCursor.virtual(_restore_node_surface(normalized_nodes))
+
+
+def _source_child(
+    cursor: SourceCursor | None,
+    key: Any,
+) -> SourceCursor | None:
+    """Return one existing child source, or ``None`` for a virtual fallback."""
+
+    if cursor is None:
+        return None
+    try:
+        return cursor.child(key) if cursor.has(key) else None
+    except SourceAccessError:
+        return None
+
+
+def _single_node_def_cursor(
+    name: str,
+    body: dict,
+    def_cursor: SourceCursor | None,
+) -> SourceCursor:
+    """Project a flat def into one source-aligned synthetic node mapping."""
+
+    param_types = body.get("inputs") or {}
+    generated_inputs = {
+        param: f"${{input.{param}}}"
+        for param in param_types
+    }
+    node_body = {
+        key: value
+        for key, value in body.items()
+        if key not in ("inputs", "outputs")
+    }
+    node_body["input"] = generated_inputs
+    if "outputs" in body:
+        node_body["output"] = body["outputs"]
+
+    if def_cursor is None:
+        return SourceCursor.virtual({name: node_body})
+
+    body_entries: dict[Any, tuple[Any, SourceCursor | None]] = {
+        key: (value, _source_child(def_cursor, key))
+        for key, value in node_body.items()
+        if key not in ("input", "output")
+    }
+
+    input_source = _source_child(def_cursor, "input")
+    if input_source is not None and isinstance(input_source._value_view(), Mapping):
+        input_cursor = input_source.project_mapping(
+            {
+                param: (binding, _source_child(input_source, param))
+                for param, binding in generated_inputs.items()
+            }
+        )
+    else:
+        input_cursor = None
+    body_entries["input"] = (generated_inputs, input_cursor)
+
+    if "output" in node_body:
+        body_entries["output"] = (
+            node_body["output"],
+            _source_child(def_cursor, "output"),
+        )
+
+    body_cursor = def_cursor.project_mapping(body_entries)
+    return def_cursor.project_mapping({name: (node_body, body_cursor)})
 
 
 def _frame_ranges(
@@ -183,7 +217,7 @@ def top_frame_ranges(
         return {}, {}
     try:
         lowered, _inline_bodies = extract_inline_bodies(
-            _nodes_cursor(document, cf.nodes),
+            flow_nodes_cursor(document, cf.nodes),
             owner=("root",),
         )
     except (LoadError, SourceAccessError):
@@ -441,9 +475,16 @@ def _load_flow(
 
     # The composite call resolver: defs-first, then a `uses:` alias (external, with the
     # ref's version); an undeclared bare name is loud. Building the defs eagerly surfaces a
-    # broken/recursive callable at load (loud, not a hang). `text` is threaded so each
-    # def's `SourceFrame` indexes its inner nodes at their absolute lines in THIS file.
-    callable_scope = _CallableScope(f.defs, registry, external, f.uses, text)
+    # broken/recursive callable at load (loud, not a hang). The owned document supplies each
+    # def's raw source cursor and absolute parent-file locations without another parse.
+    defs_cursor = root.child("defs") if root.has("defs") else None
+    callable_scope = _CallableScope(
+        f.defs,
+        registry,
+        external,
+        f.uses,
+        defs_cursor,
+    )
     callable_scope.eager_load_defs()
 
     # Render-only source frame for THIS flow: copied onto child call/map nodes for the
@@ -458,7 +499,7 @@ def _load_flow(
 
     return _assemble(
         inputs_section=f.inputs,
-        nodes_cursor=_nodes_cursor(document, f.nodes),
+        nodes_cursor=flow_nodes_cursor(document, f.nodes),
         outputs_section=f.outputs,
         asserts_section=f.asserts,
         registry=registry,
@@ -509,8 +550,9 @@ class _CallableScope:
             Resolver for local refs declared through `uses:`; `None` disables them.
         uses (`dict`):
             Callable alias -> authored external reference.
-        parent_text (`str`, *optional*, defaults to `""`):
-            Source declaring the defs, used to retain absolute source locations.
+        defs_cursor (`SourceCursor | None`, *optional*, defaults to `None`):
+            Cursor over the authored ``defs:`` mapping. ``None`` supports
+            programmatic scopes with virtual, location-free def cursors.
     """
 
     def __init__(
@@ -519,7 +561,7 @@ class _CallableScope:
         registry,
         external: Optional[ChildResolver],
         uses: dict,
-        parent_text: str = "",
+        defs_cursor: SourceCursor | None = None,
     ) -> None:
         both = sorted(set(defs_section) & set(uses))
         if both:
@@ -532,7 +574,7 @@ class _CallableScope:
         self._registry = registry
         self._external = external
         self._uses = uses
-        self._parent_text = parent_text
+        self._defs_cursor = defs_cursor
         self._private: dict[str, _PrivateCallable] = {}
         self._built: dict[str, ComposedFlow] = {}
         self._in_progress: set[str] = set()
@@ -611,12 +653,18 @@ class _CallableScope:
                 )
             self._in_progress.add(flow_id)
             try:
+                def_cursor = None
+                if self._defs_cursor is not None:
+                    try:
+                        def_cursor = self._defs_cursor.child(flow_id)
+                    except SourceAccessError:
+                        pass
                 loaded = _load_def(
                     flow_id,
                     self._defs_section[flow_id],
                     self._registry,
                     self,
-                    self._parent_text,
+                    def_cursor,
                 )
             finally:
                 self._in_progress.discard(flow_id)
@@ -663,15 +711,15 @@ def _load_def(
     body,
     registry,
     scope: _CallableScope,
-    parent_text: str = "",
+    def_cursor: SourceCursor | None = None,
 ) -> ComposedFlow:
     """Build one in-file `defs:` entry into a `ComposedFlow` (a callable / sub-flow inline).
 
     Supports the **multi-node** form only — `{inputs?, nodes, outputs?, asserts?}`,
     sharing the file's `typedefs:` registry + callable scope (so a def can call other defs,
     external flows, or compiler-owned children). A **single-node** form (a top-level
-    `kind:`) is deferred -> `LoadError`. `parent_text` is the source of the declaring
-    file: the assembly reader retains absolute lines there, and `_assemble` derives the
+    `kind:`) is deferred -> `LoadError`. ``def_cursor`` is the occurrence-local
+    authored body: it retains absolute locations, and `_assemble` derives the
     def's `SourceFrame` from its lowered descriptors."""
     if not isinstance(body, dict):
         raise LoadError(
@@ -679,7 +727,13 @@ def _load_def(
         )
     if "nodes" not in body:
         if "kind" in body:
-            return _load_single_node_def(name, body, registry, scope, parent_text)
+            return _load_single_node_def(
+                name,
+                body,
+                registry,
+                scope,
+                def_cursor,
+            )
         raise LoadError(
             f"defs entry {name!r}: a callable needs a `nodes:` sub-flow body "
             f"(inputs?/nodes/outputs?) OR a single-node `kind:` form"
@@ -690,17 +744,22 @@ def _load_def(
             f"defs entry {name!r}: unknown field(s) {extra} "
             f"(allowed: {', '.join(sorted(_DEF_ALLOWED))})"
         )
-    nodes_reader = _def_assembly_reader(parent_text, name, body["nodes"])
+    nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
+    source_text = (
+        def_cursor.document.text
+        if def_cursor is not None and def_cursor.document is not None
+        else ""
+    )
     source = SourceFrame(
         label="defs:" + name,
-        text=parent_text,
+        text=source_text,
         node_ranges={},
         field_ranges={},
     )
     try:
         return _assemble(
             inputs_section=body.get("inputs") or {},
-            nodes_cursor=nodes_reader,
+            nodes_cursor=nodes_cursor,
             outputs_section=body.get("outputs"),
             asserts_section=body.get("asserts") or [],  # enforced at the child seam
             registry=registry,
@@ -732,7 +791,7 @@ def _load_single_node_def(
     body: dict,
     registry,
     scope: _CallableScope,
-    parent_text: str = "",
+    def_cursor: SourceCursor | None = None,
 ) -> ComposedFlow:
     """Build a SINGLE-node `defs:` callable — `let f params = <one node over params>`.
 
@@ -742,31 +801,45 @@ def _load_single_node_def(
     each auto-bound by name into the single node (`p = ${input.p}`); `output:` is the
     node's output TYPE (the codomain). Everything except `input:`/`output:` is the node
     body (kind + its logic fields + any node-local `asserts:`). It desugars to a one-node
-    sub-flow and runs through the same `_assemble` as the multi-node form. Its sole node is
-    synthesized in-memory (no authored inner `nodes:` mapping), so its `SourceFrame` maps
-    are empty and the traceback frame collapses to the call line."""
+    sub-flow and runs through the same `_assemble` as the multi-node form. The synthetic
+    node projects its header, logic, generated bindings, and output type onto the flat
+    authored def cursor without mutating that source."""
     param_types = body.get("inputs") or {}
     if not isinstance(param_types, dict):
         raise LoadError(
             f"defs entry {name!r}: single-node `inputs:` must be a param map (name: TYPE)"
         )
-    node_body = {k: v for k, v in body.items() if k not in ("inputs", "outputs")}
-    node_body["inputs"] = {p: f"${{input.{p}}}" for p in param_types}  # auto-wire by name
-    if "outputs" in body:
-        node_body["outputs"] = body["outputs"]  # the node's output type = the def codomain
-    source = SourceFrame(label="defs:" + name, text=parent_text, node_ranges={}, field_ranges={})
+    nodes_cursor = _single_node_def_cursor(name, body, def_cursor)
+    output_source = _source_child(def_cursor, "output")
+    output_range = output_source.range if output_source is not None else None
+    source_text = (
+        def_cursor.document.text
+        if def_cursor is not None and def_cursor.document is not None
+        else ""
+    )
+    source = SourceFrame(
+        label="defs:" + name,
+        text=source_text,
+        node_ranges={},
+        field_ranges={},
+    )
     try:
         return _assemble(
             inputs_section=param_types,
-            nodes_cursor=NodeReader.spanless({name: node_body}),
+            nodes_cursor=nodes_cursor,
             outputs_section={"result": f"${{{name}.output}}"},  # single value re-export (node-first)
             asserts_section=[],
             registry=registry,
             scope=scope,
             owner=("def", name),
             n_lines={},
-            s_lines={},
+            s_lines=(
+                {"output": output_range.start_line}
+                if output_range is not None
+                else {}
+            ),
             source=source,
+            outputs_range=output_range,
         )
     except LoadError as exc:
         if str(exc).startswith("defs entry "):

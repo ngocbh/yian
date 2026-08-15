@@ -17,6 +17,10 @@ import pytest
 
 from agent_composer.compose import loader as compose_loader
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.compose.source import SourceDocument
+from agent_composer.compose.source import document as source_document
+from agent_composer.compose.helpers import spanloader as legacy_spanloader
+from agent_composer.events import SourceRange
 from agent_composer.run import run_flow
 from agent_composer.compose.parse.file import parse_file
 
@@ -75,12 +79,22 @@ def test_callable_scope_eagerly_builds_defs_and_memoizes_resolution(monkeypatch)
     body = {"nodes": {}}
     seen_scopes = []
 
-    def fake_load_def(name, value, seen_registry, scope, parent_text=""):
+    source_document = SourceDocument.parse("defs:\n  local:\n    nodes: {}\n")
+    defs_cursor = source_document.root.child("defs")
+
+    def fake_load_def(
+        name,
+        value,
+        seen_registry,
+        scope,
+        seen_def_cursor=None,
+    ):
         events.append(("def", name))
         seen_scopes.append(scope)
         assert value is body
         assert seen_registry is registry
-        assert parent_text == "parent source"
+        assert seen_def_cursor.document is source_document
+        assert seen_def_cursor.path == defs_cursor.child("local").path
         return local_child
 
     def external(path, version=None):
@@ -93,7 +107,7 @@ def test_callable_scope_eagerly_builds_defs_and_memoizes_resolution(monkeypatch)
         registry,
         external,
         {"remote": "library/child@declared-v1"},
-        "parent source",
+        defs_cursor,
     )
 
     scope.eager_load_defs()
@@ -110,6 +124,59 @@ def test_callable_scope_eagerly_builds_defs_and_memoizes_resolution(monkeypatch)
     ]
     assert first is external_child
     assert second is first
+
+
+def test_multiple_defs_share_one_parent_document_parse(monkeypatch):
+    source_loads = 0
+    legacy_loads = 0
+    original_source_init = source_document._DocumentLoader.__init__
+    original_legacy_init = legacy_spanloader.SpanLoader.__init__
+
+    def count_source(self, *args, **kwargs):
+        nonlocal source_loads
+        source_loads += 1
+        original_source_init(self, *args, **kwargs)
+
+    def count_legacy(self, *args, **kwargs):
+        nonlocal legacy_loads
+        legacy_loads += 1
+        original_legacy_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(source_document._DocumentLoader, "__init__", count_source)
+    monkeypatch.setattr(legacy_spanloader.SpanLoader, "__init__", count_legacy)
+
+    load_flow(
+        """id: two-defs
+name: two_defs
+defs:
+  first:
+    nodes:
+      one:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input: {value: first}
+        output: str
+    output: ${one.output}
+  second:
+    nodes:
+      two:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input: {value: second}
+        output: str
+    output: ${two.output}
+nodes:
+  root:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input: {value: root}
+    output: str
+output: ${root.output}
+"""
+    )
+
+    assert source_loads == 1
+    assert legacy_loads == 0
 
 
 def test_defs_callable_runs_end_to_end_without_external_resolver():
@@ -379,6 +446,28 @@ def test_single_node_def_runs():
     res = run_flow(loaded, {"t": "ACME"})
     assert res.status == "succeeded", res.error
     assert res.output == "ACME"
+
+
+def test_single_node_def_virtual_header_and_logic_ranges():
+    loaded = load_flow(_SINGLE_NODE_DEF)
+    frame = loaded.compiled.nodes["go"].child_source
+
+    assert frame.node_ranges["passthru"].start_line == 7
+    assert frame.field_ranges["passthru"][("field", "code")].start_line == 9
+
+
+def test_single_node_def_generated_inputs_keep_declaration_ranges():
+    loaded = load_flow(_SINGLE_NODE_DEF)
+    ranges = loaded.compiled.nodes["go"].child_source.field_ranges["passthru"]
+
+    assert ranges[("input", "topic")] == SourceRange(10, 21, 10, 24)
+
+
+def test_single_node_def_generated_output_keeps_authored_output_range():
+    loaded = load_flow(_SINGLE_NODE_DEF)
+    ranges = loaded.compiled.nodes["go"].child_source.field_ranges["passthru"]
+
+    assert ranges[("field", "outputs")] == SourceRange(11, 13, 11, 16)
 
 
 _SINGLE_NODE_DEF_BADTYPE = """

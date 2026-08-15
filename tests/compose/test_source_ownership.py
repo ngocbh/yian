@@ -44,6 +44,30 @@ nodes:
 output: ${wrapper.output}
 """
 
+_DEFS_FLOW = """\
+id: owned-defs
+name: owned_defs
+defs:
+  echo_child:
+    input:
+      value: str
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          value: ${input.value}
+        output: str
+    output: ${echo.output}
+nodes:
+  invoke:
+    kind: call
+    call: echo_child
+    input:
+      value: hello
+output: ${invoke.output}
+"""
+
 
 def test_parse_file_reuses_supplied_document(monkeypatch):
     document = SourceDocument.parse(_FLOW)
@@ -74,8 +98,12 @@ def test_parse_source_document_translates_syntax_error():
     assert caught.value.range.start_line == 1
 
 
-@pytest.mark.parametrize("source", [_FLOW, _INLINE_FLOW], ids=["plain", "inline"])
-def test_plain_and_inline_root_use_one_document_and_no_legacy_loader(
+@pytest.mark.parametrize(
+    "source",
+    [_FLOW, _INLINE_FLOW, _DEFS_FLOW],
+    ids=["plain", "inline", "defs"],
+)
+def test_root_variants_use_one_document_and_no_legacy_loader(
     monkeypatch,
     source,
 ):

@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.source import _section_lines
 from agent_composer.compose.source import (
+    SourceCursor,
     SourceDocument,
     SourceSyntaxError,
 )
@@ -228,6 +229,40 @@ def parse_source_document(text: str, label: str) -> SourceDocument:
         return SourceDocument.parse(text, label)
     except SourceSyntaxError as exc:
         raise LoadError(f"invalid YAML: {exc}", range=exc.range) from exc
+
+
+def flow_nodes_cursor(
+    document: SourceDocument,
+    nodes_section: dict[str, Any],
+) -> SourceCursor:
+    """Return the authored nodes cursor or a source-aligned compact projection.
+
+    A full flow already owns a physical ``nodes:`` mapping. A compact flow has
+    one synthesized node instead: its header is aligned with the authored
+    ``id:`` key, unchanged logic fields retain their top-level sources, and
+    generated input/output fields remain explicitly virtual.
+    """
+
+    root = document.root
+    if root.has("nodes"):
+        return root.child("nodes")
+    if len(nodes_section) != 1:
+        return SourceCursor.virtual(nodes_section)
+
+    node_id, node_body = next(iter(nodes_section.items()))
+    if not isinstance(node_body, Mapping):
+        return SourceCursor.virtual(nodes_section)
+
+    entries: dict[Any, tuple[Any, SourceCursor | None]] = {}
+    for key, value in node_body.items():
+        source = None
+        if key not in ("inputs", "outputs") and root.has(key):
+            source = root.child(key)
+        entries[key] = (value, source)
+
+    header = root.child("id") if root.has("id") else root
+    body_cursor = header.project_mapping(entries)
+    return root.project_mapping({node_id: (node_body, body_cursor)})
 
 
 def parse_file(source: str | SourceDocument) -> ComposeFile:

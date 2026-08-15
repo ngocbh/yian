@@ -1628,7 +1628,7 @@ output: ${invoke.output}
     assert result.output == "inline-ok"
 
 
-def test_def_assembly_reader_fallback_restores_only_node_surfaces():
+def test_def_assembly_cursor_fallback_restores_only_node_surfaces():
     literal = {"inputs": "literal-input", "outputs": "literal-output"}
     normalized = {
         "wrapper": {
@@ -1646,17 +1646,17 @@ def test_def_assembly_reader_fallback_restores_only_node_surfaces():
         }
     }
 
-    reader = compose_loader._def_assembly_reader("", "outer", normalized)
+    cursor = compose_loader._def_assembly_cursor(None, normalized)
 
-    wrapper = reader.value["wrapper"]
+    restored = cursor.value
+    wrapper = restored["wrapper"]
     constant = wrapper["nodes"]["constant"]
-    assert reader.yaml_node is None
+    assert cursor.document is None
     assert "input" in wrapper and "inputs" not in wrapper
     assert "output" in wrapper and "outputs" not in wrapper
     assert "input" in constant and "inputs" not in constant
     assert "output" in constant and "outputs" not in constant
-    assert wrapper["input"]["payload"] is literal
-    assert constant["env"]["literal"] is literal
+    assert wrapper["input"]["payload"] is constant["env"]["literal"]
     assert literal == {
         "inputs": "literal-input",
         "outputs": "literal-output",
@@ -3151,7 +3151,7 @@ def test_callable_scope_eager_def_can_resolve_pre_registered_private(
         events.append("private")
         return private_child
 
-    def fake_load_def(name, value, registry, scope, parent_text=""):
+    def fake_load_def(name, value, registry, scope, def_cursor=None):
         events.append(f"def:{name}")
         assert value is body
         assert scope.resolve(flow_id) is private_child

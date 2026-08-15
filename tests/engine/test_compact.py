@@ -15,7 +15,13 @@ import pytest
 
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.run import run_flow
-from agent_composer.compose.parse.file import parse_file
+from agent_composer.compose.parse.file import (
+    flow_nodes_cursor,
+    parse_file,
+    parse_source_document,
+)
+from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.events import SourceRange
 
 
 # --- a compact CODE flow runs end-to-end (auto-wire + output re-export) ------ #
@@ -47,6 +53,26 @@ def test_compact_desugars_to_one_node_keyed_by_flow_id():
     assert node["kind"] == "code"
     assert node["inputs"] == {"topic": "${input.topic}"}  # auto-wired by name
     assert f.outputs == "${echo_one.output}"             # single-value re-export
+
+
+def test_compact_projection_keeps_logic_ranges_without_mutating_root():
+    document = parse_source_document(_COMPACT_CODE, "compact.yaml")
+    original = document.root.value
+    parsed = parse_file(document)
+
+    cursor = flow_nodes_cursor(document, parsed.nodes)
+    descriptor = parse_nodes(cursor)["echo_one"]
+
+    assert cursor.document is document
+    assert descriptor.range == SourceRange(2, 1, 2, 3)
+    assert cursor.child("echo_one").range_of("kind") == SourceRange(
+        7, 7, 7, 11
+    )
+    assert descriptor.field_ranges[("field", "code")] == SourceRange(
+        8, 7, 8, 41
+    )
+    assert ("field", "inputs") not in descriptor.field_ranges
+    assert document.root.value == original
 
 
 # --- a record output type carries through to structured generation ----------- #

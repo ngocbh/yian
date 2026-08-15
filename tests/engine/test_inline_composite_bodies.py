@@ -57,6 +57,35 @@ class _RecordingRegistrar:
         self.registrations.append((flow_id, owner, label, builder))
 
 
+def _record_private_scope(monkeypatch: pytest.MonkeyPatch):
+    """Record compiler-private registrations and resolutions for one load."""
+    registrations = []
+    resolutions = []
+    original_register = compose_loader._CallableScope.register_private
+    original_resolve = compose_loader._CallableScope.resolve
+
+    def record_register(self, flow_id, owner, label, builder):
+        registrations.append((self, flow_id, owner, label))
+        return original_register(self, flow_id, owner, label, builder)
+
+    def record_resolve(self, flow_id, version=None):
+        if flow_id.startswith(INLINE_FLOW_PREFIX):
+            resolutions.append((self, flow_id))
+        return original_resolve(self, flow_id, version)
+
+    monkeypatch.setattr(
+        compose_loader._CallableScope,
+        "register_private",
+        record_register,
+    )
+    monkeypatch.setattr(
+        compose_loader._CallableScope,
+        "resolve",
+        record_resolve,
+    )
+    return registrations, resolutions
+
+
 def _association_fixture():
     """Return located retained bodies and their final CALL/MAP/LOOP descriptors."""
     root, _spans = _located_root(
@@ -2097,6 +2126,383 @@ output: ${each.output}
     assert "unknown namespace 'item'" in message
     assert INLINE_FLOW_PREFIX not in message
     assert caught.value.range == expected_range
+
+
+def test_basic_inline_loop_times_bakes_private_child_signature_and_runs():
+    loaded = load_flow(
+        """id: inline-loop-times
+name: inline_loop_times
+nodes:
+  repeat:
+    kind: loop
+    times: 2
+    input:
+      n: 0
+      exited: false
+    nodes:
+      bump:
+        kind: code
+        code: tests.engine._compose_codefns:loop_bump
+        input:
+          n: ${input.n}
+          exited: ${input.exited}
+        output:
+          n: int
+          exited: bool
+    output: ${bump.output}
+output: ${repeat.output}
+"""
+    )
+    repeat = loaded.compiled.nodes["repeat"]
+    expected_owner = ("root", "node", "repeat", "inline")
+    expected_output = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "n": Type.scalar(ValueKind.INTEGER),
+            "exited": Type.scalar(ValueKind.BOOLEAN),
+        },
+        required=frozenset({"n", "exited"}),
+    )
+
+    assert repeat.flow_id == inline_flow_id(expected_owner)
+    assert repeat.child_inputs == [
+        InputDecl(
+            name="n",
+            type_str="int",
+            default=None,
+            required=True,
+            type=Type.scalar(ValueKind.INTEGER),
+        ),
+        InputDecl(
+            name="exited",
+            type_str="bool",
+            default=None,
+            required=True,
+            type=Type.scalar(ValueKind.BOOLEAN),
+        ),
+    ]
+    assert repeat.output_type == expected_output
+    assert repeat.predicate_kind == "times"
+    assert repeat.times == repeat.max_iters == 2
+
+    result = run_flow(loaded, {})
+    assert result.status == "succeeded"
+    assert result.output == {"n": 2, "exited": False}
+
+
+@pytest.mark.parametrize(
+    ("predicate", "predicate_kind"),
+    [
+        ("while: not ${exited}", "while"),
+        ("until: ${exited}", "until"),
+    ],
+)
+def test_inline_loop_predicates_run_to_the_same_carried_result(
+    predicate: str,
+    predicate_kind: str,
+):
+    source = """id: inline-loop-predicate
+name: inline_loop_predicate
+nodes:
+  repeat:
+    kind: loop
+    <predicate>
+    max: 10
+    input:
+      n: 0
+      exited: false
+    nodes:
+      bump:
+        kind: code
+        code: tests.engine._compose_codefns:loop_bump
+        input:
+          n: ${input.n}
+          exited: ${input.exited}
+        output:
+          n: int
+          exited: bool
+    output: ${bump.output}
+output: ${repeat.output}
+""".replace("<predicate>", predicate)
+
+    loaded = load_flow(source)
+    repeat = loaded.compiled.nodes["repeat"]
+    result = run_flow(loaded, {})
+
+    assert repeat.predicate_kind == predicate_kind
+    assert result.status == "succeeded"
+    assert result.output == {"n": 3, "exited": True}
+
+
+@pytest.mark.parametrize(
+    ("step", "expected"),
+    [
+        (
+            """      step:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.n}
+        output: int
+""",
+            "body inline body of node 'repeat' must declare a record output",
+        ),
+        (
+            """      step:
+        kind: code
+        code: |
+          return {"value": inputs["n"]}
+        input:
+          n: ${input.n}
+        output:
+          value: int
+""",
+            "body output fields ['value'] must equal the carried record fields ['n']",
+        ),
+        (
+            """      step:
+        kind: code
+        code: |
+          return {"n": str(inputs["n"])}
+        input:
+          n: ${input.n}
+        output:
+          n: str
+""",
+            "carried field 'n' — body output is 'str', carried source is 'int'",
+        ),
+    ],
+    ids=["scalar-output", "record-fields", "field-type"],
+)
+def test_inline_loop_contract_diagnostics_are_friendly_and_redacted(
+    step: str,
+    expected: str,
+):
+    source = (
+        """id: inline-loop-bad-contract
+name: inline_loop_bad_contract
+input:
+  seed: int
+nodes:
+  repeat:
+    kind: loop
+    times: 1
+    input:
+      n: ${input.seed}
+    nodes:
+"""
+        + step
+        + """    output: ${step.output}
+output: ${repeat.output}
+"""
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert "loop node 'repeat'" in message
+    assert expected in message
+    assert INLINE_FLOW_PREFIX not in message
+
+
+def test_nested_inline_composites_register_four_lexical_children_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    registrations, resolutions = _record_private_scope(monkeypatch)
+    loaded = load_flow(
+        """id: nested-inline-composites
+name: nested_inline_composites
+input:
+  items: list[int]
+nodes:
+  outer_call:
+    kind: call
+    input:
+      items: ${input.items}
+    nodes:
+      inner:
+        kind: map
+        over: ${input.items}
+        input:
+          value: ${item}
+        nodes:
+          echo:
+            kind: code
+            code: tests.engine._compose_codefns:echo_x
+            input:
+              x: ${input.value}
+            output: int
+        output: ${echo.output}
+    output: ${inner.output}
+  outer_loop:
+    kind: loop
+    times: 2
+    input:
+      n: 0
+      exited: false
+    nodes:
+      inner:
+        kind: call
+        input:
+          n: ${input.n}
+          exited: ${input.exited}
+        nodes:
+          bump:
+            kind: code
+            code: tests.engine._compose_codefns:loop_bump
+            input:
+              n: ${input.n}
+              exited: ${input.exited}
+            output:
+              n: int
+              exited: bool
+        output: ${bump.output}
+    output: ${inner.output}
+output:
+  mapped: ${outer_call.output}
+  looped: ${outer_loop.output}
+"""
+    )
+
+    outer_call_owner = ("root", "node", "outer_call", "inline")
+    inner_map_owner = (*outer_call_owner, "node", "inner", "inline")
+    outer_loop_owner = ("root", "node", "outer_loop", "inline")
+    inner_call_owner = (*outer_loop_owner, "node", "inner", "inline")
+    expected = {
+        inline_flow_id(outer_call_owner): (
+            outer_call_owner,
+            "inline body of node 'outer_call'",
+        ),
+        inline_flow_id(inner_map_owner): (
+            inner_map_owner,
+            "inline body of node 'inner'",
+        ),
+        inline_flow_id(outer_loop_owner): (
+            outer_loop_owner,
+            "inline body of node 'outer_loop'",
+        ),
+        inline_flow_id(inner_call_owner): (
+            inner_call_owner,
+            "inline body of node 'inner'",
+        ),
+    }
+    expected_ids = set(expected)
+    outer_call = loaded.compiled.nodes["outer_call"]
+    inner_map = outer_call.child.nodes["inner"]
+    outer_loop = loaded.compiled.nodes["outer_loop"]
+    inner_call = outer_loop.child.nodes["inner"]
+
+    assert len(expected_ids) == 4
+    assert outer_call.flow_id == inline_flow_id(outer_call_owner)
+    assert inner_map.flow_id == inline_flow_id(inner_map_owner)
+    assert outer_loop.flow_id == inline_flow_id(outer_loop_owner)
+    assert inner_call.flow_id == inline_flow_id(inner_call_owner)
+    assert {
+        outer_call.flow_id,
+        inner_map.flow_id,
+        outer_loop.flow_id,
+        inner_call.flow_id,
+    } == expected_ids
+    assert len(registrations) == len(resolutions) == 4
+    assert {
+        flow_id: (owner, label)
+        for _scope, flow_id, owner, label in registrations
+    } == expected
+    assert sorted(flow_id for _scope, flow_id in resolutions) == sorted(expected_ids)
+    assert all(
+        sum(entry[1] == flow_id for entry in registrations) == 1
+        and sum(entry[1] == flow_id for entry in resolutions) == 1
+        for flow_id in expected_ids
+    )
+    assert all(entry[0] is registrations[0][0] for entry in registrations)
+    assert all(entry[0] is registrations[0][0] for entry in resolutions)
+
+    registrations_at_load = tuple(registrations)
+    resolutions_at_load = tuple(resolutions)
+    result = run_flow(loaded, {"items": [3, 1, 2]}, num_workers=4)
+
+    assert result.status == "succeeded"
+    assert result.output == {
+        "mapped": [3, 1, 2],
+        "looped": {"n": 2, "exited": False},
+    }
+    assert tuple(registrations) == registrations_at_load
+    assert tuple(resolutions) == resolutions_at_load
+
+
+def test_eager_def_nested_inline_calls_use_exact_lexical_owners_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    registrations, resolutions = _record_private_scope(monkeypatch)
+    loaded = load_flow(
+        """id: eager-def-nested-inline-calls
+name: eager_def_nested_inline_calls
+defs:
+  outer:
+    nodes:
+      outer_call:
+        kind: call
+        nodes:
+          inner_call:
+            kind: call
+            nodes:
+              constant:
+                kind: code
+                code: tests.engine._compose_codefns:echo
+                input:
+                  topic: nested-inline-ok
+                output: str
+            output: ${constant.output}
+        output: ${inner_call.output}
+    output: ${outer_call.output}
+nodes:
+  invoke:
+    kind: call
+    call: outer
+output: ${invoke.output}
+"""
+    )
+
+    outer_owner = ("def", "outer", "node", "outer_call", "inline")
+    inner_owner = (*outer_owner, "node", "inner_call", "inline")
+    expected = {
+        inline_flow_id(outer_owner): (
+            outer_owner,
+            "inline body of node 'outer_call'",
+        ),
+        inline_flow_id(inner_owner): (
+            inner_owner,
+            "inline body of node 'inner_call'",
+        ),
+    }
+    outer_call = loaded.compiled.nodes["invoke"].child.nodes["outer_call"]
+    inner_call = outer_call.child.nodes["inner_call"]
+
+    assert outer_call.flow_id == inline_flow_id(outer_owner)
+    assert inner_call.flow_id == inline_flow_id(inner_owner)
+    assert len(registrations) == len(resolutions) == 2
+    assert {
+        flow_id: (owner, label)
+        for _scope, flow_id, owner, label in registrations
+    } == expected
+    assert sorted(flow_id for _scope, flow_id in resolutions) == sorted(expected)
+    assert all(entry[0] is registrations[0][0] for entry in registrations)
+    assert all(entry[0] is registrations[0][0] for entry in resolutions)
+    assert all(
+        sum(entry[1] == flow_id for entry in registrations) == 1
+        and sum(entry[1] == flow_id for entry in resolutions) == 1
+        for flow_id in expected
+    )
+
+    registrations_at_load = tuple(registrations)
+    resolutions_at_load = tuple(resolutions)
+    result = run_flow(loaded, {})
+
+    assert result.status == "succeeded"
+    assert result.output == "nested-inline-ok"
+    assert tuple(registrations) == registrations_at_load
+    assert tuple(resolutions) == resolutions_at_load
 
 
 def test_inline_map_output_error_uses_friendly_child_label():

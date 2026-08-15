@@ -52,6 +52,7 @@ from agent_composer.expr import (
 )
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.case import DEFAULT_HANDLE, Case, CaseNode
+from agent_composer.nodes.contracts import binding_source
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.source import SourceCursor
@@ -255,6 +256,7 @@ def _data_edges(node_id: str, wiring: dict[str, Any]) -> list[Edge]:
     edges: list[Edge] = []
     counts: dict[str, int] = {}
     for name, source in wiring.items():
+        source = binding_source(source)
         if not isinstance(source, str):
             continue
         try:

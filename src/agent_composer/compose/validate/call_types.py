@@ -23,6 +23,7 @@ from agent_composer.compose.nodes.resolver import _output_value_type
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
 from agent_composer.expr import binding_co_skips
+from agent_composer.nodes.contracts import binding_source
 from agent_composer.typesys.values import Type
 
 
@@ -70,7 +71,7 @@ def check_ref_map_types(
             if (
                 source.nullable
                 and not decl.type.nullable
-                and not binding_co_skips(src)
+                and not binding_co_skips(binding_source(src))
             ):
                 source = replace(source, nullable=False)
             if not types_compatible(source, decl.type):

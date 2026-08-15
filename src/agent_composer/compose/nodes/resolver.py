@@ -22,6 +22,7 @@ from typing import Any, Callable, Optional
 
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.template import Span, scan_template, template_refs
+from agent_composer.nodes.contracts import binding_source
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.types import InputDecl
@@ -63,6 +64,7 @@ def _output_value_type(
         still be coerced to the declared type at the boundary.
     An opaque producer / `${system.X}` in the single-span case -> None (codomain stays
     opaque). Legacy plural heads were retired."""
+    from_ = binding_source(from_)
     if not isinstance(from_, str):
         return None
     try:

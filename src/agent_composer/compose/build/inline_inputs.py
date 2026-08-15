@@ -6,8 +6,8 @@ Compose source proves structurally; it never falls back to the runtime value
 builder's lenient ``Any`` behavior. Top-level strings retain binding-template
 semantics, while strings nested in literal containers remain ordinary strings.
 
-Knows about: ``expr`` template syntax, ``typesys`` structural types, and Compose
-source ranges/errors.
+Knows about: ``expr`` template syntax, the node-owned semantic binding carrier,
+``typesys`` structural types, and Compose source ranges/errors.
 Never imports: ``compose.loader``, ``compile``, ``runtime``, or node kinds.
 """
 
@@ -24,6 +24,7 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
 from agent_composer.expr.expressions import ExpressionError
 from agent_composer.expr.template import Span, scan_template
+from agent_composer.nodes.contracts import binding_source
 from agent_composer.typesys.values import Type, ValueKind
 
 
@@ -100,6 +101,7 @@ def infer_inline_binding_type(
         `LoadError`:
             The value has no statically proven type under the inline-body rules.
     """
+    value = binding_source(value)
     if isinstance(value, str):
         inferred = _infer_binding_string(
             value,

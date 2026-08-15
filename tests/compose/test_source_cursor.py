@@ -5,6 +5,7 @@ from datetime import datetime
 
 import pytest
 
+from agent_composer.compose.source import document as source_document_module
 from agent_composer.compose.source import (
     SourceAccessError,
     SourceCursor,
@@ -329,6 +330,59 @@ def test_merge_definition_dag_retains_only_unique_raw_pairs():
     assert len(sequences) < levels * 8
     assert max(sequence.flat_pair_count for sequence in sequences.values()) >= 2**levels
     assert len(deepest_node.value) == 1
+
+
+def test_binary_merge_chain_reuses_cached_rope_summaries(monkeypatch):
+    levels = 120
+    pair_hash_calls = 0
+    arc_hash_calls = 0
+    original_pair_hash = source_document_module._PairSequence.__hash__
+    original_arc_hash = source_document_module._ArcSequence.__hash__
+
+    def counted_pair_hash(sequence):
+        nonlocal pair_hash_calls
+        pair_hash_calls += 1
+        return original_pair_hash(sequence)
+
+    def counted_arc_hash(sequence):
+        nonlocal arc_hash_calls
+        arc_hash_calls += 1
+        return original_arc_hash(sequence)
+
+    monkeypatch.setattr(
+        source_document_module._PairSequence,
+        "__hash__",
+        counted_pair_hash,
+    )
+    monkeypatch.setattr(
+        source_document_module._ArcSequence,
+        "__hash__",
+        counted_arc_hash,
+    )
+
+    document = _binary_merge_document(levels)
+
+    assert document.root.child("root").get("value") == "leaf"
+    assert pair_hash_calls < levels * 100
+    assert arc_hash_calls < levels * 100
+
+
+def test_repeated_cached_merge_source_keeps_rightmost_winner_ordinal():
+    root = SourceDocument.parse(
+        "a: &a {clash: A, a_only: true}\n"
+        "b: &b {clash: B, b_only: true}\n"
+        "root:\n"
+        "  <<: [*a, *b, *a]\n"
+    ).root.child("root")
+
+    winner = root.child("clash")
+
+    assert root.value == {
+        "clash": "A",
+        "a_only": True,
+        "b_only": True,
+    }
+    assert winner.path[-1].pair_ordinal == 4
 
 
 def test_repeated_merge_occurrences_keep_logical_ordinals_and_replay():

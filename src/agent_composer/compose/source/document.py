@@ -85,37 +85,36 @@ def _pair_concat(parts: list[_PairSequence]) -> _PairSequence:
     return _PairSequence((), retained, tuple(offsets), count)
 
 
-def _unique_pair_occurrences(
+def _pair_summary_frontier(
     sequence: _PairSequence,
+    summaries: dict[_PairSequence, dict[Any, Any]],
     *,
     reverse: bool = False,
-) -> Iterator[tuple[tuple[yaml.Node, yaml.Node], int]]:
-    """Yield each shared pair leaf once at its first or last logical embedding."""
+) -> Iterator[_PairSequence | tuple[yaml.Node, yaml.Node]]:
+    """Yield cached summaries or unique raw pairs in logical traversal order."""
 
     seen: set[_PairSequence] = set()
-    stack: list[tuple[_PairSequence, int]] = [(sequence, 0)]
+    stack = [sequence]
     while stack:
-        current, base = stack.pop()
+        current = stack.pop()
         if current in seen:
             continue
         seen.add(current)
+        if current in summaries:
+            yield current
+            continue
         if current.parts:
             indices = range(len(current.parts))
             if not reverse:
                 indices = reversed(tuple(indices))
             for index in indices:
-                stack.append(
-                    (
-                        current.parts[index],
-                        base + current.part_offsets[index],
-                    )
-                )
+                stack.append(current.parts[index])
             continue
         indices = range(len(current.pairs) - 1, -1, -1) if reverse else range(
             len(current.pairs)
         )
         for index in indices:
-            yield current.pairs[index], base + index
+            yield current.pairs[index]
 
 
 class _DocumentLoader(yaml.SafeLoader):
@@ -253,7 +252,12 @@ class _DocumentLoader(yaml.SafeLoader):
         if cached is not None:
             return cached
         first_keys: dict[Any, None] = {}
-        for (key_node, value_node), _ordinal in _unique_pair_occurrences(sequence):
+        for item in _pair_summary_frontier(sequence, self._sequence_values):
+            if isinstance(item, _PairSequence):
+                for key in self._sequence_values[item]:
+                    first_keys.setdefault(key, None)
+                continue
+            key_node, value_node = item
             key = self._construct_key(key_node, deep=deep)
             if not isinstance(key, Hashable):
                 raise ConstructorError(
@@ -266,10 +270,16 @@ class _DocumentLoader(yaml.SafeLoader):
             first_keys.setdefault(key, None)
 
         last_values: dict[Any, Any] = {}
-        for (key_node, value_node), _ordinal in _unique_pair_occurrences(
+        for item in _pair_summary_frontier(
             sequence,
+            self._sequence_values,
             reverse=True,
         ):
+            if isinstance(item, _PairSequence):
+                for key, value in self._sequence_values[item].items():
+                    last_values.setdefault(key, value)
+                continue
+            key_node, value_node = item
             key = self._construct_key(key_node, deep=deep)
             if key not in last_values:
                 last_values[key] = self.construct_object(value_node, deep=deep)
@@ -342,7 +352,10 @@ def _build_definitions(
     definitions: list[_Definition | None] = []
     ids: dict[int, int] = {}
     converted_sequences: dict[_PairSequence, _ArcSequence] = {}
-    effective_sequences: dict[_ArcSequence, _KeyIndex] = {}
+    effective_sequences: dict[
+        _ArcSequence,
+        tuple[dict[Any, _MapOccurrence], _KeyIndex],
+    ] = {}
 
     def convert_sequence(sequence: _PairSequence) -> _ArcSequence:
         """Convert one raw pair rope to an identity-shared definition rope."""
@@ -396,11 +409,11 @@ def _build_definitions(
     def effective_sequence(
         sequence: _ArcSequence,
     ) -> _KeyIndex:
-        """Return last logical occurrences without summarizing intermediate ropes."""
+        """Return last occurrences while reusing completed mapping summaries."""
 
         existing = effective_sequences.get(sequence)
         if existing is not None:
-            return existing
+            return existing[1]
         winners: dict[Any, _MapOccurrence] = {}
         seen: set[_ArcSequence] = set()
         stack: list[tuple[_ArcSequence, int]] = [(sequence, 0)]
@@ -409,6 +422,15 @@ def _build_definitions(
             if current in seen:
                 continue
             seen.add(current)
+            cached = effective_sequences.get(current)
+            if cached is not None:
+                for key, occurrence in cached[0].items():
+                    if key not in winners:
+                        winners[key] = _MapOccurrence(
+                            occurrence.arc,
+                            base + occurrence.pair_ordinal,
+                        )
+                continue
             if current.parts:
                 for index in range(len(current.parts)):
                     stack.append(
@@ -429,7 +451,7 @@ def _build_definitions(
             (occurrence.arc.constructed_key, occurrence)
             for occurrence in winners.values()
         )
-        effective_sequences[sequence] = result
+        effective_sequences[sequence] = (winners, result)
         return result
 
     def intern(node: yaml.Node, derived_value: Any = _MISSING) -> int:

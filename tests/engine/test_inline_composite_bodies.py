@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
 
 import pytest
 import yaml
@@ -1818,6 +1819,284 @@ output: ${each.output}
         "name",
     ]
     assert over_requests == [("each.input.row", expected_request_range)]
+
+
+def test_inline_map_typed_producer_maps_whole_item_and_field_in_parallel_order():
+    loaded = load_flow(
+        """id: inline-map-typed-records
+name: inline_map_typed_records
+typedefs:
+  Row:
+    name: str
+    position: int
+input:
+  rows: list[Row]
+nodes:
+  prepare:
+    kind: code
+    code: |
+      return inputs["rows"]
+    input:
+      rows: ${input.rows}
+    output: list[Row]
+  each:
+    kind: map
+    parallel: true
+    over: ${prepare.output}
+    input:
+      row: ${item}
+      name: ${item.name}
+    nodes:
+      render:
+        kind: code
+        code: |
+          return {"row": inputs["row"], "name": inputs["name"]}
+        input:
+          row: ${input.row}
+          name: ${input.name}
+        output:
+          row: Row
+          name: str
+    output: ${render.output}
+output: ${each.output}
+"""
+    )
+    each = loaded.compiled.nodes["each"]
+
+    assert each.parallel is True
+    assert [decl.name for decl in each.child_inputs] == ["row", "name"]
+    assert each.child_inputs[0].type == loaded.input[0].type.element
+    assert each.child_inputs[1].type == Type.scalar(ValueKind.STRING)
+
+    rows = [
+        {"name": "third", "position": 3},
+        {"name": "first", "position": 1},
+        {"name": "second", "position": 2},
+    ]
+    result = run_flow(loaded, {"rows": rows}, num_workers=4)
+
+    assert result.status == "succeeded"
+    assert result.output == [
+        {"row": row, "name": row["name"]}
+        for row in rows
+    ]
+
+
+def test_inline_map_proves_list_any_date_element_and_runs():
+    loaded = load_flow(
+        """id: inline-map-date-items
+name: inline_map_date_items
+input:
+  days: list[date]
+nodes:
+  each:
+    kind: map
+    over: ${input.days}
+    input:
+      day: ${item}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.day}
+        output: date
+    output: ${echo.output}
+output: ${each.output}
+"""
+    )
+    days = [date(2026, 8, 15), date(2026, 8, 16)]
+
+    assert loaded.input[0].type.kind == ValueKind.LIST_ANY
+    assert loaded.input[0].type.element == Type.scalar(ValueKind.DATE)
+    assert loaded.compiled.nodes["each"].child_inputs[0].type == Type.scalar(
+        ValueKind.DATE
+    )
+
+    result = run_flow(loaded, {"days": days})
+    assert result.status == "succeeded"
+    assert result.output == ["2026-08-15", "2026-08-16"]
+
+
+def test_inline_map_missing_list_element_fails_at_item_binding(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source = """id: inline-map-missing-element
+name: inline_map_missing_element
+input:
+  items: list[str]
+nodes:
+  each:
+    kind: map
+    over: ${input.items}
+    input:
+      value: ${item}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: str
+    output: ${echo.output}
+output: ${each.output}
+"""
+    root, _spans = _located_root(source)
+    expected_range = (
+        root.child("nodes").child("each")
+        .mapping_value_ranges("input")["value"]
+    )
+
+    monkeypatch.setattr(
+        compose_pipeline,
+        "read_flow_inputs",
+        lambda _mapping, _registry: [
+            InputDecl(
+                name="items",
+                type_str="list[Any]",
+                default=None,
+                required=True,
+                type=Type(kind=ValueKind.LIST_ANY),
+            )
+        ],
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    assert "each.input.value" in str(caught.value)
+    assert "no proven element type" in str(caught.value)
+    assert caught.value.range == expected_range
+
+
+def test_inline_map_nullable_root_and_intermediate_infer_optional_and_intermediate_runs_none():
+    loaded = load_flow(
+        """id: inline-map-nullable-items
+name: inline_map_nullable_items
+typedefs:
+  Detail:
+    name: str
+  Row:
+    detail: Optional[Detail]
+input:
+  items: list[Optional[Row]]
+nodes:
+  each:
+    kind: map
+    over: ${input.items}
+    input:
+      row: ${item}
+      name: ${item.detail.name}
+    nodes:
+      collect:
+        kind: code
+        code: |
+          return {"row": inputs["row"], "name": inputs["name"]}
+        input:
+          row: ${input.row}
+          name: ${input.name}
+        output:
+          row: Optional[Row]
+          name: Optional[str]
+    output: ${collect.output}
+output: ${each.output}
+"""
+    )
+    decls = {
+        decl.name: decl
+        for decl in loaded.compiled.nodes["each"].child_inputs
+    }
+
+    assert decls["row"].required is False
+    assert decls["row"].type.nullable is True
+    assert decls["name"].required is False
+    assert decls["name"].type == Type(
+        kind=ValueKind.STRING,
+        nullable=True,
+    )
+
+    items = [
+        {"detail": None},
+        {"detail": {"name": "ready"}},
+    ]
+    result = run_flow(loaded, {"items": items})
+
+    assert result.status == "succeeded"
+    assert result.output == [
+        {"row": {"detail": None}, "name": None},
+        {
+            "row": {"detail": {"name": "ready"}},
+            "name": "ready",
+        },
+    ]
+
+
+def test_inline_map_rejects_outer_asserts_without_private_identity():
+    with pytest.raises(LoadError) as caught:
+        load_flow(
+            """id: inline-map-asserts
+name: inline_map_asserts
+input:
+  items: list[str]
+nodes:
+  each:
+    kind: map
+    over: ${input.items}
+    input:
+      value: ${item}
+    asserts:
+      - ${output} != null
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: str
+    output: ${echo.output}
+output: ${each.output}
+"""
+        )
+
+    message = str(caught.value)
+    assert "`asserts:` is not allowed on a mapped call" in message
+    assert INLINE_FLOW_PREFIX not in message
+
+
+def test_inline_map_child_keeps_item_namespace_closed():
+    source = """id: inline-map-closed-child
+name: inline_map_closed_child
+input:
+  items: list[str]
+nodes:
+  each:
+    kind: map
+    over: ${input.items}
+    input:
+      value: ${item}
+    nodes:
+      leak:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${item}
+        output: str
+    output: ${leak.output}
+output: ${each.output}
+"""
+    root, _spans = _located_root(source)
+    expected_range = (
+        root.child("nodes").child("each").child("nodes").child("leak")
+        .mapping_value_ranges("input")["x"]
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert "unknown namespace 'item'" in message
+    assert INLINE_FLOW_PREFIX not in message
+    assert caught.value.range == expected_range
 
 
 def test_inline_map_output_error_uses_friendly_child_label():

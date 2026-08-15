@@ -6,7 +6,8 @@ location-free literals may be parsed separately without creating a document.
 Parser-specific objects stay private so later compose phases consume stable
 document and cursor interfaces.
 
-Knows about:   PyYAML and the leaf ``events.SourceRange`` contract.
+Knows about:   PyYAML and the leaf ``SourceRange`` contract, temporarily
+               re-exported by ``events`` from ``diagnostics``.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run
                boundary, CLI modules, or provider SDKs.
 """

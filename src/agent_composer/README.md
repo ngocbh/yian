@@ -29,8 +29,9 @@ shape of it:
 ## Layout
 
 ```
+diagnostics.py source-neutral ranges, opaque origins, and resolution seam       [leaf]
 typesys/      typed value system (values) + variable pool                 [leaf]
-events.py     transient run/node observer vocabulary + source locations  [leaf]
+events.py     transient run/node observer vocabulary; imports diagnostics
 _state.py     shared scheduler-state vocabulary                          [leaf]
 expr/         one ${...} grammar: parse -> AST -> evaluate / ref-walk
 nodes/        pure Node contract + per-kind implementations; spawners return seeds
@@ -50,10 +51,13 @@ cli/          `ac` commands + main-thread terminal broker
 _settings.py  environment-based default provider/model
 ```
 
-The main import direction is acyclic: `events <- typesys <- nodes <- compile <-
-compose`, with `expr` feeding nodes. Runtime consumes the internal leaf-state
-vocabulary plus compile's topology, identity, and validation contracts, but never
-imports `compile.expand` or `compose`.
+The main import direction is acyclic: `diagnostics` is the lowest
+source-neutral leaf; `events` imports it, and nodes may combine it with the
+independent `typesys` and `expr` leaves before `compile <- compose`. Runtime
+consumes the event/state leaves plus compile's topology, identity, and validation
+contracts, but never imports `compile.expand` or `compose`.
+The package facade lazy-loads its declared root exports, so importing a leaf
+submodule does not bootstrap those higher layers.
 Package-root `run.py` sits above `compose`, `compile.expand`, and `runtime`: it
 consumes a `ComposedFlow`, injects the kind-aware growth builder, and owns run-log
 creation and recovery. None of those packages imports it back.

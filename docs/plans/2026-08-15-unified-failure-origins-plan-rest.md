@@ -28,6 +28,11 @@ owns the diagnostic/`LoadError`/CLI cutover; [#134](https://github.com/ngocbh/ag
 owns origin precision; and [#135](https://github.com/ngocbh/agent-composer/issues/135)
 owns Mermaid, architecture documentation, and CI validation.
 
+After the post-#137 current-code audit, #131 became a tracking issue rather than
+one PR. Its steps land through sequential linked child issues so each change is
+independently reviewable and green; #138 owns Step 2A. Only the final child closes
+#131.
+
 **Prerequisite**: Delivery slice 1 has landed with `compose/source/document.py`,
 `compose/source/cursor.py`, and `compose/source/literals.py` owning only
 `SourceDocument`, occurrence-aware `SourceCursor`, and the separately measured
@@ -89,10 +94,11 @@ coordinated cutover commit.
 
 | Group | Steps | Depends on | Main files | Green commit |
 | --- | --- | --- | --- | --- |
-| A | 2A–2B | slice 1 | `diagnostics.py`, `nodes/contracts.py` | #131 · `feat(engine): add origin and semantic carrier contracts` |
-| B | 2C–2D | A | `compile/model.py`, wiring consumers, assertions | #131 · `refactor(engine): make bindings and assertions semantic carriers` |
-| C | 2F | B | parameters, top-level value contracts, manifest | #131 · `refactor(engine): carry parameters and value contracts through compiled IR` |
-| D | 2G–2I | C | compose stamping, `compile/origins.py`, rebasing/growth | #131 · `feat(compose): compile complete opaque source origins` |
+| A1 | 2A | slice 1 | `diagnostics.py`, `events.py` | #138 · `refactor(engine): establish diagnostic origin contracts` |
+| A2 | 2B | A1 | `nodes/contracts.py` | linked #131 child · semantic carrier contracts |
+| B | 2C–2D | A2 | `compile/model.py`, wiring consumers, assertions | linked #131 children · binding/assertion migration |
+| C | 2F | B | parameters, top-level value contracts, manifest | linked #131 children · parameter/contract migration |
+| D | 2G–2I | C | compose stamping, `compile/origins.py`, rebasing/growth | linked #131 children · stamping/rebase/context |
 | E | 3F + 4A–4C | merged #131 | `Failure`, `Diagnostic`, `LoadError`, compose error sites | #132/#133 coordinated branch · `refactor(compose): establish canonical failure diagnostics` |
 | F | 3A–3E + 4D | E | evaluator, engine, log, reducer, result, every consumer | same #132/#133 branch · `feat(engine): cut over to canonical durable failures` |
 | G | 5A–5D | F | nested contracts, CASE/reserved sites, CODE, replay | #134 · `fix(compose): complete precise nested failure origins` |
@@ -102,6 +108,30 @@ coordinated cutover commit.
 Groups are sequential because each changes shared IR. Within a group, test
 authoring and documentation can be delegated, but two implementers must not edit
 the same production files concurrently.
+
+For #131 delivery, the broad steps below are design checklists rather than PR
+boundaries. Create and merge these child issues in order, splitting again if a
+current-code audit shows any item exceeds two hours:
+
+1. diagnostic/origin leaf (#138);
+2. immutable semantic carrier definitions;
+3. dual raw/`Binding` engine readers;
+4. dual `Binding` compose/manifest readers;
+5. canonical binding cutover;
+6. assertion cutover;
+7. node-side parameter cutover;
+8. compose parameter cutover and legacy declaration deletion;
+9. node-side value contracts;
+10. compose value-contract cutover;
+11. immutable source catalog;
+12. cursor routing and canonical origin prefixes;
+13. ordinary semantic-origin stamping;
+14. CASE/MAP/WAIT/def/inline origin stamping;
+15. generic identity-safe origin traversal;
+16. resolver table and source-free rebasing API;
+17. cached alias/diamond rebase plus completeness validation;
+18. nested execution context; and
+19. final census, full suite, docs, and #131 closure.
 
 Every numbered sub-action below is intended to take 2–5 minutes: add one narrow
 test, run that exact test to see the intended failure, implement the named seam,
@@ -114,8 +144,10 @@ Do not stack these branches. For each item: switch to freshly merged `main`, run
 `git pull --ff-only`, assign and mark the issue in progress, create the named
 branch, and post the relevant group plan before editing.
 
-1. `dev/engine/origin-semantic-ir`: execute Groups A–D only; open one PR with
-   `Fixes #131`, merge it, and verify merged `main`.
+1. Execute #131 through linked child issues, beginning with #138 on
+   `dev/engine/origin-diagnostics`. Each child branches from newly merged `main`,
+   uses `Refs #131`, and merges before the next begins. Split Groups B-D further
+   wherever a child would exceed two hours; only the final child uses `Fixes #131`.
 2. `dev/engine/unified-failure-diagnostics`: branch from that new `main`, execute
    Groups E–F, and open **one coordinated PR** whose body contains both
    `Fixes #132` and `Fixes #133`. Group E's load-path commit may precede Group F
@@ -138,8 +170,10 @@ but the full suite fails, there is no green boundary and no commit.
 
 - Create `src/agent_composer/diagnostics.py`.
 - Modify `src/agent_composer/events.py` (temporary `SourceRange` re-export only).
+- Modify `src/agent_composer/__init__.py` (lazy facade exports).
 - Create `tests/engine/test_diagnostics.py`.
 - Modify `tests/engine/test_source_range.py`.
+- Update package/architecture charters and the engine/structure skills.
 
 #### Test first
 
@@ -153,6 +187,8 @@ Add tests for:
   `None`, without importing compose;
 - importing `diagnostics.py` does not load `yaml`, `compose`, `nodes`, `compile`,
   or `runtime`.
+- every existing package-root export remains available after the facade becomes
+  lazy.
 
 Use this exact public vocabulary:
 
@@ -181,6 +217,14 @@ on #131; those belong to the coordinated #132/#133 branch.
 Temporarily import/re-export `SourceRange` from `events.py`; do not keep the old
 class definition. Keep the new vocabulary module-internal for now; the atomic
 #132/#133 cutover decides package-root exports.
+
+Because Python executes a package `__init__.py` before importing a submodule,
+replace eager package-root re-exports with a standard-library-only lazy export
+table. Preserve `__all__`, `dir()`, attribute identity, and unknown-attribute
+behavior. This is facade plumbing only; no flow/runtime behavior changes.
+
+Run the focused tests, layer ratchet, and full suite, then commit #138 green as
+`refactor(engine): establish diagnostic origin contracts`.
 
 ### Step 2B: Add canonical node semantic carriers
 
@@ -225,21 +269,23 @@ presence from `default is None`.
 Keep this module source-neutral: it may import only `diagnostics` and `typesys`.
 Export the carriers from `nodes/__init__.py`.
 
-Run Group A plus the layer ratchet, then commit:
+Run Step 2B plus the already-merged diagnostic tests and layer ratchet, then
+commit its linked child issue:
 
 ```bash
 conda run -n agentcomposer env PYTHONPATH=src python -m pytest \
   tests/engine/test_diagnostics.py tests/engine/test_source_range.py \
   tests/engine/test_semantic_contracts.py tests/engine/test_layer_direction.py -q
 conda run -n agentcomposer env PYTHONPATH=src python -m pytest -q
-git add src/agent_composer/diagnostics.py src/agent_composer/events.py \
-  src/agent_composer/nodes \
-  tests/engine/test_diagnostics.py tests/engine/test_source_range.py \
-  tests/engine/test_semantic_contracts.py
-git commit -m "feat(engine): add origin and semantic carrier contracts"
+git add src/agent_composer/nodes tests/engine/test_semantic_contracts.py
+git commit -m "feat(engine): add semantic carrier contracts"
 ```
 
 ### Step 2C: Normalize all flow-owned bindings once
+
+Deliver this end state through three linked children: engine/runtime dual
+readers, compose/manifest dual readers, then the canonical cutover. Each child
+must leave main green; do not keep the transitional union after the cutover.
 
 **Files**:
 
@@ -325,7 +371,7 @@ conda run -n agentcomposer env PYTHONPATH=src python -m pytest \
   tests/engine/test_spawner_post_assert.py tests/engine/test_flow_identity.py -q
 ```
 
-#### Implement and commit green
+#### Implement in the assertion child and commit green
 
 Make `Node.pre_asserts`/`post_asserts` lists of `Assertion`. Replace
 `LoweredAsserts` string/text maps with ordered assertion lists. Rewrite
@@ -341,10 +387,14 @@ conda run -n agentcomposer env PYTHONPATH=src python -m pytest \
   tests/engine/test_flow_identity.py tests/engine/test_expand.py -q
 conda run -n agentcomposer env PYTHONPATH=src python -m pytest -q
 git add src/agent_composer tests/engine
-git commit -m "refactor(engine): make bindings and assertions semantic carriers"
+git commit -m "refactor(engine): make assertions semantic carriers"
 ```
 
 ### Step 2F: Replace declarations and bare types with `Parameter`/`ValueContract`
+
+This is a logical end state, not one PR. Deliver it through four linked
+children: node parameters, compose parameter cutover/deletion, node value
+contracts, and compose value-contract cutover.
 
 **Files**:
 
@@ -399,7 +449,7 @@ conda run -n agentcomposer env PYTHONPATH=src python -m pytest \
   tests/engine/test_flow_identity.py tests/engine/test_run_state_outcomes.py -q
 ```
 
-#### Implement and commit green
+#### Implement across the linked parameter/contract children
 
 Delete `nodes.binding.ParamDecl` and `compose.helpers.types.InputDecl`. Make
 `Node.params`, `StartNode.params`, `ComposedFlow.input`, and
@@ -432,11 +482,16 @@ conda run -n agentcomposer env PYTHONPATH=src python -m pytest \
   tests/engine/test_build_nodes.py tests/engine/test_flow_identity.py \
   tests/engine/test_run_state_outcomes.py -q
 conda run -n agentcomposer env PYTHONPATH=src python -m pytest -q
-git add src/agent_composer tests/engine
-git commit -m "refactor(engine): carry parameters and value contracts through compiled IR"
 ```
 
+Commit each child only after its focused and full suites pass. The final child
+must make the legacy declaration census empty.
+
 ### Step 2G: Stamp complete local origins from cursors
+
+Deliver Steps 2G–2I through the catalog, cursor-routing, ordinary-stamping,
+special-stamping, traversal, resolver, cached-rebase/completeness, and context
+children listed above. The headings below specify final behavior, not PR size.
 
 **Files**:
 
@@ -683,7 +738,7 @@ conda run -n agentcomposer env PYTHONPATH=src python -m pytest \
   tests/engine/test_loop_subgraph_builder.py tests/engine/test_flow_identity.py -q
 ```
 
-#### Implement and commit green
+#### Implement in the nested-context child and commit green
 
 In `clone_child`, after deepcopy and ID renaming, prefix each clone exactly once:
 
@@ -708,12 +763,12 @@ conda run -n agentcomposer env PYTHONPATH=src python -m pytest \
   tests/engine/test_kind_census.py tests/engine/test_layer_direction.py -q
 conda run -n agentcomposer env PYTHONPATH=src python -m pytest -q
 git add src/agent_composer tests/engine tests/compose
-git commit -m "feat(compose): compile complete opaque source origins"
+git commit -m "feat(engine): preserve nested origin context"
 ```
 
-Push `dev/engine/origin-semantic-ir`, open the #131 PR, and merge it before any
-step below. Start Groups E–F only from freshly pulled merged `main` on
-`dev/engine/unified-failure-diagnostics`.
+After all #131 children merge, run the final census/full-suite/docs child and
+close #131 from that PR. Start Groups E–F only from freshly pulled merged `main`
+on `dev/engine/unified-failure-diagnostics`.
 
 ---
 

@@ -25,8 +25,9 @@ Fixes #<!-- issue number -->
 
 ## Invariants respected
 
-- [ ] Layer ladder stays acyclic (`events <- typesys <- nodes <- compile <- compose`);
-      runtime consumes contracts below compose, and the run boundary stays above both.
+- [ ] Layer ladder stays acyclic (`diagnostics` below `events`; nodes combine
+      `diagnostics` / `typesys` / `expr` before `compile <- compose`); runtime
+      consumes contracts below compose, and the run boundary stays above both.
 - [ ] Engine core stays **kind-blind** — no new `match node.kind` in `runtime/`; `tests/engine/test_kind_census.py` still passes.
 - [ ] Nodes stay **pure** — a node returns `Output | Route | Grow` and never writes the pool.
 - [ ] Runtime state stays **record-authoritative** — prepare, append to `RunLog`, then

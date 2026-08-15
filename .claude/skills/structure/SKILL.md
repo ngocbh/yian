@@ -46,10 +46,13 @@ written down where it gets read. When you later wonder "can `typesys` import
 [`src/agent_composer/__init__.py`](../../../src/agent_composer/__init__.py) for the
 worked top-level charter with the full layer diagram.
 
-After the docstring, `__init__.py` does **only** re-exports: import the package's
-public names from its submodules and list them in `__all__`. No logic, no
-classes defined inline. The `__init__` is the package's public face; everything
-else is private until re-exported.
+After the docstring, `__init__.py` does **only** re-exports: expose the package's
+public names and list them in `__all__`. No domain logic or classes are defined
+inline. A composition-root facade may use a small standard-library-only
+`__getattr__` export table when eager imports would load every higher layer while
+someone imports a leaf submodule; cache each resolved value and preserve the
+same public API. The `__init__` is the package's public face; everything else is
+private until re-exported.
 
 ## 2. Order packages into layers; let imports flow leaf-to-root
 
@@ -57,13 +60,20 @@ Before adding a package, place it on the dependency ladder. The engine reads
 (leaf → root):
 
 ```
-events  <-  typesys  <-  nodes  <-  compile  <-  compose
-                        ^   ^
-            expr  ──────┘   └──────  llm_clients
+diagnostics  <-  events
+      ^
+      └────────  nodes  <-  compile  <-  compose
+                   ^   ^
+      typesys + expr    └──────  llm_clients
 
 _state + compile runtime contracts <── runtime
 compose + compile.expand + runtime <── package-root run.py
 ```
+
+`diagnostics.py` is the lowest source-neutral value leaf. It owns concrete
+ranges, opaque origins, and the authoring-format-neutral resolution protocol;
+`events` imports it. The package facade resolves its declared public exports
+lazily so importing this leaf does not bootstrap compose or runtime.
 
 The package-root run boundary is the composition root: it may import compose,
 compile's concrete builders, and runtime. Lower layers never import it. **Arrows

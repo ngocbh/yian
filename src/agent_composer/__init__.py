@@ -7,17 +7,20 @@ ordinary outputs. See the project README for status.
 
 Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never in a cycle):
 
-    events  <-  typesys  <-  nodes  <-  compile  <-  compose
-                            ^  ^
-                expr  ──────┘  └──────  llm_clients      (both leaves, imported by nodes upward)
+    diagnostics  <-  events
+          ^
+          └────────  nodes  <-  compile  <-  compose
+                       ^  ^
+          typesys + expr  └──────  llm_clients      (independent leaves feeding nodes)
 
     _state.py + compile execution contracts  <-  runtime
     compose + compile.expand + runtime  <-  run.py
 
-`_state.py` is an internal dependency-free scheduler-state contract shared by
-compile and runtime.
-Leaves import nothing else in the layer: `events`, `_state`, `typesys` (the typed
-value pool), `expr` (`${...}` evaluation), and `llm_clients` (provider client wrappers +
+`diagnostics.py` is the dependency-free source-neutral value spine; `events`
+imports it and temporarily re-exports `SourceRange`. `_state.py` is an internal
+dependency-free scheduler-state contract shared by compile and runtime.
+Other leaves import nothing upward: `_state`, `typesys` (the typed value pool),
+`expr` (`${...}` evaluation), and `llm_clients` (provider client wrappers +
 `LLMConfig` — the AGENT node's model seam). `nodes` are the node kinds — spawners return canonical growth seeds and
 never import compile; the synthesized boundary kinds own their
 reserved ids (`StartNode.ID == "__start__"`, `EndNode.ID == "__end__"`). `compile` is the
@@ -29,16 +32,40 @@ contracts but never imports `compile.expand`.
 `run` (the package-root `run.py`) is the top-level run boundary: it consumes `compose`'s
 `ComposedFlow`, injects `compile.expand.build_grow`, and drives the runtime engine, so it
 sits above all three and is imported by none.
+This package facade resolves the public names below lazily so importing a leaf
+submodule does not bootstrap the whole engine.
 Nothing here imports a DB or a server. Durable authority is limited to the small
 runtime `RunLog` seam (memory or locked JSONL); remote host coordination lives outside.
 """
 
-from agent_composer.expr.expressions import ExpressionError, evaluate_when
-from agent_composer.compile.model import CompiledFlow
-from agent_composer.compile.validation import FlowValidationError
-from agent_composer.compose import LoadError, ComposedFlow, load_flow
-from agent_composer.run import run_flow
-from agent_composer.typesys.pool import VariablePool
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+# Static aliases keep documentation and type tooling aware of the lazy facade.
+if TYPE_CHECKING:
+    from agent_composer.compile.model import CompiledFlow
+    from agent_composer.compile.validation import FlowValidationError
+    from agent_composer.compose import ComposedFlow, LoadError, load_flow
+    from agent_composer.expr.expressions import ExpressionError, evaluate_when
+    from agent_composer.run import run_flow
+    from agent_composer.typesys.pool import VariablePool
+
+
+# Public root name -> (defining module, attribute), imported on first access.
+_EXPORTS: dict[str, tuple[str, str]] = {
+    "ExpressionError": ("agent_composer.expr.expressions", "ExpressionError"),
+    "FlowValidationError": (
+        "agent_composer.compile.validation",
+        "FlowValidationError",
+    ),
+    "LoadError": ("agent_composer.compose", "LoadError"),
+    "ComposedFlow": ("agent_composer.compose", "ComposedFlow"),
+    "CompiledFlow": ("agent_composer.compile.model", "CompiledFlow"),
+    "VariablePool": ("agent_composer.typesys.pool", "VariablePool"),
+    "evaluate_when": ("agent_composer.expr.expressions", "evaluate_when"),
+    "load_flow": ("agent_composer.compose", "load_flow"),
+    "run_flow": ("agent_composer.run", "run_flow"),
+}
 
 __all__ = [
     "ExpressionError",
@@ -51,3 +78,20 @@ __all__ = [
     "load_flow",
     "run_flow",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Load one declared package-root export when callers first request it."""
+    target = _EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attribute = target
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    """Include lazy public exports in interactive attribute discovery."""
+    return sorted({*globals(), *__all__})

@@ -167,9 +167,10 @@ Most are just the functional model (above) made enforceable:
 ## 3. Plan
 Write a short plan: the **OCaml analogue** you're borrowing and its type; what you
 simplify/drop and why; where it lands in the layer map
-(`events ← typesys ← nodes ← compile ← compose`, with `expr` feeding nodes,
-the internal `_state.py` leaf shared by compile and runtime, and runtime consuming
-compile's execution contracts but not `compile.expand`); and the **seam** if it
+(`diagnostics` below `events`, with nodes combining `diagnostics`, `typesys`, and
+`expr` before `compile ← compose`; the internal `_state.py` leaf shared by
+compile and runtime; and runtime consuming compile's execution contracts but not
+`compile.expand`); and the **seam** if it
 touches an external dependency. Flag any non-obvious choice and confirm before
 coding (CLAUDE.md "ask when uncertain").
 
@@ -183,9 +184,10 @@ GitHub issue when the work lands (reference the commit/PR). Commit at green.
 ### Package layout
 Follow the **`structure` skill** for where files and folders go — package charters
 in `__init__.py`, `common.py` vs `utils.py`, one-way imports, no cycles. The
-engine's layer ladder (`events ← typesys ← nodes ← compile ← compose`, with `expr`
-feeding nodes and `_state.py` feeding compile and runtime) is an instance of that
-framework.
+engine's layer ladder starts at the dependency-free `diagnostics` value spine.
+`events` imports that leaf; nodes combine it with the independent `typesys` and
+`expr` leaves before `compile ← compose`, while `_state.py` feeds compile and
+runtime. This is an instance of that framework.
 The package-root `run.py` sits above compose and runtime and wires cross-layer
 capabilities: notably it owns log lifecycle/recovery and injects compile's
 `build_grow` into the kind-blind runtime.

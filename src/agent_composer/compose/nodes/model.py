@@ -48,7 +48,8 @@ class ModelDescriptor(NodeDescriptor):
         """Construct the runtime `ModelNode` (+ wiring) for this `ModelDescriptor`.
 
         Builds the model leaf (node-side `params` + flow-owned
-        `inputs` wiring, `output_type` from `outputs:`) and stamps `.range`/`.field_ranges` from
+        `inputs` wiring, `output_contract` from `outputs:`) and stamps
+        `.range`/`.field_ranges` from
         the descriptor via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is
         unused (leaf kind) and the inline-CODE anchors on `ctx` are read only by the CODE build.
         """
@@ -59,7 +60,7 @@ class ModelDescriptor(NodeDescriptor):
             runtime=self.runtime,
             title=self.node_name,
         )
-        node.output_type = self.output_type(ctx.registry)
+        node.output_contract = self.output_contract(ctx.registry)
         node.params = self.sink_params()
         wiring = self.sink_wiring()
         return self._finish(node, wiring)

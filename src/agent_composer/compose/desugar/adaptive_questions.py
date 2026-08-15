@@ -7,7 +7,7 @@ retries?}`. This pass lowers that single descriptor into TWO ordinary descriptor
 
 1. a synth **AgentDescriptor** (id `<gate>__compose`) that composes a
    `list[Question]` — its codomain is the code-built `question_list_type()` set via
-   the `output_type_override` seam (no surface type-string), its prompt is the
+   the `output_contract_override` seam (no surface type-string), its prompt is the
    block's brief, and it inherits the gate's context `inputs:`;
 2. the original **HumanInputDescriptor** gate (same id), rewritten to read its
    questions from the composer: `questions: "${__questions}"`, with the composer's
@@ -37,6 +37,7 @@ from agent_composer.compose.parse.file import (
     HumanInputDescriptor,
     NodeDescriptor,
 )
+from agent_composer.nodes.contracts import ValueContract
 from agent_composer.nodes.human_input.questions import question_list_type
 
 # Reserved gate input name: the wire from the synth composer's output into the gate's
@@ -75,11 +76,12 @@ def desugar_adaptive_questions(
         # The block IS the agent spec. Pass optional fields only when present so the
         # AgentDescriptor defaults (e.g. retries=2, llm_config={}) apply otherwise. The
         # synth agent inherits the gate's ranges so its downstream errors locate there.
+        # Its internal contract has no authorable type string.
         agent_kwargs = {
             "id": synth_id,
             "prompt": auto["prompt"],
             "inputs": dict(desc.inputs),  # carry the gate's context inputs to the composer
-            "output_type_override": question_list_type(),  # the codomain (list[Question])
+            "output_contract_override": ValueContract(question_list_type()),
             "outputs": None,
             "mode": auto.get("mode", "plain"),
             "range": desc.range,

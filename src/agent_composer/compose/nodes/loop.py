@@ -18,6 +18,7 @@ from agent_composer.typesys.values import Type
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.resolver import (
+    _callable_display,
     _resolve_child,
     child_signature,
 )
@@ -81,8 +82,14 @@ class LoopDescriptor(NodeDescriptor):
         inline-CODE anchors on `ctx` are read only by the CODE build.
         """
         resolver = ctx.resolver
-        child = _resolve_child(self.id, self.call, resolver)
+        child = _resolve_child(
+            self.id,
+            self.call,
+            resolver,
+            self.child_label,
+        )
         sig = child_signature(child)
+        child_display = _callable_display(self.call, self.child_label)
         # The child's asserts ride its compiled boundary nodes (lowered at the child's own
         # build); `clone_child` deep-copies the whole child subgraph per iteration, so those
         # lowered asserts survive the splice.
@@ -155,7 +162,7 @@ class LoopDescriptor(NodeDescriptor):
         out_names = _type_field_names(sig.output)
         if out_names is None:
             errors.append(
-                f"loop node {self.id!r}: body callable {self.call!r} must declare a record "
+                f"loop node {self.id!r}: body {child_display} must declare a record "
                 f"output whose field names equal the carried record {sorted(carried)}"
             )
         elif out_names != carried:

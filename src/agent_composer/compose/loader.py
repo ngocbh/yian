@@ -76,11 +76,9 @@ def _nodes_reader(text: Optional[str], nodes_section: dict) -> NodeReader:
 def _def_nodes_reader(parent_text: str, name: str) -> NodeReader:
     """A span-aware `NodeReader` over a `defs:<name>:nodes:` mapping in the parent file.
 
-    A def is BUILT from a spanless reader (its nodes have no baked ranges), so the def's
-    render-only `SourceFrame` sources its node/field ranges here — a separate span parse of
-    the parent file, descended to `defs.<name>.nodes`, where the def's nodes physically live
-    at their absolute lines. Spanless (empty ranges -> frame collapses to the call line) when
-    `parent_text` does not compose or lacks that sub-tree (a single-node / compact def).
+    Descends a fresh span parse to the raw author surface, where nested node keys remain
+    singular and ranges retain their absolute parent-file lines. Spanless when `parent_text`
+    does not compose or lacks that subtree (a programmatic or single-node def).
     """
     if parent_text:
         try:
@@ -96,6 +94,45 @@ def _def_nodes_reader(parent_text: str, name: str) -> NodeReader:
                     .child("defs").child(name).child("nodes")
                 )
     return NodeReader.spanless({})
+
+
+def _restore_node_surface(nodes):
+    """Restore normalized node signatures to singular author-surface keys.
+
+    The normalized `ComposeFile` representation uses `inputs`/`outputs`. A spanless def
+    fallback must look like raw YAML before inline-body extraction, so only each direct
+    node body's signature keys are restored. Recursion follows an actual nested `nodes:`
+    graph and deliberately does not descend into arbitrary literal mappings or lists.
+    """
+    if not isinstance(nodes, dict):
+        return nodes
+
+    restored: dict = {}
+    for node_id, raw_body in nodes.items():
+        if not isinstance(raw_body, dict):
+            restored[node_id] = raw_body
+            continue
+        body = dict(raw_body)
+        if "inputs" in body:
+            body["input"] = body.pop("inputs")
+        if "outputs" in body:
+            body["output"] = body.pop("outputs")
+        if isinstance(body.get("nodes"), dict):
+            body["nodes"] = _restore_node_surface(body["nodes"])
+        restored[node_id] = body
+    return restored
+
+
+def _def_assembly_reader(
+    parent_text: str,
+    name: str,
+    normalized_nodes,
+) -> NodeReader:
+    """Return a fresh raw def reader, or a surface-restored spanless fallback."""
+    located = _def_nodes_reader(parent_text, name)
+    if located.yaml_node is not None:
+        return located
+    return NodeReader.spanless(_restore_node_surface(normalized_nodes))
 
 
 def _frame_ranges(
@@ -410,7 +447,8 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
         outputs_section=f.outputs,
         asserts_section=f.asserts,
         registry=registry,
-        resolver=callable_scope.resolve,
+        scope=callable_scope,
+        owner=("root",),
         n_lines={nid: rng.start_line for nid, rng in top_node_ranges.items()},
         s_lines=_section_lines(text),
         uses_aliases=set(f.uses),
@@ -562,7 +600,7 @@ class _CallableScope:
                     flow_id,
                     self._defs_section[flow_id],
                     self._registry,
-                    self.resolve,
+                    self,
                     self._parent_text,
                 )
             finally:
@@ -605,14 +643,20 @@ class _CallableScope:
             self.resolve(name)
 
 
-def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: str = "") -> ComposedFlow:
+def _load_def(
+    name: str,
+    body,
+    registry,
+    scope: _CallableScope,
+    parent_text: str = "",
+) -> ComposedFlow:
     """Build one in-file `defs:` entry into a `ComposedFlow` (a callable / sub-flow inline).
 
     Supports the **multi-node** form only — `{inputs?, nodes, outputs?, asserts?}`,
-    sharing the file's `typedefs:` registry + the composite resolver (so a def can call
-    other defs / external flows). A **single-node** form (a top-level `kind:`) is deferred
-    -> `LoadError`. `parent_text` is the source of the declaring file: the def's nodes
-    live at absolute lines there, so its `SourceFrame` indexes them via
+    sharing the file's `typedefs:` registry + callable scope (so a def can call other defs,
+    external flows, or compiler-owned children). A **single-node** form (a top-level
+    `kind:`) is deferred -> `LoadError`. `parent_text` is the source of the declaring
+    file: the def's nodes live at absolute lines there, so its `SourceFrame` indexes them via
     `_frame_ranges(_def_nodes_reader(parent_text, name))` for the nested-error traceback."""
     if not isinstance(body, dict):
         raise LoadError(
@@ -620,7 +664,7 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
         )
     if "nodes" not in body:
         if "kind" in body:
-            return _load_single_node_def(name, body, registry, resolver, parent_text)
+            return _load_single_node_def(name, body, registry, scope, parent_text)
         raise LoadError(
             f"defs entry {name!r}: a callable needs a `nodes:` sub-flow body "
             f"(inputs?/nodes/outputs?) OR a single-node `kind:` form"
@@ -631,8 +675,13 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
             f"defs entry {name!r}: unknown field(s) {extra} "
             f"(allowed: {', '.join(sorted(_DEF_ALLOWED))})"
         )
-    # The def's frame indexes its inner nodes at their absolute lines in the parent file.
-    def_node_ranges, def_field_ranges = _frame_ranges(_def_nodes_reader(parent_text, name))
+    # Frame extraction parses and mutates singular node keys while back-mapping them to
+    # descriptor fields. Assembly therefore receives a second fresh raw reader, preserving
+    # the author's singular inline-body fields and their absolute parent-file ranges.
+    def_node_ranges, def_field_ranges = _frame_ranges(
+        _def_nodes_reader(parent_text, name)
+    )
+    nodes_reader = _def_assembly_reader(parent_text, name, body["nodes"])
     source = SourceFrame(
         label="defs:" + name,
         text=parent_text,
@@ -642,11 +691,12 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
     try:
         return _assemble(
             inputs_section=body.get("inputs") or {},
-            nodes_reader=NodeReader.spanless(body["nodes"]),
+            nodes_reader=nodes_reader,
             outputs_section=body.get("outputs"),
             asserts_section=body.get("asserts") or [],  # enforced at the child seam
             registry=registry,
-            resolver=resolver,
+            scope=scope,
+            owner=("def", name),
             n_lines={},
             s_lines={},
             flow_llm_config=body.get("llm_config") or {},
@@ -663,7 +713,13 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
 
 
 
-def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolver, parent_text: str = "") -> ComposedFlow:
+def _load_single_node_def(
+    name: str,
+    body: dict,
+    registry,
+    scope: _CallableScope,
+    parent_text: str = "",
+) -> ComposedFlow:
     """Build a SINGLE-node `defs:` callable — `let f params = <one node over params>`.
 
     The flat body is `{kind, <logic fields>, input?, output?}` (singular keys; the
@@ -692,7 +748,8 @@ def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolv
             outputs_section={"result": f"${{{name}.output}}"},  # single value re-export (node-first)
             asserts_section=[],
             registry=registry,
-            resolver=resolver,
+            scope=scope,
+            owner=("def", name),
             n_lines={},
             s_lines={},
             source=source,

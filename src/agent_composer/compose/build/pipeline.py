@@ -31,8 +31,10 @@ from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.call import CallDescriptor
 from agent_composer.compose.nodes.loop import LoopDescriptor
-from agent_composer.compose.nodes.resolver import ChildResolver
-from agent_composer.compose.desugar.inline_bodies import InlineBody
+from agent_composer.compose.desugar.inline_bodies import (
+    InlineBody,
+    extract_inline_bodies,
+)
 from agent_composer.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadError
@@ -203,6 +205,15 @@ class _PrivateRegistrar(Protocol):
         """Register one private callable builder under its generated identity."""
 
 
+class _CallableScopeLike(_PrivateRegistrar, Protocol):
+    """File-owned callable scope used by assembly and anonymous child lowering."""
+
+    def resolve(
+        self, flow_id: str, version: str | None = None
+    ) -> ComposedFlow:
+        """Resolve one named or compiler-owned callable in this file scope."""
+
+
 def _register_inline_bodies(
     descriptors: dict[str, NodeDescriptor],
     bodies: dict[str, InlineBody],
@@ -288,7 +299,8 @@ def _assemble(
     outputs_section,
     asserts_section: list,
     registry,
-    resolver: ChildResolver,
+    scope: _CallableScopeLike,
+    owner: tuple[str, ...],
     n_lines: dict,
     s_lines: dict,
     uses_aliases: set = frozenset(),
@@ -312,13 +324,20 @@ def _assemble(
 
     Exactly one input representation is required: `inputs_section` is the authored
     mapping that still needs parsing, while `input_decls` carries declarations already
-    resolved by an earlier compiler pass. `resolver` is the composite call resolver
-    (defs-first); `registry` is the file's
+    resolved by an earlier compiler pass. `scope` owns composite call resolution
+    (defs-first) and private child registration; `registry` is the file's
     `read_typedefs(...)`. `n_lines`/`s_lines` are the source maps — each node id / top-level
     section key -> its 1-based HEADER line (`{}` for a nested def, whose errors are unlocated).
+    `owner` is this flow's complete lexical path and seeds stable identities for anonymous
+    children.
     Inline-CODE traceback anchors are derived from each descriptor's own `code:` range."""
     if (inputs_section is None) == (input_decls is None):
         raise ValueError("_assemble requires exactly one of inputs_section or input_decls")
+
+    nodes_reader, inline_bodies = extract_inline_bodies(
+        nodes_reader,
+        owner=owner,
+    )
 
     # The flow's file label frames inline-CODE tracebacks; each inline node's content start
     # line is derived from its recorded `code:` range in the CODE build. Inert for reference-mode CODE.
@@ -342,7 +361,7 @@ def _assemble(
     # declared-but-uncalled broken/`hub:`/missing target is loud at load, not at first call.
     for alias in uses_aliases:
         try:
-            resolver(alias)
+            scope.resolve(alias)
         except LoadError as exc:
             if exc.line is None:
                 exc.line = s_lines.get("uses")
@@ -381,12 +400,55 @@ def _assemble(
         asserts_line=s_lines.get("asserts"),
     )
 
+    def build_inline_child(
+        body: InlineBody,
+        descriptor: CallDescriptor | LoopDescriptor,
+    ) -> ComposedFlow:
+        """Assemble one retained body lazily in this file's callable scope."""
+        label = descriptor.child_label or f"inline body of node {body.node_id!r}"
+        child_source = SourceFrame(
+            label=label,
+            text=source.text if source is not None else "",
+            node_ranges={},
+            field_ranges={},
+        )
+        output_lines = (
+            {"output": body.output_range.start_line}
+            if body.output_range is not None
+            else {}
+        )
+        return _assemble(
+            input_decls=[],
+            nodes_reader=body.nodes_reader,
+            outputs_section=body.output,
+            asserts_section=[],
+            registry=registry,
+            scope=scope,
+            owner=body.owner,
+            n_lines={},
+            s_lines=output_lines,
+            flow_llm_config={},
+            flow_env={},
+            source=child_source,
+        )
+
+    descriptors = _register_inline_bodies(
+        descriptors,
+        inline_bodies,
+        registrar=scope,
+        build_child=build_inline_child,
+    )
+
     # Build EVERY node kind-blind through its own descriptor's `build(ctx)` — leaf, call/map
     # (MapDescriptor rides CallDescriptor, no branch), loop, AND case (which lowers in its own
     # `.build()`, returning its data+control edges in `BuildResult.edges`). The conductor never
     # branches on the descriptor kind. Flow-owned wiring (the split): `flow_wiring[node_id][param]
     # -> source`, a `{}` entry for every node so the key-parity check ranges over all nodes.
-    ctx_base = BuildContext(registry=registry, resolver=resolver, source_file=flow_label)
+    ctx_base = BuildContext(
+        registry=registry,
+        resolver=scope.resolve,
+        source_file=flow_label,
+    )
     build_results = _DescriptorBuildCache(
         descriptors, ctx_base, n_lines
     ).build_in_source_order()

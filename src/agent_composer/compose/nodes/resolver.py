@@ -133,7 +133,17 @@ def child_signature(loaded: Any) -> ChildSignature:
     return ChildSignature(inputs=list(loaded.input), output=output)
 
 
-def _resolve_child(node_id: str, flow_id: str, resolver: ChildResolver) -> Any:
+def _callable_display(flow_id: str, child_label: str | None = None) -> str:
+    """Return an author-facing callable description without changing named errors."""
+    return child_label or f"callable {flow_id!r}"
+
+
+def _resolve_child(
+    node_id: str,
+    flow_id: str,
+    resolver: ChildResolver,
+    child_label: str | None = None,
+) -> Any:
     """Resolve a callable to its `ComposedFlow` via the resolver, loud on failure."""
     try:
         return resolver(flow_id, None)
@@ -141,5 +151,6 @@ def _resolve_child(node_id: str, flow_id: str, resolver: ChildResolver) -> Any:
         raise
     except Exception as exc:  # any resolver failure -> the callable is unknown
         raise LoadError(
-            f"call node {node_id!r}: could not resolve callable {flow_id!r}: {exc}"
+            f"call node {node_id!r}: could not resolve "
+            f"{_callable_display(flow_id, child_label)}: {exc}"
         ) from exc

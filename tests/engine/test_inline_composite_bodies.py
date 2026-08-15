@@ -21,6 +21,7 @@ from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.run import run_flow
 
 
 def _located_root(text: str) -> tuple[NodeReader, dict]:
@@ -746,6 +747,208 @@ def test_register_inline_bodies_preflights_all_before_first_registration():
     assert registrar.registrations == []
 
 
+def test_zero_input_inline_call_loads_and_runs_in_one_file_scope(monkeypatch):
+    registrations = []
+    resolutions = []
+    original_register = compose_loader._CallableScope.register_private
+    original_resolve = compose_loader._CallableScope.resolve
+
+    def record_register(self, flow_id, owner, label, builder):
+        registrations.append((self, flow_id, owner, label))
+        return original_register(self, flow_id, owner, label, builder)
+
+    def record_resolve(self, flow_id, version=None):
+        if flow_id.startswith(INLINE_FLOW_PREFIX):
+            resolutions.append((self, flow_id))
+        return original_resolve(self, flow_id, version)
+
+    monkeypatch.setattr(
+        compose_loader._CallableScope,
+        "register_private",
+        record_register,
+    )
+    monkeypatch.setattr(
+        compose_loader._CallableScope,
+        "resolve",
+        record_resolve,
+    )
+
+    loaded = load_flow(
+        """id: inline-call-zero-input
+name: inline_call_zero_input
+nodes:
+  wrapper:
+    kind: call
+    nodes:
+      constant:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: inline-ok
+        output: str
+    output: ${constant.output}
+output: ${wrapper.output}
+"""
+    )
+
+    expected_flow_id = inline_flow_id(
+        ("root", "node", "wrapper", "inline")
+    )
+    wrapper = loaded.compiled.nodes["wrapper"]
+    result = run_flow(loaded, {})
+
+    assert wrapper.flow_id == expected_flow_id
+    assert wrapper.child_inputs == []
+    assert len(registrations) == 1
+    assert registrations[0][0] is resolutions[0][0]
+    assert registrations[0][1:] == (
+        expected_flow_id,
+        ("root", "node", "wrapper", "inline"),
+        "inline body of node 'wrapper'",
+    )
+    assert resolutions == [(registrations[0][0], expected_flow_id)]
+    assert result.status == "succeeded"
+    assert result.output == "inline-ok"
+
+
+def test_eager_def_inline_call_uses_raw_ranges_and_shared_scope(monkeypatch):
+    registrations = []
+    resolutions = []
+    original_register = compose_loader._CallableScope.register_private
+    original_resolve = compose_loader._CallableScope.resolve
+
+    def record_register(self, flow_id, owner, label, builder):
+        registrations.append((self, flow_id, owner, label))
+        return original_register(self, flow_id, owner, label, builder)
+
+    def record_resolve(self, flow_id, version=None):
+        if flow_id.startswith(INLINE_FLOW_PREFIX):
+            resolutions.append((self, flow_id))
+        return original_resolve(self, flow_id, version)
+
+    monkeypatch.setattr(
+        compose_loader._CallableScope,
+        "register_private",
+        record_register,
+    )
+    monkeypatch.setattr(
+        compose_loader._CallableScope,
+        "resolve",
+        record_resolve,
+    )
+
+    source = """id: eager-def-inline-call
+name: eager_def_inline_call
+defs:
+  outer:
+    nodes:
+      wrapper:
+        kind: call
+        nodes:
+          constant:
+            kind: code
+            code: tests.engine._compose_codefns:echo
+            input:
+              topic: inline-ok
+            output: str
+        output: ${constant.output}
+    output: ${wrapper.output}
+nodes:
+  invoke:
+    kind: call
+    call: outer
+output: ${invoke.output}
+"""
+    loaded = load_flow(source)
+
+    expected_owner = ("def", "outer", "node", "wrapper", "inline")
+    expected_flow_id = inline_flow_id(expected_owner)
+    wrapper = loaded.compiled.nodes["invoke"].child.nodes["wrapper"]
+    wrapper_line = source.splitlines().index("      wrapper:") + 1
+    result = run_flow(loaded, {})
+
+    assert wrapper.flow_id == expected_flow_id
+    assert wrapper.child_inputs == []
+    assert wrapper.range.start_line == wrapper_line
+    assert len(registrations) == 1
+    assert len(resolutions) == 1
+    assert registrations[0] == (
+        resolutions[0][0],
+        expected_flow_id,
+        expected_owner,
+        "inline body of node 'wrapper'",
+    )
+    assert resolutions[0] == (registrations[0][0], expected_flow_id)
+    assert result.status == "succeeded"
+    assert result.output == "inline-ok"
+
+
+def test_def_assembly_reader_fallback_restores_only_node_surfaces():
+    literal = {"inputs": "literal-input", "outputs": "literal-output"}
+    normalized = {
+        "wrapper": {
+            "kind": "call",
+            "inputs": {"payload": literal},
+            "nodes": {
+                "constant": {
+                    "kind": "code",
+                    "inputs": {"topic": "inline-ok"},
+                    "outputs": "str",
+                    "env": {"literal": literal},
+                }
+            },
+            "outputs": "${constant.output}",
+        }
+    }
+
+    reader = compose_loader._def_assembly_reader("", "outer", normalized)
+
+    wrapper = reader.value["wrapper"]
+    constant = wrapper["nodes"]["constant"]
+    assert reader.yaml_node is None
+    assert "input" in wrapper and "inputs" not in wrapper
+    assert "output" in wrapper and "outputs" not in wrapper
+    assert "input" in constant and "inputs" not in constant
+    assert "output" in constant and "outputs" not in constant
+    assert wrapper["input"]["payload"] is literal
+    assert constant["env"]["literal"] is literal
+    assert literal == {
+        "inputs": "literal-input",
+        "outputs": "literal-output",
+    }
+    assert "inputs" in normalized["wrapper"]
+    assert "outputs" in normalized["wrapper"]
+
+
+def test_inline_map_output_error_uses_friendly_child_label():
+    with pytest.raises(LoadError) as caught:
+        load_flow(
+            """id: inline-map-no-output
+name: inline_map_no_output
+input:
+  items: list[str]
+nodes:
+  each:
+    kind: map
+    over: ${input.items}
+    nodes:
+      constant:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: inline-ok
+        output: str
+    output:
+output: ${each.output}
+"""
+        )
+
+    message = str(caught.value)
+    assert "map node 'each': inline body of node 'each'" in message
+    assert "must declare exactly one output value" in message
+    assert INLINE_FLOW_PREFIX not in message
+
+
 def test_callable_scope_builds_private_once_and_same_owner_registration_is_idempotent():
     flow_id = INLINE_FLOW_PREFIX + "opaque-once"
     owner = ("root", "node", "wrapper", "inline")
@@ -933,10 +1136,10 @@ def test_callable_scope_eager_def_can_resolve_pre_registered_private(
         events.append("private")
         return private_child
 
-    def fake_load_def(name, value, registry, resolver, parent_text=""):
+    def fake_load_def(name, value, registry, scope, parent_text=""):
         events.append(f"def:{name}")
         assert value is body
-        assert resolver(flow_id) is private_child
+        assert scope.resolve(flow_id) is private_child
         return def_child
 
     monkeypatch.setattr(compose_loader, "_load_def", fake_load_def)

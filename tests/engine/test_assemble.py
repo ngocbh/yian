@@ -55,6 +55,16 @@ class _FakeBuildDescriptor:
         return BuildResult(node=object(), wiring={"built": self.node_id})
 
 
+class _InertCallableScope:
+    """Callable-scope double for assembly tests with no composite nodes."""
+
+    def resolve(self, flow_id, version=None):
+        raise AssertionError(f"empty flow unexpectedly resolved {flow_id!r}")
+
+    def register_private(self, flow_id, owner, label, builder):
+        raise AssertionError(f"empty flow unexpectedly registered {label!r}")
+
+
 def test_descriptor_build_cache_reuses_forward_builds_in_source_order():
     calls = []
     cache = None
@@ -178,16 +188,14 @@ def test_descriptor_build_cache_does_not_cache_failure_and_keeps_inner_line():
 
 def _assemble_resolved_input_decls(input_decls):
     """Assemble an empty flow through the already-resolved input seam."""
-    def inert_resolver(name):
-        raise AssertionError(f"empty flow unexpectedly resolved {name!r}")
-
     return _assemble(
         input_decls=input_decls,
         nodes_reader=NodeReader.spanless({}),
         outputs_section=None,
         asserts_section=[],
         registry={},
-        resolver=inert_resolver,
+        scope=_InertCallableScope(),
+        owner=("test",),
         n_lines={},
         s_lines={},
     )
@@ -229,7 +237,8 @@ def test_resolved_input_decls_reject_both_input_representations():
             outputs_section=None,
             asserts_section=[],
             registry={},
-            resolver=lambda name: None,
+            scope=_InertCallableScope(),
+            owner=("test",),
             n_lines={},
             s_lines={},
         )
@@ -242,7 +251,8 @@ def test_resolved_input_decls_reject_missing_input_representation():
             outputs_section=None,
             asserts_section=[],
             registry={},
-            resolver=lambda name: None,
+            scope=_InertCallableScope(),
+            owner=("test",),
             n_lines={},
             s_lines={},
         )
@@ -263,7 +273,8 @@ def test_resolved_input_decls_accept_zero_args_and_wire_empty_start():
         outputs_section=None,
         asserts_section=[],
         registry={},
-        resolver=lambda name: None,
+        scope=_InertCallableScope(),
+        owner=("test",),
         n_lines={},
         s_lines={},
     )

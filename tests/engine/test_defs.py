@@ -73,11 +73,11 @@ def test_callable_scope_eagerly_builds_defs_and_memoizes_resolution(monkeypatch)
     external_child = object()
     registry = object()
     body = {"nodes": {}}
-    seen_resolvers = []
+    seen_scopes = []
 
-    def fake_load_def(name, value, seen_registry, resolver, parent_text=""):
+    def fake_load_def(name, value, seen_registry, scope, parent_text=""):
         events.append(("def", name))
-        seen_resolvers.append(resolver)
+        seen_scopes.append(scope)
         assert value is body
         assert seen_registry is registry
         assert parent_text == "parent source"
@@ -98,7 +98,7 @@ def test_callable_scope_eagerly_builds_defs_and_memoizes_resolution(monkeypatch)
 
     scope.eager_load_defs()
     assert events == [("def", "local")]
-    assert seen_resolvers == [scope.resolve]
+    assert seen_scopes == [scope]
     assert scope.resolve("local") is local_child
     assert scope.resolve("local") is local_child
 

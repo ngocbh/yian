@@ -22,6 +22,7 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.resolver import (
     ChildSignature,
+    _callable_display,
     _resolve_child,
     child_signature,
 )
@@ -109,8 +110,14 @@ class CallDescriptor(NodeDescriptor):
                 f"map node {self.id!r}: input name 'over' is reserved (the iteration "
                 f"source); rename the `inputs:` entry"
             )
-        child = _resolve_child(self.id, self.call, resolver)
+        child = _resolve_child(
+            self.id,
+            self.call,
+            resolver,
+            self.child_label,
+        )
         sig = child_signature(child)
+        child_display = _callable_display(self.call, self.child_label)
         # The child's asserts ride its compiled boundary nodes (lowered at the child's own
         # build): PRE/boundary asserts on its START, POST-terminal on its END. `clone_child`
         # deep-copies the whole child subgraph, so those lowered asserts survive the splice.
@@ -130,7 +137,7 @@ class CallDescriptor(NodeDescriptor):
             wiring = {"over": self.over, **self.sink_wiring()}   # over FIRST (edge order)
             if sig.output is None:
                 errors.append(
-                    f"map node {self.id!r}: callable {self.call!r} must declare exactly one "
+                    f"map node {self.id!r}: {child_display} must declare exactly one "
                     f"output value — a mapped call (over:) returns list[U] of that single output"
                 )
             else:
@@ -148,7 +155,14 @@ class CallDescriptor(NodeDescriptor):
             node.params = self.sink_params()
             wiring = self.sink_wiring()
             node.output_type = sig.output         # re-export the child's single codomain value
-        _check_child_bindings(self.id, self.call, node.params, sig, errors)
+        _check_child_bindings(
+            self.id,
+            self.call,
+            node.params,
+            sig,
+            errors,
+            self.child_label,
+        )
         if errors:
             raise LoadError("\n  ".join(errors))
         return self._finish(node, wiring)
@@ -172,6 +186,7 @@ def _check_child_bindings(
     params: list[ParamDecl],
     sig: ChildSignature,
     errors: list[str],
+    child_label: str | None = None,
 ) -> None:
     """Name/arity check a `call` node's PARAMS against the child SIGNATURE (the analogue of
     `compile.validation._check_ref_bindings`'s name + required-input checks, read off the
@@ -184,7 +199,7 @@ def _check_child_bindings(
         if p.name not in declared:
             errors.append(
                 f"call node {node_id!r}: binding {p.name!r} is not a declared "
-                f"input of callable {flow_id!r}"
+                f"input of {_callable_display(flow_id, child_label)}"
             )
     for decl in sig.inputs:
         if decl.required and decl.name not in bound and decl.default is None:

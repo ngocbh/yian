@@ -15,6 +15,7 @@ from agent_composer.compose.desugar.inline_bodies import (
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
+from agent_composer.compose.loader import load_flow
 
 
 def _located_root(text: str) -> tuple[NodeReader, dict]:
@@ -470,6 +471,24 @@ def test_extract_allows_private_prefix_in_graph_node_id():
         "kind": "call",
         "call": "named",
     }
+
+
+def test_loader_allows_private_callable_prefix_in_graph_node_id():
+    loaded = load_flow(
+        f"""id: prefix-node
+name: prefix_node
+input: {{x: str}}
+nodes:
+  {INLINE_FLOW_PREFIX}host:
+    kind: code
+    code: tests.seeds.fns:one_line_summary
+    input:
+      x: ${{input.x}}
+output: ${{{INLINE_FLOW_PREFIX}host.output}}
+"""
+    )
+
+    assert f"{INLINE_FLOW_PREFIX}host" in loaded.compiled.nodes
 
 
 _INLINE_CHILD = """nodes:

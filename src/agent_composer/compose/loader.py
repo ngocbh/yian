@@ -36,6 +36,7 @@ from agent_composer.nodes.base import FieldRanges
 from agent_composer.typesys.values import TypeCheckError
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.build.pipeline import _assemble, ComposedFlow
+from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.uses import parse_uses_ref
@@ -163,6 +164,47 @@ def _validate_system(system: dict) -> None:
     paths = system.get("paths", [])
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         raise LoadError("system: paths must be a list of strings")
+
+
+def _reject_authored_private_callable_names(text: str, defs: dict, uses: dict) -> None:
+    """Reject file-scoped callable declarations in the inline-flow namespace.
+
+    The inexpensive declaration scan runs before any other loader work. Source
+    spans are parsed only after a reserved name is found, so valid files do not
+    pay for another document parse at this boundary.
+    """
+    for section, declarations in (("defs", defs), ("uses", uses)):
+        offender = next(
+            (
+                name
+                for name in declarations
+                if isinstance(name, str) and name.startswith(INLINE_FLOW_PREFIX)
+            ),
+            None,
+        )
+        if offender is None:
+            continue
+
+        declaration_range = None
+        try:
+            value, spans, root = load_with_spans(text, return_root=True)
+        except yaml.YAMLError:
+            pass
+        else:
+            raw_declarations = value.get(section) if isinstance(value, dict) else None
+            if isinstance(raw_declarations, dict):
+                declaration_range = (
+                    NodeReader(value, spans, root)
+                    .child(section)
+                    .key_range_of(offender)
+                )
+
+        noun = "callable names" if section == "defs" else "aliases"
+        raise LoadError(
+            f"{section}: {noun} with prefix {INLINE_FLOW_PREFIX!r} are reserved "
+            "for compiler-generated inline child flows",
+            range=declaration_range,
+        )
 
 
 @dataclass
@@ -314,6 +356,7 @@ def load_flow(
 
 def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedFlow:
     f = parse_file(text)
+    _reject_authored_private_callable_names(text, f.defs, f.uses)
     _validate_system(f.system)
 
     try:
@@ -513,6 +556,7 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
         raise LoadError(f"defs entry {name!r}: {exc}", line=exc.line) from exc
 
 
+
 def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolver, parent_text: str = "") -> ComposedFlow:
     """Build a SINGLE-node `defs:` callable — `let f params = <one node over params>`.
 
@@ -551,4 +595,3 @@ def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolv
         if str(exc).startswith("defs entry "):
             raise
         raise LoadError(f"defs entry {name!r}: {exc}", line=exc.line) from exc
-

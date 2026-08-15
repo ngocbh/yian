@@ -96,13 +96,15 @@ class NodeReader:
         return self.spans.get(id(self.yaml_node))
 
     def _pair(self, key: str):
-        """Find the `(key_node, value_node)` pair whose constructed key == `key`.
+        """Find the effective `(key_node, value_node)` pair for constructed `key`.
 
         Returns the pair, or `None` when this node is not a mapping or has no such key.
         Compares against `key_node.value` (the raw scalar text of the key), which for a
-        plain string key equals its constructed value. In spanless mode (`yaml_node is
-        None`) there are no yaml nodes, so presence is synthesized from `self.value` and
-        the pair is `(None, None)` (the range accessors resolve to `None`).
+        plain string key equals its constructed value. PyYAML's merge flattening retains
+        inherited and local override pairs while the constructed mapping uses the last
+        value, so this lookup also selects the last pair. In spanless mode (`yaml_node
+        is None`) there are no yaml nodes, so presence is synthesized from `self.value`
+        and the pair is `(None, None)` (the range accessors resolve to `None`).
         """
         if self.yaml_node is None:
             if isinstance(self.value, dict) and key in self.value:
@@ -111,7 +113,7 @@ class NodeReader:
         pairs = getattr(self.yaml_node, "value", None)
         if not isinstance(pairs, list):
             return None
-        for key_node, value_node in pairs:
+        for key_node, value_node in reversed(pairs):
             if getattr(key_node, "value", None) == key:
                 return key_node, value_node
         return None

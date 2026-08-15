@@ -756,3 +756,40 @@ def test_parent_null_shadows_child_default():
     res = run_flow(loaded, {"x": None})
     assert res.status == "succeeded", res.error
     assert res.output is None  # the parent's explicit null shadows the child default
+
+
+def test_def_yaml_merge_uses_local_nodes_override():
+    """A located def reader must pair the effective value with its last YAML pair."""
+    loaded = load_flow(
+        """id: merged-def
+name: merged_def
+x-def-base: &def_base
+  nodes:
+    old:
+      kind: code
+      code: |
+        return "old"
+      output: str
+  output: ${old.output}
+defs:
+  target:
+    <<: *def_base
+    nodes:
+      new:
+        kind: code
+        code: |
+          return "new"
+        output: str
+    output: ${new.output}
+nodes:
+  invoke:
+    kind: call
+    call: target
+output: ${invoke.output}
+"""
+    )
+
+    result = run_flow(loaded, {})
+
+    assert result.status == "succeeded"
+    assert result.output == "new"

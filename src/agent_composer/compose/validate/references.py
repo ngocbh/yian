@@ -71,6 +71,7 @@ def validate_references(
     *,
     node_lines: "dict[str, int] | None" = None,
     outputs_line: "int | None" = None,
+    outputs_range: Optional[SourceRange] = None,
 ) -> None:
     """Validate every `${...}` reference site of a built flow.
 
@@ -86,9 +87,10 @@ def validate_references(
     binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
     / `("field", "prompt")`), else the node header. The transitional `node_lines` (node id ->
     source line) + `outputs_line` (the `outputs:` section line) still feed `LoadError.line`
-    for the line-based renderer.
-    The aggregate `LoadError` carries the FIRST located error's line AND range (best-effort,
-    since several sites may be wrong at once).
+    for the line-based renderer. `outputs_range` is the authored output value/block range
+    when the caller retains it; otherwise output errors fall back to `outputs_line`.
+    The aggregate `LoadError` carries the first error with either location, preserving that
+    error's line/range pair rather than mixing locations from separate messages.
 
     Accumulates ALL located errors and raises a single `LoadError`; passes silently
     on a clean flow. Reuses `_classify_path` (head-resolution + dotted walk)
@@ -198,14 +200,20 @@ def validate_references(
 
     # Flow outputs (the codomain): each binding `from:` checked like a node input —
     # located at the `outputs:` section line (dangling-head/dotted-field errors point here).
-    # No built node owns the flow `outputs:` block, so no range is available yet (a later
-    # renderer collapse resolves it from the section span); the `outputs_line` still locates it.
+    # No built node owns the flow `outputs:` block. A retained child body can supply its
+    # output value/block range; other callers keep the section-line fallback.
     for value in _output_bindings(outputs):
-        scan(value, "flow output from", outputs_line, None)
+        scan(value, "flow output from", outputs_line, outputs_range)
 
     if errors:
-        first_line = next((ln for _, ln, _ in errors if ln is not None), None)
-        first_range = next((r for _, _, r in errors if r is not None), None)
+        first_line, first_range = next(
+            (
+                (line, error_range)
+                for _, line, error_range in errors
+                if line is not None or error_range is not None
+            ),
+            (None, None),
+        )
         raise LoadError(
             "flow has unresolved references:\n  "
             + "\n  ".join(msg for msg, _, _ in errors),

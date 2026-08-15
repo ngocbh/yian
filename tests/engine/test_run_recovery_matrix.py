@@ -106,6 +106,51 @@ nodes:
 output: ${outer.output}
 """
 
+_NESTED_INLINE_GROWTH = """
+id: recovery-matrix-inline-growth
+name: recovery_matrix_inline_growth
+nodes:
+  outer:
+    kind: call
+    input:
+      items: [1, 2]
+    nodes:
+      mapped:
+        kind: map
+        over: ${input.items}
+        input:
+          value: ${item}
+        nodes:
+          echo:
+            kind: code
+            input:
+              x: ${input.value}
+            output: int
+            code: tests.engine._compose_codefns:echo_x
+        output: ${echo.output}
+      repeated:
+        kind: loop
+        input:
+          n: 0
+          exited: false
+        times: 2
+        nodes:
+          bump:
+            kind: code
+            input:
+              n: ${input.n}
+              exited: ${input.exited}
+            output:
+              n: int
+              exited: bool
+            code: tests.engine._compose_codefns:loop_bump
+        output: ${bump.output}
+    output:
+      mapped: ${mapped.output}
+      repeated: ${repeated.output}
+output: ${outer.output}
+"""
+
 _NESTED_HUMAN_EFFECTS = {
     "call": """
 id: recovery-nested-human-call
@@ -395,13 +440,19 @@ def _pause_after_effect_started(
     return loaded, state, log
 
 
+@pytest.mark.parametrize(
+    "source",
+    [_NESTED_GROWTH, _NESTED_INLINE_GROWTH],
+    ids=["named", "inline"],
+)
 @pytest.mark.parametrize("num_workers", [0, 2], ids=["serial", "pooled"])
 def test_every_nested_growth_prefix_replays_to_the_live_state(
     monkeypatch: pytest.MonkeyPatch,
+    source: str,
     num_workers: int,
 ) -> None:
-    """CALL containing MAP and LOOP replays identically after every commit."""
-    loaded = load_flow(_NESTED_GROWTH)
+    """Named and inline CALL/MAP/LOOP replay identically after every commit."""
+    loaded = load_flow(source)
     state, log = _new_started_run(loaded, num_workers=num_workers)
     snapshots = [_state_snapshot(state)]
     original_commit = engine_module.commit_prepared

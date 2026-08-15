@@ -5,12 +5,12 @@ call resolver, load every `defs:` callable, and hand the parsed sections to the
 post-parse conductor (`build.pipeline._assemble`, imported back here) which returns
 the `ComposedFlow`. This module owns the span readers (`_nodes_reader`/`_def_nodes_reader`/
 `_frame_ranges`/`top_frame_ranges`), the resolver composition (`make_file_resolver`/
-`_make_call_resolver`), and the defs loaders (`_load_def`/`_load_single_node_def`) —
+`_CallableScope`), and the defs loaders (`_load_def`/`_load_single_node_def`) —
 not the assembly pipeline itself.
 
 `call` resolution is **defs-first**: a `call:` names an in-file `defs:` callable (built
-in-loader by the same `_assemble`) or, failing that, an external flow via the
-injected `child_resolver` (`(flow_id, version) -> ComposedFlow`). `_make_call_resolver`
+in-loader by the same `_assemble`) or a `uses:` alias resolved through the injected
+`child_resolver` (`(flow_id, version) -> ComposedFlow`). `_CallableScope`
 composes the two (and rejects recursive/mutual defs). `call` nodes are resolved-and-baked
 at load: the loader derives the callable's signature (a plain call re-exports the single
 codomain `Type`; a mapped call stamps `list[<codomain>]`; bindings are name/arity- and
@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import yaml
 
@@ -36,6 +36,10 @@ from agent_composer.nodes.base import FieldRanges
 from agent_composer.typesys.values import TypeCheckError
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.build.pipeline import _assemble, ComposedFlow
+from agent_composer.compose.desugar.inline_bodies import (
+    INLINE_FLOW_PREFIX,
+    extract_inline_bodies,
+)
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.uses import parse_uses_ref
@@ -75,11 +79,9 @@ def _nodes_reader(text: Optional[str], nodes_section: dict) -> NodeReader:
 def _def_nodes_reader(parent_text: str, name: str) -> NodeReader:
     """A span-aware `NodeReader` over a `defs:<name>:nodes:` mapping in the parent file.
 
-    A def is BUILT from a spanless reader (its nodes have no baked ranges), so the def's
-    render-only `SourceFrame` sources its node/field ranges here — a separate span parse of
-    the parent file, descended to `defs.<name>.nodes`, where the def's nodes physically live
-    at their absolute lines. Spanless (empty ranges -> frame collapses to the call line) when
-    `parent_text` does not compose or lacks that sub-tree (a single-node / compact def).
+    Descends a fresh span parse to the raw author surface, where nested node keys remain
+    singular and ranges retain their absolute parent-file lines. Spanless when `parent_text`
+    does not compose or lacks that subtree (a programmatic or single-node def).
     """
     if parent_text:
         try:
@@ -95,6 +97,45 @@ def _def_nodes_reader(parent_text: str, name: str) -> NodeReader:
                     .child("defs").child(name).child("nodes")
                 )
     return NodeReader.spanless({})
+
+
+def _restore_node_surface(nodes):
+    """Restore normalized node signatures to singular author-surface keys.
+
+    The normalized `ComposeFile` representation uses `inputs`/`outputs`. A spanless def
+    fallback must look like raw YAML before inline-body extraction, so only each direct
+    node body's signature keys are restored. Recursion follows an actual nested `nodes:`
+    graph and deliberately does not descend into arbitrary literal mappings or lists.
+    """
+    if not isinstance(nodes, dict):
+        return nodes
+
+    restored: dict = {}
+    for node_id, raw_body in nodes.items():
+        if not isinstance(raw_body, dict):
+            restored[node_id] = raw_body
+            continue
+        body = dict(raw_body)
+        if "inputs" in body:
+            body["input"] = body.pop("inputs")
+        if "outputs" in body:
+            body["output"] = body.pop("outputs")
+        if isinstance(body.get("nodes"), dict):
+            body["nodes"] = _restore_node_surface(body["nodes"])
+        restored[node_id] = body
+    return restored
+
+
+def _def_assembly_reader(
+    parent_text: str,
+    name: str,
+    normalized_nodes,
+) -> NodeReader:
+    """Return a fresh raw def reader, or a surface-restored spanless fallback."""
+    located = _def_nodes_reader(parent_text, name)
+    if located.yaml_node is not None:
+        return located
+    return NodeReader.spanless(_restore_node_surface(normalized_nodes))
 
 
 def _frame_ranges(
@@ -142,7 +183,14 @@ def top_frame_ranges(
         cf = parse_file(text)
     except LoadError:
         return {}, {}
-    return _frame_ranges(_nodes_reader(text, cf.nodes))
+    try:
+        lowered, _inline_bodies = extract_inline_bodies(
+            _nodes_reader(text, cf.nodes),
+            owner=("root",),
+        )
+    except LoadError:
+        return {}, {}
+    return _frame_ranges(lowered)
 
 
 # A multi-node `defs:` callable is a sub-flow inline: the same sections as a top-level
@@ -163,6 +211,47 @@ def _validate_system(system: dict) -> None:
     paths = system.get("paths", [])
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         raise LoadError("system: paths must be a list of strings")
+
+
+def _reject_authored_private_callable_names(text: str, defs: dict, uses: dict) -> None:
+    """Reject file-scoped callable declarations in the inline-flow namespace.
+
+    The inexpensive declaration scan runs before any other loader work. Source
+    spans are parsed only after a reserved name is found, so valid files do not
+    pay for another document parse at this boundary.
+    """
+    for section, declarations in (("defs", defs), ("uses", uses)):
+        offender = next(
+            (
+                name
+                for name in declarations
+                if isinstance(name, str) and name.startswith(INLINE_FLOW_PREFIX)
+            ),
+            None,
+        )
+        if offender is None:
+            continue
+
+        declaration_range = None
+        try:
+            value, spans, root = load_with_spans(text, return_root=True)
+        except yaml.YAMLError:
+            pass
+        else:
+            raw_declarations = value.get(section) if isinstance(value, dict) else None
+            if isinstance(raw_declarations, dict):
+                declaration_range = (
+                    NodeReader(value, spans, root)
+                    .child(section)
+                    .key_range_of(offender)
+                )
+
+        noun = "callable names" if section == "defs" else "aliases"
+        raise LoadError(
+            f"{section}: {noun} with prefix {INLINE_FLOW_PREFIX!r} are reserved "
+            "for compiler-generated inline child flows",
+            range=declaration_range,
+        )
 
 
 @dataclass
@@ -314,6 +403,7 @@ def load_flow(
 
 def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedFlow:
     f = parse_file(text)
+    _reject_authored_private_callable_names(text, f.defs, f.uses)
     _validate_system(f.system)
 
     try:
@@ -344,20 +434,20 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
         external = None                                      # no resolver -> non-def call: is loud
 
     # The composite call resolver: defs-first, then a `uses:` alias (external, with the
-    # ref's version), then a legacy bare name. Building the defs eagerly surfaces a
+    # ref's version); an undeclared bare name is loud. Building the defs eagerly surfaces a
     # broken/recursive callable at load (loud, not a hang). `text` is threaded so each
     # def's `SourceFrame` indexes its inner nodes at their absolute lines in THIS file.
-    resolver = _make_call_resolver(f.defs, registry, external, f.uses, text)
+    callable_scope = _CallableScope(f.defs, registry, external, f.uses, text)
+    callable_scope.eager_load_defs()
 
     # Render-only source frame for THIS flow: copied onto child call/map nodes for the
     # nested-error traceback. For an external file (loaded via make_file_resolver) the
     # label is relabeled to the filename in `resolve`.
-    top_node_ranges, top_field_ranges = _frame_ranges(_nodes_reader(text, f.nodes))
     source = SourceFrame(
         label=f.name or "<flow>",
         text=text,
-        node_ranges=top_node_ranges,
-        field_ranges=top_field_ranges,
+        node_ranges={},
+        field_ranges={},
     )
 
     return _assemble(
@@ -366,8 +456,9 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
         outputs_section=f.outputs,
         asserts_section=f.asserts,
         registry=registry,
-        resolver=resolver,
-        n_lines={nid: rng.start_line for nid, rng in top_node_ranges.items()},
+        scope=callable_scope,
+        owner=("root",),
+        n_lines={},
         s_lines=_section_lines(text),
         uses_aliases=set(f.uses),
         version=f.version,
@@ -381,97 +472,208 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
     )
 
 
-def _make_call_resolver(
-    defs_section: dict, registry, external: Optional[ChildResolver], uses: dict,
-    parent_text: str = "",
-) -> ChildResolver:
-    """A `(flow_id, version) -> ComposedFlow` resolver: **defs-first** (in-file `defs:`)
-    → **`uses:` alias** (external, with the ref's `@<version>`). A bare `call:` that is
-    NEITHER a `defs:` callable NOR a `uses:` alias is a `LoadError` — external flows are
-    reachable ONLY through a `uses:` alias (no bare-name backdoor to `external`).
-    Each callable builds once (memoized); an in-progress set detects recursive/mutual
-    `defs:` references (-> `LoadError`, never a load hang). Every def is built eagerly so a
-    broken/unused one is still loud at load (eager `uses:` resolution is in `_assemble`,
-    after the node-id collision guard).
+@dataclass(frozen=True)
+class _PrivateCallable:
+    """One compiler-owned callable declaration awaiting lazy construction.
 
-    `parent_text` is the source of the file declaring these `defs:` — threaded into each
-    `_load_def` so a def's `SourceFrame` indexes its inner nodes at their absolute lines
-    in that file (the nested-error traceback).
+    ``owner`` is the complete lexical path that determines generated identity,
+    ``label`` is its author-facing diagnostic name, and ``builder`` constructs the
+    child flow without arguments when resolution first reaches it.
+    """
 
-    `uses:` translates an alias to its `UsesRef`: a `hub:` scheme is the (deferred)
-    marketplace, any other scheme is unknown, and a local ref is handed to `external` as
-    `(path, version)`. A name in both `defs:` and `uses:` is loud (one callable namespace)."""
-    both = sorted(set(defs_section) & set(uses))
-    if both:
-        raise LoadError(
-            f"name(s) {both} declared in both defs: and uses: (a callable has one namespace)"
-        )
+    owner: tuple[str, ...]
+    label: str
+    builder: Callable[[], ComposedFlow]
 
-    built: dict[str, ComposedFlow] = {}
-    in_progress: set[str] = set()
 
-    def resolve(flow_id: str, version: Optional[str] = None) -> ComposedFlow:
-        if flow_id in built:
-            return built[flow_id]
-        if flow_id in defs_section:
-            if flow_id in in_progress:
+class _CallableScope:
+    """The file-local namespace and cache for callable resolution.
+
+    Compiler-owned callables resolve first, then authored ``defs:`` and ``uses:``.
+    A bare name in neither authored mapping is rejected instead of reaching the
+    external resolver. Private declarations, local defs, and external aliases share
+    one memo table, while an in-progress set makes recursive construction loud.
+
+    Args:
+        defs_section (`dict`):
+            In-file callable name -> raw `defs:` body, retained in insertion order.
+        registry:
+            The file's parsed typedef registry, shared by every local def.
+        external (`ChildResolver`, *optional*):
+            Resolver for local refs declared through `uses:`; `None` disables them.
+        uses (`dict`):
+            Callable alias -> authored external reference.
+        parent_text (`str`, *optional*, defaults to `""`):
+            Source declaring the defs, used to retain absolute source locations.
+    """
+
+    def __init__(
+        self,
+        defs_section: dict,
+        registry,
+        external: Optional[ChildResolver],
+        uses: dict,
+        parent_text: str = "",
+    ) -> None:
+        both = sorted(set(defs_section) & set(uses))
+        if both:
+            raise LoadError(
+                f"name(s) {both} declared in both defs: and uses: "
+                f"(a callable has one namespace)"
+            )
+
+        self._defs_section = defs_section
+        self._registry = registry
+        self._external = external
+        self._uses = uses
+        self._parent_text = parent_text
+        self._private: dict[str, _PrivateCallable] = {}
+        self._built: dict[str, ComposedFlow] = {}
+        self._in_progress: set[str] = set()
+
+    def register_private(
+        self,
+        flow_id: str,
+        owner: tuple[str, ...],
+        label: str,
+        builder: Callable[[], ComposedFlow],
+    ) -> None:
+        """Register one lazy compiler-owned callable in this file scope.
+
+        Re-registering the same generated identity for the same complete lexical
+        owner is idempotent: the first label and builder remain authoritative.
+        Generated-identity diagnostics deliberately report only the friendly label,
+        owner, and reserved prefix; the opaque generated identifier is never exposed.
+        """
+        if not flow_id.startswith(INLINE_FLOW_PREFIX):
+            raise LoadError(
+                f"compiler-generated callable {label!r} owned by {owner!r} must use "
+                f"the reserved prefix {INLINE_FLOW_PREFIX!r}"
+            )
+
+        existing = self._private.get(flow_id)
+        if existing is not None:
+            if existing.owner == owner:
+                return
+            raise LoadError(
+                "compiler-generated callable collision in reserved prefix "
+                f"{INLINE_FLOW_PREFIX!r}: {existing.label!r} owned by "
+                f"{existing.owner!r} conflicts with {label!r} owned by {owner!r}"
+            )
+
+        authored_section = None
+        if flow_id in self._defs_section:
+            authored_section = "defs"
+        elif flow_id in self._uses:
+            authored_section = "uses"
+        if authored_section is not None:
+            raise LoadError(
+                "compiler-generated callable collision in reserved prefix "
+                f"{INLINE_FLOW_PREFIX!r}: {label!r} owned by {owner!r} conflicts "
+                f"with an authored {authored_section}: name"
+            )
+
+        self._private[flow_id] = _PrivateCallable(owner, label, builder)
+
+    def resolve(
+        self, flow_id: str, version: Optional[str] = None
+    ) -> ComposedFlow:
+        """Resolve one callable once; a `uses:` declaration owns its external version."""
+        if flow_id in self._built:
+            return self._built[flow_id]
+        if flow_id in self._private:
+            private = self._private[flow_id]
+            if flow_id in self._in_progress:
+                raise LoadError(
+                    "recursive compiler-generated callable in reserved prefix "
+                    f"{INLINE_FLOW_PREFIX!r}: {private.label!r} owned by "
+                    f"{private.owner!r} is defined in terms of itself "
+                    "(the baked call graph must be finite)"
+                )
+            self._in_progress.add(flow_id)
+            try:
+                loaded = private.builder()
+            finally:
+                self._in_progress.discard(flow_id)
+            self._built[flow_id] = loaded
+            return loaded
+        if flow_id in self._defs_section:
+            if flow_id in self._in_progress:
                 raise LoadError(
                     f"recursive defs reference: callable {flow_id!r} is defined in terms "
                     f"of itself (the baked call graph must be finite)"
                 )
-            in_progress.add(flow_id)
+            self._in_progress.add(flow_id)
             try:
-                loaded = _load_def(flow_id, defs_section[flow_id], registry, resolve, parent_text)
+                loaded = _load_def(
+                    flow_id,
+                    self._defs_section[flow_id],
+                    self._registry,
+                    self,
+                    self._parent_text,
+                )
             finally:
-                in_progress.discard(flow_id)
-            built[flow_id] = loaded
+                self._in_progress.discard(flow_id)
+            self._built[flow_id] = loaded
             return loaded
-        if flow_id in uses:
-            ref = parse_uses_ref(uses[flow_id])
+        if flow_id in self._uses:
+            ref = parse_uses_ref(self._uses[flow_id])
             if ref.scheme == "hub":
                 raise LoadError(
-                    f"callable {flow_id!r} (uses: {uses[flow_id]!r}): marketplace not "
-                    f"supported yet (hub: scheme)"
+                    f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): marketplace "
+                    f"not supported yet (hub: scheme)"
                 )
             if ref.scheme is not None:
                 raise LoadError(
-                    f"callable {flow_id!r} (uses: {uses[flow_id]!r}): unknown scheme "
-                    f"{ref.scheme!r}: (recognized: a local ref, or hub:)"
+                    f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): unknown "
+                    f"scheme {ref.scheme!r}: (recognized: a local ref, or hub:)"
                 )
-            if external is None:
+            if self._external is None:
                 raise LoadError(
-                    f"callable {flow_id!r} (uses: {uses[flow_id]!r}) needs a search path "
-                    f"or child_resolver to resolve (load with search_paths=[...])"
+                    f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}) needs a search "
+                    f"path or child_resolver to resolve (load with search_paths=[...])"
                 )
-            built[flow_id] = external(ref.path, ref.version)
-            return built[flow_id]
+            self._built[flow_id] = self._external(ref.path, ref.version)
+            return self._built[flow_id]
+        if flow_id.startswith(INLINE_FLOW_PREFIX):
+            raise LoadError(
+                "compiler-generated callable with reserved prefix "
+                f"{INLINE_FLOW_PREFIX!r} was not registered in this file scope"
+            )
         raise LoadError(
             f"callable {flow_id!r} is neither an in-file defs: callable nor a uses: "
             f"alias — external flows are reachable only through a uses: alias "
             f"(declare `uses: {{{flow_id}: <ref>}}`)"
         )
 
-    for name in defs_section:
-        resolve(name)  # eager: a broken/recursive def is loud at load, not at first call
-    return resolve
+    def eager_load_defs(self) -> None:
+        """Build every local def in authored mapping order before the parent flow."""
+        for name in self._defs_section:
+            self.resolve(name)
 
 
-def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: str = "") -> ComposedFlow:
+def _load_def(
+    name: str,
+    body,
+    registry,
+    scope: _CallableScope,
+    parent_text: str = "",
+) -> ComposedFlow:
     """Build one in-file `defs:` entry into a `ComposedFlow` (a callable / sub-flow inline).
 
     Supports the **multi-node** form only — `{inputs?, nodes, outputs?, asserts?}`,
-    sharing the file's `typedefs:` registry + the composite resolver (so a def can call
-    other defs / external flows). A **single-node** form (a top-level `kind:`) is deferred
-    -> `LoadError`. `parent_text` is the source of the declaring file: the def's nodes
-    live at absolute lines there, so its `SourceFrame` indexes them via
-    `_frame_ranges(_def_nodes_reader(parent_text, name))` for the nested-error traceback."""
+    sharing the file's `typedefs:` registry + callable scope (so a def can call other defs,
+    external flows, or compiler-owned children). A **single-node** form (a top-level
+    `kind:`) is deferred -> `LoadError`. `parent_text` is the source of the declaring
+    file: the assembly reader retains absolute lines there, and `_assemble` derives the
+    def's `SourceFrame` from its lowered descriptors."""
     if not isinstance(body, dict):
         raise LoadError(
             f"defs entry {name!r}: body must be a mapping, got {type(body).__name__}"
         )
     if "nodes" not in body:
         if "kind" in body:
-            return _load_single_node_def(name, body, registry, resolver, parent_text)
+            return _load_single_node_def(name, body, registry, scope, parent_text)
         raise LoadError(
             f"defs entry {name!r}: a callable needs a `nodes:` sub-flow body "
             f"(inputs?/nodes/outputs?) OR a single-node `kind:` form"
@@ -482,22 +684,22 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
             f"defs entry {name!r}: unknown field(s) {extra} "
             f"(allowed: {', '.join(sorted(_DEF_ALLOWED))})"
         )
-    # The def's frame indexes its inner nodes at their absolute lines in the parent file.
-    def_node_ranges, def_field_ranges = _frame_ranges(_def_nodes_reader(parent_text, name))
+    nodes_reader = _def_assembly_reader(parent_text, name, body["nodes"])
     source = SourceFrame(
         label="defs:" + name,
         text=parent_text,
-        node_ranges=def_node_ranges,
-        field_ranges=def_field_ranges,
+        node_ranges={},
+        field_ranges={},
     )
     try:
         return _assemble(
             inputs_section=body.get("inputs") or {},
-            nodes_reader=NodeReader.spanless(body["nodes"]),
+            nodes_reader=nodes_reader,
             outputs_section=body.get("outputs"),
             asserts_section=body.get("asserts") or [],  # enforced at the child seam
             registry=registry,
-            resolver=resolver,
+            scope=scope,
+            owner=("def", name),
             n_lines={},
             s_lines={},
             flow_llm_config=body.get("llm_config") or {},
@@ -505,15 +707,27 @@ def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: s
             source=source,
         )
     except LoadError as exc:
-        # Name the def in any internal error. The line stays None (a nested def has
-        # no isolated source text — the deferred line-mapping limitation). Don't re-prefix
-        # an already-named nested-def error (keep the innermost, most specific def name).
+        # Name the def without discarding the absolute parent-file diagnostic metadata.
+        # Don't re-prefix an already-named nested-def error; keep the innermost name.
         if str(exc).startswith("defs entry "):
             raise
-        raise LoadError(f"defs entry {name!r}: {exc}", line=exc.line) from exc
+        raise LoadError(
+            f"defs entry {name!r}: {exc}",
+            line=exc.line,
+            lines=exc.lines,
+            notes=exc.notes,
+            range=exc.range,
+        ) from exc
 
 
-def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolver, parent_text: str = "") -> ComposedFlow:
+
+def _load_single_node_def(
+    name: str,
+    body: dict,
+    registry,
+    scope: _CallableScope,
+    parent_text: str = "",
+) -> ComposedFlow:
     """Build a SINGLE-node `defs:` callable — `let f params = <one node over params>`.
 
     The flat body is `{kind, <logic fields>, input?, output?}` (singular keys; the
@@ -542,7 +756,8 @@ def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolv
             outputs_section={"result": f"${{{name}.output}}"},  # single value re-export (node-first)
             asserts_section=[],
             registry=registry,
-            resolver=resolver,
+            scope=scope,
+            owner=("def", name),
             n_lines={},
             s_lines={},
             source=source,
@@ -550,5 +765,10 @@ def _load_single_node_def(name: str, body: dict, registry, resolver: ChildResolv
     except LoadError as exc:
         if str(exc).startswith("defs entry "):
             raise
-        raise LoadError(f"defs entry {name!r}: {exc}", line=exc.line) from exc
-
+        raise LoadError(
+            f"defs entry {name!r}: {exc}",
+            line=exc.line,
+            lines=exc.lines,
+            notes=exc.notes,
+            range=exc.range,
+        ) from exc

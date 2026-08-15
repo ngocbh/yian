@@ -1,0 +1,67 @@
+# Inline composite bodies — one-off CALL, MAP, and LOOP children without `defs:`.
+# Each `input:` entry becomes a typed parameter of the adjacent child `nodes:` body;
+# that body is closed, so it reads the parameter as `${input.<name>}`.
+# Provider-free: every leaf is inline CODE.
+#
+# Run:
+#   ac run inline-composites.yaml --inputs inputs.json
+# where inputs.json contains: {"seed": 2, "items": [1, 2, 3]}
+
+id: inline-composites
+name: inline_composites
+description: Define one-off CALL, MAP, and LOOP child bodies in place.
+
+input:
+  seed: int
+  items: list[int]
+
+nodes:
+  call_once:
+    kind: call
+    input:
+      value: ${input.seed}
+    nodes:
+      increment:
+        kind: code
+        input:
+          value: ${input.value}
+        output: int
+        code: |
+          return inputs["value"] + 1
+    output: ${increment.output}
+
+  map_each:
+    kind: map
+    over: ${input.items}
+    input:
+      value: ${item}
+    nodes:
+      double:
+        kind: code
+        input:
+          value: ${input.value}
+        output: int
+        code: |
+          return inputs["value"] * 2
+    output: ${double.output}
+
+  loop_three:
+    kind: loop
+    times: 3
+    input:
+      n: ${input.seed}
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+        code: |
+          return {"n": inputs["n"] + 1}
+    output: ${bump.output}
+
+output:
+  call: ${call_once.output}
+  map: ${map_each.output}
+  loop: ${loop_three.output}

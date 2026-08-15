@@ -1,7 +1,8 @@
 """kind=map — mapped function application (`List.map`); a `CallDescriptor` subclass.
 
 The second of the two REF/MAP kinds. A `map` is `kind: map` + `over: ${list}` — iteration with
-`${item}` in element scope, built as a `MapNode` (`parallel:` overlaps the element runs).
+`${item}` in element scope, built as a `MapNode`. `parallel:` is retained but currently inert;
+run-level workers control concurrency.
 `MapDescriptor` subclasses `CallDescriptor` (in `call.py`), adding only the map FIELD
 SURFACE (`over`/`parallel` join call's `call`/`inputs`) via `allowed`/`required`; it inherits the
 template `parse`, the resolve-and-bake `build` (which builds a `MapNode` because the descriptor is
@@ -21,11 +22,11 @@ class MapDescriptor(CallDescriptor):
     """kind=map — `List.map`: apply a callable over each element of an `over: ${list}` source.
 
     A `CallDescriptor` with a wider authoring surface: `over` (the iteration source) is required
-    alongside `call`, and `parallel` opts into overlapping element runs. It declares NO new fields
-    (`over`/`parallel` already live on `CallDescriptor`); it only widens `allowed`/`required` and
-    sets `kind="map"`, which is what makes `CallDescriptor.build` construct a `MapNode` (it
-    branches on `isinstance(self, MapDescriptor)`). Inherits the template `parse` and
-    `binding_fields=("inputs","over")` from `CallDescriptor`.
+    alongside `call`; `parallel` is accepted as inert authoring metadata. It declares NO new
+    fields (`over`/`parallel` already live on `CallDescriptor`); it only widens
+    `allowed`/`required` and sets `kind="map"`, which is what makes `CallDescriptor.build`
+    construct a `MapNode` (it branches on `isinstance(self, MapDescriptor)`). Inherits the
+    template `parse` and `binding_fields=("inputs","over")` from `CallDescriptor`.
     """
 
     kind = "map"

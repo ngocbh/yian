@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict
 
 import agent_composer.compile.manifest as manifest_module
 from agent_composer.compile.manifest import expansion_digest, flow_fingerprint, flow_manifest
-from agent_composer.compile.model import CompiledFlow, Edge, Flow, FlowOutput
+from agent_composer.compile.model import START_ID, CompiledFlow, Edge, Flow, FlowOutput
 from agent_composer.compose import load_flow
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.agent.structured import type_to_schema
@@ -81,6 +81,29 @@ output: ${step.output}
 """
 
 
+_INLINE_COMPOSITE_IDENTITY = """
+id: inline-identity
+name: inline_identity
+input:
+  value: int
+nodes:
+  wrapper:
+    kind: call
+    input:
+      value: ${input.value}
+    nodes:
+      step:
+        kind: code
+        input:
+          value: ${input.value}
+        output: int
+        code: |
+          return inputs["value"] + 1
+    output: ${step.output}
+output: ${wrapper.output}
+"""
+
+
 def _compiled(source: str = _INLINE_FLOW):
     """Load one source string and return its representation-neutral compiled flow."""
     return load_flow(source).compiled
@@ -118,6 +141,75 @@ def test_flow_fingerprint_ignores_comments_ranges_and_python_object_identity():
     assert plain.nodes["step"]._code is not moved.nodes["step"]._code
     assert flow_manifest(plain) == flow_manifest(moved)
     assert flow_fingerprint(plain) == flow_fingerprint(moved)
+
+
+def test_inline_identity_ignores_formatting_but_tracks_owner_and_child_semantics():
+    baseline = load_flow(_INLINE_COMPOSITE_IDENTITY).compiled
+    formatted = load_flow(
+        "# moves every authored range without changing the program\n\n"
+        + _INLINE_COMPOSITE_IDENTITY
+    ).compiled
+    changed_child = load_flow(
+        _INLINE_COMPOSITE_IDENTITY.replace(
+            'return inputs["value"] + 1',
+            'return inputs["value"] + 2',
+        )
+    ).compiled
+    renamed_owner = load_flow(
+        _INLINE_COMPOSITE_IDENTITY.replace("wrapper:", "renamed:").replace(
+            "${wrapper.output}",
+            "${renamed.output}",
+        )
+    ).compiled
+
+    baseline_id = baseline.nodes["wrapper"].flow_id
+    assert formatted.nodes["wrapper"].flow_id == baseline_id
+    assert changed_child.nodes["wrapper"].flow_id == baseline_id
+    assert renamed_owner.nodes["renamed"].flow_id != baseline_id
+
+    assert flow_manifest(formatted) == flow_manifest(baseline)
+    assert flow_fingerprint(formatted) == flow_fingerprint(baseline)
+    assert flow_fingerprint(changed_child) != flow_fingerprint(baseline)
+    assert flow_fingerprint(renamed_owner) != flow_fingerprint(baseline)
+
+
+def test_inline_manifest_canonicalizes_generated_structural_input_types():
+    compiled = load_flow(
+        """id: inline-manifest-structural-input
+name: inline_manifest_structural_input
+typedefs:
+  Row:
+    z: int
+    a: Optional[str]
+input:
+  row: Row
+nodes:
+  wrapper:
+    kind: call
+    input:
+      row: ${input.row}
+    nodes:
+      echo:
+        kind: code
+        code: |
+          return inputs["row"]
+        input:
+          row: ${input.row}
+        output: Row
+    output: ${echo.output}
+output: ${wrapper.output}
+"""
+    ).compiled
+
+    wrapper_manifest = flow_manifest(compiled)["nodes"]["wrapper"]
+    child_start = wrapper_manifest["child"]["nodes"][START_ID]
+    generated = child_start["input_decls"][0]
+
+    assert generated["type_str"] == {
+        "type": "str",
+        "value": '{"a":Optional[str],"z":int}',
+    }
+    assert [field["name"] for field in generated["type"]["fields"]] == ["a", "z"]
 
 
 def test_flow_fingerprint_changes_with_node_kind_and_execution_source():

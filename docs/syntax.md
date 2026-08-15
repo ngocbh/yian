@@ -466,17 +466,108 @@ worker cooperatively.
 ### `call` / `map` — composition over child flows
 
 `call` runs a child flow once; `map` runs it over a list (`${item}` is the
-current element). The child is itself a flow file.
+current element). A reusable child is named by `call:`: resolution is
+`defs:` first, then a declared `uses:` alias.
 
 ```yaml
 each:
   kind: map
   over: ${input.tickers}       # a list[T]
   call: child_flow             # node value is list[U]
-  parallel: true
   input:
     ticker: ${item}
 ```
+
+The `input:` map contains the child's arguments. A `call` re-exports the child's
+result (`None` when the child declares no output value); a `map` requires one
+child output value and returns `list[U]` in `over:` order.
+`parallel:` is accepted but currently inert; MAP concurrency is controlled by
+the run's `num_workers`, while collection order remains the `over:` order.
+
+#### Inline child bodies — skip a one-off `defs:` entry
+
+When a CALL, MAP, or LOOP body is used only once, put the child graph directly
+on the composite node. This is load-time sugar for a private child flow; the
+result uses the same compiled-child execution path as a named `defs:` body, while
+keeping occurrence-local identity and diagnostics.
+
+```yaml
+nodes:
+  clean_one:
+    kind: call
+    input:                         # arguments become the child parameters
+      text: ${input.text}
+    nodes:                         # the private child body
+      clean:
+        kind: code
+        input:
+          text: ${input.text}      # reads the generated child parameter
+        output: str
+        code: |
+          return inputs["text"].strip()
+    output: ${clean.output}        # child return binding
+
+  clean_each:
+    kind: map
+    over: ${input.texts}
+    input:
+      text: ${item}                # current item becomes a child parameter
+    nodes:
+      clean:
+        kind: code
+        input:
+          text: ${input.text}
+        output: str
+        code: |
+          return inputs["text"].strip()
+    output: ${clean.output}
+```
+
+Inline-body rules:
+
+- Write **exactly one** of `call:` or `nodes:`. Inline `nodes:` must be a
+  non-empty mapping and requires `output:`; `output:` is not valid beside a
+  named `call:`. The key itself is required: CALL may use `output: null` and
+  return `None`, while MAP requires one output value and LOOP requires its
+  carried-record shape.
+- The outer composite `input:` is still the argument map. Its keys become the
+  anonymous child's typed input parameters, and the body reads them as
+  `${input.<key>}`.
+- The child is closed to its parent's pool: it cannot capture parent inputs,
+  parent nodes, or MAP's `${item}`. Pass those values through the outer `input:`
+  map, then read the generated inputs and child nodes inside. The run-global
+  `${system.today}`, `${system.now}`, and `${system.run_id}` values remain
+  available as in every flow.
+- Parameter types are inferred strictly. YAML null/bool/int/float/string values,
+  closed literal records, non-empty homogeneous literal lists, and direct typed
+  references (`${input.x}`, `${producer.output.field}`, or MAP `${item.field}`)
+  retain their structural type. A nullable record path produces an optional
+  parameter. If a type cannot be proved, loading fails; use a named `defs:` child
+  with an explicit `input:` signature.
+- MAP proves the `over:` element type only when an outer argument is a lone
+  whole-value `${item...}` reference. An opaque `over:` therefore remains legal
+  when the inline body does not need the item. When item typing is requested,
+  `over:` must have an exact proven list element type. Current limitation:
+  inference can mark an element of `list[Optional[record]]` optional, but typed
+  storage still rejects an actual null element ([#128](https://github.com/ngocbh/agent-composer/issues/128));
+  nullable intermediate record fields work normally.
+- Strings nested inside literal lists or mappings stay literal. For example,
+  `payload: {text: "${input.text}"}` passes the characters `${input.text}`; nested
+  containers are not scanned for references.
+- Existing composite configuration keeps its existing owner and meaning:
+  LOOP drivers still configure the outer composite, `env:` stays on that node
+  (inner body nodes may set their own `env:` normally), CALL/LOOP node asserts
+  keep their normal semantics, and MAP node-local asserts remain invalid.
+  `parallel:` remains an accepted outer MAP field but is currently inert.
+  `llm_config:` remains invalid on a composite node; the enclosing flow's LLM
+  cascade still descends into body agents exactly as it does for an unconfigured
+  named child. There is no separate inline-child
+  `llm_config:`/`env:`/`asserts:` surface; configure individual body agents or use
+  `defs:` when the child needs its own supported flow-level configuration or
+  assertions.
+
+Inline bodies may contain further CALL/MAP/LOOP nodes, including further inline
+bodies. Each occurrence remains a separate lexical child.
 
 #### Inline `call(...)` — a flow call as a binding's whole value
 
@@ -512,6 +603,11 @@ Rules:
   (Pure builtins like `${upper(x)}` stay legal inside `${}` — only *flow* callees
   moved out.)
 
+This directive and an inline child body solve different verbosity problems.
+`call(named, x=...)` is a whole-value binding that invokes an already named
+`defs:`/`uses:` callable and synthesizes the surrounding CALL node. A
+`kind: call` node with `nodes:` defines that one-off callable body in place. It
+is invalid to combine `call:` and `nodes:` on the same node.
 
 ### `loop` — re-run a body under a predicate or a fixed count
 
@@ -532,8 +628,32 @@ turn:
   max: 100                     # required runaway guard
 ```
 
+A one-off LOOP body can be inline too:
+
+```yaml
+repeat:
+  kind: loop
+  times: 3
+  input:
+    n: 0
+  nodes:
+    bump:
+      kind: code
+      input:
+        n: ${input.n}
+      output:
+        n: int
+      code: |
+        return {"n": inputs["n"] + 1}
+  output: ${bump.output}
+```
+
+Here the generated child signature is `n: int`, and its record output preserves
+the LOOP contract `'a -> 'a`.
+
 - **`input:`** is the seed carried record — its field names and types define `'a`.
-- **`call:`** names the body. The body's `output:` must be the **same shape** as
+- **`call:` / `nodes:`** names a reusable body or defines a one-off body inline.
+  The body's `output:` must be the **same shape** as
   the carried record (`'a -> 'a`), and the fields the body reads (`${input.X}`)
   must be a subset of the carried names. This contract is checked twice: field
   **names** at build, field **types** at load. Each output field's type is inferred

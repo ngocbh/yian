@@ -33,6 +33,7 @@ from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.helpers.types import read_flow_inputs
 from agent_composer.compose.validate.references import validate_references
+from agent_composer.events import SourceRange
 from tests.engine._fakes import derive_wiring, stamp_reads
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -95,6 +96,49 @@ def test_e01_dangling_flow_output_is_loud():
     msg = str(exc.value)
     assert "scor" in msg  # the typo'd target is named
     assert "flow output" in msg
+
+
+def test_dangling_flow_output_uses_supplied_range():
+    nodes, flow_inputs, producers, outputs, flow_wiring = _load(
+        "errors/e01-undeclared-ref.yaml"
+    )
+    expected = SourceRange(31, 4, 31, 24)
+
+    with pytest.raises(LoadError) as exc:
+        validate_references(
+            nodes,
+            flow_inputs,
+            producers,
+            outputs,
+            flow_wiring,
+            outputs_range=expected,
+        )
+
+    assert exc.value.range == expected
+
+
+def test_aggregate_location_keeps_line_and_range_on_the_same_error():
+    node = AgentNode("broken", prompt="fixed")
+    node.output_type = Type.scalar(ValueKind.STRING)
+    stamp_reads(node, {"value": "${missing_node.output}"})
+    nodes = {"broken": node}
+    flow_wiring = derive_wiring(nodes)
+    later_output_range = SourceRange(20, 9, 20, 33)
+
+    with pytest.raises(LoadError) as exc:
+        validate_references(
+            nodes,
+            set(),
+            {},
+            "${missing_output.output}",
+            flow_wiring,
+            node_lines={"broken": 5},
+            outputs_line=20,
+            outputs_range=later_output_range,
+        )
+
+    assert exc.value.line == 5
+    assert exc.value.range is None
 
 
 # --------------------------------------------------------------------------- #

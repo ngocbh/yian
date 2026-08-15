@@ -26,7 +26,8 @@ Copy, rename, and edit.
 | [`child-summarize.yaml`](templates/child-summarize.yaml) | a reusable CHILD flow |
 | [`call-child.yaml`](templates/call-child.yaml) | `call` a sibling flow once (via `uses:`) |
 | [`expr-and-call.yaml`](templates/expr-and-call.yaml) | `${a + b}` arithmetic in a binding + inline `call(...)` over an in-file `defs:` callee |
-| [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list, in parallel |
+| [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list and collect in source order |
+| [`inline-composites.yaml`](templates/inline-composites.yaml) | provider-free inline CALL, MAP, and LOOP child bodies (no `defs:`) |
 | [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — chat-shaped blocking turn |
 | [`chat.yaml`](templates/chat.yaml) | a conversational REPL — `human_input` → exit CASE → agent/code, with flow-owned exit, the shape `ac chat` runs |
 | [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml) | flow-level `llm_config:`, per-node override, `inherit: false` |
@@ -78,6 +79,75 @@ nesting allowed (`call(a, x=call(b, y=1))`). Recognized **only** as the entire
 trimmed value. The old `${flow(args)}` (a flow call inside braces) is a load
 error: hoist an embedded flow call to a named node; split a coalesce-of-calls into
 per-node outputs. Pure builtins (`${upper(x)}`) stay legal inside `${}`.
+
+This is distinct from an **inline child body**. `call(f, ...)` invokes an existing
+named callable and synthesizes the CALL node around that invocation. An explicit
+`kind: call`/`map`/`loop` node with `nodes:` defines a one-off callable body on
+the node itself.
+
+## Inline CALL / MAP / LOOP child bodies
+
+A composite node may replace its named `call:` target with a private body:
+
+```yaml
+each:
+  kind: map
+  over: ${input.rows}
+  input:
+    row: ${item}
+    name: ${item.name}
+  nodes:
+    collect:
+      kind: code
+      input:
+        row: ${input.row}
+        name: ${input.name}
+      output:
+        row: Row
+        name: str
+      code: |
+        return inputs
+  output: ${collect.output}
+```
+
+Contract:
+
+- Exactly one of named `call:` or inline `nodes:` is required. Inline `nodes:`
+  is non-empty and requires the `output:` key; a named call must not also declare
+  that child output. CALL may set it to null and return `None`; MAP/LOOP require
+  their usual output shape.
+- Outer `input:` keys generate the private child's parameters. The child cannot
+  capture parent inputs/nodes or `${item}`; pass them explicitly through outer
+  `input:`. Its own inputs/nodes and the run-global `${system.today}`,
+  `${system.now}`, and `${system.run_id}` remain available.
+- Generated parameter types are strict structural proofs. YAML
+  null/bool/int/float/string values, closed records, non-empty homogeneous lists
+  (with int/float widening), and
+  lone direct references retain exact structure. Record field walks require
+  proven fields and carry any root/intermediate nullability into the result.
+  Actual null elements in `list[Optional[record]]` are currently rejected by
+  typed storage (issue #128); nullable intermediate fields work.
+  Unsupported whole-value computations, empty/heterogeneous lists, producers
+  without an available static output type, or incomplete list element types fail
+  at the authored binding; use a typed named `defs:` body as the escape hatch.
+- MAP's `${item...}` provider is demand-driven. If no outer argument is a lone
+  whole-value item reference, `over:` need not be statically inspectable. The
+  first such item read proves `over:` is a list with an exact element type;
+  later reads reuse that proof.
+- Only a string at the outer binding value is scanned as a template. Strings
+  nested inside a literal mapping/list remain literal, including `${...}` and
+  `$$` text.
+- Nesting is recursive. Every source occurrence has a distinct private child,
+  including YAML alias/merge occurrences.
+- Existing fields do not change ownership: loop drivers configure the outer
+  composite; `env:` remains node-local; CALL/LOOP asserts keep their existing
+  behavior and MAP asserts stay invalid. `parallel:` remains an accepted outer
+  MAP field but is currently inert; run-level workers control concurrency.
+  There is no inline child flow-level `llm_config:`/`env:`/`asserts:` block, and
+  `llm_config:` remains invalid on composite nodes. The enclosing flow's LLM
+  cascade reaches body agents exactly as for an unconfigured named child;
+  configure an individual agent or factor a `defs:` child when it needs its own
+  supported flow-level surface.
 
 ## Type forms
 
@@ -141,7 +211,10 @@ completes through the ordinary node-output path in the active run.
 
 **Reuse a sub-flow.** Factor the repeated work into its own flow file, bind it with
 `uses: <alias>: <filename>`, and `call:` it (once) or `map:` it (per list element).
-Reference its object fields downstream as `${node.output.field}`.
+A CALL record supports `${node.output.field}`; MAP returns a list at
+`${node.output}`, so project fields in a downstream CODE/MAP step. If the body is
+one-off, keep the CALL/MAP/LOOP node and put its closed `nodes:` + `output:` body
+there instead; do not create a throwaway `defs:` entry.
 
 **Loop until done.** Use a `loop` node to re-run a body under one of three drivers,
 threading a carried record `'a -> 'a` (the body's `output:` shape EQUALS its

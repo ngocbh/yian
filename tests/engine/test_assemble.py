@@ -13,13 +13,20 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compile.model import END_ID, START_ID
+from agent_composer.events import SourceRange
 from agent_composer.typesys.types import read_typedefs
+from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.compose import LoadError
-from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.helpers.types import InputDecl
+from agent_composer.compose.nodes.base import BuildContext, BuildResult
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.validate.wiring_parity import check_wiring_parity
-from agent_composer.compose.build.pipeline import _flow_outputs
+from agent_composer.compose.build.pipeline import (
+    _DescriptorBuildCache,
+    _assemble,
+    _flow_outputs,
+)
 from agent_composer.compose.parse.file import (
     AgentDescriptor,
     CaseDescriptor,
@@ -31,6 +38,248 @@ from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
+
+
+class _FakeBuildDescriptor:
+    """A kind-neutral descriptor whose callback controls one build attempt."""
+
+    def __init__(self, node_id, calls, callback=None):
+        self.node_id = node_id
+        self.calls = calls
+        self.callback = callback
+
+    def build(self, ctx):
+        self.calls.append((self.node_id, ctx))
+        if self.callback is not None:
+            self.callback()
+        return BuildResult(node=object(), wiring={"built": self.node_id})
+
+
+class _InertCallableScope:
+    """Callable-scope double for assembly tests with no composite nodes."""
+
+    def resolve(self, flow_id, version=None):
+        raise AssertionError(f"empty flow unexpectedly resolved {flow_id!r}")
+
+    def register_private(self, flow_id, owner, label, builder):
+        raise AssertionError(f"empty flow unexpectedly registered {label!r}")
+
+
+def test_descriptor_build_cache_reuses_forward_builds_in_source_order():
+    calls = []
+    cache = None
+    descriptors = {
+        "a": _FakeBuildDescriptor(
+            "a", calls, lambda: cache.build_one("b", "a.input.x")
+        ),
+        "b": _FakeBuildDescriptor("b", calls),
+    }
+    ctx = BuildContext(registry={})
+    cache = _DescriptorBuildCache(descriptors, ctx, {"a": 11, "b": 12})
+
+    built = cache.build_in_source_order()
+
+    assert list(built) == ["a", "b"]
+    assert [node_id for node_id, _ in calls] == ["a", "b"]
+    assert all(actual_ctx is ctx for _, actual_ctx in calls)
+    assert built["b"] is cache.build_one("b")
+    assert [node_id for node_id, _ in calls] == ["a", "b"]
+
+
+def test_descriptor_build_cache_reports_only_mutual_cycle_with_closing_range():
+    calls = []
+    closing_range = SourceRange(31, 9, 31, 27)
+    cache = None
+    descriptors = {
+        "outside": _FakeBuildDescriptor(
+            "outside", calls, lambda: cache.build_one("a", "outside.input.seed")
+        ),
+        "a": _FakeBuildDescriptor(
+            "a", calls, lambda: cache.build_one("b", "a.input.x")
+        ),
+        "b": _FakeBuildDescriptor(
+            "b",
+            calls,
+            lambda: cache.build_one("a", "b.input.y", closing_range),
+        ),
+    }
+    cache = _DescriptorBuildCache(descriptors, BuildContext(registry={}), {})
+
+    with pytest.raises(LoadError) as caught:
+        cache.build_in_source_order()
+
+    assert str(caught.value).endswith("a.input.x -> b.input.y -> a")
+    assert "outside.input.seed" not in str(caught.value)
+    assert caught.value.range is closing_range
+    assert not isinstance(caught.value, RecursionError)
+
+
+def test_descriptor_build_cycle_falls_back_to_first_cycle_edge_range():
+    calls = []
+    first_edge_range = SourceRange(17, 7, 17, 21)
+    cache = None
+    descriptors = {
+        "a": _FakeBuildDescriptor(
+            "a",
+            calls,
+            lambda: cache.build_one("b", "a.input.x", first_edge_range),
+        ),
+        "b": _FakeBuildDescriptor(
+            "b", calls, lambda: cache.build_one("a", "b.input.y")
+        ),
+    }
+    cache = _DescriptorBuildCache(descriptors, BuildContext(registry={}), {})
+
+    with pytest.raises(LoadError) as caught:
+        cache.build_in_source_order()
+
+    assert str(caught.value).endswith("a.input.x -> b.input.y -> a")
+    assert caught.value.range is first_edge_range
+
+
+def test_descriptor_build_cycle_uses_node_ids_when_an_edge_has_no_label():
+    calls = []
+    cache = None
+    descriptors = {
+        "a": _FakeBuildDescriptor(
+            "a", calls, lambda: cache.build_one("b", "a.input.x")
+        ),
+        "b": _FakeBuildDescriptor(
+            "b", calls, lambda: cache.build_one("a")
+        ),
+    }
+    cache = _DescriptorBuildCache(descriptors, BuildContext(registry={}), {})
+
+    with pytest.raises(LoadError) as caught:
+        cache.build_in_source_order()
+
+    assert str(caught.value).endswith("a -> b -> a")
+
+
+def test_descriptor_build_cache_does_not_cache_failure_and_keeps_inner_line():
+    calls = []
+    cache = None
+
+    def fail():
+        raise LoadError("broken descriptor")
+
+    descriptors = {
+        "outer": _FakeBuildDescriptor(
+            "outer", calls, lambda: cache.build_one("broken")
+        ),
+        "broken": _FakeBuildDescriptor("broken", calls, fail),
+    }
+    cache = _DescriptorBuildCache(
+        descriptors, BuildContext(registry={}), {"outer": 9, "broken": 42}
+    )
+
+    for _ in range(2):
+        with pytest.raises(LoadError, match="broken descriptor") as caught:
+            cache.build_one("outer")
+        assert caught.value.line == 42
+
+    assert [node_id for node_id, _ in calls] == [
+        "outer",
+        "broken",
+        "outer",
+        "broken",
+    ]
+
+
+def _assemble_resolved_input_decls(input_decls):
+    """Assemble an empty flow through the already-resolved input seam."""
+    return _assemble(
+        input_decls=input_decls,
+        nodes_reader=NodeReader.spanless({}),
+        outputs_section=None,
+        asserts_section=[],
+        registry={},
+        scope=_InertCallableScope(),
+        owner=("test",),
+        n_lines={},
+        s_lines={},
+    )
+
+
+def test_resolved_input_decls_preserve_structural_declaration_identity():
+    element_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"label": Type(kind=ValueKind.STRING, nullable=True)},
+        required=frozenset(),
+    )
+    structural_type = Type(
+        kind=ValueKind.LIST_OBJECT,
+        element=element_type,
+    )
+    declaration = InputDecl(
+        name="items",
+        type_str="list[object]",
+        default=None,
+        required=True,
+        type=structural_type,
+    )
+
+    flow = _assemble_resolved_input_decls([declaration])
+    start = flow.compiled.nodes[START_ID]
+
+    assert flow.input[0] is declaration
+    assert flow.input[0].type is structural_type
+    assert start.input_decls[0] is declaration
+    assert start.input_decls[0].type is structural_type
+
+
+def test_resolved_input_decls_reject_both_input_representations():
+    with pytest.raises(ValueError, match="exactly one of inputs_section or input_decls"):
+        _assemble(
+            inputs_section={},
+            input_decls=[],
+            nodes_reader=NodeReader.spanless({}),
+            outputs_section=None,
+            asserts_section=[],
+            registry={},
+            scope=_InertCallableScope(),
+            owner=("test",),
+            n_lines={},
+            s_lines={},
+        )
+
+
+def test_resolved_input_decls_reject_missing_input_representation():
+    with pytest.raises(ValueError, match="exactly one of inputs_section or input_decls"):
+        _assemble(
+            nodes_reader=NodeReader.spanless({}),
+            outputs_section=None,
+            asserts_section=[],
+            registry={},
+            scope=_InertCallableScope(),
+            owner=("test",),
+            n_lines={},
+            s_lines={},
+        )
+
+
+def test_resolved_input_decls_accept_zero_args_and_wire_empty_start():
+    flow = _assemble_resolved_input_decls([])
+    start = flow.compiled.nodes[START_ID]
+
+    assert flow.input == []
+    assert start.input_decls == []
+    assert start.params == []
+    assert flow.compiled.wiring[START_ID] == {}
+
+    raw_flow = _assemble(
+        inputs_section={},
+        nodes_reader=NodeReader.spanless({}),
+        outputs_section=None,
+        asserts_section=[],
+        registry={},
+        scope=_InertCallableScope(),
+        owner=("test",),
+        n_lines={},
+        s_lines={},
+    )
+    assert raw_flow.input == []
+    assert raw_flow.compiled.wiring[START_ID] == {}
 
 
 def _end_edges(f, node_ids, edges):

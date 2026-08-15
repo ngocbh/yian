@@ -38,8 +38,8 @@ nodes/        pure Node contract + per-kind implementations; spawners return see
                loop, human_input, wait)
 compile/      compiled IR + validation; growth builder; stable identity;
               effective static-path LLM configuration maps
-compose/      Compose-YAML front end: text -> CompiledFlow
-              (nodes/parse/desugar/edges/validate/build/loader)
+compose/      Compose-YAML front end: text -> CompiledFlow; file-private inline
+              child lowering (nodes/parse/desugar/edges/validate/build/loader)
 runtime/      run records/logs, reducer-owned RunState, kind-blind dispatcher,
               and worker pool
 run.py        public run boundary: ComposedFlow + inputs/log -> RunResult
@@ -56,6 +56,41 @@ imports `compile.expand` or `compose`.
 Package-root `run.py` sits above `compose`, `compile.expand`, and `runtime`: it
 consumes a `ComposedFlow`, injects the kind-aware growth builder, and owns run-log
 creation and recovery. None of those packages imports it back.
+
+## Inline composite lowering
+
+An authored CALL, MAP, or LOOP may contain a non-empty `nodes:` plus a required
+`output:` instead of naming a child with `call:`. This is entirely a `compose/`
+front-end feature. `desugar.inline_bodies` retains the located child body and
+masks that occurrence as an ordinary private `call:` before the normal
+parse/build/validate pipeline runs. YAML anchors, aliases, and merged mappings
+are not mutated: extraction works on occurrence-local shallow overlays while
+keeping the original value nodes and source ranges read-only.
+
+Each source file owns one callable scope. Alongside its authored `defs:` and
+`uses:` namespace, that scope has a resolver-private table for retained inline
+children. A child's stable identity is `__inline_flow_` plus a digest of its
+complete lexical owner path (root or def, enclosing node, and nested inline
+occurrences), not a process counter or object identity. Authored defs, aliases,
+and call targets cannot use that reserved prefix, and author-facing diagnostics
+show the lexical child label rather than the opaque digest.
+
+Private child builders are registered during assembly and invoked lazily. The
+file scope builds each callable at most once on successful resolution, shares
+the same cache across private children/defs/uses, and guards private/def
+construction in progress. The default file resolver's load context guards
+cross-file recursion; an injected resolver is responsible for any equivalent
+protection.
+Generated child parameters come from the enclosing composite's `input:`
+bindings. Their types are proved structurally; parent producer descriptors are
+themselves built on demand through one success cache, and a MAP's `over:` element
+is proved and cached only if a lone whole-value `${item...}` binding requests it.
+Nested literal container strings are deliberately not scanned as references.
+
+The result is an ordinary compiled child baked onto the existing CallNode,
+MapNode, or LoopNode. No private resolver state reaches execution, no runtime
+kind or graph-rewrite rule is added, and live execution/recovery continue through
+the same kind-blind `Grow`/record/reducer path as named children.
 
 ## Node contract
 

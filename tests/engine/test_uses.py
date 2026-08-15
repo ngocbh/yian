@@ -112,7 +112,7 @@ def test_system_paths_is_not_a_runtime_ref():
 
 
 # --------------------------------------------------------------------------- #
-# _make_call_resolver uses: arm + defs∩uses guard + hub:/scheme deferral
+# _CallableScope uses: arm + defs∩uses guard + hub:/scheme deferral
 # --------------------------------------------------------------------------- #
 
 # A child flow text (input x: str -> echoes a one-line verdict); used by fake resolvers.

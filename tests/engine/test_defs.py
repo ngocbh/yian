@@ -15,6 +15,7 @@ real CODE-only children through `run_flow` (no LLM). Pinned here:
 
 import pytest
 
+from agent_composer.compose import loader as compose_loader
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.run import run_flow
 from agent_composer.compose.parse.file import parse_file
@@ -63,6 +64,52 @@ def test_defs_section_parses():
     f = parse_file(_DEFS_PARENT)
     assert "research_pair" in f.defs
     assert "nodes" in f.defs["research_pair"]
+
+
+def test_callable_scope_eagerly_builds_defs_and_memoizes_resolution(monkeypatch):
+    """One scope eagerly builds local defs and resolves each external alias once."""
+    events = []
+    local_child = object()
+    external_child = object()
+    registry = object()
+    body = {"nodes": {}}
+    seen_scopes = []
+
+    def fake_load_def(name, value, seen_registry, scope, parent_text=""):
+        events.append(("def", name))
+        seen_scopes.append(scope)
+        assert value is body
+        assert seen_registry is registry
+        assert parent_text == "parent source"
+        return local_child
+
+    def external(path, version=None):
+        events.append(("external", path, version))
+        return external_child
+
+    monkeypatch.setattr(compose_loader, "_load_def", fake_load_def)
+    scope = compose_loader._CallableScope(
+        {"local": body},
+        registry,
+        external,
+        {"remote": "library/child@declared-v1"},
+        "parent source",
+    )
+
+    scope.eager_load_defs()
+    assert events == [("def", "local")]
+    assert seen_scopes == [scope]
+    assert scope.resolve("local") is local_child
+    assert scope.resolve("local") is local_child
+
+    first = scope.resolve("remote", "caller-version-is-ignored")
+    second = scope.resolve("remote", "another-caller-version")
+    assert events == [
+        ("def", "local"),
+        ("external", "library/child", "declared-v1"),
+    ]
+    assert first is external_child
+    assert second is first
 
 
 def test_defs_callable_runs_end_to_end_without_external_resolver():
@@ -709,3 +756,40 @@ def test_parent_null_shadows_child_default():
     res = run_flow(loaded, {"x": None})
     assert res.status == "succeeded", res.error
     assert res.output is None  # the parent's explicit null shadows the child default
+
+
+def test_def_yaml_merge_uses_local_nodes_override():
+    """A located def reader must pair the effective value with its last YAML pair."""
+    loaded = load_flow(
+        """id: merged-def
+name: merged_def
+x-def-base: &def_base
+  nodes:
+    old:
+      kind: code
+      code: |
+        return "old"
+      output: str
+  output: ${old.output}
+defs:
+  target:
+    <<: *def_base
+    nodes:
+      new:
+        kind: code
+        code: |
+          return "new"
+        output: str
+    output: ${new.output}
+nodes:
+  invoke:
+    kind: call
+    call: target
+output: ${invoke.output}
+"""
+    )
+
+    result = run_flow(loaded, {})
+
+    assert result.status == "succeeded"
+    assert result.output == "new"

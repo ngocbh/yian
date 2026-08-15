@@ -13,7 +13,8 @@ is asserted on the returned descriptor map with a deterministic minter.
 
 import pytest
 
-from agent_composer.compose import LoadError, desugar_inline_calls
+from agent_composer.compose import LoadError, desugar_inline_calls, load_flow
+from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.compose.parse.file import CodeDescriptor
 
 
@@ -84,6 +85,116 @@ def test_nested_directive_desugars_inner_first():
     assert outer.call == "a"
     assert outer.inputs["x"] == "${__call_0.output}"
     assert new_descriptors["use"].inputs["topic"] == "${__call_1.output}"
+
+
+def test_outer_private_callee_is_rejected_at_binding_before_resolution(monkeypatch):
+    private_name = INLINE_FLOW_PREFIX + "d" * 64
+    text = f"""id: private_outer
+name: private_outer
+nodes:
+  use:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input:
+      topic: call({private_name})
+    output: str
+output: ${{use.output}}
+"""
+    resolved = []
+
+    def resolve(*args, **kwargs):
+        resolved.append((args, kwargs))
+        raise AssertionError("the private callee reached child resolution")
+
+    monkeypatch.setattr("agent_composer.compose.nodes.call._resolve_child", resolve)
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+
+    expected_line = next(
+        number
+        for number, source_line in enumerate(text.splitlines(), start=1)
+        if private_name in source_line
+    )
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == expected_line
+    assert caught.value.line == expected_line
+    assert INLINE_FLOW_PREFIX in str(caught.value)
+    assert private_name not in str(caught.value)
+    assert resolved == []
+
+
+def test_nested_private_callee_is_rejected_at_binding_before_resolution(monkeypatch):
+    private_name = INLINE_FLOW_PREFIX + "a" * 64
+    text = f"""id: private_nested
+name: private_nested
+nodes:
+  use:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input:
+      topic: call(outer, x=call({private_name}))
+    output: str
+output: ${{use.output}}
+"""
+    resolved = []
+
+    def resolve(*args, **kwargs):
+        resolved.append((args, kwargs))
+        raise AssertionError("the private callee reached child resolution")
+
+    monkeypatch.setattr("agent_composer.compose.nodes.call._resolve_child", resolve)
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+
+    expected_line = next(
+        number
+        for number, source_line in enumerate(text.splitlines(), start=1)
+        if private_name in source_line
+    )
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == expected_line
+    assert caught.value.line == expected_line
+    assert INLINE_FLOW_PREFIX in str(caught.value)
+    assert private_name not in str(caught.value)
+    assert resolved == []
+
+
+@pytest.mark.parametrize(
+    ("section", "expected_line"),
+    [("output", 17), ("assert", 23)],
+)
+def test_private_callee_in_flow_section_preserves_section_line(section, expected_line):
+    private_name = INLINE_FLOW_PREFIX + "b" * 64
+    kwargs = (
+        {"outputs_section": f"call({private_name})", "outputs_line": expected_line}
+        if section == "output"
+        else {
+            "outputs_section": None,
+            "asserts_section": [f"call({private_name})"],
+            "asserts_line": expected_line,
+        }
+    )
+
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls({}, next_id=_ids(), **kwargs)
+
+    assert caught.value.range is None
+    assert caught.value.line == expected_line
+    assert INLINE_FLOW_PREFIX in str(caught.value)
+    assert private_name not in str(caught.value)
+
+
+@pytest.mark.parametrize("callee", ["__inline_flow", "x__inline_flow_"])
+def test_private_callee_guard_matches_only_the_exact_prefix(callee):
+    descriptors = {"use": _code("use", {"topic": f"call({callee})"})}
+
+    new_descriptors, _, _ = desugar_inline_calls(
+        descriptors, None, next_id=_ids()
+    )
+
+    assert new_descriptors["__call_0"].call == callee
 
 
 def test_shared_minter_yields_distinct_ids_across_bindings():

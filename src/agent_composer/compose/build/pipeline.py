@@ -18,17 +18,29 @@ here. It imports NOTHING from `loader.py` (that would be a back-edge).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, replace
+from typing import Callable, Optional, Protocol
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
-from agent_composer.nodes.base import Node
+from agent_composer.events import SourceRange
+from agent_composer.nodes.base import FieldRanges, Node
 from agent_composer.typesys.values import Type
 from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
+from agent_composer.compose.build.inline_inputs import (
+    canonical_type_label,
+    canonicalize_inline_type,
+    infer_inline_binding_type,
+)
 from agent_composer.compose.edges.data import infer_data_edges
-from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.nodes.resolver import ChildResolver
+from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from agent_composer.compose.nodes.call import CallDescriptor
+from agent_composer.compose.nodes.loop import LoopDescriptor
+from agent_composer.compose.nodes.map import MapDescriptor
+from agent_composer.compose.desugar.inline_bodies import (
+    InlineBody,
+    extract_inline_bodies,
+)
 from agent_composer.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadError
@@ -53,6 +65,97 @@ from agent_composer.compose.validate.asserts import validate_node_asserts
 # `FlowOutput`, `terminal_output` returns the bare resolved value, so the name
 # only labels the carrier.
 _SINGLE_OUTPUT_NAME = "result"
+
+
+@dataclass(frozen=True)
+class BuildRequest:
+    """One active descriptor build and the dependency edge that requested it."""
+
+    node_id: str
+    via_label: str | None
+    via_range: SourceRange | None
+
+
+class _DescriptorBuildCache:
+    """Build descriptors lazily once while retaining dependency-cycle provenance.
+
+    A descriptor may request a later descriptor while deriving its own build product.
+    Successful products are memoized; failures are not. The final source-order walk
+    therefore reuses forward-built products without changing assembled node order.
+    """
+
+    def __init__(
+        self,
+        descriptors: dict[str, NodeDescriptor],
+        context: BuildContext,
+        node_lines: dict[str, int],
+    ) -> None:
+        self._descriptors = descriptors
+        self._context = context
+        self._node_lines = node_lines
+        self._built: dict[str, BuildResult] = {}
+        self._building: list[BuildRequest] = []
+
+    def build_one(
+        self,
+        node_id: str,
+        via_label: str | None = None,
+        via_range: SourceRange | None = None,
+    ) -> BuildResult:
+        """Build one descriptor, reusing success and rejecting an active dependency cycle."""
+        if node_id in self._built:
+            return self._built[node_id]
+
+        request = BuildRequest(node_id, via_label, via_range)
+        repeated_at = next(
+            (
+                index
+                for index, active in enumerate(self._building)
+                if active.node_id == node_id
+            ),
+            None,
+        )
+        if repeated_at is not None:
+            cycle = self._building[repeated_at:]
+            cycle_edges = [*cycle[1:], request]
+            if all(edge.via_label is not None for edge in cycle_edges):
+                path = [edge.via_label for edge in cycle_edges]
+                path.append(node_id)
+            else:
+                path = [active.node_id for active in cycle]
+                path.append(node_id)
+            error_range = request.via_range or next(
+                (
+                    edge.via_range
+                    for edge in cycle_edges
+                    if edge.via_range is not None
+                ),
+                None,
+            )
+            raise LoadError(
+                f"node build dependency cycle: {' -> '.join(path)}",
+                range=error_range,
+            )
+
+        self._building.append(request)
+        try:
+            try:
+                result = self._descriptors[node_id].build(self._context)
+            except LoadError as exc:
+                if exc.line is None:
+                    exc.line = self._node_lines.get(node_id)
+                raise
+            self._built[node_id] = result
+            return result
+        finally:
+            self._building.pop()
+
+    def build_in_source_order(self) -> dict[str, BuildResult]:
+        """Return every successful build in descriptor insertion order."""
+        return {
+            node_id: self.build_one(node_id)
+            for node_id in self._descriptors
+        }
 
 
 @dataclass(frozen=True)
@@ -95,6 +198,84 @@ class ComposedFlow:
     source: Optional[SourceFrame] = None
 
 
+class _PrivateRegistrar(Protocol):
+    """Structural seam for registering a lazy compiler-owned child callable."""
+
+    def register_private(
+        self,
+        flow_id: str,
+        owner: tuple[str, ...],
+        label: str,
+        builder: Callable[[], ComposedFlow],
+    ) -> None:
+        """Register one private callable builder under its generated identity."""
+
+
+class _CallableScopeLike(_PrivateRegistrar, Protocol):
+    """File-owned callable scope used by assembly and anonymous child lowering."""
+
+    def resolve(
+        self, flow_id: str, version: str | None = None
+    ) -> ComposedFlow:
+        """Resolve one named or compiler-owned callable in this file scope."""
+
+
+def _register_inline_bodies(
+    descriptors: dict[str, NodeDescriptor],
+    bodies: dict[str, InlineBody],
+    *,
+    registrar: _PrivateRegistrar,
+    build_child: Callable[
+        [InlineBody, CallDescriptor | LoopDescriptor], ComposedFlow
+    ],
+) -> dict[str, NodeDescriptor]:
+    """Associate retained inline bodies with descriptors and register lazy builders.
+
+    Every association is validated before the registrar is touched. The returned map
+    replaces only matching frozen descriptors with copies carrying an author-facing child
+    label; the input descriptors remain unchanged. Child construction stays lazy until the
+    registrar invokes a captured zero-argument builder.
+    """
+    associated = dict(descriptors)
+    registrations: list[
+        tuple[InlineBody, CallDescriptor | LoopDescriptor, str]
+    ] = []
+
+    for body in bodies.values():
+        label = f"inline body of node '{body.node_id}'"
+        descriptor = descriptors.get(body.node_id)
+        if descriptor is None:
+            raise LoadError(
+                f"{label}: no matching composite node descriptor",
+                range=body.nodes_reader._own_range(),
+            )
+        if not isinstance(descriptor, (CallDescriptor, LoopDescriptor)):
+            raise LoadError(
+                f"{label}: final node descriptor is not CALL, MAP, or LOOP",
+                range=body.nodes_reader._own_range(),
+            )
+        if descriptor.call != body.flow_id:
+            raise LoadError(
+                f"{label}: final node descriptor does not target its retained inline body",
+                range=body.nodes_reader._own_range(),
+            )
+
+        labelled_descriptor = replace(descriptor, child_label=label)
+        associated[body.node_id] = labelled_descriptor
+        registrations.append((body, labelled_descriptor, label))
+
+    for body, labelled_descriptor, label in registrations:
+        def builder(
+            body: InlineBody = body,
+            descriptor: CallDescriptor | LoopDescriptor = labelled_descriptor,
+        ) -> ComposedFlow:
+            return build_child(body, descriptor)
+
+        registrar.register_private(body.flow_id, body.owner, label, builder)
+
+    return associated
+
+
 def _flow_outputs(outputs) -> list[FlowOutput]:
     """Read the flow `outputs:` section into the `FlowOutput` carriers `terminal_output` reads.
 
@@ -118,12 +299,14 @@ def _flow_outputs(outputs) -> list[FlowOutput]:
 
 def _assemble(
     *,
-    inputs_section: dict,
+    inputs_section: Optional[dict] = None,
+    input_decls: Optional[list[InputDecl]] = None,
     nodes_reader: NodeReader,
     outputs_section,
     asserts_section: list,
     registry,
-    resolver: ChildResolver,
+    scope: _CallableScopeLike,
+    owner: tuple[str, ...],
     n_lines: dict,
     s_lines: dict,
     uses_aliases: set = frozenset(),
@@ -135,6 +318,7 @@ def _assemble(
     source: Optional[SourceFrame] = None,
     boundary_field_ranges: Optional[dict] = None,
     boundary_assert_ranges: Optional[list] = None,
+    outputs_range: Optional[SourceRange] = None,
 ) -> ComposedFlow:
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
@@ -145,16 +329,60 @@ def _assemble(
       -> synthesize roots/terminals -> reject cycles + check if/else handles
       -> CompiledFlow.from_parts.
 
-    `resolver` is the composite call resolver (defs-first); `registry` is the file's
-    `read_typedefs(...)`. `n_lines`/`s_lines` are the source maps — each node id / top-level
-    section key -> its 1-based HEADER line (`{}` for a nested def, whose errors are unlocated).
+    Exactly one input representation is required: `inputs_section` is the authored
+    mapping that still needs parsing, while `input_decls` carries declarations already
+    resolved by an earlier compiler pass. `scope` owns composite call resolution
+    (defs-first) and private child registration; `registry` is the file's
+    `read_typedefs(...)`. `n_lines`/`s_lines` are fallback source maps — each node id /
+    top-level section key -> its 1-based header line; located descriptors refresh node lines
+    after inline lowering, including inside a nested def.
+    `owner` is this flow's complete lexical path and seeds stable identities for anonymous
+    children. `boundary_field_ranges`/`boundary_assert_ranges` locate synthesized boundary
+    behavior; `outputs_range` is the retained authored codomain range when one exists.
     Inline-CODE traceback anchors are derived from each descriptor's own `code:` range."""
+    if (inputs_section is None) == (input_decls is None):
+        raise ValueError("_assemble requires exactly one of inputs_section or input_decls")
+
+    nodes_reader, inline_bodies = extract_inline_bodies(
+        nodes_reader,
+        owner=owner,
+    )
+
     # The flow's file label frames inline-CODE tracebacks; each inline node's content start
     # line is derived from its recorded `code:` range in the CODE build. Inert for reference-mode CODE.
     flow_label = source.label if source is not None else "<inline-code>"
-    inputs = read_flow_inputs(inputs_section, registry)
-    flow_inputs = {decl.name for decl in inputs}
+    if inputs_section is not None:
+        inputs = read_flow_inputs(inputs_section, registry)
+    else:
+        assert input_decls is not None
+        inputs = list(input_decls)
+    flow_input_types = {decl.name: decl.type for decl in inputs}
+    flow_inputs = set(flow_input_types)
     descriptors = parse_nodes(nodes_reader)
+
+    parsed_node_ranges = {
+        node_id: descriptor.range
+        for node_id, descriptor in descriptors.items()
+        if descriptor.range is not None
+    }
+    parsed_field_ranges = {
+        node_id: FieldRanges(descriptor.field_ranges)
+        for node_id, descriptor in descriptors.items()
+        if descriptor.field_ranges
+    }
+    n_lines = {
+        **n_lines,
+        **{
+            node_id: node_range.start_line
+            for node_id, node_range in parsed_node_ranges.items()
+        },
+    }
+    if source is not None:
+        source = replace(
+            source,
+            node_ranges=parsed_node_ranges,
+            field_ranges=parsed_field_ranges,
+        )
 
     # A `uses:` alias shares the callable namespace, so it must not collide with a node
     # id (the resolver only sees a bare name; the author conflates them). Checked here, where
@@ -167,7 +395,7 @@ def _assemble(
     # declared-but-uncalled broken/`hub:`/missing target is loud at load, not at first call.
     for alias in uses_aliases:
         try:
-            resolver(alias)
+            scope.resolve(alias)
         except LoadError as exc:
             if exc.line is None:
                 exc.line = s_lines.get("uses")
@@ -206,25 +434,163 @@ def _assemble(
         asserts_line=s_lines.get("asserts"),
     )
 
+    descriptor_cache: _DescriptorBuildCache | None = None
+
+    def build_inline_child(
+        body: InlineBody,
+        descriptor: CallDescriptor | LoopDescriptor,
+    ) -> ComposedFlow:
+        """Assemble one retained body lazily in this file's callable scope."""
+
+        def producer_type(
+            producer_id: str,
+            binding_label: str,
+            binding_range: SourceRange | None,
+        ) -> Type:
+            """Resolve one parent producer through this assembly's build cache."""
+            def unavailable_type() -> LoadError:
+                return LoadError(
+                    f"cannot infer type for inline binding {binding_label!r}: "
+                    f"producer {producer_id!r} has no available static type; use an "
+                    "explicitly typed named `defs:` body",
+                    range=binding_range,
+                )
+
+            if producer_id not in descriptors:
+                raise unavailable_type()
+
+            cache = descriptor_cache
+            if cache is None:
+                raise RuntimeError(
+                    "descriptor cache was not initialized before inline child resolution"
+                )
+            output_type = cache.build_one(
+                producer_id,
+                via_label=binding_label,
+                via_range=binding_range,
+            ).node.output_type
+            if output_type is None:
+                raise unavailable_type()
+            return output_type
+
+        item_type: Callable[[str, SourceRange | None], Type] | None = None
+        if isinstance(descriptor, MapDescriptor):
+            cached_item_type: Type | None = None
+
+            def map_item_type(
+                binding_label: str,
+                binding_range: SourceRange | None,
+            ) -> Type:
+                """Prove the MAP element type once, only when an item walk requests it."""
+                nonlocal cached_item_type
+                if cached_item_type is not None:
+                    return cached_item_type
+
+                over_type = infer_inline_binding_type(
+                    descriptor.over,
+                    parent_input_types=flow_input_types,
+                    producer_type=producer_type,
+                    binding_label=binding_label,
+                    binding_range=binding_range,
+                )
+                if not over_type.kind.is_list() or over_type.element is None:
+                    raise LoadError(
+                        f"cannot infer type for inline binding {binding_label!r}: "
+                        "MAP `over:` must have a proven list element type; use an "
+                        "explicitly typed named `defs:` body",
+                        range=binding_range,
+                    )
+                cached_item_type = over_type.element
+                return cached_item_type
+
+            item_type = map_item_type
+
+        child_inputs: list[InputDecl] = []
+        for key, value in (descriptor.inputs or {}).items():
+            binding_label = f"{descriptor.id}.input.{key}"
+            binding_range = body.input_ranges.get(key)
+            inferred = infer_inline_binding_type(
+                value,
+                parent_input_types=flow_input_types,
+                producer_type=producer_type,
+                item_type=item_type,
+                binding_label=binding_label,
+                binding_range=binding_range,
+            )
+            canonical = canonicalize_inline_type(inferred)
+            child_inputs.append(
+                InputDecl(
+                    name=key,
+                    type_str=canonical_type_label(canonical),
+                    default=None,
+                    required=not canonical.nullable,
+                    type=canonical,
+                )
+            )
+
+        label = descriptor.child_label or f"inline body of node {body.node_id!r}"
+        child_source = SourceFrame(
+            label=label,
+            text=source.text if source is not None else "",
+            node_ranges={},
+            field_ranges={},
+        )
+        output_lines = (
+            {"output": body.output_range.start_line}
+            if body.output_range is not None
+            else {}
+        )
+        return _assemble(
+            input_decls=child_inputs,
+            nodes_reader=body.nodes_reader,
+            outputs_section=body.output,
+            asserts_section=[],
+            registry=registry,
+            scope=scope,
+            owner=body.owner,
+            n_lines={},
+            s_lines=output_lines,
+            flow_llm_config={},
+            flow_env={},
+            source=child_source,
+            boundary_field_ranges={
+                ("input_decl", name): binding_range
+                for name, binding_range in body.input_ranges.items()
+            },
+            outputs_range=body.output_range,
+        )
+
+    descriptors = _register_inline_bodies(
+        descriptors,
+        inline_bodies,
+        registrar=scope,
+        build_child=build_inline_child,
+    )
+
     # Build EVERY node kind-blind through its own descriptor's `build(ctx)` — leaf, call/map
     # (MapDescriptor rides CallDescriptor, no branch), loop, AND case (which lowers in its own
     # `.build()`, returning its data+control edges in `BuildResult.edges`). The conductor never
     # branches on the descriptor kind. Flow-owned wiring (the split): `flow_wiring[node_id][param]
     # -> source`, a `{}` entry for every node so the key-parity check ranges over all nodes.
-    ctx_base = BuildContext(registry=registry, resolver=resolver, source_file=flow_label)
-    nodes_built: dict[str, Node] = {}
-    flow_wiring: dict[str, dict] = {}
-    case_edges: list[Edge] = []  # a case's own data+control edges; () for every other kind
-    for nid, desc in descriptors.items():
-        try:
-            result = desc.build(ctx_base)
-        except LoadError as exc:  # locate a build failure (resolver/legality/type expr) at the node's line
-            if exc.line is None:
-                exc.line = n_lines.get(nid)
-            raise
-        nodes_built[nid] = result.node
-        flow_wiring[nid] = result.wiring
-        case_edges.extend(result.edges)
+    ctx_base = BuildContext(
+        registry=registry,
+        resolver=scope.resolve,
+        source_file=flow_label,
+    )
+    descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base, n_lines)
+    build_results = descriptor_cache.build_in_source_order()
+    nodes_built: dict[str, Node] = {
+        nid: result.node for nid, result in build_results.items()
+    }
+    flow_wiring: dict[str, dict] = {
+        nid: result.wiring for nid, result in build_results.items()
+    }
+    # A case's own data+control edges; every other kind returns an empty tuple.
+    case_edges: list[Edge] = [
+        edge
+        for result in build_results.values()
+        for edge in result.edges
+    ]
     # Stamp each built node's effective static config: the flow-level `env:` default merged
     # under the node's own `env:` (node override wins), flow-local (a called child flow has its
     # own flow env). The engine core never reads `Node.env` — only the node's `_run_impl()` path does.
@@ -242,7 +608,6 @@ def _assemble(
 
     # cross-flow type check: each `call` binding's source type vs the callable
     # input type (needs producers, so it runs after all nodes are built).
-    flow_input_types = {decl.name: decl.type for decl in inputs}
     check_ref_map_types(nodes_built, producers, flow_input_types, flow_wiring, n_lines)
     # loop `'a -> 'a` type contract (types): each carried field's seed-source Type vs the
     # body output's same-named field Type (needs producers, so it runs alongside the
@@ -275,6 +640,7 @@ def _assemble(
         flow_wiring,
         node_lines=n_lines,
         outputs_line=s_lines.get("output") or s_lines.get("outputs"),
+        outputs_range=outputs_range,
     )
     # human_input gates: structurally check a literal `questions:` list at load, and
     # pin a ref-form `questions: ${name}` to a declared input (the prompt-scope rule).

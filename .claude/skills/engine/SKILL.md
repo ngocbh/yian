@@ -31,7 +31,9 @@ Hold this model whenever you design anything:
 - A **flow is a function** — typed inputs in, typed outputs out. An **agent is
   just a flow** whose leaf is an LLM loop. Same contract, same composability.
 - Flows **compose** (a node can *be* a flow, via a `call:`/`uses:` reference) and
-  nest to any depth.
+  nest to any depth. A CALL/MAP/LOOP `nodes:` + `output:` body is front-end sugar
+  for the same application: compose lowers it to a file-private child flow; it
+  does not introduce a runtime kind.
 - Computation is **pure at the boundary**: a node *returns* outputs, the engine
   *binds* them under `(node_id, key)` like `let`-bindings — never a mutation.
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
@@ -101,7 +103,9 @@ Most are just the functional model (above) made enforceable:
 - **Hierarchical / composable** *(function composition)* — a node can *be*
   another flow (a `call:`/`uses:` reference → a child subgraph seeded from the
   parent's pool), nestable to arbitrary depth. This is how an agent calls another
-  agent and how composite nodes are built. A spawner returns only a canonical
+  agent and how composite nodes are built. One-off inline composite bodies must
+  lower to that same child contract with stable lexical identity and a closed
+  generated-input scope. A spawner returns only a canonical
   `Grow(seed, prune)`; the compile-owned `build_grow` interprets that seed after the
   package-root run boundary injects it into runtime. Never assume a node is a leaf;
   preserve recursion through compile + run and deterministic run-record replay.
@@ -185,3 +189,9 @@ framework.
 The package-root `run.py` sits above compose and runtime and wires cross-layer
 capabilities: notably it owns log lifecycle/recovery and injects compile's
 `build_grow` into the kind-blind runtime.
+
+Inline composite implementation stays wholly in `compose`: `desugar/` retains
+and masks located bodies, the loader owns the file-private callable table/cache,
+and `build/` proves generated parameter types and assembles the child. The child
+then enters the ordinary compiled CALL/MAP/LOOP path; never add private-callable
+resolution or inline-body handling to runtime.

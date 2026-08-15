@@ -272,10 +272,19 @@ def test_seed19_loads_clean():
     loaded = _load("19")
     # the assembler exercises every stance; all compile + name-check.
     sources = loaded.compiled.wiring["assemble"]
-    assert sources["claim"] == Binding("${pro.output | con.output}")
-    assert sources["detail"] == Binding("${pro_detail.output:-null}")
-    assert sources["when"] == Binding("${input.as_of:-${system.today}}")
-    assert sources["topic"] == Binding('${input.topic:?"a topic is required"}')
+    expected = {
+        "backdrop": "${macro.output}",
+        "claim": "${pro.output | con.output}",
+        "detail": "${pro_detail.output:-null}",
+        "when": "${input.as_of:-${system.today}}",
+        "topic": '${input.topic:?"a topic is required"}',
+    }
+    assert {name: binding.source for name, binding in sources.items()} == expected
+    assert all(binding.origin is not None for binding in sources.values())
+    assert all(
+        parameter.origin is not None
+        for parameter in loaded.compiled.nodes["assemble"].params
+    )
 
 
 # --------------------------------------------------------------------------- #

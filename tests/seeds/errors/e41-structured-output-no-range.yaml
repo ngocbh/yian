@@ -12,7 +12,7 @@
 #
 # 2. THE FUNNEL MISSES ENTIRELY -> range=None. `runtime/engine.py:472` mints key="output" (SINGULAR,
 #    the write-boundary vocabulary), but `field_ranges` is keyed "outputs" (PLURAL, after
-#    `_back_map_input_output` rewrites the author's `output:` key). So `eval_node.py:149`'s
+#    node-signature normalization rewrites the author's `output:` key). So `eval_node.py:149`'s
 #    `field_ranges.get(("field","output"))` misses on EVERY output-validation failure:
 #        calc.field_ranges keys: [('field','code'), ('field','outputs')]
 #          .get(("field","output"))  -> None          <- what the funnel asks for

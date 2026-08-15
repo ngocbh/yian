@@ -421,7 +421,7 @@ def test_structured_output_failure_names_whole_field_and_range_is_none():
     # (1) granularity — `score:` is bad, `claim:` is fine, but the locator names the WHOLE field and
     #     the message never says `score`. A stamp for ("outputs","score") would go unused.
     # (2) the funnel misses entirely -> range=None. engine.py:472 mints key="output" (SINGULAR);
-    #     field_ranges is keyed "outputs" (PLURAL, post-_back_map_input_output), so
+    #     field_ranges is keyed "outputs" (PLURAL, post-signature normalization), so
     #     eval_node.py:149's .get(("field","output")) misses on EVERY output-validation failure.
     #     The CLI hides it via _FIELD_KEY_ALIAS — but a LIBRARY CALLER gets range=None. That is
     #     #81's opening complaint, live.

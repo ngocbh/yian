@@ -114,7 +114,13 @@ through contract validation, so it is accepted only when the parameter is untype
 or its contract accepts null (a nullable or `None`-kind type).
 Parameter/default/contract origins do not affect manifest identity. Compose
 `input:` lowers directly into this same exact carrier shape; `ComposedFlow.input`
-and START use it without a parallel front-end declaration type.
+and START use it without a parallel front-end declaration type. For an ordinary
+source-backed node input, final assembly puts the selecting-key origin on its
+`Parameter` and the value origin on its flow-owned `Binding`; a desugar may change
+`Binding.source` without moving that value origin. Inputs without a retained source
+occurrence stay origin-free; source-backed projections inherit their backing site.
+Reserved kind-specific wiring and synthesized flow boundaries remain outside this
+migration step.
 
 `Node.output_contract` is the canonical compiled output declaration: exactly one
 `ValueContract`, or `None` when the output is unenforced. Runtime enforcement and
@@ -158,6 +164,9 @@ into a `DiagnosticFrame`; it neither reparses YAML nor creates a parallel range
 map. Virtual or unanchored cursors produce no origin. One builder is shared by
 the root flow, its `defs:`, and its inline bodies, and each assembled
 `ComposedFlow` retains a frozen document-local snapshot as `_local_catalog`.
+Final assembly registers authored node headers plus ordinary node-input key/value
+occurrences directly on their canonical semantic carriers; it does not build a
+parallel location map.
 That field is intentionally private: external child origins still require
 lexical rebasing before the returned flow can expose one complete resolver.
 

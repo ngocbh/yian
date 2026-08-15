@@ -261,6 +261,8 @@ ask2:                                 # (B) LLM composes them (desugars at load)
   input: { ctx: ${research.output} }
   adaptive_questions: { prompt: "Design 1-3 questions for: ${ctx}", retries: 3 }
 ```
+(On an adaptive gate, `__questions` is reserved for the generated composer wire;
+do not declare it in `input:`.)
 (Form (C): read a list from an upstream node — `questions: ${qs}`.)
 
 ### `wait` — block until an absolute UTC deadline

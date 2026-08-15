@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from agent_composer.nodes.call import CallNode   # nodes/call/__init__.py
-from agent_composer.nodes.contracts import Binding, Parameter, ValueContract
+from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind
 from agent_composer.compose import ComposedFlow, LoadError, load_flow
@@ -98,20 +98,29 @@ def test_seed04_ref_loads_and_reexports_child_output():
     assert typ.kind == ValueKind.OBJECT
     assert set(typ.fields) == {"report", "asof"}
     # the REF sources live on flow.wiring; the node carries only the param names.
-    assert loaded.compiled.wiring["research"] == {
-        "topic": Binding("${input.topic}")
+    wiring = loaded.compiled.wiring["research"]
+    assert {name: binding.source for name, binding in wiring.items()} == {
+        "topic": "${input.topic}",
     }
+    assert wiring["topic"].origin is not None
     assert [p.name for p in research.params] == ["topic"]
+    assert research.params[0].origin is not None
 
 
 def test_seed04_downstream_dotted_ref_validates_against_child_record():
     # `take` reads ${research.output.report}/${research.output.asof}; the REF node's
     # stamped output contract (a checked record) lets the dotted-field walk pass.
     loaded = load_flow(_text("04-call.yaml"), search_paths=[_SEEDS])
-    assert loaded.compiled.wiring["take"] == {
-        "brief": Binding("${research.output.report}"),
-        "asof": Binding("${research.output.asof}"),
+    wiring = loaded.compiled.wiring["take"]
+    assert {name: binding.source for name, binding in wiring.items()} == {
+        "brief": "${research.output.report}",
+        "asof": "${research.output.asof}",
     }
+    assert all(binding.origin is not None for binding in wiring.values())
+    assert all(
+        parameter.origin is not None
+        for parameter in loaded.compiled.nodes["take"].params
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -137,12 +146,17 @@ def test_seed05_map_loads_with_list_output_and_parallel():
     assert set(typ.element.fields) == {"report", "asof"}
     # the MAP sources (incl the reserved `over`, over-first) live on flow.wiring; the node
     # carries only the per-element param names (`over:` is the iteration source, not a param).
-    assert loaded.compiled.wiring["research_each"] == {
-        "over": Binding("${input.topics}"),
-        "topic": Binding("${item}"),
-        "as_of": Binding('${input.as_of:-"today"}'),
+    wiring = loaded.compiled.wiring["research_each"]
+    assert {name: binding.source for name, binding in wiring.items()} == {
+        "over": "${input.topics}",
+        "topic": "${item}",
+        "as_of": '${input.as_of:-"today"}',
     }
+    assert wiring["over"].origin is None
+    assert wiring["topic"].origin is not None
+    assert wiring["as_of"].origin is not None
     assert [p.name for p in research_each.params] == ["topic", "as_of"]
+    assert all(parameter.origin is not None for parameter in research_each.params)
 
 
 def test_map_input_named_over_is_reserved():

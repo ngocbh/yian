@@ -435,6 +435,8 @@ ask:
 **(B) adaptive** — an LLM composes the questions from context. The block
 **desugars at load** into a synth compose-agent (`<node>__compose`, output
 `list[Question]`) wired into the gate; the runtime gate never calls an LLM.
+The input name `__questions` is reserved for that generated wire and cannot be
+authored on an adaptive gate.
 
 ```yaml
 ask:

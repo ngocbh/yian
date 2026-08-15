@@ -1503,6 +1503,10 @@ def _node_manifest(
     _check_node_fields(node, path)
     params = None
     if node.params is not None:
+        if type(node.params) is not list:
+            raise TypeError(
+                f"{path}.params: expected list, got {type(node.params).__name__}"
+            )
         params = [
             _parameter_manifest(param, ctx, f"{path}.params[{index}]")
             for index, param in enumerate(node.params)

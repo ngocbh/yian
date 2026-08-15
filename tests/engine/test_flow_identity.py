@@ -2088,6 +2088,10 @@ def _fragment() -> Flow:
     )
 
 
+class _ParameterSubclass(Parameter):
+    """Near-canonical fixture for exact manifest carrier checks."""
+
+
 def _replace_body(fragment: Flow) -> None:
     body = CodeNode("body", code='return inputs["x"] + 1')
     body.params = [
@@ -2199,7 +2203,7 @@ def test_flow_fingerprint_covers_each_included_common_node_field(field, changed_
         {"name": "renamed"},
         {"contract": ValueContract(Type.scalar(ValueKind.NUMBER))},
         {"required": True},
-        {"has_default": True, "default": 7},
+        {"has_default": True},
         {"coerce_strings": True},
     ],
     ids=["name", "contract", "required", "default", "coerce-strings"],
@@ -2209,6 +2213,21 @@ def test_flow_fingerprint_covers_each_parameter_field(changes):
     changed = copy.deepcopy(original)
     param = changed.nodes["body"].params[0]
     changed.nodes["body"].params[0] = replace(param, **changes)
+
+    assert flow_fingerprint(changed) != flow_fingerprint(original)
+
+
+def test_flow_fingerprint_covers_parameter_default_independently():
+    original = _fragment()
+    original_param = original.nodes["body"].params[0]
+    original.nodes["body"].params[0] = replace(
+        original_param,
+        has_default=True,
+        default=1,
+    )
+    changed = copy.deepcopy(original)
+    changed_param = changed.nodes["body"].params[0]
+    changed.nodes["body"].params[0] = replace(changed_param, default=2)
 
     assert flow_fingerprint(changed) != flow_fingerprint(original)
 
@@ -2230,14 +2249,9 @@ def test_parameter_origins_do_not_affect_program_or_expansion_identity():
     first.nodes["body"].params = [
         Parameter(
             "x",
-            contract=ValueContract(
-                int_type,
-                ContractOrigins(default=OriginRef("first/contract")),
-            ),
+            contract=ValueContract(int_type),
             has_default=True,
             default=1,
-            origin=OriginRef("first/parameter"),
-            default_origin=OriginRef("first/default"),
         )
     ]
     second.nodes["body"].params = [
@@ -2245,7 +2259,10 @@ def test_parameter_origins_do_not_affect_program_or_expansion_identity():
             "x",
             contract=ValueContract(
                 int_type,
-                ContractOrigins(default=OriginRef("second/contract")),
+                ContractOrigins(
+                    default=OriginRef("second/contract"),
+                    entries=((('nested',), OriginRef("second/contract/nested")),),
+                ),
             ),
             has_default=True,
             default=1,
@@ -2271,6 +2288,20 @@ def test_parameter_manifest_rejects_unknown_fields_and_raw_bypass():
     raw.nodes["body"].params = ["x"]  # type: ignore[list-item]
     with pytest.raises(TypeError, match="expected Parameter"):
         flow_manifest(raw)
+
+    subclass = _fragment()
+    subclass.nodes["body"].params = [_ParameterSubclass("x")]
+    with pytest.raises(TypeError, match="expected Parameter"):
+        flow_manifest(subclass)
+
+
+@pytest.mark.parametrize("params", [(), (Parameter("x"),)])
+def test_parameter_manifest_rejects_noncanonical_containers(params):
+    flow = _fragment()
+    flow.nodes["body"].params = params  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="expected list"):
+        flow_manifest(flow)
 
 
 @pytest.mark.parametrize(

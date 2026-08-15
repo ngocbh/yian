@@ -355,7 +355,12 @@ class Node(ABC):
         A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
         from agent_composer.events import SourceSpan
 
-        inputs = apply_defaults(self.params or [], inputs)
+        params = self.params if self.params is not None else []
+        if type(params) is not list:
+            raise TypeError(
+                f"node {self.id!r} params must be an exact list, got {type(params).__name__}"
+            )
+        inputs = apply_defaults(params, inputs)
         # Fire pre-asserts IN ORDER, first-failure-wins, and locate the failure BY POSITION:
         # the failing assert's own `SourceRange` is `pre_assert_ranges[i]`, not a lookup keyed by
         # assertion text — so two identical asserts get distinct carets. The range list is

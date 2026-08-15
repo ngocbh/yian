@@ -99,6 +99,10 @@ def bind_params(
     Raises:
         BindingError: On a missing-required input or a type mismatch.
     """
+    if type(params) is not list:
+        raise TypeError(
+            f"node params must be an exact list, got {type(params).__name__}"
+        )
     record: dict[str, Any] = {}
     for p in params:
         if type(p) is not Parameter:
@@ -126,10 +130,10 @@ def bind_params(
                     # wrapper's apply_default can fill it (or the render raises on unbound).
                     continue
                 else:
-                    # PRESENT but resolved to None -> a caller's explicit bound-null. Keep it
-                    # None to SHADOW any default (`f(x=None)`); the wrapper must NOT re-fill it.
-                    record[p.name] = None
-                    continue
+                    # PRESENT but resolved to None -> a caller's explicit bound-null. It
+                    # SHADOWS any default, then still passes through the optional contract:
+                    # nullable/untyped accepts it; a non-nullable contract rejects it.
+                    value = None
             if p.contract is not None:
                 if present and p.coerce_strings:
                     value = coerce_param(p, value)

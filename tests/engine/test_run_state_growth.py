@@ -47,6 +47,10 @@ class _Spawner(Node):
     grow_depth_delta = 1
 
 
+class _ParameterSubclass(Parameter):
+    """Near-canonical fixture proving growth requires the exact carrier."""
+
+
 class _OverlayNode(Node):
     """Ordinary dynamic-overlay node used by prune safety tests."""
 
@@ -716,6 +720,12 @@ def _invalid_fragment(case: str) -> Any:
         fragment.wiring[fragment.start_id]["extra"] = Binding(1)
     elif case == "raw-param":
         fragment.nodes[fragment.start_id].params = ["raw"]  # type: ignore[list-item]
+    elif case == "parameter-subclass":
+        fragment.nodes[fragment.start_id].params = [_ParameterSubclass("x")]
+    elif case == "empty-param-tuple":
+        fragment.nodes[fragment.start_id].params = ()  # type: ignore[assignment]
+    elif case == "param-tuple":
+        fragment.nodes[fragment.start_id].params = (Parameter("x"),)  # type: ignore[assignment]
     elif case == "duplicate-edge-id":
         edge = fragment.edges[0]
         fragment.edges.append(
@@ -795,6 +805,9 @@ def _invalid_fragment(case: str) -> Any:
         "missing-wiring-entry",
         "extra-wiring-key",
         "raw-param",
+        "parameter-subclass",
+        "empty-param-tuple",
+        "param-tuple",
         "missing-required",
         "missing-reserved",
         "duplicate-edge-id",

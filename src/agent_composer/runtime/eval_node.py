@@ -108,7 +108,8 @@ def _evaluate_node_stream(
         if per_item:
             record = {}
         else:
-            record = bind_params(node.params or [], node_wiring, pool)
+            params = node.params if node.params is not None else []
+            record = bind_params(params, node_wiring, pool)
         # Reserved-key pre-resolve (node-owned): WAIT `until` -> ISO deadline; mapped-call `over`
         # -> list (validated in the hook -> NodeFailed). The hook reads its sources from
         # `node_wiring` (the node/flow split) + `pool`; default `{}` for an ordinary node.
@@ -119,7 +120,8 @@ def _evaluate_node_stream(
         if per_item:
             # Per-element bind from params + flow.wiring (pure). No system cap — the
             # cloned children share the one live pool, so `${system.X}` resolves directly.
-            caps["bind_item"] = lambda el: bind_params(node.params or [], node_wiring, pool, item=el)
+            params = node.params if node.params is not None else []
+            caps["bind_item"] = lambda el: bind_params(params, node_wiring, pool, item=el)
         if node.needs_stop_event:
             # Engine-driven evaluation always passes its run-owned event. Direct evaluation has
             # no host owner, so create one only for an opted-in node; ordinary nodes allocate and

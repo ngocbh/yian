@@ -2156,7 +2156,7 @@ def _validate_growth_fragment_data(
             raise TypeError(
                 f"growth fragment wiring for {node_id!r} must be a string-keyed dict"
             )
-        params = node.params or []
+        params = node.params if node.params is not None else []
         if type(params) is not list:
             raise TypeError(f"growth fragment node {node_id!r} params must be a list")
         declared: dict[str, bool] = {}

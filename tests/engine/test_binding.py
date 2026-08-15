@@ -51,7 +51,12 @@ INTEGER = ValueContract(Type.scalar(ValueKind.INTEGER))
 NUMBER = ValueContract(Type.scalar(ValueKind.NUMBER))
 BOOLEAN = ValueContract(Type.scalar(ValueKind.BOOLEAN))
 OBJECT = ValueContract(Type.scalar(ValueKind.OBJECT))
+NULLABLE_STRING = ValueContract(Type(kind=ValueKind.STRING, nullable=True))
 NULLABLE_INTEGER = ValueContract(Type(kind=ValueKind.INTEGER, nullable=True))
+
+
+class _ParameterSubclass(Parameter):
+    """Near-canonical fixture proving the read seam requires the exact carrier."""
 
 
 def bind_inputs(bindings, pool, *, item=None):
@@ -120,14 +125,30 @@ def test_bind_compatible_default_is_validated_without_replacement():
     assert type(rec["w"]) is int
 
 
-def test_bind_present_null_shadows_param_default():
+def test_bind_present_null_shadows_default_but_fails_nonnullable_contract():
     # An edge that is PRESENT but RESOLVES to null is bound-null: it SHADOWS the param default
-    # (the `f(x=None)` contract). Pins the omit-vs-bound-null distinction at the live binder.
+    # rather than filling 30, but the non-nullable type still rejects the explicit null.
+    with pytest.raises(BindingError):
+        bind_inputs(
+            [
+                InputBinding(
+                    name="w",
+                    contract=INTEGER,
+                    source="${system.w}",
+                    has_default=True,
+                    default=30,
+                )
+            ],
+            _pool(),
+        )
+
+
+def test_bind_present_null_shadows_default_when_contract_is_nullable():
     rec = bind_inputs(
         [
             InputBinding(
                 name="w",
-                contract=INTEGER,
+                contract=NULLABLE_INTEGER,
                 source="${system.w}",
                 has_default=True,
                 default=30,
@@ -135,6 +156,7 @@ def test_bind_present_null_shadows_param_default():
         ],
         _pool(),
     )
+
     assert rec == {"w": None}
 
 
@@ -175,9 +197,20 @@ def test_bind_params_rejects_a_raw_declaration_bypass():
         bind_params(["x"], {}, _pool())  # type: ignore[list-item]
 
 
-def test_bind_optional_missing_is_none():
+@pytest.mark.parametrize("params", [(), (Parameter("x"),)])
+def test_bind_params_rejects_noncanonical_containers(params):
+    with pytest.raises(TypeError):
+        bind_params(params, {}, _pool())  # type: ignore[arg-type]
+
+
+def test_bind_params_rejects_parameter_subclasses():
+    with pytest.raises(TypeError, match="Parameter values"):
+        bind_params([_ParameterSubclass("x")], {}, _pool())
+
+
+def test_bind_nullable_reference_missing_is_none():
     assert bind_inputs(
-        [InputBinding(name="t", contract=STRING, source="${system.t}")], _pool()
+        [InputBinding(name="t", contract=NULLABLE_STRING, source="${system.t}")], _pool()
     ) == {"t": None}
 
 

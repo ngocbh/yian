@@ -162,3 +162,12 @@ def test_apply_default_idempotent_no_double_fill():
     # And end-to-end through the wrapper the default is filled exactly once.
     result = node.run({})
     assert result.value == {"x": 5}
+
+
+@pytest.mark.parametrize("params", [(), (Parameter("x"),)])
+def test_node_run_rejects_noncanonical_parameter_containers(params):
+    node = _ImplNode("n")
+    node.params = params  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="exact list"):
+        node.run({})

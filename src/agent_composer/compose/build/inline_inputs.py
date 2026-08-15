@@ -13,6 +13,7 @@ Never imports: ``compose.loader``, ``compile``, ``runtime``, or node kinds.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
@@ -100,7 +101,7 @@ def infer_inline_binding_type(
             The value has no statically proven type under the inline-body rules.
     """
     if isinstance(value, str):
-        return _infer_binding_string(
+        inferred = _infer_binding_string(
             value,
             parent_input_types=parent_input_types,
             producer_type=producer_type,
@@ -108,13 +109,186 @@ def infer_inline_binding_type(
             binding_label=binding_label,
             binding_range=binding_range,
         )
-    return _infer_literal(
-        value,
+    else:
+        inferred = _infer_literal(
+            value,
+            binding_label=binding_label,
+            binding_range=binding_range,
+            path=binding_label,
+            active_containers=set(),
+        )
+    return require_proven_type(
+        inferred,
         binding_label=binding_label,
         binding_range=binding_range,
-        path=binding_label,
-        active_containers=set(),
     )
+
+
+def require_proven_type(
+    typ: Type,
+    *,
+    binding_label: str,
+    binding_range: SourceRange | None = None,
+) -> Type:
+    """Require every structural refinement in ``typ`` to be statically proven.
+
+    A refined record is closed: each declared field must either be required or
+    nullable, and every child type is checked recursively. An unrefined object
+    remains valid as a whole value. Every list storage kind, including
+    ``list[Any]``, requires a recursively proven structural element.
+
+    Args:
+        typ (`Type`):
+            The type to prove without copying or mutating it.
+        binding_label (`str`):
+            The author-facing node/input path included in inference errors.
+        binding_range (`SourceRange | None`, *optional*, defaults to `None`):
+            The binding value's source range, or ``None`` for spanless input.
+
+    Returns:
+        `Type`:
+            The exact same object passed as ``typ`` after successful proof.
+
+    Raises:
+        `LoadError`:
+            A record or list refinement is incomplete or internally invalid.
+    """
+    if typ.fields is not None:
+        required = typ.required or frozenset()
+        missing = required - typ.fields.keys()
+        if missing:
+            raise _inference_error(
+                binding_label,
+                binding_range,
+                f"record requires unknown fields {sorted(missing)!r}",
+            )
+        for name, field_type in typ.fields.items():
+            if name not in required and not field_type.nullable:
+                raise _inference_error(
+                    binding_label,
+                    binding_range,
+                    f"record field {name!r} is neither required nor nullable",
+                )
+            require_proven_type(
+                field_type,
+                binding_label=binding_label,
+                binding_range=binding_range,
+            )
+
+    if typ.kind.is_list():
+        if typ.element is None:
+            raise _inference_error(
+                binding_label,
+                binding_range,
+                f"list type {typ.kind.value!r} has no proven element type",
+            )
+        require_proven_type(
+            typ.element,
+            binding_label=binding_label,
+            binding_range=binding_range,
+        )
+
+    return typ
+
+
+def canonicalize_inline_type(typ: Type) -> Type:
+    """Return a recursively copied, deterministically ordered inline type.
+
+    Record fields use raw Unicode code-point order. Their exact valid required
+    membership is retained, including required nullable fields; a refined
+    record with ``required=None`` normalizes to an empty frozen set. Other type
+    metadata is copied without changing its structural meaning.
+
+    Args:
+        typ (`Type`): The already-proven type to canonicalize.
+
+    Returns:
+        `Type`: A deep canonical copy; ``typ`` is never mutated.
+    """
+    if typ.fields is None:
+        fields = None
+        required = (
+            None
+            if typ.required is None
+            else frozenset(name for name in sorted(typ.required))
+        )
+    else:
+        fields = {
+            name: canonicalize_inline_type(typ.fields[name])
+            for name in sorted(typ.fields)
+        }
+        source_required = typ.required or frozenset()
+        required = frozenset(
+            name for name in fields if name in source_required
+        )
+
+    tags = (
+        None
+        if typ.tags is None
+        else frozenset(tag for tag in sorted(typ.tags))
+    )
+    element = (
+        None
+        if typ.element is None
+        else canonicalize_inline_type(typ.element)
+    )
+    return Type(
+        kind=typ.kind,
+        fields=fields,
+        required=required,
+        tags=tags,
+        element=element,
+        nullable=typ.nullable,
+    )
+
+
+def canonical_type_label(typ: Type) -> str:
+    """Render one deterministic, unambiguous label for a structural type.
+
+    Record keys and variant tags use compact JSON quoting, while lists render
+    from their structural element rather than their storage kind. Callers must
+    prove the type first; a list without an element raises ``ValueError``.
+
+    Args:
+        typ (`Type`): The proven structural type to label.
+
+    Returns:
+        `str`: The compact canonical label used by generated input declarations.
+
+    Raises:
+        `ValueError`: A list type has no structural element.
+    """
+    label = _canonical_nonnullable_label(typ)
+    return f"Optional[{label}]" if typ.nullable else label
+
+
+def _canonical_nonnullable_label(typ: Type) -> str:
+    """Render ``typ`` without applying its outer nullable wrapper."""
+    if typ.fields is not None:
+        fields = (
+            f"{_json_string(name)}:{canonical_type_label(typ.fields[name])}"
+            for name in sorted(typ.fields)
+        )
+        return "{" + ",".join(fields) + "}"
+
+    if typ.tags is not None:
+        return "Literal[" + ",".join(
+            _json_string(tag) for tag in sorted(typ.tags)
+        ) + "]"
+
+    if typ.kind.is_list():
+        if typ.element is None:
+            raise ValueError(
+                f"cannot label {typ.kind.value!r} without a structural element"
+            )
+        return f"list[{canonical_type_label(typ.element)}]"
+
+    return typ.kind.value
+
+
+def _json_string(value: str) -> str:
+    """Encode one record key or variant tag as compact canonical JSON."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _infer_binding_string(
@@ -259,8 +433,13 @@ def _infer_direct_reference(
         root = producer_type(head, binding_label, binding_range)
         fields = parts[2:]
 
-    return _walk_record_type(
+    proven_root = require_proven_type(
         root,
+        binding_label=binding_label,
+        binding_range=binding_range,
+    )
+    return _walk_record_type(
+        proven_root,
         fields,
         path=path,
         binding_label=binding_label,
@@ -491,4 +670,11 @@ def _inference_error(
     )
 
 
-__all__ = ["ItemType", "ProducerType", "infer_inline_binding_type"]
+__all__ = [
+    "ItemType",
+    "ProducerType",
+    "canonical_type_label",
+    "canonicalize_inline_type",
+    "infer_inline_binding_type",
+    "require_proven_type",
+]

@@ -7,7 +7,12 @@ from copy import deepcopy
 import pytest
 
 from agent_composer.compose.build import inline_inputs
-from agent_composer.compose.build.inline_inputs import infer_inline_binding_type
+from agent_composer.compose.build.inline_inputs import (
+    canonical_type_label,
+    canonicalize_inline_type,
+    infer_inline_binding_type,
+    require_proven_type,
+)
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
 from agent_composer.typesys.values import Type, ValueKind
@@ -675,3 +680,291 @@ def test_template_scan_error_preserves_binding_range_and_line():
     assert "call.input.query" in str(error)
     assert "unbalanced" in str(error)
     assert "explicitly typed named `defs:` body" in str(error)
+
+
+_LIST_VALUE_KINDS = tuple(kind for kind in ValueKind if kind.is_list())
+
+
+@pytest.mark.parametrize("kind", _LIST_VALUE_KINDS)
+def test_every_list_kind_requires_a_recursively_proven_element(kind):
+    element = Type.scalar(ValueKind.STRING)
+    proven = Type(kind=kind, element=element)
+
+    assert require_proven_type(proven, binding_label="call.input.items") is proven
+
+    with pytest.raises(LoadError) as caught:
+        require_proven_type(Type(kind=kind), binding_label="call.input.items")
+
+    assert kind.value in str(caught.value)
+    assert "no proven element type" in str(caught.value)
+
+
+def test_list_proof_recurses_into_a_present_malformed_element():
+    malformed_element = Type(
+        kind=ValueKind.OBJECT,
+        fields={"optional_but_nonnullable": Type.scalar(ValueKind.STRING)},
+        required=frozenset(),
+    )
+    typ = Type(kind=ValueKind.LIST_ANY, element=malformed_element)
+
+    with pytest.raises(LoadError, match="optional_but_nonnullable"):
+        require_proven_type(typ, binding_label="call.input.items")
+
+
+@pytest.mark.parametrize(
+    ("typ", "label"),
+    [
+        (
+            Type(kind=ValueKind.LIST_ANY, element=Type.scalar(ValueKind.NONE)),
+            "list[None]",
+        ),
+        (
+            Type(
+                kind=ValueKind.LIST_ANY,
+                element=Type(
+                    kind=ValueKind.LIST_ANY,
+                    element=Type.scalar(ValueKind.DATE),
+                ),
+            ),
+            "list[list[date]]",
+        ),
+        (
+            Type(kind=ValueKind.LIST_ANY, element=Type.scalar(ValueKind.DATETIME)),
+            "list[datetime]",
+        ),
+        (
+            Type(kind=ValueKind.LIST_ANY, element=Type.scalar(ValueKind.FILE)),
+            "list[file]",
+        ),
+    ],
+)
+def test_list_any_retains_proven_special_and_nested_elements(typ, label):
+    assert require_proven_type(typ, binding_label="call.input.items") is typ
+    assert canonical_type_label(typ) == label
+
+
+def test_unrefined_object_is_proven_whole_but_not_dottable():
+    opaque = Type.scalar(ValueKind.OBJECT)
+
+    assert require_proven_type(opaque, binding_label="call.input.payload") is opaque
+    assert _infer(
+        "${input.payload}",
+        parent_input_types={"payload": opaque},
+    ) == opaque
+
+    with pytest.raises(LoadError, match="without proven record fields"):
+        _infer(
+            "${input.payload.value}",
+            parent_input_types={"payload": opaque},
+        )
+
+
+def test_record_rejects_required_names_absent_from_fields():
+    typ = Type(
+        kind=ValueKind.OBJECT,
+        fields={"present": Type.scalar(ValueKind.STRING)},
+        required=frozenset({"present", "absent"}),
+    )
+
+    with pytest.raises(LoadError) as caught:
+        require_proven_type(typ, binding_label="call.input.record")
+
+    assert "requires unknown fields ['absent']" in str(caught.value)
+
+
+def test_record_rejects_any_nonrequired_nonnullable_field():
+    typ = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "required": Type.scalar(ValueKind.INTEGER),
+            "ordinary_string": Type.scalar(ValueKind.STRING),
+        },
+        required=frozenset({"required"}),
+    )
+
+    with pytest.raises(LoadError) as caught:
+        require_proven_type(typ, binding_label="loop.input.record")
+
+    assert "ordinary_string" in str(caught.value)
+    assert "neither required nor nullable" in str(caught.value)
+
+
+def test_record_accepts_required_nullable_optional_nullable_and_required_none():
+    typ = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "required_nullable": Type(kind=ValueKind.STRING, nullable=True),
+            "optional_nullable": Type(kind=ValueKind.INTEGER, nullable=True),
+            "required_none": Type.scalar(ValueKind.NONE),
+        },
+        required=frozenset({"required_nullable", "required_none"}),
+    )
+
+    assert require_proven_type(typ, binding_label="call.input.record") is typ
+
+
+def test_recursive_proof_rejects_a_malformed_nested_record():
+    malformed_child = Type(
+        kind=ValueKind.OBJECT,
+        fields={"unproven": Type.scalar(ValueKind.STRING)},
+        required=frozenset(),
+    )
+    root = Type(
+        kind=ValueKind.OBJECT,
+        fields={"child": malformed_child},
+        required=frozenset({"child"}),
+    )
+
+    with pytest.raises(LoadError, match="unproven"):
+        require_proven_type(root, binding_label="call.input.record")
+
+
+def test_direct_reference_proves_the_entire_root_before_selecting_a_field():
+    root = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "selected": Type.scalar(ValueKind.INTEGER),
+            "malformed_sibling": Type(kind=ValueKind.LIST_ANY),
+        },
+        required=frozenset({"selected", "malformed_sibling"}),
+    )
+
+    with pytest.raises(LoadError) as caught:
+        _infer(
+            "${input.record.selected}",
+            parent_input_types={"record": root},
+            label="call.input.value",
+        )
+
+    assert "list[Any]" in str(caught.value)
+    assert "no proven element type" in str(caught.value)
+
+
+def test_structural_proof_error_preserves_source_range_line_and_hint():
+    source_range = SourceRange(73, 5, 73, 27)
+
+    with pytest.raises(LoadError) as caught:
+        require_proven_type(
+            Type(kind=ValueKind.LIST_OBJECT),
+            binding_label="each.input.rows",
+            binding_range=source_range,
+        )
+
+    error = caught.value
+    assert error.range == source_range
+    assert error.line == 73
+    assert "each.input.rows" in str(error)
+    assert "explicitly typed named `defs:` body" in str(error)
+
+
+def test_canonicalization_deep_copies_sorts_and_preserves_required_membership():
+    required_nullable = Type(kind=ValueKind.STRING, nullable=True)
+    variant = Type(
+        kind=ValueKind.STRING,
+        tags=frozenset({"é", "z", 'a,"b'}),
+    )
+    listed_variant = Type(kind=ValueKind.LIST_STRING, element=variant)
+    original = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "é": Type.scalar(ValueKind.BOOLEAN),
+            "optional": Type(kind=ValueKind.INTEGER, nullable=True),
+            "required_nullable": required_nullable,
+            "a": listed_variant,
+        },
+        required=frozenset({"é", "required_nullable", "a"}),
+    )
+    before = deepcopy(original)
+
+    canonical = canonicalize_inline_type(original)
+
+    assert canonical == original
+    assert canonical is not original
+    assert list(canonical.fields or {}) == ["a", "optional", "required_nullable", "é"]
+    assert canonical.required == frozenset({"a", "required_nullable", "é"})
+    assert canonical.fields["required_nullable"].nullable is True
+    assert canonical.fields["a"] is not listed_variant
+    assert canonical.fields["a"].element is not variant
+    assert canonical.fields["a"].element.tags == variant.tags
+    assert original == before
+    assert list(original.fields or {}) == ["é", "optional", "required_nullable", "a"]
+
+
+def test_canonicalization_normalizes_refined_record_required_none_to_empty():
+    typ = Type(
+        kind=ValueKind.OBJECT,
+        fields={"optional": Type(kind=ValueKind.STRING, nullable=True)},
+        required=None,
+    )
+
+    canonical = canonicalize_inline_type(typ)
+
+    assert canonical.required == frozenset()
+    assert typ.required is None
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        ValueKind.NONE,
+        ValueKind.STRING,
+        ValueKind.INTEGER,
+        ValueKind.NUMBER,
+        ValueKind.DATE,
+        ValueKind.DATETIME,
+        ValueKind.BOOLEAN,
+        ValueKind.OBJECT,
+        ValueKind.FILE,
+    ],
+)
+def test_canonical_scalar_labels_use_author_vocabulary(kind):
+    assert canonical_type_label(Type.scalar(kind)) == kind.value
+
+
+@pytest.mark.parametrize("kind", _LIST_VALUE_KINDS)
+def test_every_list_kind_label_uses_its_structural_element(kind):
+    typ = Type(kind=kind, element=Type(kind=ValueKind.INTEGER, nullable=True))
+
+    assert canonical_type_label(typ) == "list[Optional[int]]"
+
+
+@pytest.mark.parametrize("kind", _LIST_VALUE_KINDS)
+def test_canonical_list_label_rejects_a_missing_element(kind):
+    with pytest.raises(ValueError, match="without a structural element"):
+        canonical_type_label(Type(kind=kind))
+
+
+def test_canonical_variant_label_sorts_and_json_quotes_adversarial_tags():
+    typ = Type(
+        kind=ValueKind.STRING,
+        tags=frozenset({"é", "z", 'a,"b'}),
+    )
+
+    assert canonical_type_label(typ) == 'Literal["a,\\"b","z","é"]'
+
+
+def test_canonical_record_label_sorts_and_json_quotes_adversarial_keys():
+    typ = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "é": Type.scalar(ValueKind.BOOLEAN),
+            'quote"key': Type.scalar(ValueKind.STRING),
+            "a: int, b": Type.scalar(ValueKind.INTEGER),
+        },
+        required=frozenset({"é", 'quote"key', "a: int, b"}),
+    )
+
+    assert canonical_type_label(typ) == (
+        '{"a: int, b":int,"quote\\"key":str,"é":bool}'
+    )
+
+
+def test_nullable_wrapper_is_outermost_for_a_structural_record_label():
+    typ = Type(
+        kind=ValueKind.OBJECT,
+        fields={"value": Type.scalar(ValueKind.STRING)},
+        required=frozenset({"value"}),
+        nullable=True,
+    )
+
+    assert canonical_type_label(typ) == 'Optional[{"value":str}]'

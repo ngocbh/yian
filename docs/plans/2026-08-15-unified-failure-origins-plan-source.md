@@ -160,7 +160,9 @@ aliases terminate and alias DAG storage stays linear. Temporary construction and
 node-to-definition maps are discarded before the loader is disposed.
 
 `SourceCursor` retains its current definition ID and a persistent private path
-link. Descending is O(1); `cursor.path` materializes a tuple only on demand.
+link. Each descent allocates one constant-size link; cycle detection scans only
+the selected path's finite ancestry, avoiding a copied per-cursor ancestry set.
+`cursor.path` materializes a tuple only on demand.
 `SourceDocument._resolve_occurrence(path)` replays a finite path through the DAG
 for later catalog resolution. Definition IDs never appear in origin keys.
 

@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import pytest
 import yaml
 
-from agent_composer.compose.desugar.inline_bodies import _overlay_node_occurrences
+from agent_composer.compose.desugar.inline_bodies import (
+    INLINE_FLOW_PREFIX,
+    _overlay_node_occurrences,
+    extract_inline_bodies,
+    inline_flow_id,
+)
+from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 
@@ -111,3 +118,140 @@ nodes:
     assert base_spans == original_span_entries
     assert id(merged.yaml_node) not in base_spans
     assert all(id(key_node) not in base_spans for key_node, _ in merged.yaml_node.value)
+
+
+def test_extract_one_inline_body_masks_only_the_occurrence_and_retains_locations():
+    root, base_spans = _located_root(
+        """nodes:
+  wrapper:
+    kind: call
+    input:
+      text: ${input.text}
+    nodes:
+      echo:
+        kind: code
+        run: tests.engine._compose_codefns:echo
+        input:
+          value: ${input.text}
+        output: str
+    output: ${echo.output}
+"""
+    )
+    original_nodes = root.child("nodes")
+    original_body = original_nodes.child("wrapper")
+    original_child_nodes = original_body.child("nodes")
+    original_body_value = dict(original_body.value)
+    original_pairs = tuple(original_body.yaml_node.value)
+    original_span_entries = dict(base_spans)
+    child_owner = ("root", "node", "wrapper", "inline")
+
+    masked_nodes, bodies = extract_inline_bodies(original_nodes, owner=("root",))
+
+    assert inline_flow_id(child_owner) == (
+        INLINE_FLOW_PREFIX
+        + "78882e0096fb763300120ec6c6428e700d2dd5094af58139242c79a1023a243a"
+    )
+    assert list(bodies) == ["wrapper"]
+    body = bodies["wrapper"]
+    assert body.node_id == "wrapper"
+    assert body.owner == child_owner
+    assert body.flow_id == inline_flow_id(child_owner)
+    assert body.nodes_reader.value is original_child_nodes.value
+    assert body.nodes_reader.yaml_node is original_child_nodes.yaml_node
+    assert body.output == "${echo.output}"
+    assert body.output_range == original_body.range_of("output")
+    assert body.input_ranges == original_body.mapping_value_ranges("input")
+
+    masked_body = masked_nodes.child("wrapper")
+    assert masked_body.value == {
+        "kind": "call",
+        "input": {"text": "${input.text}"},
+        "call": body.flow_id,
+    }
+    assert "nodes" not in masked_body.value
+    assert "output" not in masked_body.value
+    assert masked_body.range_of("call") == original_body.range_of("nodes")
+    assert masked_body.child("call").yaml_node is original_child_nodes.yaml_node
+    assert [key.value for key, _value in masked_body.yaml_node.value] == [
+        "kind",
+        "input",
+        "call",
+    ]
+
+    assert original_body.value == original_body_value
+    assert tuple(original_body.yaml_node.value) == original_pairs
+    assert base_spans == original_span_entries
+
+
+_INLINE_CHILD = """nodes:
+      echo:
+        kind: code
+        run: tests.engine._compose_codefns:echo
+        input:
+          value: hello
+        output: str
+"""
+
+
+@pytest.mark.parametrize(
+    ("kind", "body", "range_key", "message"),
+    [
+        (
+            "map",
+            "call: named\n    " + _INLINE_CHILD + "    output: ${echo.output}\n",
+            "nodes",
+            "exactly one",
+        ),
+        ("call", "input: {}\n", None, "exactly one"),
+        ("loop", _INLINE_CHILD, None, "requires `output:`"),
+        ("call", "call: named\n    output: ${named.output}\n", "output", "only valid"),
+        ("call", "nodes: {}\n    output: ${missing.output}\n", "nodes", "non-empty"),
+        ("map", "nodes: not-a-map\n    output: value\n", "nodes", "mapping"),
+        (
+            "call",
+            "input: not-a-map\n    " + _INLINE_CHILD + "    output: ${echo.output}\n",
+            "input",
+            "string keys",
+        ),
+        (
+            "loop",
+            "input:\n      1: value\n    "
+            + _INLINE_CHILD
+            + "    output: ${echo.output}\n",
+            "input",
+            "string keys",
+        ),
+    ],
+    ids=[
+        "both-call-and-nodes",
+        "neither-call-nor-nodes",
+        "inline-missing-output",
+        "named-with-output",
+        "empty-nodes",
+        "non-mapping-nodes",
+        "non-mapping-input",
+        "non-string-input-key",
+    ],
+)
+def test_inline_body_shape_errors_are_located_without_private_ids(
+    kind: str,
+    body: str,
+    range_key: str | None,
+    message: str,
+):
+    root, _spans = _located_root(
+        "nodes:\n"
+        "  composite:\n"
+        f"    kind: {kind}\n"
+        f"    {body}"
+    )
+    nodes_reader = root.child("nodes")
+    raw_body = nodes_reader.child("composite")
+    expected_range = raw_body.range_of(range_key) if range_key else raw_body._own_range()
+
+    with pytest.raises(LoadError) as caught:
+        extract_inline_bodies(nodes_reader, owner=("root",))
+
+    assert message in str(caught.value)
+    assert INLINE_FLOW_PREFIX not in str(caught.value)
+    assert caught.value.range == expected_range

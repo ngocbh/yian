@@ -59,7 +59,8 @@ engine or flow change.
   `Grow`; the engine records and binds the result.
 - Runtime transitions stay record-authoritative: prepare and validate, append to
   `RunLog`, then apply through the reducer. Recovery folds the same reducer.
-- Keep imports acyclic: `events <- typesys <- nodes <- compile <- compose`.
+- Keep imports acyclic: `diagnostics` sits below `events`; nodes combine the
+  `diagnostics`, `typesys`, and `expr` leaves before `compile <- compose`.
 - Prefer general, domain-neutral nodes and combinators over one-off behavior.
 - Put new external dependencies behind small injected callables. Agent modes are
   the existing exception.

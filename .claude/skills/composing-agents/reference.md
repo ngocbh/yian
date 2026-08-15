@@ -210,7 +210,8 @@ node execution. A `human_input` gate can present multiple-choice questions
 (static `questions:`), have an LLM compose them
 (`adaptive_questions:`, which desugars to a compose-agent + gate at load), or read
 them from an upstream node (`questions: ${name}`); the answer is then a record
-keyed by each question's `header`.
+keyed by each question's `header`. The adaptive desugar owns the `__questions`
+input name, so authors cannot bind that name on an adaptive gate.
 
 These are live authoring surfaces: AGENT has no authored `entry:`/`controls:`
 fields, HUMAN_INPUT has no control fields, and WAIT has no event-watch form. Each

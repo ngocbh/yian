@@ -68,7 +68,7 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
             range=cursor.range,
         )
     _reject_reserved_node_id(node_id, cursor)
-    cursor = _back_map_input_output(cursor)
+    cursor = normalize_node_signature_cursor(cursor)
 
     kind = cursor.get("kind")
     if kind is None:
@@ -91,7 +91,8 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
     #     INDEX, not by their (non-unique) text, so two identical asserts get distinct carets — hence
     #     they live in a list, NOT in `field_ranges`.
     # Both no-op for a source-free cursor or a node without the field. `inputs:` is read AFTER
-    # `_back_map_input_output` has renamed the author's singular `input:` key to plural.
+    # `normalize_node_signature_cursor` has renamed the author's singular
+    # `input:` key to plural.
     field_ranges = getattr(desc, "field_ranges", None)
     if isinstance(field_ranges, dict):
         field_ranges.update(
@@ -139,7 +140,25 @@ def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:
         )
 
 
-def _back_map_input_output(cursor: SourceCursor) -> SourceCursor:
-    """Return a pure singular-to-plural node-signature key projection."""
+def normalize_node_signature_cursor(cursor: SourceCursor) -> SourceCursor:
+    """Project authored node-signature keys onto descriptor field names.
+
+    The projection is the single crossing from the singular Compose surface to
+    the plural Python carrier fields. Later phases that correlate a descriptor
+    with its source must reuse this cursor so collision and source-selection
+    semantics cannot drift from parsing.
+
+    Args:
+        cursor (`SourceCursor`):
+            Cursor over one node body mapping in authored or projected form.
+
+    Returns:
+        `SourceCursor`:
+            Pure projection with signature keys normalized to carrier names.
+
+    Raises:
+        `SourceAccessError`:
+            Raised when `cursor` is not a traversable mapping.
+    """
 
     return cursor.renamed(_INPUT_OUTPUT_REMAP)

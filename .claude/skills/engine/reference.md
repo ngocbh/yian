@@ -286,7 +286,12 @@ origins are manifest-neutral. A bound null shadows a default but still undergoes
 contract validation, so it is accepted only when the parameter is untyped or its
 contract accepts null (a nullable or `None`-kind type). Compose `input:` crosses
 directly into this exact `Parameter` shape; `ComposedFlow.input` and START use it
-without a parallel front-end carrier.
+without a parallel front-end carrier. For ordinary source-backed node inputs, final
+assembly stamps the selecting key on `Parameter.origin` and the value on the
+corresponding `Binding.origin`. Desugaring may replace `Binding.source` but retains
+that value origin. Inputs without a retained source occurrence remain origin-free;
+source-backed projections inherit their backing site. Reserved kind-specific wiring and
+synthesized boundaries are deferred.
 
 `Node.output_contract` is the sole stored output declaration: an exact
 `ValueContract`, or `None` for an unenforced output. Runtime success/replay
@@ -337,10 +342,11 @@ occurrence and an explicit key/value anchor. Resolution replays that occurrence
 into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and no
 YAML is reparsed or parallel range map created. The loader creates one builder per
 physical document and shares it through root, `defs:`, and inline-body assembly.
-Authored node-header origins are registered under their complete lexical owner paths;
-loader/desugar-synthesized nodes remain origin-free. Each assembled flow receives a
-frozen snapshot as private `ComposedFlow._local_catalog` staging metadata. It is not
-the complete resolver for reachable external children until their origins are
+Authored node headers and ordinary node-input key/value occurrences are registered under
+their complete lexical owner paths and carried by the semantic IR rather than a parallel
+map; sites without a retained source occurrence remain origin-free. Each assembled flow
+receives a frozen snapshot as private `ComposedFlow._local_catalog` staging metadata. It
+is not the complete resolver for reachable external children until their origins are
 lexically rebased.
 
 After cursor-based extraction and parsing, descriptors and nodes carry the derived

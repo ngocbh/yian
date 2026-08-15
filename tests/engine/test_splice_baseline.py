@@ -12,7 +12,6 @@ they only appear at RUNTIME.
 
 from agent_composer.compose import load_flow
 from agent_composer.nodes.base import NodeKind
-from agent_composer.nodes.contracts import Binding
 from tests.engine.test_map import _ECHO_CHILD, _map_flow
 from tests.engine.test_map import _resolver as _map_resolver
 from tests.engine.test_ref_run import _CHILD, _REF_PARENT, _resolver
@@ -41,7 +40,11 @@ def test_ref_parent_edge_ids_and_call_wiring():
         "research->__end__#0",
         "research->__end__#1",
     ]
-    assert c.wiring["research"] == {"topic": Binding("${input.topic}")}
+    wiring = c.wiring["research"]
+    assert {name: binding.source for name, binding in wiring.items()} == {
+        "topic": "${input.topic}",
+    }
+    assert wiring["topic"].origin is not None
 
 
 def test_map_child_boundary_and_over_wiring():
@@ -54,10 +57,12 @@ def test_map_child_boundary_and_over_wiring():
     assert child.nodes[child.end_id].kind == NodeKind.END
     assert [p.name for p in child.nodes[child.start_id].params] == ["topic"]
     # the MAP `over` source rides flow.wiring[id]["over"] (over-then-inputs).
-    assert c.wiring["each"] == {
-        "over": Binding("${input.topics}"),
-        "topic": Binding("${item}"),
+    assert {name: binding.source for name, binding in c.wiring["each"].items()} == {
+        "over": "${input.topics}",
+        "topic": "${item}",
     }
+    assert c.wiring["each"]["over"].origin is None
+    assert c.wiring["each"]["topic"].origin is not None
     assert sorted(e.id for e in c.edges) == ["__start__->each#0", "each->__end__#0"]
 
 

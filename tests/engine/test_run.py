@@ -130,8 +130,14 @@ def test_leaf_binds_from_flow_wiring():
     # The engine binds a leaf from flow.wiring + node.params (the wiring split): the flow owns the
     # source, the node carries only the param name, and the loaded flow runs end-to-end from it.
     loaded = load_flow(_PLAN_FLOW)
-    assert loaded.compiled.wiring["plan"] == {"topic": Binding("${input.topic}")}
-    assert [p.name for p in loaded.compiled.nodes["plan"].params] == ["topic"]
+    wiring = loaded.compiled.wiring["plan"]
+    parameters = loaded.compiled.nodes["plan"].params
+    assert {name: binding.source for name, binding in wiring.items()} == {
+        "topic": "${input.topic}",
+    }
+    assert wiring["topic"].origin is not None
+    assert [p.name for p in parameters] == ["topic"]
+    assert parameters[0].origin is not None
     result = run_flow(loaded, {"topic": "ACME"})
     assert result.status == "succeeded", result.error
     assert result.output == {"rating": "plan for ACME", "score": 0.9}

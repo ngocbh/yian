@@ -24,7 +24,7 @@ from typing import Callable, Optional, Protocol
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges, Node
-from agent_composer.nodes.contracts import Parameter, ValueContract
+from agent_composer.nodes.contracts import Parameter, ValueContract, as_binding
 from agent_composer.typesys.values import Type
 from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
@@ -55,7 +55,10 @@ from agent_composer.compose.validate.call_types import check_ref_map_types
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 from agent_composer.compose.helpers.source import SourceFrame
-from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.parse.nodes import (
+    normalize_node_signature_cursor,
+    parse_nodes,
+)
 from agent_composer.compose.source import SourceAccessError, SourceCatalog, SourceCursor
 from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.compose.helpers.types import read_flow_inputs
@@ -301,6 +304,106 @@ def _register_inline_bodies(
         registrar.register_private(body.flow_id, body.owner, label, builder)
 
     return associated
+
+
+def _stamp_node_input_origins(
+    descriptors: dict[str, NodeDescriptor],
+    nodes_cursor: SourceCursor,
+    nodes: dict[str, Node],
+    flow_wiring: dict[str, dict],
+    *,
+    owner: tuple[str, ...],
+    catalog_builder: _SourceCatalogBuilder,
+) -> None:
+    """Attach authored ordinary input sites to their canonical carriers.
+
+    Desugaring has already produced each final binding source, while
+    ``nodes_cursor`` still retains the original occurrence. Each source-backed
+    mapping entry therefore contributes two independent meanings: its key owns
+    the formal ``Parameter`` and its value owns the flow ``Binding``. Generated
+    names absent from the retained cursor remain origin-free. Reserved kind
+    fields such as MAP ``over`` and WAIT ``until`` are not descriptor inputs and
+    are deliberately outside this crossing.
+
+    Args:
+        descriptors (`dict[str, NodeDescriptor]`):
+            Final descriptors keyed by node id, after every graph desugar.
+        nodes_cursor (`SourceCursor`):
+            Retained source view of the flow's authored node mapping.
+        nodes (`dict[str, Node]`):
+            Built runtime nodes keyed by final descriptor id.
+        flow_wiring (`dict[str, dict]`):
+            Mutable final binding maps keyed by node id and parameter name.
+        owner (`tuple[str, ...]`):
+            Complete lexical owner path used to namespace catalog sites.
+        catalog_builder (`_SourceCatalogBuilder`):
+            File-owned origin catalog builder shared by all lexical children.
+
+    Raises:
+        `LoadError`:
+            Raised when a retained source cursor cannot be traversed.
+    """
+    for node_id, descriptor in descriptors.items():
+        if not descriptor.inputs:
+            continue
+        node = nodes.get(node_id)
+        wiring = flow_wiring.get(node_id)
+        if node is None or wiring is None:
+            continue
+
+        try:
+            if not nodes_cursor.has(node_id):
+                continue
+            node_cursor = normalize_node_signature_cursor(
+                nodes_cursor.child(node_id)
+            )
+            if not node_cursor.has("inputs"):
+                continue
+            inputs_cursor = node_cursor.child("inputs")
+        except SourceAccessError as exc:
+            raise LoadError(str(exc), range=exc.range) from exc
+
+        if node.params is None:
+            continue
+        parameter_indexes = {
+            parameter.name: index
+            for index, parameter in enumerate(node.params)
+        }
+        parameters = list(node.params)
+        parameters_changed = False
+        for name in descriptor.inputs:
+            if name not in parameter_indexes or name not in wiring:
+                continue
+            try:
+                if not inputs_cursor.has(name):
+                    continue
+                entry_cursor = inputs_cursor.child(name)
+                parameter_origin = catalog_builder.register(
+                    (*owner, "node", node_id, "input", name, "parameter"),
+                    entry_cursor,
+                    anchor="key",
+                )
+                binding_origin = catalog_builder.register(
+                    (*owner, "node", node_id, "input", name, "binding"),
+                    entry_cursor,
+                )
+            except SourceAccessError as exc:
+                raise LoadError(str(exc), range=exc.range) from exc
+
+            parameter_index = parameter_indexes[name]
+            if parameter_origin is not None:
+                parameters[parameter_index] = replace(
+                    parameters[parameter_index],
+                    origin=parameter_origin,
+                )
+                parameters_changed = True
+            if binding_origin is not None:
+                wiring[name] = replace(
+                    as_binding(wiring[name]),
+                    origin=binding_origin,
+                )
+        if parameters_changed:
+            node.params = parameters
 
 
 def _flow_outputs(outputs) -> list[FlowOutput]:
@@ -665,6 +768,14 @@ def _assemble(
     flow_wiring: dict[str, dict] = {
         nid: result.wiring for nid, result in build_results.items()
     }
+    _stamp_node_input_origins(
+        descriptors,
+        nodes_cursor,
+        nodes_built,
+        flow_wiring,
+        owner=owner,
+        catalog_builder=catalog_builder,
+    )
     # A case's own data+control edges; every other kind returns an empty tuple.
     case_edges: list[Edge] = [
         edge

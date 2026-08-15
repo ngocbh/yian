@@ -55,8 +55,18 @@ def desugar_adaptive_questions(
     the synth composer agent first (id `<gate>__compose`), then the rewritten gate —
     so the agent precedes the gate in insertion order (build/edge order).
 
-    Raises `LoadError` (located at the gate's `range`) if the synth id `<gate>__compose`
-    already exists in the map.
+    Args:
+        descriptors (`dict[str, NodeDescriptor]`):
+            Parsed descriptors keyed by node id in authored graph order.
+
+    Returns:
+        `dict[str, NodeDescriptor]`:
+            New ordered mapping with each adaptive gate lowered to two nodes.
+
+    Raises:
+        `LoadError`:
+            Raised for a synthesized node-id collision or an authored reserved
+            `__questions` input on an adaptive gate.
     """
     new_descriptors: dict[str, NodeDescriptor] = {}
     for gid, desc in descriptors.items():
@@ -71,6 +81,12 @@ def desugar_adaptive_questions(
                 f"node {gid!r} (kind=human_input): synthesized composer id "
                 f"{synth_id!r} collides with an existing node id",
                 range=desc.range,
+            )
+        if QPARAM in desc.inputs:
+            raise LoadError(
+                f"node {gid!r} (kind=human_input): input {QPARAM!r} is reserved "
+                "for adaptive_questions",
+                range=desc.field_ranges.get(("input", QPARAM), desc.range),
             )
 
         # The block IS the agent spec. Pass optional fields only when present so the

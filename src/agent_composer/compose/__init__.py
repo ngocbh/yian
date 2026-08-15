@@ -12,9 +12,10 @@ in the ordered phases `parse/ -> desugar/ -> edges/ -> validate/ -> build/`. The
 points (`parse/nodes.py`, the loader's conductor loop, `nodes/bindings.py`) dispatch through
 `KINDS` kind-blind — there is no per-kind isinstance ladder. `source/` owns the one-pass
 YAML document, located cursors, and immutable occurrence-backed origin catalogs;
-assembly stamps authored node headers and retains a private document-local catalog
-snapshot on each `ComposedFlow`. The snapshot is not yet a complete cross-file
-resolver; `parse/file.py` consumes the document (`parse_file`).
+assembly stamps authored node headers and ordinary node-input key/value origins on
+their canonical carriers, then retains a private document-local catalog snapshot on
+each `ComposedFlow`. The snapshot is not yet a complete cross-file resolver;
+`parse/file.py` consumes the document (`parse_file`).
 The loader also owns each file's callable scope:
 authored `defs:`/`uses:` plus a resolver-private, lazy cache for inline CALL/MAP/LOOP
 children lowered by `desugar/` and assembled by `build/`.

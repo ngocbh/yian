@@ -225,13 +225,31 @@ def _copy_mapping(
     node: yaml.MappingNode,
     range_copies: list[tuple[yaml.Node, yaml.Node]],
 ) -> tuple[dict[Any, Any], yaml.MappingNode]:
-    """Shallow-copy one constructed/YAML mapping and record copied range owners."""
+    """Shallow-copy one effective mapping and record copied range owners.
+
+    PyYAML expands ``<<:`` entries into the composed pair list before construction,
+    leaving both an inherited pair and a later local override there. The constructed
+    dict has already applied last-key-wins semantics. Select that last pair while
+    retaining the key's first position, which matches the constructed dict's order.
+    """
     copied_node = copy(node)
     copied_pairs: list[tuple[yaml.Node, yaml.Node]] = []
     copied_node.value = copied_pairs
     range_copies.append((copied_node, node))
 
-    for key_node, value_node in node.value:
+    key_order: list[tuple[str | None, str | None]] = []
+    effective_pairs: dict[
+        tuple[str | None, str | None], tuple[yaml.Node, yaml.Node]
+    ] = {}
+    for pair in node.value:
+        key_node, _value_node = pair
+        key = (getattr(key_node, "tag", None), getattr(key_node, "value", None))
+        if key not in effective_pairs:
+            key_order.append(key)
+        effective_pairs[key] = pair
+
+    for key in key_order:
+        key_node, value_node = effective_pairs[key]
         copied_key = copy(key_node)
         copied_pairs.append((copied_key, value_node))
         range_copies.append((copied_key, key_node))

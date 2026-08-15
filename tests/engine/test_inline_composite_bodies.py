@@ -22,6 +22,15 @@ def _located_root(text: str) -> tuple[NodeReader, dict]:
     return NodeReader(value, spans, root), spans
 
 
+def _yaml_pairs(reader: NodeReader, key: str) -> list[tuple[yaml.Node, yaml.Node]]:
+    """Return every composed pair for ``key`` in author/effective merge order."""
+    return [
+        (key_node, value_node)
+        for key_node, value_node in reader.yaml_node.value
+        if key_node.value == key
+    ]
+
+
 def test_overlay_alias_wrappers_are_distinct_and_leave_the_base_unchanged():
     root, base_spans = _located_root(
         """
@@ -180,6 +189,185 @@ def test_extract_one_inline_body_masks_only_the_occurrence_and_retains_locations
 
     assert original_body.value == original_body_value
     assert tuple(original_body.yaml_node.value) == original_pairs
+    assert base_spans == original_span_entries
+
+
+def test_extract_alias_occurrences_get_distinct_ids_and_share_retained_children():
+    root, base_spans = _located_root(
+        """
+body: &body
+  kind: call
+  input:
+    text: ${input.text}
+  nodes:
+    echo:
+      kind: code
+      run: tests.engine._compose_codefns:echo
+      input:
+        value: ${input.text}
+      output: str
+  output: ${echo.output}
+nodes:
+  first: *body
+  second: *body
+"""
+    )
+    original_nodes = root.child("nodes")
+    anchor = root.child("body")
+    anchor_children = anchor.child("nodes")
+    original_anchor_value = dict(anchor.value)
+    original_anchor_pairs = tuple(anchor.yaml_node.value)
+    original_anchor_keys = [key.value for key, _value in anchor.yaml_node.value]
+    original_span_entries = dict(base_spans)
+
+    masked_nodes, bodies = extract_inline_bodies(original_nodes, owner=("root",))
+
+    assert list(bodies) == ["first", "second"]
+    assert bodies["first"].owner == ("root", "node", "first", "inline")
+    assert bodies["second"].owner == ("root", "node", "second", "inline")
+    assert bodies["first"].flow_id != bodies["second"].flow_id
+    for body in bodies.values():
+        assert body.nodes_reader.value is anchor_children.value
+        assert body.nodes_reader.yaml_node is anchor_children.yaml_node
+        assert body.output == "${echo.output}"
+        assert body.output_range == anchor.range_of("output")
+
+    first = masked_nodes.child("first")
+    second = masked_nodes.child("second")
+    assert first.value is not second.value
+    assert first.yaml_node is not second.yaml_node
+    assert first.value["call"] == bodies["first"].flow_id
+    assert second.value["call"] == bodies["second"].flow_id
+    assert first.range_of("call") == anchor.range_of("nodes")
+    assert second.range_of("call") == anchor.range_of("nodes")
+    assert [key.value for key, _value in first.yaml_node.value].count("call") == 1
+    assert [key.value for key, _value in second.yaml_node.value].count("call") == 1
+
+    assert anchor.value == original_anchor_value
+    assert tuple(anchor.yaml_node.value) == original_anchor_pairs
+    assert [key.value for key, _value in anchor.yaml_node.value] == original_anchor_keys
+    assert base_spans == original_span_entries
+
+
+def test_extract_merged_inline_body_retains_anchor_values_and_ranges():
+    root, base_spans = _located_root(
+        """
+body: &body
+  kind: call
+  nodes:
+    echo:
+      kind: code
+      run: tests.engine._compose_codefns:echo
+      input:
+        value: hello
+      output: str
+  output: ${echo.output}
+nodes:
+  merged:
+    <<: *body
+    input:
+      text: hello
+"""
+    )
+    anchor = root.child("body")
+    anchor_children = anchor.child("nodes")
+    original_nodes = root.child("nodes")
+    merged_before = original_nodes.child("merged")
+    original_merged_pairs = tuple(merged_before.yaml_node.value)
+    original_merged_keys = [key.value for key, _value in merged_before.yaml_node.value]
+    original_span_entries = dict(base_spans)
+
+    masked_nodes, bodies = extract_inline_bodies(original_nodes, owner=("root",))
+
+    body = bodies["merged"]
+    assert body.nodes_reader.value is anchor_children.value
+    assert body.nodes_reader.yaml_node is anchor_children.yaml_node
+    assert body.output == "${echo.output}"
+    assert body.output_range == anchor.range_of("output")
+
+    masked = masked_nodes.child("merged")
+    assert masked.value == {
+        "kind": "call",
+        "call": body.flow_id,
+        "input": {"text": "hello"},
+    }
+    assert masked.range_of("call") == anchor.range_of("nodes")
+    assert [key.value for key, _value in masked.yaml_node.value].count("call") == 1
+    assert tuple(merged_before.yaml_node.value) == original_merged_pairs
+    assert [key.value for key, _value in merged_before.yaml_node.value] == (
+        original_merged_keys
+    )
+    assert base_spans == original_span_entries
+
+
+def test_extract_merged_local_body_override_uses_effective_values_and_ranges():
+    root, base_spans = _located_root(
+        """
+body: &body
+  kind: call
+  nodes:
+    anchored:
+      kind: code
+      run: tests.engine._compose_codefns:echo
+      input:
+        value: anchored
+      output: str
+  output: ${anchored.output}
+nodes:
+  merged:
+    <<: *body
+    nodes:
+      local:
+        kind: code
+        run: tests.engine._compose_codefns:echo
+        input:
+          value: local
+        output: str
+    output: ${local.output}
+"""
+    )
+    anchor = root.child("body")
+    original_nodes = root.child("nodes")
+    merged_before = original_nodes.child("merged")
+    nodes_pairs = _yaml_pairs(merged_before, "nodes")
+    output_pairs = _yaml_pairs(merged_before, "output")
+    assert len(nodes_pairs) == 2
+    assert len(output_pairs) == 2
+    local_nodes_node = nodes_pairs[-1][1]
+    local_output_node = output_pairs[-1][1]
+    local_nodes_range = base_spans[id(local_nodes_node)]
+    local_output_range = base_spans[id(local_output_node)]
+    original_merged_pairs = tuple(merged_before.yaml_node.value)
+    original_anchor_pairs = tuple(anchor.yaml_node.value)
+    original_merged_keys = [key.value for key, _value in merged_before.yaml_node.value]
+    original_anchor_keys = [key.value for key, _value in anchor.yaml_node.value]
+    original_span_entries = dict(base_spans)
+
+    assert list(merged_before.value["nodes"]) == ["local"]
+    assert merged_before.value["output"] == "${local.output}"
+
+    masked_nodes, bodies = extract_inline_bodies(original_nodes, owner=("root",))
+
+    body = bodies["merged"]
+    assert body.nodes_reader.value is merged_before.value["nodes"]
+    assert body.nodes_reader.yaml_node is local_nodes_node
+    assert list(body.nodes_reader.value) == ["local"]
+    assert body.output == "${local.output}"
+    assert body.output_range == local_output_range
+
+    masked = masked_nodes.child("merged")
+    call_pairs = _yaml_pairs(masked, "call")
+    assert masked.value == {"kind": "call", "call": body.flow_id}
+    assert len(call_pairs) == 1
+    assert call_pairs[0][1] is local_nodes_node
+    assert masked.range_of("call") == local_nodes_range
+
+    assert tuple(merged_before.yaml_node.value) == original_merged_pairs
+    assert tuple(anchor.yaml_node.value) == original_anchor_pairs
+    assert [key.value for key, _value in merged_before.yaml_node.value] == (
+        original_merged_keys
+    )
+    assert [key.value for key, _value in anchor.yaml_node.value] == original_anchor_keys
     assert base_spans == original_span_entries
 
 

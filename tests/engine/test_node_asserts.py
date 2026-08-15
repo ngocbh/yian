@@ -48,22 +48,16 @@ def test_node_asserts_classify_pre_and_post():
 
 
 def test_node_assert_field_walk_uses_the_canonical_output_contract():
-    """Node-local validation must not depend on the temporary output-type view."""
-
-    class ContractOnlyNode(Node):
-        @property
-        def output_type(self):
-            raise AssertionError("the compatibility view must not be read")
-
-    output_type = Type(
+    """Node-local validation projects the type without replacing provenance."""
+    contract_type = Type(
         kind=ValueKind.OBJECT,
         fields={"score": Type.scalar(ValueKind.NUMBER)},
         required=frozenset({"score"}),
     )
     origins = ContractOrigins(default=OriginRef("node-output"))
-    node = ContractOnlyNode(
+    node = Node(
         "x",
-        output_contract=ValueContract(output_type, origins),
+        output_contract=ValueContract(contract_type, origins),
     )
     descriptor = SimpleNamespace(
         asserts=["${output.score} >= 0"],
@@ -75,7 +69,7 @@ def test_node_assert_field_walk_uses_the_canonical_output_contract():
     assert node.post_asserts == [
         Assertion("${output.score} >= 0", "${output.score} >= 0")
     ]
-    assert node.output_contract.type is output_type
+    assert node.output_contract.type is contract_type
     assert node.output_contract.origins is origins
 
 

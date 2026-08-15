@@ -1,5 +1,5 @@
 """6.3 — the `model` kind handle: parse records field ranges into the descriptor; build
-returns a runtime ModelNode with output_type + wiring and stamped ranges."""
+returns a runtime ModelNode with an output contract, wiring, and stamped ranges."""
 
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.model import ModelDescriptor
@@ -47,6 +47,6 @@ def test_model_build_returns_model_node_and_stamps_ranges():
 
     assert isinstance(node, ModelNode)
     assert node.model_id == "sentiment-v2"
-    assert node.output_type is not None
+    assert node.output_contract is not None
     assert node.range == desc.range
     assert wiring == {"text": "${input.text}"}

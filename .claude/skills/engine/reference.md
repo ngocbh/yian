@@ -289,15 +289,13 @@ clones retain the carrier so its origins survive lexical rewrites. Manifests enc
 the semantic type but deliberately omit `ContractOrigins`, keeping provenance
 changes identity-neutral.
 
-`Node.output_type` is a temporary Type-valued compatibility view for the remaining
-Compose front end. Its getter projects `output_contract.type`; assigning a `Type`
-changes only that type while preserving existing origins, and assigning `None`
-clears the contract. It is not parallel storage, and canonical node, compile, and
-runtime code must not use it. The next #131 child converts descriptor output
-derivation, builders, producer maps, `ChildSignature.output`, human-input schema,
-assert/loop validation, and the legacy constructor keyword to `ValueContract`, then
-deletes the bridge.
-The authored `output:` / `outputs:` YAML surface is unchanged.
+Compose output derivation, builders, producer maps, and `ChildSignature.output`
+retain exact `ValueContract` carriers. Reference, assert, CASE, CALL, and LOOP
+algorithms project `.type` only at the point where a semantic type is required.
+Whole direct references preserve contract identity; nested references rebase their
+origin paths. Python-authored nodes pass `output_contract=`; there is no
+parallel output-Type compatibility API. The authored `output:` / `outputs:` YAML
+surface is unchanged.
 
 ## Compose source ownership
 

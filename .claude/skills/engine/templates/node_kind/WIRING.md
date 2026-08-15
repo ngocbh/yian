@@ -37,9 +37,8 @@ parallel declaration type, or a source on the parameter itself.
 Every enforced programmatic node output is an exact `ValueContract` stored in
 `Node.output_contract`; `None` means unenforced. Node-side code reads the
 contract's `.type` when it needs the semantic type and retains the carrier when it
-clones or rewrites the node. Do not add another output-Type field. The temporary
-`Node.output_type` property exists only for the remaining Compose front end and is
-deleted by the next #131 child.
+clones or rewrites the node. Python callers pass `output_contract=`; do not add
+another output-Type field or compatibility property.
 
 ```python
 class NodeKind(str, Enum):
@@ -85,7 +84,7 @@ This one module owns the kind's front-end handle: a frozen `XxxDescriptor` datac
 that **subclasses `NodeDescriptor`**. The base holds the common contract — the shared
 fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + `inputs`/`outputs` + the
 `range`/`field_ranges` parse metadata), the key-legality check, the template
-`parse(node_id, reader)` classmethod, and the sink derivations (`output_type` /
+`parse(node_id, reader)` classmethod, and the sink derivations (`output_contract` /
 `sink_params` / `sink_wiring` / `_finish`). A leaf kind diverges only where it must.
 Copy `code.py`.
 
@@ -106,15 +105,10 @@ Copy `code.py`.
 - **Override `build`** — an instance method `build(self, ctx: BuildContext) -> BuildResult`
   that constructs `XxxNode(...)`, sets the output contract / params / wiring, and returns
   `self._finish(node, wiring)` (which stamps `.range`/`.field_ranges` and wraps a `BuildResult`).
-  During the current staged cutover, the inherited descriptor
-  `self.output_type(ctx.registry)` still returns a `Type`; assign it through the temporary
-  `node.output_type` view, whose setter replaces the semantic type without discarding any
-  origins already attached to `node.output_contract`. This is the only allowed use of the
-  bridge in a newly added node-kind builder. The next #131 child changes descriptor/child
-  signatures to produce
-  `ValueContract` directly, moves all builders, producer maps, human-input schema,
-  and assert/loop validators off the view, removes the legacy constructor keyword,
-  and deletes the view. The authored `outputs:` field does not change.
+  The inherited `self.output_contract(ctx.registry)` returns a `ValueContract | None`;
+  assign that carrier directly to `node.output_contract`. Retain an existing carrier when
+  re-exporting a child output; construct a new carrier only when the kind changes the semantic
+  type (for example, MAP deriving `list[U]`). The authored `outputs:` field does not change.
   The one input is the immutable `BuildContext`: `ctx.registry` (the `TypeRegistry`),
   `ctx.resolver` (the child-flow resolver — only call/map/loop read it), and the inline-CODE
   traceback anchors `ctx.source_file`/`ctx.code_line`/`ctx.code_field_line` (only the CODE build

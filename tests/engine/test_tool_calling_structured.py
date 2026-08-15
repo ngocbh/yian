@@ -4,6 +4,7 @@ import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.nodes.agent import AgentNode
+from agent_composer.nodes.contracts import ValueContract
 from agent_composer.runtime.eval_node import eval_node
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import Type, ValueKind
@@ -74,13 +75,15 @@ def test_tool_calling_final_answer_is_structured(monkeypatch):
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
 
     node = AgentNode("n", prompt="hi", tools=["value"], llm_config=LLMConfig(), mode="tool_calling")
-    node.output_type = Type(
-        kind=ValueKind.OBJECT,
-        fields={
-            "name": Type.scalar(ValueKind.STRING),
-            "score": Type.scalar(ValueKind.INTEGER),
-        },
-        required=frozenset({"name", "score"}),
+    node.output_contract = ValueContract(
+        Type(
+            kind=ValueKind.OBJECT,
+            fields={
+                "name": Type.scalar(ValueKind.STRING),
+                "score": Type.scalar(ValueKind.INTEGER),
+            },
+            required=frozenset({"name", "score"}),
+        )
     )
     out = _run_node(node).value
     assert out == {"name": "ACME", "score": 9}  # a plain dict, structured final answer
@@ -93,6 +96,6 @@ def test_tool_calling_text_answer_unchanged(monkeypatch):
     chat._replies = [AIMessage(content="plain answer")]
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
     node = AgentNode("n", prompt="hi", llm_config=LLMConfig(), mode="tool_calling")
-    # no output_type declared -> text passthrough, no structured emit turn
+    # no output contract declared -> text passthrough, no structured emit turn
     assert _run_node(node).value == "plain answer"
     assert chat.structured_called_with is None

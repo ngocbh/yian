@@ -114,15 +114,12 @@ attached to the same carrier for diagnostics. The manifest projects only that se
 type, so changing or rebasing contract origins does not change flow or expansion
 identity.
 
-`Node.output_type` is a temporary Type-valued Compose compatibility view, not a second
-stored declaration. Reading it projects `output_contract.type`; assigning a `Type`
-replaces only the semantic type while retaining the carrier's existing origins, and
-assigning `None` clears the contract. Canonical node/compile/runtime code uses
-`output_contract` directly. Compose descriptors, builders, producer maps, child
-signatures, and validators still cross this bridge during the staged migration; the
-next #131 child must move those sites and the legacy constructor keyword to
-`ValueContract`, then delete the view. This internal migration does not change the
-authored `output:` / `outputs:` YAML syntax.
+Compose descriptors derive `ValueContract` directly. Builders, child signatures,
+producer maps, and validators retain the carrier; algorithms that only compare or walk
+types project `.type` at their boundary. CALL and LOOP preserve a child's output
+contract, while MAP deliberately derives a new list contract. There is no parallel
+output-Type API: Python-authored nodes pass `output_contract=` explicitly.
+The authored `output:` / `outputs:` YAML syntax is unchanged.
 
 ## One-pass source ownership
 

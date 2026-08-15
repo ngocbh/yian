@@ -121,7 +121,7 @@ def test_seed02_start_feeds_input_readers_branch_targets_control_gated():
 
 
 # --------------------------------------------------------------------------- #
-# seed 13 — nested record output_type + a dict-valued (record-typed) flow input
+# seed 13 — nested record output contract + a dict-valued (record-typed) flow input
 # --------------------------------------------------------------------------- #
 
 
@@ -129,7 +129,8 @@ def test_seed13_nested_record_output_and_dict_input():
     loaded = _load("13")
     plan = loaded.compiled.nodes["plan"]
     assert isinstance(plan, CodeNode)
-    typ = plan.output_type
+    assert plan.output_contract is not None
+    typ = plan.output_contract.type
     assert typ.kind == ValueKind.OBJECT
     # summary is a nested record; meta is nested again (two levels deep).
     summary = typ.fields["summary"]
@@ -154,7 +155,8 @@ def test_seed11_anchored_nodes_built():
     for nid in ("pro", "con", "judge"):
         node = flow.nodes[nid]
         assert isinstance(node, AgentNode)
-        assert node.output_type.kind == ValueKind.STRING  # from the anchor
+        assert node.output_contract is not None
+        assert node.output_contract.type.kind == ValueKind.STRING  # from the anchor
         assert node.llm_config is not None  # llm_config merged in from the anchor
 
 
@@ -171,7 +173,8 @@ def test_seed07_model_fields():
     assert predict.weights_uri == "manifold://calpha/models/topic-ranker-v1.pt"
     assert predict.runtime_name == "torchscript"
     # object output {score, rank}.
-    assert set(predict.output_type.fields) == {"score", "rank"}
+    assert predict.output_contract is not None
+    assert set(predict.output_contract.type.fields) == {"score", "rank"}
 
 
 # --------------------------------------------------------------------------- #
@@ -197,7 +200,8 @@ def test_seed14_agent_knobs():
 def test_seed18_synth_carries_view_record():
     flow = _load("18").compiled
     synth = flow.nodes["synth"]
-    typ = synth.output_type
+    assert synth.output_contract is not None
+    typ = synth.output_contract.type
     assert typ.kind == ValueKind.OBJECT
     assert set(typ.fields) == {"stance", "claim", "confidence"}
     # stance is the Stance enum -> its Type carries the tags.

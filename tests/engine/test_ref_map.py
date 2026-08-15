@@ -5,12 +5,13 @@ codomain, and name/arity-checks bindings. (End-to-end RUN lives in test_ref_run.
 test_map.py; the cross-flow type check e06 in test_errors.py.) These assert:
 
 - seed 03 (`research-one`) loads as a child flow (its `ComposedFlow` exposes a
-  resolvable child SIGNATURE — canonical `Parameter`s + the single codomain `Type`);
+  resolvable child SIGNATURE — canonical `Parameter`s + one codomain `ValueContract`);
 - seed 04 (a plain `call` over 03) loads+compiles; the built `CallNode` (REF)
-  `output_type` re-exports the child's single codomain `Type` (a `{report, asof}` record)
-  via the test-local child resolver;
+  re-exports the child's exact codomain contract (a `{report, asof}` record) via the
+  test-local child resolver;
 - seed 05 (a `map` over 03) loads+compiles; the built `MapNode` (`kind: map`)
-  `output_type == list[<child codomain>]` (a `LIST_OBJECT` of the record) and `parallel=True`;
+  has `output_contract.type == list[<child codomain>]` (a `LIST_OBJECT` of the record)
+  and `parallel=True`;
 - a `call` binding to a non-declared callable input → loud `LoadError`;
 - a `map` whose callable has no codomain (≠1 declared output value) → loud `LoadError`;
 - a flow with a `call` but no resolver → loud `LoadError`.
@@ -78,7 +79,7 @@ def test_seed03_loads_as_child_flow():
 
 
 # --------------------------------------------------------------------------- #
-# seed 04 — REF loads + the REF node re-exports the child's codomain Type
+# seed 04 — REF loads + the REF node re-exports the child's codomain contract
 # --------------------------------------------------------------------------- #
 
 
@@ -90,9 +91,10 @@ def test_seed04_ref_loads_and_reexports_child_output():
     assert not hasattr(research, "over")               # REF carries no over/parallel
     assert not hasattr(research, "parallel")
     assert research.flow_id == "research-one"
-    # output_type re-exports the child's single codomain (the {report, asof} record).
-    typ = research.output_type
-    assert typ is not None
+    # The exact contract re-exports the child's single codomain ({report, asof}).
+    contract = research.output_contract
+    assert contract is not None
+    typ = contract.type
     assert typ.kind == ValueKind.OBJECT
     assert set(typ.fields) == {"report", "asof"}
     # the REF sources live on flow.wiring; the node carries only the param names.
@@ -104,7 +106,7 @@ def test_seed04_ref_loads_and_reexports_child_output():
 
 def test_seed04_downstream_dotted_ref_validates_against_child_record():
     # `take` reads ${research.output.report}/${research.output.asof}; the REF node's
-    # stamped output_type (a CHECKED record) lets the dotted-field walk pass (not loud).
+    # stamped output contract (a checked record) lets the dotted-field walk pass.
     loaded = load_flow(_text("04-call.yaml"), search_paths=[_SEEDS])
     assert loaded.compiled.wiring["take"] == {
         "brief": Binding("${research.output.report}"),
@@ -113,7 +115,7 @@ def test_seed04_downstream_dotted_ref_validates_against_child_record():
 
 
 # --------------------------------------------------------------------------- #
-# seed 05 — MAP loads + output_type == list[<child codomain>], parallel=True
+# seed 05 — MAP loads + list[<child codomain>] output contract, parallel=True
 # --------------------------------------------------------------------------- #
 
 
@@ -126,9 +128,10 @@ def test_seed05_map_loads_with_list_output_and_parallel():
     assert research_each.flow_id == "research-one"
     assert research_each.parallel is True
     assert research_each.title == "Research each topic"  # node_name -> title
-    # output_type = list[<child codomain>] -> a LIST_OBJECT (element = the record).
-    typ = research_each.output_type
-    assert typ is not None
+    # The contract type is list[<child codomain>] (element = the record).
+    contract = research_each.output_contract
+    assert contract is not None
+    typ = contract.type
     assert typ.kind == ValueKind.LIST_OBJECT
     assert typ.element.kind == ValueKind.OBJECT
     assert set(typ.element.fields) == {"report", "asof"}

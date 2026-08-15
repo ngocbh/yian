@@ -128,7 +128,7 @@ def test_respawn_preserves_the_full_output_contract_carrier():
     assert clone.output_contract is contract
     assert clone.output_contract == contract
     assert clone.output_contract.origins is origins
-    assert clone.output_type is contract.type
+    assert clone.output_contract.type is contract.type
 
 
 def test_until_do_while_continues_on_iteration_zero():

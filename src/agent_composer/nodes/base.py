@@ -27,7 +27,6 @@ from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.binding import apply_defaults
 from agent_composer.nodes.contracts import Assertion, Parameter, ValueContract
-from agent_composer.typesys.values import Type
 
 if TYPE_CHECKING:
     from agent_composer.events import SourceRange
@@ -203,9 +202,6 @@ class Node(ABC):
         output_contract (`ValueContract`, *optional*):
             The canonical declared output contract (one value); `None` leaves the write
             unenforced.
-        output_type (`Type`, *optional*):
-            Temporary construction compatibility for Compose and older Python callers.
-            It is normalized into `output_contract`, never stored separately.
         params (`list[Parameter]`, *optional*):
             The node-side declared params (no source — the flow owns the wiring); `None`
             for a node that declares no inputs.
@@ -270,7 +266,6 @@ class Node(ABC):
         *,
         title: Optional[str] = None,
         output_contract: Optional[ValueContract] = None,
-        output_type: Optional[Type] = None,
     ) -> None:
         self.id = node_id
         self.title = title
@@ -279,14 +274,8 @@ class Node(ABC):
                 "output_contract must be an exact ValueContract or None, "
                 f"got {type(output_contract).__name__}"
             )
-        if output_contract is not None and output_type is not None:
-            raise ValueError("output_contract and output_type cannot both be supplied")
-        # One canonical output declaration. The temporary `output_type` view below
-        # lets the Compose migration land in the next focused child without retaining
-        # a second mutable Type field.
+        # One canonical output declaration shared by compiled and Python-authored nodes.
         self.output_contract: Optional[ValueContract] = output_contract
-        if output_type is not None:
-            self.output_type = output_type
         # The node-side signature (the node/flow split): declared params with NO source — the flow owns
         # the wiring in `CompiledFlow.wiring[node_id][param]`. Stamped by the compiler
         # (`build_*`/case desugar); the engine's `eval_node` binds via `params` + `flow.wiring`.
@@ -343,41 +332,6 @@ class Node(ABC):
         # order, first-failure-wins, located by position). `[]` for a node with no asserts.
         self.pre_assert_ranges: list[Optional["SourceRange"]] = []
         self.post_assert_ranges: list[Optional["SourceRange"]] = []
-
-    @property
-    def output_type(self) -> Optional[Type]:
-        """Project the semantic Type from the temporary Compose compatibility view."""
-        contract = self.output_contract
-        if contract is None:
-            return None
-        if type(contract) is not ValueContract:
-            raise TypeError(
-                "output_contract must be an exact ValueContract or None, "
-                f"got {type(contract).__name__}"
-            )
-        return contract.type
-
-    @output_type.setter
-    def output_type(self, value: Optional[Type]) -> None:
-        """Replace only the semantic type, retaining existing contract origins."""
-        if value is None:
-            self.output_contract = None
-            return
-        if not isinstance(value, Type):
-            raise TypeError(
-                f"output_type must be a Type or None, got {type(value).__name__}"
-            )
-        contract = self.output_contract
-        if contract is not None and type(contract) is not ValueContract:
-            raise TypeError(
-                "output_contract must be an exact ValueContract or None, "
-                f"got {type(contract).__name__}"
-            )
-        self.output_contract = (
-            ValueContract(type=value)
-            if contract is None
-            else ValueContract(type=value, origins=contract.origins)
-        )
 
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Template method: fill declared defaults for omitted inputs, fire pre-asserts

@@ -93,8 +93,17 @@ one carrier; node-local validation creates one fresh carrier per authored
 occurrence. Lowering and CALL expansion replace only `.expression`, preserving
 `.display` and `.origin`. `Node.run` evaluates the expression and reports the
 display text. Manifests include expression, display, order, and duplicate count,
-while excluding origin and the temporary positional range bridge. Parameter and
-value-contract consumers move in later #131 cutovers.
+while excluding origin and the temporary positional range bridge.
+
+`Node.params` has one compiled shape too: an ordered list of exact `Parameter`
+carriers (or `None` only for a source-free fake). The flow still owns each
+parameter's `Binding`; the node owns the formal name, optional `ValueContract`,
+required/default presence, and string-coercion policy. Binding validates stored
+defaults without replacing their authored payload, and coerces supplied strings
+only when the parameter opts in. Parameter/default/contract origins do not affect
+manifest identity. Compose `InputDecl` remains temporarily at the START/front-end
+boundary; START derives source-neutral parameters from it without duplicating its
+type checks. Stored output value-contract consumers move in later #131 cutovers.
 
 ## One-pass source ownership
 

@@ -100,8 +100,8 @@ raised exception, not a node-result variant.
 
 These source-neutral frozen values give binding, parameter, assertion, and value
 contract provenance one canonical home. Origins are optional for Python-authored
-graphs. They are currently the migration foundation; the existing consumers
-below move to them in subsequent #131 changes.
+graphs. Compiled wiring, assertions, and node parameters use these carriers;
+stored output contracts move in a later migration.
 
 ::: agent_composer.nodes.contracts.Binding
 
@@ -153,11 +153,10 @@ and END boundaries synthesized by the loader.
 ### Parameter binding
 
 The node/flow split: a node declares its signature as
-[`ParamDecl`][agent_composer.nodes.binding.ParamDecl]s (no source); the flow owns
-the wiring, and [`bind_params`][agent_composer.nodes.binding.bind_params] joins them
-into the typed input record handed to the node.
-
-::: agent_composer.nodes.binding.ParamDecl
+[`Parameter`][agent_composer.nodes.contracts.Parameter] values (no source); the
+flow owns canonical `Binding` sources, and
+[`bind_params`][agent_composer.nodes.binding.bind_params] joins them into the
+typed input record handed to the node.
 
 ::: agent_composer.nodes.binding.bind_params
 

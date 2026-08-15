@@ -1,9 +1,9 @@
 """Source-neutral semantic IR shared by node and flow construction.
 
 These frozen carriers attach opaque origins to executable meanings without
-depending on Compose/YAML or runtime state. Compiled wiring and node assertions
-already use their canonical carriers; parameters and value contracts cross over
-in later steps of the origin-IR migration.
+depending on Compose/YAML or runtime state. Compiled wiring, node assertions,
+and node parameters use their canonical carriers; stored output value contracts
+cross over in a later step of the origin-IR migration.
 """
 
 from __future__ import annotations

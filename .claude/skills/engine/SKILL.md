@@ -46,6 +46,9 @@ Hold this model whenever you design anything:
 - Compiled node assertions also have one shape: ordered `Assertion` carriers.
   Evaluate `.expression`, report `.display`, and preserve `.origin` whenever a
   compile/growth rewrite creates a new carrier. Do not add parallel text maps.
+- Compiled `Node.params` has one shape: ordered exact `Parameter` carriers. The
+  flow owns their `Binding` sources; parameter contracts/default presence/
+  coercion policy stay source-neutral, and rewrites preserve all origins.
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
   it does not rewrite the graph at runtime.
 

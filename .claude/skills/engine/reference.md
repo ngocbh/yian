@@ -271,8 +271,13 @@ growth clone creates a new carrier for a rewritten source and retains its origin
 `Node.pre_asserts` / `post_asserts` are likewise canonical ordered `Assertion`
 lists. Compose crosses raw YAML text into one carrier per occurrence; lowering
 and growth use `replace(..., expression=...)`, so display/origin survive. The
-manifest projects `{expression, display}` and ignores origin. Parameter and
-value-contract consumers move in later tested #131 cutovers.
+manifest projects `{expression, display}` and ignores origin. `Node.params` is
+an ordered exact `Parameter` list: `bind_params` reads its optional resolved
+contract, explicit default-presence bit, and string-coercion policy while the
+flow owns the corresponding `Binding` sources. Parameter/default/contract
+origins are manifest-neutral. START temporarily retains Compose `InputDecl` as
+its boundary authority and derives contract-free Parameters from it. Stored
+output value-contract consumers move in later tested #131 cutovers.
 
 ## Compose source ownership
 

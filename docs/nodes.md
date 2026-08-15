@@ -31,7 +31,7 @@ engine always drives that shared wrapper.
 ```python
 class Node:
     id: NodeId                       # where my output is stored
-    params: list[ParamDecl]          # my input NAMES only — the flow owns their sources (wiring)
+    params: list[Parameter]          # formal inputs only — the flow owns their Binding sources
     pre_asserts: list[Assertion]      # ordered contracts checked before the body
     post_asserts: list[Assertion]     # ordered contracts checked after an Output
     is_spawner: bool = False         # may I return Grow (expand the graph)?
@@ -51,8 +51,9 @@ class Node:
 `run` receives two things:
 
 - **`inputs`** — the params, already resolved from the pool into a plain dict (never the
-  pool itself). The node declares only param *names*; the **flow** owns where each reads
-  from, and the engine binds the two before calling.
+  pool itself). Each source-neutral `Parameter` declares a name plus optional
+  contract/default/coercion policy; the **flow** owns where it reads from, and the
+  engine binds the two before calling.
 - **`caps`** — narrow capabilities a plain input dict cannot carry, such as a mapped
   call's `caps["bind_item"]` or a cooperative `stop_event`. The read boundary supplies
   only traits a node explicitly requests. The AGENT node is the documented exception for

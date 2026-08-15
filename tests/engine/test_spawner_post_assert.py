@@ -240,7 +240,7 @@ def test_spawner_post_assert_fires_after_log_recovery(tmp_path: Path):
 # assert onto the def's END as a synth param `__assert_input_v` (+ its wiring + a
 # producer->END edge). A `call` to this def ALSO carrying a node-level POST assert reading
 # the SAME declared input `${v}` used to allocate the IDENTICAL `__assert_input_v` name a
-# SECOND time onto the cloned END (a duplicate ParamDecl + a phantom producer->END edge
+# SECOND time onto the cloned END (a duplicate Parameter + a phantom producer->END edge
 # sharing the input_group).
 _ECHO_CHILD_WITH_INPUT_ASSERT = """
 id: echo-child
@@ -310,7 +310,7 @@ def test_collision_free_cloned_end_has_no_duplicate_params_or_edges():
     # Structural regression: the cloned child END must NOT carry a duplicate synth param nor a
     # phantom second producer->END edge sharing an input_group. This FAILS against the pre-fix
     # code (the def's `__assert_input_v` survives the clone, then the spawner lowering allocates
-    # `__assert_input_v` AGAIN — duplicate ParamDecl + phantom edge).
+    # `__assert_input_v` AGAIN — duplicate Parameter + phantom edge).
     loaded = _load_collision()
     end, flow = _cloned_child_end(loaded)
 

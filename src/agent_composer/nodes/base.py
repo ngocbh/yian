@@ -25,8 +25,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
-from agent_composer.nodes.binding import ParamDecl
-from agent_composer.nodes.contracts import Assertion
+from agent_composer.nodes.contracts import Assertion, Parameter
 from agent_composer.typesys.seeding import apply_defaults
 from agent_composer.typesys.values import Type
 
@@ -204,7 +203,7 @@ class Node(ABC):
             A human-friendly display title, or `None`.
         output_type (`Type`, *optional*):
             The declared output Type (one value); `None` leaves the write unenforced.
-        params (`list[ParamDecl]`, *optional*):
+        params (`list[Parameter]`, *optional*):
             The node-side declared params (no source — the flow owns the wiring); `None`
             for a node that declares no inputs.
         pre_asserts (`list[Assertion]`):
@@ -278,7 +277,7 @@ class Node(ABC):
         # the wiring in `CompiledFlow.wiring[node_id][param]`. Stamped by the compiler
         # (`build_*`/case desugar); the engine's `eval_node` binds via `params` + `flow.wiring`.
         # `None` for a fake / directly-constructed node that declares no inputs (== no params).
-        self.params: Optional[list[ParamDecl]] = None
+        self.params: Optional[list[Parameter]] = None
         # Node-local `asserts:` (a per-node contract), classified + stamped by the loader and
         # enforced by the inherited `run` template: PRE checked against the bound input record
         # before `_run_impl`; POST (reads `${output}`) afterward against `{**inputs, output}`.
@@ -340,7 +339,7 @@ class Node(ABC):
         input the caller OMITTED but the node declares a default for. `apply_defaults`
         fills only omitted keys (a caller's explicit bound-null SHADOWS the default,
         `f(x=None)`), so it never overrides a present key; running it here is a no-op for
-        body nodes (their ParamDecls carry no default yet) and idempotent for START
+        body nodes (their Parameters carry no default) and idempotent for START
         (whose `_run_impl` also defaults — the second fill is inert).
 
         Firing reads ONLY the bound `inputs` record — never the pool — so node purity is
@@ -356,7 +355,18 @@ class Node(ABC):
         A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
         from agent_composer.events import SourceSpan
 
-        inputs = apply_defaults(self.params or [], inputs)
+        params = self.params if self.params is not None else []
+        if type(params) is not list:
+            raise TypeError(
+                f"node {self.id!r} params must be an exact list, got {type(params).__name__}"
+            )
+        for parameter in params:
+            if type(parameter) is not Parameter:
+                raise TypeError(
+                    f"node {self.id!r} params must contain Parameter values, "
+                    f"got {type(parameter).__name__}"
+                )
+        inputs = apply_defaults(params, inputs)
         # Fire pre-asserts IN ORDER, first-failure-wins, and locate the failure BY POSITION:
         # the failing assert's own `SourceRange` is `pre_assert_ranges[i]`, not a lookup keyed by
         # assertion text — so two identical asserts get distinct carets. The range list is

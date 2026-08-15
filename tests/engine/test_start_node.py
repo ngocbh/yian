@@ -3,7 +3,7 @@ import pytest
 from agent_composer.compile.model import START_ID
 from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.nodes.base import NodeKind, Output
-from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.typesys.pool import VariablePool
@@ -21,7 +21,7 @@ def test_start_kind_and_params_are_input_names():
     assert node.kind == NodeKind.START
     # params = the input NAMES (so eval_node->bind_params reads its wired sources).
     assert [p.name for p in node.params] == ["topic", "window"]
-    assert all(isinstance(p, ParamDecl) for p in node.params)
+    assert all(type(p) is Parameter for p in node.params)
 
 
 def test_start_run_coerces_defaults_into_a_record():

@@ -18,7 +18,7 @@ no special co-skip logic. Hidden from authors: a reserved __-prefixed id, never 
 from typing import Optional
 
 from agent_composer.nodes.base import Node, NodeKind, Output
-from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Parameter
 
 
 class EndNode(Node):
@@ -63,11 +63,11 @@ class EndNode(Node):
         if output_names is not None:
             self._mode = "record"
             self._names = list(output_names)
-            self.params = [ParamDecl(name=name) for name in self._names]
+            self.params = [Parameter(name=name) for name in self._names]
         else:
             self._mode = "list"
             self._n = n
-            self.params = [ParamDecl(name=f"e{i}") for i in range(n)]
+            self.params = [Parameter(name=f"e{i}") for i in range(n)]
 
     @classmethod
     def record(cls, node_id: str, *, output_names: list[str],

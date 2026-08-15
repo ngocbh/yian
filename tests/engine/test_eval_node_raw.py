@@ -20,7 +20,7 @@ from agent_composer.nodes.base import (
     Route,
     _HostStop,
 )
-from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.typesys.pool import VariablePool
 from tests.engine._fakes import BranchNode, FailNode, FuncNode, StreamNode, derive_wiring
@@ -88,7 +88,7 @@ def test_raw_streaming_uses_only_the_injected_transient_callback():
 
 def test_raw_failure_is_frozen_slotted_and_preserves_diagnostics():
     node = FuncNode("work", lambda inputs: inputs)
-    node.params = [ParamDecl(name="required", required=True)]
+    node.params = [Parameter(name="required", required=True)]
     node._wiring_src = {}
     expected_range = SourceRange(7, 5, 7, 13)
     node.field_ranges[("input", "required")] = expected_range

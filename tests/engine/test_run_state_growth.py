@@ -11,11 +11,11 @@ import agent_composer.runtime.state as state_module
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.manifest import expansion_digest
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, NodeState, START_ID
+from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import NodeExpanded
 from agent_composer.nodes.base import Grow, Node, NodeKind
-from agent_composer.nodes.binding import ParamDecl
-from agent_composer.nodes.contracts import Binding
+from agent_composer.nodes.contracts import Binding, Parameter
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.loop import LoopNode
@@ -45,6 +45,10 @@ class _Spawner(Node):
     kind = NodeKind.CALL
     is_spawner = True
     grow_depth_delta = 1
+
+
+class _ParameterSubclass(Parameter):
+    """Near-canonical fixture proving growth requires the exact carrier."""
 
 
 class _OverlayNode(Node):
@@ -115,7 +119,15 @@ def _initialized_spawner(
 def _canonical_child(*, optional_input: bool = False) -> CompiledFlow:
     """Return a real manifestable child accepted by ``build_grow``."""
     input_decls = (
-        [ParamDecl(name="optional", required=False, default="fallback")]
+        [
+            InputDecl(
+                name="optional",
+                type_str="str",
+                default="fallback",
+                required=False,
+                type=Type.scalar(ValueKind.STRING),
+            )
+        ]
         if optional_input
         else []
     )
@@ -598,7 +610,7 @@ def test_growth_accepts_typed_fields_and_nested_map_item_scope():
     def typed_map_builder(spawner: Node, seed: Any) -> Flow:
         node_id = f"{spawner.id}/nested-map"
         node = MapNode(node_id, flow_id="child", child=_canonical_child())
-        node.params = [ParamDecl(name="value")]
+        node.params = [Parameter(name="value")]
         return Flow(
             nodes={node_id: node},
             edges=[],
@@ -626,7 +638,15 @@ def _missing_required_fragment(spawner_id: str) -> Flow:
     end_id = f"{spawner_id}/required/end"
     start = StartNode(
         start_id,
-        input_decls=[ParamDecl(name="required", required=True)],
+        input_decls=[
+            InputDecl(
+                name="required",
+                type_str="str",
+                default=None,
+                required=True,
+                type=Type.scalar(ValueKind.STRING),
+            )
+        ],
     )
     end = EndNode.record(end_id, output_names=[])
     return Flow(
@@ -698,6 +718,14 @@ def _invalid_fragment(case: str) -> Any:
         fragment.wiring.pop(fragment.end_id)
     elif case == "extra-wiring-key":
         fragment.wiring[fragment.start_id]["extra"] = Binding(1)
+    elif case == "raw-param":
+        fragment.nodes[fragment.start_id].params = ["raw"]  # type: ignore[list-item]
+    elif case == "parameter-subclass":
+        fragment.nodes[fragment.start_id].params = [_ParameterSubclass("x")]
+    elif case == "empty-param-tuple":
+        fragment.nodes[fragment.start_id].params = ()  # type: ignore[assignment]
+    elif case == "param-tuple":
+        fragment.nodes[fragment.start_id].params = (Parameter("x"),)  # type: ignore[assignment]
     elif case == "duplicate-edge-id":
         edge = fragment.edges[0]
         fragment.edges.append(
@@ -776,6 +804,10 @@ def _invalid_fragment(case: str) -> Any:
         "empty-node-id",
         "missing-wiring-entry",
         "extra-wiring-key",
+        "raw-param",
+        "parameter-subclass",
+        "empty-param-tuple",
+        "param-tuple",
         "missing-required",
         "missing-reserved",
         "duplicate-edge-id",

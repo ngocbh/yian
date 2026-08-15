@@ -74,7 +74,7 @@ def synthesize_boundary_graph(
     `lowered` (optional) is the flow's `asserts:` lowered into node-local `LoweredAsserts`.
     When given, its PRE (boundary) asserts are stamped on START's ordinary
     `post_asserts` (they read `${output.X}` — START's coerced output), its POST asserts on END
-    (`end.post_asserts`), each synthesized END input becomes an extra `ParamDecl` on END plus a
+    (`end.post_asserts`), each synthesized END input becomes an extra `Parameter` on END plus a
     wiring entry and a producer edge — so a cross-node post assert's `${producer.output}`
     dependency is STRUCTURAL (a real END input) and survives child cloning. `None` leaves the
     boundary nodes assert-free (a def / in-memory flow with no flow-level asserts).

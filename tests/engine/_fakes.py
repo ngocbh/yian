@@ -8,14 +8,14 @@ from typing import Any, Callable
 
 from agent_composer.events import StreamChunk
 from agent_composer.nodes.base import Node, NodeKind, Output, Route
-from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Parameter
 
 
 def stamp_reads(node, reads):
     """Declare a fake's inputs the way the flow does (the node no longer holds sources). `reads` is a
     `{param: source}` map -> stamp `node.params` + a fake-local `node._wiring_src` that
     `derive_wiring` collects into the flow's `wiring`. Returns the node (chainable)."""
-    node.params = [ParamDecl(name=k) for k in (reads or {})]
+    node.params = [Parameter(name=k) for k in (reads or {})]
     node._wiring_src = dict(reads or {})
     return node
 

@@ -2,8 +2,8 @@ from agent_composer.compile.expand import clone_child
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
 from agent_composer.compose.helpers.types import InputDecl, read_type
 from agent_composer.diagnostics import OriginRef, SourceRange
-from agent_composer.nodes.base import NodeKind, Output, ParamDecl
-from agent_composer.nodes.contracts import Assertion, Binding
+from agent_composer.nodes.base import NodeKind, Output
+from agent_composer.nodes.contracts import Assertion, Binding, Parameter
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.eval_node import EvaluationFailure
@@ -142,7 +142,7 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     assertion_range = SourceRange(3, 1, 3, 30)
     end.post_asserts = [Assertion("${__assert_tail} != ''", "${tail.output} != ''", origin)]
     end.post_assert_ranges = [assertion_range]
-    end.params.append(ParamDecl(name="__assert_tail"))
+    end.params.append(Parameter(name="__assert_tail"))
     child.wiring[END_ID]["__assert_tail"] = Binding("${tail.output:-null}")
     child.edges.append(Edge(id=f"tail->{END_ID}#assert", from_="tail", to=END_ID,
                             input_group="__assert_tail", optional=True))
@@ -207,7 +207,7 @@ def _tail_assert_end():
     end.post_asserts = [
         Assertion("${__assert_tail} != ''", "${each/tail.output} != ''")
     ]
-    end.params.append(ParamDecl(name="__assert_tail"))
+    end.params.append(Parameter(name="__assert_tail"))
     return stamp_reads(
         end,
         {"out": "${each/tail.output}", "__assert_tail": "${each/tail.output:-null}"},

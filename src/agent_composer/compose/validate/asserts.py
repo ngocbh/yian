@@ -44,8 +44,8 @@ from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.expr.template import flow_call_callees_in_spans
 from agent_composer.compose.desugar.inline_calls import desugar_call_directives
-from agent_composer.nodes.base import Node, ParamDecl
-from agent_composer.nodes.contracts import Assertion
+from agent_composer.nodes.base import Node
+from agent_composer.nodes.contracts import Assertion, Parameter
 from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange  # for the positional assert-range annotations
@@ -69,7 +69,7 @@ class LoweredAsserts:
     - `start_pre`: pre (boundary) asserts, `${input.X}` rewritten to `${output.X}` (they ride
       START's ordinary `post_asserts`, firing against START's COERCED output record).
     - `end_post`: post asserts, each producer/input ref rewritten to its synth-param ref.
-    - `synth_params`: one untyped `ParamDecl(name=<synth>)` per synthesized END input.
+    - `synth_params`: one untyped `Parameter(name=<synth>)` per synthesized END input.
     - `synth_wiring`: `dict[synth_name -> ${...} source string wired into END]`. A
       producer ref uses `${pid.output:-null}` (the `:-null` keeps the edge optional so a
       skipped producer does not co-skip END); an input ref uses `${input.X}` (always present).
@@ -83,7 +83,7 @@ class LoweredAsserts:
 
     start_pre: list[Assertion] = field(default_factory=list)
     end_post: list[Assertion] = field(default_factory=list)
-    synth_params: list[ParamDecl] = field(default_factory=list)
+    synth_params: list[Parameter] = field(default_factory=list)
     synth_wiring: dict = field(default_factory=dict)
     pre_ranges: list = field(default_factory=list)
     post_ranges: list = field(default_factory=list)
@@ -214,7 +214,7 @@ def lower_flow_asserts(
                 if synth is None:
                     synth = _alloc(f"{_SYNTH_PREFIX}input_{x}")
                     synth_for_input[x] = synth
-                    result.synth_params.append(ParamDecl(name=synth))
+                    result.synth_params.append(Parameter(name=synth))
                     result.synth_wiring[synth] = f"${{input.{x}}}"
                 return ".".join([synth, *segs[2:]])
             # producer-output ref: `pid.output[.f.g...]`, pid in valid_targets, seg[1] == output.
@@ -223,7 +223,7 @@ def lower_flow_asserts(
                 if synth is None:
                     synth = _alloc(f"{_SYNTH_PREFIX}{head}")
                     synth_for_producer[head] = synth
-                    result.synth_params.append(ParamDecl(name=synth))
+                    result.synth_params.append(Parameter(name=synth))
                     # `:-null` makes the END edge optional: a conditionally-skipped
                     # producer binds None instead of co-skipping END to dead.
                     result.synth_wiring[synth] = f"${{{head}.output:-null}}"

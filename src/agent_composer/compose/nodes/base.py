@@ -15,8 +15,8 @@ authoring keys — each kind still lists `inputs`/`outputs` in its own ALLOWED s
 subtracted from `NodeDescriptor.common_field_names()`), so wait/case/call/loop/map keep
 rejecting them.
 
-Like `nodes/base.py` (which imports `typesys`/`binding` for the `Node` contract), this base
-imports the deps its methods need — `typesys` (Type/TypeRegistry), `nodes.binding` (ParamDecl),
+Like `nodes/base.py`, this base imports only the dependencies its contract needs —
+`typesys` (Type/TypeRegistry), `nodes.contracts` (Parameter),
 `compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError) and
 `compose.source` (SourceCursor) for parse navigation, `events` (SourceRange) — all
 earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Optional
 
 from agent_composer.nodes.base import FieldRanges, Node
-from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.typesys.values import Type
 from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compile.model import Edge
@@ -146,13 +146,13 @@ class NodeDescriptor:
             return None
         return read_type(self.outputs, registry)
 
-    def sink_params(self) -> list[ParamDecl]:
-        """This descriptor's `inputs:` map -> untyped `ParamDecl`s (the node-side signature).
+    def sink_params(self) -> list[Parameter]:
+        """This descriptor's `inputs:` map -> untyped Parameters (the node-side signature).
 
         The split: `params` carries only the declared NAMES (no source); the flow owns the
-        sources in `CompiledFlow.wiring`. Untyped (`type_str`/`type` None) — the source carries
-        the type; derived from the SAME map as `sink_wiring` so names and keys are in lockstep."""
-        return [ParamDecl(name=k) for k in (self.inputs or {})]
+        sources in `CompiledFlow.wiring`. These parameters have `contract=None`; they are
+        derived from the SAME map as `sink_wiring` so names and keys stay in lockstep."""
+        return [Parameter(name=k) for k in (self.inputs or {})]
 
     def sink_wiring(self) -> dict[str, Any]:
         """This descriptor's `inputs:` map -> the flow-owned wiring (`param -> source`).

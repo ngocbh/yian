@@ -31,6 +31,9 @@ The other node-owned capability traits/hooks (`binds_per_item`, `bind_reserved`,
 template method that fires the node's asserts around `_run_impl`; do not override it.
 Programmatic assertions are ordered `Assertion(expression, display, origin)`
 carriers, never raw strings or a side text map.
+Every non-`None` programmatic node signature is an exact `list` of exact
+`Parameter` carriers; never introduce subclasses, alternate containers, a
+parallel declaration type, or a source on the parameter itself.
 
 ```python
 class NodeKind(str, Enum):

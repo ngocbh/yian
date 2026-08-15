@@ -29,7 +29,13 @@ from agent_composer.nodes.base import Node, NodeKind
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.case import Case, CaseNode
 from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import Assertion, Binding
+from agent_composer.nodes.contracts import (
+    Assertion,
+    Binding,
+    ContractOrigins,
+    Parameter,
+    ValueContract,
+)
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.loop import LoopNode
@@ -151,8 +157,15 @@ _BINDING_CANONICAL_FIELDS = frozenset({"source"})
 _BINDING_IGNORED_FIELDS = frozenset({"origin"})
 _ASSERTION_CANONICAL_FIELDS = frozenset({"expression", "display"})
 _ASSERTION_IGNORED_FIELDS = frozenset({"origin"})
+_PARAMETER_CANONICAL_FIELDS = frozenset(
+    {"name", "contract", "required", "has_default", "default", "coerce_strings"}
+)
+_PARAMETER_IGNORED_FIELDS = frozenset({"origin", "default_origin"})
+_VALUE_CONTRACT_CANONICAL_FIELDS = frozenset({"type"})
+_VALUE_CONTRACT_IGNORED_FIELDS = frozenset({"origins"})
+_CONTRACT_ORIGINS_IGNORED_FIELDS = frozenset({"default", "entries"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
-_DECL_FIELDS = frozenset({"name", "type_str", "required", "default", "type"})
+_INPUT_DECL_FIELDS = frozenset({"name", "type_str", "required", "default", "type"})
 _CASE_FIELDS = frozenset({"handle", "when"})
 
 # Config secrets are intentionally absent from identity. Exact names and high-confidence
@@ -1369,28 +1382,101 @@ def _type_manifest(value: Type | None, ctx: _ManifestContext, path: str) -> Any:
         ctx.types.remove(object_id)
 
 
-def _declaration_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, Any]:
-    """Canonicalize a ParamDecl or duck-typed flow InputDecl without importing compose."""
-    _check_fields(value, _DECL_FIELDS, path)
-    if _connection_string_key(value.name):
+def _declaration_default_manifest(
+    name: str,
+    default: Any,
+    ctx: _ManifestContext,
+    path: str,
+) -> Any:
+    """Canonicalize one declaration default under the credential-redaction policy."""
+    if _connection_string_key(name):
         default = _canonical_connection_value(
-            value.default,
+            default,
             ctx,
-            f"{path}.default",
+            path,
         )
         if default is _MISSING:
             default = {"type": "redacted"}
-    elif _credential_key(value.name):
+    elif _credential_key(name):
         default = {"type": "redacted"}
     else:
         default = _canonical_value(
+            default,
+            ctx,
+            path,
+            redact_credentials=True,
+        )
+    return default
+
+
+def _value_contract_manifest(
+    value: ValueContract,
+    ctx: _ManifestContext,
+    path: str,
+) -> dict[str, Any]:
+    """Project one parameter value contract while excluding every nested origin."""
+    if type(value) is not ValueContract:
+        raise TypeError(f"{path}: expected ValueContract, got {type(value).__name__}")
+    _check_fields(
+        value,
+        _VALUE_CONTRACT_CANONICAL_FIELDS | _VALUE_CONTRACT_IGNORED_FIELDS,
+        path,
+    )
+    if type(value.origins) is not ContractOrigins:
+        raise TypeError(
+            f"{path}.origins: expected ContractOrigins, got {type(value.origins).__name__}"
+        )
+    _check_fields(value.origins, _CONTRACT_ORIGINS_IGNORED_FIELDS, f"{path}.origins")
+    return {"type": _type_manifest(value.type, ctx, f"{path}.type")}
+
+
+def _parameter_manifest(
+    value: Parameter,
+    ctx: _ManifestContext,
+    path: str,
+) -> dict[str, Any]:
+    """Project one exact canonical node parameter to source-neutral identity."""
+    if type(value) is not Parameter:
+        raise TypeError(f"{path}: expected Parameter, got {type(value).__name__}")
+    _check_fields(
+        value,
+        _PARAMETER_CANONICAL_FIELDS | _PARAMETER_IGNORED_FIELDS,
+        path,
+    )
+    contract = (
+        _value_contract_manifest(value.contract, ctx, f"{path}.contract")
+        if value.contract is not None
+        else None
+    )
+    return {
+        "coerce_strings": value.coerce_strings,
+        "contract": contract,
+        "default": _declaration_default_manifest(
+            value.name,
             value.default,
             ctx,
             f"{path}.default",
-            redact_credentials=True,
-        )
+        ),
+        "has_default": value.has_default,
+        "name": value.name,
+        "required": value.required,
+    }
+
+
+def _input_declaration_manifest(
+    value: Any,
+    ctx: _ManifestContext,
+    path: str,
+) -> dict[str, Any]:
+    """Canonicalize one retained Compose InputDecl without importing compose."""
+    _check_fields(value, _INPUT_DECL_FIELDS, path)
     return {
-        "default": default,
+        "default": _declaration_default_manifest(
+            value.name,
+            value.default,
+            ctx,
+            f"{path}.default",
+        ),
         "name": value.name,
         "required": value.required,
         "type": _type_manifest(value.type, ctx, f"{path}.type"),
@@ -1417,8 +1503,12 @@ def _node_manifest(
     _check_node_fields(node, path)
     params = None
     if node.params is not None:
+        if type(node.params) is not list:
+            raise TypeError(
+                f"{path}.params: expected list, got {type(node.params).__name__}"
+            )
         params = [
-            _declaration_manifest(param, ctx, f"{path}.params[{index}]")
+            _parameter_manifest(param, ctx, f"{path}.params[{index}]")
             for index, param in enumerate(node.params)
         ]
     manifest: dict[str, Any] = {
@@ -1441,7 +1531,7 @@ def _node_manifest(
 
     if node.kind is NodeKind.START:
         manifest["input_decls"] = [
-            _declaration_manifest(decl, ctx, f"{path}.input_decls[{index}]")
+            _input_declaration_manifest(decl, ctx, f"{path}.input_decls[{index}]")
             for index, decl in enumerate(node.input_decls)
         ]
     elif node.kind is NodeKind.END:

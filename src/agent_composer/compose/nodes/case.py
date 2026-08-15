@@ -30,7 +30,7 @@ the flow's producer types, which are only assembled after every node is built, s
 in `.build()`. `.build()` lowers unconditionally; the loader runs `check_case_exhaustive` in the
 validate phase.
 
-Imports flow down/peer only: `expr` (ref scan/rewrite), `nodes` (Case/CaseNode/ParamDecl),
+Imports flow down/peer only: `expr` (ref scan/rewrite), `nodes` (Case/CaseNode/Parameter),
 `compile.model` (Edge), and the compose peer `source`/`helpers.errors`/`nodes.base`.
 It imports NOTHING from parse/desugar/edges/validate/build/loader (the ladder), so it stays a
 leaf of the nodes package.
@@ -50,7 +50,7 @@ from agent_composer.expr import (
     expr_refs_of,
     rewrite_condition_refs,
 )
-from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.case import DEFAULT_HANDLE, Case, CaseNode
 from agent_composer.nodes.contracts import binding_source
 from agent_composer.compose.helpers.errors import LoadError
@@ -327,7 +327,7 @@ def _desugar_on(
     if desc.else_ is not None:
         handle_targets.append((DEFAULT_HANDLE, desc.else_))
     node = CaseNode(desc.id, cases, title=desc.node_name)
-    node.params = [ParamDecl(name="__on")]
+    node.params = [Parameter(name="__on")]
     wiring = {"__on": desc.on}
     on_rng = desc.field_ranges.get(("field", "on"))  # the `on:` value's own range
     param_ranges = {("input", "__on"): on_rng} if on_rng is not None else {}
@@ -387,7 +387,7 @@ def _desugar_searched(
         handle_targets.append((DEFAULT_HANDLE, desc.else_))
 
     node = CaseNode(desc.id, cases, title=desc.node_name)
-    node.params = [ParamDecl(name=local) for local in ref_to_local.values()]
+    node.params = [Parameter(name=local) for local in ref_to_local.values()]
     param_ranges: dict = {}
     param_labels: dict[str, str] = {}
     for local, ci in local_case_index.items():

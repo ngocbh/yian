@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind, Type
@@ -183,7 +183,7 @@ def _list_of(element: Type) -> Type:
 def _check_child_bindings(
     node_id: str,
     flow_id: str,
-    params: list[ParamDecl],
+    params: list[Parameter],
     sig: ChildSignature,
     errors: list[str],
     child_label: str | None = None,

@@ -1,7 +1,8 @@
 """START_ID — the flow's parameter-binding boundary, internal-only. PURE.
 
 The loader synthesizes ONE StartNode per flow from its `input:` decls; it is the flow's single
-root. `self.params` are the input NAMES (ParamDecl per input) so the engine's eval_node ->
+root. `self.params` are canonical `Parameter` values derived from those declarations, so
+the engine's eval_node ->
 bind_params reads START_ID's sources from flow.wiring[START_ID] (top-level: the run-arg seed;
 child: the call-arg edges). `run(record)` = coerce_inputs + declared-type check + apply_defaults,
 returning the bound input record as ONE object keyed by input name -> store[<start id>], the
@@ -18,7 +19,7 @@ from typing import Optional
 
 from agent_composer.events import SourceSpan
 from agent_composer.nodes.base import FieldRanges, Node, NodeKind, Output
-from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.typesys import TypeCheckError, build_value_as
 from agent_composer.typesys.seeding import apply_defaults, coerce_inputs
 
@@ -73,10 +74,16 @@ class StartNode(Node):
         # one). This is what lets the child START_ID own omitted-input defaulting — without
         # the REF/MAP driver pre-defaulting (a naive driver-drop otherwise loses the default, since a
         # bare param binds an absent input as present-None which run()'s apply_defaults can't fill).
-        # `type`/`type_str` are intentionally NOT carried: run() is the sole type authority, so
-        # bind_params must not type-check first with its own BindingError message.
+        # A contract is intentionally NOT carried: run() is the sole type authority, so bind_params
+        # must not type-check first with its own BindingError message. InputDecl cannot yet represent
+        # an explicit-null default, so its existing non-null presence rule remains at this adapter.
         self.params = [
-            ParamDecl(name=d.name, required=d.required, default=d.default)
+            Parameter(
+                name=d.name,
+                required=d.required,
+                has_default=d.default is not None,
+                default=d.default,
+            )
             for d in self.input_decls
         ]
 

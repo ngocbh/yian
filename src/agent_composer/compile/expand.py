@@ -31,9 +31,9 @@ from typing import Any, Optional
 from agent_composer.compile.model import Edge, END_ID, Flow, START_ID
 from agent_composer.expr import rewrite_template_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
-from agent_composer.nodes.base import Node, NodeKind, ParamDecl
+from agent_composer.nodes.base import Node, NodeKind
 from agent_composer.diagnostics import SourceRange
-from agent_composer.nodes.contracts import Assertion, Binding
+from agent_composer.nodes.contracts import Assertion, Binding, Parameter
 from agent_composer.nodes.end.node import EndNode
 from agent_composer.nodes.ids import map_callsite, ns
 from agent_composer.nodes.start.node import StartNode
@@ -189,7 +189,7 @@ def _lower_spawner_post_asserts(
             if synth is None:
                 synth = _alloc(f"{_SYNTH_PREFIX}input_{head}")
                 synth_for_input[head] = synth
-                end.params.append(ParamDecl(name=synth))
+                end.params.append(Parameter(name=synth))
                 # `:-null` keeps the END input edge OPTIONAL so END waits for START to settle
                 # and binds None if the value was omitted, instead of co-skipping END to dead
                 # (the SAME structural shape build-time flow-assert lowering uses).

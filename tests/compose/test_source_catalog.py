@@ -247,6 +247,21 @@ def test_freeze_isolates_snapshots_and_deepcopy_reuses_catalog():
     assert deepcopy(first_snapshot) is first_snapshot
 
 
+def test_failed_builder_transaction_releases_registered_site_keys():
+    """A retry may reuse every semantic path from a failed construction."""
+    cursor = SourceDocument.parse("value: present\n").root.child("value")
+    builder = _SourceCatalogBuilder()
+
+    with pytest.raises(RuntimeError, match="construction failed"):
+        with builder.transaction():
+            builder.register(("value",), cursor)
+            raise RuntimeError("construction failed")
+
+    retried = builder.register(("value",), cursor)
+
+    assert builder.freeze().resolve(retried) is not None
+
+
 def test_resolution_does_not_reparse_source(monkeypatch):
     parse_count = 0
     original_init = source_document_module._DocumentLoader.__init__

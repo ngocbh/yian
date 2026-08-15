@@ -439,7 +439,6 @@ def _load_flow(
     search_paths,
     ctx: "_LoadCtx",
 ) -> ComposedFlow:
-    catalog_builder = _SourceCatalogBuilder()
     root = document.root
     text = document.text
     f = parse_file(document)
@@ -484,7 +483,6 @@ def _load_flow(
         external,
         f.uses,
         defs_cursor,
-        catalog_builder=catalog_builder,
     )
     callable_scope.eager_load_defs()
 
@@ -517,7 +515,6 @@ def _load_flow(
         source=source,
         boundary_field_ranges=_boundary_field_ranges(root),
         boundary_assert_ranges=_boundary_assert_ranges(root),
-        catalog_builder=catalog_builder,
     )
 
 
@@ -592,6 +589,31 @@ class _CallableScope:
         self._built: dict[str, ComposedFlow] = {}
         self._in_progress: set[str] = set()
 
+    @property
+    def catalog_builder(self) -> _SourceCatalogBuilder:
+        """Return this physical file's mutable origin registry."""
+        return self._catalog_builder
+
+    def _build_transactionally(
+        self,
+        builder: Callable[[], ComposedFlow],
+    ) -> ComposedFlow:
+        """Build one callable without caching origins from a failed attempt.
+
+        Nested resolutions may populate `_built` while `builder` runs. If the
+        outer construction fails, discard those new cache entries together with
+        the catalog registrations rolled back by the builder transaction.
+        """
+        cached_before = frozenset(self._built)
+        try:
+            with self._catalog_builder.transaction():
+                return builder()
+        except BaseException:
+            for flow_id in tuple(self._built):
+                if flow_id not in cached_before:
+                    del self._built[flow_id]
+            raise
+
     def register_private(
         self,
         flow_id: str,
@@ -653,7 +675,7 @@ class _CallableScope:
                 )
             self._in_progress.add(flow_id)
             try:
-                loaded = private.builder()
+                loaded = self._build_transactionally(private.builder)
             finally:
                 self._in_progress.discard(flow_id)
             self._built[flow_id] = loaded
@@ -672,12 +694,14 @@ class _CallableScope:
                         def_cursor = self._defs_cursor.child(flow_id)
                     except SourceAccessError:
                         pass
-                loaded = _load_def(
-                    flow_id,
-                    self._defs_section[flow_id],
-                    self._registry,
-                    self,
-                    def_cursor,
+                loaded = self._build_transactionally(
+                    lambda: _load_def(
+                        flow_id,
+                        self._defs_section[flow_id],
+                        self._registry,
+                        self,
+                        def_cursor,
+                    )
                 )
             finally:
                 self._in_progress.discard(flow_id)
@@ -788,7 +812,6 @@ def _load_def(
                 if def_cursor is not None
                 else None
             ),
-            catalog_builder=scope._catalog_builder,
         )
     except LoadError as exc:
         # Name the def without discarding the absolute parent-file diagnostic metadata.
@@ -864,7 +887,6 @@ def _load_single_node_def(
                 else None
             ),
             outputs_range=output_range,
-            catalog_builder=scope._catalog_builder,
         )
     except LoadError as exc:
         if str(exc).startswith("defs entry "):

@@ -40,8 +40,8 @@ Importing the kind modules here cannot cycle: each takes its `build` helpers fro
 top-level import there WOULD cycle. Deriving the tables below only reads each class's
 already-defined ClassVars; it never touches `KINDS`.
 
-Knows about: compose source/helpers/peer phases, compile.model, nodes, typesys, expr,
-             events, and llm_clients.
+Knows about: diagnostics, compose source/helpers/peer phases, compile.model, nodes,
+             typesys, expr, events, and llm_clients.
 Never imports: runtime, the package-root run boundary, CLI, or provider SDKs.
 """
 

@@ -237,6 +237,10 @@ class _PrivateRegistrar(Protocol):
 class _CallableScopeLike(_PrivateRegistrar, Protocol):
     """File-owned callable scope used by assembly and anonymous child lowering."""
 
+    @property
+    def catalog_builder(self) -> _SourceCatalogBuilder:
+        """Return the one mutable origin registry owned by this source file."""
+
     def resolve(
         self, flow_id: str, version: str | None = None
     ) -> ComposedFlow:
@@ -345,7 +349,6 @@ def _assemble(
     boundary_field_ranges: Optional[dict] = None,
     boundary_assert_ranges: Optional[list] = None,
     outputs_range: Optional[SourceRange] = None,
-    catalog_builder: _SourceCatalogBuilder | None = None,
 ) -> ComposedFlow:
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
@@ -366,11 +369,10 @@ def _assemble(
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
     children. `boundary_field_ranges`/`boundary_assert_ranges` locate synthesized boundary
     behavior; `outputs_range` is the retained authored codomain range when one exists.
-    `catalog_builder` is shared by every assembly originating from one physical
-    document, so root, definitions, and inline bodies mint collision-free local
-    origins under `owner`. Direct/programmatic assembly creates a source-free local
-    builder when none is supplied. Inline-CODE traceback anchors are derived from
-    each descriptor's own `code:` range."""
+    `scope.catalog_builder` is the one registry shared by every assembly originating
+    from this physical document, so root, definitions, and inline bodies mint
+    collision-free local origins under `owner`. Inline-CODE traceback anchors are
+    derived from each descriptor's own `code:` range."""
     if (inputs_section is None) == (input_parameters is None):
         raise ValueError(
             "_assemble requires exactly one of inputs_section or input_parameters"
@@ -416,8 +418,7 @@ def _assemble(
     }
     flow_inputs = {parameter.name for parameter in inputs}
     descriptors = parse_nodes(nodes_cursor)
-    if catalog_builder is None:
-        catalog_builder = _SourceCatalogBuilder()
+    catalog_builder = scope.catalog_builder
     try:
         descriptors = {
             node_id: replace(
@@ -635,7 +636,6 @@ def _assemble(
                 for name, binding_range in body.input_ranges.items()
             },
             outputs_range=body.output_range,
-            catalog_builder=catalog_builder,
         )
 
     descriptors = _register_inline_bodies(

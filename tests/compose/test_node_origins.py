@@ -2,8 +2,14 @@
 
 from copy import deepcopy
 
+import pytest
+
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose import load_flow
+from agent_composer.compose.build.pipeline import _assemble
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.loader import _CallableScope
+from agent_composer.compose.parse.file import flow_nodes_cursor, parse_file
 from agent_composer.compose.source import SourceCatalog, SourceCursor, SourceDocument
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Node
@@ -164,3 +170,89 @@ def test_deepcopy_reuses_immutable_local_catalog():
     assert copied._local_catalog.resolve(copied.compiled.nodes["worker"].origin) == (
         loaded._local_catalog.resolve(loaded.compiled.nodes["worker"].origin)
     )
+
+
+def test_direct_assembly_uses_its_callable_scopes_document_catalog():
+    """The file scope, not each assembly call, owns the shared builder."""
+    text = """id: direct-origin
+name: direct-origin
+defs:
+  child:
+    kind: code
+    code: return 1
+    output: int
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: ${invoke.output}
+"""
+    document = SourceDocument.parse(text)
+    parsed = parse_file(document)
+    scope = _CallableScope(
+        parsed.defs,
+        {},
+        None,
+        parsed.uses,
+        document.root.child("defs"),
+    )
+    scope.eager_load_defs()
+
+    loaded = _assemble(
+        inputs_section=parsed.inputs,
+        nodes_cursor=flow_nodes_cursor(document, parsed.nodes),
+        outputs_section=parsed.outputs,
+        asserts_section=parsed.asserts,
+        registry={},
+        scope=scope,
+        owner=("root",),
+        n_lines={},
+        s_lines={},
+    )
+
+    root_node = loaded.compiled.nodes["invoke"]
+    child_node = root_node.child.nodes["child"]
+    assert loaded._local_catalog.resolve(root_node.origin) is not None
+    assert loaded._local_catalog.resolve(child_node.origin) is not None
+
+
+def test_failed_nested_def_build_rolls_back_origins_and_success_cache():
+    """Fixing and retrying a failed callable reuses every lexical site safely."""
+    text = """id: retry-origin
+name: retry-origin
+defs:
+  outer:
+    nodes:
+      invoke:
+        kind: call
+        call: inner
+    output: ${missing.output}
+  inner:
+    nodes:
+      worker:
+        kind: code
+        code: return 1
+        output: int
+    output: ${worker.output}
+nodes: {}
+"""
+    document = SourceDocument.parse(text)
+    parsed = parse_file(document)
+    scope = _CallableScope(
+        parsed.defs,
+        {},
+        None,
+        parsed.uses,
+        document.root.child("defs"),
+    )
+
+    with pytest.raises(LoadError):
+        scope.resolve("outer")
+
+    parsed.defs["outer"]["outputs"] = "${invoke.output}"
+    retried = scope.resolve("outer")
+    outer_node = retried.compiled.nodes["invoke"]
+    inner_node = outer_node.child.nodes["worker"]
+
+    assert retried._local_catalog.resolve(outer_node.origin) is not None
+    assert retried._local_catalog.resolve(inner_node.origin) is not None

@@ -36,6 +36,7 @@ from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.call import CallDescriptor
 from agent_composer.compose.nodes.loop import LoopDescriptor
+from agent_composer.compose.nodes.map import MapDescriptor
 from agent_composer.compose.desugar.inline_bodies import (
     InlineBody,
     extract_inline_bodies,
@@ -445,6 +446,38 @@ def _assemble(
                 raise unavailable_type()
             return output_type
 
+        item_type: Callable[[str, SourceRange | None], Type] | None = None
+        if isinstance(descriptor, MapDescriptor):
+            cached_item_type: Type | None = None
+
+            def map_item_type(
+                binding_label: str,
+                binding_range: SourceRange | None,
+            ) -> Type:
+                """Prove the MAP element type once, only when an item walk requests it."""
+                nonlocal cached_item_type
+                if cached_item_type is not None:
+                    return cached_item_type
+
+                over_type = infer_inline_binding_type(
+                    descriptor.over,
+                    parent_input_types=flow_input_types,
+                    producer_type=producer_type,
+                    binding_label=binding_label,
+                    binding_range=binding_range,
+                )
+                if not over_type.kind.is_list() or over_type.element is None:
+                    raise LoadError(
+                        f"cannot infer type for inline binding {binding_label!r}: "
+                        "MAP `over:` must have a proven list element type; use an "
+                        "explicitly typed named `defs:` body",
+                        range=binding_range,
+                    )
+                cached_item_type = over_type.element
+                return cached_item_type
+
+            item_type = map_item_type
+
         child_inputs: list[InputDecl] = []
         for key, value in (descriptor.inputs or {}).items():
             binding_label = f"{descriptor.id}.input.{key}"
@@ -453,6 +486,7 @@ def _assemble(
                 value,
                 parent_input_types=flow_input_types,
                 producer_type=producer_type,
+                item_type=item_type,
                 binding_label=binding_label,
                 binding_range=binding_range,
             )

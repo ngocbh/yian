@@ -9,6 +9,7 @@ import yaml
 
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose import loader as compose_loader
+from agent_composer.compose.build import pipeline as compose_pipeline
 from agent_composer.compose.build.pipeline import _register_inline_bodies
 from agent_composer.compose.desugar import inline_bodies as inline_bodies_module
 from agent_composer.compose.desugar.inline_bodies import (
@@ -24,6 +25,7 @@ from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.events import SourceRange
 from agent_composer.run import run_flow
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -1618,6 +1620,204 @@ def test_def_assembly_reader_fallback_restores_only_node_surfaces():
     }
     assert "inputs" in normalized["wrapper"]
     assert "outputs" in normalized["wrapper"]
+
+
+def test_inline_map_opaque_over_without_direct_item_walk_loads_and_runs():
+    loaded = load_flow(
+        """id: inline-map-opaque-over-no-item
+name: inline_map_opaque_over_no_item
+input:
+  primary: list[str]
+  fallback: list[str]
+  prefix: str
+nodes:
+  each:
+    kind: map
+    over: ${input.primary | input.fallback}
+    input:
+      constant: fixed
+      parent: ${input.prefix}
+      template: item ${item}
+      literal:
+        nested: ${item.value}
+    nodes:
+      collect:
+        kind: code
+        code: |
+          return {
+            "constant": inputs["constant"],
+            "parent": inputs["parent"],
+            "template": inputs["template"],
+            "literal": inputs["literal"],
+          }
+        input:
+          constant: ${input.constant}
+          parent: ${input.parent}
+          template: ${input.template}
+          literal: ${input.literal}
+        output:
+          constant: str
+          parent: str
+          template: str
+          literal:
+            nested: str
+    output: ${collect.output}
+output: ${each.output}
+"""
+    )
+
+    result = run_flow(
+        loaded,
+        {"primary": ["first", "second"], "fallback": ["unused"], "prefix": "P"},
+    )
+
+    assert result.status == "succeeded"
+    assert result.output == [
+        {
+            "constant": "fixed",
+            "parent": "P",
+            "template": "item first",
+            "literal": {"nested": "${item.value}"},
+        },
+        {
+            "constant": "fixed",
+            "parent": "P",
+            "template": "item second",
+            "literal": {"nested": "${item.value}"},
+        },
+    ]
+
+
+@pytest.mark.parametrize("item_source", ["${item}", "${item.name}"])
+def test_inline_map_direct_item_on_opaque_over_fails_at_requesting_binding(
+    item_source: str,
+):
+    source = f"""id: inline-map-opaque-over-item
+name: inline_map_opaque_over_item
+input:
+  primary: list[str]
+  fallback: list[str]
+nodes:
+  each:
+    kind: map
+    over: ${{input.primary | input.fallback}}
+    input:
+      row: {item_source}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${{input.row}}
+        output: str
+    output: ${{echo.output}}
+output: ${{each.output}}
+"""
+    root, _spans = _located_root(source)
+    each = root.child("nodes").child("each")
+    expected_range = each.mapping_value_ranges("input")["row"]
+    over_range = each.range_of("over")
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert "each.input.row" in message
+    assert "explicitly typed named `defs:` body" in message
+    assert "only typed inside an outer MAP input" not in message
+    assert caught.value.range == expected_range
+    assert caught.value.range != over_range
+    assert INLINE_FLOW_PREFIX not in message
+
+
+def test_inline_map_item_proof_is_lazy_and_cached(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    original_infer = compose_pipeline.infer_inline_binding_type
+    over_requests: list[tuple[str, SourceRange | None]] = []
+
+    def counting_infer(value, **kwargs):
+        if value == "${input.items}":
+            over_requests.append(
+                (kwargs["binding_label"], kwargs.get("binding_range"))
+            )
+        return original_infer(value, **kwargs)
+
+    monkeypatch.setattr(
+        compose_pipeline,
+        "infer_inline_binding_type",
+        counting_infer,
+    )
+
+    load_flow(
+        """id: inline-map-lazy-item-proof
+name: inline_map_lazy_item_proof
+typedefs:
+  Row:
+    name: str
+input:
+  items: list[Row]
+  prefix: str
+nodes:
+  each:
+    kind: map
+    over: ${input.items}
+    input:
+      constant: fixed
+      parent: ${input.prefix}
+      template: prefix ${input.prefix}
+      literal:
+        nested: ${item.name}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.constant}
+        output: str
+    output: ${echo.output}
+output: ${each.output}
+"""
+    )
+    assert over_requests == []
+
+    direct_source = """id: inline-map-cached-item-proof
+name: inline_map_cached_item_proof
+typedefs:
+  Row:
+    name: str
+input:
+  items: list[Row]
+nodes:
+  each:
+    kind: map
+    over: ${input.items}
+    input:
+      row: ${item}
+      name: ${item.name}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.name}
+        output: str
+    output: ${echo.output}
+output: ${each.output}
+    """
+    direct_root, _spans = _located_root(direct_source)
+    expected_request_range = (
+        direct_root.child("nodes").child("each")
+        .mapping_value_ranges("input")["row"]
+    )
+
+    loaded = load_flow(direct_source)
+
+    assert [decl.name for decl in loaded.compiled.nodes["each"].child_inputs] == [
+        "row",
+        "name",
+    ]
+    assert over_requests == [("each.input.row", expected_request_range)]
 
 
 def test_inline_map_output_error_uses_friendly_child_label():

@@ -39,6 +39,7 @@ from agent_composer.expr import (
 )
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node
+from agent_composer.nodes.contracts import binding_source
 from agent_composer.nodes.wait import WaitNode
 from agent_composer.typesys.values import Type
 
@@ -115,6 +116,7 @@ def validate_references(
 
         `extra_heads` is the per-site set of body-local scopes treated as lenient — e.g.
         a MAP per-element input's `${item}` (valid only inside `map.inputs`, not `over:`)."""
+        from_value = binding_source(from_value)
         if not isinstance(from_value, str):
             return
         try:

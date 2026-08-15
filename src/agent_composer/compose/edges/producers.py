@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from agent_composer.compile.model import START_ID
 from agent_composer.expr import ExpressionError, expr_refs_of
+from agent_composer.nodes.contracts import binding_source
 
 
 def _ref_producer(path: str) -> Optional[str]:
@@ -38,6 +39,7 @@ def _binding_producers(value: Any) -> list[str]:
     producers — the caller assigns them ALL the one sink `input_group`. An `inputs.X` ref
     produces from START_ID (the input-reader data edge); `system.X` produces nothing.
     """
+    value = binding_source(value)
     if not isinstance(value, str):
         return []
     try:

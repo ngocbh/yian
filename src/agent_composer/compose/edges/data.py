@@ -19,6 +19,7 @@ from agent_composer.compile.model import Edge
 from agent_composer.expr import binding_co_skips
 from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.compose.parse.file import CaseDescriptor, NodeDescriptor, WaitDescriptor
+from agent_composer.nodes.contracts import binding_source
 
 
 def infer_data_edges(
@@ -56,7 +57,7 @@ def infer_data_edges(
 
     def emit_for(value: Any, consumer: str, group: str) -> None:
         # the whole group's co-skip stance is a property of its binding.
-        optional = not binding_co_skips(value)
+        optional = not binding_co_skips(binding_source(value))
         for producer in _binding_producers(value):
             emit(producer, consumer, group, optional)
 

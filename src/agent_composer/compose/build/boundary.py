@@ -14,6 +14,7 @@ from typing import Any, Optional
 from agent_composer.compile.model import END_ID, START_ID, Edge, FlowOutput
 from agent_composer.expr import binding_co_skips
 from agent_composer.nodes.base import Node
+from agent_composer.nodes.contracts import binding_source
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.compose.edges.producers import _binding_producers
@@ -88,7 +89,7 @@ def synthesize_boundary_graph(
     end_edges: list[Edge] = []
     counts: dict[tuple[str, str], int] = {}
     for o in outputs:
-        optional = not binding_co_skips(o.from_)
+        optional = not binding_co_skips(binding_source(o.from_))
         for producer in _binding_producers(o.from_):
             i = counts.get((producer, END_ID), 0)
             counts[(producer, END_ID)] = i + 1
@@ -127,7 +128,7 @@ def synthesize_boundary_graph(
         # edge; START always runs). A `${pid.output:-null}` synth -> binding_co_skips False ->
         # optional=True: END waits for the producer to settle, binding None if it was skipped.
         for synth_name, src in lowered.synth_wiring.items():
-            optional = not binding_co_skips(src)
+            optional = not binding_co_skips(binding_source(src))
             for producer in _binding_producers(src):
                 i = counts.get((producer, END_ID), 0)
                 counts[(producer, END_ID)] = i + 1

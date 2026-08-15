@@ -36,7 +36,10 @@ from agent_composer.nodes.base import FieldRanges
 from agent_composer.typesys.values import TypeCheckError
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.build.pipeline import _assemble, ComposedFlow
-from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
+from agent_composer.compose.desugar.inline_bodies import (
+    INLINE_FLOW_PREFIX,
+    extract_inline_bodies,
+)
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.uses import parse_uses_ref
@@ -180,7 +183,14 @@ def top_frame_ranges(
         cf = parse_file(text)
     except LoadError:
         return {}, {}
-    return _frame_ranges(_nodes_reader(text, cf.nodes))
+    try:
+        lowered, _inline_bodies = extract_inline_bodies(
+            _nodes_reader(text, cf.nodes),
+            owner=("root",),
+        )
+    except LoadError:
+        return {}, {}
+    return _frame_ranges(lowered)
 
 
 # A multi-node `defs:` callable is a sub-flow inline: the same sections as a top-level
@@ -433,12 +443,11 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
     # Render-only source frame for THIS flow: copied onto child call/map nodes for the
     # nested-error traceback. For an external file (loaded via make_file_resolver) the
     # label is relabeled to the filename in `resolve`.
-    top_node_ranges, top_field_ranges = _frame_ranges(_nodes_reader(text, f.nodes))
     source = SourceFrame(
         label=f.name or "<flow>",
         text=text,
-        node_ranges=top_node_ranges,
-        field_ranges=top_field_ranges,
+        node_ranges={},
+        field_ranges={},
     )
 
     return _assemble(
@@ -449,7 +458,7 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
         registry=registry,
         scope=callable_scope,
         owner=("root",),
-        n_lines={nid: rng.start_line for nid, rng in top_node_ranges.items()},
+        n_lines={},
         s_lines=_section_lines(text),
         uses_aliases=set(f.uses),
         version=f.version,
@@ -656,8 +665,8 @@ def _load_def(
     sharing the file's `typedefs:` registry + callable scope (so a def can call other defs,
     external flows, or compiler-owned children). A **single-node** form (a top-level
     `kind:`) is deferred -> `LoadError`. `parent_text` is the source of the declaring
-    file: the def's nodes live at absolute lines there, so its `SourceFrame` indexes them via
-    `_frame_ranges(_def_nodes_reader(parent_text, name))` for the nested-error traceback."""
+    file: the assembly reader retains absolute lines there, and `_assemble` derives the
+    def's `SourceFrame` from its lowered descriptors."""
     if not isinstance(body, dict):
         raise LoadError(
             f"defs entry {name!r}: body must be a mapping, got {type(body).__name__}"
@@ -675,18 +684,12 @@ def _load_def(
             f"defs entry {name!r}: unknown field(s) {extra} "
             f"(allowed: {', '.join(sorted(_DEF_ALLOWED))})"
         )
-    # Frame extraction parses and mutates singular node keys while back-mapping them to
-    # descriptor fields. Assembly therefore receives a second fresh raw reader, preserving
-    # the author's singular inline-body fields and their absolute parent-file ranges.
-    def_node_ranges, def_field_ranges = _frame_ranges(
-        _def_nodes_reader(parent_text, name)
-    )
     nodes_reader = _def_assembly_reader(parent_text, name, body["nodes"])
     source = SourceFrame(
         label="defs:" + name,
         text=parent_text,
-        node_ranges=def_node_ranges,
-        field_ranges=def_field_ranges,
+        node_ranges={},
+        field_ranges={},
     )
     try:
         return _assemble(

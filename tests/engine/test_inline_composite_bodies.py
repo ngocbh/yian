@@ -2505,6 +2505,93 @@ output: ${invoke.output}
     assert tuple(resolutions) == resolutions_at_load
 
 
+def test_inline_sibling_preserves_outer_and_top_frame_ranges():
+    source = """id: inline-outer-frames
+name: inline_outer_frames
+nodes:
+  before:
+    kind: code
+    code: tests.engine._compose_codefns:echo_x
+    input:
+      x: start
+    output: str
+  wrapper:
+    kind: call
+    input:
+      value: ${before.output}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: str
+    output: ${echo.output}
+  after:
+    kind: code
+    code: tests.engine._compose_codefns:echo_x
+    input:
+      x: ${wrapper.output}
+    output: str
+output: ${after.output}
+"""
+    root, _spans = _located_root(source)
+    nodes = root.child("nodes")
+    expected_nodes = {
+        node_id: nodes.key_range_of(node_id)
+        for node_id in ("before", "wrapper", "after")
+    }
+    expected_after_input = (
+        nodes.child("after").mapping_value_ranges("input")["x"]
+    )
+
+    loaded = load_flow(source)
+    top_nodes, top_fields = compose_loader.top_frame_ranges(source)
+    repeated_nodes, repeated_fields = compose_loader.top_frame_ranges(source)
+
+    assert loaded.source is not None
+    assert loaded.source.node_ranges == expected_nodes
+    assert loaded.source.field_ranges["after"][("input", "x")] == expected_after_input
+    assert top_nodes == expected_nodes
+    assert top_fields["after"][("input", "x")] == expected_after_input
+    assert (repeated_nodes, repeated_fields) == (top_nodes, top_fields)
+
+
+def test_inline_sibling_keeps_outer_bad_binding_range():
+    source = """id: inline-outer-bad-binding
+name: inline_outer_bad_binding
+nodes:
+  wrapper:
+    kind: call
+    nodes:
+      constant:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ready
+        output: str
+    output: ${constant.output}
+  broken:
+    kind: code
+    code: tests.engine._compose_codefns:echo_x
+    input:
+      x: ${missing.output}
+    output: str
+output: ${broken.output}
+"""
+    root, _spans = _located_root(source)
+    expected_range = (
+        root.child("nodes").child("broken")
+        .mapping_value_ranges("input")["x"]
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    assert "unknown namespace 'missing'" in str(caught.value)
+    assert caught.value.range == expected_range
+
+
 def test_inline_map_output_error_uses_friendly_child_label():
     with pytest.raises(LoadError) as caught:
         load_flow(

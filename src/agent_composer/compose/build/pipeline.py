@@ -23,7 +23,7 @@ from typing import Callable, Optional, Protocol
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
 from agent_composer.events import SourceRange
-from agent_composer.nodes.base import Node
+from agent_composer.nodes.base import FieldRanges, Node
 from agent_composer.typesys.values import Type
 from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
@@ -356,6 +356,30 @@ def _assemble(
     flow_input_types = {decl.name: decl.type for decl in inputs}
     flow_inputs = set(flow_input_types)
     descriptors = parse_nodes(nodes_reader)
+
+    parsed_node_ranges = {
+        node_id: descriptor.range
+        for node_id, descriptor in descriptors.items()
+        if descriptor.range is not None
+    }
+    parsed_field_ranges = {
+        node_id: FieldRanges(descriptor.field_ranges)
+        for node_id, descriptor in descriptors.items()
+        if descriptor.field_ranges
+    }
+    n_lines = {
+        **n_lines,
+        **{
+            node_id: node_range.start_line
+            for node_id, node_range in parsed_node_ranges.items()
+        },
+    }
+    if source is not None:
+        source = replace(
+            source,
+            node_ranges=parsed_node_ranges,
+            field_ranges=parsed_field_ranges,
+        )
 
     # A `uses:` alias shares the callable namespace, so it must not collide with a node
     # id (the resolver only sees a bare name; the author conflates them). Checked here, where

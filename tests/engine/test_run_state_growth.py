@@ -14,7 +14,12 @@ from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, NodeS
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import NodeExpanded
 from agent_composer.nodes.base import Grow, Node, NodeKind
-from agent_composer.nodes.contracts import Binding, Parameter, ValueContract
+from agent_composer.nodes.contracts import (
+    Binding,
+    ContractOrigins,
+    Parameter,
+    ValueContract,
+)
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.loop import LoopNode
@@ -603,7 +608,18 @@ def test_growth_accepts_typed_fields_and_nested_map_item_scope():
         required=frozenset({"known"}),
     )
     state, _ = _initialized_spawner(
-        _parent_flow(_Spawner("spawn", output_type=source_type))
+        _parent_flow(
+            _Spawner(
+                "spawn",
+                output_contract=ValueContract(
+                    source_type,
+                    ContractOrigins(
+                        default=OriginRef("spawn/output"),
+                        entries=((('known',), OriginRef("spawn/output/known")),),
+                    ),
+                ),
+            )
+        )
     )
 
     def typed_map_builder(spawner: Node, seed: Any) -> Flow:
@@ -720,6 +736,10 @@ def _invalid_fragment(case: str) -> Any:
         fragment.nodes[fragment.start_id].params = ["raw"]  # type: ignore[list-item]
     elif case == "parameter-subclass":
         fragment.nodes[fragment.start_id].params = [_ParameterSubclass("x")]
+    elif case == "raw-output-contract":
+        fragment.nodes[fragment.start_id].output_contract = Type.scalar(  # type: ignore[assignment]
+            ValueKind.STRING
+        )
     elif case == "empty-param-tuple":
         fragment.nodes[fragment.start_id].params = ()  # type: ignore[assignment]
     elif case == "param-tuple":
@@ -761,10 +781,12 @@ def _invalid_fragment(case: str) -> Any:
             "value": Binding("${system.not_declared}")
         }
     elif case == "unknown-typed-field":
-        fragment.nodes[fragment.start_id].output_type = Type(
-            kind=ValueKind.OBJECT,
-            fields={"known": Type.scalar(ValueKind.STRING)},
-            required=frozenset({"known"}),
+        fragment.nodes[fragment.start_id].output_contract = ValueContract(
+            Type(
+                kind=ValueKind.OBJECT,
+                fields={"known": Type.scalar(ValueKind.STRING)},
+                required=frozenset({"known"}),
+            )
         )
         end = EndNode.record(fragment.end_id, output_names=["value"])
         end.commit_as = "spawn"
@@ -804,6 +826,7 @@ def _invalid_fragment(case: str) -> Any:
         "extra-wiring-key",
         "raw-param",
         "parameter-subclass",
+        "raw-output-contract",
         "empty-param-tuple",
         "param-tuple",
         "missing-required",
@@ -923,6 +946,28 @@ def test_growth_requires_exact_live_carriers(
         prepare_expanded(state, "spawn", grow, builder)
 
     assert isinstance(caught.value, state_module._NodeDataError) is node_data
+
+
+def test_growth_rejects_malformed_static_contract_as_a_host_invariant():
+    """Static IR corruption remains outside the builder-owned fragment boundary."""
+    state, log = _initialized_spawner()
+    state.flow.nodes["spawn"].output_contract = Type.scalar(  # type: ignore[assignment]
+        ValueKind.STRING
+    )
+    before = _snapshot(state)
+    sequence = log.next_sequence
+
+    with pytest.raises(TypeError, match="exact ValueContract") as caught:
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda spawner, seed: _fragment(spawner.id),
+        )
+
+    assert not isinstance(caught.value, state_module._NodeDataError)
+    assert _snapshot(state) == before
+    assert log.next_sequence == sequence
 
 
 def test_growth_enforces_peak_node_budget_before_same_transition_pruning(monkeypatch):

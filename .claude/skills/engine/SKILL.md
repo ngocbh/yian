@@ -49,6 +49,13 @@ Hold this model whenever you design anything:
 - Compiled `Node.params` has one shape: ordered exact `Parameter` carriers. The
   flow owns their `Binding` sources; parameter contracts/default presence/
   coercion policy stay source-neutral, and rewrites preserve all origins.
+- Compiled `Node.output_contract` has one shape: an exact `ValueContract`, or
+  `None` for an unenforced output. Runtime and node behavior project `.type`, while
+  manifests exclude `.origins`. `Node.output_type` is only the temporary
+  Type-valued Compose bridge: its setter retains existing contract origins when
+  replacing the type. Do not use it in new node/compile/runtime code. The next
+  #131 child moves Compose to `output_contract` and deletes the bridge; authored
+  `output:` / `outputs:` syntax stays unchanged.
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
   it does not rewrite the graph at runtime.
 

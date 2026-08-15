@@ -29,6 +29,7 @@ from agent_composer.events import (
     StreamChunk,
 )
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route, _HostStop
+from agent_composer.nodes.contracts import ValueContract
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.engine import FlowEngine
@@ -62,9 +63,9 @@ class _ActionNode(Node):
         node_id: str,
         action: Callable[[], Any],
         *,
-        output_type: Type | None = None,
+        output_contract: ValueContract | None = None,
     ) -> None:
-        super().__init__(node_id, output_type=output_type)
+        super().__init__(node_id, output_contract=output_contract)
         self._action = action
 
     def _run_impl(self, inputs: dict[str, Any]) -> Output:
@@ -500,7 +501,7 @@ def test_invalid_raw_output_preparation_becomes_durable_node_failure():
     node = _ActionNode(
         "work",
         lambda: "not-an-int",
-        output_type=Type.scalar(ValueKind.INTEGER),
+        output_contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
     )
     state, log = _initialized(_flow([node]), num_workers=0)
 
@@ -511,6 +512,24 @@ def test_invalid_raw_output_preparation_becomes_durable_node_failure():
     assert events[-1].error_type == "TypeCheckError"
     assert isinstance(state.result, RunFailed)
     assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
+
+
+def test_malformed_compiled_output_contract_remains_a_host_failure():
+    """The dispatcher must not blame a node for corrupt compiled IR."""
+    state, log = _initialized(
+        _flow([_ActionNode("work", lambda: "done")]),
+        num_workers=0,
+    )
+    state.flow.nodes["work"].output_contract = Type.scalar(  # type: ignore[assignment]
+        ValueKind.STRING
+    )
+
+    with pytest.raises(TypeError, match="exact ValueContract") as caught:
+        list(_dispatcher(state, log, num_workers=0).run())
+
+    assert not isinstance(caught.value, state_module._NodeDataError)
+    assert tuple(state.in_flight) == ("work",)
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
 
 
 @pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))

@@ -23,6 +23,7 @@ from agent_composer.events import (
     SourceRange,
     SourceSpan,
 )
+from agent_composer.nodes.contracts import ValueContract
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.log import (
@@ -895,9 +896,15 @@ def _redirect_flow() -> CompiledFlow:
     nodes = {
         START_ID: StartNode(START_ID),
         "filler": filler,
-        "baked": FuncNode("baked", lambda inputs: inputs, output_type=list_type),
+        "baked": FuncNode(
+            "baked",
+            lambda inputs: inputs,
+            output_contract=ValueContract(list_type),
+        ),
         "explicit": FuncNode(
-            "explicit", lambda inputs: inputs, output_type=list_type
+            "explicit",
+            lambda inputs: inputs,
+            output_contract=ValueContract(list_type),
         ),
         "after-baked": FuncNode("after-baked", lambda inputs: inputs),
         "after-explicit": FuncNode("after-explicit", lambda inputs: inputs),
@@ -963,6 +970,67 @@ def test_success_resolves_redirect_precedence_and_preserves_target_disposition(
     assert state.edge_state[f"{expected_target}-after"] is NodeState.TAKEN
     assert state.edge_state[f"{other_target}-after"] is NodeState.UNKNOWN
     assert tuple(state.ready) == (expected_successor,)
+
+
+def test_success_validates_ordinary_target_against_output_contract_type():
+    """A non-redirected commit uses its own contract's semantic Type."""
+    state, log = _redirect_ready()
+    filler = state.flow.nodes["filler"]
+    filler.commit_as = None
+    filler.output_contract = ValueContract(Type.scalar(ValueKind.NUMBER))
+
+    prepared = prepare_node_succeeded(state, "filler", 3)
+    commit_prepared(log, state, prepared)
+
+    assert prepared.record.commit_target == "filler"
+    assert prepared.record.value == {"kind": "float", "value": 3.0}
+    assert state.pool.get("filler") == 3.0
+
+
+def test_success_rejects_malformed_target_contract_as_a_host_invariant():
+    """A corrupt compiled carrier is not node-produced failure data."""
+    state, log = _redirect_ready()
+    state.flow.nodes["baked"].output_contract = Type.scalar(  # type: ignore[assignment]
+        ValueKind.STRING
+    )
+    before = _state_snapshot(state)
+    sequence = log.next_sequence
+
+    with pytest.raises(TypeError, match="exact ValueContract") as caught:
+        prepare_node_succeeded(state, "filler", ("valid",))
+
+    assert not isinstance(caught.value, state_module._NodeDataError)
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == sequence
+
+
+def test_success_replay_revalidates_target_output_contract_type():
+    """Replay accepts the same contract and rejects a changed incompatible contract."""
+    live_state, live_log = _redirect_ready()
+    commit_prepared(
+        live_log,
+        live_state,
+        prepare_node_succeeded(live_state, "filler", ("valid",)),
+    )
+
+    replay_state, replay_log, _ = _replay_outcome_log(_redirect_flow(), live_log)
+    assert _reducer_snapshot(replay_state) == _reducer_snapshot(live_state)
+    assert tuple(replay_log) == tuple(live_log)
+
+    incompatible = _redirect_flow()
+    incompatible.nodes["baked"].output_contract = ValueContract(
+        Type.scalar(ValueKind.INTEGER)
+    )
+    with pytest.raises(ValueError, match="declared type int"):
+        _replay_outcome_log(incompatible, live_log)
+
+    malformed = _redirect_flow()
+    malformed.nodes["baked"].output_contract = Type.scalar(  # type: ignore[assignment]
+        ValueKind.STRING
+    )
+    with pytest.raises(TypeError, match="exact ValueContract") as caught:
+        _replay_outcome_log(malformed, live_log)
+    assert not isinstance(caught.value, state_module._NodeDataError)
 
 
 @pytest.mark.parametrize(

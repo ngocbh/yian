@@ -36,7 +36,7 @@ from agent_composer.events import (
 )
 from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.nodes.base import Grow, Node
-from agent_composer.nodes.contracts import Parameter, binding_source
+from agent_composer.nodes.contracts import Parameter, ValueContract, binding_source
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
     NodeExpandedRecord,
@@ -57,7 +57,7 @@ from agent_composer.runtime.log import (
     encode_record,
 )
 from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import ANY_VALUE_ADAPTER, TypedValue
+from agent_composer.typesys.values import ANY_VALUE_ADAPTER, Type, TypedValue
 
 
 MAX_TOTAL_NODES = 10_000
@@ -68,6 +68,19 @@ MAX_REF_DEPTH = 5
 
 GrowBuilder = Callable[[Node, Any], Flow]
 """Injected kind-aware interpreter from a spawner and canonical seed to a fragment."""
+
+
+def _node_output_type(node: Node) -> Type | None:
+    """Project one node's semantic output type from its exact canonical contract."""
+    contract = node.output_contract
+    if contract is None:
+        return None
+    if type(contract) is not ValueContract:
+        raise TypeError(
+            "node output_contract must be an exact ValueContract or None, "
+            f"got {type(contract).__name__}"
+        )
+    return contract.type
 
 
 class _NodeDataError(Exception):
@@ -728,11 +741,9 @@ def prepare_node_succeeded(
                 )
             )
         raise ValueError(f"success commit target {target!r} does not exist in the flow")
+    declared_type = _node_output_type(state.flow.nodes[target])
     try:
-        value_wire, typed = canonical_typed(
-            output,
-            state.flow.nodes[target].output_type,
-        )
+        value_wire, typed = canonical_typed(output, declared_type)
     except (TypeError, ValueError) as exc:
         _raise_node_data(exc)
     return _prepare_success_transition(
@@ -2077,8 +2088,17 @@ def _validate_growth_fragment(
     fragment: Flow,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Mark only fragment-shape rejections as node-owned transition data."""
+    static_producer_types = {
+        node_id: _node_output_type(node)
+        for node_id, node in state.flow.nodes.items()
+        if node.output_contract is not None
+    }
     try:
-        return _validate_growth_fragment_data(state, fragment)
+        return _validate_growth_fragment_data(
+            state,
+            fragment,
+            static_producer_types=static_producer_types,
+        )
     except _NodeDataError:
         raise
     except (TypeError, ValueError) as exc:
@@ -2088,8 +2108,15 @@ def _validate_growth_fragment(
 def _validate_growth_fragment_data(
     state: RunState,
     fragment: Flow,
+    *,
+    static_producer_types: dict[str, Type] | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Require a collision-free, self-contained, acyclic fragment."""
+    """Require a collision-free, self-contained, acyclic fragment.
+
+    ``static_producer_types`` is the already validated live-topology projection.
+    Direct callers may omit it; unlike the node-data wrapper, this function then
+    reports malformed live contracts as host invariant errors.
+    """
     if type(fragment.nodes) is not dict:
         raise TypeError("growth fragment nodes must be a dict")
     if type(fragment.edges) is not list:
@@ -2129,11 +2156,20 @@ def _validate_growth_fragment_data(
     combined_nodes = dict(state.flow.nodes)
     combined_nodes.update(fragment.nodes)
     combined_node_ids = set(combined_nodes)
-    producer_types = {
-        node_id: node.output_type
-        for node_id, node in combined_nodes.items()
-        if node.output_type is not None
-    }
+    if static_producer_types is None:
+        static_producer_types = {
+            node_id: _node_output_type(node)
+            for node_id, node in state.flow.nodes.items()
+            if node.output_contract is not None
+        }
+    producer_types = dict(static_producer_types)
+    producer_types.update(
+        {
+            node_id: _node_output_type(node)
+            for node_id, node in fragment.nodes.items()
+            if node.output_contract is not None
+        }
+    )
     for node_id, node in fragment.nodes.items():
         for attribute in ("commit_as", "origin_id"):
             target = getattr(node, attribute)
@@ -2561,7 +2597,7 @@ def _validate_success_value(
         raise ValueError("NodeSucceededRecord value is not a typed value") from exc
     wire, decoded = canonical_typed(
         typed,
-        state.flow.nodes[record.commit_target].output_type,
+        _node_output_type(state.flow.nodes[record.commit_target]),
     )
     if wire != record.value:
         raise ValueError("NodeSucceededRecord value is not canonical for its target")

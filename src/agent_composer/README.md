@@ -105,8 +105,24 @@ through contract validation, so it is accepted only when the parameter is untype
 or its contract accepts null (a nullable or `None`-kind type).
 Parameter/default/contract origins do not affect manifest identity. Compose
 `input:` lowers directly into this same exact carrier shape; `ComposedFlow.input`
-and START use it without a parallel front-end declaration type. Stored output
-value-contract consumers move in later #131 cutovers.
+and START use it without a parallel front-end declaration type.
+
+`Node.output_contract` is the canonical compiled output declaration: exactly one
+`ValueContract`, or `None` when the output is unenforced. Runtime enforcement and
+node-owned structured generation project its semantic `.type`; nested origins remain
+attached to the same carrier for diagnostics. The manifest projects only that semantic
+type, so changing or rebasing contract origins does not change flow or expansion
+identity.
+
+`Node.output_type` is a temporary Type-valued Compose compatibility view, not a second
+stored declaration. Reading it projects `output_contract.type`; assigning a `Type`
+replaces only the semantic type while retaining the carrier's existing origins, and
+assigning `None` clears the contract. Canonical node/compile/runtime code uses
+`output_contract` directly. Compose descriptors, builders, producer maps, child
+signatures, and validators still cross this bridge during the staged migration; the
+next #131 child must move those sites and the legacy constructor keyword to
+`ValueContract`, then delete the view. This internal migration does not change the
+authored `output:` / `outputs:` YAML syntax.
 
 ## One-pass source ownership
 

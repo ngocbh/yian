@@ -8,9 +8,14 @@ These test `run`/`respawn` and compile-owned reconstruction directly (no engine)
 from agent_composer.compile.expand import build_grow
 from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.base import Grow, NodeKind, Output
-from agent_composer.nodes.contracts import Assertion
-from agent_composer.nodes.loop import LoopNode
+from agent_composer.nodes.contracts import (
+    Assertion,
+    ContractOrigins,
+    ValueContract,
+)
 from agent_composer.nodes.ids import map_callsite, ns
+from agent_composer.nodes.loop import LoopNode
+from agent_composer.typesys import Type, ValueKind
 
 from tests.engine.test_expand import _child_flow
 
@@ -92,6 +97,38 @@ def test_respawn_preserves_assertion_carriers_and_positional_ranges():
     assert clone.pre_asserts[0].origin is origin
     assert clone.pre_assert_ranges == [assertion_range]
     assert clone.pre_assert_ranges is not node.pre_assert_ranges
+
+
+def test_respawn_preserves_the_full_output_contract_carrier():
+    """A fresh LOOP driver keeps the immutable type and nested output origins."""
+    node = LoopNode(
+        "loop",
+        flow_id="body",
+        child=object(),
+        predicate_kind="while",
+        predicate="${x}",
+        max_iters=3,
+    )
+    origins = ContractOrigins(
+        default=OriginRef("nodes/loop/output"),
+        entries=((("answer",), OriginRef("nodes/loop/output/answer")),),
+    )
+    contract = ValueContract(
+        Type(
+            kind=ValueKind.OBJECT,
+            fields={"answer": Type.scalar(ValueKind.INTEGER)},
+            required=frozenset({"answer"}),
+        ),
+        origins,
+    )
+    node.output_contract = contract
+
+    clone = node.respawn(1)
+
+    assert clone.output_contract is contract
+    assert clone.output_contract == contract
+    assert clone.output_contract.origins is origins
+    assert clone.output_type is contract.type
 
 
 def test_until_do_while_continues_on_iteration_zero():

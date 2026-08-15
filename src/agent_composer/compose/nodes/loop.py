@@ -37,6 +37,8 @@ class LoopDescriptor(NodeDescriptor):
     custom parse hook — loop's field legality is the default allowed/required key check + the
     asserts-list check; all its deeper legality lives in `build`). Only the loop-specific fields
     are declared here; `inputs` comes from the base, and a loop never populates `outputs`.
+    `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
+    deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
 
     Class attrs: `kind="loop"`; `allowed` adds `call`/`inputs`/`while`/`until`/`times`/`max`/
     `asserts` to the commons; `required` is `{"call"}` (the body subflow); `binding_fields=()` —
@@ -54,6 +56,7 @@ class LoopDescriptor(NodeDescriptor):
     keyword_remap = {"while": "while_", "until": "until_"}
 
     call: str
+    child_label: str | None = field(default=None, compare=False)
     while_: Optional[str] = None
     until_: Optional[str] = None
     times: Optional[int] = None

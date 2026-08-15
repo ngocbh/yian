@@ -18,8 +18,8 @@ here. It imports NOTHING from `loader.py` (that would be a back-edge).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, replace
+from typing import Callable, Optional, Protocol
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
 from agent_composer.events import SourceRange
@@ -29,7 +29,10 @@ from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from agent_composer.compose.nodes.call import CallDescriptor
+from agent_composer.compose.nodes.loop import LoopDescriptor
 from agent_composer.compose.nodes.resolver import ChildResolver
+from agent_composer.compose.desugar.inline_bodies import InlineBody
 from agent_composer.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.helpers.errors import LoadError
@@ -185,6 +188,75 @@ class ComposedFlow:
     name: Optional[str] = None
     description: Optional[str] = None
     source: Optional[SourceFrame] = None
+
+
+class _PrivateRegistrar(Protocol):
+    """Structural seam for registering a lazy compiler-owned child callable."""
+
+    def register_private(
+        self,
+        flow_id: str,
+        owner: tuple[str, ...],
+        label: str,
+        builder: Callable[[], ComposedFlow],
+    ) -> None:
+        """Register one private callable builder under its generated identity."""
+
+
+def _register_inline_bodies(
+    descriptors: dict[str, NodeDescriptor],
+    bodies: dict[str, InlineBody],
+    *,
+    registrar: _PrivateRegistrar,
+    build_child: Callable[
+        [InlineBody, CallDescriptor | LoopDescriptor], ComposedFlow
+    ],
+) -> dict[str, NodeDescriptor]:
+    """Associate retained inline bodies with descriptors and register lazy builders.
+
+    Every association is validated before the registrar is touched. The returned map
+    replaces only matching frozen descriptors with copies carrying an author-facing child
+    label; the input descriptors remain unchanged. Child construction stays lazy until the
+    registrar invokes a captured zero-argument builder.
+    """
+    associated = dict(descriptors)
+    registrations: list[
+        tuple[InlineBody, CallDescriptor | LoopDescriptor, str]
+    ] = []
+
+    for body in bodies.values():
+        label = f"inline body of node '{body.node_id}'"
+        descriptor = descriptors.get(body.node_id)
+        if descriptor is None:
+            raise LoadError(
+                f"{label}: no matching composite node descriptor",
+                range=body.nodes_reader._own_range(),
+            )
+        if not isinstance(descriptor, (CallDescriptor, LoopDescriptor)):
+            raise LoadError(
+                f"{label}: final node descriptor is not CALL, MAP, or LOOP",
+                range=body.nodes_reader._own_range(),
+            )
+        if descriptor.call != body.flow_id:
+            raise LoadError(
+                f"{label}: final node descriptor does not target its retained inline body",
+                range=body.nodes_reader._own_range(),
+            )
+
+        labelled_descriptor = replace(descriptor, child_label=label)
+        associated[body.node_id] = labelled_descriptor
+        registrations.append((body, labelled_descriptor, label))
+
+    for body, labelled_descriptor, label in registrations:
+        def builder(
+            body: InlineBody = body,
+            descriptor: CallDescriptor | LoopDescriptor = labelled_descriptor,
+        ) -> ComposedFlow:
+            return build_child(body, descriptor)
+
+        registrar.register_private(body.flow_id, body.owner, label, builder)
+
+    return associated
 
 
 def _flow_outputs(outputs) -> list[FlowOutput]:

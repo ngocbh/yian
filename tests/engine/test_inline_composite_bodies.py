@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import yaml
 
 from agent_composer.compose import loader as compose_loader
+from agent_composer.compose.build.pipeline import _register_inline_bodies
 from agent_composer.compose.desugar import inline_bodies as inline_bodies_module
 from agent_composer.compose.desugar.inline_bodies import (
     INLINE_FLOW_PREFIX,
@@ -17,6 +20,7 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.loader import load_flow
+from agent_composer.compose.parse.nodes import parse_nodes
 
 
 def _located_root(text: str) -> tuple[NodeReader, dict]:
@@ -32,6 +36,61 @@ def _yaml_pairs(reader: NodeReader, key: str) -> list[tuple[yaml.Node, yaml.Node
         for key_node, value_node in reader.yaml_node.value
         if key_node.value == key
     ]
+
+
+class _RecordingRegistrar:
+    """Test double retaining private registration arguments without resolving them."""
+
+    def __init__(self) -> None:
+        self.registrations: list[tuple[str, tuple[str, ...], str, object]] = []
+
+    def register_private(self, flow_id, owner, label, builder) -> None:
+        """Record one lazy private builder without invoking it."""
+        self.registrations.append((flow_id, owner, label, builder))
+
+
+def _association_fixture():
+    """Return located retained bodies and their final CALL/MAP/LOOP descriptors."""
+    root, _spans = _located_root(
+        """nodes:
+  call_node:
+    kind: call
+    nodes:
+      echo:
+        kind: code
+        run: tests.engine._compose_codefns:echo
+        input:
+          value: hello
+        output: str
+    output: ${echo.output}
+  map_node:
+    kind: map
+    over: ${input.items}
+    nodes:
+      echo:
+        kind: code
+        run: tests.engine._compose_codefns:echo
+        input:
+          value: hello
+        output: str
+    output: ${echo.output}
+  loop_node:
+    kind: loop
+    times: 1
+    input:
+      value: 0
+    nodes:
+      echo:
+        kind: code
+        run: tests.engine._compose_codefns:echo
+        input:
+          value: hello
+        output: str
+    output: ${echo.output}
+"""
+    )
+    masked, bodies = extract_inline_bodies(root.child("nodes"), owner=("root",))
+    return parse_nodes(masked), bodies
 
 
 def test_overlay_alias_wrappers_are_distinct_and_leave_the_base_unchanged():
@@ -564,6 +623,127 @@ def test_inline_body_shape_errors_are_located_without_private_ids(
     assert message in str(caught.value)
     assert INLINE_FLOW_PREFIX not in str(caught.value)
     assert caught.value.range == expected_range
+
+
+def test_register_inline_bodies_associates_call_map_loop_and_stays_lazy():
+    descriptors, bodies = _association_fixture()
+    originals = dict(descriptors)
+    registrar = _RecordingRegistrar()
+    build_calls: list[tuple[object, object]] = []
+
+    def build_child(body, descriptor):
+        build_calls.append((body, descriptor))
+        return body.node_id
+
+    associated = _register_inline_bodies(
+        descriptors,
+        bodies,
+        registrar=registrar,
+        build_child=build_child,
+    )
+
+    assert associated is not descriptors
+    assert list(associated) == ["call_node", "map_node", "loop_node"]
+    assert len(registrar.registrations) == 3
+    assert build_calls == []
+
+    for body, registration in zip(
+        bodies.values(), registrar.registrations, strict=True
+    ):
+        flow_id, owner, label, builder = registration
+        expected_label = f"inline body of node {body.node_id!r}"
+        rewritten = associated[body.node_id]
+
+        assert flow_id == body.flow_id
+        assert owner == body.owner
+        assert label == expected_label
+        assert rewritten is not originals[body.node_id]
+        assert rewritten == originals[body.node_id]
+        assert rewritten.child_label == expected_label
+        assert rewritten.call == body.flow_id
+        assert originals[body.node_id] is descriptors[body.node_id]
+        assert originals[body.node_id].child_label is None
+
+        assert builder() == body.node_id
+        assert build_calls[-1] == (body, rewritten)
+
+
+@pytest.mark.parametrize(
+    ("kind", "body"),
+    [
+        ("call", "call: named"),
+        ("map", "call: named\n    over: ${input.items}"),
+        ("loop", "call: named\n    times: 1"),
+    ],
+)
+def test_child_label_is_not_authorable(kind: str, body: str):
+    root, _spans = _located_root(
+        "nodes:\n"
+        "  composite:\n"
+        f"    kind: {kind}\n"
+        f"    {body}\n"
+        "    child_label: forged\n"
+    )
+    node = root.child("nodes").child("composite")
+
+    with pytest.raises(LoadError) as caught:
+        parse_nodes(root.child("nodes"))
+
+    assert "child_label" in str(caught.value)
+    assert "not allowed" in str(caught.value)
+    assert caught.value.range == node.range_of("child_label")
+
+
+@pytest.mark.parametrize("failure", ["missing", "wrong-kind", "wrong-target"])
+def test_register_inline_body_rejects_bad_association_located_and_redacted(
+    failure: str,
+):
+    descriptors, bodies = _association_fixture()
+    body = bodies["call_node"]
+    candidate = {"call_node": descriptors["call_node"]}
+    if failure == "missing":
+        candidate = {}
+    elif failure == "wrong-kind":
+        candidate = {"call_node": object()}
+    else:
+        candidate = {
+            "call_node": replace(descriptors["call_node"], call="named")
+        }
+    registrar = _RecordingRegistrar()
+
+    with pytest.raises(LoadError) as caught:
+        _register_inline_bodies(
+            candidate,
+            {"call_node": body},
+            registrar=registrar,
+            build_child=lambda _body, _descriptor: object(),
+        )
+
+    message = str(caught.value)
+    assert "inline body of node 'call_node'" in message
+    assert body.flow_id not in message
+    assert INLINE_FLOW_PREFIX not in message
+    assert caught.value.range == body.nodes_reader._own_range()
+    assert registrar.registrations == []
+
+
+def test_register_inline_bodies_preflights_all_before_first_registration():
+    descriptors, bodies = _association_fixture()
+    broken = dict(descriptors)
+    del broken["loop_node"]
+    registrar = _RecordingRegistrar()
+
+    with pytest.raises(LoadError) as caught:
+        _register_inline_bodies(
+            broken,
+            bodies,
+            registrar=registrar,
+            build_child=lambda _body, _descriptor: object(),
+        )
+
+    assert "inline body of node 'loop_node'" in str(caught.value)
+    assert caught.value.range == bodies["loop_node"].nodes_reader._own_range()
+    assert registrar.registrations == []
 
 
 def test_callable_scope_builds_private_once_and_same_owner_registration_is_idempotent():

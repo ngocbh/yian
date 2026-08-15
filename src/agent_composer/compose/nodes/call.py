@@ -59,6 +59,8 @@ class CallDescriptor(NodeDescriptor):
     `range`/`field_ranges` parse metadata) and `inputs` from `NodeDescriptor`; only the
     call/map-specific fields are declared here. `over`/`parallel` are fields on the shared base
     class (a plain `call` leaves them at `None`/`False`); only `map` lists them in its `allowed`.
+    `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
+    deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
 
     Class attrs (call's own surface): `kind="call"`; `allowed` adds `call`/`inputs`/`asserts` to
     the commons; `required` is `{"call"}`; `binding_fields=("inputs","over")` — the call-arg
@@ -72,6 +74,7 @@ class CallDescriptor(NodeDescriptor):
     binding_fields = ("inputs", "over")
 
     call: str
+    child_label: str | None = field(default=None, compare=False)
     over: Optional[str] = None
     parallel: bool = False
     asserts: list[str] = field(default_factory=list)

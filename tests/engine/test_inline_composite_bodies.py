@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 import yaml
 
+from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose import loader as compose_loader
 from agent_composer.compose.build.pipeline import _register_inline_bodies
 from agent_composer.compose.desugar import inline_bodies as inline_bodies_module
@@ -21,6 +22,7 @@ from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.compose.loader import load_flow
+from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.run import run_flow
 from agent_composer.typesys.values import Type, ValueKind
@@ -909,6 +911,265 @@ output: ${wrapper.output}
         "payload": {"z": "tail", "a": 3},
         "marker": "before",
     }
+
+
+def test_forward_producer_type_builds_once_and_keeps_source_order(monkeypatch):
+    builds = []
+    original_build = CodeDescriptor.build
+
+    def record_producer_build(self, ctx):
+        if self.id == "producer":
+            builds.append(self.id)
+        return original_build(self, ctx)
+
+    monkeypatch.setattr(CodeDescriptor, "build", record_producer_build)
+    loaded = load_flow(
+        """id: inline-call-forward-producer
+name: inline_call_forward_producer
+nodes:
+  consumer:
+    kind: call
+    input:
+      value: ${producer.output}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: str
+    output: ${echo.output}
+  producer:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input:
+      topic: forward-value
+    output: str
+output: ${consumer.output}
+"""
+    )
+
+    consumer = loaded.compiled.nodes["consumer"]
+    body_order = [
+        node_id
+        for node_id in loaded.compiled.nodes
+        if node_id not in {START_ID, END_ID}
+    ]
+    result = run_flow(loaded, {})
+
+    assert builds == ["producer"]
+    assert body_order == ["consumer", "producer"]
+    assert consumer.child_inputs == [
+        InputDecl(
+            name="value",
+            type_str="str",
+            default=None,
+            required=True,
+            type=Type.scalar(ValueKind.STRING),
+        )
+    ]
+    assert result.status == "succeeded"
+    assert result.output == "forward-value"
+
+
+def test_producer_declared_none_type_is_not_treated_as_missing_output():
+    loaded = load_flow(
+        """id: inline-call-none-producer
+name: inline_call_none_producer
+nodes:
+  consumer:
+    kind: call
+    input:
+      value: ${producer.output}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: "None"
+    output: ${echo.output}
+  producer:
+    kind: code
+    code: |
+      return None
+    output: "None"
+output: ${consumer.output}
+"""
+    )
+
+    consumer = loaded.compiled.nodes["consumer"]
+    result = run_flow(loaded, {})
+
+    assert consumer.child_inputs == [
+        InputDecl(
+            name="value",
+            type_str="None",
+            default=None,
+            required=True,
+            type=Type.scalar(ValueKind.NONE),
+        )
+    ]
+    assert result.status == "succeeded"
+    assert result.output is None
+
+
+def test_inline_signature_self_cycle_uses_binding_path_and_range():
+    source = """id: inline-signature-self-cycle
+name: inline_signature_self_cycle
+nodes:
+  first:
+    kind: call
+    input:
+      value: ${first.output}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: str
+    output: ${echo.output}
+output: ${first.output}
+"""
+    root, _spans = _located_root(source)
+    expected_range = (
+        root.child("nodes").child("first").mapping_value_ranges("input")["value"]
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert message.endswith("first.input.value -> first")
+    assert INLINE_FLOW_PREFIX not in message
+    assert caught.value.range == expected_range
+    assert caught.value.line == expected_range.start_line
+    assert not isinstance(caught.value, RecursionError)
+
+
+def test_inline_signature_mutual_cycle_uses_closing_binding_range():
+    source = """id: inline-signature-mutual-cycle
+name: inline_signature_mutual_cycle
+nodes:
+  left:
+    kind: call
+    input:
+      from_right: ${right.output}
+    nodes:
+      echo_left:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.from_right}
+        output: str
+    output: ${echo_left.output}
+  right:
+    kind: call
+    input:
+      from_left: ${left.output}
+    nodes:
+      echo_right:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.from_left}
+        output: str
+    output: ${echo_right.output}
+output: ${left.output}
+"""
+    root, _spans = _located_root(source)
+    expected_range = (
+        root.child("nodes").child("right")
+        .mapping_value_ranges("input")["from_left"]
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert message.endswith(
+        "left.input.from_right -> right.input.from_left -> left"
+    )
+    assert INLINE_FLOW_PREFIX not in message
+    assert caught.value.range == expected_range
+    assert caught.value.line == expected_range.start_line
+    assert not isinstance(caught.value, RecursionError)
+
+
+def test_inline_signature_unknown_producer_is_located_and_strict():
+    source = """id: inline-signature-unknown-producer
+name: inline_signature_unknown_producer
+nodes:
+  consumer:
+    kind: call
+    input:
+      value: ${missing.output}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: str
+    output: ${echo.output}
+output: ${consumer.output}
+"""
+    root, _spans = _located_root(source)
+    expected_range = (
+        root.child("nodes").child("consumer")
+        .mapping_value_ranges("input")["value"]
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert "consumer.input.value" in message
+    assert "producer 'missing' has no available static type" in message
+    assert "explicitly typed named `defs:` body" in message
+    assert INLINE_FLOW_PREFIX not in message
+    assert caught.value.range == expected_range
+
+
+def test_inline_signature_producer_without_output_is_located_and_strict():
+    source = """id: inline-signature-untyped-producer
+name: inline_signature_untyped_producer
+nodes:
+  consumer:
+    kind: call
+    input:
+      value: ${producer.output}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: str
+    output: ${echo.output}
+  producer:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input:
+      topic: no-static-output
+output: ${consumer.output}
+"""
+    root, _spans = _located_root(source)
+    expected_range = (
+        root.child("nodes").child("consumer")
+        .mapping_value_ranges("input")["value"]
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert "consumer.input.value" in message
+    assert "producer 'producer' has no available static type" in message
+    assert "explicitly typed named `defs:` body" in message
+    assert INLINE_FLOW_PREFIX not in message
+    assert caught.value.range == expected_range
 
 
 def test_eager_def_inline_call_uses_raw_ranges_and_shared_scope(monkeypatch):

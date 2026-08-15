@@ -406,24 +406,44 @@ def _assemble(
         asserts_line=s_lines.get("asserts"),
     )
 
+    descriptor_cache: _DescriptorBuildCache | None = None
+
     def build_inline_child(
         body: InlineBody,
         descriptor: CallDescriptor | LoopDescriptor,
     ) -> ComposedFlow:
         """Assemble one retained body lazily in this file's callable scope."""
 
-        def unavailable_producer_type(
+        def producer_type(
             producer_id: str,
             binding_label: str,
             binding_range: SourceRange | None,
         ) -> Type:
-            """Reject producer-derived signatures until dependency-aware building."""
-            raise LoadError(
-                f"cannot infer type for inline binding {binding_label!r}: "
-                f"producer {producer_id!r} has no available static type; use an "
-                "explicitly typed named `defs:` body",
-                range=binding_range,
-            )
+            """Resolve one parent producer through this assembly's build cache."""
+            def unavailable_type() -> LoadError:
+                return LoadError(
+                    f"cannot infer type for inline binding {binding_label!r}: "
+                    f"producer {producer_id!r} has no available static type; use an "
+                    "explicitly typed named `defs:` body",
+                    range=binding_range,
+                )
+
+            if producer_id not in descriptors:
+                raise unavailable_type()
+
+            cache = descriptor_cache
+            if cache is None:
+                raise RuntimeError(
+                    "descriptor cache was not initialized before inline child resolution"
+                )
+            output_type = cache.build_one(
+                producer_id,
+                via_label=binding_label,
+                via_range=binding_range,
+            ).node.output_type
+            if output_type is None:
+                raise unavailable_type()
+            return output_type
 
         child_inputs: list[InputDecl] = []
         for key, value in (descriptor.inputs or {}).items():
@@ -432,7 +452,7 @@ def _assemble(
             inferred = infer_inline_binding_type(
                 value,
                 parent_input_types=flow_input_types,
-                producer_type=unavailable_producer_type,
+                producer_type=producer_type,
                 binding_label=binding_label,
                 binding_range=binding_range,
             )
@@ -491,9 +511,8 @@ def _assemble(
         resolver=scope.resolve,
         source_file=flow_label,
     )
-    build_results = _DescriptorBuildCache(
-        descriptors, ctx_base, n_lines
-    ).build_in_source_order()
+    descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base, n_lines)
+    build_results = descriptor_cache.build_in_source_order()
     nodes_built: dict[str, Node] = {
         nid: result.node for nid, result in build_results.items()
     }

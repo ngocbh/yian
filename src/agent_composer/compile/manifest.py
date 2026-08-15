@@ -56,7 +56,7 @@ _COMMON_NODE_FIELDS = frozenset(
     {
         "id",
         "title",
-        "output_type",
+        "output_contract",
         "params",
         "pre_asserts",
         "post_asserts",
@@ -1413,7 +1413,7 @@ def _value_contract_manifest(
     ctx: _ManifestContext,
     path: str,
 ) -> dict[str, Any]:
-    """Project one parameter value contract while excluding every nested origin."""
+    """Project one value contract while excluding every nested origin."""
     if type(value) is not ValueContract:
         raise TypeError(f"{path}: expected ValueContract, got {type(value).__name__}")
     _check_fields(
@@ -1489,13 +1489,22 @@ def _node_manifest(
             _parameter_manifest(param, ctx, f"{path}.params[{index}]")
             for index, param in enumerate(node.params)
         ]
+    output_type = None
+    if node.output_contract is not None:
+        output_type = _value_contract_manifest(
+            node.output_contract,
+            ctx,
+            f"{path}.output_contract",
+        )["type"]
     manifest: dict[str, Any] = {
         "commit_as": _canonical_value(node.commit_as, ctx, f"{path}.commit_as"),
         "env": _sorted_mapping(node.env, ctx, f"{path}.env", redact_credentials=True),
         "id": node.id,
         "kind": node.kind.value,
         "origin_id": _canonical_value(node.origin_id, ctx, f"{path}.origin_id"),
-        "output_type": _type_manifest(node.output_type, ctx, f"{path}.output_type"),
+        # Preserve the pre-contract wire shape: the carrier is canonical in memory,
+        # while its diagnostic origins remain outside program identity.
+        "output_type": output_type,
         "params": params,
         "post_asserts": [
             _assertion_manifest(assertion, ctx, f"{path}.post_asserts[{index}]")

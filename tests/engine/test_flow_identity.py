@@ -2100,7 +2100,7 @@ def _fragment() -> Flow:
             contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
         )
     ]
-    body.output_type = Type.scalar(ValueKind.INTEGER)
+    body.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
     end = EndNode.record("terminal", output_names=["result"])
     return Flow(
         nodes={"entry": start, "body": body, "terminal": end},
@@ -2122,6 +2122,10 @@ class _ParameterSubclass(Parameter):
     """Near-canonical fixture for exact manifest carrier checks."""
 
 
+class _ValueContractSubclass(ValueContract):
+    """Near-canonical fixture for exact output-contract manifest checks."""
+
+
 def _replace_body(fragment: Flow) -> None:
     body = CodeNode("body", code='return inputs["x"] + 1')
     body.params = [
@@ -2130,7 +2134,7 @@ def _replace_body(fragment: Flow) -> None:
             contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
         )
     ]
-    body.output_type = Type.scalar(ValueKind.INTEGER)
+    body.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
     fragment.nodes["body"] = body
 
 
@@ -2210,14 +2214,14 @@ def test_flow_manifest_emits_the_literal_node_kind():
     ("field", "changed_value"),
     [
         ("id", "renamed-body"),
-        ("output_type", Type.scalar(ValueKind.NUMBER)),
+        ("output_contract", ValueContract(Type.scalar(ValueKind.NUMBER))),
         ("pre_asserts", [Assertion("x > 0", "x > 0")]),
         ("post_asserts", [Assertion("output > 0", "output > 0")]),
         ("commit_as", "owner"),
         ("origin_id", "origin"),
         ("env", {"threshold": 2}),
     ],
-    ids=["id", "output-type", "pre-asserts", "post-asserts", "commit-as", "origin-id", "env"],
+    ids=["id", "output-contract", "pre-asserts", "post-asserts", "commit-as", "origin-id", "env"],
 )
 def test_flow_fingerprint_covers_each_included_common_node_field(field, changed_value):
     original = _fragment()
@@ -2306,6 +2310,69 @@ def test_parameter_origins_do_not_affect_program_or_expansion_identity():
     assert expansion_digest(first) == expansion_digest(second)
 
 
+def test_output_contract_origins_do_not_affect_program_or_expansion_identity():
+    """Root and nested result origins are diagnostic-only manifest data."""
+    first = _fragment()
+    second = copy.deepcopy(first)
+    int_type = Type.scalar(ValueKind.INTEGER)
+    first.nodes["body"].output_contract = ValueContract(int_type)
+    second.nodes["body"].output_contract = ValueContract(
+        int_type,
+        ContractOrigins(
+            default=OriginRef("second/output"),
+            entries=((('nested',), OriginRef("second/output/nested")),),
+        ),
+    )
+
+    assert flow_manifest(first) == flow_manifest(second)
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    assert expansion_digest(first) == expansion_digest(second)
+
+
+def test_output_contract_cutover_preserves_manifest_shape_and_fingerprint():
+    """The carrier cutover must not invalidate equivalent durable flow identity."""
+    fragment = _fragment()
+    node_manifest = flow_manifest(fragment)["nodes"]["body"]
+
+    assert "output_contract" not in node_manifest
+    assert node_manifest["output_type"] == {
+        "element": None,
+        "fields": None,
+        "kind": "int",
+        "nullable": False,
+        "required": None,
+        "tags": None,
+    }
+    assert flow_fingerprint(fragment) == (
+        "16d1ca51cfd1c4730aea134054211d87708d8aa08bc8f592b41df96c74982d00"
+    )
+    assert expansion_digest(fragment) == flow_fingerprint(fragment)
+
+
+def test_output_contract_manifest_rejects_unknown_raw_and_subclass_bypasses():
+    """Only an exact ValueContract may occupy canonical node output storage."""
+    unknown = _fragment()
+    object.__setattr__(
+        unknown.nodes["body"].output_contract,
+        "future_field",
+        True,
+    )
+    with pytest.raises(ValueError, match="future_field"):
+        flow_manifest(unknown)
+
+    raw = _fragment()
+    raw.nodes["body"].output_contract = Type.scalar(ValueKind.INTEGER)
+    with pytest.raises(TypeError, match="expected ValueContract"):
+        flow_manifest(raw)
+
+    subclass = _fragment()
+    subclass.nodes["body"].output_contract = _ValueContractSubclass(
+        Type.scalar(ValueKind.INTEGER)
+    )
+    with pytest.raises(TypeError, match="expected ValueContract"):
+        flow_manifest(subclass)
+
+
 def test_parameter_manifest_rejects_unknown_fields_and_raw_bypass():
     """The manifest enforces the exact carrier and an explicit field policy."""
     with_unknown = _fragment()
@@ -2372,8 +2439,8 @@ def test_parameter_manifest_rejects_noncanonical_containers(params):
 def test_flow_fingerprint_covers_each_structural_type_field(first_type, second_type):
     first = _fragment()
     second = copy.deepcopy(first)
-    first.nodes["body"].output_type = first_type
-    second.nodes["body"].output_type = second_type
+    first.nodes["body"].output_contract = ValueContract(first_type)
+    second.nodes["body"].output_contract = ValueContract(second_type)
 
     assert flow_fingerprint(first) != flow_fingerprint(second)
 
@@ -2402,8 +2469,8 @@ def test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schema(
 
     first = _fragment()
     second = copy.deepcopy(first)
-    first.nodes["body"].output_type = first_type
-    second.nodes["body"].output_type = second_type
+    first.nodes["body"].output_contract = ValueContract(first_type)
+    second.nodes["body"].output_contract = ValueContract(second_type)
 
     assert flow_fingerprint(first) != flow_fingerprint(second)
 

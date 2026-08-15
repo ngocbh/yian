@@ -90,7 +90,7 @@ The pipeline has two representations of a node, and the split matters:
 |---|---|---|
 | what | a frozen record of *what you wrote* | the runtime object the engine calls |
 | where | `compose/nodes/<kind>.py` | `nodes/<kind>/` |
-| carries | raw fields + `SourceRange`s | `run()`, typed `output_type`, params |
+| carries | raw fields + `SourceRange`s | `run()`, `output_contract`, params |
 | lifetime | load-time only | lives through the whole run |
 
 `parse_nodes` produces descriptors; the desugar passes rewrite descriptors; `build`
@@ -145,9 +145,11 @@ result = desc.build(BuildContext(registry=registry, resolver=resolver))
 node, wiring, edges = result.node, result.wiring, result.edges
 ```
 
-- the **node** carries only what it needs to run: its `output_type` (resolved against
-  the type registry), its sink `params` (names, mostly untyped — the type travels with
-  the source), and render-only `range`/`field_ranges` for tracebacks.
+- the **node** carries only what it needs to run: its canonical `output_contract`,
+  its sink `params` (formal names plus optional input contracts/default policy), and
+  render-only `range`/`field_ranges` for tracebacks. During the staged #131 cutover,
+  descriptors still derive a bare output `Type` and cross it through the temporary
+  `node.output_type` view; the node stores only a `ValueContract`.
 - the **wiring** is *flow-owned*: `{param → "${source}"}`. The node knows its parameter
   *names*; the flow knows where each one is *sourced from*. This is why a node is
   reusable and why the flow, not the node, owns the graph.

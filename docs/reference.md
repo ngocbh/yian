@@ -101,7 +101,8 @@ raised exception, not a node-result variant.
 These source-neutral frozen values give binding, parameter, assertion, and value
 contract provenance one canonical home. Origins are optional for Python-authored
 graphs. Compiled wiring, assertions, and node parameters use these carriers;
-stored output contracts move in a later migration.
+`Node.output_contract` is canonical too. Compose output derivation crosses its
+temporary Type-valued compatibility view until the next #131 child.
 
 ::: agent_composer.nodes.contracts.Binding
 

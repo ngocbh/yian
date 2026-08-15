@@ -68,12 +68,17 @@ class AgentNode(Node):
 
     def _ctx(self, prompt: str, *, stop_event=None) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
+        output_type = (
+            None
+            if self.output_contract is None
+            else self.output_contract.type
+        )
         return AgentRunContext(
             node_id=self.id,
             prompt=prompt,
             tools=list(self.tools),
             llm_config=self.llm_config,
-            output_type=self.output_type,
+            output_type=output_type,
             retries=self.retries,
             max_tool_iterations=self._max_tool_iterations(),
             stop_event=stop_event,

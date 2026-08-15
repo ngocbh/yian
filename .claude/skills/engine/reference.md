@@ -205,8 +205,9 @@ model made enforceable.
 - **Stable program and expansion identity** — compile-owned `flow_manifest`
   canonicalizes execution semantics, `flow_fingerprint` hashes it, and
   `expansion_digest` covers an expanded fragment's entry/end ids and topology.
-  Assertion expression/display/order/multiplicity affect identity; assertion origins and
-  render-only ranges, comments, and object identity do not.
+  Assertion expression/display/order/multiplicity and an output contract's semantic
+  `Type` affect identity; assertion/contract origins and render-only ranges, comments,
+  and object identity do not.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
   core dispatches on worker-result/run-record variants + node-owned traits/hooks, never on
   `node.kind` (ratchet: census 0).
@@ -279,8 +280,24 @@ origins are manifest-neutral. A bound null shadows a default but still undergoes
 contract validation, so it is accepted only when the parameter is untyped or its
 contract accepts null (a nullable or `None`-kind type). Compose `input:` crosses
 directly into this exact `Parameter` shape; `ComposedFlow.input` and START use it
-without a parallel front-end carrier. Stored output value-contract consumers move
-in later tested #131 cutovers.
+without a parallel front-end carrier.
+
+`Node.output_contract` is the sole stored output declaration: an exact
+`ValueContract`, or `None` for an unenforced output. Runtime success/replay
+validation and structured agent generation read `output_contract.type`; growth
+clones retain the carrier so its origins survive lexical rewrites. Manifests encode
+the semantic type but deliberately omit `ContractOrigins`, keeping provenance
+changes identity-neutral.
+
+`Node.output_type` is a temporary Type-valued compatibility view for the remaining
+Compose front end. Its getter projects `output_contract.type`; assigning a `Type`
+changes only that type while preserving existing origins, and assigning `None`
+clears the contract. It is not parallel storage, and canonical node, compile, and
+runtime code must not use it. The next #131 child converts descriptor output
+derivation, builders, producer maps, `ChildSignature.output`, human-input schema,
+assert/loop validation, and the legacy constructor keyword to `ValueContract`, then
+deletes the bridge.
+The authored `output:` / `outputs:` YAML surface is unchanged.
 
 ## Compose source ownership
 

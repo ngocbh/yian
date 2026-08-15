@@ -2,8 +2,8 @@
 
 These frozen carriers attach opaque origins to executable meanings without
 depending on Compose/YAML or runtime state. Compiled wiring, node assertions,
-and node parameters use their canonical carriers; stored output value contracts
-cross over in a later step of the origin-IR migration.
+node parameters, and node outputs use their canonical carriers. Compose output
+derivation still crosses a temporary Type view until the next origin-IR step.
 """
 
 from __future__ import annotations

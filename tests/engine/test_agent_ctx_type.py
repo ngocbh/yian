@@ -1,11 +1,20 @@
-"""`AgentNode._ctx` threads the node's declared `output_type` into the mode context."""
+"""`AgentNode._ctx` projects the node's semantic output contract for its mode."""
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.agent.node import AgentNode
+from agent_composer.nodes.contracts import ContractOrigins, ValueContract
 from agent_composer.typesys.values import Type, ValueKind
 
 
-def test_ctx_carries_output_type():
+def test_ctx_carries_the_output_contract_type_only():
     n = AgentNode("a", prompt="hi")
-    n.output_type = Type.scalar(ValueKind.INTEGER)
+    contract = ValueContract(
+        Type.scalar(ValueKind.INTEGER),
+        ContractOrigins(default=OriginRef("nodes/a/output")),
+    )
+    n.output_contract = contract
+
     ctx = n._ctx(prompt="hi")
-    assert ctx.output_type == n.output_type
+
+    assert ctx.output_type is contract.type
+    assert ctx.output_type is not contract

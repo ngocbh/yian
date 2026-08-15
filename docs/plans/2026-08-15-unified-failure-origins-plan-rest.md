@@ -242,12 +242,16 @@ Test:
   frozen and preserve arbitrary semantic values;
 - `as_binding(raw)` returns `Binding(raw, None)` and returns an existing binding
   unchanged;
-- `ContractOrigins` rejects duplicate/unsorted entries and non-string/non-int
-  path segments;
+- `ContractOrigins` rejects mutable, empty, duplicate, or unsorted entries and
+  any path segment whose exact type is not string/integer (including bool);
+- canonical path order is prefix-first with string segments before integer
+  segments, so mixed paths sort on Python 3.10 without comparing `str` to `int`;
 - `ContractOrigins.at(path)` selects exact, then longest ancestor, then default;
 - `ValueContract(type, origins)` is frozen and defaults to empty origins;
 - `Parameter` preserves `name`, contract, required/default/coercion semantics,
   `origin`, and `default_origin`; rejects `required and has_default`;
+- `has_default=False` rejects a non-`None` default or any `default_origin`, so
+  no inactive default authority can hide beside the flag;
 - `has_default=True, default=None` remains distinct from no default, and
   `coerce_strings` does not introduce a second textual type authority;
 - `map_origins(mapper)` rewrites only non-`None` origins and retains semantic
@@ -265,7 +269,8 @@ Implement `ValuePath`, `Binding`, `Parameter`, `Assertion`, `ContractOrigins`,
 Use exactly the final `Parameter` fields from the design:
 `name`, `contract`, `required`, `has_default`, `default`, `coerce_strings`,
 `origin`, and `default_origin`. Do not retain `type_str` or infer default
-presence from `default is None`.
+presence from `default is None`. Give all five carrier classes a pure
+`map_origins(mapper)` method; parameter mapping recurses into its value contract.
 Keep this module source-neutral: it may import only `diagnostics` and `typesys`.
 Export the carriers from `nodes/__init__.py`.
 

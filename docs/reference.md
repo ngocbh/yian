@@ -96,6 +96,29 @@ raised exception, not a node-result variant.
 
 ::: agent_composer.nodes.base.Grow
 
+### Semantic IR carriers
+
+These source-neutral frozen values give binding, parameter, assertion, and value
+contract provenance one canonical home. Origins are optional for Python-authored
+graphs. They are currently the migration foundation; the existing consumers
+below move to them in subsequent #131 changes.
+
+::: agent_composer.nodes.contracts.Binding
+
+::: agent_composer.nodes.contracts.Parameter
+
+::: agent_composer.nodes.contracts.Assertion
+
+::: agent_composer.nodes.contracts.ValueContract
+
+::: agent_composer.nodes.contracts.ContractOrigins
+
+::: agent_composer.nodes.contracts.ValuePath
+
+::: agent_composer.nodes.contracts.as_binding
+
+::: agent_composer.nodes.contracts.binding_source
+
 ### Node kinds
 
 The authorable leaf, control, and composition kinds plus the internal-only START

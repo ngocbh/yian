@@ -62,6 +62,27 @@ Package-root `run.py` sits above `compose`, `compile.expand`, and `runtime`: it
 consumes a `ComposedFlow`, injects the kind-aware growth builder, and owns run-log
 creation and recovery. None of those packages imports it back.
 
+## Semantic IR carriers
+
+`nodes/contracts.py` is the source-neutral vocabulary that joins opaque
+provenance from `diagnostics` with semantic `typesys.Type` values. Each class has
+one responsibility:
+
+| Carrier | Meaning |
+| --- | --- |
+| `Binding` | one flow-owned expression or literal supplied to an input |
+| `Parameter` | one formal input, its optional contract, and default/coercion policy |
+| `Assertion` | one executable expression plus stable author-facing display text |
+| `ValueContract` | one recursive semantic `Type` plus nested origin selection |
+| `ContractOrigins` | immutable root/nested origin lookup for a value contract |
+
+All origins are optional, so Python-authored values remain source-free. The
+carriers are frozen only at their fields: arbitrary binding/default payloads are
+retained by identity. `map_origins()` performs pure lexical rebasing without
+copying semantic payloads. These definitions are the migration foundation;
+existing wiring, assertion, parameter, and output consumers move to them in
+subsequent #131 changes rather than through a parallel compatibility authority.
+
 ## One-pass source ownership
 
 `compose/source/` is the only production Compose package that imports PyYAML.

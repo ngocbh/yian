@@ -29,6 +29,7 @@ from agent_composer.nodes.base import Node, NodeKind
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.case import Case, CaseNode
 from agent_composer.nodes.code import CodeNode
+from agent_composer.nodes.contracts import Binding, binding_source
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.loop import LoopNode
@@ -147,6 +148,8 @@ _EDGE_FIELDS = frozenset(
     {"id", "from_", "to", "source_handle", "input_group", "optional", "ordering"}
 )
 _FLOW_OUTPUT_FIELDS = frozenset({"name", "from_"})
+_BINDING_CANONICAL_FIELDS = frozenset({"source"})
+_BINDING_IGNORED_FIELDS = frozenset({"origin"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
 _DECL_FIELDS = frozenset({"name", "type_str", "required", "default", "type"})
 _CASE_FIELDS = frozenset({"handle", "when"})
@@ -328,6 +331,31 @@ def _check_fields(value: Any, expected: frozenset[str], path: str) -> None:
         raise ValueError(f"{path}: unknown noncanonical field(s): {unknown}")
     if missing:
         raise ValueError(f"{path}: missing canonical field(s): {missing}")
+
+
+def _binding_manifest_source(value: Any, path: str) -> Any:
+    """Project one semantic binding to identity-bearing source data only."""
+    if not isinstance(value, Binding):
+        return value
+    _check_fields(
+        value,
+        _BINDING_CANONICAL_FIELDS | _BINDING_IGNORED_FIELDS,
+        path,
+    )
+    return binding_source(value)
+
+
+def _binding_manifest_mapping(value: dict, path: str) -> dict:
+    """Project direct wiring carriers while retaining mapping validation order."""
+    bad_key = next((key for key in value if not isinstance(key, str)), _MISSING)
+    if bad_key is not _MISSING:
+        raise TypeError(
+            f"{path}: mapping keys must be strings, got {type(bad_key).__name__}"
+        )
+    return {
+        key: _binding_manifest_source(item, f"{path}.values[{index}]")
+        for index, (key, item) in enumerate(value.items())
+    }
 
 
 def _check_node_fields(node: Node, path: str) -> None:
@@ -1506,8 +1534,9 @@ def _output_manifest(output: FlowOutput, ctx: _ManifestContext, path: str) -> di
     if type(output) is not FlowOutput:
         raise TypeError(f"{path}: expected FlowOutput, got {type(output).__name__}")
     _check_fields(output, _FLOW_OUTPUT_FIELDS, path)
+    source = _binding_manifest_source(output.from_, f"{path}.from")
     return {
-        "from": _canonical_value(output.from_, ctx, f"{path}.from"),
+        "from": _canonical_value(source, ctx, f"{path}.from"),
         "name": output.name,
     }
 
@@ -1577,8 +1606,12 @@ def _flow_manifest(
                 raise TypeError(
                     f"{path}.wiring.{node_id}: expected dict, got {type(node_wiring).__name__}"
                 )
-            wiring[node_id] = _sorted_mapping(
+            binding_sources = _binding_manifest_mapping(
                 node_wiring,
+                f"{path}.wiring.{node_id}",
+            )
+            wiring[node_id] = _sorted_mapping(
+                binding_sources,
                 ctx,
                 f"{path}.wiring.{node_id}",
                 redact_credentials=True,

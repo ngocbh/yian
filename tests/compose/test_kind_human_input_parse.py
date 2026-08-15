@@ -74,8 +74,8 @@ def test_human_input_build_questions_gate_defaults_to_open_object():
 
     assert isinstance(node, HumanInputNode)
     # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT.
-    assert node.output_type is not None
-    assert node.output_type.kind == ValueKind.OBJECT
+    assert node.output_contract is not None
+    assert node.output_contract.type.kind == ValueKind.OBJECT
     assert node.answer_schema is not None
 
 

@@ -45,8 +45,8 @@ from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.expr.template import flow_call_callees_in_spans
 from agent_composer.compose.desugar.inline_calls import desugar_call_directives
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import Assertion, Parameter
-from agent_composer.typesys.values import Type, ValueKind
+from agent_composer.nodes.contracts import Assertion, Parameter, ValueContract
+from agent_composer.typesys.values import ValueKind
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange  # for the positional assert-range annotations
 
@@ -93,7 +93,7 @@ def lower_flow_asserts(
     assert_list: list[Assertion],
     flow_inputs: "set[str]",
     valid_targets: "set[str]",
-    producers: "dict[str, Type]",
+    producers: "dict[str, ValueContract]",
     assert_ranges: "list[SourceRange | None] | None" = None,
 ) -> LoweredAsserts:
     """Lower a flow's `asserts:` into node-local asserts for the START/END boundary nodes.
@@ -116,9 +116,17 @@ def lower_flow_asserts(
     Raises `LoadError` on the first malformed assert, bad ref, or `${system}` ref.
     """
     result = LoweredAsserts()
-    # Only resolvable producers participate in the dotted walk (an opaque/None producer
-    # stays lenient) — mirrors validate.validate_references.
-    producer_types = {nid: sh for nid, sh in producers.items() if sh is not None}
+    # The representation-neutral leaf checker speaks Type. Project only at that boundary;
+    # the canonical ValueContract carriers (and their origins) stay untouched here.
+    for node_id, contract in producers.items():
+        if type(contract) is not ValueContract:
+            raise TypeError(
+                "producer contracts must be exact ValueContract values, "
+                f"got {type(contract).__name__} for {node_id!r}"
+            )
+    producer_types = {
+        node_id: contract.type for node_id, contract in producers.items()
+    }
     # Positional flow-assert ranges, aligned 1:1 with `assert_list` (an entry is None where no span
     # exists). Indexed by the loop position below — never keyed by assert text — so two identical
     # flow asserts get distinct carets.
@@ -250,7 +258,8 @@ def validate_node_asserts(
     """Validate + classify + stamp each node's `asserts:` — the per-node contract.
 
     A node assert is node-LOCAL: a bare `${name}` is one of the node's declared inputs;
-    `${output}`/`${output.field}` is the node's own output (dotted-walked vs `output_type`).
+    `${output}`/`${output.field}` is the node's own output (dotted-walked through its
+    `output_contract.type`).
     Rejected (located `LoadError`): a pool head (`${outputs/inputs/system/item.X}`), an inline
     `${call}`, `${output.field}` on a non-record output, a declared input named `output`, and
     any node assert on a mapped call (a `MapNode`, `kind: map` — the per-node hook has no `${item}` scope).
@@ -312,7 +321,13 @@ def validate_node_asserts(
                 if head == "output":
                     reads_output = True
                     if len(segs) > 1:
-                        sh = node.output_type
+                        contract = node.output_contract
+                        if contract is not None and type(contract) is not ValueContract:
+                            raise TypeError(
+                                f"node {nid!r} output_contract must be an exact "
+                                f"ValueContract or None, got {type(contract).__name__}"
+                            )
+                        sh = contract.type if contract is not None else None
                         if sh is not None and sh.kind != ValueKind.OBJECT:
                             errors.append((
                                 f"node {nid!r} assert: ${{{ref}}} — the node output is not a "

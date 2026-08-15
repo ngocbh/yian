@@ -323,9 +323,9 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
 # DESCRIPTORS: the validated parsed shape per kind, each owned by its `nodes/<kind>.py`
 # module (the frozen dataclass + its `parse`/`build`) and inheriting the common
 # `NodeDescriptor` base (see `nodes/base.py`); this module only re-exports them.
-# Building the runtime `Node` (`output_type` + `params` + flow `wiring`, `read_type` over
-# `outputs:`) happens later in the loader; the descriptors keep `inputs`/`outputs`/`args`/
-# `cases` raw (binding strings / type nodes).
+# Building the runtime `Node` (`output_contract` + `params` + flow `wiring`, with
+# `read_type` wrapped in a `ValueContract`) happens later in the loader; the descriptors
+# keep `inputs`/`outputs`/`args`/`cases` raw (binding strings / type nodes).
 #
 # `node_name`/`depends_on`/`runs_after`/`env` are common to every kind (the `NodeDescriptor`
 # base). `depends_on` and `runs_after` are RUN-ORDERING edges (no data flows): both gate on the

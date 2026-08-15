@@ -1,15 +1,16 @@
 """Graph-stage: the cross-flow TYPE check for every `call`/`map` binding.
 
 A loader post-build pass (run after the flow's leaves + child signatures are assembled).
-Each binding's SOURCE `Type` — resolved from its `${<id>.output}`/`${input.X}` ref over the
-PARENT producers + flow-input types, read from the flow-owned `wiring` — must be structurally
-compatible with the CHILD input's declared `Type` (`types_compatible`, C-EQUIV). It carries
+Each binding's SOURCE contract is resolved from its `${<id>.output}`/`${input.X}` ref over
+the PARENT producer + flow-input contracts, then its `Type` is projected and checked for
+structural compatibility with the CHILD input's declared `Type` (`types_compatible`,
+C-EQUIV). It carries
 a `.range` anchor off the built call node's `field_ranges[("field", "inputs")]` (the coarse `input:`
 mapping span) — the transitional `node_lines` still feeds `.line`.
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
-analysis), `compose.nodes.resolver` (`_output_value_type`, the shared ref-to-Type resolver —
-`resolver` imports no later phase, so this edge is acyclic), `typesys` (Type),
+analysis), `compose.nodes.resolver` (`_output_value_contract`, the shared contract resolver —
+`resolver` imports no later phase, so this edge is acyclic), and
 `compose.helpers.errors`. Only the loader (and the compose package facade) import this back.
 """
 
@@ -19,25 +20,24 @@ from dataclasses import replace
 from typing import Any, Optional
 
 from agent_composer.compile.validation import types_compatible
-from agent_composer.compose.nodes.resolver import _output_value_type
+from agent_composer.compose.nodes.resolver import _output_value_contract
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
 from agent_composer.expr import binding_co_skips
-from agent_composer.nodes.contracts import binding_source
-from agent_composer.typesys.values import Type
+from agent_composer.nodes.contracts import ValueContract, binding_source
 
 
 def check_ref_map_types(
     nodes: dict,
-    producers: dict[str, Type],
-    flow_input_types: dict[str, Type],
+    producers: dict[str, ValueContract],
+    flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
     node_lines: Optional[dict] = None,
 ) -> None:
     """Cross-flow type check for every `call` binding (a loader post-build pass).
 
-    Each binding's SOURCE `Type` (resolved from its `${<id>.output}`/`${input.X}` ref over the
-    PARENT producers + flow-input types — read from the flow-owned `wiring`) must be
+    Each binding's SOURCE contract (resolved from its `${<id>.output}`/`${input.X}` ref
+    over the PARENT producer + flow-input contracts) is projected to its `Type` and must be
     structurally compatible with the CHILD input's declared `Type` (`types_compatible`,
     C-EQUIV). A `${item}`/coalesce/literal/opaque source — or an opaque/absent child input
     (incl. the reserved `over` key) — stays lenient (skipped). Loud + located at the
@@ -45,6 +45,16 @@ def check_ref_map_types(
     `node_lines` still feeds the transitional `.line`. Iterates the WIRING (not the params)
     so a mis-named binding still surfaces here when its child decl is absent rather than
     being silently skipped."""
+    for label, contracts in (
+        ("output producer", producers),
+        ("flow input", flow_inputs),
+    ):
+        for name, contract in contracts.items():
+            if type(contract) is not ValueContract:
+                raise TypeError(
+                    f"{label} contracts must be exact ValueContract values, "
+                    f"got {type(contract).__name__} for {name!r}"
+                )
     lines = node_lines or {}
     for nid, node in nodes.items():
         # CALL/MAP carry `child_inputs` to type-check against; a LOOP also carries a child but
@@ -59,9 +69,10 @@ def check_ref_map_types(
             if decl is None or decl.contract is None:
                 continue  # `over`/name-caught-in-build/opaque child input -> lenient
             child_type = decl.contract.type
-            source = _output_value_type(src, producers, flow_input_types)
-            if source is None:
+            source_contract = _output_value_contract(src, producers, flow_inputs)
+            if source_contract is None:
                 continue  # ${item}/coalesce/literal/opaque source -> lenient
+            source = source_contract.type
             # A nullable source is fine for a non-nullable child input ONLY when the
             # binding GUARANTEES a non-null value — a non-null literal escape or a `:?`
             # required (both fire on null, present-null included). A ref-default `:-${y}`

@@ -21,17 +21,30 @@ from agent_composer.compile.model import (
 )
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.build.inline_inputs import infer_inline_binding_type
+from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.nodes.call import CallDescriptor
+from agent_composer.compose.nodes.loop import LoopDescriptor
+from agent_composer.compose.nodes.map import MapDescriptor
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.case import _data_edges as case_data_edges
-from agent_composer.compose.nodes.resolver import _output_value_type
+from agent_composer.compose.nodes.resolver import (
+    _output_value_contract,
+    child_signature,
+)
 from agent_composer.compose.validate.call_types import check_ref_map_types
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import Assertion, Binding, Parameter, ValueContract
+from agent_composer.nodes.contracts import (
+    Assertion,
+    Binding,
+    ContractOrigins,
+    Parameter,
+    ValueContract,
+)
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.typesys import Type, ValueKind
@@ -310,24 +323,201 @@ def test_reference_validation_checks_a_wrapped_flow_output() -> None:
     )
 
 
-def test_output_type_resolution_is_identical_for_raw_and_wrapped_sources() -> None:
-    """Child signatures and call/loop checks see the carrier's semantic source."""
+def test_output_contract_resolution_retains_whole_value_identity() -> None:
+    """Raw and wrapped references resolve to the producer's exact carrier."""
     output_type = Type.scalar(ValueKind.STRING)
+    contract = ValueContract(
+        output_type,
+        ContractOrigins(default=_origin("producer-output")),
+    )
     source = "${producer.output}"
-    producers = {"producer": output_type}
+    producers = {"producer": contract}
 
-    assert _output_value_type(source, producers, {}) is output_type
+    assert _output_value_contract(source, producers, {}) is contract
     assert (
-        _output_value_type(Binding(source, _origin("typed-output")), producers, {})
-        is output_type
+        _output_value_contract(Binding(source, _origin("typed-output")), producers, {})
+        is contract
     )
     assert (
-        _output_value_type(
+        _output_value_contract(
             Binding(Binding(source, _origin("inner")), _origin("outer")),
             producers,
             {},
         )
         is None
+    )
+    assert _output_value_contract("${input.topic}", {}, {"topic": contract}) is contract
+
+    computed = _output_value_contract(
+        "${producer.output + 1}",
+        {"producer": contract},
+        {},
+    )
+    assert type(computed) is ValueContract
+    assert computed is not contract
+    assert computed.type is contract.type
+    assert computed.origins == ContractOrigins()
+
+    with pytest.raises(TypeError, match="flow input contracts.*ValueContract"):
+        _output_value_contract(  # type: ignore[dict-item]
+            "${input.topic}",
+            {},
+            {"topic": output_type},
+        )
+
+
+def test_output_contract_resolution_rebases_nested_origins() -> None:
+    """Selecting a record field makes its origin root and strips its path prefix."""
+    nested_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "answer": Type.scalar(ValueKind.INTEGER),
+            "note": Type.scalar(ValueKind.STRING),
+        },
+        required=frozenset({"answer", "note"}),
+    )
+    root_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "result": nested_type,
+            "ignored": Type.scalar(ValueKind.BOOLEAN),
+        },
+        required=frozenset({"result", "ignored"}),
+    )
+    contract = ValueContract(
+        root_type,
+        ContractOrigins(
+            default=_origin("root"),
+            entries=(
+                (("ignored",), _origin("ignored")),
+                (("result",), _origin("result")),
+                (("result", "answer"), _origin("answer")),
+                (("result", "note"), _origin("note")),
+            ),
+        ),
+    )
+
+    projected = _output_value_contract(
+        "${producer.output.result}",
+        {"producer": contract},
+        {},
+    )
+
+    assert type(projected) is ValueContract
+    assert projected.type is nested_type
+    assert projected.origins == ContractOrigins(
+        default=_origin("result"),
+        entries=(
+            (("answer",), _origin("answer")),
+            (("note",), _origin("note")),
+        ),
+    )
+
+    fallback_contract = ValueContract(
+        root_type,
+        ContractOrigins(
+            default=_origin("root"),
+            entries=((("result",), _origin("result")),),
+        ),
+    )
+    leaf = _output_value_contract(
+        "${producer.output.result.answer}",
+        {"producer": fallback_contract},
+        {},
+    )
+    assert leaf.origins.default == _origin("result")
+    assert leaf.origins.entries == ()
+
+
+def test_child_signature_prefixes_multi_output_contract_origins() -> None:
+    """A record codomain retains each field contract under its output name."""
+    alpha = ValueContract(
+        Type(
+            kind=ValueKind.OBJECT,
+            fields={"leaf": Type.scalar(ValueKind.STRING)},
+            required=frozenset({"leaf"}),
+        ),
+        ContractOrigins(
+            default=_origin("alpha-root"),
+            entries=((("leaf",), _origin("alpha-leaf")),),
+        ),
+    )
+    beta = ValueContract(
+        Type.scalar(ValueKind.INTEGER),
+        ContractOrigins(default=_origin("beta-root")),
+    )
+    loaded = SimpleNamespace(
+        input=[],
+        compiled=SimpleNamespace(
+            nodes={
+                "alpha_node": Node("alpha_node", output_contract=alpha),
+                "beta_node": Node("beta_node", output_contract=beta),
+            },
+            outputs=[
+                FlowOutput("beta", "${beta_node.output}"),
+                FlowOutput("alpha", "${alpha_node.output}"),
+            ],
+        ),
+    )
+
+    output = child_signature(loaded).output
+
+    assert type(output) is ValueContract
+    assert output.type.kind is ValueKind.OBJECT
+    assert list(output.type.fields) == ["beta", "alpha"]
+    assert output.type.fields == {"beta": beta.type, "alpha": alpha.type}
+    assert output.origins == ContractOrigins(
+        entries=(
+            (("alpha",), _origin("alpha-root")),
+            (("alpha", "leaf"), _origin("alpha-leaf")),
+            (("beta",), _origin("beta-root")),
+        )
+    )
+
+
+def test_composite_builders_preserve_or_deliberately_wrap_child_contract() -> None:
+    """CALL/LOOP retain identity; MAP creates a default-only list contract."""
+    contract = ValueContract(
+        Type(
+            kind=ValueKind.OBJECT,
+            fields={"state": Type.scalar(ValueKind.INTEGER)},
+            required=frozenset({"state"}),
+        ),
+        ContractOrigins(
+            default=_origin("child-root"),
+            entries=((("state",), _origin("child-state")),),
+        ),
+    )
+    child = SimpleNamespace(
+        input=[],
+        source=None,
+        compiled=SimpleNamespace(
+            nodes={"producer": Node("producer", output_contract=contract)},
+            outputs=[FlowOutput("result", "${producer.output}")],
+        ),
+    )
+    ctx = BuildContext(registry={}, resolver=lambda _flow_id, _version: child)
+
+    call = CallDescriptor(id="call", call="child").build(ctx).node
+    loop = LoopDescriptor(
+        id="loop",
+        call="child",
+        inputs={"state": "${input.state}"},
+        times=1,
+    ).build(ctx).node
+    mapped = MapDescriptor(
+        id="mapped",
+        call="child",
+        over="${input.items}",
+    ).build(ctx).node
+
+    assert call.output_contract is contract
+    assert loop.output_contract is contract
+    assert type(mapped.output_contract) is ValueContract
+    assert mapped.output_contract is not contract
+    assert mapped.output_contract.type.element is contract.type
+    assert mapped.output_contract.origins == ContractOrigins(
+        default=_origin("child-root")
     )
 
 
@@ -356,7 +546,7 @@ def test_call_type_error_is_identical_for_raw_and_wrapped_sources() -> None:
             check_ref_map_types(
                 {"call": node},
                 {},
-                {"x": nullable_parent},
+                {"x": ValueContract(nullable_parent)},
                 {"call": {"topic": value}},
             )
         errors.append(str(caught.value))

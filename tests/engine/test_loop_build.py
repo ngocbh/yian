@@ -2,7 +2,7 @@
 
 A `kind: loop` node bakes a `LoopNode` from a `LoopDescriptor`: it resolves+bakes the
 body subflow (the `call:` child, a `defs:` callable here so no external resolver is
-needed), stamps `output_type`, and enforces the two halves of the type contract:
+needed), stamps `output_contract`, and enforces the two halves of the type contract:
 
 - FIELD-NAME-set (in `build_loop_node`): body output field NAMES == carried keys,
   body input NAMES subset of carried keys — a located `LoadError` on a name mismatch.
@@ -144,9 +144,10 @@ def test_good_loop_bakes_loopnode():
     node = flow.compiled.nodes["chat_loop"]
     assert node.kind == NodeKind.LOOP
     assert node.child is not None
-    # output_type IS the carried record type (the body codomain) — prove the contract
-    # baked, not just that a child was resolved.
-    assert set(node.output_type.fields.keys()) == {"n", "exited"}
+    # The output contract carries the body codomain — prove the contract was baked,
+    # not just that a child was resolved.
+    assert node.output_contract is not None
+    assert set(node.output_contract.type.fields) == {"n", "exited"}
 
 
 def test_body_output_fieldset_must_equal_carried():
@@ -212,7 +213,8 @@ def test_multi_segment_template_output_types_as_str():
     flow = load_flow(TEMPLATE_STR)
     node = flow.compiled.nodes["chat_loop"]
     assert node.kind == NodeKind.LOOP
-    assert node.output_type.fields["transcript"].kind == ValueKind.STRING
+    assert node.output_contract is not None
+    assert node.output_contract.type.fields["transcript"].kind == ValueKind.STRING
 
 
 # A runaway guard below 1 (`max: 0`) is nonsensical — the guard bounds the iteration

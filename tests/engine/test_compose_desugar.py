@@ -21,9 +21,9 @@ def test_adaptive_questions_lowers_to_agent_plus_gate():
     gate = nodes["ask"]
     agent = nodes["ask__compose"]
     assert agent.kind.name == "AGENT"
-    assert agent.output_type.kind.value == "list[object]"
+    assert agent.output_contract.type.kind.value == "list[object]"
     assert gate.questions_input is not None
-    assert gate.output_type.kind.value == "object"
+    assert gate.output_contract.type.kind.value == "object"
 
 
 def test_adaptive_questions_scope_is_validated_like_an_agent():

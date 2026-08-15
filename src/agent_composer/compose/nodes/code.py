@@ -44,7 +44,7 @@ class CodeDescriptor(NodeDescriptor):
         """Construct the runtime `CodeNode` (+ wiring) for this `CodeDescriptor`.
 
         Builds the code leaf (classify + syntax/return gates,
-        node-side `params` + flow-owned `inputs` wiring, `output_type` from `outputs:`) and
+        node-side `params` + flow-owned `inputs` wiring, `output_contract` from `outputs:`) and
         anchors inline tracebacks from two line hints on `ctx`, preferring the caller's over the
         desc's:
 
@@ -96,7 +96,7 @@ class CodeDescriptor(NodeDescriptor):
                 line = code_field_line
             raise LoadError(f"node {self.id!r}: {exc}", line=line) from exc
 
-        node.output_type = self.output_type(ctx.registry)
+        node.output_contract = self.output_contract(ctx.registry)
         node.params = self.sink_params()
         wiring = self.sink_wiring()
         return self._finish(node, wiring)

@@ -24,7 +24,7 @@ reject an ill-formed flow before it is compiled:
 
 Ladder position: `validate/` MAY import `helpers`/`nodes`/`parse`/`desugar`/
 `edges` and the engine core (`compile.model`, `compile.validation`, `expr`,
-`typesys`). The `validate -> nodes` edge (`nodes.resolver._output_value_type`)
+`typesys`). The `validate -> nodes` edge (`nodes.resolver._output_value_contract`)
 and the `validate -> desugar` edge (`desugar.inline_calls.desugar_call_directives`)
 are acknowledged legal later->earlier edges. NOTHING in helpers/nodes/parse/
 desugar/edges imports `validate`. Only `build`/`loader` (and the package facade)

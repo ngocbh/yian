@@ -15,7 +15,7 @@ def test_build_human_input_node():
                                 inputs={"a": "${p.output}"}, outputs="str")
     node, wiring = _build(desc)
     assert isinstance(node, HumanInputNode)
-    assert node.output_type is not None         # str enforced at write boundary
+    assert node.output_contract is not None     # str enforced at write boundary
     assert [p.name for p in node.params] == ["a"]     # the node-side signature
     assert wiring == {"a": "${p.output}"}            # the flow-owned source
 
@@ -24,7 +24,7 @@ def test_build_wait_node():
     node, wiring = _build(WaitDescriptor(id="settle", until="${input.settle_at}"))
     assert isinstance(node, WaitNode)
     assert wiring == {"until": "${input.settle_at}"}  # the `until` source rides the wiring
-    assert node.output_type is None
+    assert node.output_contract is None
 
 
 def test_wait_until_output_ref_makes_data_edge():

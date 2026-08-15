@@ -2,7 +2,8 @@
 
 A leaf descriptor (agent/code/model/tool) + a typedefs registry (via `BuildContext`) build the
 matching runtime `Node`, stamped with:
-  - `output_type = read_type(descriptor.outputs, registry)` (None if no outputs),
+  - `output_contract = ValueContract(read_type(descriptor.outputs, registry))`
+    (None if no outputs),
   - untyped `Parameter(name=k)` values plus flow-owned wiring from the descriptor's
     `inputs:` map; a TOOL's `input:` map binds the same way.
 
@@ -16,7 +17,7 @@ import pytest
 
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import Parameter
+from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.nodes.model import ModelNode
 from agent_composer.nodes.tool import ToolNode
 from agent_composer.llm_clients import LLMConfig
@@ -56,7 +57,8 @@ def test_agent_node_built_with_type_and_bindings():
     node, wiring = _build(desc)
     assert isinstance(node, AgentNode)
     assert node.id == "note"
-    assert node.output_type.kind == ValueKind.STRING
+    assert type(node.output_contract) is ValueContract
+    assert node.output_contract.type.kind == ValueKind.STRING
     # the node-side signature is the param NAMES; the flow owns the source.
     assert [p.name for p in node.params] == ["topic"]
     assert wiring == {"topic": "${input.topic}"}
@@ -70,9 +72,10 @@ def test_agent_node_object_output():
     desc = _seed_nodes("01-structured-agent.yaml")["score"]
     node, _ = _build(desc)
     assert isinstance(node, AgentNode)
-    assert node.output_type.kind == ValueKind.OBJECT
-    assert node.output_type.fields["rating"].kind == ValueKind.NUMBER
-    assert node.output_type.fields["rationale"].kind == ValueKind.STRING
+    assert type(node.output_contract) is ValueContract
+    assert node.output_contract.type.kind == ValueKind.OBJECT
+    assert node.output_contract.type.fields["rating"].kind == ValueKind.NUMBER
+    assert node.output_contract.type.fields["rationale"].kind == ValueKind.STRING
 
 
 def test_agent_unknown_mode_is_loud_loaderror():
@@ -123,7 +126,7 @@ def test_agent_node_knobs():
     assert node.llm_config["model"] == "claude-opus-4-8"
     assert node.llm_config["temperature"] == 0.3
     assert node.prompt.startswith("Research ${topic}")
-    assert node.output_type.fields["confidence"].kind == ValueKind.NUMBER
+    assert node.output_contract.type.fields["confidence"].kind == ValueKind.NUMBER
 
 
 def test_node_name_becomes_title():
@@ -158,7 +161,7 @@ def test_code_node_built():
     node, wiring = _build(desc)
     assert isinstance(node, CodeNode)
     assert node.ref == "tests.seeds.fns:one_line_summary"
-    assert node.output_type.kind == ValueKind.STRING
+    assert node.output_contract.type.kind == ValueKind.STRING
     assert {p.name for p in node.params} == {"rating", "rationale"}
     assert wiring == {
         "rating": "${score.output.rating}",
@@ -177,8 +180,8 @@ def test_model_node_built():
     assert node.model_id == "topic-ranker-v1"
     assert node.weights_uri == "manifold://calpha/models/topic-ranker-v1.pt"
     assert node.runtime_name == "torchscript"
-    assert node.output_type.fields["score"].kind == ValueKind.NUMBER
-    assert node.output_type.fields["rank"].kind == ValueKind.INTEGER
+    assert node.output_contract.type.fields["score"].kind == ValueKind.NUMBER
+    assert node.output_contract.type.fields["rank"].kind == ValueKind.INTEGER
     assert {p.name for p in node.params} == {"topic", "features"}
     assert wiring == {"topic": "${input.topic}", "features": "${input.features}"}
 
@@ -201,7 +204,7 @@ def test_tool_node_built_with_args_bindings():
     node, wiring = _build(desc)
     assert isinstance(node, ToolNode)
     assert node.tool_id == "get_facts"
-    assert node.output_type is None  # no outputs: declared
+    assert node.output_contract is None  # no outputs: declared
     assert {p.name for p in node.params} == {"symbol", "limit"}
     assert wiring == {"symbol": "${input.topic}", "limit": 10}
     # Inputs are exact untyped sink parameters.
@@ -227,7 +230,7 @@ def test_call_loop_descriptors_need_a_resolver():
             _build(desc)
 
 
-def test_output_type_resolves_registry_name():
+def test_output_contract_resolves_registry_name():
     registry = read_typedefs({"Rating": {"category": "str", "score": "float"}})
     # an agent descriptor whose outputs name a registry record.
     nodes = parse_nodes(
@@ -244,5 +247,6 @@ def test_output_type_resolves_registry_name():
     )
     node, _ = _build(nodes["synth"], registry)
     assert isinstance(node, AgentNode)
-    assert node.output_type.kind == ValueKind.OBJECT
-    assert node.output_type.fields["category"].kind == ValueKind.STRING
+    assert type(node.output_contract) is ValueContract
+    assert node.output_contract.type.kind == ValueKind.OBJECT
+    assert node.output_contract.type.fields["category"].kind == ValueKind.STRING

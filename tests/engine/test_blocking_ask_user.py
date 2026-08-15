@@ -14,7 +14,7 @@ import agent_composer.tools as tools_module
 import agent_composer.nodes.agent.modes.tool_calling as tool_calling_mode
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Output, _HostStop
-from agent_composer.nodes.contracts import Assertion
+from agent_composer.nodes.contracts import Assertion, ValueContract
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.tools import install_ask_user
@@ -326,10 +326,12 @@ def test_stop_during_structured_attempt_prevents_retry(monkeypatch):
         mode="plain",
         llm_config={"provider": "openai", "model": "gpt-4o"},
     )
-    node.output_type = Type(
-        kind=ValueKind.OBJECT,
-        fields={"answer": Type.scalar(ValueKind.STRING)},
-        required=frozenset({"answer"}),
+    node.output_contract = ValueContract(
+        Type(
+            kind=ValueKind.OBJECT,
+            fields={"answer": Type.scalar(ValueKind.STRING)},
+            required=frozenset({"answer"}),
+        )
     )
 
     with pytest.raises(_HostStop):
@@ -403,13 +405,15 @@ def test_structured_output_succeeds_after_blocking_ask(monkeypatch):
         mode="tool_calling",
         llm_config={"provider": "openai", "model": "gpt-4o"},
     )
-    node.output_type = Type(
-        kind=ValueKind.OBJECT,
-        fields={
-            "name": Type.scalar(ValueKind.STRING),
-            "score": Type.scalar(ValueKind.INTEGER),
-        },
-        required=frozenset({"name", "score"}),
+    node.output_contract = ValueContract(
+        Type(
+            kind=ValueKind.OBJECT,
+            fields={
+                "name": Type.scalar(ValueKind.STRING),
+                "score": Type.scalar(ValueKind.INTEGER),
+            },
+            required=frozenset({"name", "score"}),
+        )
     )
 
     with install_ask_user(lambda **request: "yes"):

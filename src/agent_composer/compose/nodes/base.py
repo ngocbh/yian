@@ -7,8 +7,9 @@ nodes so no kind redeclares them — exactly as every runtime node subclasses `n
 
 Beyond the common fields it also carries the two node-signature surfaces every value-shaped
 kind shares — `inputs` (the call-arg bindings) and `outputs` (the declared output shape) — plus
-the build-time derivations over them (`output_type`/`sink_params`/`sink_wiring`), the descriptor
-analogue of the runtime `Node`'s `output_type`/`params`. A kind that has no signature (wait/case)
+the build-time derivations over them (`output_contract`/`sink_params`/`sink_wiring`), the
+descriptor analogue of the runtime `Node`'s `output_contract`/`params`. A kind that has no
+signature (wait/case)
 simply leaves them at their empty defaults, and a kind that derives its output from a child flow
 (call/map/loop) ignores `outputs`. The fields live on the base but are NOT auto-allowed as
 authoring keys — each kind still lists `inputs`/`outputs` in its own ALLOWED set (they are
@@ -16,7 +17,7 @@ subtracted from `NodeDescriptor.common_field_names()`), so wait/case/call/loop/m
 rejecting them.
 
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
-`typesys` (Type/TypeRegistry), `nodes.contracts` (Parameter),
+`typesys` (TypeRegistry), `nodes.contracts` (Parameter/ValueContract),
 `compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError) and
 `compose.source` (SourceCursor) for parse navigation, `events` (SourceRange) — all
 earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
@@ -31,8 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Optional
 
 from agent_composer.nodes.base import FieldRanges, Node
-from agent_composer.nodes.contracts import Parameter
-from agent_composer.typesys.values import Type
+from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.types import read_type
@@ -140,11 +140,11 @@ class NodeDescriptor:
     # get distinct carets). `compare=False`, like the other render metadata. `[]` when none authored.
     assert_ranges: list[SourceRange | None] = field(default_factory=list, compare=False)
 
-    def output_type(self, registry: TypeRegistry) -> Optional[Type]:
-        """This descriptor's declared `outputs:` as one `Type`; `None` when absent."""
+    def output_contract(self, registry: TypeRegistry) -> Optional[ValueContract]:
+        """Return the declared `outputs:` as one canonical contract, or `None`."""
         if self.outputs is None:
             return None
-        return read_type(self.outputs, registry)
+        return ValueContract(read_type(self.outputs, registry))
 
     def sink_params(self) -> list[Parameter]:
         """This descriptor's `inputs:` map -> untyped Parameters (the node-side signature).
@@ -322,7 +322,8 @@ class NodeDescriptor:
 
         Abstract on the base — each concrete kind overrides it, returning a `BuildResult`
         (typically via `self._finish(node, wiring)`; `case` also passes `edges=`). Its one input
-        is the immutable `BuildContext`: `ctx.registry` (the `TypeRegistry` for `output_type`),
+        is the immutable `BuildContext`: `ctx.registry` (the `TypeRegistry` for
+        `output_contract`),
         `ctx.resolver` (the child-flow resolver for call/map/loop), and the inline-CODE traceback
         anchors `ctx.source_file`/`ctx.code_line`/`ctx.code_field_line` (only the CODE build reads
         them). A leaf kind reads only `ctx.registry`; call/map/loop also read `ctx.resolver`."""

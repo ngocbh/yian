@@ -21,7 +21,9 @@ from pathlib import Path
 
 import pytest
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.agent import AgentNode
+from agent_composer.nodes.contracts import ContractOrigins, ValueContract
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.helpers.errors import LoadError
@@ -47,7 +49,7 @@ def _load(seed: str):
     document = SourceDocument.parse(path.read_text(), label=str(path))
     f = parse_file(document)
     descriptors = parse_nodes(document.root.child("nodes"))
-    # First pass: build leaf nodes to learn the producer output types the case build reads.
+    # First pass: build leaf nodes to learn the producer output contracts.
     nodes: dict = {}
     flow_wiring: dict = {}
     for nid, d in descriptors.items():
@@ -55,7 +57,11 @@ def _load(seed: str):
             result = d.build(BuildContext({}))
             nodes[nid] = result.node
             flow_wiring[nid] = result.wiring
-    producers = {nid: n.output_type for nid, n in nodes.items() if n.output_type is not None}
+    producers = {
+        nid: n.output_contract
+        for nid, n in nodes.items()
+        if n.output_contract is not None
+    }
     # Second pass: build the cases (their on:/when: type-legality reads producers).
     for nid, d in descriptors.items():
         if isinstance(d, CaseDescriptor):
@@ -121,7 +127,7 @@ def test_dangling_flow_output_uses_supplied_range():
 
 def test_aggregate_location_keeps_line_and_range_on_the_same_error():
     node = AgentNode("broken", prompt="fixed")
-    node.output_type = Type.scalar(ValueKind.STRING)
+    node.output_contract = ValueContract(Type.scalar(ValueKind.STRING))
     stamp_reads(node, {"value": "${missing_node.output}"})
     nodes = {"broken": node}
     flow_wiring = derive_wiring(nodes)
@@ -151,12 +157,52 @@ def test_aggregate_location_keeps_line_and_range_on_the_same_error():
 def test_e03_unknown_field_on_anon_record_is_loud():
     nodes, flow_inputs, producers, outputs, flow_wiring = _load("errors/e03-unknown-field.yaml")
     # the anonymous {rating, rationale} producer is a CHECKED record.
-    assert producers["score"].fields is not None
-    assert set(producers["score"].fields) == {"rating", "rationale"}
+    assert producers["score"].type.fields is not None
+    assert set(producers["score"].type.fields) == {"rating", "rationale"}
     with pytest.raises(LoadError) as exc:
         validate_references(nodes, flow_inputs, producers, outputs, flow_wiring)
     msg = str(exc.value)
     assert "confidence" in msg  # the unknown field is named
+
+
+def test_reference_walk_projects_type_without_replacing_contract_origins():
+    """Reference checking reads semantic type without consuming provenance."""
+    output_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"rating": Type.scalar(ValueKind.NUMBER)},
+        required=frozenset({"rating"}),
+    )
+    contract = ValueContract(
+        output_type,
+        ContractOrigins(default=OriginRef("producer-output")),
+    )
+    score = AgentNode("score", prompt="fixed")
+    sink = AgentNode("sink", prompt="fixed")
+    stamp_reads(sink, {"value": "${score.output.rating}"})
+    nodes = {"score": score, "sink": sink}
+
+    validate_references(
+        nodes,
+        set(),
+        {"score": contract},
+        None,
+        derive_wiring(nodes),
+    )
+
+    assert contract.type is output_type
+    assert contract.origins.default == OriginRef("producer-output")
+
+
+def test_reference_walk_rejects_non_contract_producer_map_values():
+    """The Compose validator boundary accepts canonical carriers, not bare Types."""
+    with pytest.raises(TypeError, match="producer contracts.*ValueContract"):
+        validate_references(  # type: ignore[dict-item]
+            {"score": AgentNode("score")},
+            set(),
+            {"score": Type.scalar(ValueKind.STRING)},
+            None,
+            {"score": {}},
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -167,7 +213,7 @@ def test_e03_unknown_field_on_anon_record_is_loud():
 def test_prompt_l1_pool_ref_is_loud():
     # an AGENT prompt that interpolates ${X.output} (a pool ref) -> loud.
     node = AgentNode("bad", prompt="Summarize ${upstream.output} for the user.")
-    node.output_type = Type.scalar(ValueKind.STRING)
+    node.output_contract = ValueContract(Type.scalar(ValueKind.STRING))
     stamp_reads(node, {})  # no declared inputs
     nodes = {"bad": node}
     flow_wiring = derive_wiring(nodes)
@@ -182,7 +228,7 @@ def test_prompt_l1_pool_ref_is_loud():
 
 def test_prompt_l1_declared_input_passes():
     node = AgentNode("ok", prompt="Summarize ${topic} for the user.")
-    node.output_type = Type.scalar(ValueKind.STRING)
+    node.output_contract = ValueContract(Type.scalar(ValueKind.STRING))
     stamp_reads(node, {"topic": "${input.topic}"})  # stamps params + the fake wiring
     nodes = {"ok": node}
     flow_wiring = derive_wiring(nodes)

@@ -1512,7 +1512,7 @@ output:
     named = loaded.compiled.nodes["named_call"]
     inline = loaded.compiled.nodes["inline_call"]
     assert named.child_inputs == inline.child_inputs
-    assert named.output_type == inline.output_type
+    assert named.output_contract == inline.output_contract
     assert set(named.child.nodes) - {START_ID, END_ID} == {"echo", "pack"}
     assert set(inline.child.nodes) - {START_ID, END_ID} == {"echo", "pack"}
 
@@ -2373,7 +2373,8 @@ output: ${repeat.output}
         _parameter("n", Type.scalar(ValueKind.INTEGER)),
         _parameter("exited", Type.scalar(ValueKind.BOOLEAN)),
     ]
-    assert repeat.output_type == expected_output
+    assert repeat.output_contract is not None
+    assert repeat.output_contract.type == expected_output
     assert repeat.predicate_kind == "times"
     assert repeat.times == repeat.max_iters == 2
 

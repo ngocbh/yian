@@ -53,7 +53,7 @@ def test_code_build_returns_code_node_and_stamps_ranges():
     from agent_composer.nodes.code import CodeNode
 
     assert isinstance(node, CodeNode)
-    assert node.output_type is not None
+    assert node.output_contract is not None
     assert node.range is desc.range or node.range == desc.range
     assert wiring == {"rating": "${input.rating}"}
 

@@ -16,7 +16,7 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.nodes.agent import AgentNode
-from agent_composer.typesys.values import Type
+from agent_composer.nodes.contracts import ValueContract
 
 
 def _validate_llm_config(
@@ -73,15 +73,15 @@ class AgentDescriptor(NodeDescriptor):
     retries: int = 2
     asserts: list[str] = field(default_factory=list)
     # INTERNAL — never parsed from YAML; set only by the adaptive_questions desugar pass.
-    # When present it overrides the type-string derived `output_type` for a synthesized
-    # structured agent whose codomain is a code-built Type with no surface type-string.
-    output_type_override: Optional[Type] = None
+    # When present it overrides the surface-derived contract for a synthesized structured
+    # agent whose codomain is code-built and has no surface type-string.
+    output_contract_override: Optional[ValueContract] = None
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `AgentNode` (+ wiring) for this `AgentDescriptor`.
 
         Builds the agent leaf (LLM-config validation, node-side
-        `params` + flow-owned `inputs` wiring, `output_type` from `outputs:`/override) and
+        `params` + flow-owned `inputs` wiring, `output_contract` from `outputs:`/override) and
         additionally stamps `.range`/`.field_ranges` from the descriptor via `_finish` (which
         wraps them in a `BuildResult`). `ctx.resolver` is unused (leaf kind) and the inline-CODE
         anchors on `ctx` are read only by the CODE build.
@@ -103,8 +103,10 @@ class AgentDescriptor(NodeDescriptor):
             # the loader's one error type (loud), not a bare ValueError.
             raise LoadError(f"node {self.id!r}: {exc}") from exc
 
-        override = self.output_type_override
-        node.output_type = override if override is not None else self.output_type(ctx.registry)
+        override = self.output_contract_override
+        node.output_contract = (
+            override if override is not None else self.output_contract(ctx.registry)
+        )
         node.params = self.sink_params()
         wiring = self.sink_wiring()
         return self._finish(node, wiring)

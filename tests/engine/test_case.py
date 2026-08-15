@@ -27,6 +27,7 @@ import pytest
 
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode
+from agent_composer.nodes.contracts import ValueContract
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.helpers.errors import LoadError
@@ -225,7 +226,7 @@ def _enum_case(tags: list[str], cases: list[str], else_: str | None):
     """A constructed `case ... on ${cls.output}` over a Literal-enum producer.
 
     `producers` maps `cls` -> a record? no: cls produces the enum value directly
-    (its output_type carries `.tags`). The on: ref is `${cls.output}`.
+    (its output contract's type carries `.tags`). The on: ref is `${cls.output}`.
     """
     desc = CaseDescriptor(
         id="route",
@@ -233,7 +234,9 @@ def _enum_case(tags: list[str], cases: list[str], else_: str | None):
         cases=[{"when": t, "then": f"{t}_note"} for t in cases],
         else_=else_,
     )
-    producers = {"cls": Type(kind=ValueKind.STRING, tags=frozenset(tags))}
+    producers = {
+        "cls": ValueContract(Type(kind=ValueKind.STRING, tags=frozenset(tags)))
+    }
     return desc, producers
 
 
@@ -267,8 +270,8 @@ def test_exhaustiveness_all_tags_covered_no_else_ok():
 
 
 def test_exhaustiveness_walks_dotted_field_into_record():
-    # seed 18 shape: on ${synth.output.stance}; synth.output_type is a View record
-    # whose `stance` field carries the Stance enum tags.
+    # seed 18 shape: on ${synth.output.stance}; synth's contract is a View record
+    # whose `stance` field type carries the Stance enum tags.
     view = Type(
         kind=ValueKind.OBJECT,
         fields={
@@ -286,7 +289,9 @@ def test_exhaustiveness_walks_dotted_field_into_record():
         cases=[{"when": "positive", "then": "pro_note"}, {"when": "negative", "then": "con_note"}],
         else_="neutral_note",
     )
-    check_case_exhaustive({desc.id: desc}, {"synth": view})  # else: covers `neutral` -> ok
+    check_case_exhaustive(
+        {desc.id: desc}, {"synth": ValueContract(view)}
+    )  # else: covers `neutral` -> ok
 
 
 def test_exhaustiveness_dotted_missing_tag_raises():
@@ -307,24 +312,51 @@ def test_exhaustiveness_dotted_missing_tag_raises():
         else_=None,
     )
     with pytest.raises(LoadError) as exc:
-        check_case_exhaustive({desc.id: desc}, {"synth": view})
+        check_case_exhaustive({desc.id: desc}, {"synth": ValueContract(view)})
     assert "neutral" in str(exc.value)
+
+
+def test_exhaustiveness_rejects_noncanonical_producer_contract():
+    desc, _ = _enum_case(tags=["pro", "con"], cases=["pro"], else_=None)
+    with pytest.raises(TypeError, match="exact ValueContract"):
+        check_case_exhaustive(
+            {desc.id: desc},
+            {"cls": Type(kind=ValueKind.STRING, tags=frozenset({"pro", "con"}))},
+        )
+
+
+def test_exhaustiveness_rejects_noncanonical_unused_producer_contract():
+    """The CASE validator enforces its carrier map before selecting a case form."""
+    desc = _case_desc("02-case.yaml", "gate")
+    with pytest.raises(TypeError, match="exact ValueContract"):
+        check_case_exhaustive(
+            {desc.id: desc},
+            {"unused": Type.scalar(ValueKind.STRING)},  # type: ignore[dict-item]
+        )
 
 
 def test_no_exhaustiveness_for_searched_form():
     # a searched case (no on:) over an enum-ish producer is NOT exhaustiveness-checked.
     desc = _case_desc("02-case.yaml", "gate")
     check_case_exhaustive(
-        {desc.id: desc}, {"score": Type(kind=ValueKind.STRING, tags=frozenset({"a"}))}
+        {desc.id: desc},
+        {
+            "score": ValueContract(
+                Type(kind=ValueKind.STRING, tags=frozenset({"a"}))
+            )
+        },
     )  # no raise
 
 
 def test_on_non_enum_producer_skips_exhaustiveness():
     # on: a plain scalar producer (no .tags) -> lenient, no exhaustiveness, no raise.
     desc = _case_desc("06-case-on.yaml", "route")
-    result = _build_case(desc, {"classify": Type.scalar(ValueKind.STRING)})
+    producers = {
+        "classify": ValueContract(Type.scalar(ValueKind.STRING)),
+    }
+    result = _build_case(desc, producers)
     assert isinstance(result.node, CaseNode)
-    check_case_exhaustive({desc.id: desc}, {"classify": Type.scalar(ValueKind.STRING)})
+    check_case_exhaustive({desc.id: desc}, producers)
 
 
 # --------------------------------------------------------------------------- #

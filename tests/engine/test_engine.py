@@ -10,6 +10,7 @@ from agent_composer.events import (
     RunSucceeded,
 )
 from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, FlowOutput, NodeState
+from agent_composer.nodes.contracts import ValueContract
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.typesys.values import ValueKind, Type
@@ -335,7 +336,13 @@ def test_node_failure_produces_graph_failed():
 
 def test_output_enforced_rejects_type_mismatch():
     g = _graph(
-        [FuncNode("a", lambda p: "oops", output_type=Type.scalar(ValueKind.NUMBER))],
+        [
+            FuncNode(
+                "a",
+                lambda p: "oops",
+                output_contract=ValueContract(Type.scalar(ValueKind.NUMBER)),
+            )
+        ],
         [(START_ID, "a"), ("a", END_ID)],
     )
     events = _run(_engine(g))
@@ -344,7 +351,13 @@ def test_output_enforced_rejects_type_mismatch():
 
 def test_output_enforced_coerces_and_types_storage():
     g = _graph(
-        [FuncNode("a", lambda p: 3, output_type=Type.scalar(ValueKind.NUMBER))],
+        [
+            FuncNode(
+                "a",
+                lambda p: 3,
+                output_contract=ValueContract(Type.scalar(ValueKind.NUMBER)),
+            )
+        ],
         [(START_ID, "a"), ("a", END_ID)],
     )
     engine = _engine(g)
@@ -363,13 +376,38 @@ def test_multi_output_record_is_a_closed_type():
         fields={"a": Type.scalar(ValueKind.STRING), "b": Type.scalar(ValueKind.STRING)},
         required=frozenset({"a", "b"}),
     )
-    g_missing = _graph([FuncNode("n", lambda p: {"a": "x"}, output_type=rec)], [(START_ID, "n"), ("n", END_ID)])
+    g_missing = _graph(
+        [
+            FuncNode(
+                "n",
+                lambda p: {"a": "x"},
+                output_contract=ValueContract(rec),
+            )
+        ],
+        [(START_ID, "n"), ("n", END_ID)],
+    )
     assert isinstance(_run(_engine(g_missing))[-1], RunFailed)
     g_extra = _graph(
-        [FuncNode("n", lambda p: {"a": "x", "b": "y", "c": "z"}, output_type=rec)], [(START_ID, "n"), ("n", END_ID)]
+        [
+            FuncNode(
+                "n",
+                lambda p: {"a": "x", "b": "y", "c": "z"},
+                output_contract=ValueContract(rec),
+            )
+        ],
+        [(START_ID, "n"), ("n", END_ID)],
     )
     assert isinstance(_run(_engine(g_extra))[-1], RunFailed)
-    g_ok = _graph([FuncNode("n", lambda p: {"a": "x", "b": "y"}, output_type=rec)], [(START_ID, "n"), ("n", END_ID)])
+    g_ok = _graph(
+        [
+            FuncNode(
+                "n",
+                lambda p: {"a": "x", "b": "y"},
+                output_contract=ValueContract(rec),
+            )
+        ],
+        [(START_ID, "n"), ("n", END_ID)],
+    )
     engine = _engine(g_ok)
     assert isinstance(_run(engine)[-1], RunSucceeded)
     assert engine.state.pool.get("n") == {"a": "x", "b": "y"}
@@ -377,9 +415,9 @@ def test_multi_output_record_is_a_closed_type():
 
 def test_unresolvable_declared_type_is_not_enforced():
     # 'Policy' is unresolvable against the empty registry -> the compiler stamps
-    # output_type=None (unenforced); the node's value is stored raw.
+    # output_contract=None (unenforced); the node's value is stored raw.
     g = _graph(
-        [FuncNode("a", lambda p: {"k": 1}, output_type=None)],
+        [FuncNode("a", lambda p: {"k": 1}, output_contract=None)],
         [(START_ID, "a"), ("a", END_ID)],
     )
     engine = _engine(g)
@@ -389,10 +427,10 @@ def test_unresolvable_declared_type_is_not_enforced():
 
 
 def test_undeclared_output_is_not_enforced():
-    # No declared output_type -> the node's value is stored whole, unenforced;
+    # No declared output contract -> the node's value is stored whole, unenforced;
     # any object key is reachable via object-walk.
     g = _graph(
-        [FuncNode("a", lambda p: {"other": "x"}, output_type=None)],
+        [FuncNode("a", lambda p: {"other": "x"}, output_contract=None)],
         [(START_ID, "a"), ("a", END_ID)],
     )
     engine = _engine(g)

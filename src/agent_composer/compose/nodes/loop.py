@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent_composer.expr import ExpressionError, condition_refs
+from agent_composer.nodes.contracts import ValueContract
 from agent_composer.nodes.loop import LoopNode
-from agent_composer.typesys.values import Type
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.resolver import (
@@ -74,11 +74,11 @@ class LoopDescriptor(NodeDescriptor):
         `BuildResult` (the split): the node carries `params`; the flow owns the carried-record
         seed sources in `wiring`. Resolves the callable through `ctx.resolver` (required — a loop
         is higher-order), derives its `ChildSignature`, bakes the compiled child + parameters,
-        stamps `output_type` (the body codomain, which IS the carried record type), and enforces
+        stamps `output_contract` (the body codomain, which IS the carried record contract), and enforces
         the FIELD-NAME half of the contract + slice legality (`while:` present, `max:` present).
         The deep TYPE-level half (body output Type == carried record Type) is the loader pass
         `check_loop_type_contract`, which needs the assembled parent producers/flow-input types.
-        `ctx.registry` is unused (loop resolves its output type from the body signature); the
+        `ctx.registry` is unused (loop resolves its output contract from the body signature); the
         inline-CODE anchors on `ctx` are read only by the CODE build.
         """
         resolver = ctx.resolver
@@ -104,7 +104,7 @@ class LoopDescriptor(NodeDescriptor):
         )
         node.params = self.sink_params()
         wiring = self.sink_wiring()
-        node.output_type = sig.output          # the body codomain == the carried record type
+        node.output_contract = sig.output
 
         errors: list[str] = []
         # Predicate slice legality: exactly one of `while:`/`until:`/`times:` selects the loop's
@@ -159,7 +159,7 @@ class LoopDescriptor(NodeDescriptor):
         # slice of the carried record). A non-record body output (no fields) can't match a
         # multi-field carried record — flag it too.
         carried = set(self.inputs or {})
-        out_names = _type_field_names(sig.output)
+        out_names = _contract_field_names(sig.output)
         if out_names is None:
             errors.append(
                 f"loop node {self.id!r}: body {child_display} must declare a record "
@@ -206,10 +206,10 @@ class LoopDescriptor(NodeDescriptor):
         return self._finish(node, wiring)
 
 
-def _type_field_names(typ: Optional[Type]) -> Optional[set[str]]:
-    """The per-field NAMES of a record `Type`, or `None` when `typ` is not a
-    closed record (no `fields:` — a scalar/list/opaque codomain). Used for the
-    body-output field-NAME-set half of the loop's `'a -> 'a` contract."""
-    if typ is None or typ.fields is None:
+def _contract_field_names(
+    contract: Optional[ValueContract],
+) -> Optional[set[str]]:
+    """The field names of a closed record contract, else `None`."""
+    if contract is None or contract.type.fields is None:
         return None
-    return set(typ.fields.keys())
+    return set(contract.type.fields)

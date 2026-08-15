@@ -32,7 +32,7 @@ output: ${ask.output}
 def test_static_questions_carry_literal_and_object_output():
     n = load_flow(_STATIC).compiled.nodes["ask"]
     assert n.questions and n.questions_input is None
-    assert n.output_type.kind.value == "object"
+    assert n.output_contract.type.kind.value == "object"
 
 
 def test_ref_questions_record_input_param():

@@ -2,9 +2,9 @@
 
 Cross-node assembly pass. The analogue of `compile.validation._collect_reference_errors`,
 walking the BUILT flow (not a `FlowSpec`): it CALLS the leaf checkers (`_classify_path`)
-directly — supplying the `valid_targets`/`flow_inputs` sets + the `producers` Type-map —
-only reimplementing the per-node walk glue. Every located problem accumulates; one
-`LoadError` is raised carrying them all.
+directly — supplying the `valid_targets`/`flow_inputs` sets and a semantic-Type
+projection of the producer contracts — only reimplementing the per-node walk glue.
+Every located problem accumulates; one `LoadError` is raised carrying them all.
 
 Two subtleties mirror the legacy collector:
 
@@ -21,7 +21,8 @@ mapping for an input-binding ref, its `prompt:` for a prompt ref). The transitio
 renderer; a later renderer collapse retires them for the range.
 
 Imports flow down only: `compile.validation` (the leaf ref checker), `expr` (the binding
-parser), `nodes` (Node/AgentNode/WaitNode discrimination), `typesys` (Type), `compose.helpers.errors`.
+parser), `nodes` (Node/AgentNode/WaitNode discrimination and `ValueContract`),
+`compose.helpers.errors`.
 Only the loader (and the compose package facade) import this back.
 """
 
@@ -39,9 +40,8 @@ from agent_composer.expr import (
 )
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import binding_source
+from agent_composer.nodes.contracts import ValueContract, binding_source
 from agent_composer.nodes.wait import WaitNode
-from agent_composer.typesys.values import Type
 
 # Heads forbidden in a strict prompt (always trigger the bespoke hint).
 # `input`/`system`/`item` are the pool-style heads; a node-id head (e.g. `${other.output}`)
@@ -66,7 +66,7 @@ def _output_bindings(outputs: Any) -> list[Any]:
 def validate_references(
     nodes: dict[str, Node],
     flow_inputs: "set[str]",
-    producers: dict[str, Type],
+    producers: dict[str, ValueContract],
     outputs: Any,
     flow_wiring: dict[str, dict[str, Any]],
     *,
@@ -79,9 +79,11 @@ def validate_references(
     `nodes` is the built node map — leaf runtime `Node`s AND desugared `CaseNode`s
     (their `.inputs` carry the `__rN`/`__on` SOURCES, the reconciled `case` data refs).
     `flow_inputs` is the `read_flow_inputs(...)` decl names (the `${input.X}` set);
-    `producers` maps node id -> its `output_type` (drives the dotted-field walk;
-    only resolvable/checked producers belong here — an opaque/None producer stays
-    lenient). `outputs` is the raw flow `outputs:` section.
+    `producers` maps node id -> its exact `output_contract`. Only producers with a
+    resolvable contract belong here; an absent producer contract stays lenient. The
+    existing structural reference walker receives only each contract's semantic `.type`,
+    leaving its origins attached to the untouched carrier. `outputs` is the raw flow
+    `outputs:` section.
 
     Each error anchors on the referencing site's `SourceRange`, resolved off the built node's
     `field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
@@ -99,8 +101,17 @@ def validate_references(
     """
     lines = node_lines or {}
     valid_targets = set(nodes)
-    # Only resolvable producers participate in the dotted walk (opaque -> lenient).
-    producer_types = {nid: sh for nid, sh in producers.items() if sh is not None}
+    # The representation-neutral leaf checker speaks Type. Project only at that boundary;
+    # the canonical ValueContract carriers (and their origins) stay untouched here.
+    for node_id, contract in producers.items():
+        if type(contract) is not ValueContract:
+            raise TypeError(
+                "producer contracts must be exact ValueContract values, "
+                f"got {type(contract).__name__} for {node_id!r}"
+            )
+    producer_types = {
+        node_id: contract.type for node_id, contract in producers.items()
+    }
     # (message, line, range) triples — line/range locate the offending site where known.
     errors: list[tuple[str, "int | None", Optional[SourceRange]]] = []
 

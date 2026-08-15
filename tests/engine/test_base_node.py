@@ -4,7 +4,7 @@ import pytest
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import StreamChunk
-from agent_composer.nodes.base import Output, Route
+from agent_composer.nodes.base import Node, Output, Route
 from agent_composer.nodes.contracts import ContractOrigins, ValueContract
 from agent_composer.runtime.eval_node import EvaluationFailure
 from agent_composer.typesys.pool import VariablePool
@@ -70,70 +70,35 @@ def test_node_does_not_write_pool():
 
 
 def test_node_stores_one_canonical_output_contract():
-    """The semantic carrier is stored; ``output_type`` is only a read view."""
+    """The semantic carrier is the node's only output declaration."""
     untyped = FuncNode("untyped", lambda _inputs: {})
-    output_type = Type.scalar(ValueKind.NUMBER)
+    contract_type = Type.scalar(ValueKind.NUMBER)
     contract = ValueContract(
-        output_type,
+        contract_type,
         ContractOrigins(default=OriginRef("node/output")),
     )
 
     node = FuncNode("n", lambda _inputs: {}, output_contract=contract)
 
     assert untyped.output_contract is None
-    assert untyped.output_type is None
     assert "output_contract" in vars(untyped)
     assert "output_type" not in vars(untyped)
     assert node.output_contract is contract
-    assert node.output_type is output_type
+    assert node.output_contract.type is contract_type
     assert "output_contract" in vars(node)
     assert "output_type" not in vars(node)
+    assert not hasattr(Node, "output_type")
+    assert not hasattr(node, "output_type")
 
 
-def test_legacy_output_type_constructor_normalizes_to_a_contract():
-    """The temporary constructor bridge cannot recreate parallel type storage."""
-    output_type = Type.scalar(ValueKind.NUMBER)
-
-    node = FuncNode("n", lambda _inputs: {}, output_type=output_type)
-
-    assert type(node.output_contract) is ValueContract
-    assert node.output_contract.type is output_type
-    assert node.output_contract.origins == ContractOrigins()
-    assert node.output_type is output_type
-
-
-def test_legacy_output_type_setter_replaces_only_the_contract_type():
-    """A front-end type rewrite retains root and nested contract provenance."""
-    original_type = Type.scalar(ValueKind.INTEGER)
-    replacement_type = Type.scalar(ValueKind.NUMBER)
-    origins = ContractOrigins(
-        default=OriginRef("node/output"),
-        entries=((("answer",), OriginRef("node/output/answer")),),
-    )
-    original = ValueContract(original_type, origins)
-    node = FuncNode("n", lambda _inputs: {}, output_contract=original)
-
-    node.output_type = replacement_type
-
-    assert type(node.output_contract) is ValueContract
-    assert node.output_contract is not original
-    assert node.output_contract.type is replacement_type
-    assert node.output_contract.origins is origins
-    assert node.output_type is replacement_type
-
-
-def test_legacy_output_type_none_clears_the_contract():
-    """An explicitly absent type means there is no output contract or origin."""
-    node = FuncNode(
-        "n",
-        lambda _inputs: {},
-        output_contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
-    )
-
-    node.output_type = None
-
-    assert node.output_contract is None
-    assert node.output_type is None
+def test_node_rejects_removed_output_type_constructor_keyword():
+    """The deleted compatibility keyword cannot recreate parallel type storage."""
+    with pytest.raises(TypeError, match="unexpected keyword argument 'output_type'"):
+        FuncNode(
+            "n",
+            lambda _inputs: {},
+            output_type=Type.scalar(ValueKind.NUMBER),
+        )
 
 
 @pytest.mark.parametrize(
@@ -149,29 +114,9 @@ def test_legacy_output_type_none_clears_the_contract():
             _ValueContractSubclass(Type.scalar(ValueKind.INTEGER)),
             "output_contract.*ValueContract",
         ),
-        ("output_type", "int", "output_type.*Type"),
     ],
 )
 def test_node_rejects_invalid_output_contract_inputs(keyword, value, message):
-    """Neither canonical nor compatibility constructors accept the other's shape."""
+    """The canonical constructor accepts only the exact carrier shape."""
     with pytest.raises(TypeError, match=message):
         FuncNode("n", lambda _inputs: {}, **{keyword: value})
-
-
-def test_node_rejects_conflicting_canonical_and_legacy_output_inputs():
-    """Two supplied declarations cannot compete for the single contract authority."""
-    with pytest.raises(ValueError, match="output_contract.*output_type"):
-        FuncNode(
-            "n",
-            lambda _inputs: {},
-            output_contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
-            output_type=Type.scalar(ValueKind.NUMBER),
-        )
-
-
-def test_legacy_output_type_setter_rejects_a_non_type():
-    """The compatibility property accepts only a ``Type`` or ``None``."""
-    node = FuncNode("n", lambda _inputs: {})
-
-    with pytest.raises(TypeError, match="output_type.*Type"):
-        node.output_type = ValueContract(Type.scalar(ValueKind.INTEGER))

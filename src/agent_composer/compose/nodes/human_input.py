@@ -21,6 +21,7 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.events import SourceRange
 from agent_composer.expr.template import prompt_refs
+from agent_composer.nodes.contracts import ValueContract
 from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -143,22 +144,23 @@ class HumanInputDescriptor(NodeDescriptor):
         """Construct the runtime `HumanInputNode` (+ wiring) for this `HumanInputDescriptor`.
 
         Builds the human_input leaf: build the gate (one of three
-        question forms), derive `output_type` from `outputs:` (a questions gate with none defaults
-        to a bare open OBJECT — the host returns a free-form answer record), compute the
+        question forms), derive `output_contract` from `outputs:` (a questions gate with none
+        defaults to a bare open OBJECT — the host returns a free-form answer record), compute the
         `answer_schema`, and wire node-side `params` + flow-owned `inputs`. Stamps `.range`/
         `.field_ranges` via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is
         unused (leaf kind) and the inline-CODE anchors on `ctx` are read only by the CODE build.
         """
         node = self._build_gate()
-        node.output_type = self.output_type(ctx.registry)
+        node.output_contract = self.output_contract(ctx.registry)
         # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT (the host
         # returns a free-form answer record). Legacy gates derive their schema from the (possibly
         # absent) declared output type.
-        if node.output_type is None and (
+        if node.output_contract is None and (
             node.questions is not None or node.questions_input is not None
         ):
-            node.output_type = Type.scalar(ValueKind.OBJECT)
-        node.answer_schema = _answer_schema(node.output_type)
+            node.output_contract = ValueContract(Type.scalar(ValueKind.OBJECT))
+        output_type = None if node.output_contract is None else node.output_contract.type
+        node.answer_schema = _answer_schema(output_type)
         node.params = self.sink_params()
         wiring = self.sink_wiring()
         return self._finish(node, wiring)

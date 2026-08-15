@@ -4,11 +4,17 @@ Compile: node-local validation + pre/post classification + stamping onto the Nod
 Runtime: per-node enforcement in `Node.run` (pre before `_run`, post after) — e2e below.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from agent_composer.compose import LoadError, load_flow
-from agent_composer.nodes.contracts import Assertion
+from agent_composer.compose.validate.asserts import validate_node_asserts
+from agent_composer.diagnostics import OriginRef
+from agent_composer.nodes.base import Node
+from agent_composer.nodes.contracts import Assertion, ContractOrigins, ValueContract
 from agent_composer.run import run_flow
+from agent_composer.typesys.values import Type, ValueKind
 
 
 def _flow(asserts: list[str], *, input_decl="n: ${input.v}", outputs="int") -> str:
@@ -39,6 +45,32 @@ def test_node_asserts_classify_pre_and_post():
     x = loaded.compiled.nodes["x"]
     assert x.post_asserts == [Assertion("${output} >= 0", "${output} >= 0")]
     assert x.pre_asserts == [Assertion("${n} >= 0", "${n} >= 0")]
+
+
+def test_node_assert_field_walk_uses_the_canonical_output_contract():
+    """Node-local validation projects the type without replacing provenance."""
+    contract_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": Type.scalar(ValueKind.NUMBER)},
+        required=frozenset({"score"}),
+    )
+    origins = ContractOrigins(default=OriginRef("node-output"))
+    node = Node(
+        "x",
+        output_contract=ValueContract(contract_type, origins),
+    )
+    descriptor = SimpleNamespace(
+        asserts=["${output.score} >= 0"],
+        assert_ranges=[],
+    )
+
+    validate_node_asserts({"x": node}, {"x": descriptor})
+
+    assert node.post_asserts == [
+        Assertion("${output.score} >= 0", "${output.score} >= 0")
+    ]
+    assert node.output_contract.type is contract_type
+    assert node.output_contract.origins is origins
 
 
 @pytest.mark.parametrize("pre", ["n >= 0", "${n} >= 0", "${n >= 0}"])

@@ -84,7 +84,7 @@ def _engine(
 class _SyntheticInputDecl:
     """A minimal Compose input declaration for a manually built START boundary.
 
-    The #150 node-side cutover deliberately retains the Compose declaration at
+    The node-side parameter contract deliberately retains the Compose declaration at
     ``StartNode.input_decls``. This untyped fixture keeps manual run arguments lenient.
     """
 

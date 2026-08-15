@@ -24,6 +24,10 @@ NUMBER = ValueContract(Type.scalar(ValueKind.NUMBER))
 NULLABLE_INTEGER = ValueContract(Type(kind=ValueKind.INTEGER, nullable=True))
 
 
+class _ParameterSubclass(Parameter):
+    """Near-canonical fixture proving direct runs reject carrier subclasses."""
+
+
 class _ImplNode(Node):
     """A concrete node implementing `_run_impl` so the base `Node.run` template
     method (default-fill + assert firing) is exercised. `_run_impl` records the
@@ -170,4 +174,13 @@ def test_node_run_rejects_noncanonical_parameter_containers(params):
     node.params = params  # type: ignore[assignment]
 
     with pytest.raises(TypeError, match="exact list"):
+        node.run({})
+
+
+@pytest.mark.parametrize("params", [["x"], [_ParameterSubclass("x")]])
+def test_node_run_rejects_noncanonical_parameter_elements(params):
+    node = _ImplNode("n")
+    node.params = params  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="Parameter values"):
         node.run({})

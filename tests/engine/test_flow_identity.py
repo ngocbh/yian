@@ -501,6 +501,39 @@ output: ${step.output}
     assert "secret-a" not in json.dumps(flow_manifest(first), sort_keys=True)
 
 
+def test_flow_fingerprint_redacts_credentials_in_programmatic_parameter_defaults():
+    first = _compiled()
+    rotated = copy.deepcopy(first)
+    changed = copy.deepcopy(first)
+    first.nodes["step"].params = [
+        Parameter(
+            name="config",
+            has_default=True,
+            default={"region": "us", "auth": {"token": "first-secret"}},
+        )
+    ]
+    rotated.nodes["step"].params = [
+        Parameter(
+            name="config",
+            has_default=True,
+            default={"region": "us", "auth": {"token": "second-secret"}},
+        )
+    ]
+    changed.nodes["step"].params = [
+        Parameter(
+            name="config",
+            has_default=True,
+            default={"region": "eu", "auth": {"token": "second-secret"}},
+        )
+    ]
+
+    assert flow_fingerprint(first) == flow_fingerprint(rotated)
+    assert flow_fingerprint(first) != flow_fingerprint(changed)
+    manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
+    assert "first-secret" not in manifest_text
+    assert "us" in manifest_text
+
+
 def test_flow_fingerprint_redacts_uri_credentials_in_declaration_defaults():
     source = """
 id: input-endpoint

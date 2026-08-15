@@ -13,8 +13,8 @@ A MAP body binds a per-element `item` scope: `${item}` / `${item.path}` resolve 
 element passed via the `item=` kwarg (a body-local scope, NOT a pool head). The default (`item`
 unset) is the ordinary non-MAP bind path.
 
-Imports `expr` (eval_binding / resolve_reference) + `typesys` (type_for /
-build_value_as); both sit below/beside `nodes` in the layer ladder.
+Imports `expr` for source evaluation and `typesys` for contract validation and
+coercion; both sit below/beside `nodes` in the layer ladder.
 """
 
 from __future__ import annotations

@@ -51,6 +51,7 @@ INTEGER = ValueContract(Type.scalar(ValueKind.INTEGER))
 NUMBER = ValueContract(Type.scalar(ValueKind.NUMBER))
 BOOLEAN = ValueContract(Type.scalar(ValueKind.BOOLEAN))
 OBJECT = ValueContract(Type.scalar(ValueKind.OBJECT))
+NONE = ValueContract(Type.scalar(ValueKind.NONE))
 NULLABLE_STRING = ValueContract(Type(kind=ValueKind.STRING, nullable=True))
 NULLABLE_INTEGER = ValueContract(Type(kind=ValueKind.INTEGER, nullable=True))
 
@@ -154,6 +155,15 @@ def test_bind_present_null_shadows_default_when_contract_is_nullable():
                 default=30,
             )
         ],
+        _pool(),
+    )
+
+    assert rec == {"w": None}
+
+
+def test_bind_present_null_is_valid_for_none_contract():
+    rec = bind_inputs(
+        [InputBinding(name="w", contract=NONE, source="${system.w}")],
         _pool(),
     )
 

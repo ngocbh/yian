@@ -360,6 +360,12 @@ class Node(ABC):
             raise TypeError(
                 f"node {self.id!r} params must be an exact list, got {type(params).__name__}"
             )
+        for parameter in params:
+            if type(parameter) is not Parameter:
+                raise TypeError(
+                    f"node {self.id!r} params must contain Parameter values, "
+                    f"got {type(parameter).__name__}"
+                )
         inputs = apply_defaults(params, inputs)
         # Fire pre-asserts IN ORDER, first-failure-wins, and locate the failure BY POSITION:
         # the failing assert's own `SourceRange` is `pre_assert_ranges[i]`, not a lookup keyed by

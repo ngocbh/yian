@@ -156,7 +156,9 @@ The node/flow split: a node declares its signature as
 [`Parameter`][agent_composer.nodes.contracts.Parameter] values (no source); the
 flow owns canonical `Binding` sources, and
 [`bind_params`][agent_composer.nodes.binding.bind_params] joins them into the
-typed input record handed to the node.
+typed input record handed to the node. A bound null shadows a parameter default
+but remains subject to its contract; it is accepted only when the parameter is
+untyped or its contract accepts null (a nullable or `None`-kind type).
 
 ::: agent_composer.nodes.binding.bind_params
 

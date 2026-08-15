@@ -275,7 +275,10 @@ manifest projects `{expression, display}` and ignores origin. `Node.params` is
 an ordered exact `Parameter` list: `bind_params` reads its optional resolved
 contract, explicit default-presence bit, and string-coercion policy while the
 flow owns the corresponding `Binding` sources. Parameter/default/contract
-origins are manifest-neutral. START temporarily retains Compose `InputDecl` as
+origins are manifest-neutral. A bound null shadows a default but still undergoes
+contract validation, so it is accepted only when the parameter is untyped or its
+contract accepts null (a nullable or `None`-kind type). START
+temporarily retains Compose `InputDecl` as
 its boundary authority and derives contract-free Parameters from it. Stored
 output value-contract consumers move in later tested #131 cutovers.
 

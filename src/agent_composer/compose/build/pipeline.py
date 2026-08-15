@@ -293,8 +293,11 @@ def _flow_outputs(outputs) -> list[FlowOutput]:
     if outputs is None:
         return []
     if isinstance(outputs, dict):
-        return [FlowOutput(name=str(name), from_=value) for name, value in outputs.items()]
-    return [FlowOutput(name=_SINGLE_OUTPUT_NAME, from_=outputs)]
+        return [
+            FlowOutput(name=str(name), binding=value)
+            for name, value in outputs.items()
+        ]
+    return [FlowOutput(name=_SINGLE_OUTPUT_NAME, binding=outputs)]
 
 
 def _assemble(

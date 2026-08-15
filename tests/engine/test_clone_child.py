@@ -42,7 +42,7 @@ def _child(outputs, *, tail_reads=None, inputs=("topic",)) -> CompiledFlow:
 
 
 def _single():  # one declared output
-    return _child([FlowOutput(name="out", from_="${tail.output}")])
+    return _child([FlowOutput(name="out", binding="${tail.output}")])
 
 
 def test_clone_child_namespaces_ids():
@@ -115,8 +115,8 @@ def test_clone_child_alias_target_is_child_end():
 def test_clone_child_end_carries_producer_edges():
     # the cloned child END_ID keeps its producer->END_ID edges (re-keyed under the callsite), so the
     # alias filler (the child END_ID) fires only after its producers settle.
-    child = _child([FlowOutput(name="report", from_="${tail.output}"),
-                    FlowOutput(name="n", from_="${head.output.r}")])
+    child = _child([FlowOutput(name="report", binding="${tail.output}"),
+                    FlowOutput(name="n", binding="${head.output.r}")])
     cloned = clone_child(child, callsite="each", record={"topic": "ACME"})
     into_end = {(e.from_, e.to, e.input_group) for e in cloned.edges if e.to == "each/__end__"}
     assert into_end == {("each/tail", "each/__end__", "report"),
@@ -135,7 +135,7 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     # clone_child deep-copies the END, re-namespaces its wiring, and re-keys its edges — so the whole
     # structural dependency SURVIVES the clone (the C2 fix: no re-homing needed, and none possible
     # without deleting the synth edge that gates the assert on its producer).
-    child = _child([FlowOutput(name="out", from_="${tail.output}")])
+    child = _child([FlowOutput(name="out", binding="${tail.output}")])
     end = child.nodes[END_ID]
     # Lower `${tail.output} != ''` onto END exactly as boundary synthesis does.
     end.post_asserts = ["${__assert_tail} != ''"]

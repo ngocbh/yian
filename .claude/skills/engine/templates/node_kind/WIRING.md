@@ -59,6 +59,10 @@ must preserve the layer boundary:
   and returns one deterministic, self-contained `Flow` fragment.
 - Add focused tests proving the node returns only the canonical seed and
   `build_grow` reconstructs the expected entry/end ids, topology, and wiring.
+- A returned `Flow` owns canonical `Binding` values. Its constructor may accept
+  raw builder sources and wraps them once; an existing carrier keeps its origin.
+  Never assign a raw value into `fragment.wiring` after construction. When a
+  builder rewrites a source, return a new carrier with the original origin.
 
 Do not add a runtime kind branch or a `runtime -> compile.expand` import. The
 package-root run boundary injects `build_grow` into the kind-blind runtime for live
@@ -96,6 +100,10 @@ Copy `code.py`.
   `ctx.resolver` (the child-flow resolver — only call/map/loop read it), and the inline-CODE
   traceback anchors `ctx.source_file`/`ctx.code_line`/`ctx.code_field_line` (only the CODE build
   reads them). A leaf kind reads only `ctx.registry`.
+
+`BuildResult.wiring` is still pre-IR Compose data and may remain raw. The shared
+`CompiledFlow.from_parts` boundary performs canonical carrier normalization; do
+not add a second normalization map to a descriptor.
 
 ## 4. `compose/nodes/__init__.py` — add to the `_DESCRIPTORS` tuple
 

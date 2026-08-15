@@ -48,13 +48,28 @@ class Edge:
 
 @dataclass(frozen=True)
 class FlowOutput:
-    """One declared flow output: its `name` and where its value comes from (`from_`).
+    """One declared result name paired with its canonical semantic binding.
 
-    `from_` is either a `${...}` binding string (e.g. `${node.key}`) or a literal value.
+    Raw `${...}` sources and literals are accepted at construction and normalized
+    to an origin-free `Binding`. The temporary read-only `from_` view exposes the
+    source for callers migrating to the carrier-owned representation.
+
+    Attributes:
+        name (`str`): Declared result name.
+        binding (`Binding`): Source or literal plus its optional authored origin.
     """
 
     name: str
-    from_: Any
+    binding: Binding
+
+    def __post_init__(self) -> None:
+        """Normalize a raw second positional value without replacing a carrier."""
+        object.__setattr__(self, "binding", as_binding(self.binding))
+
+    @property
+    def from_(self) -> Any:
+        """Return the source-only compatibility view of this declared output."""
+        return self.binding.source
 
 
 def _normalize_wiring(

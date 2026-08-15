@@ -2080,7 +2080,7 @@ def _replace_body(fragment: Flow) -> None:
         lambda fragment: setattr(fragment, "end_id", "body"),
         _replace_body,
         lambda fragment: setattr(fragment, "edges", list(reversed(fragment.edges))),
-        lambda fragment: fragment.wiring["body"].__setitem__("x", 2),
+        lambda fragment: fragment.wiring["body"].__setitem__("x", Binding(2)),
         lambda fragment: fragment.edges.append(
             Edge("entry->terminal", "entry", "terminal", ordering=True)
         ),

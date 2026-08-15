@@ -115,10 +115,10 @@ def child_signature(loaded: Any) -> ChildSignature:
     if not outs:
         output: Optional[Type] = None
     elif len(outs) == 1:
-        output = _output_value_type(outs[0].from_, producers, flow_input_types)
+        output = _output_value_type(outs[0].binding, producers, flow_input_types)
     else:
         fields = {
-            o.name: _output_value_type(o.from_, producers, flow_input_types)
+            o.name: _output_value_type(o.binding, producers, flow_input_types)
             for o in outs
         }
         # Every declared output is a record field (a closed record keyed by name); an

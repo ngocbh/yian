@@ -259,9 +259,13 @@ owns one input source, `Parameter` owns one formal/default policy, `Assertion`
 owns executable and display text, and `ValueContract` pairs a provenance-free
 `Type` with `ContractOrigins`. Origins are optional and rewrite only through each
 carrier's pure `map_origins()` method. Do not put origin fields into `Type`, or
-recreate them in parallel maps. During the #131 migration, a consumer changes to
-the canonical carrier in its own tested cutover; the definitions alone do not
-mean all consumers have moved.
+recreate them in parallel maps. Stored flow-owned bindings have completed their
+cutover: `Flow.__init__`, `CompiledFlow.from_parts`, and `add_subgraph` normalize
+every direct wiring value exactly once, and `FlowOutput.binding` is canonical.
+Raw Python values remain accepted only at those construction boundaries;
+pre-IR Compose dictionaries and runtime overrides are deliberately raw. A
+growth clone creates a new carrier for a rewritten source and retains its origin.
+Other semantic carriers move in their own tested #131 cutovers.
 
 ## Compose source ownership
 

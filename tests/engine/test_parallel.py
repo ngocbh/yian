@@ -149,7 +149,7 @@ def test_terminal_output_under_workers():
     g = _graph(
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final"})],
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],
-        outputs=[FlowOutput(name="result", from_="${t.output}")],
+        outputs=[FlowOutput(name="result", binding="${t.output}")],
     )
     events = _run(_engine(g, num_workers=4))
     assert events[-1].output == {"output": "final"}

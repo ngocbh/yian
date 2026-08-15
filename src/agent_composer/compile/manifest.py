@@ -29,7 +29,7 @@ from agent_composer.nodes.base import Node, NodeKind
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.case import Case, CaseNode
 from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import Binding, binding_source
+from agent_composer.nodes.contracts import Binding
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.loop import LoopNode
@@ -147,7 +147,7 @@ _KIND_CLASSES: dict[NodeKind, type[Node]] = {
 _EDGE_FIELDS = frozenset(
     {"id", "from_", "to", "source_handle", "input_group", "optional", "ordering"}
 )
-_FLOW_OUTPUT_FIELDS = frozenset({"name", "from_"})
+_FLOW_OUTPUT_FIELDS = frozenset({"name", "binding"})
 _BINDING_CANONICAL_FIELDS = frozenset({"source"})
 _BINDING_IGNORED_FIELDS = frozenset({"origin"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
@@ -334,15 +334,15 @@ def _check_fields(value: Any, expected: frozenset[str], path: str) -> None:
 
 
 def _binding_manifest_source(value: Any, path: str) -> Any:
-    """Project one semantic binding to identity-bearing source data only."""
+    """Project one canonical binding to identity-bearing source data only."""
     if not isinstance(value, Binding):
-        return value
+        raise TypeError(f"{path}: expected Binding, got {type(value).__name__}")
     _check_fields(
         value,
         _BINDING_CANONICAL_FIELDS | _BINDING_IGNORED_FIELDS,
         path,
     )
-    return binding_source(value)
+    return value.source
 
 
 def _binding_manifest_mapping(value: dict, path: str) -> dict:
@@ -1534,9 +1534,9 @@ def _output_manifest(output: FlowOutput, ctx: _ManifestContext, path: str) -> di
     if type(output) is not FlowOutput:
         raise TypeError(f"{path}: expected FlowOutput, got {type(output).__name__}")
     _check_fields(output, _FLOW_OUTPUT_FIELDS, path)
-    source = _binding_manifest_source(output.from_, f"{path}.from")
+    source = _binding_manifest_source(output.binding, f"{path}.binding")
     return {
-        "from": _canonical_value(source, ctx, f"{path}.from"),
+        "from": _canonical_value(source, ctx, f"{path}.binding.source"),
         "name": output.name,
     }
 

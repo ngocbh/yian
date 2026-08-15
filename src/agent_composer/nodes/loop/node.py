@@ -144,6 +144,8 @@ class LoopNode(Node):
         clone.output_type = self.output_type
         clone.pre_asserts = list(self.pre_asserts)
         clone.post_asserts = list(self.post_asserts)
+        clone.pre_assert_ranges = list(self.pre_assert_ranges)
+        clone.post_assert_ranges = list(self.post_assert_ranges)
         return clone
 
     def should_stop(self, iteration: int) -> bool:

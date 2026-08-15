@@ -43,6 +43,9 @@ Hold this model whenever you design anything:
   direct source as `Binding`, and `FlowOutput.binding` owns declared outputs.
   Python builders may pass raw values at construction, but must not write raw
   values into an already-constructed flow.
+- Compiled node assertions also have one shape: ordered `Assertion` carriers.
+  Evaluate `.expression`, report `.display`, and preserve `.origin` whenever a
+  compile/growth rewrite creates a new carrier. Do not add parallel text maps.
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
   it does not rewrite the graph at runtime.
 

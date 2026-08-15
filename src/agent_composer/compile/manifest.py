@@ -29,7 +29,7 @@ from agent_composer.nodes.base import Node, NodeKind
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.case import Case, CaseNode
 from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import Binding
+from agent_composer.nodes.contracts import Assertion, Binding
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.loop import LoopNode
@@ -61,7 +61,6 @@ _COMMON_NODE_FIELDS = frozenset(
 )
 _IGNORED_NODE_FIELDS = frozenset(
     {
-        "assert_texts",
         "range",
         "field_ranges",
         "wiring_labels",
@@ -150,6 +149,8 @@ _EDGE_FIELDS = frozenset(
 _FLOW_OUTPUT_FIELDS = frozenset({"name", "binding"})
 _BINDING_CANONICAL_FIELDS = frozenset({"source"})
 _BINDING_IGNORED_FIELDS = frozenset({"origin"})
+_ASSERTION_CANONICAL_FIELDS = frozenset({"expression", "display"})
+_ASSERTION_IGNORED_FIELDS = frozenset({"origin"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
 _DECL_FIELDS = frozenset({"name", "type_str", "required", "default", "type"})
 _CASE_FIELDS = frozenset({"handle", "when"})
@@ -355,6 +356,25 @@ def _binding_manifest_mapping(value: dict, path: str) -> dict:
     return {
         key: _binding_manifest_source(item, f"{path}.values[{index}]")
         for index, (key, item) in enumerate(value.items())
+    }
+
+
+def _assertion_manifest(
+    value: Any,
+    ctx: "_ManifestContext",
+    path: str,
+) -> dict[str, Any]:
+    """Project one canonical assertion to behavior and presentation identity."""
+    if type(value) is not Assertion:
+        raise TypeError(f"{path}: expected Assertion, got {type(value).__name__}")
+    _check_fields(
+        value,
+        _ASSERTION_CANONICAL_FIELDS | _ASSERTION_IGNORED_FIELDS,
+        path,
+    )
+    return {
+        "expression": _canonical_value(value.expression, ctx, f"{path}.expression"),
+        "display": _canonical_value(value.display, ctx, f"{path}.display"),
     }
 
 
@@ -1409,8 +1429,14 @@ def _node_manifest(
         "origin_id": _canonical_value(node.origin_id, ctx, f"{path}.origin_id"),
         "output_type": _type_manifest(node.output_type, ctx, f"{path}.output_type"),
         "params": params,
-        "post_asserts": _canonical_sequence(node.post_asserts, ctx, f"{path}.post_asserts"),
-        "pre_asserts": _canonical_sequence(node.pre_asserts, ctx, f"{path}.pre_asserts"),
+        "post_asserts": [
+            _assertion_manifest(assertion, ctx, f"{path}.post_asserts[{index}]")
+            for index, assertion in enumerate(node.post_asserts)
+        ],
+        "pre_asserts": [
+            _assertion_manifest(assertion, ctx, f"{path}.pre_asserts[{index}]")
+            for index, assertion in enumerate(node.pre_asserts)
+        ],
     }
 
     if node.kind is NodeKind.START:

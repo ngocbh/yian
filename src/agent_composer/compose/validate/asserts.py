@@ -37,7 +37,7 @@ this back.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from agent_composer.compile.validation import _classify_path, _walk_record_fields
 from agent_composer.expr import ExpressionError, condition_refs
@@ -45,6 +45,7 @@ from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.expr.template import flow_call_callees_in_spans
 from agent_composer.compose.desugar.inline_calls import desugar_call_directives
 from agent_composer.nodes.base import Node, ParamDecl
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange  # for the positional assert-range annotations
@@ -75,25 +76,21 @@ class LoweredAsserts:
     - `pre_ranges` / `post_ranges`: `list[SourceRange | None]`, render-only for error carets,
       aligned 1:1 with `start_pre` / `end_post` (an entry is `None` where no span was recorded).
       Positional — NOT keyed by text — so two identical flow asserts get distinct carets. The
-      boundary sets them as the START/END nodes' `pre_assert_ranges` / `post_assert_ranges`.
-    - `pre_texts` / `post_texts`: `dict[lowered-string -> original author text]`. The node fires
-      the LOWERED form, but a failure message must show the author's ORIGINAL text (`calc.output
-      > 100`, not the synth form `${__assert_calc} > 100`) — eval_node / StartNode look the display
-      text up here, falling back to the lowered string when a mapping is absent.
+      boundary sets them as the START/END nodes' respective `post_assert_ranges` lists.
+    Each ordered `Assertion` owns both the lowered executable expression and stable
+    author-facing display text. Rewrites preserve its opaque origin.
     """
 
-    start_pre: list[str] = field(default_factory=list)
-    end_post: list[str] = field(default_factory=list)
+    start_pre: list[Assertion] = field(default_factory=list)
+    end_post: list[Assertion] = field(default_factory=list)
     synth_params: list[ParamDecl] = field(default_factory=list)
     synth_wiring: dict = field(default_factory=dict)
     pre_ranges: list = field(default_factory=list)
     post_ranges: list = field(default_factory=list)
-    pre_texts: dict = field(default_factory=dict)
-    post_texts: dict = field(default_factory=dict)
 
 
 def lower_flow_asserts(
-    assert_list: list[str],
+    assert_list: list[Assertion],
     flow_inputs: "set[str]",
     valid_targets: "set[str]",
     producers: "dict[str, Type]",
@@ -103,7 +100,7 @@ def lower_flow_asserts(
 
     Validation parses each assert + walks its `${...}` refs via `_classify_path` (a dangling
     ref / bad field is a loud LoadError); the lowering then REWRITES each assert so it can fire
-    node-locally, instead of returning the raw assert strings split into two lists:
+    node-locally, replacing only each assertion carrier's executable expression:
 
     - a PRE (boundary) assert rewrites each `${input.X}` ref to `${output.X}`, since START now
       fires these from its ordinary `post_asserts` against its own coerced output record; and
@@ -158,13 +155,14 @@ def lower_flow_asserts(
         allocated.add(name)
         return name
 
-    for i, expr in enumerate(assert_list):
+    for i, assertion in enumerate(assert_list):
+        expr = assertion.expression
         # 1. parse-check + collect refs on the ONE unified condition walk (any brace spelling).
         try:
             refs = condition_refs(expr)
         except ExpressionError as exc:
             raise LoadError(
-                f"assert {expr!r} is not a valid boolean expression: {exc}"
+                f"assert {assertion.display!r} is not a valid boolean expression: {exc}"
             ) from exc
 
         rng = ranges[i] if i < len(ranges) else None
@@ -174,11 +172,11 @@ def lower_flow_asserts(
         for path in refs:
             err = _classify_path(path, valid_targets, flow_inputs, (), producer_types)
             if err is not None:
-                raise LoadError(f"assert {expr!r}: {err}", range=rng)
+                raise LoadError(f"assert {assertion.display!r}: {err}", range=rng)
             head = path.split(".")[0]
             if head == "system":
                 raise LoadError(
-                    f"assert {expr!r}: the `system` namespace is not allowed in asserts "
+                    f"assert {assertion.display!r}: the `system` namespace is not allowed in asserts "
                     f"(it is ambient — there is no producer to draw an edge from; move the "
                     f"check into a body node)",
                     range=rng,
@@ -200,8 +198,7 @@ def lower_flow_asserts(
                 return None
 
             lowered = rewrite_condition_refs(expr, _pre_rename)
-            result.start_pre.append(lowered)
-            result.pre_texts[lowered] = expr
+            result.start_pre.append(replace(assertion, expression=lowered))
             result.pre_ranges.append(rng)  # ALWAYS append (may be None) to stay aligned with start_pre
             continue
 
@@ -234,8 +231,7 @@ def lower_flow_asserts(
             return None  # anything else (e.g. `input` head w/o field) — keep
 
         lowered = rewrite_condition_refs(expr, _post_rename)
-        result.end_post.append(lowered)
-        result.post_texts[lowered] = expr
+        result.end_post.append(replace(assertion, expression=lowered))
         result.post_ranges.append(rng)  # ALWAYS append (may be None) to stay aligned with end_post
 
     return result
@@ -285,8 +281,8 @@ def validate_node_asserts(
                 f"node {nid!r}: a declared input named 'output' collides with the node-assert "
                 f"`${{output}}` keyword — rename the input", line))
             continue
-        pre: list[str] = []
-        post: list[str] = []
+        pre: list[Assertion] = []
+        post: list[Assertion] = []
         pre_r: list = []   # aligned with `pre`
         post_r: list = []  # aligned with `post`
         for i, a in enumerate(asserts):
@@ -337,10 +333,10 @@ def validate_node_asserts(
                         line))
             rng = aranges[i] if i < len(aranges) else None
             if reads_output:
-                post.append(a)
+                post.append(Assertion(expression=a, display=a))
                 post_r.append(rng)
             else:
-                pre.append(a)
+                pre.append(Assertion(expression=a, display=a))
                 pre_r.append(rng)
         node.pre_asserts = pre
         node.post_asserts = post

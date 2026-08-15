@@ -32,7 +32,7 @@ from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import Binding
+from agent_composer.nodes.contracts import Assertion, Binding
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.typesys import Type, ValueKind
@@ -66,6 +66,13 @@ def _manifest_compiled_output(value: object) -> CompiledFlow:
         wiring={START_ID: {}, END_ID: {"result": "fixed"}},
         outputs=[FlowOutput("result", value)],
     )
+
+
+def _manifest_assertions(assertions: list[object]) -> Flow:
+    """Return a manifestable fragment whose END owns the supplied assertion storage."""
+    flow = _manifest_fragment("value")
+    flow.nodes["terminal"].post_asserts = assertions  # type: ignore[assignment]
+    return flow
 
 
 def test_flow_construction_normalizes_direct_wiring_values() -> None:
@@ -479,6 +486,56 @@ def test_manifest_rejects_raw_values_that_bypass_construction(site: str) -> None
 
     with pytest.raises(TypeError, match="expected Binding"):
         flow_manifest(flow)
+
+
+def test_assertion_identity_uses_expression_and_display_but_ignores_origin() -> None:
+    """All identity surfaces retain behavior/presentation and exclude provenance only."""
+    base = Assertion("${output} > 0", "output must be positive", _origin("first"))
+    other_origin = Assertion(
+        base.expression,
+        base.display,
+        _origin("second"),
+    )
+    changed_expression = Assertion("${output} >= 0", base.display, base.origin)
+    changed_display = Assertion(base.expression, "nonnegative output", base.origin)
+
+    same = [_manifest_assertions([base]), _manifest_assertions([other_origin])]
+    changed = [
+        _manifest_assertions([changed_expression]),
+        _manifest_assertions([changed_display]),
+    ]
+
+    assert flow_manifest(same[0]) == flow_manifest(same[1])
+    assert flow_fingerprint(same[0]) == flow_fingerprint(same[1])
+    assert expansion_digest(same[0]) == expansion_digest(same[1])
+    for candidate in changed:
+        assert flow_manifest(candidate) != flow_manifest(same[0])
+        assert flow_fingerprint(candidate) != flow_fingerprint(same[0])
+        assert expansion_digest(candidate) != expansion_digest(same[0])
+
+
+def test_assertion_manifest_preserves_order_and_duplicate_count() -> None:
+    """An ordered contract sequence is behavioral identity, including repeated checks."""
+    first = Assertion("a", "first")
+    second = Assertion("b", "second")
+
+    ordered = _manifest_assertions([first, second])
+    reversed_ = _manifest_assertions([second, first])
+    duplicated = _manifest_assertions([first, second, second])
+
+    assert flow_fingerprint(ordered) != flow_fingerprint(reversed_)
+    assert flow_fingerprint(ordered) != flow_fingerprint(duplicated)
+
+
+def test_assertion_manifest_rejects_unknown_fields_and_raw_bypass() -> None:
+    """Every carrier field needs an explicit policy and strings cannot re-enter Node IR."""
+    assertion = Assertion("true", "true")
+    object.__setattr__(assertion, "future_semantic_field", True)
+
+    with pytest.raises(ValueError, match="future_semantic_field"):
+        flow_manifest(_manifest_assertions([assertion]))
+    with pytest.raises(TypeError, match="expected Assertion"):
+        flow_manifest(_manifest_assertions(["true"]))
 
 
 def test_wrapped_credential_wiring_keeps_redaction_and_source_identity() -> None:

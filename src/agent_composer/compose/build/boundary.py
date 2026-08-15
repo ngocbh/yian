@@ -66,13 +66,13 @@ def synthesize_boundary_graph(
     The START_ID-side `${input.X}`-producer DATA edges + the demote-input-reader-from-root
     rule live here too (every input read resolves through the START_ID namespace).
 
-    `start_field_ranges` (optional) is the flow-boundary source map stamped onto the StartNode
-    (`input name -> SourceRange`, flow-`asserts:` `expr -> SourceRange`) — render-only, so a
-    boundary input-type failure / false boundary assert resolves a precise caret. `None` for a
-    spanless flow (compact / in-memory / def).
+    `start_field_ranges` (optional) is the flow-boundary input-declaration source map stamped
+    onto the StartNode (`("input_decl", name) -> SourceRange`) so a boundary input-type failure
+    resolves a precise caret. Assertion ranges travel in the positional lists on `lowered`.
+    `None` for a spanless flow (compact / in-memory / def).
 
-    `lowered` (optional) is the flow's `asserts:` lowered into node-local asserts (Step 2's
-    `LoweredAsserts`). When given, its PRE (boundary) asserts are stamped on START's ordinary
+    `lowered` (optional) is the flow's `asserts:` lowered into node-local `LoweredAsserts`.
+    When given, its PRE (boundary) asserts are stamped on START's ordinary
     `post_asserts` (they read `${output.X}` — START's coerced output), its POST asserts on END
     (`end.post_asserts`), each synthesized END input becomes an extra `ParamDecl` on END plus a
     wiring entry and a producer edge — so a cross-node post assert's `${producer.output}`
@@ -109,9 +109,7 @@ def synthesize_boundary_graph(
         # carries no post_asserts today, but merge rather than assign so a future START-owned
         # post-assert is not clobbered.
         start.post_asserts = list(start.post_asserts) + list(lowered.start_pre)
-        start.assert_texts = {**start.assert_texts, **lowered.pre_texts}
         end.post_asserts = list(lowered.end_post)
-        end.assert_texts = dict(lowered.post_texts)
         # Positional assert ranges ride ALONGSIDE the lowered asserts (aligned 1:1): the boundary PRE
         # asserts ride START's `post_asserts`, so their ranges extend START's `post_assert_ranges`;
         # END's POST asserts become its `post_assert_ranges`. A false boundary assert then carets its

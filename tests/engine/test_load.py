@@ -236,9 +236,11 @@ def test_seed18_post_terminal_assert_against_view():
     end = loaded.compiled.nodes[END_ID]
     assert start.post_asserts == []
     assert end.post_asserts != []
-    # `confidence` survives on the lowered assert or its original author text.
-    end_texts = list(end.post_asserts) + list(end.assert_texts.values())
-    assert any("confidence" in t for t in end_texts)
+    # `confidence` survives in executable and author-facing carrier text.
+    assert any(
+        "confidence" in assertion.expression or "confidence" in assertion.display
+        for assertion in end.post_asserts
+    )
 
 
 # --------------------------------------------------------------------------- #

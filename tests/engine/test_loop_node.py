@@ -6,7 +6,9 @@ These test `run`/`respawn` and compile-owned reconstruction directly (no engine)
 `test_loop_run.py`.
 """
 from agent_composer.compile.expand import build_grow
+from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.base import Grow, NodeKind, Output
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.ids import map_callsite, ns
 
@@ -66,6 +68,30 @@ def test_clone_driver_self_prunes_previous_body_and_self():
     assert any(p.startswith("chat_loop#0/") for p in result.prune)
     assert result.seed == ({"messages": ["hi"], "exited": False}, 1)
     assert not hasattr(result, "subgraph")
+
+
+def test_respawn_preserves_assertion_carriers_and_positional_ranges():
+    """A fresh LOOP driver retains semantic origins and the temporary range bridge."""
+    node = LoopNode(
+        "loop",
+        flow_id="body",
+        child=object(),
+        predicate_kind="while",
+        predicate="${x}",
+        max_iters=3,
+    )
+    origin = OriginRef("nodes/loop/asserts/0")
+    assertion_range = SourceRange(12, 7, 12, 20)
+    node.pre_asserts = [Assertion("${x} > 0", "x must be positive", origin)]
+    node.pre_assert_ranges = [assertion_range]
+
+    clone = node.respawn(1)
+
+    assert clone.pre_asserts == node.pre_asserts
+    assert clone.pre_asserts is not node.pre_asserts
+    assert clone.pre_asserts[0].origin is origin
+    assert clone.pre_assert_ranges == [assertion_range]
+    assert clone.pre_assert_ranges is not node.pre_assert_ranges
 
 
 def test_until_do_while_continues_on_iteration_zero():

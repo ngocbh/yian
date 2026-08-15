@@ -29,6 +29,8 @@ spawner additionally owns its growth traits/hooks (`is_spawner`,
 The other node-owned capability traits/hooks (`binds_per_item`, `bind_reserved`,
 `reserved_wiring_keys`, `needs_stop_event`) remain available to either shape. The base `Node.run` is a concrete
 template method that fires the node's asserts around `_run_impl`; do not override it.
+Programmatic assertions are ordered `Assertion(expression, display, origin)`
+carriers, never raw strings or a side text map.
 
 ```python
 class NodeKind(str, Enum):

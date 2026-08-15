@@ -16,6 +16,8 @@ import pytest
 from agent_composer.compose import LoadError, desugar_inline_calls, load_flow
 from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.compose.parse.file import CodeDescriptor
+from agent_composer.diagnostics import OriginRef
+from agent_composer.nodes.contracts import Assertion
 
 
 def _ids():
@@ -263,9 +265,39 @@ def test_directive_in_outputs_and_asserts_is_desugared():
         next_id=_ids(),
     )
     assert new_outputs["result"].startswith("${__call_")
-    assert new_asserts[0].startswith("${__call_")
+    assert new_asserts[0].expression.startswith("${__call_")
+    assert new_asserts[0].display == "call(score, topic=${input.t})"
     synth = {d.call for nid, d in new_descriptors.items() if nid.startswith("__call_")}
     assert synth == {"summarize", "score"}
+
+
+def test_directive_rewrite_preserves_existing_assertion_presentation():
+    """Carrierized flow assertions retain presentation while executable text changes."""
+    authored = Assertion(
+        "call(score, topic=${input.t})",
+        "score(topic) must pass",
+        OriginRef("asserts/0"),
+    )
+
+    _, _, assertions = desugar_inline_calls(
+        {}, None, asserts_section=[authored], next_id=_ids()
+    )
+
+    assert assertions[0].expression.startswith("${__call_")
+    assert assertions[0].display == authored.display
+    assert assertions[0].origin is authored.origin
+
+
+def test_raw_duplicate_flow_assertions_become_distinct_ordered_carriers():
+    """The front-end boundary retains occurrence identity even for equal YAML text."""
+    text = "${input.score} > 0"
+
+    _, _, assertions = desugar_inline_calls(
+        {}, None, asserts_section=[text, text], next_id=_ids()
+    )
+
+    assert assertions == [Assertion(text, text), Assertion(text, text)]
+    assert assertions[0] is not assertions[1]
 
 
 # --------------------------------------------------------------------------- #

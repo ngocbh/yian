@@ -85,8 +85,16 @@ every direct `flow.wiring[node_id][parameter]` value and every
 accepted and wrapped origin-free. Expansion rewrites only `Binding.source` and
 retains `Binding.origin`; pre-IR Compose dictionaries and runtime-only overrides
 remain raw. `FlowOutput.from_` is a temporary read-only source view during the
-remaining migration. Assertion, parameter, and value-contract consumers move in
-their own subsequent #131 cutovers rather than through parallel authorities.
+remaining migration.
+
+`Node.pre_asserts` and `Node.post_asserts` are ordered `Assertion` lists. Parsed
+YAML remains raw text until the inline-call pass crosses each flow assertion into
+one carrier; node-local validation creates one fresh carrier per authored
+occurrence. Lowering and CALL expansion replace only `.expression`, preserving
+`.display` and `.origin`. `Node.run` evaluates the expression and reports the
+display text. Manifests include expression, display, order, and duplicate count,
+while excluding origin and the temporary positional range bridge. Parameter and
+value-contract consumers move in later #131 cutovers.
 
 ## One-pass source ownership
 
@@ -245,7 +253,9 @@ loop pruning keeps only one dynamic iteration resident at a time.
 
 Compile also owns stable identity for the static program. `flow_manifest`
 canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and
-`resolve_llm_cascade` returns a complete map keyed by slash-separated static agent
-paths. The run boundary reads process provider/model defaults once at fresh-run
-initialization; `apply_effective_llm_map` restores the recorded map during
-recovery without consulting the environment.
+assertion identity includes executable and display text in list order while
+remaining origin/range-neutral. `expansion_digest` applies the same projection to
+dynamic fragments. `resolve_llm_cascade` returns a complete map keyed by
+slash-separated static agent paths. The run boundary reads process provider/model
+defaults once at fresh-run initialization; `apply_effective_llm_map` restores the
+recorded map during recovery without consulting the environment.

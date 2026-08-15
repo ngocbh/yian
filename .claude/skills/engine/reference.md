@@ -23,7 +23,8 @@ A node is a **pure function of its bound input record**. A kind implements
 `apply_defaults(record) → pre_asserts(record) → _run_impl(record, **caps) →
 post_asserts({**record, "output": value})`. Assert firing is **record-only** (no pool),
 so it preserves node purity, and it happens **exactly once** here in the node (not in
-`eval_node`). `_run_impl` returns ONE of the closed sum:
+`eval_node`). Both assertion lists contain ordered `Assertion` carriers: the wrapper
+evaluates `.expression` and reports/locates `.display`. `_run_impl` returns ONE of the closed sum:
 
 | Return | Meaning |
 |--------|---------|
@@ -83,7 +84,8 @@ spawner's own `post_asserts` (a `call` node's `asserts:`) are **lowered onto the
 fires through the child END's ordinary `run` wrapper — not re-checked at any commit site. Live
 growth and durable replay both pass the canonical seed persisted in `NodeExpandedRecord` through
 the same injected `compile.expand.build_grow`, so lowering is identical on resume. The moved
-assert's failure names the **child END id**, not the spawner.
+assert's display/origin and temporary positional range stay aligned; its failure names the
+**child END id**, not the spawner.
 
 AGENT is now an ordinary non-spawner leaf. Its model/tool loop, including an
 explicitly granted `ask_user`, stays inside one live `_run_impl`; post-asserts fire
@@ -203,7 +205,8 @@ model made enforceable.
 - **Stable program and expansion identity** — compile-owned `flow_manifest`
   canonicalizes execution semantics, `flow_fingerprint` hashes it, and
   `expansion_digest` covers an expanded fragment's entry/end ids and topology.
-  Render-only ranges, comments, and object identity do not affect these values.
+  Assertion expression/display/order/multiplicity affect identity; assertion origins and
+  render-only ranges, comments, and object identity do not.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
   core dispatches on worker-result/run-record variants + node-owned traits/hooks, never on
   `node.kind` (ratchet: census 0).
@@ -265,7 +268,11 @@ every direct wiring value exactly once, and `FlowOutput.binding` is canonical.
 Raw Python values remain accepted only at those construction boundaries;
 pre-IR Compose dictionaries and runtime overrides are deliberately raw. A
 growth clone creates a new carrier for a rewritten source and retains its origin.
-Other semantic carriers move in their own tested #131 cutovers.
+`Node.pre_asserts` / `post_asserts` are likewise canonical ordered `Assertion`
+lists. Compose crosses raw YAML text into one carrier per occurrence; lowering
+and growth use `replace(..., expression=...)`, so display/origin survive. The
+manifest projects `{expression, display}` and ignores origin. Parameter and
+value-contract consumers move in later tested #131 cutovers.
 
 ## Compose source ownership
 
@@ -400,7 +407,7 @@ node header. The mechanism is a structured locator produced at the failure site 
 resolved to a line at the CLI boundary — never a text heuristic.
 
 - **`SourceSpan(node, kind, key)`** (in the low-level `events` observer module) — `kind ∈ {input, assert,
-  input_decl, field}`; `key` is the input name / assert expr / input-decl name / field
+  input_decl, field}`; `key` is the input name / assertion display / input-decl name / field
   name; `node` is the node id, or `None` for a flow-level location.
 - **Carriers:** `NodeFailed.locator` (node-level) and `RunFailed.locator` /
   `RunResult.locator` (flow-level). All default `None`.
@@ -433,7 +440,7 @@ resolved to a line at the CLI boundary — never a text heuristic.
   in `field_ranges`). It rides `NodeFailed.range` and its flow-level twin `RunResult.range` /
   `RunFailed.range` (all default `None`; the flow twin is the boundary node's resolved range —
   `StartNode.field_ranges[("input_decl", name)]` for an e08 input-decl,
-  `StartNode.pre_assert_ranges` / `EndNode.post_assert_ranges` for a boundary / post assert).
+  `StartNode.post_assert_ranges` / `EndNode.post_assert_ranges` for a boundary / post assert).
   Output-type failures occur after evaluation, so their durable failure may carry only the
   symbolic `field` locator; the CLI resolves it from the supplied flow when no concrete range
   was recorded.

@@ -22,12 +22,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
+from agent_composer.events import SourceRange
 from agent_composer.nodes.base import Node
 from agent_composer.typesys.values import Type
 from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
-from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.desugar.case_outputs import expand_case_outputs
@@ -53,6 +54,97 @@ from agent_composer.compose.validate.asserts import validate_node_asserts
 # `FlowOutput`, `terminal_output` returns the bare resolved value, so the name
 # only labels the carrier.
 _SINGLE_OUTPUT_NAME = "result"
+
+
+@dataclass(frozen=True)
+class BuildRequest:
+    """One active descriptor build and the dependency edge that requested it."""
+
+    node_id: str
+    via_label: str | None
+    via_range: SourceRange | None
+
+
+class _DescriptorBuildCache:
+    """Build descriptors lazily once while retaining dependency-cycle provenance.
+
+    A descriptor may request a later descriptor while deriving its own build product.
+    Successful products are memoized; failures are not. The final source-order walk
+    therefore reuses forward-built products without changing assembled node order.
+    """
+
+    def __init__(
+        self,
+        descriptors: dict[str, NodeDescriptor],
+        context: BuildContext,
+        node_lines: dict[str, int],
+    ) -> None:
+        self._descriptors = descriptors
+        self._context = context
+        self._node_lines = node_lines
+        self._built: dict[str, BuildResult] = {}
+        self._building: list[BuildRequest] = []
+
+    def build_one(
+        self,
+        node_id: str,
+        via_label: str | None = None,
+        via_range: SourceRange | None = None,
+    ) -> BuildResult:
+        """Build one descriptor, reusing success and rejecting an active dependency cycle."""
+        if node_id in self._built:
+            return self._built[node_id]
+
+        request = BuildRequest(node_id, via_label, via_range)
+        repeated_at = next(
+            (
+                index
+                for index, active in enumerate(self._building)
+                if active.node_id == node_id
+            ),
+            None,
+        )
+        if repeated_at is not None:
+            cycle = self._building[repeated_at:]
+            cycle_edges = [*cycle[1:], request]
+            if all(edge.via_label is not None for edge in cycle_edges):
+                path = [edge.via_label for edge in cycle_edges]
+                path.append(node_id)
+            else:
+                path = [active.node_id for active in cycle]
+                path.append(node_id)
+            error_range = request.via_range or next(
+                (
+                    edge.via_range
+                    for edge in cycle_edges
+                    if edge.via_range is not None
+                ),
+                None,
+            )
+            raise LoadError(
+                f"node build dependency cycle: {' -> '.join(path)}",
+                range=error_range,
+            )
+
+        self._building.append(request)
+        try:
+            try:
+                result = self._descriptors[node_id].build(self._context)
+            except LoadError as exc:
+                if exc.line is None:
+                    exc.line = self._node_lines.get(node_id)
+                raise
+            self._built[node_id] = result
+            return result
+        finally:
+            self._building.pop()
+
+    def build_in_source_order(self) -> dict[str, BuildResult]:
+        """Return every successful build in descriptor insertion order."""
+        return {
+            node_id: self.build_one(node_id)
+            for node_id in self._descriptors
+        }
 
 
 @dataclass(frozen=True)
@@ -223,19 +315,21 @@ def _assemble(
     # branches on the descriptor kind. Flow-owned wiring (the split): `flow_wiring[node_id][param]
     # -> source`, a `{}` entry for every node so the key-parity check ranges over all nodes.
     ctx_base = BuildContext(registry=registry, resolver=resolver, source_file=flow_label)
-    nodes_built: dict[str, Node] = {}
-    flow_wiring: dict[str, dict] = {}
-    case_edges: list[Edge] = []  # a case's own data+control edges; () for every other kind
-    for nid, desc in descriptors.items():
-        try:
-            result = desc.build(ctx_base)
-        except LoadError as exc:  # locate a build failure (resolver/legality/type expr) at the node's line
-            if exc.line is None:
-                exc.line = n_lines.get(nid)
-            raise
-        nodes_built[nid] = result.node
-        flow_wiring[nid] = result.wiring
-        case_edges.extend(result.edges)
+    build_results = _DescriptorBuildCache(
+        descriptors, ctx_base, n_lines
+    ).build_in_source_order()
+    nodes_built: dict[str, Node] = {
+        nid: result.node for nid, result in build_results.items()
+    }
+    flow_wiring: dict[str, dict] = {
+        nid: result.wiring for nid, result in build_results.items()
+    }
+    # A case's own data+control edges; every other kind returns an empty tuple.
+    case_edges: list[Edge] = [
+        edge
+        for result in build_results.values()
+        for edge in result.edges
+    ]
     # Stamp each built node's effective static config: the flow-level `env:` default merged
     # under the node's own `env:` (node override wins), flow-local (a called child flow has its
     # own flow env). The engine core never reads `Node.env` — only the node's `_run_impl()` path does.

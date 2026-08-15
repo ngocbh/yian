@@ -82,20 +82,20 @@ def extract_inline_bodies(
     projected: dict[Any, tuple[Any, SourceCursor | None]] = {}
 
     for node_id in list(nodes):
-        body_reader = nodes_cursor.child(node_id)
-        raw_body = body_reader._value_view()
+        body_cursor = nodes_cursor.child(node_id)
+        raw_body = body_cursor._value_view()
         if not isinstance(raw_body, Mapping):
-            projected[node_id] = (nodes_snapshot[node_id], body_reader)
+            projected[node_id] = (nodes_snapshot[node_id], body_cursor)
             continue
         if raw_body.get("kind") not in _INLINE_COMPOSITE_KINDS:
-            projected[node_id] = (nodes_snapshot[node_id], body_reader)
+            projected[node_id] = (nodes_snapshot[node_id], body_cursor)
             continue
 
         has_call = "call" in raw_body
         has_nodes = "nodes" in raw_body
         if has_call == has_nodes:
             conflict_range = (
-                body_reader.range_of("nodes") if has_nodes else body_reader.range
+                body_cursor.range_of("nodes") if has_nodes else body_cursor.range
             )
             raise LoadError(
                 f"node {node_id!r} (kind={raw_body['kind']}): exactly one of "
@@ -108,9 +108,9 @@ def extract_inline_bodies(
                 raise LoadError(
                     f"node {node_id!r} (kind={raw_body['kind']}): `output:` is only "
                     "valid with inline `nodes:`",
-                    range=body_reader.range_of("output"),
+                    range=body_cursor.range_of("output"),
                 )
-            projected[node_id] = (nodes_snapshot[node_id], body_reader)
+            projected[node_id] = (nodes_snapshot[node_id], body_cursor)
             continue
 
         child_nodes = raw_body["nodes"]
@@ -118,19 +118,19 @@ def extract_inline_bodies(
             raise LoadError(
                 f"node {node_id!r} (kind={raw_body['kind']}): inline `nodes:` must "
                 "be a non-empty mapping",
-                range=body_reader.range_of("nodes"),
+                range=body_cursor.range_of("nodes"),
             )
         if not child_nodes:
             raise LoadError(
                 f"node {node_id!r} (kind={raw_body['kind']}): inline `nodes:` must "
                 "be a non-empty mapping",
-                range=body_reader.range_of("nodes"),
+                range=body_cursor.range_of("nodes"),
             )
         if "output" not in raw_body:
             raise LoadError(
                 f"node {node_id!r} (kind={raw_body['kind']}): inline `nodes:` "
                 "requires `output:`",
-                range=body_reader.range,
+                range=body_cursor.range,
             )
 
         outer_input = raw_body.get("input", {})
@@ -140,7 +140,7 @@ def extract_inline_bodies(
             raise LoadError(
                 f"node {node_id!r} (kind={raw_body['kind']}): inline `input:` must "
                 "be a mapping with string keys",
-                range=body_reader.range_of("input"),
+                range=body_cursor.range_of("input"),
             )
 
         child_owner = (*owner, "node", node_id, "inline")
@@ -149,14 +149,14 @@ def extract_inline_bodies(
             node_id=node_id,
             owner=child_owner,
             flow_id=flow_id,
-            nodes_cursor=body_reader.child("nodes"),
-            output=body_reader.get("output"),
-            output_range=body_reader.range_of("output"),
-            input_ranges=body_reader.mapping_value_ranges("input"),
+            nodes_cursor=body_cursor.child("nodes"),
+            output=body_cursor.get("output"),
+            output_range=body_cursor.range_of("output"),
+            input_ranges=body_cursor.mapping_value_ranges("input"),
         )
         bodies[node_id] = body
         masked, masked_value = _mask_inline_body(
-            body_reader,
+            body_cursor,
             flow_id,
             nodes_snapshot[node_id],
         )
@@ -176,8 +176,8 @@ def _reject_authored_private_call_targets(nodes_cursor: SourceCursor) -> None:
     if not isinstance(nodes, Mapping):
         return
     for node_id in nodes:
-        body_reader = nodes_cursor.child(node_id)
-        raw_body = body_reader._value_view()
+        body_cursor = nodes_cursor.child(node_id)
+        raw_body = body_cursor._value_view()
         if not isinstance(raw_body, Mapping):
             continue
         if raw_body.get("kind") not in _INLINE_COMPOSITE_KINDS:
@@ -191,7 +191,7 @@ def _reject_authored_private_call_targets(nodes_cursor: SourceCursor) -> None:
             f"node {node_id!r} (kind={raw_body['kind']}): call targets beginning "
             f"with {INLINE_FLOW_PREFIX!r} are reserved for compiler-generated "
             "inline child flows",
-            range=body_reader.range_of("call"),
+            range=body_cursor.range_of("call"),
         )
 
 

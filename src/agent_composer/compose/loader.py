@@ -252,9 +252,9 @@ def _reject_authored_private_callable_names(
 ) -> None:
     """Reject file-scoped callable declarations in the inline-flow namespace.
 
-    The inexpensive declaration scan runs before any other loader work. Source
-    spans are parsed only after a reserved name is found, so valid files do not
-    pay for another document parse at this boundary.
+    The inexpensive declaration scan reuses the root cursor built at the source
+    boundary, including the offending declaration's key range. It never parses
+    the document again.
     """
     for section, declarations in (("defs", defs), ("uses", uses)):
         offender = next(

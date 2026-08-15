@@ -1,7 +1,7 @@
 """Parse-free source-location primitives for the Compose front end.
 
 The parse-independent slice of the loader's render-only source mapping: the
-`SourceFrame` carrier plus best-effort span-map helpers over an existing source cursor.
+`SourceFrame` carrier plus best-effort location-map helpers over an existing source cursor.
 They never parse or call `parse_nodes`/`parse_file`. Kept at the bottom
 of the ladder (`helpers <- parse`) so `parse/` can depend on it without a cycle; the
 frame-range helpers that DO call the parser (`_frame_ranges`, `top_frame_ranges`) stay in

@@ -10,7 +10,7 @@ callable:
   if/else handles -> CompiledFlow.from_parts.
 
 Holds `ComposedFlow` (the compiled+validated flow the engine runs) plus the flow
-`outputs:` reader (`_flow_outputs`). Ladder position: the LAST phase before the
+`outputs:` parser (`_flow_outputs`). Ladder position: the LAST phase before the
 loader — it may import every earlier phase (helpers/nodes/parse/desugar/edges/
 validate/build.boundary); the loader imports `_assemble`/`ComposedFlow` back from
 here. It imports NOTHING from `loader.py` (that would be a back-edge).

@@ -26,12 +26,12 @@ with no map-element scope — use a named `call` node with `over:`), and a user 
 may not use the reserved synth prefix `__call_`.
 
 Located parse metadata: each parsed host descriptor carries its own `range`/`field_ranges`
-(from the span tree). A synth `call` node locates at the SITE it desugared from — the host
+(read from its source cursor). A synth `call` node locates at the SITE it desugared from — the host
 binding's own line (looked up in the host `field_ranges` by the binding key), not the host
 node header — and owns an empty `field_ranges`, so a bad ref inside the directive carets the
 directive rather than a host input that shares its param name. The flow `outputs:`/`asserts:`
 sections have no descriptor, so their inline calls locate at the section source line
-(`outputs_line`/`asserts_line`) until the span cutover retires those.
+(`outputs_line`/`asserts_line`).
 
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
 kind-blind binding-field walk) + `compose.helpers.errors` (peers), `expr` (the ref-walk + the

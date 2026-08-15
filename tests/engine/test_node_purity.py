@@ -24,6 +24,7 @@ import pytest
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.compose import load_flow
 from agent_composer.compose.loader import SourceFrame
+from agent_composer.nodes.contracts import Binding
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -92,7 +93,11 @@ def test_flow_wiring_is_where_the_sources_are():
     all_wiring_sources = [
         src for node_w in loaded.compiled.wiring.values() for src in node_w.values()
     ]
-    assert any(isinstance(s, str) and _POOL_REF.search(s) for s in all_wiring_sources)
+    assert all(isinstance(source, Binding) for source in all_wiring_sources)
+    assert any(
+        isinstance(source.source, str) and _POOL_REF.search(source.source)
+        for source in all_wiring_sources
+    )
 
 
 def test_purity_guard_actually_bites():

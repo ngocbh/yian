@@ -79,9 +79,14 @@ one responsibility:
 All origins are optional, so Python-authored values remain source-free. The
 carriers are frozen only at their fields: arbitrary binding/default payloads are
 retained by identity. `map_origins()` performs pure lexical rebasing without
-copying semantic payloads. These definitions are the migration foundation;
-existing wiring, assertion, parameter, and output consumers move to them in
-subsequent #131 changes rather than through a parallel compatibility authority.
+copying semantic payloads. `Flow` construction is the single binding boundary:
+every direct `flow.wiring[node_id][parameter]` value and every
+`FlowOutput.binding` is canonical `Binding`, while raw Python-authored values are
+accepted and wrapped origin-free. Expansion rewrites only `Binding.source` and
+retains `Binding.origin`; pre-IR Compose dictionaries and runtime-only overrides
+remain raw. `FlowOutput.from_` is a temporary read-only source view during the
+remaining migration. Assertion, parameter, and value-contract consumers move in
+their own subsequent #131 cutovers rather than through parallel authorities.
 
 ## One-pass source ownership
 

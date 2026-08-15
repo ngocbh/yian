@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from agent_composer.nodes.call import CallNode   # nodes/call/__init__.py
+from agent_composer.nodes.contracts import Binding
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind
 from agent_composer.compose import ComposedFlow, LoadError, load_flow
@@ -86,7 +87,9 @@ def test_seed04_ref_loads_and_reexports_child_output():
     assert typ.kind == ValueKind.OBJECT
     assert set(typ.fields) == {"report", "asof"}
     # the REF sources live on flow.wiring; the node carries only the param names.
-    assert loaded.compiled.wiring["research"] == {"topic": "${input.topic}"}
+    assert loaded.compiled.wiring["research"] == {
+        "topic": Binding("${input.topic}")
+    }
     assert [p.name for p in research.params] == ["topic"]
 
 
@@ -95,8 +98,8 @@ def test_seed04_downstream_dotted_ref_validates_against_child_record():
     # stamped output_type (a CHECKED record) lets the dotted-field walk pass (not loud).
     loaded = load_flow(_text("04-call.yaml"), search_paths=[_SEEDS])
     assert loaded.compiled.wiring["take"] == {
-        "brief": "${research.output.report}",
-        "asof": "${research.output.asof}",
+        "brief": Binding("${research.output.report}"),
+        "asof": Binding("${research.output.asof}"),
     }
 
 
@@ -123,9 +126,9 @@ def test_seed05_map_loads_with_list_output_and_parallel():
     # the MAP sources (incl the reserved `over`, over-first) live on flow.wiring; the node
     # carries only the per-element param names (`over:` is the iteration source, not a param).
     assert loaded.compiled.wiring["research_each"] == {
-        "over": "${input.topics}",
-        "topic": "${item}",
-        "as_of": '${input.as_of:-"today"}',
+        "over": Binding("${input.topics}"),
+        "topic": Binding("${item}"),
+        "as_of": Binding('${input.as_of:-"today"}'),
     }
     assert [p.name for p in research_each.params] == ["topic", "as_of"]
 

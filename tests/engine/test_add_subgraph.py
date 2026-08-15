@@ -1,4 +1,5 @@
 from agent_composer.compile.model import CompiledFlow, Edge, START_ID, END_ID
+from agent_composer.nodes.contracts import Binding
 from tests.engine._fakes import FuncNode
 
 
@@ -18,7 +19,7 @@ def test_add_subgraph_extends_nodes_edges_wiring():
         wiring={"ns/b": {"x": "${a.output}"}},
     )
     assert "ns/b" in flow.nodes
-    assert flow.wiring["ns/b"] == {"x": "${a.output}"}
+    assert flow.wiring["ns/b"] == {"x": Binding("${a.output}")}
     # adjacency updated both directions
     assert any(e.to == "ns/b" for e in flow.incoming("ns/b"))
     assert any(e.to == "ns/b" for e in flow.outgoing("a"))
@@ -55,7 +56,7 @@ def test_remove_subgraph_drops_nodes_edges_wiring_and_adjacency():
 
     # SURVIVING sibling namespace + base node untouched
     assert "iter1/b" in flow.nodes
-    assert flow.wiring["iter1/b"] == {"x": "${a.output}"}
+    assert flow.wiring["iter1/b"] == {"x": Binding("${a.output}")}
     assert any(e.to == "iter1/b" for e in flow.incoming("iter1/b"))
     assert any(e.to == "iter1/b" for e in flow.outgoing("a"))
     assert "a" in flow.nodes

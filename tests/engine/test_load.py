@@ -20,6 +20,7 @@ import pytest
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.code import CodeNode
+from agent_composer.nodes.contracts import Binding
 from agent_composer.nodes.case import CaseNode
 from agent_composer.nodes.model import ModelNode
 from agent_composer.typesys.values import ValueKind
@@ -209,7 +210,7 @@ def test_seed18_route_desugars_case_on_with_else():
     assert isinstance(route, CaseNode)
     # on-form: one __on param wired to the stance ref (the source lives on flow.wiring).
     assert [p.name for p in route.params] == ["__on"]
-    assert flow.wiring["route"] == {"__on": "${synth.output.stance}"}
+    assert flow.wiring["route"] == {"__on": Binding("${synth.output.stance}")}
     out = {(e.to, e.source_handle) for e in flow.outgoing("route")}
     assert ("pro_note", "pro_note") in out
     assert ("con_note", "con_note") in out
@@ -264,10 +265,10 @@ def test_seed19_loads_clean():
     loaded = _load("19")
     # the assembler exercises every stance; all compile + name-check.
     sources = loaded.compiled.wiring["assemble"]
-    assert sources["claim"] == "${pro.output | con.output}"
-    assert sources["detail"] == "${pro_detail.output:-null}"
-    assert sources["when"] == "${input.as_of:-${system.today}}"
-    assert sources["topic"] == '${input.topic:?"a topic is required"}'
+    assert sources["claim"] == Binding("${pro.output | con.output}")
+    assert sources["detail"] == Binding("${pro_detail.output:-null}")
+    assert sources["when"] == Binding("${input.as_of:-${system.today}}")
+    assert sources["topic"] == Binding('${input.topic:?"a topic is required"}')
 
 
 # --------------------------------------------------------------------------- #

@@ -89,8 +89,8 @@ def synthesize_boundary_graph(
     end_edges: list[Edge] = []
     counts: dict[tuple[str, str], int] = {}
     for o in outputs:
-        optional = not binding_co_skips(binding_source(o.from_))
-        for producer in _binding_producers(o.from_):
+        optional = not binding_co_skips(binding_source(o.binding))
+        for producer in _binding_producers(o.binding):
             i = counts.get((producer, END_ID), 0)
             counts[(producer, END_ID)] = i + 1
             end_edges.append(Edge(id=f"{producer}->{END_ID}#{i}", from_=producer, to=END_ID,
@@ -150,7 +150,7 @@ def synthesize_boundary_graph(
         # keys (an omitted input then binds absent so START's wrapper fills its declared default).
         # This compiled entry is what a direct-driver / hand-seed test (no run_inputs) reads.
         START_ID: {d.name: f"${{input.{d.name}}}" for d in input_decls},
-        END_ID: {o.name: o.from_ for o in outputs},
+        END_ID: {o.name: o.binding for o in outputs},
     }
     # Merge each synthesized END param's source so bind_params finds a source per synth param
     # (key parity with the extra params + edges above). A synth name never collides with an

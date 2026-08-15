@@ -25,6 +25,7 @@ from agent_composer.compile.model import START_ID
 from agent_composer.compose import load_flow
 from agent_composer.events import NodeStarted, NodeSucceeded, RunSucceeded
 from agent_composer.nodes.base import NodeKind, Output
+from agent_composer.nodes.contracts import Binding
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.runtime.eval_node import eval_node
 from agent_composer.runtime.log import (
@@ -668,7 +669,7 @@ def test_recovered_wait_recomputes_from_the_authored_absolute_deadline(
         _EFFECT_FLOWS["wait"],
     )
     recovered = run_module._replay_run_log(loaded, log)
-    assert recovered.flow.wiring["effect"]["until"] == _WAIT_DEADLINE
+    assert recovered.flow.wiring["effect"]["until"] == Binding(_WAIT_DEADLINE)
 
     prepared = prepare_run_resumed(recovered, num_workers=0)
     commit_prepared(log, recovered, prepared)

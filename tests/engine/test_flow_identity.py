@@ -20,6 +20,7 @@ from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.case import Case, CaseNode
 from agent_composer.nodes.code import CodeNode
+from agent_composer.nodes.contracts import Binding
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.loop import LoopNode
@@ -1348,10 +1349,10 @@ def test_uri_redaction_is_scoped_away_from_prompts_code_and_model_labels():
 def test_flow_fingerprint_redacts_uri_credentials_in_wiring():
     first = _fragment()
     second = copy.deepcopy(first)
-    first.wiring["body"]["x"] = (
+    first.wiring["body"]["x"] = Binding(
         "https://first-user:first-secret@example.test/path?token=first-token"
     )
-    second.wiring["body"]["x"] = (
+    second.wiring["body"]["x"] = Binding(
         "https://second-user:second-secret@example.test/path?token=second-token"
     )
 
@@ -1479,12 +1480,14 @@ output: ${step.output}
 def test_embedded_connection_binding_keeps_endpoint_semantics():
     first = _fragment()
     changed = copy.deepcopy(first)
-    first.wiring["body"]["connection_string"] = (
+    first.wiring["body"]["connection_string"] = Binding(
         "postgres://${input.primary_user}:${input.primary_password}@db.example/app"
     )
-    changed.wiring["body"]["connection_string"] = first.wiring["body"][
-        "connection_string"
-    ].replace("db.example", "other.example")
+    changed.wiring["body"]["connection_string"] = Binding(
+        first.wiring["body"]["connection_string"].source.replace(
+            "db.example", "other.example"
+        )
+    )
 
     assert flow_fingerprint(first) != flow_fingerprint(changed)
 
@@ -1492,10 +1495,10 @@ def test_embedded_connection_binding_keeps_endpoint_semantics():
 def test_encoded_binding_like_uri_credentials_remain_literal():
     first = _fragment()
     rotated = copy.deepcopy(first)
-    first.wiring["body"]["endpoint"] = (
+    first.wiring["body"]["endpoint"] = Binding(
         "https://api.example/v1?token=%24%7Bfirst.secret%7D&region=us"
     )
-    rotated.wiring["body"]["endpoint"] = (
+    rotated.wiring["body"]["endpoint"] = Binding(
         "https://api.example/v1?token=%24%7Bsecond.secret%7D&region=us"
     )
 
@@ -1506,10 +1509,10 @@ def test_encoded_binding_like_uri_credentials_remain_literal():
 def test_credential_binding_marker_redacts_literal_operands():
     first = _fragment()
     rotated = copy.deepcopy(first)
-    first.wiring["body"]["authorization"] = (
+    first.wiring["body"]["authorization"] = Binding(
         'Bearer ${input.primary_token:-"first-secret"}'
     )
-    rotated.wiring["body"]["authorization"] = (
+    rotated.wiring["body"]["authorization"] = Binding(
         'Bearer ${input.primary_token:-"second-secret"}'
     )
 
@@ -1517,17 +1520,19 @@ def test_credential_binding_marker_redacts_literal_operands():
     assert "first-secret" not in json.dumps(flow_manifest(first), sort_keys=True)
 
     changed = copy.deepcopy(rotated)
-    changed.wiring["body"]["authorization"] = changed.wiring["body"][
-        "authorization"
-    ].replace("primary_token", "backup_token")
+    changed.wiring["body"]["authorization"] = Binding(
+        changed.wiring["body"]["authorization"].source.replace(
+            "primary_token", "backup_token"
+        )
+    )
     assert flow_fingerprint(first) != flow_fingerprint(changed)
 
 
 def test_credential_binding_marker_keeps_http_auth_scheme_semantics():
     first = _fragment()
     changed = copy.deepcopy(first)
-    first.wiring["body"]["authorization"] = "Bearer ${input.token}"
-    changed.wiring["body"]["authorization"] = "Basic ${input.token}"
+    first.wiring["body"]["authorization"] = Binding("Bearer ${input.token}")
+    changed.wiring["body"]["authorization"] = Binding("Basic ${input.token}")
 
     assert flow_fingerprint(first) != flow_fingerprint(changed)
     manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
@@ -1555,8 +1560,8 @@ def test_credential_binding_marker_redacts_unsafe_literal_runs(
 ):
     first = _fragment()
     rotated = copy.deepcopy(first)
-    first.wiring["body"][slot] = first_source
-    rotated.wiring["body"][slot] = rotated_source
+    first.wiring["body"][slot] = Binding(first_source)
+    rotated.wiring["body"][slot] = Binding(rotated_source)
 
     assert flow_fingerprint(first) == flow_fingerprint(rotated)
     manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
@@ -1595,8 +1600,12 @@ def test_binding_like_static_credentials_remain_literal():
             first.nodes["step"].env["auth"] = {"password": "${first.secret}"}
             rotated.nodes["step"].env["auth"] = {"password": "${second.secret}"}
         else:
-            first.wiring["step"]["auth"] = {"password": "${first.secret}"}
-            rotated.wiring["step"]["auth"] = {"password": "${second.secret}"}
+            first.wiring["step"]["auth"] = Binding(
+                {"password": "${first.secret}"}
+            )
+            rotated.wiring["step"]["auth"] = Binding(
+                {"password": "${second.secret}"}
+            )
 
         assert flow_fingerprint(first) == flow_fingerprint(rotated)
         manifest_text = json.dumps(flow_manifest(first), sort_keys=True)
@@ -1638,8 +1647,8 @@ def test_flow_fingerprint_redacts_model_weights_uri_credentials():
 def test_wait_fingerprint_and_expansion_digest_cover_absolute_until_wiring():
     first = _single_node_flow(WaitNode("node"))
     second = _single_node_flow(WaitNode("node"))
-    first.wiring["node"] = {"until": "2026-01-01T00:00:00+00:00"}
-    second.wiring["node"] = {"until": "2026-01-02T00:00:00+00:00"}
+    first.wiring["node"] = {"until": Binding("2026-01-01T00:00:00+00:00")}
+    second.wiring["node"] = {"until": Binding("2026-01-02T00:00:00+00:00")}
 
     assert flow_fingerprint(first) != flow_fingerprint(second)
     assert expansion_digest(first) != expansion_digest(second)
@@ -2071,7 +2080,7 @@ def _replace_body(fragment: Flow) -> None:
         lambda fragment: setattr(fragment, "end_id", "body"),
         _replace_body,
         lambda fragment: setattr(fragment, "edges", list(reversed(fragment.edges))),
-        lambda fragment: fragment.wiring["body"].__setitem__("x", 2),
+        lambda fragment: fragment.wiring["body"].__setitem__("x", Binding(2)),
         lambda fragment: fragment.edges.append(
             Edge("entry->terminal", "entry", "terminal", ordering=True)
         ),

@@ -39,6 +39,10 @@ Hold this model whenever you design anything:
 - Source-neutral semantic operations live in `nodes/contracts.py`: `Binding`,
   `Parameter`, `Assertion`, and `ValueContract` carry optional opaque origins;
   `typesys.Type` remains provenance-free.
+- Compiled flow-owned wiring has one shape: `Flow` construction wraps each
+  direct source as `Binding`, and `FlowOutput.binding` owns declared outputs.
+  Python builders may pass raw values at construction, but must not write raw
+  values into an already-constructed flow.
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
   it does not rewrite the graph at runtime.
 

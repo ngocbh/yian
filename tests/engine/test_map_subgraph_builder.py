@@ -12,6 +12,7 @@ the list-END and that the synthetic start wires straight to it (so it schedules 
 
 from agent_composer.compile.expand import map_callsite, map_subgraph, ns
 from agent_composer.compile.model import END_ID, START_ID, Flow
+from agent_composer.nodes.contracts import Binding
 
 from tests.engine.test_expand import _child_flow
 
@@ -44,7 +45,7 @@ def test_map_subgraph_matches_grow_map_type():
     assert set(end_wiring) == {"e0", "e1"}
     for i in range(2):
         out_id = ns(map_callsite("m0", i), child.end_id)
-        assert end_wiring[f"e{i}"] == f"${{{out_id}.output}}"
+        assert end_wiring[f"e{i}"] == Binding(f"${{{out_id}.output}}")
 
     # The synthetic start fans out to EVERY element START via an ordering edge (its sole gate).
     for i in range(2):

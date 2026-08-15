@@ -48,8 +48,8 @@ def test_terminal_output_surface():
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final", "n": 7})],
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],
         outputs=[
-            FlowOutput(name="output", from_="${t.output.output}"),
-            FlowOutput(name="n", from_="${t.output.n}"),
+            FlowOutput(name="output", binding="${t.output.output}"),
+            FlowOutput(name="n", binding="${t.output.n}"),
         ],
     )
     events = _run(_engine(g))
@@ -76,7 +76,7 @@ def test_terminal_output_coalesce_returns_first_non_none():
     g = _graph(
         [FuncNode("b", lambda p: "B-RAN")],
         [(START_ID, "b"), ("b", END_ID)],
-        outputs=[FlowOutput(name="result", from_="${a.output | b.output}")],
+        outputs=[FlowOutput(name="result", binding="${a.output | b.output}")],
     )
     events = _run(_engine(g))
     assert events[-1].output == "B-RAN"
@@ -87,7 +87,7 @@ def test_terminal_output_default_when_ref_none():
     g = _graph(
         [FuncNode("a", lambda p: {})],
         [(START_ID, "a"), ("a", END_ID)],
-        outputs=[FlowOutput(name="result", from_='${missing.output:-"fallback"}')],
+        outputs=[FlowOutput(name="result", binding='${missing.output:-"fallback"}')],
     )
     events = _run(_engine(g))
     assert events[-1].output == "fallback"
@@ -98,7 +98,7 @@ def test_terminal_output_literal_string_passthrough():
     g = _graph(
         [FuncNode("a", lambda p: {})],
         [(START_ID, "a"), ("a", END_ID)],
-        outputs=[FlowOutput(name="result", from_="plain literal")],
+        outputs=[FlowOutput(name="result", binding="plain literal")],
     )
     events = _run(_engine(g))
     assert events[-1].output == "plain literal"
@@ -109,7 +109,7 @@ def test_terminal_output_literal_numeric_passthrough():
     g = _graph(
         [FuncNode("a", lambda p: {})],
         [(START_ID, "a"), ("a", END_ID)],
-        outputs=[FlowOutput(name="result", from_=7)],
+        outputs=[FlowOutput(name="result", binding=7)],
     )
     events = _run(_engine(g))
     assert events[-1].output == 7
@@ -123,8 +123,8 @@ def test_terminal_output_flowoutput_carrier_like_iofield():
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final", "n": 7})],
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],
         outputs=[
-            FlowOutput(name="output", from_="${t.output.output}"),
-            FlowOutput(name="n", from_="${t.output.n}"),
+            FlowOutput(name="output", binding="${t.output.output}"),
+            FlowOutput(name="n", binding="${t.output.n}"),
         ],
     )
     events = _run(_engine(g))
@@ -136,7 +136,7 @@ def test_terminal_output_iofield_still_resolves():
     g = _graph(
         [FuncNode("t", lambda p: {"output": "final"})],
         [(START_ID, "t"), ("t", END_ID)],
-        outputs=[FlowOutput(name="result", from_="${t.output.output}")],
+        outputs=[FlowOutput(name="result", binding="${t.output.output}")],
     )
     events = _run(_engine(g))
     assert events[-1].output == "final"

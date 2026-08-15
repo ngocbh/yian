@@ -29,6 +29,7 @@ from agent_composer.compose.nodes.case import _data_edges as case_data_edges
 from agent_composer.compose.nodes.resolver import _output_value_type
 from agent_composer.compose.validate.call_types import check_ref_map_types
 from agent_composer.compose.validate.references import validate_references
+from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import Binding
@@ -67,6 +68,167 @@ def _manifest_compiled_output(value: object) -> CompiledFlow:
     )
 
 
+def test_flow_construction_normalizes_direct_wiring_values() -> None:
+    """Stored flow wiring is canonical without copying semantic payloads."""
+    payload = {"literal": ["kept-by-identity"]}
+    existing = Binding("${producer.output}", _origin("existing"))
+    nested = Binding(existing, _origin("outer"))
+    authored = {
+        "sink": {
+            "raw": payload,
+            "existing": existing,
+            "nested": nested,
+        }
+    }
+
+    flow = Flow(nodes={"sink": Node("sink")}, edges=[], wiring=authored)
+
+    assert flow.wiring is not authored
+    assert flow.wiring["sink"] is not authored["sink"]
+    assert flow.wiring["sink"]["raw"] == Binding(payload)
+    assert flow.wiring["sink"]["raw"].source is payload
+    assert flow.wiring["sink"]["existing"] is existing
+    assert flow.wiring["sink"]["nested"] is nested
+
+
+def test_compiled_flow_from_parts_normalizes_direct_wiring_values() -> None:
+    """The public compiled-graph constructor delegates to the same boundary."""
+    existing = Binding(7, _origin("count"))
+
+    flow = CompiledFlow.from_parts(
+        nodes={"sink": Node("sink")},
+        edges=[],
+        wiring={"sink": {"raw": 3, "existing": existing}},
+    )
+
+    assert flow.wiring["sink"]["raw"] == Binding(3)
+    assert flow.wiring["sink"]["existing"] is existing
+
+
+@pytest.mark.parametrize("constructor", ["flow", "compiled"])
+@pytest.mark.parametrize(
+    ("wiring", "message"),
+    [
+        ({1: {"value": "raw"}}, "node id"),
+        ({"sink": {1: "raw"}}, "parameter name"),
+    ],
+)
+def test_flow_construction_rejects_non_string_wiring_keys(
+    constructor: str,
+    wiring: dict[object, dict[object, object]],
+    message: str,
+) -> None:
+    """Both model entry points reject keys outside the compiled IR contract."""
+    nodes = {"sink": Node("sink")}
+
+    with pytest.raises(TypeError, match=message):
+        if constructor == "flow":
+            Flow(nodes=nodes, edges=[], wiring=wiring)  # type: ignore[arg-type]
+        else:
+            CompiledFlow.from_parts(  # type: ignore[arg-type]
+                nodes=nodes,
+                edges=[],
+                wiring=wiring,
+            )
+
+
+def test_add_subgraph_normalizes_wiring_and_preserves_existing_binding() -> None:
+    """Programmatic growth enters the same canonical stored representation."""
+    flow = CompiledFlow.from_parts(nodes={"base": Node("base")}, edges=[])
+    existing = Binding("${base.output}", _origin("child-value"))
+
+    flow.add_subgraph(
+        nodes={"child": Node("child")},
+        edges=[Edge("base->child", "base", "child", input_group="value")],
+        wiring={"child": {"raw": 4, "existing": existing}},
+    )
+
+    assert flow.wiring["child"]["raw"] == Binding(4)
+    assert flow.wiring["child"]["existing"] is existing
+
+
+@pytest.mark.parametrize(
+    ("wiring", "message"),
+    [
+        ({1: {"value": "raw"}}, "node id"),
+        ({"child": {1: "raw"}}, "parameter name"),
+    ],
+)
+def test_add_subgraph_rejects_bad_wiring_before_mutating_topology(
+    wiring: dict[object, dict[object, object]],
+    message: str,
+) -> None:
+    """An invalid splice cannot leave nodes, edges, or wiring partially installed."""
+    base = Node("base")
+    flow = CompiledFlow.from_parts(
+        nodes={"base": base},
+        edges=[],
+        wiring={"base": {}},
+    )
+    before_nodes = dict(flow.nodes)
+    before_edges = list(flow.edges)
+    before_wiring = dict(flow.wiring)
+
+    with pytest.raises(TypeError, match=message):
+        flow.add_subgraph(  # type: ignore[arg-type]
+            nodes={"child": Node("child")},
+            edges=[Edge("base->child", "base", "child")],
+            wiring=wiring,
+        )
+
+    assert flow.nodes == before_nodes
+    assert flow.edges == before_edges
+    assert flow.wiring == before_wiring
+
+
+def test_flow_output_normalizes_one_binding_and_keeps_a_source_view() -> None:
+    """Declared outputs own carriers while legacy reads expose only the source."""
+    payload = {"literal": ["kept-by-identity"]}
+    raw = FlowOutput("result", payload)
+    existing = Binding("${producer.output}", _origin("declared-output"))
+    wrapped = FlowOutput("result", existing)
+
+    assert raw.binding == Binding(payload)
+    assert raw.binding.source is payload
+    assert raw.from_ is payload
+    assert wrapped.binding is existing
+    assert wrapped.from_ is existing.source
+
+    with pytest.raises(AttributeError):
+        wrapped.from_ = "changed"  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        FlowOutput(name="result", from_="legacy-keyword")  # type: ignore[call-arg]
+
+
+def test_loaded_compose_flow_has_only_canonical_binding_storage() -> None:
+    """The YAML front end crosses into one uniform compiled representation."""
+    loaded = load_flow(
+        """
+id: canonical-bindings
+name: Canonical bindings
+input:
+  topic: str
+nodes:
+  emit:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input:
+      topic: ${input.topic}
+    output: str
+output: ${emit.output}
+"""
+    )
+
+    assert all(
+        isinstance(binding, Binding)
+        for node_wiring in loaded.compiled.wiring.values()
+        for binding in node_wiring.values()
+    )
+    assert all(
+        isinstance(output.binding, Binding) for output in loaded.compiled.outputs
+    )
+
+
 def test_data_edge_inference_is_identical_for_raw_and_wrapped_sources() -> None:
     """Carrier provenance must not change producers, groups, or optionality."""
     source = "${producer.output}"
@@ -93,7 +255,7 @@ def test_producer_scan_unwraps_exactly_one_carrier_layer() -> None:
 def test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring() -> None:
     """Boundary dependencies use source semantics without discarding provenance."""
     wrapped = Binding("${producer.output}", _origin("flow-output"))
-    output = FlowOutput(name="result", from_=wrapped)
+    output = FlowOutput(name="result", binding=wrapped)
 
     _nodes, edges, wiring = synthesize_boundary_graph(
         [],
@@ -302,6 +464,20 @@ def test_manifest_unwraps_exactly_one_binding_layer(site: str) -> None:
     )
 
     with pytest.raises(TypeError, match="Binding"):
+        flow_manifest(flow)
+
+
+@pytest.mark.parametrize("site", ["wiring", "output"])
+def test_manifest_rejects_raw_values_that_bypass_construction(site: str) -> None:
+    """Identity serialization fails loudly when mutation violates canonical IR."""
+    if site == "wiring":
+        flow = _manifest_fragment("value")
+        flow.wiring["terminal"]["result"] = "bypass"  # type: ignore[assignment]
+    else:
+        flow = _manifest_compiled_output("value")
+        object.__setattr__(flow.outputs[0], "binding", "bypass")
+
+    with pytest.raises(TypeError, match="expected Binding"):
         flow_manifest(flow)
 
 

@@ -9,6 +9,7 @@ from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, 
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Binding
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.start import StartNode
 
@@ -58,7 +59,7 @@ def test_continue_splices_next_driver_and_edge():
     assert "lp~1" in sg.nodes
     body_end = ns(map_callsite("lp", 0), END_ID)
     assert any(e.from_ == body_end and e.to == "lp~1" for e in sg.edges)
-    assert sg.wiring["lp~1"] == {"x": f"${{{body_end}.output.x}}"}
+    assert sg.wiring["lp~1"] == {"x": Binding(f"${{{body_end}.output.x}}")}
 
 
 def test_continue_seeds_only_fields_declared_by_the_body_start():
@@ -75,11 +76,11 @@ def test_continue_seeds_only_fields_declared_by_the_body_start():
         driver,
     )
 
-    assert sg.wiring[sg.start_id] == {"x": 1}
+    assert sg.wiring[sg.start_id] == {"x": Binding(1)}
     body_end = ns(map_callsite("lp", 0), END_ID)
     assert sg.wiring[driver.id] == {
-        "x": f"${{{body_end}.output.x}}",
-        "exited": f"${{{body_end}.output.exited}}",
+        "x": Binding(f"${{{body_end}.output.x}}"),
+        "exited": Binding(f"${{{body_end}.output.exited}}"),
     }
 
 

@@ -11,13 +11,15 @@ from threading import TIMEOUT_MAX
 from typing import Any
 
 from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
+from agent_composer.nodes.contracts import binding_source
 from agent_composer.typesys.pool import VariablePool
 
 
 def resolve_until(until_src: Any, pool: VariablePool) -> str:
-    """Resolve a WAIT ``until`` source to an ISO date or datetime string.
+    """Resolve a raw or carrier-wrapped WAIT source to an ISO date/datetime.
 
-    A ``${...}`` binding or literal is evaluated against ``pool``. Typed
+    Exactly one semantic ``Binding`` layer is removed before a ``${...}``
+    expression or literal is evaluated against ``pool``. Typed
     ``date``/``datetime`` values resolve to ISO strings; a raw object exposing
     ``isoformat()`` is formatted defensively. The WAIT body parses and
     normalizes the resulting absolute deadline.
@@ -25,13 +27,14 @@ def resolve_until(until_src: Any, pool: VariablePool) -> str:
     from agent_composer.expr import eval_binding
     from agent_composer.expr.expressions import resolve_reference
 
-    value = eval_binding(until_src, lambda path: resolve_reference(path, pool))
+    source = binding_source(until_src)
+    value = eval_binding(source, lambda path: resolve_reference(path, pool))
     if isinstance(value, str):
         return value
     if hasattr(value, "isoformat"):
         return value.isoformat()
     raise ValueError(
-        f"wait `until` ({until_src!r}) did not resolve to a date/datetime: {value!r}"
+        f"wait `until` ({source!r}) did not resolve to a date/datetime: {value!r}"
     )
 
 

@@ -1,7 +1,9 @@
 from agent_composer.compile.expand import clone_child
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
 from agent_composer.compose.helpers.types import InputDecl, read_type
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import NodeKind, Output, ParamDecl
+from agent_composer.nodes.contracts import Binding
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.eval_node import EvaluationFailure
@@ -56,6 +58,33 @@ def test_clone_child_namespaces_ids():
     assert any(e.id == "each/head->tail#0" for e in cloned.edges)
     # start_id = the namespaced child START_ID (the sole seed point), NOT each/head
     assert cloned.start_id == "each/__start__"
+
+
+def test_clone_child_rewrites_one_binding_layer_and_preserves_its_origin():
+    """Child namespacing rewrites semantic source text without replacing provenance."""
+    child = _single()
+    origin = OriginRef("child-tail-r")
+    child.wiring["tail"]["r"] = Binding("${head.output.r}", origin)
+
+    cloned = clone_child(child, callsite="each", record={"topic": "ACME"})
+
+    rewritten = cloned.wiring["each/tail"]["r"]
+    assert rewritten == Binding("${each/head.output.r}", origin)
+    assert rewritten.origin is origin
+    assert rewritten is not child.wiring["tail"]["r"]
+
+
+def test_clone_child_does_not_rewrite_a_nested_binding_payload():
+    """Only the outer IR carrier is interpreted; an inner carrier is user data."""
+    child = _single()
+    inner = Binding("${head.output.r}", OriginRef("inner"))
+    child.wiring["tail"]["r"] = Binding(inner, OriginRef("outer"))
+
+    cloned = clone_child(child, callsite="each", record={"topic": "ACME"})
+
+    rewritten = cloned.wiring["each/tail"]["r"]
+    assert isinstance(rewritten, Binding)
+    assert rewritten.source is inner
 
 
 def test_clone_child_seeds_start_with_call_args_as_edges():

@@ -31,6 +31,7 @@ from agent_composer.compile.model import Edge, END_ID, Flow, START_ID
 from agent_composer.expr import rewrite_template_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.nodes.base import Node, NodeKind, ParamDecl
+from agent_composer.nodes.contracts import Binding, binding_source
 from agent_composer.nodes.end.node import EndNode
 from agent_composer.nodes.ids import map_callsite, ns
 from agent_composer.nodes.start.node import StartNode
@@ -58,7 +59,11 @@ def _whole_span(src: str) -> Optional[str]:
 
 
 def _rens_internal(src: Any, callsite: str) -> Any:
-    """Re-namespace one binding source under `callsite` — NO baking.
+    """Re-namespace one raw or carrier-wrapped source under `callsite`.
+
+    Exactly one ``Binding`` layer is semantic IR: its source is rewritten and a
+    new carrier retains the same origin. A nested carrier is an opaque payload
+    and is not recursively unwrapped. Raw inputs continue to produce raw outputs.
 
     Singular only:
     - `${input.<k>...}`   -> `${<callsite>/<start>.output.<k>...}` (namespaced child
@@ -71,8 +76,10 @@ def _rens_internal(src: Any, callsite: str) -> Any:
     Routes every `${...}` span through `rewrite_template_refs` + the ONE parse tree, so an
     embedded / coalesce / whole-expression span is re-namespaced leaf-by-leaf (the old flat
     `${...}` regex only handled a simple single-path span)."""
-    if not isinstance(src, str):
-        return src
+    wrapped = src if isinstance(src, Binding) else None
+    source = binding_source(src)
+    if not isinstance(source, str):
+        return Binding(source, wrapped.origin) if wrapped is not None else source
 
     def _rename(path: str) -> "str | None":
         parts = path.split(".")
@@ -88,7 +95,8 @@ def _rens_internal(src: Any, callsite: str) -> Any:
             return new + ("." + ".".join(parts[2:]) if len(parts) > 2 else "")
         return None  # system.X / any other head untouched
 
-    return rewrite_template_refs(src, _rename)
+    rewritten = rewrite_template_refs(source, _rename)
+    return Binding(rewritten, wrapped.origin) if wrapped is not None else rewritten
 
 
 def _lower_spawner_post_asserts(

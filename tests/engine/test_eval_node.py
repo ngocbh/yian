@@ -6,9 +6,12 @@ belong to ``FlowEngine`` rather than this pure evaluation seam.
 """
 
 from agent_composer.compile.model import START_ID
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route
 from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Binding
 from agent_composer.nodes.map import MapNode
+from agent_composer.nodes.wait import WaitNode
 from agent_composer.runtime.eval_node import EvaluationFailure
 from agent_composer.typesys.pool import VariablePool
 from tests.engine._fakes import BranchNode, FailNode, FuncNode, drive, stamp_reads
@@ -62,6 +65,59 @@ def test_binding_failure_returns_diagnostic_evaluation_failure():
 
     assert isinstance(result, EvaluationFailure)
     assert result.error_type == "BindingError"
+
+
+def test_binding_carrier_resolves_at_the_node_read_boundary():
+    """Ordinary parameter binding evaluates the carrier source without mutating it."""
+    pool = VariablePool()
+    pool.set(START_ID, {"value": "resolved"})
+    origin = OriginRef("binding")
+    wrapped = Binding("${input.value}", origin)
+    node = FuncNode("n", lambda inputs: inputs["x"], reads={"x": wrapped})
+
+    result = drive(node, pool)
+
+    assert result == Output("resolved")
+    assert node._wiring_src["x"] is wrapped
+    assert wrapped.origin is origin
+
+
+def test_binding_carrier_unwraps_exactly_one_layer():
+    """A nested carrier remains an opaque user payload after the outer IR layer."""
+    pool = VariablePool()
+    pool.set(START_ID, {"value": "must-not-resolve"})
+    inner = Binding("${input.value}", OriginRef("inner"))
+    outer = Binding(inner, OriginRef("outer"))
+    node = FuncNode("n", lambda inputs: inputs["x"], reads={"x": outer})
+
+    result = drive(node, pool)
+
+    assert isinstance(result, Output)
+    assert result.value == inner
+
+
+def test_map_over_accepts_a_binding_carrier():
+    """MAP's reserved iteration source uses the ordinary binding read seam."""
+    node = MapNode("m", flow_id="child", child=object())
+    node._wiring_src = {
+        "over": Binding(["first", "second"], OriginRef("map-over"))
+    }
+
+    result = drive(node)
+
+    assert result == Grow(seed=[{}, {}])
+
+
+def test_wait_until_accepts_a_binding_carrier():
+    """WAIT's dedicated resolver accepts the carrier shape it bypasses elsewhere."""
+    node = WaitNode("wait")
+    node._wiring_src = {
+        "until": Binding("2000-01-01T00:00:00+00:00", OriginRef("wait-until"))
+    }
+
+    result = drive(node)
+
+    assert result == Output(None)
 
 
 def test_node_raise_returns_evaluation_failure():
@@ -138,15 +194,18 @@ def test_post_assert_isolated_from_node_input_mutation():
 
 
 def test_map_over_not_a_list_message_is_byte_identical():
+    """Raw and carrier-wrapped sources produce the same origin-neutral error text."""
     pool = VariablePool()
     pool.set(START_ID, {"bad": "notalist"})
-    node = MapNode("m", flow_id="f")
-    node._wiring_src = {"over": "${input.bad}"}
+    raw_source = "${input.bad}"
+    for source in (raw_source, Binding(raw_source, OriginRef("map-over"))):
+        node = MapNode("m", flow_id="f")
+        node._wiring_src = {"over": source}
 
-    result = drive(node, pool)
+        result = drive(node, pool)
 
-    assert isinstance(result, EvaluationFailure)
-    assert result.error == MAP_OVER_NOT_LIST_FMT.format(
-        id="m",
-        src="${input.bad}",
-    )
+        assert isinstance(result, EvaluationFailure)
+        assert result.error == MAP_OVER_NOT_LIST_FMT.format(
+            id="m",
+            src=raw_source,
+        )

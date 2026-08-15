@@ -11,9 +11,11 @@ import agent_composer.runtime.state as state_module
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.manifest import expansion_digest
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, NodeState, START_ID
+from agent_composer.diagnostics import OriginRef
 from agent_composer.events import NodeExpanded
 from agent_composer.nodes.base import Grow, Node, NodeKind
 from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Binding
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.loop import LoopNode
@@ -805,6 +807,56 @@ def test_growth_rejects_invalid_fragments_atomically(case: str):
     assert log.next_sequence == 4
 
 
+def test_growth_reference_validation_reads_a_binding_source(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Valid wrapped references reach the same closed-reference scanner as raw text."""
+    state, _log = _initialized_spawner()
+    fragment = _unknown_reference_fragment("spawn")
+    source = f"${{{fragment.start_id}.output}}"
+    fragment.wiring[fragment.end_id]["value"] = Binding(
+        source,
+        OriginRef("growth-reference"),
+    )
+    scanned: list[str] = []
+    scan_refs = state_module.expr_refs_of
+
+    def record_scan(value: str) -> list[str]:
+        """Record the unwrapped scanner input while delegating real classification."""
+        scanned.append(value)
+        return scan_refs(value)
+
+    monkeypatch.setattr(state_module, "expr_refs_of", record_scan)
+
+    node_ids, edge_ids = state_module._validate_growth_fragment_data(state, fragment)
+
+    assert node_ids == (fragment.start_id, fragment.end_id)
+    assert edge_ids == ("ref-edge",)
+    assert scanned == [source]
+
+
+def test_growth_rejects_a_binding_wrapped_unknown_reference_before_digesting():
+    """Wrapped bad references fail as node data before manifest identity is needed."""
+    state, log = _initialized_spawner()
+    fragment = _unknown_reference_fragment("spawn")
+    fragment.wiring[fragment.end_id]["value"] = Binding(
+        "${absent.output}",
+        OriginRef("unknown-growth-reference"),
+    )
+    before = _snapshot(state)
+
+    with pytest.raises(state_module._NodeDataError, match="unknown namespace"):
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda _spawner, _seed: fragment,
+        )
+
+    assert _snapshot(state) == before
+    assert log.next_sequence == 4
+
+
 @pytest.mark.parametrize(
     ("grow", "builder", "error", "node_data"),
     [
@@ -1152,6 +1204,30 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
             executing,
             Grow(seed={}, prune=prune_ids),
             lambda node, seed: _fragment(node.id),
+        )
+
+    assert _snapshot(state) == before
+    assert log.next_sequence == 4
+
+
+def test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node():
+    """A wrapped reference cannot hide a live dependency on removed topology."""
+    state, log = _initialized_spawner()
+    old_id = _install_settled_overlay(state)[0]
+    state.flow.wiring[END_ID] = {
+        "value": Binding(
+            f"${{{old_id}.output}}",
+            OriginRef("pruned-dependency"),
+        )
+    }
+    before = _snapshot(state)
+
+    with pytest.raises(ValueError, match="wiring depends on pruned node"):
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}, prune=frozenset({old_id})),
+            lambda node, _seed: _fragment(node.id),
         )
 
     assert _snapshot(state) == before

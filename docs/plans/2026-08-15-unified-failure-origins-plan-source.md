@@ -241,9 +241,11 @@ object or a returned overlay value cannot change the overlay.
 
 The accepted virtual algebra is exact `dict`, `list`, `tuple`, `set`,
 `frozenset`, and SafeLoader scalar values (`None`, `bool`, `int`, `float`, `str`,
-`bytes`, `date`, and `datetime`), recursively. Custom objects and container
-subclasses raise `TypeError`; a future Python graph front end does not pass
-through this YAML-specific cursor layer.
+`bytes`, `date`, and `datetime`), recursively. A datetime is naive or uses an
+exact immutable `datetime.timezone`, matching SafeLoader output; custom timezone
+graphs are rejected. Custom objects and container subclasses raise `TypeError`;
+a future Python graph front end does not pass through this YAML-specific cursor
+layer.
 
 ### Complete `SourceCursor` API
 

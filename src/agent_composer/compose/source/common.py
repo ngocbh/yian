@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, TypeAlias
 
 from agent_composer.events import SourceRange
@@ -196,6 +195,15 @@ def _snapshot_safe_value(value: Any) -> Any:
         current = pending.pop()
         current_type = type(current)
         if current_type in _SAFE_SCALAR_TYPES:
+            if (
+                current_type is datetime
+                and current.tzinfo is not None
+                and type(current.tzinfo) is not timezone
+            ):
+                raise TypeError(
+                    "source cursors accept only exact SafeLoader value types; "
+                    "got datetime with a non-SafeLoader timezone"
+                )
             continue
         if current_type not in _SAFE_CONTAINER_TYPES:
             raise TypeError(
@@ -221,14 +229,19 @@ def _snapshot_safe_value(value: Any) -> Any:
                 copies[identity] = set()
             pending.extend(current)
 
-    scalar_copy_memo: dict[int, Any] = {}
+    temporal_copies: dict[int, date | datetime] = {}
 
     def copied_item(item: Any) -> Any:
         """Return an atomic value or its already-allocated container copy."""
 
         item_type = type(item)
         if item_type in (date, datetime):
-            return copy.deepcopy(item, scalar_copy_memo)
+            identity = id(item)
+            copied = temporal_copies.get(identity)
+            if copied is None:
+                copied = item.replace()
+                temporal_copies[identity] = copied
+            return copied
         if item_type in _SAFE_SCALAR_TYPES:
             return item
         return copies[id(item)]

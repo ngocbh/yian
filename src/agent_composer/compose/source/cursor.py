@@ -114,6 +114,7 @@ class SourceCursor:
             value (`Any`):
                 Value in the exact recursive SafeLoader algebra: built-in
                 containers and YAML-safe scalar types, without subclasses.
+                Datetimes are naive or use exact `datetime.timezone` values.
 
         Returns:
             `SourceCursor`:

@@ -1,7 +1,7 @@
 """Tests for immutable, occurrence-aware YAML source cursors."""
 
 from collections.abc import Mapping, Sequence, Set
-from datetime import date, datetime, timedelta, tzinfo
+from datetime import date, datetime, timedelta, timezone, tzinfo
 
 import pytest
 
@@ -140,8 +140,8 @@ def test_virtual_copy_preserves_tuple_through_list_cycle():
     assert copied is copied[0][0]
 
 
-def test_virtual_copy_isolates_date_and_mutable_datetime_timezone():
-    class MutableTimezone(tzinfo):
+def test_virtual_copy_isolates_temporal_scalars_and_rejects_custom_timezone():
+    class CustomTimezone(tzinfo):
         def __init__(self, hours=0):
             self.hours = hours
 
@@ -153,7 +153,12 @@ def test_virtual_copy_isolates_date_and_mutable_datetime_timezone():
 
     shared_date = date(2026, 8, 15)
     date_cursor = SourceCursor.virtual(shared_date)
-    shared_datetime = datetime(2026, 8, 15, tzinfo=MutableTimezone(1))
+    shared_datetime = datetime(
+        2026,
+        8,
+        15,
+        tzinfo=timezone(timedelta(hours=1)),
+    )
     datetime_cursor = SourceCursor.virtual(shared_datetime)
     alias_cursor = SourceCursor.virtual(
         [
@@ -167,16 +172,21 @@ def test_virtual_copy_isolates_date_and_mutable_datetime_timezone():
     first_date = date_cursor.value
     second_date = date_cursor.value
     first_datetime = datetime_cursor.value
-    first_datetime.tzinfo.hours = 9
+    second_datetime = datetime_cursor.value
     aliased = alias_cursor.value
 
     assert first_date == second_date
     assert first_date is not second_date
+    assert first_datetime == second_datetime
+    assert first_datetime is not second_datetime
     assert aliased[0] is aliased[1][0]
     assert aliased[0] is not shared_datetime
     assert aliased[2] is next(iter(aliased[3]))
     assert aliased[2] is not shared_date
-    assert datetime_cursor.value.utcoffset() == timedelta(hours=1)
+    with pytest.raises(TypeError, match="SafeLoader value"):
+        SourceCursor.virtual(
+            datetime(2026, 8, 15, tzinfo=CustomTimezone(1))
+        )
 
 
 def test_value_view_is_recursive_and_read_only():

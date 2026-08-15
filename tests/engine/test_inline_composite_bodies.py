@@ -26,7 +26,7 @@ from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.events import SourceRange
+from agent_composer.events import RunFailed, SourceRange
 from agent_composer.run import run_flow
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -2090,6 +2090,154 @@ output: ${each.output}
     message = str(caught.value)
     assert "`asserts:` is not allowed on a mapped call" in message
     assert INLINE_FLOW_PREFIX not in message
+
+
+def test_inline_outer_env_stays_on_driver_and_child_env_stays_inner():
+    loaded = load_flow(
+        """id: inline-env-ownership
+name: inline_env_ownership
+env:
+  FLOW_LEVEL: root
+nodes:
+  wrapper:
+    kind: call
+    env:
+      DRIVER_ONLY: outer
+    nodes:
+      inner:
+        kind: code
+        env:
+          CHILD_ONLY: inner
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ready
+        output: str
+    output: ${inner.output}
+output: ${wrapper.output}
+"""
+    )
+    wrapper = loaded.compiled.nodes["wrapper"]
+    inner = wrapper.child.nodes["inner"]
+
+    assert wrapper.env == {"FLOW_LEVEL": "root", "DRIVER_ONLY": "outer"}
+    assert inner.env == {"CHILD_ONLY": "inner"}
+
+
+@pytest.mark.parametrize(
+    "node_body",
+    [
+        """    kind: call
+    llm_config: {model: forbidden}
+    nodes:
+      inner:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input: {topic: ready}
+        output: str
+    output: ${inner.output}
+""",
+        """    kind: map
+    llm_config: {model: forbidden}
+    over: ${[1]}
+    nodes:
+      inner:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input: {topic: ready}
+        output: str
+    output: ${inner.output}
+""",
+        """    kind: loop
+    llm_config: {model: forbidden}
+    times: 1
+    input: {n: 0}
+    nodes:
+      inner:
+        kind: code
+        code: |
+          return {"n": inputs["n"] + 1}
+        input:
+          n: ${input.n}
+        output:
+          n: int
+    output: ${inner.output}
+""",
+    ],
+    ids=["call", "map", "loop"],
+)
+def test_inline_composites_reject_outer_llm_config_without_private_identity(
+    node_body: str,
+):
+    source = (
+        """id: inline-llm-config-rejected
+name: inline_llm_config_rejected
+nodes:
+  composite:
+"""
+        + node_body
+        + "output: ${composite.output}\n"
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert "field 'llm_config' is not allowed" in message
+    assert INLINE_FLOW_PREFIX not in message
+
+
+@pytest.mark.parametrize(
+    "node_body",
+    [
+        """    kind: call
+    asserts:
+      - ${output} == 999
+    nodes:
+      inner:
+        kind: code
+        code: |
+          return 1
+        output: int
+    output: ${inner.output}
+""",
+        """    kind: loop
+    times: 1
+    input:
+      n: 0
+      exited: false
+    asserts:
+      - ${output.n} == 999
+    nodes:
+      inner:
+        kind: code
+        code: tests.engine._compose_codefns:loop_bump
+        input:
+          n: ${input.n}
+          exited: ${input.exited}
+        output:
+          n: int
+          exited: bool
+    output: ${inner.output}
+""",
+    ],
+    ids=["call", "loop"],
+)
+def test_inline_call_and_loop_outer_post_asserts_still_fire(node_body: str):
+    source = (
+        """id: inline-outer-assert
+name: inline_outer_assert
+nodes:
+  composite:
+"""
+        + node_body
+        + "output: ${composite.output}\n"
+    )
+
+    result = run_flow(load_flow(source), {})
+
+    assert result.status == "failed"
+    failures = [event for event in result.events if isinstance(event, RunFailed)]
+    assert failures and failures[-1].error_type == "NodeAssertFailed"
 
 
 def test_inline_map_child_keeps_item_namespace_closed():

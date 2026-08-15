@@ -178,6 +178,66 @@ output: ${c.output}
     assert inner.llm_config == {"provider": "anthropic", "model": "claude-opus-4-8"}
 
 
+def test_named_and_inline_children_receive_the_same_llm_cascade():
+    named = load_flow(
+        """id: named-cascade
+name: named_cascade
+llm_config: {provider: openai}
+defs:
+  child:
+    nodes:
+      inner:
+        kind: agent
+        prompt: hi
+        llm_config: {temperature: 0.7}
+    output: ${inner.output}
+nodes:
+  invoke: {kind: call, call: child}
+output: ${invoke.output}
+"""
+    )
+    inline = load_flow(
+        """id: inline-cascade
+name: inline_cascade
+llm_config: {provider: openai}
+nodes:
+  invoke:
+    kind: call
+    nodes:
+      inner:
+        kind: agent
+        prompt: hi
+        llm_config: {temperature: 0.7}
+    output: ${inner.output}
+output: ${invoke.output}
+"""
+    )
+
+    caller = {"model": "caller-model"}
+    named_effective = resolve_llm_cascade(
+        named.compiled,
+        caller,
+        defaults=_DEFAULTS,
+    )
+    inline_effective = resolve_llm_cascade(
+        inline.compiled,
+        caller,
+        defaults=_DEFAULTS,
+    )
+
+    assert inline_effective == named_effective == {
+        "invoke/inner": {
+            "provider": "openai",
+            "model": "caller-model",
+            "temperature": 0.7,
+        }
+    }
+    assert (
+        inline.compiled.nodes["invoke"].child.nodes["inner"].llm_config
+        == named.compiled.nodes["invoke"].child.nodes["inner"].llm_config
+    )
+
+
 def test_nested_re_resolution_recomputes_from_own():
     # the riskier path — resolve_llm_cascade replaces node.child with a fresh deepcopy each
     # call, so re-running over a CALL must still recompute the inner agent from its OWN config

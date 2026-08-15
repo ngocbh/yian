@@ -93,7 +93,7 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 |---|---|---|
 | PyYAML construction and the private YAML node/occurrence graph | `compose/source` | every other compose phase, `compile`, `runtime` |
 | Stable location-aware navigation and immutable projections | public `SourceDocument` / `SourceCursor` contracts from `compose/source` | private document slots or PyYAML nodes |
-| Immutable opaque-origin resolution by retained occurrence | public `SourceCatalog` from `compose/source` | parallel range maps or another YAML parse |
+| Immutable document-local origin resolution by retained occurrence | public `SourceCatalog` plus its package-private builder in `compose/source` | parallel range maps, another YAML parse, or a premature cross-file resolver |
 | Semantic descriptors and flow sections | `compose/parse` consuming a document/cursor | another YAML construction pass |
 | Source-preserving inline extraction | `compose/desugar` projecting cursors | PyYAML and loader state |
 | Compiled-flow assembly | `compose/build` consuming descriptors and retained cursor sources | PyYAML and concrete loader implementation |
@@ -104,6 +104,13 @@ parser graph. A text-accepting convenience in `compose/parse` must delegate the
 single construction to `SourceDocument`. Source-aware parsing and inline extraction
 navigate its cursors; descriptors and nodes carry derived ranges afterward. No phase
 copies, renders, or reparses YAML to reconstruct source.
+
+The loader creates one package-private catalog builder per physical document and
+threads it through root, definition, and inline-body assembly. The conductor stamps
+authored node-header origins and freezes a snapshot on each
+`ComposedFlow._local_catalog`; generated nodes remain source-free. The private field
+cannot stand in for a returned-flow resolver until external child origins are rebased
+into the caller's lexical namespace.
 
 The loader owns two intentionally separate caches:
 

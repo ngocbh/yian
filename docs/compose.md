@@ -20,6 +20,7 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ read_typedefs         → the type registry (typedefs:)
   ├─ read_flow_inputs      → canonical Parameter values for input:
   ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered)
+  ├─ stamp authored headers → optional Node origins in one document-local catalog
   │
   ├─ desugar_inline_calls        ┐  rewrite author sugar into core nodes,
   ├─ desugar_adaptive_questions  │  minting synthetic nodes where needed.
@@ -79,7 +80,10 @@ takes one whole-nodes snapshot before projection so unchanged alias siblings sta
 builder maps deterministic typed semantic paths to opaque origins and retains each physical
 document occurrence plus an explicit key/value anchor. Resolution replays that occurrence
 into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and no YAML is
-reparsed or parallel range map created.
+reparsed or parallel range map created. The loader shares one builder across a physical
+document's root, `defs:`, and inline bodies. Each assembled `ComposedFlow` receives a frozen
+snapshot as private `_local_catalog` staging metadata. It is deliberately not a public,
+complete resolver yet: cached external-child origins still need lexical rebasing.
 
 External `uses:` resolution adds one reuse boundary. During a load graph, successfully
 compiled external flows are cached by resolved absolute path. A repeated alias or diamond
@@ -96,7 +100,7 @@ The pipeline has two representations of a node, and the split matters:
 |---|---|---|
 | what | a frozen record of *what you wrote* | the runtime object the engine calls |
 | where | `compose/nodes/<kind>.py` | `nodes/<kind>/` |
-| carries | raw fields + `SourceRange`s | `run()`, `output_contract`, params |
+| carries | raw fields + ranges + optional header origin | `run()`, contracts, optional origin |
 | lifetime | load-time only | lives through the whole run |
 
 `parse_nodes` produces descriptors; the desugar passes rewrite descriptors; `build`
@@ -153,7 +157,8 @@ node, wiring, edges = result.node, result.wiring, result.edges
 
 - the **node** carries only what it needs to run: its canonical `output_contract`,
   its sink `params` (formal names plus optional input contracts/default policy), and
-  render-only `range`/`field_ranges` for tracebacks. Descriptors derive a
+  an optional source-neutral authored-context `origin`. It also retains the legacy
+  render-only `range`/`field_ranges` traceback bridge. Descriptors derive a
   `ValueContract` directly; consumers retain it and project `.type` only inside
   semantic type algorithms.
 - the **wiring** is *flow-owned*: `{param → "${source}"}`. The node knows its parameter
@@ -204,7 +209,8 @@ the pipeline only ever sees a small set of kinds:
 
 Because desugaring is a descriptor-level rewrite, the synthetic nodes flow through
 `build`, edge inference, validation, and the DAG check exactly like hand-written ones —
-no special path downstream.
+no special path downstream. They remain origin-free because no authored node header
+corresponds to them; authored nodes inside retained inline bodies are stamped normally.
 
 ---
 
@@ -219,6 +225,10 @@ no special path downstream.
 - `asserts` — flow-level pre/post checks,
 - `source` — a render-only `SourceFrame` (the text + per-node ranges) that lets a
   runtime failure draw a caret back at your YAML, even across nested flow calls.
+
+Internally, `_local_catalog` retains the immutable document-local origin snapshot used
+while the source-neutral IR migration proceeds. The underscore is intentional: it cannot
+resolve origins embedded from external files until lexical rebasing is implemented.
 
 Hand it to [`run_flow()`](engine.md) and the interpreter takes over.
 

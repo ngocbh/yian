@@ -59,6 +59,7 @@ from agent_composer.compose.source import (
     SourceCursor,
     SourceDocument,
 )
+from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 
 
 def _restore_node_surface(nodes):
@@ -438,6 +439,7 @@ def _load_flow(
     search_paths,
     ctx: "_LoadCtx",
 ) -> ComposedFlow:
+    catalog_builder = _SourceCatalogBuilder()
     root = document.root
     text = document.text
     f = parse_file(document)
@@ -482,6 +484,7 @@ def _load_flow(
         external,
         f.uses,
         defs_cursor,
+        catalog_builder=catalog_builder,
     )
     callable_scope.eager_load_defs()
 
@@ -514,6 +517,7 @@ def _load_flow(
         source=source,
         boundary_field_ranges=_boundary_field_ranges(root),
         boundary_assert_ranges=_boundary_assert_ranges(root),
+        catalog_builder=catalog_builder,
     )
 
 
@@ -553,6 +557,9 @@ class _CallableScope:
         defs_cursor (`SourceCursor | None`, *optional*, defaults to `None`):
             Cursor over the authored ``defs:`` mapping. ``None`` supports
             programmatic scopes with virtual, location-free def cursors.
+        catalog_builder (`_SourceCatalogBuilder | None`, *optional*):
+            Mutable document-local registry shared by root, definitions, and
+            inline bodies. A private builder is created for programmatic scopes.
     """
 
     def __init__(
@@ -562,6 +569,7 @@ class _CallableScope:
         external: Optional[ChildResolver],
         uses: dict,
         defs_cursor: SourceCursor | None = None,
+        catalog_builder: _SourceCatalogBuilder | None = None,
     ) -> None:
         both = sorted(set(defs_section) & set(uses))
         if both:
@@ -575,6 +583,11 @@ class _CallableScope:
         self._external = external
         self._uses = uses
         self._defs_cursor = defs_cursor
+        self._catalog_builder = (
+            catalog_builder
+            if catalog_builder is not None
+            else _SourceCatalogBuilder()
+        )
         self._private: dict[str, _PrivateCallable] = {}
         self._built: dict[str, ComposedFlow] = {}
         self._in_progress: set[str] = set()
@@ -775,6 +788,7 @@ def _load_def(
                 if def_cursor is not None
                 else None
             ),
+            catalog_builder=scope._catalog_builder,
         )
     except LoadError as exc:
         # Name the def without discarding the absolute parent-file diagnostic metadata.
@@ -850,6 +864,7 @@ def _load_single_node_def(
                 else None
             ),
             outputs_range=output_range,
+            catalog_builder=scope._catalog_builder,
         )
     except LoadError as exc:
         if str(exc).startswith("defs entry "):

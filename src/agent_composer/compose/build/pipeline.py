@@ -18,7 +18,7 @@ here. It imports NOTHING from `loader.py` (that would be a back-edge).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Callable, Optional, Protocol
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
@@ -56,7 +56,8 @@ from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 from agent_composer.compose.helpers.source import SourceFrame
 from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceAccessError, SourceCursor
+from agent_composer.compose.source import SourceAccessError, SourceCatalog, SourceCursor
+from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.compose.helpers.types import read_flow_inputs
 from agent_composer.compose.validate.handles import check_case_handles
 from agent_composer.compose.validate.asserts import validate_node_asserts
@@ -187,6 +188,11 @@ class ComposedFlow:
             `uses:` file; copied onto the built `CallNode`/`MapNode` as `child_source` so
             the CLI can box a frame for the child a call descends into. `None` only when a
             flow was assembled without a known source (defensive).
+        _local_catalog (`SourceCatalog`):
+            Immutable snapshot of source sites registered from this flow's physical
+            Compose document. This is compiler staging metadata, not yet the complete
+            resolver for embedded external flows; external origins must first be
+            lexically rebased into one returned-flow namespace.
     """
 
     compiled: CompiledFlow
@@ -194,6 +200,11 @@ class ComposedFlow:
     name: Optional[str] = None
     description: Optional[str] = None
     source: Optional[SourceFrame] = None
+    _local_catalog: SourceCatalog = field(
+        default_factory=SourceCatalog,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def input(self) -> list[Parameter]:
@@ -334,6 +345,7 @@ def _assemble(
     boundary_field_ranges: Optional[dict] = None,
     boundary_assert_ranges: Optional[list] = None,
     outputs_range: Optional[SourceRange] = None,
+    catalog_builder: _SourceCatalogBuilder | None = None,
 ) -> ComposedFlow:
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
@@ -354,7 +366,11 @@ def _assemble(
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
     children. `boundary_field_ranges`/`boundary_assert_ranges` locate synthesized boundary
     behavior; `outputs_range` is the retained authored codomain range when one exists.
-    Inline-CODE traceback anchors are derived from each descriptor's own `code:` range."""
+    `catalog_builder` is shared by every assembly originating from one physical
+    document, so root, definitions, and inline bodies mint collision-free local
+    origins under `owner`. Direct/programmatic assembly creates a source-free local
+    builder when none is supplied. Inline-CODE traceback anchors are derived from
+    each descriptor's own `code:` range."""
     if (inputs_section is None) == (input_parameters is None):
         raise ValueError(
             "_assemble requires exactly one of inputs_section or input_parameters"
@@ -400,6 +416,22 @@ def _assemble(
     }
     flow_inputs = {parameter.name for parameter in inputs}
     descriptors = parse_nodes(nodes_cursor)
+    if catalog_builder is None:
+        catalog_builder = _SourceCatalogBuilder()
+    try:
+        descriptors = {
+            node_id: replace(
+                descriptor,
+                origin=catalog_builder.register(
+                    (*owner, "node", node_id),
+                    nodes_cursor.child(node_id),
+                    anchor="key",
+                ),
+            )
+            for node_id, descriptor in descriptors.items()
+        }
+    except SourceAccessError as exc:
+        raise LoadError(str(exc), range=exc.range) from exc
 
     parsed_node_ranges = {
         node_id: descriptor.range
@@ -603,6 +635,7 @@ def _assemble(
                 for name, binding_range in body.input_ranges.items()
             },
             outputs_range=body.output_range,
+            catalog_builder=catalog_builder,
         )
 
     descriptors = _register_inline_bodies(
@@ -755,5 +788,9 @@ def _assemble(
                                        flow_llm_config=flow_llm_config or {})
     return ComposedFlow(
         compiled=compiled,
-        version=version, name=name, description=description, source=source,
+        version=version,
+        name=name,
+        description=description,
+        source=source,
+        _local_catalog=catalog_builder.freeze(),
     )

@@ -39,6 +39,10 @@ Hold this model whenever you design anything:
 - Source-neutral semantic operations live in `nodes/contracts.py`: `Binding`,
   `Parameter`, `Assertion`, and `ValueContract` carry optional opaque origins;
   `typesys.Type` remains provenance-free.
+- `Node.origin` is the optional source-neutral identity of an authored node
+  context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
+  stays outside manifests/fingerprints. Compose stamps physical node headers;
+  source-free/generated nodes default to `None` and clones preserve a value.
 - Compiled flow-owned wiring has one shape: `Flow` construction wraps each
   direct source as `Binding`, and `FlowOutput.binding` owns declared outputs.
   Python builders may pass raw values at construction, but must not write raw
@@ -229,7 +233,11 @@ anchors/aliases/merges.
 `SourceCatalog` is Compose's immutable `OriginResolver`: its private builder maps
 typed semantic paths to opaque origins and retains document occurrences with explicit
 key/value anchors. Resolution replays an occurrence without reparsing or adding a
-parallel range map; virtual or unanchored cursors produce no origin.
+parallel range map; virtual or unanchored cursors produce no origin. One builder is
+shared by a physical document's root, definitions, and inline bodies. Assembly stamps
+authored node headers and freezes a document-local snapshot on
+`ComposedFlow._local_catalog`; the private field is not a complete cross-file resolver
+until embedded external origins are lexically rebased.
 Inline extraction intentionally takes one graph-wide nodes snapshot before
 projection so unchanged aliases retain sharing; field navigation uses cursors or
 their package-private read-only view.

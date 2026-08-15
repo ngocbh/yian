@@ -1,12 +1,15 @@
 """6.2 — the `code` kind handle: parse records the code body's range; build reconciles the
 inline `def main(inputs):` wrapper offset so an inline syntax slip frames at the YAML line."""
 
+from dataclasses import replace
+
 import pytest
 
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.source import SourceDocument
+from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceRange
 
 
@@ -56,6 +59,20 @@ def test_code_build_returns_code_node_and_stamps_ranges():
     assert node.output_contract is not None
     assert node.range is desc.range or node.range == desc.range
     assert wiring == {"rating": "${input.rating}"}
+
+
+def test_code_build_stamps_descriptor_origin_without_affecting_equality():
+    """The central finish seam transfers opaque provenance to every built kind."""
+    parsed = CodeDescriptor.parse("verdict", _reader_for(_FLOW, "verdict"))
+    origin = OriginRef("root/node/verdict")
+    located = replace(parsed, origin=origin)
+
+    result = located.build(BuildContext({}, source_file="flow.yaml"))
+
+    assert located == parsed
+    assert result.node.origin is origin
+    with pytest.raises(TypeError, match="node descriptor origin must be an OriginRef or None"):
+        replace(parsed, origin="root/node/verdict")  # type: ignore[arg-type]
 
 
 def test_code_build_frames_inline_syntax_error_at_yaml_line():

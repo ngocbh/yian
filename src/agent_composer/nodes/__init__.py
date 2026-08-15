@@ -2,7 +2,10 @@
 
 Nodes consume bound input records and return the closed ``Output | Route | Grow``
 result sum. Spawners return only a canonical ``Grow`` seed (plus ids to
-prune); they never construct compiled graph fragments themselves.
+prune); they never construct compiled graph fragments themselves. A node may
+carry an optional opaque authored-context origin; Python-authored and
+programmatically generated nodes default to it being absent, while clones
+preserve an existing value. Runtime does not interpret this provenance.
 
 Knows about:   diagnostics, events, expr, typesys, tools, llm_clients, and peer
                node modules.

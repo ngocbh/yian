@@ -39,6 +39,9 @@ Every enforced programmatic node output is an exact `ValueContract` stored in
 contract's `.type` when it needs the semantic type and retains the carrier when it
 clones or rewrites the node. Python callers pass `output_contract=`; do not add
 another output-Type field or compatibility property.
+`Node.origin` is optional opaque diagnostic provenance and is unrelated to LOOP's
+`origin_id`. A programmatic/generated node defaults to `None`; preserve an existing
+origin when cloning, and never interpret it as execution state.
 
 ```python
 class NodeKind(str, Enum):
@@ -83,7 +86,7 @@ growth and replay.
 This one module owns the kind's front-end handle: a frozen `XxxDescriptor` dataclass
 that **subclasses `NodeDescriptor`**. The base holds the common contract — the shared
 fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + `inputs`/`outputs` + the
-`range`/`field_ranges` parse metadata), the key-legality check, the template
+`origin`/`range`/`field_ranges` source metadata), the key-legality check, the template
 `parse(node_id, reader)` classmethod, and the sink derivations (`output_contract` /
 `sink_params` / `sink_wiring` / `_finish`). A leaf kind diverges only where it must.
 Copy `code.py`.
@@ -102,9 +105,12 @@ Copy `code.py`.
   fields, and records each field's `SourceRange`. Override the `_normalize_reader` /
   `_validate_fields` hooks only if the kind needs pre-normalization or extra checks
   (see `case.py` / `human_input.py` for examples). Most leaves need neither.
+- The assembly conductor stamps `NodeDescriptor.origin` from the authored node-header
+  occurrence after parsing. A kind must not mint or infer that origin in its own parser.
 - **Override `build`** — an instance method `build(self, ctx: BuildContext) -> BuildResult`
   that constructs `XxxNode(...)`, sets the output contract / params / wiring, and returns
-  `self._finish(node, wiring)` (which stamps `.range`/`.field_ranges` and wraps a `BuildResult`).
+  `self._finish(node, wiring)` (which stamps `.origin` plus the legacy ranges and wraps a
+  `BuildResult`).
   The inherited `self.output_contract(ctx.registry)` returns a `ValueContract | None`;
   assign that carrier directly to `node.output_contract`. Retain an existing carrier when
   re-exporting a child output; construct a new carrier only when the kind changes the semantic

@@ -67,6 +67,19 @@ def test_clone_child_namespaces_ids():
     assert cloned.start_id == "each/__start__"
 
 
+def test_clone_child_preserves_node_origin_while_namespacing_runtime_ids():
+    """Cloning changes execution identity without erasing authored provenance."""
+    child = _single()
+    origin = OriginRef("def/child/node/head")
+    child.nodes["head"].origin = origin
+
+    cloned = clone_child(child, callsite="each", record={"topic": "ACME"})
+
+    assert cloned.nodes["each/head"].origin == origin
+    assert cloned.nodes["each/head"].id == "each/head"
+    assert child.nodes["head"].id == "head"
+
+
 def test_clone_child_rewrites_one_binding_layer_and_preserves_its_origin():
     """Child namespacing rewrites semantic source text without replacing provenance."""
     child = _single()

@@ -106,6 +106,12 @@ public interface; descriptors and nodes carry derived ranges afterward.
 Text-accepting parse conveniences delegate construction to `SourceDocument` before
 doing semantic work; they do not own a second parser.
 
+One package-private catalog builder is shared across a physical document's root,
+definitions, and inline bodies. Assembly registers authored node headers and stores
+a frozen snapshot on `ComposedFlow._local_catalog`. That field stays private and
+document-local: it is not a complete resolver for embedded external flows until their
+origins are lexically rebased.
+
 `compose/loader` owns the state whose lifetime is a load graph or one authored
 file. Its resolved-path context guards cycles and caches only successfully
 compiled external flows, so aliases and diamonds reuse one physical source load

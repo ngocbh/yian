@@ -1,6 +1,7 @@
 """Seed-first growth: nodes describe expansion; compile constructs topology."""
 
 from agent_composer.compile.model import Flow
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Grow
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.contracts import Assertion, Parameter
@@ -68,6 +69,18 @@ def test_call_map_and_loop_return_seed_only():
     assert producers[0][1].seed == {"x": 1}
     assert producers[1][1].seed == [{"x": 1}, {"x": 2}]
     assert producers[2][1].seed == ({"x": 1}, 0)
+
+
+def test_loop_respawn_preserves_diagnostic_origin_separately_from_origin_id():
+    """Every fresh driver keeps its authored site while retaining runtime attribution."""
+    loop = LoopNode("loop", flow_id="child", origin_id="runtime-loop")
+    authored_origin = OriginRef("root/node/loop")
+    loop.origin = authored_origin
+
+    clone = loop.respawn(2)
+
+    assert clone.origin is authored_origin
+    assert clone.origin_id == "runtime-loop"
 
 
 def test_compile_builder_reconstructs_every_growth_kind():

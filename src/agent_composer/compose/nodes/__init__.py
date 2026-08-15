@@ -11,7 +11,9 @@ per-kind isinstance ladder, now dissolved):
 - **`parse(id, cursor)`** — a classmethod that reads one node body via a located
   `SourceCursor`, recording each field's `SourceRange` into the descriptor's `field_ranges`, and
 - **`build(ctx: BuildContext) -> BuildResult`** — a method that constructs the runtime `Node`
-  (+ wiring, + any edges a `case` owns), stamping `.range`/`.field_ranges` onto it.
+  (+ wiring, + any edges a `case` owns), stamping the descriptor's optional `.origin`
+  plus its legacy `.range`/`.field_ranges` onto it. The assembly conductor, not a
+  per-kind parser, assigns authored node-header origins before build.
 
 `parse`/`build` ride on the descriptor class itself, so `KINDS` maps the surface `kind:`
 string straight to the descriptor class — no bundling wrapper. The shared dispatch sites

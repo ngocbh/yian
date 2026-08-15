@@ -88,6 +88,14 @@ retains `Binding.origin`; pre-IR Compose dictionaries and runtime-only overrides
 remain raw. `FlowOutput.from_` is a temporary read-only source view during the
 remaining migration.
 
+`Node.origin` is the same source-neutral provenance shape for an authored node
+context. Compose stamps the authored node-header occurrence for root, `defs:`,
+and inline-body nodes; direct Python construction defaults to origin-free, and
+loader/desugar-synthesized nodes remain so. Clones preserve an existing origin,
+but manifests, fingerprints, and expansion digests ignore it. The legacy
+`range` fields remain the active render bridge while diagnostics migrate to
+origin resolution.
+
 `Node.pre_asserts` and `Node.post_asserts` are ordered `Assertion` lists. Parsed
 YAML remains raw text until the inline-call pass crosses each flow assertion into
 one carrier; node-local validation creates one fresh carrier per authored
@@ -147,7 +155,11 @@ derived ranges afterward, so no phase reparses text or touches parser objects.
 typed semantic paths to opaque origins while retaining the physical document
 occurrence and an explicit key/value anchor. Resolution replays that occurrence
 into a `DiagnosticFrame`; it neither reparses YAML nor creates a parallel range
-map. Virtual or unanchored cursors produce no origin.
+map. Virtual or unanchored cursors produce no origin. One builder is shared by
+the root flow, its `defs:`, and its inline bodies, and each assembled
+`ComposedFlow` retains a frozen document-local snapshot as `_local_catalog`.
+That field is intentionally private: external child origins still require
+lexical rebasing before the returned flow can expose one complete resolver.
 
 `SourceFrame` is persistent render-only diagnostic metadata on
 `ComposedFlow.source` and composite nodes' `child_source`. It carries source text

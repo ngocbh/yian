@@ -142,6 +142,7 @@ class LoopNode(Node):
             child_source=self.child_source, predicate_kind=self.predicate_kind,
             predicate=self.predicate, times=self.times, max_iters=self.max_iters,
             title=self.title, iteration=k, origin_id=self.origin_id)
+        clone.origin = self.origin
         clone.params = self.params
         clone.output_contract = self.output_contract
         clone.pre_asserts = list(self.pre_asserts)

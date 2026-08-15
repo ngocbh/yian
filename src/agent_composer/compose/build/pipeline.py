@@ -27,6 +27,11 @@ from agent_composer.nodes.base import Node
 from agent_composer.typesys.values import Type
 from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
+from agent_composer.compose.build.inline_inputs import (
+    canonical_type_label,
+    canonicalize_inline_type,
+    infer_inline_binding_type,
+)
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.call import CallDescriptor
@@ -347,7 +352,8 @@ def _assemble(
     else:
         assert input_decls is not None
         inputs = list(input_decls)
-    flow_inputs = {decl.name for decl in inputs}
+    flow_input_types = {decl.name: decl.type for decl in inputs}
+    flow_inputs = set(flow_input_types)
     descriptors = parse_nodes(nodes_reader)
 
     # A `uses:` alias shares the callable namespace, so it must not collide with a node
@@ -405,6 +411,42 @@ def _assemble(
         descriptor: CallDescriptor | LoopDescriptor,
     ) -> ComposedFlow:
         """Assemble one retained body lazily in this file's callable scope."""
+
+        def unavailable_producer_type(
+            producer_id: str,
+            binding_label: str,
+            binding_range: SourceRange | None,
+        ) -> Type:
+            """Reject producer-derived signatures until dependency-aware building."""
+            raise LoadError(
+                f"cannot infer type for inline binding {binding_label!r}: "
+                f"producer {producer_id!r} has no available static type; use an "
+                "explicitly typed named `defs:` body",
+                range=binding_range,
+            )
+
+        child_inputs: list[InputDecl] = []
+        for key, value in (descriptor.inputs or {}).items():
+            binding_label = f"{descriptor.id}.input.{key}"
+            binding_range = body.input_ranges.get(key)
+            inferred = infer_inline_binding_type(
+                value,
+                parent_input_types=flow_input_types,
+                producer_type=unavailable_producer_type,
+                binding_label=binding_label,
+                binding_range=binding_range,
+            )
+            canonical = canonicalize_inline_type(inferred)
+            child_inputs.append(
+                InputDecl(
+                    name=key,
+                    type_str=canonical_type_label(canonical),
+                    default=None,
+                    required=not canonical.nullable,
+                    type=canonical,
+                )
+            )
+
         label = descriptor.child_label or f"inline body of node {body.node_id!r}"
         child_source = SourceFrame(
             label=label,
@@ -418,7 +460,7 @@ def _assemble(
             else {}
         )
         return _assemble(
-            input_decls=[],
+            input_decls=child_inputs,
             nodes_reader=body.nodes_reader,
             outputs_section=body.output,
             asserts_section=[],
@@ -481,7 +523,6 @@ def _assemble(
 
     # cross-flow type check: each `call` binding's source type vs the callable
     # input type (needs producers, so it runs after all nodes are built).
-    flow_input_types = {decl.name: decl.type for decl in inputs}
     check_ref_map_types(nodes_built, producers, flow_input_types, flow_wiring, n_lines)
     # loop `'a -> 'a` type contract (types): each carried field's seed-source Type vs the
     # body output's same-named field Type (needs producers, so it runs alongside the

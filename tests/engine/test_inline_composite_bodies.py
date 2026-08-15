@@ -19,9 +19,11 @@ from agent_composer.compose.desugar.inline_bodies import (
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.spanloader import load_with_spans
+from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.run import run_flow
+from agent_composer.typesys.values import Type, ValueKind
 
 
 def _located_root(text: str) -> tuple[NodeReader, dict]:
@@ -809,6 +811,104 @@ output: ${wrapper.output}
     assert resolutions == [(registrations[0][0], expected_flow_id)]
     assert result.status == "succeeded"
     assert result.output == "inline-ok"
+
+
+@pytest.mark.parametrize("value", [None, 7])
+def test_typed_inline_call_preserves_nullable_parent_scalar(value):
+    loaded = load_flow(
+        """id: inline-call-nullable-input
+name: inline_call_nullable_input
+input:
+  maybe: Optional[int]
+nodes:
+  wrapper:
+    kind: call
+    input:
+      value: ${input.maybe}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: Optional[int]
+    output: ${echo.output}
+output: ${wrapper.output}
+"""
+    )
+
+    wrapper = loaded.compiled.nodes["wrapper"]
+    assert wrapper.child_inputs == [
+        InputDecl(
+            name="value",
+            type_str="Optional[int]",
+            default=None,
+            required=False,
+            type=Type(kind=ValueKind.INTEGER, nullable=True),
+        )
+    ]
+
+    result = run_flow(loaded, {"maybe": value})
+    assert result.status == "succeeded"
+    assert result.output == value
+
+
+def test_typed_inline_call_canonicalizes_literal_record_and_retains_input_order():
+    loaded = load_flow(
+        """id: inline-call-record-input
+name: inline_call_record_input
+nodes:
+  wrapper:
+    kind: call
+    input:
+      payload:
+        z: tail
+        a: 3
+      marker: before
+    nodes:
+      echo:
+        kind: code
+        code: |
+          return {"payload": inputs["payload"], "marker": inputs["marker"]}
+        input:
+          payload: ${input.payload}
+          marker: ${input.marker}
+        output:
+          payload:
+            a: int
+            z: str
+          marker: str
+    output: ${echo.output}
+output: ${wrapper.output}
+"""
+    )
+
+    wrapper = loaded.compiled.nodes["wrapper"]
+    assert [decl.name for decl in wrapper.child_inputs] == ["payload", "marker"]
+    payload, marker = wrapper.child_inputs
+    assert payload.type_str == '{"a":int,"z":str}'
+    assert payload.default is None
+    assert payload.required is True
+    assert list(payload.type.fields or {}) == ["a", "z"]
+    assert payload.type == Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "a": Type.scalar(ValueKind.INTEGER),
+            "z": Type.scalar(ValueKind.STRING),
+        },
+        required=frozenset({"a", "z"}),
+    )
+    assert marker.type_str == "str"
+    assert marker.default is None
+    assert marker.required is True
+    assert marker.type == Type.scalar(ValueKind.STRING)
+
+    result = run_flow(loaded, {})
+    assert result.status == "succeeded"
+    assert result.output == {
+        "payload": {"z": "tail", "a": 3},
+        "marker": "before",
+    }
 
 
 def test_eager_def_inline_call_uses_raw_ranges_and_shared_scope(monkeypatch):

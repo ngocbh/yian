@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -220,6 +221,18 @@ def _snapshot_safe_value(value: Any) -> Any:
                 copies[identity] = set()
             pending.extend(current)
 
+    scalar_copy_memo: dict[int, Any] = {}
+
+    def copied_item(item: Any) -> Any:
+        """Return an atomic value or its already-allocated container copy."""
+
+        item_type = type(item)
+        if item_type in (date, datetime):
+            return copy.deepcopy(item, scalar_copy_memo)
+        if item_type in _SAFE_SCALAR_TYPES:
+            return item
+        return copies[id(item)]
+
     immutable_states: dict[int, bool] = {}
     for container in containers:
         if type(container) not in (tuple, frozenset):
@@ -236,19 +249,9 @@ def _snapshot_safe_value(value: Any) -> Any:
                 continue
             if ready:
                 if type(current) is tuple:
-                    copied = tuple(
-                        item
-                        if type(item) in _SAFE_SCALAR_TYPES
-                        else copies[id(item)]
-                        for item in current
-                    )
+                    copied = tuple(copied_item(item) for item in current)
                 else:
-                    copied = frozenset(
-                        item
-                        if type(item) in _SAFE_SCALAR_TYPES
-                        else copies[id(item)]
-                        for item in current
-                    )
+                    copied = frozenset(copied_item(item) for item in current)
                 copies[current_identity] = copied
                 immutable_states[current_identity] = False
                 continue
@@ -260,13 +263,6 @@ def _snapshot_safe_value(value: Any) -> Any:
             for item in reversed(tuple(current)):
                 if type(item) in (tuple, frozenset) and id(item) not in copies:
                     stack.append((item, False))
-
-    def copied_item(item: Any) -> Any:
-        """Return an atomic value or its already-allocated container copy."""
-
-        if type(item) in _SAFE_SCALAR_TYPES:
-            return item
-        return copies[id(item)]
 
     for container in containers:
         container_type = type(container)

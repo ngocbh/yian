@@ -12,7 +12,8 @@ catalog.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, TypeAlias
@@ -237,6 +238,26 @@ class _SourceCatalogBuilder:
             anchor=anchor,
         )
         return OriginRef(key)
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Roll back registrations made by a failed construction attempt.
+
+        Callable compilation is success-cached and may be retried after an
+        error. A failed attempt must therefore leave the catalog at the same
+        insertion boundary as the cache. Nested transactions are savepoints;
+        the builder is single-threaded during Compose loading.
+
+        Yields:
+            `None`: Control to the construction attempt.
+        """
+        checkpoint = len(self._sites)
+        try:
+            yield
+        except BaseException:
+            while len(self._sites) > checkpoint:
+                self._sites.popitem()
+            raise
 
     def freeze(self) -> SourceCatalog:
         """Return an immutable snapshot of all successful registrations.

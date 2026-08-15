@@ -38,6 +38,7 @@ from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.types import read_type
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.source import SourceCursor
+from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceRange
 
 
@@ -77,9 +78,10 @@ class NodeDescriptor:
       `None`). Both default empty, so a signature-less kind (wait/case) or a child-derived one
       (call/map/loop) simply never populates them. They are NOT common authoring keys — each kind
       opts in via its own ALLOWED set (see the module docstring).
-    - **Located-parse metadata** (`range`/`field_ranges`): the node body's `SourceRange` and each
-      present field's `SourceRange`, populated by each kind's `parse`. `compare=False` keeps them
-      out of `==`, so a descriptor still equals an identically-configured one built without ranges.
+    - **Located-parse metadata** (`origin`/`range`/`field_ranges`): the opaque authored node
+      identity, node body's `SourceRange`, and each present field's `SourceRange`. `compare=False`
+      keeps them out of `==`, so a descriptor still equals an identically-configured one built
+      without source metadata.
 
     `kw_only=True` (inherited by every subclass) makes all fields keyword-only, so a subclass may
     declare REQUIRED kind fields (`code`, `model_id`, `call`, ...) after these defaulted commons
@@ -128,6 +130,7 @@ class NodeDescriptor:
     env: dict[str, Any] = field(default_factory=dict)
     inputs: dict[str, Any] = field(default_factory=dict)
     outputs: Any = None
+    origin: OriginRef | None = field(default=None, compare=False)
     range: Optional[SourceRange] = field(default=None, compare=False)
     # `(kind, key) -> SourceRange` for each authored NAMED site, guarded against a bare-key
     # lookup (see `FieldRanges`). Stamped here at parse; copied onto the runtime node by `_finish`.
@@ -139,6 +142,11 @@ class NodeDescriptor:
     # `field_ranges` because an assert's text is not a unique key (two identical asserts must still
     # get distinct carets). `compare=False`, like the other render metadata. `[]` when none authored.
     assert_ranges: list[SourceRange | None] = field(default_factory=list, compare=False)
+
+    def __post_init__(self) -> None:
+        """Reject non-opaque provenance before a descriptor reaches build."""
+        if self.origin is not None and not isinstance(self.origin, OriginRef):
+            raise TypeError("node descriptor origin must be an OriginRef or None")
 
     def output_contract(self, registry: TypeRegistry) -> Optional[ValueContract]:
         """Return the declared `outputs:` as one canonical contract, or `None`."""
@@ -332,15 +340,19 @@ class NodeDescriptor:
     def _finish(self, node, wiring, edges=()) -> BuildResult:
         """Stamp parse metadata onto a freshly-built `node` and wrap it in a `BuildResult`.
 
-        The tail helper every `build` ends with — the ONE place the two range stamps live, so
-        they cannot drift across the per-kind builds: copies this descriptor's `range` and a COPY
-        of its `field_ranges` onto the runtime node (so diagnostics after build still caret back
-        to the source), then returns the `BuildResult(node, wiring, edges)`. `edges` defaults to
-        `()` (leaf/call/loop own no edges); `case` passes its data+control edges.
+        The tail helper every `build` ends with — the ONE place source metadata stamps live, so
+        they cannot drift across the per-kind builds: copies this descriptor's opaque `origin`,
+        `range`, and a COPY of its `field_ranges` onto the runtime node (so diagnostics after
+        build still resolve to the source), then returns the `BuildResult(node, wiring, edges)`.
+        `edges` defaults to `()` (leaf/call/loop own no edges); `case` passes its data+control
+        edges.
 
         The copy is a `FieldRanges`, not a plain `dict` — the runtime node is where the lookups
         actually happen, so copying into a bare dict would drop the bare-key guard precisely
         where it earns its keep."""
+        if self.origin is not None and not isinstance(self.origin, OriginRef):
+            raise TypeError("node descriptor origin must be an OriginRef or None")
+        node.origin = self.origin
         node.range = self.range
         node.field_ranges = FieldRanges(self.field_ranges)
         return BuildResult(node=node, wiring=wiring, edges=tuple(edges))

@@ -41,7 +41,9 @@ evaluation boundary returns `EvaluationFailure`; the dispatcher turns that into 
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine
 records it, and the reducer performs the write). Nodes stay pure; the dispatcher
-is the sole live state writer.
+is the sole live state writer. `Node.origin` is optional opaque diagnostic
+provenance for the authored node context, not execution state; it is unrelated to
+the LOOP-only `origin_id` attribution field.
 
 Growth uses the same inversion boundary. Node modules never import `compile`: a
 spawner returns a canonical seed only. `compile.expand.build_grow` is the sole
@@ -206,8 +208,8 @@ model made enforceable.
   canonicalizes execution semantics, `flow_fingerprint` hashes it, and
   `expansion_digest` covers an expanded fragment's entry/end ids and topology.
   Assertion expression/display/order/multiplicity and an output contract's semantic
-  `Type` affect identity; assertion/contract origins and render-only ranges, comments,
-  and object identity do not.
+  `Type` affect identity; node/carrier origins and render-only ranges, comments, and
+  object identity do not.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
   core dispatches on worker-result/run-record variants + node-owned traits/hooks, never on
   `node.kind` (ratchet: census 0).
@@ -269,6 +271,10 @@ every direct wiring value exactly once, and `FlowOutput.binding` is canonical.
 Raw Python values remain accepted only at those construction boundaries;
 pre-IR Compose dictionaries and runtime overrides are deliberately raw. A
 growth clone creates a new carrier for a rewritten source and retains its origin.
+The base `Node` separately carries one optional `OriginRef` for the authored node
+context. Compose stamps physical root/definition/inline headers; direct Python and
+generated nodes default to `None`, and cloning preserves an existing value. It is
+manifest-neutral and unrelated to LOOP's execution-only `origin_id`.
 `Node.pre_asserts` / `post_asserts` are likewise canonical ordered `Assertion`
 lists. Compose crosses raw YAML text into one carrier per occurrence; lowering
 and growth use `replace(..., expression=...)`, so display/origin survive. The
@@ -329,7 +335,13 @@ or their package-private read-only view.
 typed semantic paths to opaque origins while retaining each physical document
 occurrence and an explicit key/value anchor. Resolution replays that occurrence
 into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and no
-YAML is reparsed or parallel range map created.
+YAML is reparsed or parallel range map created. The loader creates one builder per
+physical document and shares it through root, `defs:`, and inline-body assembly.
+Authored node-header origins are registered under their complete lexical owner paths;
+loader/desugar-synthesized nodes remain origin-free. Each assembled flow receives a
+frozen snapshot as private `ComposedFlow._local_catalog` staging metadata. It is not
+the complete resolver for reachable external children until their origins are
+lexically rebased.
 
 After cursor-based extraction and parsing, descriptors and nodes carry the derived
 ranges needed by later phases; no phase reparses source fragments or inspects the
@@ -473,6 +485,10 @@ resolved to a line at the CLI boundary — never a text heuristic.
   Output-type failures occur after evaluation, so their durable failure may carry only the
   symbolic `field` locator; the CLI resolves it from the supplied flow when no concrete range
   was recorded.
+- **Migration boundary:** authored nodes now carry an opaque header `origin`, but runtime and
+  CLI failure rendering still use the legacy locator/range path above. The document-local
+  catalog remains private until carrier stamping and cross-file rebasing make one returned-flow
+  resolver complete.
 - **Resolution (CLI boundary):** `cli/run.py` prefers the pre-resolved `nf.range` →
   `result.range`; only if both are absent does `_resolve_range` map the span itself, via
   `_top_ranges` (the loaded flow's `SourceFrame` maps, or the defensive

@@ -9,9 +9,12 @@ The LAST compose phase before the loader. Three modules:
   (build every node kind-blind -> type/exhaustiveness checks -> edge inference ->
   reference/assert validation -> boundary synthesis -> cycle/handle checks ->
   `CompiledFlow.from_parts`), plus `ComposedFlow` (the compiled+validated result) and the
-  flow `outputs:` parser. It associates retained inline bodies with their final
+  flow `outputs:` parser. It stamps authored node-header origins through the
+  file-owned catalog builder, associates retained inline bodies with their final
   descriptors, registers lazy builders through the loader-owned callable-scope seam,
   and uses one success-only descriptor cache for on-demand signature dependencies.
+  `ComposedFlow._local_catalog` is a frozen document-local staging snapshot, not a
+  complete resolver for embedded external flows.
 - `inline_inputs.py` — strict structural type inference for parameters of generated
   inline-composite child flows. It distinguishes top-level binding strings from nested
   literal strings, walks nullable record paths, proves MAP item types only on demand,

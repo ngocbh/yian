@@ -59,6 +59,7 @@ from agent_composer.compose.source import (
     SourceCursor,
     SourceDocument,
 )
+from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 
 
 def _restore_node_surface(nodes):
@@ -539,7 +540,9 @@ class _CallableScope:
     external resolver. Private declarations, local defs, and external aliases share
     one memo table. The in-progress set makes recursive private/def construction
     loud; cross-file recursion is outside this scope and belongs to the selected
-    external resolver.
+    external resolver. Failed callable construction atomically drops new private
+    declarations, nested cache entries, and source-catalog sites so a later retry
+    cannot observe a stale partial attempt.
 
     Args:
         defs_section (`dict`):
@@ -553,6 +556,9 @@ class _CallableScope:
         defs_cursor (`SourceCursor | None`, *optional*, defaults to `None`):
             Cursor over the authored ``defs:`` mapping. ``None`` supports
             programmatic scopes with virtual, location-free def cursors.
+        catalog_builder (`_SourceCatalogBuilder | None`, *optional*):
+            Mutable document-local registry shared by root, definitions, and
+            inline bodies. A private builder is created for programmatic scopes.
     """
 
     def __init__(
@@ -562,6 +568,7 @@ class _CallableScope:
         external: Optional[ChildResolver],
         uses: dict,
         defs_cursor: SourceCursor | None = None,
+        catalog_builder: _SourceCatalogBuilder | None = None,
     ) -> None:
         both = sorted(set(defs_section) & set(uses))
         if both:
@@ -575,9 +582,44 @@ class _CallableScope:
         self._external = external
         self._uses = uses
         self._defs_cursor = defs_cursor
+        self._catalog_builder = (
+            catalog_builder
+            if catalog_builder is not None
+            else _SourceCatalogBuilder()
+        )
         self._private: dict[str, _PrivateCallable] = {}
         self._built: dict[str, ComposedFlow] = {}
         self._in_progress: set[str] = set()
+
+    @property
+    def catalog_builder(self) -> _SourceCatalogBuilder:
+        """Return this physical file's mutable origin registry."""
+        return self._catalog_builder
+
+    def _build_transactionally(
+        self,
+        builder: Callable[[], ComposedFlow],
+    ) -> ComposedFlow:
+        """Build one callable without caching origins from a failed attempt.
+
+        Nested resolutions may populate `_built`, and assembly may register
+        inline builders in `_private`, while `builder` runs. If construction
+        fails, discard both sets of new entries together with the catalog sites
+        rolled back by the builder transaction.
+        """
+        cached_before = frozenset(self._built)
+        private_before = frozenset(self._private)
+        try:
+            with self._catalog_builder.transaction():
+                return builder()
+        except BaseException:
+            for flow_id in tuple(self._built):
+                if flow_id not in cached_before:
+                    del self._built[flow_id]
+            for flow_id in tuple(self._private):
+                if flow_id not in private_before:
+                    del self._private[flow_id]
+            raise
 
     def register_private(
         self,
@@ -640,7 +682,7 @@ class _CallableScope:
                 )
             self._in_progress.add(flow_id)
             try:
-                loaded = private.builder()
+                loaded = self._build_transactionally(private.builder)
             finally:
                 self._in_progress.discard(flow_id)
             self._built[flow_id] = loaded
@@ -659,12 +701,14 @@ class _CallableScope:
                         def_cursor = self._defs_cursor.child(flow_id)
                     except SourceAccessError:
                         pass
-                loaded = _load_def(
-                    flow_id,
-                    self._defs_section[flow_id],
-                    self._registry,
-                    self,
-                    def_cursor,
+                loaded = self._build_transactionally(
+                    lambda: _load_def(
+                        flow_id,
+                        self._defs_section[flow_id],
+                        self._registry,
+                        self,
+                        def_cursor,
+                    )
                 )
             finally:
                 self._in_progress.discard(flow_id)

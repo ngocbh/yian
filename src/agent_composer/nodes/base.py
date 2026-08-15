@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.binding import apply_defaults
@@ -222,6 +223,10 @@ class Node(ABC):
             sets `origin_id = L` too, so the engine can attribute every iteration's
             `Grow`/`Output` to the single durable origin `L`. A driver is the origin iff
             `self.id == self.origin_id`, which is what gates "do not self-prune".
+        origin (`OriginRef`, *optional*):
+            Opaque authored-source identity for this semantic node, or `None` for a
+            source-free or generated node. This diagnostic value is unrelated to
+            `origin_id`, which controls LOOP execution attribution.
         env (`dict[str, Any]`):
             Author-supplied static per-node config (`{str -> literal}`), baked at build
             time from the flow-level `env:` default merged with the node's own `env:`
@@ -266,6 +271,7 @@ class Node(ABC):
         *,
         title: Optional[str] = None,
         output_contract: Optional[ValueContract] = None,
+        origin: OriginRef | None = None,
     ) -> None:
         self.id = node_id
         self.title = title
@@ -296,6 +302,11 @@ class Node(ABC):
         # the compiled `L`, == `L` on each fresh iteration clone `L~k`). A driver is the
         # origin iff `self.id == self.origin_id` (which gates "do not self-prune").
         self.origin_id: Optional[str] = None
+        if origin is not None and not isinstance(origin, OriginRef):
+            raise TypeError("node origin must be an OriginRef or None")
+        # Opaque source identity for diagnostics. Unlike `origin_id`, this has no
+        # execution meaning and is absent on directly constructed/generated nodes.
+        self.origin: OriginRef | None = origin
         # Author-supplied static per-node config, opaque to the engine core (kind-blind): a
         # plain `{str -> literal}` map baked at build time from the flow-level `env:` default
         # merged with this node's own `env:` (node override wins; see the compose builder). The

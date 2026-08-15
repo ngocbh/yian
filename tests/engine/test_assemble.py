@@ -35,6 +35,7 @@ from agent_composer.compose.parse.file import (
 )
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceCursor, SourceDocument
+from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.nodes.contracts import Parameter, ValueContract
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -57,6 +58,9 @@ class _FakeBuildDescriptor:
 
 class _InertCallableScope:
     """Callable-scope double for assembly tests with no composite nodes."""
+
+    def __init__(self):
+        self.catalog_builder = _SourceCatalogBuilder()
 
     def resolve(self, flow_id, version=None):
         raise AssertionError(f"empty flow unexpectedly resolved {flow_id!r}")

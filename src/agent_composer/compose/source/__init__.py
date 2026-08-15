@@ -2,10 +2,11 @@
 
 This package owns one PyYAML construction pass per physical document, the
 source-navigation contracts built over its retained YAML graph, and the
-immutable catalog that resolves Compose-owned opaque origins by replaying
-physical occurrences. Isolated location-free literals may be parsed separately
-without creating a document. Parser-specific objects stay private so later
-compose phases consume stable document, cursor, and origin-resolver interfaces.
+immutable document-local catalogs that resolve Compose-owned opaque origins by
+replaying physical occurrences. Later Compose phases may populate the
+package-private catalog builder and consume its frozen snapshots, but parser
+objects stay private. Isolated location-free literals may be parsed separately
+without creating a document.
 
 Knows about:   PyYAML and the source-neutral contracts in ``diagnostics``;
                ``SourceRange`` is temporarily re-exported through ``events``.

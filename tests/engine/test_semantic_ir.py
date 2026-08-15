@@ -87,6 +87,20 @@ def _manifest_assertions(assertions: list[object]) -> Flow:
     return flow
 
 
+def test_node_origin_is_optional_validated_and_distinct_from_loop_attribution() -> None:
+    """Opaque diagnostic provenance cannot be confused with execution `origin_id`."""
+    source_origin = _origin("node/header")
+
+    source_free = Node("source-free")
+    authored = Node("authored", origin=source_origin)
+
+    assert source_free.origin is None
+    assert authored.origin is source_origin
+    assert authored.origin_id is None
+    with pytest.raises(TypeError, match="node origin must be an OriginRef or None"):
+        Node("invalid", origin="node/header")  # type: ignore[arg-type]
+
+
 def test_flow_construction_normalizes_direct_wiring_values() -> None:
     """Stored flow wiring is canonical without copying semantic payloads."""
     payload = {"literal": ["kept-by-identity"]}

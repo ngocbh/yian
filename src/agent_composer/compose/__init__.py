@@ -11,8 +11,10 @@ derives the shared `KINDS` table from those classes), and the cross-node graph-s
 in the ordered phases `parse/ -> desugar/ -> edges/ -> validate/ -> build/`. The shared choke
 points (`parse/nodes.py`, the loader's conductor loop, `nodes/bindings.py`) dispatch through
 `KINDS` kind-blind — there is no per-kind isinstance ladder. `source/` owns the one-pass
-YAML document, located cursors, and immutable occurrence-backed origin catalog;
-`parse/file.py` consumes that document (`parse_file`).
+YAML document, located cursors, and immutable occurrence-backed origin catalogs;
+assembly stamps authored node headers and retains a private document-local catalog
+snapshot on each `ComposedFlow`. The snapshot is not yet a complete cross-file
+resolver; `parse/file.py` consumes the document (`parse_file`).
 The loader also owns each file's callable scope:
 authored `defs:`/`uses:` plus a resolver-private, lazy cache for inline CALL/MAP/LOOP
 children lowered by `desugar/` and assembled by `build/`.

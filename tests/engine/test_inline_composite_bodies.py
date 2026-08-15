@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from agent_composer.compose.desugar import inline_bodies as inline_bodies_module
 from agent_composer.compose.desugar.inline_bodies import (
     INLINE_FLOW_PREFIX,
     _overlay_node_occurrences,
@@ -369,6 +370,106 @@ nodes:
     )
     assert [key.value for key, _value in anchor.yaml_node.value] == original_anchor_keys
     assert base_spans == original_span_entries
+
+
+def test_extract_rejects_authored_private_call_target_without_mutating_source():
+    root, base_spans = _located_root(
+        f"""nodes:
+  attacker:
+    kind: call
+    call: {INLINE_FLOW_PREFIX}not-generated
+"""
+    )
+    original_nodes = root.child("nodes")
+    attacker = original_nodes.child("attacker")
+    original_value = dict(attacker.value)
+    original_pairs = tuple(attacker.yaml_node.value)
+    original_span_entries = dict(base_spans)
+
+    with pytest.raises(LoadError) as caught:
+        extract_inline_bodies(original_nodes, owner=("root",))
+
+    assert "reserved" in str(caught.value).lower()
+    assert INLINE_FLOW_PREFIX in str(caught.value)
+    assert caught.value.range == attacker.range_of("call")
+    assert attacker.value == original_value
+    assert tuple(attacker.yaml_node.value) == original_pairs
+    assert base_spans == original_span_entries
+
+
+@pytest.mark.parametrize("attacker_first", [True, False], ids=["before", "after"])
+def test_extract_rejects_sibling_private_id_attack_before_masking_any_body(
+    attacker_first: bool,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    victim_target = inline_flow_id(("root", "node", "victim", "inline"))
+    attacker = f"""  attacker:
+    kind: call
+    call: {victim_target}
+"""
+    victim = """  victim:
+    kind: call
+    nodes:
+      echo:
+        kind: code
+        run: tests.engine._compose_codefns:echo
+        input:
+          value: hello
+        output: str
+    output: ${echo.output}
+"""
+    first, second = (attacker, victim) if attacker_first else (victim, attacker)
+    root, base_spans = _located_root("nodes:\n" + first + second)
+    original_nodes = root.child("nodes")
+    attacker_reader = original_nodes.child("attacker")
+    victim_reader = original_nodes.child("victim")
+    original_attacker = dict(attacker_reader.value)
+    original_victim = dict(victim_reader.value)
+    original_attacker_pairs = tuple(attacker_reader.yaml_node.value)
+    original_victim_pairs = tuple(victim_reader.yaml_node.value)
+    original_span_entries = dict(base_spans)
+    mask_calls: list[str] = []
+    original_mask = inline_bodies_module._mask_inline_body
+
+    def track_mask(reader: NodeReader, flow_id: str) -> None:
+        mask_calls.append(flow_id)
+        original_mask(reader, flow_id)
+
+    monkeypatch.setattr(inline_bodies_module, "_mask_inline_body", track_mask)
+
+    with pytest.raises(LoadError) as caught:
+        extract_inline_bodies(original_nodes, owner=("root",))
+
+    assert "reserved" in str(caught.value).lower()
+    assert INLINE_FLOW_PREFIX in str(caught.value)
+    assert victim_target not in str(caught.value)
+    assert caught.value.range == attacker_reader.range_of("call")
+    assert mask_calls == []
+    assert attacker_reader.value == original_attacker
+    assert victim_reader.value == original_victim
+    assert tuple(attacker_reader.yaml_node.value) == original_attacker_pairs
+    assert tuple(victim_reader.yaml_node.value) == original_victim_pairs
+    assert base_spans == original_span_entries
+
+
+def test_extract_allows_private_prefix_in_graph_node_id():
+    root, _spans = _located_root(
+        f"""nodes:
+  {INLINE_FLOW_PREFIX}host:
+    kind: call
+    call: named
+"""
+    )
+
+    masked_nodes, bodies = extract_inline_bodies(
+        root.child("nodes"), owner=("root",)
+    )
+
+    assert bodies == {}
+    assert masked_nodes.value[f"{INLINE_FLOW_PREFIX}host"] == {
+        "kind": "call",
+        "call": "named",
+    }
 
 
 _INLINE_CHILD = """nodes:

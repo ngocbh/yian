@@ -80,9 +80,11 @@ def extract_inline_bodies(
     read-only.
     """
     overlay = _overlay_node_occurrences(nodes_reader)
-    bodies: dict[str, InlineBody] = {}
     if not isinstance(overlay.value, dict):
-        return overlay, bodies
+        return overlay, {}
+
+    _reject_authored_private_call_targets(overlay)
+    bodies: dict[str, InlineBody] = {}
 
     for node_id in list(overlay.value):
         raw_body = overlay.value[node_id]
@@ -158,6 +160,32 @@ def extract_inline_bodies(
         _mask_inline_body(body_reader, flow_id)
 
     return overlay, bodies
+
+
+def _reject_authored_private_call_targets(nodes_reader: NodeReader) -> None:
+    """Reject authored composite calls into the compiler-private namespace.
+
+    This preflight deliberately completes before any inline body is retained or
+    masked. Otherwise an authored call later in source order could target the
+    predictable id of a sibling that extraction had already synthesized.
+    """
+    for node_id, raw_body in nodes_reader.value.items():
+        if not isinstance(raw_body, dict):
+            continue
+        if raw_body.get("kind") not in _INLINE_COMPOSITE_KINDS:
+            continue
+        call_target = raw_body.get("call")
+        if not isinstance(call_target, str) or not call_target.startswith(
+            INLINE_FLOW_PREFIX
+        ):
+            continue
+        body_reader = nodes_reader.child(node_id)
+        raise LoadError(
+            f"node {node_id!r} (kind={raw_body['kind']}): call targets beginning "
+            f"with {INLINE_FLOW_PREFIX!r} are reserved for compiler-generated "
+            "inline child flows",
+            range=body_reader.range_of("call"),
+        )
 
 
 def _mask_inline_body(reader: NodeReader, flow_id: str) -> None:

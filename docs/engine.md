@@ -44,10 +44,10 @@ while state.result is None:
 
 def Node.run(self, inputs, **caps):      # the generic template — IDENTICAL for every kind
     inputs = apply_defaults(self.params, inputs)
-    check(self.pre_asserts, inputs)
+    check_assertions(self.pre_asserts, inputs)           # expression executes; display reports
     out = self._run_impl(inputs, **caps)                # the ONLY kind-specific step
     if isinstance(out, Output):
-        check(self.post_asserts, {**inputs, "output": out.value})
+        check_assertions(self.post_asserts, {**inputs, "output": out.value})
     return out
 ```
 
@@ -62,12 +62,11 @@ on kind (e.g. `binds_per_item` on `map`, `bind_reserved` for a `wait`'s `until` 
 
 A flow's own top-level `asserts:` are not a separate engine phase: at build they are
 lowered onto the synthesized `__start__`/`__end__` boundary nodes. A boundary assert
-(`${input.X}` only) rides `__start__` and fires *inside* `StartNode.run`, after input
-coercion — a dedicated slot the generic `check(node.pre_asserts)` seam leaves alone, since
-it must see the coerced values. A post assert (`${node.output}`) rides `__end__` as an
-ordinary `node.post_asserts` and fires through the `Node.run` recipe above. So `run.py`
-enforces no asserts itself; a false assert becomes a durable `NodeFailedRecord`, from
-which the reducer derives the `NodeFailed` and `RunFailed` observers.
+(`${input.X}` only) is rewritten to read START's coerced `${output.X}`, then rides
+`__start__.post_asserts` through the ordinary inherited `Node.run` recipe. A post assert
+(`${node.output}`) similarly rides `__end__.post_asserts`. So `run.py` enforces no asserts
+itself; a false assert becomes a durable `NodeFailedRecord`, from which the reducer derives
+the `NodeFailed` and `RunFailed` observers.
 
 ## `NodeResult` — the whole node result vocabulary
 

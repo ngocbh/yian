@@ -20,7 +20,7 @@ from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.case import Case, CaseNode
 from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import Binding
+from agent_composer.nodes.contracts import Assertion, Binding
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.loop import LoopNode
@@ -2150,8 +2150,8 @@ def test_flow_manifest_emits_the_literal_node_kind():
     [
         ("id", "renamed-body"),
         ("output_type", Type.scalar(ValueKind.NUMBER)),
-        ("pre_asserts", ["x > 0"]),
-        ("post_asserts", ["output > 0"]),
+        ("pre_asserts", [Assertion("x > 0", "x > 0")]),
+        ("post_asserts", [Assertion("output > 0", "output > 0")]),
         ("commit_as", "owner"),
         ("origin_id", "origin"),
         ("env", {"threshold": 2}),

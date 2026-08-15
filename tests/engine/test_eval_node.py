@@ -9,7 +9,7 @@ from agent_composer.compile.model import START_ID
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route
 from agent_composer.nodes.binding import ParamDecl
-from agent_composer.nodes.contracts import Binding
+from agent_composer.nodes.contracts import Assertion, Binding
 from agent_composer.nodes.map import MapNode
 from agent_composer.nodes.wait import WaitNode
 from agent_composer.runtime.eval_node import EvaluationFailure
@@ -186,7 +186,7 @@ def test_post_assert_isolated_from_node_input_mutation():
     pool = VariablePool()
     pool.set(START_ID, {"x": 1})
     node = _MutatingNode("n")
-    node.post_asserts = ["${x} == 1"]
+    node.post_asserts = [Assertion("${x} == 1", "${x} == 1")]
 
     result = drive(node, pool)
 

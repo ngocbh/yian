@@ -38,9 +38,8 @@ class StartNode(Node):
         input_decls (`list`, *optional*, defaults to `None`):
             The flow's `InputDecl`s; the params (and their defaults/required) derive from these.
         field_ranges (`dict`, *optional*, defaults to `None`):
-            Render-only boundary field ranges — `input name -> SourceRange` and flow-`asserts:`
-            `expr -> SourceRange` — used to locate a boundary type failure / false assert. `None`
-            for a spanless flow.
+            Render-only named boundary field ranges used to locate input declaration failures.
+            Flow assertions use the separate positional range bridge. `None` for a spanless flow.
         title (`str`, *optional*, defaults to `None`):
             Display title.
     """

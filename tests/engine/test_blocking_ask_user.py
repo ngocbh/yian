@@ -14,6 +14,7 @@ import agent_composer.tools as tools_module
 import agent_composer.nodes.agent.modes.tool_calling as tool_calling_mode
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Output, _HostStop
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.tools import install_ask_user
@@ -431,7 +432,7 @@ def test_post_assert_fires_after_blocking_ask(monkeypatch):
         tools=["ask_user"],
         mode="tool_calling",
     )
-    node.post_asserts = ["output == 'GOOD'"]
+    node.post_asserts = [Assertion("output == 'GOOD'", "output == 'GOOD'")]
 
     with install_ask_user(lambda **request: "yes"):
         event = _drive(node)

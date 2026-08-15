@@ -11,6 +11,7 @@ these in a later step; here the test stamps them directly.
 
 from agent_composer.events import SourceRange
 from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.runtime.eval_node import EvaluationFailure
 from tests.engine._fakes import FuncNode, drive
 
@@ -31,7 +32,7 @@ def test_assert_failure_carries_range():
     expr = "1 == 2"  # a constant, always-false assert -> pre-assert fails
     rng = SourceRange(3, 5, 3, 11)
     node = FuncNode("n", lambda i: {"output": "ok"})
-    node.pre_asserts = [expr]
+    node.pre_asserts = [Assertion(expr, expr)]
     node.pre_assert_ranges = [rng]  # positional, aligned 1:1 with pre_asserts
     nf = _failure(_drive(node))
     # symbolic locator unchanged (dual-path — we ADD range, do not replace the locator)

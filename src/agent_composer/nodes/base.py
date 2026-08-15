@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.typesys.seeding import apply_defaults
 from agent_composer.typesys.values import Type
 
@@ -169,7 +170,7 @@ class NodeAssertFailed(Exception):
 
     - `locator` (`Optional[SourceSpan]`): the failing assert's locator (`node`, `kind="assert"`,
       `key=<display text>`), or `None`.
-    - `range` (`Optional[SourceRange]`): the assert expr's `SourceRange` in the flow YAML, or `None`.
+    - `range` (`Optional[SourceRange]`): the authored assertion occurrence's YAML range, or `None`.
 
     `eval_node` captures it as an `EvaluationFailure`; the dispatcher durably records the
     corresponding node failure before the reducer derives `RunFailed`.
@@ -206,10 +207,10 @@ class Node(ABC):
         params (`list[ParamDecl]`, *optional*):
             The node-side declared params (no source — the flow owns the wiring); `None`
             for a node that declares no inputs.
-        pre_asserts (`list[str]`):
-            Node-local `asserts:` checked against the bound record before `_run_impl`.
-        post_asserts (`list[str]`):
-            Node-local `asserts:` (reading `${output}`) checked after `_run_impl`.
+        pre_asserts (`list[Assertion]`):
+            Ordered node-local contracts checked against the bound record before `_run_impl`.
+        post_asserts (`list[Assertion]`):
+            Ordered node-local contracts (reading `${output}`) checked after `_run_impl`.
         commit_as (`str`, *optional*):
             Engine-baked commit redirect: write this node's Output under `commit_as`
             instead of its own id (and fire that target's out-edges). Set by the
@@ -282,15 +283,8 @@ class Node(ABC):
         # enforced by the inherited `run` template: PRE checked against the bound input record
         # before `_run_impl`; POST (reads `${output}`) afterward against `{**inputs, output}`.
         # Empty for most nodes.
-        self.pre_asserts: list[str] = []
-        self.post_asserts: list[str] = []
-        # Display-text map for a LOWERED assert: `dict[lowered-string -> original author text]`.
-        # A flow-level `asserts:` is lowered onto the boundary nodes in a synth form (`${__assert_
-        # calc} > 100`); this maps each lowered pre/post assert back to what the author wrote
-        # (`calc.output > 100`) so a failure message shows the author's text, never the synth form.
-        # `{}` for an ordinary node whose asserts are already node-local (the fallback is the
-        # assert string itself).
-        self.assert_texts: dict[str, str] = {}
+        self.pre_asserts: list[Assertion] = []
+        self.post_asserts: list[Assertion] = []
         # Engine-baked commit redirect (see the class docstring): a subflow terminal
         # commits its Output under this spawner id instead of its own id. Stamped by the
         # compile-owned growth builders; `None` for an ordinary node.
@@ -331,7 +325,7 @@ class Node(ABC):
         # is None where no span exists — a spanless / in-memory flow). Populated by the loader:
         # `validate_node_asserts` splits the descriptor's authored `assert_ranges` in lockstep with
         # the pre/post classification, and the boundary sets the lowered flow-assert ranges. The
-        # `run` wrapper resolves a failing assert's caret by INDEX here — never by the assert STRING
+        # `run` wrapper resolves a failing assert's caret by INDEX here — never by assertion text
         # — so two identical assert texts get their own distinct carets (Python's model: evaluate in
         # order, first-failure-wins, located by position). `[]` for a node with no asserts.
         self.pre_assert_ranges: list[Optional["SourceRange"]] = []
@@ -365,18 +359,18 @@ class Node(ABC):
         inputs = apply_defaults(self.params or [], inputs)
         # Fire pre-asserts IN ORDER, first-failure-wins, and locate the failure BY POSITION:
         # the failing assert's own `SourceRange` is `pre_assert_ranges[i]`, not a lookup keyed by
-        # the assert STRING — so two identical assert texts get distinct carets. The range list is
+        # assertion text — so two identical asserts get distinct carets. The range list is
         # aligned 1:1 with `pre_asserts`; a shorter list (spanless flow) or a None entry -> no range.
         bad_i = next(
-            (i for i, a in enumerate(self.pre_asserts) if not self._assert_holds(a, inputs)), None
+            (i for i, a in enumerate(self.pre_asserts)
+             if not self._assert_holds(a.expression, inputs)), None
         )
         if bad_i is not None:
             bad = self.pre_asserts[bad_i]
-            display = self.assert_texts.get(bad, bad)
             rng = self.pre_assert_ranges[bad_i] if bad_i < len(self.pre_assert_ranges) else None
             raise NodeAssertFailed(
-                f"node {self.id!r} pre-assert failed: {display}",
-                locator=SourceSpan(self.id, "assert", display),
+                f"node {self.id!r} pre-assert failed: {bad.display}",
+                locator=SourceSpan(self.id, "assert", bad.display),
                 range=rng,
             )
         # Pristine snapshot for the post-asserts, taken BEFORE `_run_impl` runs: a leaf may
@@ -394,15 +388,14 @@ class Node(ABC):
             post_record = {**post_input, "output": result.value}
             bad_i = next(
                 (i for i, a in enumerate(self.post_asserts)
-                 if not self._assert_holds(a, post_record)), None
+                 if not self._assert_holds(a.expression, post_record)), None
             )
             if bad_i is not None:
                 bad = self.post_asserts[bad_i]
-                display = self.assert_texts.get(bad, bad)
                 rng = self.post_assert_ranges[bad_i] if bad_i < len(self.post_assert_ranges) else None
                 raise NodeAssertFailed(
-                    f"node {self.id!r} post-assert failed: {display}",
-                    locator=SourceSpan(self.id, "assert", display),
+                    f"node {self.id!r} post-assert failed: {bad.display}",
+                    locator=SourceSpan(self.id, "assert", bad.display),
                     range=rng,
                 )
         return result

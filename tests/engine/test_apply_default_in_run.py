@@ -20,6 +20,7 @@ from typing import Any
 
 from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.binding import ParamDecl
+from agent_composer.nodes.contracts import Assertion
 
 
 class _ImplNode(Node):
@@ -45,7 +46,7 @@ def test_omitted_input_defaulted_before_pre_assert():
     so it passes without Step 5's type_str threading."""
     node = _ImplNode("n")
     node.params = [ParamDecl(name="x", type_str="int", required=False, default=5)]
-    node.pre_asserts = ["${x} > 0"]
+    node.pre_asserts = [Assertion("${x} > 0", "${x} > 0")]
 
     result = node.run({})  # x omitted
 

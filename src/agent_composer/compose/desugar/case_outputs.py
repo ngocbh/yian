@@ -29,6 +29,7 @@ from agent_composer.compose.nodes.bindings import keyless, map_binding_strings
 from agent_composer.compose.desugar.inline_calls import map_outputs_strings
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import CaseDescriptor
+from agent_composer.nodes.contracts import Assertion
 
 
 # A clean whole-span case-output ref INTERIOR. Singular only:
@@ -42,7 +43,7 @@ _CASE_OUTPUT_INTERIOR = re.compile(
 def expand_case_outputs(
     descriptors: dict,
     outputs_section: Any,
-    asserts_section: list,
+    asserts_section: list[Assertion],
     *,
     node_lines: "dict[str, int] | None" = None,
     outputs_line: "int | None" = None,
@@ -169,7 +170,8 @@ def _reject_case_refs(strings, case_ids: set, where: str, line: Optional[int]) -
     """Raise a located `LoadError` if any string reads a `${<case>.output}` value
     (`<case>` a case node id) — the floor for the non-clean / condition / assert
     positions where the value-case is not supported."""
-    for s in strings:
+    for value in strings:
+        s = value.expression if isinstance(value, Assertion) else value
         if not isinstance(s, str):
             continue
         try:

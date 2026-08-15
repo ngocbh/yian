@@ -11,6 +11,7 @@ import importlib
 import pytest
 
 from agent_composer.compose import load_flow
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.run import run_flow
 from agent_composer.compose.helpers.errors import LoadError
 from tests.engine._graph_builder import _engine
@@ -230,7 +231,7 @@ def test_pool_heads_singular() -> None:
 # head), so any assert with `${output}` silently held. The fix: `${output}` reads
 # the END_ID's committed value through an injected `{"output": end_value}` record.
 def test_end_post_assert_reads_output() -> None:
-    """Direct EndNode with `post_asserts = ["${output} > 0"]` fires correctly through
+    """Direct EndNode with an `${output} > 0` assertion fires correctly through
     eval_node's END_ID branch.
 
     Before the fix: pool-scoped `first_failing_assert(["${output} > 0"], pool)` silently resolved
@@ -249,7 +250,7 @@ def test_end_post_assert_reads_output() -> None:
         start = StartNode(START_ID, input_decls=[])
         n = FuncNode("n", lambda p: 5)
         end = EndNode.record(END_ID, output_names=["result"])
-        end.post_asserts = [post_assert]
+        end.post_asserts = [Assertion(post_assert, post_assert)]
         nodes = {START_ID: start, "n": n, END_ID: end}
         edges = [
             Edge("e0", START_ID, "n"),

@@ -1,9 +1,9 @@
 from agent_composer.compile.expand import clone_child
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
 from agent_composer.compose.helpers.types import InputDecl, read_type
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.base import NodeKind, Output, ParamDecl
-from agent_composer.nodes.contracts import Binding
+from agent_composer.nodes.contracts import Assertion, Binding
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.eval_node import EvaluationFailure
@@ -138,8 +138,10 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     child = _child([FlowOutput(name="out", binding="${tail.output}")])
     end = child.nodes[END_ID]
     # Lower `${tail.output} != ''` onto END exactly as boundary synthesis does.
-    end.post_asserts = ["${__assert_tail} != ''"]
-    end.assert_texts = {"${__assert_tail} != ''": "${tail.output} != ''"}
+    origin = OriginRef("flow/asserts/0")
+    assertion_range = SourceRange(3, 1, 3, 30)
+    end.post_asserts = [Assertion("${__assert_tail} != ''", "${tail.output} != ''", origin)]
+    end.post_assert_ranges = [assertion_range]
     end.params.append(ParamDecl(name="__assert_tail"))
     child.wiring[END_ID]["__assert_tail"] = Binding("${tail.output:-null}")
     child.edges.append(Edge(id=f"tail->{END_ID}#assert", from_="tail", to=END_ID,
@@ -148,9 +150,10 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     cloned = clone_child(child, callsite="each", record={"topic": "ACME"})
     ce = cloned.nodes["each/__end__"]
     # the lowered post-assert is node-local (it names a synth PARAM, not a node) -> UNCHANGED.
-    assert ce.post_asserts == ["${__assert_tail} != ''"]
-    # the author's ORIGINAL text rides along so a failure message shows `${tail.output} != ''`.
-    assert ce.assert_texts == {"${__assert_tail} != ''": "${tail.output} != ''"}
+    assert ce.post_asserts == [
+        Assertion("${__assert_tail} != ''", "${tail.output} != ''", origin)
+    ]
+    assert ce.post_assert_ranges == [assertion_range]
     # the synth wiring feeding the param is re-namespaced under the callsite.
     assert cloned.wiring["each/__end__"]["__assert_tail"] == Binding(
         "${each/tail.output:-null}"
@@ -158,6 +161,30 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     # the producer->END synth edge is re-keyed under the callsite (gates the assert on its producer).
     assert any(e.from_ == "each/tail" and e.to == "each/__end__"
                and e.input_group == "__assert_tail" for e in cloned.edges)
+
+
+def test_spawner_range_append_pads_spanless_child_assertions():
+    """A spawner range cannot slide onto an earlier source-free child assertion."""
+    child = _single()
+    child_end = child.nodes[END_ID]
+    child_end.post_asserts = [Assertion("${output} != null", "child output exists")]
+    child_end.post_assert_ranges = []
+    spawner_range = SourceRange(20, 7, 20, 35)
+
+    cloned = clone_child(
+        child,
+        callsite="each",
+        record={"topic": "ACME"},
+        post_asserts=[Assertion("${output} != null", "call output exists")],
+        post_assert_ranges=[spawner_range],
+    )
+    cloned_end = cloned.nodes[cloned.end_id]
+
+    assert [a.display for a in cloned_end.post_asserts] == [
+        "child output exists",
+        "call output exists",
+    ]
+    assert cloned_end.post_assert_ranges == [None, spawner_range]
 
 
 # --- firing contract: eval_node drives the node's `run` wrapper, which fires an END's post-assert
@@ -177,8 +204,9 @@ def _tail_assert_end():
     # An END whose post-assert reads a SYNTH PARAM bound into the record from `${each/tail.output}`,
     # modeled on the lowered shape in test_clone_child_lowered_post_asserts_survive_clone above.
     end = EndNode.record("each/__end__", output_names=["out"])
-    end.post_asserts = ["${__assert_tail} != ''"]
-    end.assert_texts = {"${__assert_tail} != ''": "${each/tail.output} != ''"}
+    end.post_asserts = [
+        Assertion("${__assert_tail} != ''", "${each/tail.output} != ''")
+    ]
     end.params.append(ParamDecl(name="__assert_tail"))
     return stamp_reads(
         end,

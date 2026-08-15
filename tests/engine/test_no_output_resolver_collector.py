@@ -11,6 +11,7 @@ import importlib
 import pytest
 
 from agent_composer.nodes.base import NodeKind, Output, ParamDecl
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.nodes.end import EndNode
 from agent_composer.runtime.eval_node import EvaluationFailure
 from agent_composer.typesys.pool import VariablePool
@@ -33,7 +34,7 @@ def _end_with_tail_assert(node_id="each/__end__"):
     # A spliced child END whose post-assert reads a SYNTH PARAM (`__assert_tail`) bound into the
     # record from `${each/tail.output}` — the production shape after ref lowering.
     end = EndNode.record(node_id, output_names=["out"])
-    end.post_asserts = ["${__assert_tail} != ''"]
+    end.post_asserts = [Assertion("${__assert_tail} != ''", "tail must not be empty")]
     end.params.append(ParamDecl(name="__assert_tail"))
     return stamp_reads(
         end,

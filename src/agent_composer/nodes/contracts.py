@@ -1,9 +1,9 @@
 """Source-neutral semantic IR shared by node and flow construction.
 
 These frozen carriers attach opaque origins to executable meanings without
-depending on Compose/YAML or runtime state. They are definitions only: consumer
-cutovers normalize wiring, assertions, parameters, and value contracts in later
-steps of the origin-IR migration.
+depending on Compose/YAML or runtime state. Compiled wiring and node assertions
+already use their canonical carriers; parameters and value contracts cross over
+in later steps of the origin-IR migration.
 """
 
 from __future__ import annotations

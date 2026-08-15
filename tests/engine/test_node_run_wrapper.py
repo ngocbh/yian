@@ -14,12 +14,14 @@ from typing import Any
 
 import pytest
 
+from agent_composer.diagnostics import SourceRange
 from agent_composer.nodes.base import (
     Node,
     NodeAssertFailed,
     NodeKind,
     Output,
 )
+from agent_composer.nodes.contracts import Assertion
 
 
 class _ImplNode(Node):
@@ -42,8 +44,8 @@ class _ImplNode(Node):
 def test_run_returns_impl_output_when_asserts_hold():
     """Both pre and post hold -> `run()` returns the `Output` `_run_impl` produced."""
     node = _ImplNode("n", value={"output": 42})
-    node.pre_asserts = ["${x} > 0"]
-    node.post_asserts = ["${output.output} == 42"]
+    node.pre_asserts = [Assertion("${x} > 0", "x is positive")]
+    node.post_asserts = [Assertion("${output.output} == 42", "output is 42")]
 
     result = node.run({"x": 5})
 
@@ -55,7 +57,7 @@ def test_run_returns_impl_output_when_asserts_hold():
 def test_pre_assert_failure_raises_before_impl_runs():
     """A violated pre-assert raises `NodeAssertFailed` before `_run_impl` runs."""
     node = _ImplNode("n", value={"output": 1})
-    node.pre_asserts = ["${x} > 100"]
+    node.pre_asserts = [Assertion("${x} > 100", "x is greater than 100")]
 
     with pytest.raises(NodeAssertFailed) as excinfo:
         node.run({"x": 5})
@@ -68,7 +70,7 @@ def test_pre_assert_failure_raises_before_impl_runs():
 def test_post_assert_failure_on_output_raises():
     """A violated post-assert (reading `${output}`) raises `NodeAssertFailed`."""
     node = _ImplNode("n", value={"output": 7})
-    node.post_asserts = ["${output.output} > 100"]
+    node.post_asserts = [Assertion("${output.output} > 100", "output is greater than 100")]
 
     with pytest.raises(NodeAssertFailed) as excinfo:
         node.run({})
@@ -78,16 +80,41 @@ def test_post_assert_failure_on_output_raises():
     assert "'n'" in str(excinfo.value)
 
 
-def test_assert_texts_used_in_message():
-    """The failure message shows the author's original text via `assert_texts`."""
+def test_assertion_evaluates_expression_and_reports_display():
+    """Display text is presentation-only; it is neither parsed nor evaluated."""
     node = _ImplNode("n", value=None)
-    node.pre_asserts = ["${__assert_calc} > 100"]
-    node.assert_texts = {"${__assert_calc} > 100": "calc.output > 100"}
+    node.pre_asserts = [
+        Assertion("${__assert_calc} > 100", "authored text that is not an expression")
+    ]
 
     with pytest.raises(NodeAssertFailed) as excinfo:
         node.run({"__assert_calc": 5})
 
-    assert "calc.output > 100" in str(excinfo.value)
+    assert "authored text that is not an expression" in str(excinfo.value)
+    assert excinfo.value.locator.key == "authored text that is not an expression"
+
+
+def test_assertion_display_is_not_evaluated_when_expression_holds():
+    """A deliberately invalid display cannot affect a valid executable expression."""
+    node = _ImplNode("n", value=None)
+    node.pre_asserts = [Assertion("${x} > 0", "{{ definitely not executable")]
+
+    assert node.run({"x": 1}) == Output(None)
+
+
+def test_duplicate_assertions_fail_at_the_first_occurrence_range():
+    """Equal carrier values retain list-order and positional first-failure semantics."""
+    node = _ImplNode("n", value=None)
+    assertion = Assertion("1 == 2", "must hold")
+    first = SourceRange(4, 7, 4, 18)
+    second = SourceRange(5, 7, 5, 18)
+    node.pre_asserts = [assertion, assertion]
+    node.pre_assert_ranges = [first, second]
+
+    with pytest.raises(NodeAssertFailed) as caught:
+        node.run({})
+
+    assert caught.value.range == first
 
 
 # The inherited base
@@ -186,7 +213,9 @@ def test_eval_node_does_not_fire_when_run_bypasses_firing():
     from tests.engine._fakes import drive, stamp_reads
 
     node = _BypassRunNode("n", value="v")
-    node.post_asserts = ["${output} == 'never'"]  # would FAIL if fired
+    node.post_asserts = [
+        Assertion("${output} == 'never'", "output must equal never")
+    ]  # would FAIL if fired
     stamp_reads(node, {})
 
     result = drive(node)
@@ -200,7 +229,7 @@ def test_eval_node_fires_via_wrapper_positive_control():
     from tests.engine._fakes import drive, stamp_reads
 
     node = _FireRunNode("n", value="v")
-    node.post_asserts = ["${output} == 'never'"]
+    node.post_asserts = [Assertion("${output} == 'never'", "output must equal never")]
     stamp_reads(node, {})
 
     result = drive(node)

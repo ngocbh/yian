@@ -13,8 +13,10 @@ import pytest
 
 from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import condition_refs
 from agent_composer.nodes.base import ParamDecl
+from agent_composer.nodes.contracts import Assertion
 
 
 # A small shared environment: two producers (opaque output types) + two flow inputs.
@@ -25,7 +27,7 @@ FLOW_INPUTS = {"age", "threshold"}
 
 def _lower(asserts, **kw):
     return lower_flow_asserts(
-        asserts,
+        [a if isinstance(a, Assertion) else Assertion(a, a) for a in asserts],
         kw.get("flow_inputs", FLOW_INPUTS),
         kw.get("valid_targets", VALID_TARGETS),
         kw.get("producers", PRODUCERS),
@@ -33,11 +35,16 @@ def _lower(asserts, **kw):
     )
 
 
+def _expressions(assertions: list[Assertion]) -> list[str]:
+    """Project executable text while keeping carrier assertions explicit."""
+    return [assertion.expression for assertion in assertions]
+
+
 # ---- PRE (boundary) asserts: rewrite `input.` -> `output.` (START's coerced output) ------
 
 def test_pre_mixed_spelling_rewrites_input_to_output():
     r = _lower(["${input.age} >= 18"])
-    assert r.start_pre == ["${output.age} >= 18"]
+    assert _expressions(r.start_pre) == ["${output.age} >= 18"]
     assert r.end_post == []
     assert r.synth_params == []
     assert r.synth_wiring == {}
@@ -45,7 +52,7 @@ def test_pre_mixed_spelling_rewrites_input_to_output():
 
 def test_pre_bare_spelling_rewrites_input_to_output():
     r = _lower(["input.age >= 18"])
-    assert r.start_pre == ["output.age >= 18"]
+    assert _expressions(r.start_pre) == ["output.age >= 18"]
     assert r.synth_params == []
 
 
@@ -54,7 +61,7 @@ def test_pre_bare_spelling_rewrites_input_to_output():
 def test_post_bare_producer_ref_lowers_to_synth_param():
     r = _lower(["emit.output.n >= 1"])
     # bare form rewrites without braces.
-    assert r.end_post == ["__assert_emit.n >= 1"]
+    assert _expressions(r.end_post) == ["__assert_emit.n >= 1"]
     assert r.synth_params == [ParamDecl(name="__assert_emit")]
     assert r.synth_wiring == {"__assert_emit": "${emit.output:-null}"}
     assert r.start_pre == []
@@ -62,7 +69,7 @@ def test_post_bare_producer_ref_lowers_to_synth_param():
 
 def test_post_dotted_field_ref_lowers_to_synth_field():
     r = _lower(['${classify.output.label} == "x"'])
-    assert r.end_post == ['${__assert_classify.label} == "x"']
+    assert _expressions(r.end_post) == ['${__assert_classify.label} == "x"']
     assert r.synth_params == [ParamDecl(name="__assert_classify")]
     assert r.synth_wiring == {"__assert_classify": "${classify.output:-null}"}
 
@@ -71,7 +78,7 @@ def test_post_same_producer_two_fields_share_one_synth():
     r = _lower(["emit.output.n >= 1", "emit.output.m >= 2"])
     assert len(r.synth_params) == 1
     assert r.synth_params[0].name == "__assert_emit"
-    assert r.end_post == ["__assert_emit.n >= 1", "__assert_emit.m >= 2"]
+    assert _expressions(r.end_post) == ["__assert_emit.n >= 1", "__assert_emit.m >= 2"]
     assert r.synth_wiring == {"__assert_emit": "${emit.output:-null}"}
 
 
@@ -79,7 +86,7 @@ def test_post_mixed_producer_and_input_two_synths():
     r = _lower(["emit.output.n >= input.threshold"])
     names = [p.name for p in r.synth_params]
     assert set(names) == {"__assert_emit", "__assert_input_threshold"}
-    assert r.end_post == ["__assert_emit.n >= __assert_input_threshold"]
+    assert _expressions(r.end_post) == ["__assert_emit.n >= __assert_input_threshold"]
     # producer edge defaults to null; the input edge does NOT (input is always present).
     assert r.synth_wiring["__assert_emit"] == "${emit.output:-null}"
     assert r.synth_wiring["__assert_input_threshold"] == "${input.threshold}"
@@ -128,6 +135,14 @@ def test_malformed_expression_raises():
         _lower(["emit.output.n >= "])
 
 
+def test_lowering_error_reports_display_not_rewritten_expression():
+    """Compile diagnostics use stable authored presentation from the carrier."""
+    assertion = Assertion("missing.output > 0", "the authored business rule")
+
+    with pytest.raises(LoadError, match="authored business rule"):
+        _lower([assertion])
+
+
 # ---- Every lowered string must remain a parseable condition ---------------------
 
 def test_all_lowered_strings_parse():
@@ -139,10 +154,10 @@ def test_all_lowered_strings_parse():
             "emit.output.n >= input.threshold",
         ]
     )
-    for s in r.start_pre + r.end_post:
+    for assertion in r.start_pre + r.end_post:
         # condition_refs parses the whole value as a boolean expression; a broken
         # ref rewrite would raise here.
-        condition_refs(s)
+        condition_refs(assertion.expression)
     # Wiring sources are also ${...} refs — confirm they parse too.
     for src in r.synth_wiring.values():
         condition_refs(src)
@@ -171,3 +186,16 @@ def test_no_ranges_gives_none_padded_lists():
     r = _lower(["${input.age} >= 18"])
     assert r.pre_ranges == [None]
     assert r.post_ranges == []
+
+
+def test_lowering_changes_only_expression_and_preserves_occurrence_metadata():
+    """Display and origin belong to each occurrence even when executable text is rewritten."""
+    first = Assertion("${input.age} >= 18", "age must be adult", OriginRef("asserts/0"))
+    second = Assertion("${input.age} >= 18", "age must be adult", OriginRef("asserts/1"))
+
+    lowered = _lower([first, second])
+
+    assert _expressions(lowered.start_pre) == ["${output.age} >= 18"] * 2
+    assert [a.display for a in lowered.start_pre] == ["age must be adult"] * 2
+    assert [a.origin for a in lowered.start_pre] == [first.origin, second.origin]
+    assert lowered.start_pre[0] is not lowered.start_pre[1]

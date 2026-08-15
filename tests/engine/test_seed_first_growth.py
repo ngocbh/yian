@@ -4,6 +4,7 @@ from agent_composer.compile.model import Flow
 from agent_composer.nodes.base import Grow
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.call import CallNode
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.map import MapNode
 
@@ -16,8 +17,7 @@ def _growth_producers():
 
     call = CallNode("call", flow_id="child", child=child)
     call.params = [ParamDecl(name="x")]
-    call.post_asserts = ["output == x"]
-    call.assert_texts = {"output == x": "output == x"}
+    call.post_asserts = [Assertion("output == x", "output == x")]
     call_grow = call.run({"x": 1})
 
     map_node = MapNode("map", flow_id="child", child=child)
@@ -58,7 +58,7 @@ def _assert_same_fragment(actual: Flow, expected: Flow) -> None:
         assert left.commit_as == right.commit_as
         assert left.origin_id == right.origin_id
         assert left.post_asserts == right.post_asserts
-        assert left.assert_texts == right.assert_texts
+        assert left.post_assert_ranges == right.post_assert_ranges
 
 
 def test_call_map_and_loop_return_seed_only():
@@ -86,7 +86,7 @@ def test_compile_builder_reconstructs_every_growth_kind():
         callsite=call.id,
         record=dict(call_grow.seed),
         post_asserts=call.post_asserts,
-        assert_texts=call.assert_texts,
+        post_assert_ranges=call.post_assert_ranges,
         input_names={param.name for param in call.params or []},
     )
     _assert_same_fragment(build_grow(call, call_grow.seed), call_expected)

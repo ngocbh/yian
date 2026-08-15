@@ -42,10 +42,12 @@ from __future__ import annotations
 
 import itertools
 import re
+from dataclasses import replace
 from typing import Any, Callable, Optional
 
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.expr import (
     ExpressionError,
     expr_refs_of,
@@ -90,9 +92,10 @@ def desugar_inline_calls(
 
     Returns `(new_descriptors, new_outputs, new_asserts)`: the descriptor map augmented with
     one synth `CallDescriptor` per inline call (the host binding rewritten to
-    `${<synth>.output}`), the flow `outputs:` section, and the `asserts:` list — each with its
-    inline calls rewritten the same way. A span-wrapped inline `${ f(...) }` in an assert
-    expression (`${ f(...) } == x`) lifts to a synth node so the assert reads its output.
+    `${<synth>.output}`), the flow `outputs:` section, and ordered semantic `Assertion`
+    carriers. An assertion's inline calls rewrite only its executable expression; display/origin
+    stay stable. A span-wrapped inline `${ f(...) }` in an assert expression
+    (`${ f(...) } == x`) lifts to a synth node so the assert reads its output.
 
     Each synth node from a node host locates at the range of the binding it was found in (its
     own `call(...)` directive line); a synth node from the flow `outputs:`/`asserts:` section
@@ -314,16 +317,29 @@ def _desugar_outputs(outputs: Any, mint: Callable[[], str], line: Optional[int])
 
 
 def _desugar_asserts(asserts: Optional[list], mint: Callable[[], str], line: Optional[int]) -> tuple:
-    """Desugar an inline `${ f(...) }` in each flow-assert string, returning
-    `(new_asserts, inline_calls)`. A non-string assert (shouldn't occur — the schema is
-    `list[str]`) passes through. `None`/empty returns unchanged."""
+    """Cross raw flow asserts into semantic carriers and desugar inline calls.
+
+    Parsed YAML supplies strings. An existing carrier is accepted for source-neutral
+    programmatic composition and retains its display/origin. Rewriting changes only the
+    executable expression, so generated node ids never replace authored presentation.
+    `None`/empty returns unchanged.
+    """
     if not asserts:
         return asserts, []
     calls: list = []
-    new_asserts = [
-        _desugar_value(a, mint, calls, "assert", line=line) if isinstance(a, str) else a
-        for a in asserts
-    ]
+    new_asserts: list[Assertion] = []
+    for value in asserts:
+        if isinstance(value, Assertion):
+            assertion = value
+        elif isinstance(value, str):
+            assertion = Assertion(expression=value, display=value)
+        else:
+            raise TypeError(
+                "flow assertions must be strings or Assertion carriers, "
+                f"got {type(value).__name__}"
+            )
+        expression = _desugar_value(assertion.expression, mint, calls, "assert", line=line)
+        new_asserts.append(replace(assertion, expression=expression))
     return new_asserts, calls
 
 

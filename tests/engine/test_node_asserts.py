@@ -7,6 +7,7 @@ Runtime: per-node enforcement in `Node.run` (pre before `_run`, post after) — 
 import pytest
 
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.run import run_flow
 
 
@@ -36,8 +37,8 @@ output: ${{x.output}}
 def test_node_asserts_classify_pre_and_post():
     loaded = load_flow(_flow(["${output} >= 0", "${n} >= 0"]))
     x = loaded.compiled.nodes["x"]
-    assert x.post_asserts == ["${output} >= 0"]   # reads ${output}
-    assert x.pre_asserts == ["${n} >= 0"]         # inputs-only
+    assert x.post_asserts == [Assertion("${output} >= 0", "${output} >= 0")]
+    assert x.pre_asserts == [Assertion("${n} >= 0", "${n} >= 0")]
 
 
 @pytest.mark.parametrize("pre", ["n >= 0", "${n} >= 0", "${n >= 0}"])
@@ -47,8 +48,18 @@ def test_node_asserts_classify_same_across_spellings(pre, post):
     # so the bare / mixed / whole-span spellings must classify identically: a `${n}`-only
     # (input) assert is pre, an `${output}`-reading assert is post.
     x = load_flow(_flow([post, pre])).compiled.nodes["x"]
-    assert x.post_asserts == [post]
-    assert x.pre_asserts == [pre]
+    assert x.post_asserts == [Assertion(post, post)]
+    assert x.pre_asserts == [Assertion(pre, pre)]
+
+
+def test_duplicate_node_asserts_are_distinct_ordered_occurrences():
+    """Equal authored text must not collapse occurrence identity or positional ranges."""
+    text = "${n} >= 0"
+    x = load_flow(_flow([text, text])).compiled.nodes["x"]
+
+    assert x.pre_asserts == [Assertion(text, text), Assertion(text, text)]
+    assert x.pre_asserts[0] is not x.pre_asserts[1]
+    assert len(x.pre_assert_ranges) == 2
 
 
 @pytest.mark.parametrize("bad", ["nope > 0", "${nope} > 0", "${nope > 0}"])

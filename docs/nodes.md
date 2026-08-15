@@ -32,15 +32,16 @@ engine always drives that shared wrapper.
 class Node:
     id: NodeId                       # where my output is stored
     params: list[ParamDecl]          # my input NAMES only — the flow owns their sources (wiring)
-    pre_asserts / post_asserts       # conditions base run checks before / after the body
+    pre_asserts: list[Assertion]      # ordered contracts checked before the body
+    post_asserts: list[Assertion]     # ordered contracts checked after an Output
     is_spawner: bool = False         # may I return Grow (expand the graph)?
 
     def run(self, inputs, **caps) -> NodeResult:   # shared template; do not override
         inputs = apply_defaults(self.params, inputs)
-        check(self.pre_asserts, inputs)
+        check_assertions(self.pre_asserts, inputs)  # evaluate expression; report display
         outcome = self._run_impl(inputs, **caps)   # the ONE kind-specific step
         if isinstance(outcome, Output):
-            check(self.post_asserts, {**inputs, "output": outcome.value})
+            check_assertions(self.post_asserts, {**inputs, "output": outcome.value})
         return outcome
 
     def _run_impl(self, inputs, **caps) -> NodeResult:

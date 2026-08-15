@@ -1,4 +1,5 @@
 from agent_composer.nodes.base import NodeKind, Output
+from agent_composer.nodes.contracts import Assertion
 from agent_composer.nodes.end import EndNode
 
 
@@ -60,14 +61,14 @@ def test_end_post_asserts_fire_record_scoped_through_eval_node():
     pool.set("emit", {"n": 4})  # the producer value bound into the record via the synth param
 
     node = EndNode.record("__end__", output_names=["n"])
-    node.post_asserts = ["${__assert_emit} > 0"]  # node-local synth-param ref (lowered shape)
+    node.post_asserts = [Assertion("${__assert_emit} > 0", "emit must be positive")]
     node.params.append(ParamDecl(name="__assert_emit"))
     flow = SimpleNamespace(wiring={"__end__": {"n": "${emit.output.n}",
                                               "__assert_emit": "${emit.output.n:-null}"}})
     assert eval_node(node, flow, pool) == Output(4)
 
     bad = EndNode.record("__end__", output_names=["n"])
-    bad.post_asserts = ["${__assert_emit} > 100"]
+    bad.post_asserts = [Assertion("${__assert_emit} > 100", "emit must exceed 100")]
     bad.params.append(ParamDecl(name="__assert_emit"))
     failed = eval_node(bad, flow, pool)
     assert isinstance(failed, EvaluationFailure)
@@ -92,12 +93,12 @@ def test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param():
     flow = SimpleNamespace(wiring=wiring)
 
     ok_node = EndNode.record("__end__", output_names=["n"])
-    ok_node.post_asserts = ["${__assert_score} > 0"]
+    ok_node.post_asserts = [Assertion("${__assert_score} > 0", "score must be positive")]
     ok_node.params.append(ParamDecl(name="__assert_score"))
     assert eval_node(ok_node, flow, pool) == Output(7)
 
     bad_node = EndNode.record("__end__", output_names=["n"])
-    bad_node.post_asserts = ["${__assert_score} > 100"]
+    bad_node.post_asserts = [Assertion("${__assert_score} > 100", "score must exceed 100")]
     bad_node.params.append(ParamDecl(name="__assert_score"))
     failed = eval_node(bad_node, flow, pool)
     assert isinstance(failed, EvaluationFailure)

@@ -20,8 +20,8 @@ engine's `num_workers`); it is carried for the over case.
 
 from typing import Any, Callable, ClassVar, Optional
 
-from agent_composer.expr import eval_binding, resolve_reference
 from agent_composer.nodes.base import Grow, Node, NodeKind
+from agent_composer.nodes.binding import _resolve_source
 
 
 class MapNode(Node):
@@ -79,7 +79,7 @@ class MapNode(Node):
         against `pool`. A source that resolves to `None`/non-list is a loud `RuntimeError`
         (surfaced as a NodeFailed by the read seam)."""
         over_src = node_wiring["over"]
-        items = eval_binding(over_src, lambda p: resolve_reference(p, pool))
+        items = _resolve_source(over_src, pool)
         if items is None or not isinstance(items, list):
             raise RuntimeError(
                 f"MAP node {self.id!r}: `over` ({over_src}) did not resolve to a list"

@@ -1652,6 +1652,35 @@ def test_def_assembly_reader_fallback_restores_only_node_surfaces():
     assert "outputs" in normalized["wrapper"]
 
 
+def test_inline_map_literal_over_runs_with_inferred_item_type():
+    loaded = load_flow(
+        """id: inline-map-literal-over
+name: inline_map_literal_over
+nodes:
+  each:
+    kind: map
+    over: [1, 2]
+    input:
+      value: ${item}
+    nodes:
+      echo:
+        kind: code
+        code: |
+          return inputs["value"]
+        input:
+          value: ${input.value}
+        output: int
+    output: ${echo.output}
+output: ${each.output}
+"""
+    )
+
+    result = run_flow(loaded, {})
+
+    assert result.status == "succeeded"
+    assert result.output == [1, 2]
+
+
 def test_inline_map_opaque_over_without_direct_item_walk_loads_and_runs():
     loaded = load_flow(
         """id: inline-map-opaque-over-no-item

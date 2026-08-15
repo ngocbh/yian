@@ -81,6 +81,64 @@ def test_value_copy_preserves_alias_identity_and_recursive_alias():
     assert copied["root"]["self"] is copied["root"]
 
 
+def test_value_copy_is_stack_safe_for_deep_alias_dag():
+    levels = 2_000
+    copied = _binary_alias_document(levels).root.child("root").value
+
+    for _ in range(levels):
+        assert copied[0] is copied[1]
+        copied = copied[0]
+    assert copied == ["leaf"]
+
+
+@pytest.mark.parametrize(
+    ("container", "descend"),
+    [
+        (lambda value: [value], lambda value: value[0]),
+        (lambda value: {"next": value}, lambda value: value["next"]),
+        (lambda value: (value,), lambda value: value[0]),
+        (lambda value: frozenset((value,)), lambda value: next(iter(value))),
+    ],
+)
+def test_virtual_value_copy_is_stack_safe_for_deep_safe_containers(
+    container,
+    descend,
+):
+    levels = 2_000
+    original = "leaf"
+    for _ in range(levels):
+        original = container(original)
+
+    copied = SourceCursor.virtual(original).value
+
+    assert copied is not original
+    for _ in range(levels):
+        copied = descend(copied)
+    assert copied == "leaf"
+
+
+def test_virtual_deep_invalid_value_raises_type_error_without_recursion():
+    class InvalidList(list):
+        pass
+
+    value = InvalidList()
+    for _ in range(2_000):
+        value = [value]
+
+    with pytest.raises(TypeError, match="SafeLoader value"):
+        SourceCursor.virtual(value)
+
+
+def test_virtual_copy_preserves_tuple_through_list_cycle():
+    recursive_list = []
+    original = (recursive_list,)
+    recursive_list.append(original)
+
+    copied = SourceCursor.virtual(original).value
+
+    assert copied is copied[0][0]
+
+
 def test_value_view_is_recursive_and_read_only():
     document = SourceDocument.parse(
         "shared: &shared\n"

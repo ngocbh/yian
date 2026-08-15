@@ -203,7 +203,7 @@ class SourceCursor:
                 A fresh deep copy whose shared and recursive aliases are kept.
         """
 
-        return copy.deepcopy(self._value)
+        return _snapshot_safe_value(self._value)
 
     def _value_view(self) -> Any:
         """Return an identity-preserving recursive read-only value view."""
@@ -804,7 +804,7 @@ class SourceCursor:
                 f"field {key!r} must be a mapping, got {type(value).__name__}",
                 child.range,
             )
-        return copy.deepcopy(value)
+        return _snapshot_safe_value(value)
 
     def sequence(self, key: Any) -> list[Any]:
         """Return a defensive copy of a required sequence field.
@@ -830,7 +830,7 @@ class SourceCursor:
                 f"field {key!r} must be a sequence, got {type(value).__name__}",
                 child.range,
             )
-        return copy.deepcopy(value)
+        return _snapshot_safe_value(value)
 
     def range_of(self, key: Any) -> SourceRange | None:
         """Return the effective child value range, requiring the field.

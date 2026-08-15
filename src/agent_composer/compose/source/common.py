@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass, field
 from datetime import date, datetime
-import copy
 from typing import Any, TypeAlias
 
 from agent_composer.events import SourceRange
@@ -179,39 +178,108 @@ _SAFE_SCALAR_TYPES = (
 _SAFE_CONTAINER_TYPES = (dict, list, tuple, set, frozenset)
 
 
-def _validate_safe_value(value: Any, seen: set[int] | None = None) -> None:
-    """Validate the exact recursive value algebra produced by ``SafeLoader``."""
-
-    value_type = type(value)
-    if value_type in _SAFE_SCALAR_TYPES:
-        return
-    if value_type not in _SAFE_CONTAINER_TYPES:
-        raise TypeError(
-            "source cursors accept only exact SafeLoader value types; "
-            f"got {value_type.__name__}"
-        )
-
-    if seen is None:
-        seen = set()
-    identity = id(value)
-    if identity in seen:
-        return
-    seen.add(identity)
-
-    if value_type is dict:
-        for key, item in value.items():
-            _validate_safe_value(key, seen)
-            _validate_safe_value(item, seen)
-        return
-    for item in value:
-        _validate_safe_value(item, seen)
-
-
 def _snapshot_safe_value(value: Any) -> Any:
-    """Validate and defensively snapshot one virtual source value."""
+    """Validate and iteratively copy one exact SafeLoader value graph.
 
-    _validate_safe_value(value)
-    return copy.deepcopy(value)
+    Mutable containers are allocated before their contents, which preserves
+    recursive aliases. Immutable containers are then finalized bottom-up and
+    may safely point at those mutable placeholders.
+    """
+
+    originals: dict[int, Any] = {}
+    containers: list[Any] = []
+    copies: dict[int, Any] = {}
+    pending = [value]
+
+    while pending:
+        current = pending.pop()
+        current_type = type(current)
+        if current_type in _SAFE_SCALAR_TYPES:
+            continue
+        if current_type not in _SAFE_CONTAINER_TYPES:
+            raise TypeError(
+                "source cursors accept only exact SafeLoader value types; "
+                f"got {current_type.__name__}"
+            )
+
+        identity = id(current)
+        if identity in originals:
+            continue
+        originals[identity] = current
+        containers.append(current)
+
+        if current_type is dict:
+            copies[identity] = {}
+            for key, item in current.items():
+                pending.append(item)
+                pending.append(key)
+        else:
+            if current_type is list:
+                copies[identity] = []
+            elif current_type is set:
+                copies[identity] = set()
+            pending.extend(current)
+
+    immutable_states: dict[int, bool] = {}
+    for container in containers:
+        if type(container) not in (tuple, frozenset):
+            continue
+        identity = id(container)
+        if identity in copies:
+            continue
+
+        stack: list[tuple[Any, bool]] = [(container, False)]
+        while stack:
+            current, ready = stack.pop()
+            current_identity = id(current)
+            if current_identity in copies:
+                continue
+            if ready:
+                if type(current) is tuple:
+                    copied = tuple(
+                        item
+                        if type(item) in _SAFE_SCALAR_TYPES
+                        else copies[id(item)]
+                        for item in current
+                    )
+                else:
+                    copied = frozenset(
+                        item
+                        if type(item) in _SAFE_SCALAR_TYPES
+                        else copies[id(item)]
+                        for item in current
+                    )
+                copies[current_identity] = copied
+                immutable_states[current_identity] = False
+                continue
+
+            if immutable_states.get(current_identity, False):
+                raise TypeError("source value contains an immutable container cycle")
+            immutable_states[current_identity] = True
+            stack.append((current, True))
+            for item in reversed(tuple(current)):
+                if type(item) in (tuple, frozenset) and id(item) not in copies:
+                    stack.append((item, False))
+
+    def copied_item(item: Any) -> Any:
+        """Return an atomic value or its already-allocated container copy."""
+
+        if type(item) in _SAFE_SCALAR_TYPES:
+            return item
+        return copies[id(item)]
+
+    for container in containers:
+        container_type = type(container)
+        target = copies[id(container)]
+        if container_type is dict:
+            for key, item in container.items():
+                target[copied_item(key)] = copied_item(item)
+        elif container_type is list:
+            target.extend(copied_item(item) for item in container)
+        elif container_type is set:
+            target.update(copied_item(item) for item in container)
+
+    return copied_item(value)
 
 
 class _ReadOnlyMapping(Mapping[Any, Any]):

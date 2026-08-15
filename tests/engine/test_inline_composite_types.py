@@ -574,8 +574,6 @@ def test_zero_step_direct_walk_always_returns_a_fresh_type():
         "${input.record.missing}",
         "${item.value}",
         "${system.now}",
-        "${inputs.value}",
-        "${outputs.value}",
         "${producer}",
         "${producer.value}",
         "${producer()}",

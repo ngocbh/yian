@@ -3,9 +3,8 @@
 A leaf descriptor (agent/code/model/tool) + a typedefs registry (via `BuildContext`) build the
 matching runtime `Node`, stamped with:
   - `output_type = read_type(descriptor.outputs, registry)` (None if no outputs),
-  - `inputs = [InputBinding(name=k, source=v)]` from the descriptor's `inputs:`
-    map (sink bindings — `type_str`/`type` lenient/None; the type is carried by the
-    source); a TOOL's `input:` map binds the same way (untyped).
+  - untyped `Parameter(name=k)` values plus flow-owned wiring from the descriptor's
+    `inputs:` map; a TOOL's `input:` map binds the same way.
 
 `desc.build(ctx)` returns a `BuildResult` (`.node`/`.wiring`/`.edges`). Mirrors the per-kind
 ctor args.
@@ -17,6 +16,7 @@ import pytest
 
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.code import CodeNode
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.model import ModelNode
 from agent_composer.nodes.tool import ToolNode
 from agent_composer.llm_clients import LLMConfig
@@ -60,8 +60,9 @@ def test_agent_node_built_with_type_and_bindings():
     # the node-side signature is the param NAMES; the flow owns the source.
     assert [p.name for p in node.params] == ["topic"]
     assert wiring == {"topic": "${input.topic}"}
-    # sink params are lenient: the type travels with the source.
-    assert node.params[0].type_str is None and node.params[0].type is None
+    # Body-node sink params are exact, source-neutral, and untyped.
+    assert type(node.params[0]) is Parameter
+    assert node.params[0].contract is None
 
 
 def test_agent_node_object_output():
@@ -203,8 +204,8 @@ def test_tool_node_built_with_args_bindings():
     assert node.output_type is None  # no outputs: declared
     assert {p.name for p in node.params} == {"symbol", "limit"}
     assert wiring == {"symbol": "${input.topic}", "limit": 10}
-    # inputs are untyped sink params.
-    assert all(p.type_str is None for p in node.params)
+    # Inputs are exact untyped sink parameters.
+    assert all(type(p) is Parameter and p.contract is None for p in node.params)
 
 
 # ---------- registry-resolved output type ----------

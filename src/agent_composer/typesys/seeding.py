@@ -6,9 +6,9 @@ the child's own declared defaults for omitted args. The clock reaches children t
 the inherited `pool.system` (`${system.today}`/`${system.now}`) — there is no separate
 `as_of` clock special-case.
 
-Lives in the engine layer so the nodes can import it without an import-direction
-inversion. It is spec-free at runtime — it duck-types the declared-input decls
-(`.name`/`.type_str`/`.default`); the `InputDecl` it operates on is the Compose loader's.
+Lives below nodes so the node layer can import it without an import-direction
+inversion. It structurally supports both canonical node `Parameter` values and the
+Compose boundary's retained `InputDecl` without importing either package.
 """
 
 from __future__ import annotations
@@ -17,26 +17,41 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List
 
+from agent_composer.typesys.values import ValueKind, build_value_as
+
 if TYPE_CHECKING:  # pragma: no cover - typing only (keeps state import-clean)
     from agent_composer.typesys.pool import VariablePool
 
 
 def coerce_param(field: Any, value: Any) -> Any:
-    """Coerce a raw (usually string) input to the flow input's declared `type_str`.
+    """Coerce a supplied string under a parameter's explicit scalar policy.
 
-    Only the unambiguous scalar types are coerced; string/topics/object pass
-    through as-entered. Invalid numbers/bools fall back to the raw value rather
-    than raising — the engine/node decides what to do with a bad input.
+    A canonical node `Parameter` opts in with `coerce_strings=True` and supplies
+    its resolved type through `contract`. A retained Compose `InputDecl` supplies
+    `type_str` and keeps its existing boundary coercion. Only unambiguous scalar
+    types coerce; other values pass through for the owning validator to reject.
     """
     if value is None or not isinstance(value, str):
         return value
+    contract = getattr(field, "contract", None)
+    if hasattr(field, "coerce_strings"):
+        if not field.coerce_strings or contract is None:
+            return value
+        kind = contract.type.kind
+        type_name = {
+            ValueKind.INTEGER: "int",
+            ValueKind.NUMBER: "float",
+            ValueKind.BOOLEAN: "bool",
+        }.get(kind)
+    else:
+        type_name = field.type_str
     raw = value.strip()
     try:
-        if field.type_str == "int":
+        if type_name == "int":
             return int(raw)
-        if field.type_str == "float":
+        if type_name == "float":
             return float(raw)
-        if field.type_str == "bool":
+        if type_name == "bool":
             return raw.lower() in ("1", "true", "yes", "y", "on")
     except ValueError:
         return value
@@ -49,13 +64,12 @@ def coerce_inputs(inputs: List[Any], raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def apply_defaults(inputs: List[Any], coerced: Dict[str, Any]) -> Dict[str, Any]:
-    """Fill each declared flow input's default for any name the caller OMITTED.
+    """Fill each declared input's default for any name the caller omitted.
 
-    ``coerce_inputs`` only carries caller-passed keys, so an omitted optional input
-    is absent here; without this it resolves to an unbound ``None`` at run time
-    (and, since the strict-renderer change, RAISES at render). The default is
-    coerced to the input's `type` so a YAML ``default: "30"`` on an integer input
-    seeds ``30``.
+    A canonical `Parameter.has_default` distinguishes an explicit null default from
+    absence and retains its stored payload without coercion. The retained Compose
+    `InputDecl` has no presence bit, so its historical non-null default rule and
+    boundary coercion remain until that front-end carrier is cut over.
 
     A caller-passed value is never overridden — even a falsy one, and even ``None``.
     So a parent that BINDS ``null`` to a child input SHADOWS that child's default (the
@@ -67,7 +81,18 @@ def apply_defaults(inputs: List[Any], coerced: Dict[str, Any]) -> Dict[str, Any]
     """
     out = dict(coerced)
     for io in inputs:
-        if io.default is not None and io.name not in out:
+        if io.name in out:
+            continue
+        if hasattr(io, "has_default"):
+            if io.has_default:
+                contract = getattr(io, "contract", None)
+                if contract is not None:
+                    # Validate the authored payload without replacing it with the typed
+                    # system's normalized object. Defaults are semantic source data; coercion
+                    # applies only to supplied boundary strings.
+                    build_value_as(contract.type, io.default)
+                out[io.name] = io.default
+        elif io.default is not None:
             out[io.name] = coerce_param(io, io.default)
     return out
 

@@ -56,8 +56,8 @@ def test_rens_internal_computed_whole_span_renamespaces_all_leaves():
 from agent_composer.events import RunSucceeded
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, NodeState, START_ID, END_ID
 from agent_composer.compose.helpers.types import InputDecl, read_type
-from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.code import CodeNode
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from tests.engine._fakes import FuncNode, derive_wiring
@@ -102,9 +102,9 @@ def _with_boundary(
 def _child_flow():
     # head(reads ${input.x}) -> tail(reads ${head.output}); single output ${tail.output}.
     head = CodeNode("head", code='return inputs["x"] + 1')
-    head.params = [ParamDecl(name="x")]
+    head.params = [Parameter(name="x")]
     tail = CodeNode("tail", code='return inputs["r"] * 10')
-    tail.params = [ParamDecl(name="r")]
+    tail.params = [Parameter(name="r")]
     nodes = {"head": head, "tail": tail}
     edges = [Edge("__start__->head#0", START_ID, "head", input_group="x"),
              Edge("head->tail#0", "head", "tail", input_group="r"),
@@ -312,7 +312,7 @@ def _wide_child(n: int) -> CompiledFlow:
     for k in range(n):
         nid = f"n{k}"
         node = CodeNode(nid, code="tests.engine._compose_codefns:echo_x")
-        node.params = [ParamDecl(name="x")]
+        node.params = [Parameter(name="x")]
         nodes[nid] = node
         node_wiring[nid] = {"x": "${input.x}"}
         edges.append(Edge(f"__start__->{nid}#0", START_ID, nid, input_group="x"))

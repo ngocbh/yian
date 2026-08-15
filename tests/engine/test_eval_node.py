@@ -8,8 +8,7 @@ belong to ``FlowEngine`` rather than this pure evaluation seam.
 from agent_composer.compile.model import START_ID
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route
-from agent_composer.nodes.binding import ParamDecl
-from agent_composer.nodes.contracts import Assertion, Binding
+from agent_composer.nodes.contracts import Assertion, Binding, Parameter
 from agent_composer.nodes.map import MapNode
 from agent_composer.nodes.wait import WaitNode
 from agent_composer.runtime.eval_node import EvaluationFailure
@@ -58,7 +57,7 @@ def test_node_chosen_commit_target_remains_on_output():
 
 def test_binding_failure_returns_diagnostic_evaluation_failure():
     node = FuncNode("n", lambda inputs: inputs)
-    node.params = [ParamDecl(name="x", required=True)]
+    node.params = [Parameter(name="x", required=True)]
     node._wiring_src = {}
 
     result = drive(node)

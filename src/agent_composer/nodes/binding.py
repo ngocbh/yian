@@ -1,12 +1,13 @@
 """Input binding — resolve a node's declared params into a typed input record (the read boundary).
 
-The node/flow split: a node declares its signature as `ParamDecl`s (name + required/default/type,
-NO source); the flow owns the sources in `CompiledFlow.wiring[node_id][param]`. `bind_params`
-joins each `ParamDecl` to its `wiring[name]` source (an `expr.template` value — a whole `${...}`
+The node/flow split: a node declares its signature as source-neutral `Parameter` values (name +
+contract/default policy, NO source); the flow owns the sources in
+`CompiledFlow.wiring[node_id][param]`. `bind_params` joins each parameter to its `wiring[name]`
+source (an `expr.template` value — a whole `${...}`
 resolved against the pool with type preserved, an embedded `${...}` stringified, or a literal),
 building the `{name: value}` record the engine's `eval_node` hands the node instead of the pool.
-Type-checking reuses the `type_for` / `build_value_as` helpers and stays lenient
-on record / variant types that can't resolve against the empty registry.
+Type-checking consumes an optional resolved `ValueContract`; untyped parameters
+accept any resolved Python value.
 
 A MAP body binds a per-element `item` scope: `${item}` / `${item.path}` resolve from the current
 element passed via the `item=` kwarg (a body-local scope, NOT a pool head). The default (`item`
@@ -19,8 +20,7 @@ build_value_as); both sit below/beside `nodes` in the layer ladder.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from agent_composer.events import SourceSpan
 from agent_composer.expr import (
@@ -29,9 +29,10 @@ from agent_composer.expr import (
     eval_binding,
     resolve_reference,
 )
-from agent_composer.nodes.contracts import binding_source
-from agent_composer.typesys import TypeCheckError, Type, build_value_as, type_for
+from agent_composer.nodes.contracts import Parameter, binding_source
+from agent_composer.typesys import TypeCheckError, build_value_as
 from agent_composer.typesys.pool import VariablePool
+from agent_composer.typesys.seeding import coerce_param
 
 
 class BindingError(ValueError):
@@ -42,34 +43,6 @@ class BindingError(ValueError):
     """
 
     locator: object = None  # Optional[SourceSpan]
-
-
-@dataclass(frozen=True)
-class ParamDecl:
-    """
-    One declared input on a node — the node-side half of the node/flow split.
-
-    The node declares only its signature; the flow owns the wiring
-    (`CompiledFlow.wiring[node_id][name] -> source`), so a `ParamDecl` holds NO source.
-
-    Attributes:
-        name (`str`):
-            The input name (the key the bound record is keyed by).
-        type_str (`str`, *optional*, defaults to `None`):
-            The declared type name; `None` is an UNTYPED param (e.g. TOOL args).
-        required (`bool`, *optional*, defaults to `False`):
-            Whether an omitted input is an error. In practice only START params set this.
-        default (`Any`, *optional*, defaults to `None`):
-            The value filled for an OMITTED input. In practice only START params set this.
-        type (`Type`, *optional*, defaults to `None`):
-            The compile-stamped resolved type used to type-check the bound value.
-    """
-
-    name: str
-    type_str: Optional[str] = None
-    required: bool = False
-    default: Any = None
-    type: Optional[Type] = None
 
 
 def _resolve_source(source: Any, pool: VariablePool, item: Any = None) -> Any:
@@ -97,13 +70,13 @@ def _resolve_source(source: Any, pool: VariablePool, item: Any = None) -> Any:
 
 
 def bind_params(
-    params: list[ParamDecl],
+    params: list[Parameter],
     wiring: dict[str, Any],
     pool: VariablePool,
     *,
     item: Any = None,
 ) -> dict[str, Any]:
-    """Resolve each declared `ParamDecl` into a typed record — the engine's read boundary.
+    """Resolve each declared `Parameter` into a typed record — the engine's read boundary.
 
     Joins each param to its source from the flow-owned `wiring` dict (`wiring[name] -> source`):
     coalesce / default / required / type-check / deep-copy / `item` scope. An OMITTED input (no
@@ -111,7 +84,7 @@ def bind_params(
     SHADOWS the child default (`f(x=None)` semantics).
 
     Args:
-        params (`list[ParamDecl]`):
+        params (`list[Parameter]`):
             The node-side declared signature to bind.
         wiring (`dict`):
             The flow-owned `name -> source` map for this node.
@@ -128,19 +101,24 @@ def bind_params(
     """
     record: dict[str, Any] = {}
     for p in params:
+        if type(p) is not Parameter:
+            raise TypeError(
+                f"node params must contain Parameter values, got {type(p).__name__}"
+            )
         try:
             present = p.name in wiring  # an absent edge (caller OMITTED) vs a present one (incl. bound-null)
+            used_default = False
             source = wiring.get(p.name)
             value = _resolve_source(source, pool, item)
             if value is None:
                 # Distinguish an OMITTED input (no wiring edge) from one BOUND-TO-NULL (an edge that
                 # resolves to None): only an omitted input fills its declared default / fails when
                 # required — a caller's explicit null SHADOWS the child default (`f(x=None)` semantics,
-                # the apply_defaults contract). In practice only START_ID's params carry default/required
-                # (every other kind builds bare ParamDecls), so this refinement is inert elsewhere; it
-                # is what lets the spliced child START_ID own omitted-input defaulting.
-                if not present and p.default is not None:
+                # the apply_defaults contract). Loader-built body parameters carry no default;
+                # START parameters do, so the spliced child START owns omitted-input defaulting.
+                if not present and p.has_default:
                     value = p.default
+                    used_default = True
                 elif not present and p.required:
                     raise BindingError(f"required input {p.name!r} is unbound (from={source!r})")
                 elif not present:
@@ -152,17 +130,15 @@ def bind_params(
                     # None to SHADOW any default (`f(x=None)`); the wrapper must NOT re-fill it.
                     record[p.name] = None
                     continue
-            typ = p.type
-            if typ is None and p.type_str is not None:
+            if p.contract is not None:
+                if present and p.coerce_strings:
+                    value = coerce_param(p, value)
                 try:
-                    typ = type_for(p.type_str, {})
-                except TypeCheckError:
-                    typ = None
-            if typ is not None:
-                try:
-                    value = build_value_as(typ, value).to_object()
+                    checked = build_value_as(p.contract.type, value)
                 except TypeCheckError as exc:
                     raise BindingError(f"input {p.name!r}: {exc}") from exc
+                if not used_default:
+                    value = checked.to_object()
             record[p.name] = copy.deepcopy(value)
         except BindingError as exc:
             # Name the failing input for precise error framing; node id is stamped by

@@ -15,8 +15,7 @@ from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import condition_refs
-from agent_composer.nodes.base import ParamDecl
-from agent_composer.nodes.contracts import Assertion
+from agent_composer.nodes.contracts import Assertion, Parameter
 
 
 # A small shared environment: two producers (opaque output types) + two flow inputs.
@@ -62,7 +61,7 @@ def test_post_bare_producer_ref_lowers_to_synth_param():
     r = _lower(["emit.output.n >= 1"])
     # bare form rewrites without braces.
     assert _expressions(r.end_post) == ["__assert_emit.n >= 1"]
-    assert r.synth_params == [ParamDecl(name="__assert_emit")]
+    assert r.synth_params == [Parameter(name="__assert_emit")]
     assert r.synth_wiring == {"__assert_emit": "${emit.output:-null}"}
     assert r.start_pre == []
 
@@ -70,7 +69,7 @@ def test_post_bare_producer_ref_lowers_to_synth_param():
 def test_post_dotted_field_ref_lowers_to_synth_field():
     r = _lower(['${classify.output.label} == "x"'])
     assert _expressions(r.end_post) == ['${__assert_classify.label} == "x"']
-    assert r.synth_params == [ParamDecl(name="__assert_classify")]
+    assert r.synth_params == [Parameter(name="__assert_classify")]
     assert r.synth_wiring == {"__assert_classify": "${classify.output:-null}"}
 
 

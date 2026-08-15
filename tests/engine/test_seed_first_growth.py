@@ -2,9 +2,8 @@
 
 from agent_composer.compile.model import Flow
 from agent_composer.nodes.base import Grow
-from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.call import CallNode
-from agent_composer.nodes.contracts import Assertion
+from agent_composer.nodes.contracts import Assertion, Parameter
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.map import MapNode
 
@@ -16,7 +15,7 @@ def _growth_producers():
     child = _child_flow()
 
     call = CallNode("call", flow_id="child", child=child)
-    call.params = [ParamDecl(name="x")]
+    call.params = [Parameter(name="x")]
     call.post_asserts = [Assertion("output == x", "output == x")]
     call_grow = call.run({"x": 1})
 

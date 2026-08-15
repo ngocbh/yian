@@ -10,8 +10,7 @@ these in a later step; here the test stamps them directly.
 """
 
 from agent_composer.events import SourceRange
-from agent_composer.nodes.binding import ParamDecl
-from agent_composer.nodes.contracts import Assertion
+from agent_composer.nodes.contracts import Assertion, Parameter
 from agent_composer.runtime.eval_node import EvaluationFailure
 from tests.engine._fakes import FuncNode, drive
 
@@ -49,7 +48,7 @@ def test_binding_failure_carries_range():
     # this proves the kind-blind funnel already covers input keys (no per-kind branch).
     rng = SourceRange(7, 3, 7, 20)
     node = FuncNode("n", lambda i: i)
-    node.params = [ParamDecl(name="x", required=True)]
+    node.params = [Parameter(name="x", required=True)]
     node._wiring_src = {}  # x omitted -> BindingError through the funnel
     node.field_ranges = {("input", "x"): rng}  # keyed (kind, key) — the input namespace
     nf = _failure(_drive(node))

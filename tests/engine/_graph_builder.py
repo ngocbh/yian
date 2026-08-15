@@ -82,14 +82,10 @@ def _engine(
 
 @dataclass(frozen=True)
 class _SyntheticInputDecl:
-    """A minimal `InputDecl` duck-type for a manually built graph's START boundary.
+    """A minimal Compose input declaration for a manually built START boundary.
 
-    The real loader derives START's `input_decls` from the flow's `inputs:` block; a
-    hand-built graph has none, so `_graph` synthesizes one decl per `${input.X}` ref it
-    finds across node wiring. StartNode reads only `.name`/`.required`/`.default` (for its
-    `ParamDecl`s) and `.type` (for its coerce/type-check); an untyped (`type=None`) decl is
-    lenient — it binds the run-arg through unchanged, which is exactly what the old bypass
-    (`coerce_inputs([], run_inputs)`) did for these manual graphs.
+    The #150 node-side cutover deliberately retains the Compose declaration at
+    ``StartNode.input_decls``. This untyped fixture keeps manual run arguments lenient.
     """
 
     name: str
@@ -100,12 +96,11 @@ class _SyntheticInputDecl:
 
 
 def _synth_start_input_decls(node_map: dict, wiring: Optional[dict]) -> list:
-    """Collect the `${input.X}` names a manual graph reads, as synthetic START input decls.
+    """Collect the `${input.X}` names a manual graph reads as START input declarations.
 
     Scans every node's wiring source (the passed `wiring`, else the auto-derived one) for
     `input.<name>` reference paths so the scheduled START can `bind_params` the run args
-    against matching params. Returns one `_SyntheticInputDecl` per distinct input name,
-    in first-seen order.
+    against matching derived params. Returns declarations in first-seen order.
     """
     sources = wiring if wiring is not None else derive_wiring(node_map)
     seen: dict[str, None] = {}

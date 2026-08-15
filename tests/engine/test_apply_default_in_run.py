@@ -1,26 +1,27 @@
-"""The base `Node.run` template method fills declared defaults BEFORE pre-asserts.
+"""The base `Node.run` template fills canonical parameter defaults before pre-asserts.
 
-Step 4 of the node-owned-asserts refactor: `Node.run` runs `apply_defaults`
-(from `typesys.seeding`) as its FIRST step — before the pre-asserts — so a
-pre-assert may read an input the caller omitted but the node declares a default
-for. Defaults MUST precede pre-asserts (a pre-assert may read an omitted-then-
-defaulted input).
+`Node.run` calls `apply_defaults` before checking pre-asserts, so a pre-assert
+may read an input omitted by the caller but supplied by its `Parameter`.
 
 `f(x=None)` semantics: a caller who BINDS `null` to an input SHADOWS the default
 (the key is present with value None) — the wrapper must NOT re-fill it. Only a
 truly OMITTED input (key absent from the record) gets its default.
 
-These tests exercise the wrapper directly (NOT through `eval_node`). We build
-nodes with ParamDecls that carry a `default` by hand: the loader only ever mints
-`default`-bearing ParamDecls on START (from the flow-level `input:` block); a body
-node's `input:` block is pure wiring, so its params carry no default.
+These tests exercise the wrapper directly rather than through `eval_node`.
 """
 
 from typing import Any
 
+import pytest
+
 from agent_composer.nodes.base import Node, NodeKind, Output
-from agent_composer.nodes.binding import ParamDecl
-from agent_composer.nodes.contracts import Assertion
+from agent_composer.nodes.contracts import Assertion, Parameter, ValueContract
+from agent_composer.typesys import Type, TypeCheckError, ValueKind
+
+
+INTEGER = ValueContract(Type.scalar(ValueKind.INTEGER))
+NUMBER = ValueContract(Type.scalar(ValueKind.NUMBER))
+NULLABLE_INTEGER = ValueContract(Type(kind=ValueKind.INTEGER, nullable=True))
 
 
 class _ImplNode(Node):
@@ -42,10 +43,16 @@ class _ImplNode(Node):
 def test_omitted_input_defaulted_before_pre_assert():
     """An input OMITTED from the bound record gets its declared default filled by
     the wrapper — and it is VISIBLE to a pre-assert reading that input (defaults
-    precede pre-asserts). Uses an int default already an int (no coercion needed),
-    so it passes without Step 5's type_str threading."""
+    precede pre-asserts). The stored integer already satisfies its contract."""
     node = _ImplNode("n")
-    node.params = [ParamDecl(name="x", type_str="int", required=False, default=5)]
+    node.params = [
+        Parameter(
+            name="x",
+            contract=INTEGER,
+            has_default=True,
+            default=5,
+        )
+    ]
     node.pre_asserts = [Assertion("${x} > 0", "${x} > 0")]
 
     result = node.run({})  # x omitted
@@ -59,7 +66,14 @@ def test_bound_null_shadows_default():
     """An input BOUND to null (key present, value None) is NOT re-filled — the
     caller's explicit null SHADOWS the default (`f(x=None)`)."""
     node = _ImplNode("n")
-    node.params = [ParamDecl(name="x", type_str="int", required=False, default=5)]
+    node.params = [
+        Parameter(
+            name="x",
+            contract=INTEGER,
+            has_default=True,
+            default=5,
+        )
+    ]
 
     result = node.run({"x": None})  # x present, explicitly null
 
@@ -67,25 +81,58 @@ def test_bound_null_shadows_default():
     assert result.value == {"x": None}
 
 
-def test_string_default_coerced_to_declared_type():
-    """A ParamDecl carrying BOTH `type_str="int"` and a string `default="30"`,
-    OMITTED -> the wrapper's default-fill coerces it to the INTEGER 30 (via
-    `apply_defaults` -> `coerce_param`, which reads `type_str`), not the string "30".
-
-    This pins the wrapper's coerce-on-fill capability directly. Note the loader
-    never mints a BODY-node ParamDecl carrying a default (body `input:` blocks are
-    pure wiring, no `TYPE = default` syntax — that lives only on the flow-level
-    `input:` block, i.e. START's params), and START's params deliberately carry
-    `default` WITHOUT `type_str` (`start/node.py`: run() is the sole type authority,
-    so `bind_params` must not type-check first). So the type_str+default pairing is
-    exercised here against the wrapper as a unit, not via a loader path."""
+def test_explicit_null_default_fills_when_omitted():
+    """`has_default=True` makes a nullable `None` default semantically present."""
     node = _ImplNode("n")
-    node.params = [ParamDecl(name="x", type_str="int", required=False, default="30")]
+    node.params = [
+        Parameter(
+            name="x",
+            contract=NULLABLE_INTEGER,
+            has_default=True,
+            default=None,
+        )
+    ]
 
     result = node.run({})  # x omitted
 
-    assert node.seen == {"x": 30}
-    assert result.value == {"x": 30}
+    assert node.seen == {"x": None}
+    assert result.value == {"x": None}
+
+
+def test_compatible_stored_default_is_not_replaced_by_validation():
+    """Validation may accept numeric widening without replacing the stored payload."""
+    node = _ImplNode("n")
+    parameter = Parameter(
+        name="x",
+        contract=NUMBER,
+        has_default=True,
+        default=30,
+    )
+    node.params = [parameter]
+
+    result = node.run({})
+
+    assert type(parameter.default) is int
+    assert type(result.value["x"]) is int
+
+
+def test_incompatible_stored_default_fails_without_string_coercion():
+    """Caller-string coercion policy never rewrites an already-stored default."""
+    node = _ImplNode("n")
+    parameter = Parameter(
+        name="x",
+        contract=INTEGER,
+        has_default=True,
+        default="30",
+        coerce_strings=True,
+    )
+    node.params = [parameter]
+
+    with pytest.raises(TypeCheckError):
+        node.run({})
+
+    assert parameter.default == "30"
+    assert node.seen is None
 
 
 def test_apply_default_idempotent_no_double_fill():
@@ -96,7 +143,14 @@ def test_apply_default_idempotent_no_double_fill():
     from agent_composer.typesys.seeding import apply_defaults
 
     node = _ImplNode("n")
-    node.params = [ParamDecl(name="x", type_str="int", required=False, default=5)]
+    node.params = [
+        Parameter(
+            name="x",
+            contract=INTEGER,
+            has_default=True,
+            default=5,
+        )
+    ]
 
     # First fill (what the wrapper does), then a second fill (what a START _run_impl
     # would redundantly do): the value stays 5, not double-processed.

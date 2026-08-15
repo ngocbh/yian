@@ -14,13 +14,20 @@ import agent_composer.compile.manifest as manifest_module
 from agent_composer.compile.manifest import expansion_digest, flow_fingerprint, flow_manifest
 from agent_composer.compile.model import START_ID, CompiledFlow, Edge, Flow, FlowOutput
 from agent_composer.compose import load_flow
+from agent_composer.compose.helpers.types import InputDecl
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.agent.structured import type_to_schema
-from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.case import Case, CaseNode
 from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import Assertion, Binding
+from agent_composer.nodes.contracts import (
+    Assertion,
+    Binding,
+    ContractOrigins,
+    Parameter,
+    ValueContract,
+)
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.human_input import HumanInputNode
 from agent_composer.nodes.loop import LoopNode
@@ -80,6 +87,16 @@ nodes:
       - output > x
 output: ${step.output}
 """
+
+
+def test_loaded_flow_stores_only_exact_parameter_carriers():
+    """Compose builders and synthesized boundaries share one compiled parameter shape."""
+    loaded = load_flow(_INLINE_FLOW)
+
+    for node in loaded.compiled.nodes.values():
+        if node.params is not None:
+            assert type(node.params) is list
+            assert all(type(parameter) is Parameter for parameter in node.params)
 
 
 _INLINE_COMPOSITE_IDENTITY = """
@@ -2047,7 +2064,12 @@ def _fragment() -> Flow:
     """Build a small valid fragment with literal wiring and two ordered edges."""
     start = StartNode("entry", input_decls=[])
     body = CodeNode("body", code='return inputs["x"]')
-    body.params = [ParamDecl(name="x", type_str="int", type=Type.scalar(ValueKind.INTEGER))]
+    body.params = [
+        Parameter(
+            name="x",
+            contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
+        )
+    ]
     body.output_type = Type.scalar(ValueKind.INTEGER)
     end = EndNode.record("terminal", output_names=["result"])
     return Flow(
@@ -2068,7 +2090,12 @@ def _fragment() -> Flow:
 
 def _replace_body(fragment: Flow) -> None:
     body = CodeNode("body", code='return inputs["x"] + 1')
-    body.params = [ParamDecl(name="x", type_str="int", type=Type.scalar(ValueKind.INTEGER))]
+    body.params = [
+        Parameter(
+            name="x",
+            contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
+        )
+    ]
     body.output_type = Type.scalar(ValueKind.INTEGER)
     fragment.nodes["body"] = body
 
@@ -2170,14 +2197,14 @@ def test_flow_fingerprint_covers_each_included_common_node_field(field, changed_
     "changes",
     [
         {"name": "renamed"},
-        {"type_str": "float"},
+        {"contract": ValueContract(Type.scalar(ValueKind.NUMBER))},
         {"required": True},
-        {"default": 7},
-        {"type": Type.scalar(ValueKind.NUMBER)},
+        {"has_default": True, "default": 7},
+        {"coerce_strings": True},
     ],
-    ids=["name", "type-str", "required", "default", "type"],
+    ids=["name", "contract", "required", "default", "coerce-strings"],
 )
-def test_flow_fingerprint_covers_each_param_declaration_field(changes):
+def test_flow_fingerprint_covers_each_parameter_field(changes):
     original = _fragment()
     changed = copy.deepcopy(original)
     param = changed.nodes["body"].params[0]
@@ -2186,13 +2213,64 @@ def test_flow_fingerprint_covers_each_param_declaration_field(changes):
     assert flow_fingerprint(changed) != flow_fingerprint(original)
 
 
-def test_flow_fingerprint_preserves_param_declaration_order():
+def test_flow_fingerprint_preserves_parameter_order():
     original = _fragment()
-    original.nodes["body"].params.append(ParamDecl(name="y"))
+    original.nodes["body"].params.append(Parameter(name="y"))
     changed = copy.deepcopy(original)
     changed.nodes["body"].params.reverse()
 
     assert flow_fingerprint(changed) != flow_fingerprint(original)
+
+
+def test_parameter_origins_do_not_affect_program_or_expansion_identity():
+    """Parameter, default, and nested contract origins are diagnostic-only."""
+    first = _fragment()
+    second = copy.deepcopy(first)
+    int_type = Type.scalar(ValueKind.INTEGER)
+    first.nodes["body"].params = [
+        Parameter(
+            "x",
+            contract=ValueContract(
+                int_type,
+                ContractOrigins(default=OriginRef("first/contract")),
+            ),
+            has_default=True,
+            default=1,
+            origin=OriginRef("first/parameter"),
+            default_origin=OriginRef("first/default"),
+        )
+    ]
+    second.nodes["body"].params = [
+        Parameter(
+            "x",
+            contract=ValueContract(
+                int_type,
+                ContractOrigins(default=OriginRef("second/contract")),
+            ),
+            has_default=True,
+            default=1,
+            origin=OriginRef("second/parameter"),
+            default_origin=OriginRef("second/default"),
+        )
+    ]
+
+    assert flow_manifest(first) == flow_manifest(second)
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    assert expansion_digest(first) == expansion_digest(second)
+
+
+def test_parameter_manifest_rejects_unknown_fields_and_raw_bypass():
+    """The manifest enforces the exact carrier and an explicit field policy."""
+    with_unknown = _fragment()
+    object.__setattr__(with_unknown.nodes["body"].params[0], "future_field", True)
+
+    with pytest.raises(ValueError, match="future_field"):
+        flow_manifest(with_unknown)
+
+    raw = _fragment()
+    raw.nodes["body"].params = ["x"]  # type: ignore[list-item]
+    with pytest.raises(TypeError, match="expected Parameter"):
+        flow_manifest(raw)
 
 
 @pytest.mark.parametrize(
@@ -2281,17 +2359,17 @@ def test_flow_fingerprint_preserves_structural_field_order_used_by_agent_schema(
     ids=["name", "type-str", "required", "default", "type"],
 )
 def test_flow_fingerprint_covers_each_start_input_declaration_field(changes):
-    declaration = ParamDecl(
+    declaration = InputDecl(
         name="x",
         type_str="int",
         required=True,
-        default=1,
+        default=None,
         type=Type.scalar(ValueKind.INTEGER),
     )
-    first = StartNode("node", input_decls=[declaration])
-    second = StartNode("node", input_decls=[replace(declaration, **changes)])
-    # Keep the duplicated common params field fixed so this isolates input_decls.
-    first.params = second.params = []
+    first = StartNode("node", input_decls=[])
+    second = StartNode("node", input_decls=[])
+    first.input_decls = [declaration]
+    second.input_decls = [replace(declaration, **changes)]
 
     assert flow_fingerprint(_single_node_flow(first)) != flow_fingerprint(
         _single_node_flow(second)
@@ -2299,8 +2377,9 @@ def test_flow_fingerprint_covers_each_start_input_declaration_field(changes):
 
 
 def test_flow_fingerprint_preserves_start_input_declaration_order():
-    first_decl = ParamDecl(name="first")
-    second_decl = ParamDecl(name="second")
+    string_type = Type.scalar(ValueKind.STRING)
+    first_decl = InputDecl("first", "str", None, True, string_type)
+    second_decl = InputDecl("second", "str", None, True, string_type)
     first = StartNode("node", input_decls=[first_decl, second_decl])
     second = StartNode("node", input_decls=[second_decl, first_decl])
     first.params = second.params = []

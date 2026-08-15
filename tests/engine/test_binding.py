@@ -4,8 +4,8 @@ The production `InputBinding`/`bind_inputs` are gone (the node no longer holds s
 flow owns them in `CompiledFlow.wiring`). These tests exercise the SAME `_resolve_source` grammar
 (coalesce / `:-` default / `:?` required / escapes / type-check / deep-copy / `${item}` scope)
 through `bind_params`, the engine's live read boundary. The local `InputBinding`/`bind_inputs`
-adapters below phrase each case as a (ParamDecl + wiring) split, so the comprehensive grammar
-coverage carries over verbatim against the live binder.
+adapters below phrase each case as a (`Parameter` + wiring) split, so the comprehensive grammar
+coverage carries over against the live binder without reviving a legacy declaration type.
 """
 
 from collections import namedtuple
@@ -13,27 +13,68 @@ from collections import namedtuple
 import pytest
 
 from agent_composer.compile.model import START_ID
-from agent_composer.nodes.binding import BindingError, ParamDecl, bind_params
+from agent_composer.nodes.binding import BindingError, bind_params
+from agent_composer.nodes.contracts import Parameter, ValueContract
+from agent_composer.typesys import Type, ValueKind
 from agent_composer.typesys.pool import VariablePool
 
-# Test-local sink: a legacy InputBinding-shaped (name, type, source, required, default) spec.
-_Sink = namedtuple("_Sink", "name type source required default", defaults=(None, None, False, None))
+# Test-local sink: one canonical parameter plus its flow-owned source.
+_Sink = namedtuple(
+    "_Sink",
+    "name contract source required has_default default coerce_strings",
+    defaults=(None, None, False, False, None, False),
+)
 
 
-def InputBinding(name, type=None, source=None, required=False, default=None):
-    return _Sink(name, type, source, required, default)
+def InputBinding(
+    name,
+    contract=None,
+    source=None,
+    required=False,
+    has_default=False,
+    default=None,
+    coerce_strings=False,
+):
+    return _Sink(
+        name,
+        contract,
+        source,
+        required,
+        has_default,
+        default,
+        coerce_strings,
+    )
+
+
+STRING = ValueContract(Type.scalar(ValueKind.STRING))
+INTEGER = ValueContract(Type.scalar(ValueKind.INTEGER))
+NUMBER = ValueContract(Type.scalar(ValueKind.NUMBER))
+BOOLEAN = ValueContract(Type.scalar(ValueKind.BOOLEAN))
+OBJECT = ValueContract(Type.scalar(ValueKind.OBJECT))
+NULLABLE_INTEGER = ValueContract(Type(kind=ValueKind.INTEGER, nullable=True))
 
 
 def bind_inputs(bindings, pool, *, item=None):
-    """Adapter: drive the live `bind_params` from legacy sink specs (the node-side params +
-    the flow-owned wiring split), so the grammar coverage below tests the real binder.
+    """Drive the live `bind_params` from test-local parameter/source pairs.
+
+    The canonical node-side parameters and flow-owned wiring remain separate, so
+    the grammar coverage below tests the real binder contract.
 
     A `source=None` sink models an OMITTED input — NO wiring edge — so the presence-based
     param `default`/`required` fires. An edge that merely RESOLVES to null (e.g. `${system.w}`
     with the pool empty) is BOUND-NULL, which shadows a param default (`f(x=None)` semantics).
     Resolve-fallback / required-in-source are the SEPARATE `:-` / `:?` grammar (tested below)."""
-    params = [ParamDecl(name=b.name, type_str=b.type, required=b.required, default=b.default)
-              for b in bindings]
+    params = [
+        Parameter(
+            name=b.name,
+            contract=b.contract,
+            required=b.required,
+            has_default=b.has_default,
+            default=b.default,
+            coerce_strings=b.coerce_strings,
+        )
+        for b in bindings
+    ]
     wiring = {b.name: b.source for b in bindings if b.source is not None}
     return bind_params(params, wiring, pool, item=item)
 
@@ -50,9 +91,9 @@ def test_bind_ref_and_literal():
     pool.set("up", {"pe": 21.0})
     rec = bind_inputs(
         [
-            InputBinding(name="topic", type="str", source="${system.topics}"),
-            InputBinding(name="pe", type="float", source="${up.output.pe}"),
-            InputBinding(name="k", type="float", source=90),  # literal
+            InputBinding(name="topic", contract=STRING, source="${system.topics}"),
+            InputBinding(name="pe", contract=NUMBER, source="${up.output.pe}"),
+            InputBinding(name="k", contract=NUMBER, source=90),  # literal
         ],
         pool,
     )
@@ -62,15 +103,54 @@ def test_bind_ref_and_literal():
 def test_bind_default_applied_when_omitted():
     # The param `default` is the OMIT-default (presence-based): it fills only when the input has
     # NO wiring edge at all. (Resolve-fallback for a present-but-null source is the `:-` grammar.)
-    rec = bind_inputs([InputBinding(name="w", type="int", default=30)], _pool())  # no source -> omitted
+    rec = bind_inputs(
+        [InputBinding(name="w", contract=INTEGER, has_default=True, default=30)],
+        _pool(),
+    )  # no source -> omitted
     assert rec == {"w": 30}
+
+
+def test_bind_compatible_default_is_validated_without_replacement():
+    """A typed default retains its authored Python payload after validation."""
+    rec = bind_inputs(
+        [InputBinding(name="w", contract=NUMBER, has_default=True, default=30)],
+        _pool(),
+    )
+
+    assert type(rec["w"]) is int
 
 
 def test_bind_present_null_shadows_param_default():
     # An edge that is PRESENT but RESOLVES to null is bound-null: it SHADOWS the param default
     # (the `f(x=None)` contract). Pins the omit-vs-bound-null distinction at the live binder.
     rec = bind_inputs(
-        [InputBinding(name="w", type="int", source="${system.w}", default=30)], _pool()
+        [
+            InputBinding(
+                name="w",
+                contract=INTEGER,
+                source="${system.w}",
+                has_default=True,
+                default=30,
+            )
+        ],
+        _pool(),
+    )
+    assert rec == {"w": None}
+
+
+def test_bind_explicit_null_default_fills_when_omitted():
+    # `has_default` owns presence, so an authored nullable `default: null` is a real
+    # default and remains distinct from a parameter with no default.
+    rec = bind_inputs(
+        [
+            InputBinding(
+                name="w",
+                contract=NULLABLE_INTEGER,
+                has_default=True,
+                default=None,
+            )
+        ],
+        _pool(),
     )
     assert rec == {"w": None}
 
@@ -80,32 +160,79 @@ def test_bind_omitted_no_default_is_absent():
     # present-as-None) so the wrapper's `apply_default` can fill it (or the strict render raises
     # on unbound). This is the omit vs bound-null split — contrast `test_bind_optional_missing_is_none`,
     # where a PRESENT edge resolving to null lands as `{"t": None}`.
-    assert bind_inputs([InputBinding(name="x", type="int")], _pool()) == {}  # no source -> absent
+    assert bind_inputs([InputBinding(name="x", contract=INTEGER)], _pool()) == {}
 
 
 def test_bind_required_omitted_raises():
     # Param `required` is presence-based too: an OMITTED required input (no edge) fails loud.
     with pytest.raises(BindingError):
-        bind_inputs([InputBinding(name="t", type="str", required=True)], _pool())  # no source
+        bind_inputs([InputBinding(name="t", contract=STRING, required=True)], _pool())
+
+
+def test_bind_params_rejects_a_raw_declaration_bypass():
+    """The engine read seam enforces the hard canonical Node.params shape."""
+    with pytest.raises(TypeError, match="Parameter values"):
+        bind_params(["x"], {}, _pool())  # type: ignore[list-item]
 
 
 def test_bind_optional_missing_is_none():
     assert bind_inputs(
-        [InputBinding(name="t", type="str", source="${system.t}")], _pool()
+        [InputBinding(name="t", contract=STRING, source="${system.t}")], _pool()
     ) == {"t": None}
 
 
 def test_bind_type_mismatch_raises():
     with pytest.raises(BindingError):
         bind_inputs(
-            [InputBinding(name="n", type="float", source="${system.n}")], _pool(n="not-a-number")
+            [InputBinding(name="n", contract=NUMBER, source="${system.n}")],
+            _pool(n="not-a-number"),
         )
 
 
-def test_bind_unresolvable_type_is_lenient():
-    # 'Policy' record/variant can't resolve against the empty registry -> not enforced
+def test_bind_supplied_string_coerces_only_when_enabled():
+    pool = _pool(n="30")
+    with pytest.raises(BindingError):
+        bind_inputs(
+            [InputBinding(name="n", contract=INTEGER, source="${system.n}")],
+            pool,
+        )
+
     rec = bind_inputs(
-        [InputBinding(name="p", type="Policy", source="${system.p}")], _pool(p={"k": 1})
+        [
+            InputBinding(
+                name="n",
+                contract=INTEGER,
+                source="${system.n}",
+                coerce_strings=True,
+            )
+        ],
+        pool,
+    )
+    assert rec == {"n": 30}
+
+
+def test_bind_incompatible_stored_default_is_not_coerced():
+    # String coercion is caller-input policy. It must not silently rewrite the
+    # already-stored default, even when that policy is enabled.
+    with pytest.raises(BindingError):
+        bind_inputs(
+            [
+                InputBinding(
+                    name="n",
+                    contract=INTEGER,
+                    has_default=True,
+                    default="30",
+                    coerce_strings=True,
+                )
+            ],
+            _pool(),
+        )
+
+
+def test_bind_untyped_value_is_lenient():
+    # No contract means the read boundary accepts an arbitrary Python value.
+    rec = bind_inputs(
+        [InputBinding(name="p", source="${system.p}")], _pool(p={"k": 1})
     )
     assert rec == {"p": {"k": 1}}
 
@@ -114,8 +241,12 @@ def test_bind_falsy_default_applied():
     # A falsy param default (0 / False) still fills when the input is OMITTED (no edge).
     rec = bind_inputs(
         [
-            InputBinding(name="n", type="int", default=0),
-            InputBinding(name="f", type="bool", default=False),
+            InputBinding(
+                name="n", contract=INTEGER, has_default=True, default=0
+            ),
+            InputBinding(
+                name="f", contract=BOOLEAN, has_default=True, default=False
+            ),
         ],
         _pool(),
     )
@@ -126,22 +257,24 @@ def test_bind_isolates_object_from_pool():
     # The leaf must see ONLY its own record — mutating it must not write the pool.
     pool = _pool()
     pool.set("up", {"k": 1, "nested": {"a": 2}})
-    rec = bind_inputs([InputBinding(name="x", type="object", source="${up.output}")], pool)
+    rec = bind_inputs(
+        [InputBinding(name="x", contract=OBJECT, source="${up.output}")], pool
+    )
     rec["x"]["k"] = 999
     rec["x"]["nested"]["a"] = 999  # nested mutation must not leak either
     assert pool.resolve("up", ["output"]) == {"k": 1, "nested": {"a": 2}}
 
 
-def test_bind_isolates_lenient_value_from_pool():
-    # The lenient (unresolvable-type) path must also isolate the value.
+def test_bind_isolates_untyped_value_from_pool():
+    # The untyped path must also isolate the value.
     pool = _pool(p={"k": 1})
-    rec = bind_inputs([InputBinding(name="p", type="Policy", source="${system.p}")], pool)
+    rec = bind_inputs([InputBinding(name="p", source="${system.p}")], pool)
     rec["p"]["k"] = 999
     assert pool.system["p"].to_object() == {"k": 1}
 
 
 def test_bind_untyped_resolves_and_isolates():
-    # type=None -> resolve + deep-copy, NO type-check (the untyped TOOL-input path).
+    # contract=None -> resolve + deep-copy, with no type check.
     pool = _pool(topic="ACME")
     pool.set("up", {"k": 1})
     rec = bind_inputs(
@@ -320,13 +453,13 @@ def test_whole_ref_typed_embedded_stringified_dollar_escape():
 def test_bind_inputs_typed_record_from_declared_inputs():
     # bind_inputs is the read boundary the engine seam (eval_node) uses to turn a node's
     # declared inputs into a typed record (was: the deleted Node._bind_inputs helper).
-    bindings = [InputBinding(name="t", type="str", source="${system.t}")]
+    bindings = [InputBinding(name="t", contract=STRING, source="${system.t}")]
     assert bind_inputs(bindings, _pool(t="X")) == {"t": "X"}
 
 
 def test_bind_inputs_resolves_item_from_local_scope():
     pool = VariablePool()
-    rec = bind_inputs([InputBinding(name="topic", type="str", source="${item}")],
+    rec = bind_inputs([InputBinding(name="topic", contract=STRING, source="${item}")],
                       pool, item="ACME")
     assert rec == {"topic": "ACME"}
 

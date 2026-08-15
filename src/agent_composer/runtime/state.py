@@ -36,7 +36,7 @@ from agent_composer.events import (
 )
 from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.nodes.base import Grow, Node
-from agent_composer.nodes.contracts import binding_source
+from agent_composer.nodes.contracts import Parameter, binding_source
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
     NodeExpandedRecord,
@@ -2161,6 +2161,11 @@ def _validate_growth_fragment_data(
             raise TypeError(f"growth fragment node {node_id!r} params must be a list")
         declared: dict[str, bool] = {}
         for param in params:
+            if type(param) is not Parameter:
+                raise TypeError(
+                    f"growth fragment node {node_id!r} params must contain Parameter values, "
+                    f"got {type(param).__name__}"
+                )
             if type(param.name) is not str or not param.name:
                 raise ValueError(
                     f"growth fragment node {node_id!r} has an invalid param name"

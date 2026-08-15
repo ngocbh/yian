@@ -25,8 +25,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
-from agent_composer.nodes.binding import ParamDecl
-from agent_composer.nodes.contracts import Assertion
+from agent_composer.nodes.contracts import Assertion, Parameter
 from agent_composer.typesys.seeding import apply_defaults
 from agent_composer.typesys.values import Type
 
@@ -204,7 +203,7 @@ class Node(ABC):
             A human-friendly display title, or `None`.
         output_type (`Type`, *optional*):
             The declared output Type (one value); `None` leaves the write unenforced.
-        params (`list[ParamDecl]`, *optional*):
+        params (`list[Parameter]`, *optional*):
             The node-side declared params (no source — the flow owns the wiring); `None`
             for a node that declares no inputs.
         pre_asserts (`list[Assertion]`):
@@ -278,7 +277,7 @@ class Node(ABC):
         # the wiring in `CompiledFlow.wiring[node_id][param]`. Stamped by the compiler
         # (`build_*`/case desugar); the engine's `eval_node` binds via `params` + `flow.wiring`.
         # `None` for a fake / directly-constructed node that declares no inputs (== no params).
-        self.params: Optional[list[ParamDecl]] = None
+        self.params: Optional[list[Parameter]] = None
         # Node-local `asserts:` (a per-node contract), classified + stamped by the loader and
         # enforced by the inherited `run` template: PRE checked against the bound input record
         # before `_run_impl`; POST (reads `${output}`) afterward against `{**inputs, output}`.
@@ -340,7 +339,7 @@ class Node(ABC):
         input the caller OMITTED but the node declares a default for. `apply_defaults`
         fills only omitted keys (a caller's explicit bound-null SHADOWS the default,
         `f(x=None)`), so it never overrides a present key; running it here is a no-op for
-        body nodes (their ParamDecls carry no default yet) and idempotent for START
+        body nodes (their Parameters carry no default) and idempotent for START
         (whose `_run_impl` also defaults — the second fill is inert).
 
         Firing reads ONLY the bound `inputs` record — never the pool — so node purity is

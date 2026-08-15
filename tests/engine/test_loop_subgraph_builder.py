@@ -8,8 +8,7 @@ durable reconstruction builds the SAME `L#k/…` namespace.
 from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, ns
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
 from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.binding import ParamDecl
-from agent_composer.nodes.contracts import Binding
+from agent_composer.nodes.contracts import Binding, Parameter
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.start import StartNode
 
@@ -66,7 +65,7 @@ def test_continue_seeds_only_fields_declared_by_the_body_start():
     """Carry loop-only state forward without adding undeclared child START wiring."""
     child = _child_flow()
     driver = _driver("lp", 1, child)
-    driver.params = [ParamDecl(name="x"), ParamDecl(name="exited")]
+    driver.params = [Parameter(name="x"), Parameter(name="exited")]
 
     sg = loop_continue_subgraph(
         child,

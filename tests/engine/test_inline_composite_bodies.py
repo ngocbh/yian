@@ -2592,6 +2592,105 @@ output: ${broken.output}
     assert caught.value.range == expected_range
 
 
+def test_inline_child_start_uses_outer_input_binding_ranges():
+    source = """id: inline-child-input-ranges
+name: inline_child_input_ranges
+input:
+  value: str
+  count: int
+nodes:
+  wrapper:
+    kind: call
+    input:
+      value: ${input.value}
+      count: ${input.count}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: str
+    output: ${echo.output}
+output: ${wrapper.output}
+"""
+    root, _spans = _located_root(source)
+    expected_ranges = (
+        root.child("nodes").child("wrapper").mapping_value_ranges("input")
+    )
+
+    loaded = load_flow(source)
+    child_start = loaded.compiled.nodes["wrapper"].child.nodes[START_ID]
+
+    assert {
+        name: child_start.field_ranges[("input_decl", name)]
+        for name in ("value", "count")
+    } == expected_ranges
+
+
+def test_inline_child_bad_output_uses_retained_output_range():
+    source = """id: inline-child-output-range
+name: inline_child_output_range
+nodes:
+  wrapper:
+    kind: call
+    nodes:
+      constant:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ready
+        output: str
+    output: ${missing.output}
+output: ${wrapper.output}
+"""
+    root, _spans = _located_root(source)
+    expected_range = root.child("nodes").child("wrapper").range_of("output")
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    assert "unknown namespace 'missing'" in str(caught.value)
+    assert caught.value.range == expected_range
+
+
+def test_eager_def_inline_child_bad_output_preserves_absolute_range():
+    source = """id: eager-def-inline-output-range
+name: eager_def_inline_output_range
+defs:
+  outer:
+    nodes:
+      wrapper:
+        kind: call
+        nodes:
+          constant:
+            kind: code
+            code: tests.engine._compose_codefns:echo
+            input:
+              topic: ready
+            output: str
+        output: ${missing.output}
+    output: ${wrapper.output}
+nodes:
+  invoke:
+    kind: call
+    call: outer
+output: ${invoke.output}
+"""
+    root, _spans = _located_root(source)
+    expected_range = (
+        root.child("defs").child("outer").child("nodes")
+        .child("wrapper").range_of("output")
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    assert str(caught.value).startswith("defs entry 'outer':")
+    assert "unknown namespace 'missing'" in str(caught.value)
+    assert caught.value.range == expected_range
+
+
 def test_inline_map_output_error_uses_friendly_child_label():
     with pytest.raises(LoadError) as caught:
         load_flow(

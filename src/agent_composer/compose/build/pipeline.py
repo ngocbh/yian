@@ -318,6 +318,7 @@ def _assemble(
     source: Optional[SourceFrame] = None,
     boundary_field_ranges: Optional[dict] = None,
     boundary_assert_ranges: Optional[list] = None,
+    outputs_range: Optional[SourceRange] = None,
 ) -> ComposedFlow:
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
@@ -332,10 +333,12 @@ def _assemble(
     mapping that still needs parsing, while `input_decls` carries declarations already
     resolved by an earlier compiler pass. `scope` owns composite call resolution
     (defs-first) and private child registration; `registry` is the file's
-    `read_typedefs(...)`. `n_lines`/`s_lines` are the source maps — each node id / top-level
-    section key -> its 1-based HEADER line (`{}` for a nested def, whose errors are unlocated).
+    `read_typedefs(...)`. `n_lines`/`s_lines` are fallback source maps — each node id /
+    top-level section key -> its 1-based header line; located descriptors refresh node lines
+    after inline lowering, including inside a nested def.
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
-    children.
+    children. `boundary_field_ranges`/`boundary_assert_ranges` locate synthesized boundary
+    behavior; `outputs_range` is the retained authored codomain range when one exists.
     Inline-CODE traceback anchors are derived from each descriptor's own `code:` range."""
     if (inputs_section is None) == (input_decls is None):
         raise ValueError("_assemble requires exactly one of inputs_section or input_decls")
@@ -550,6 +553,11 @@ def _assemble(
             flow_llm_config={},
             flow_env={},
             source=child_source,
+            boundary_field_ranges={
+                ("input_decl", name): binding_range
+                for name, binding_range in body.input_ranges.items()
+            },
+            outputs_range=body.output_range,
         )
 
     descriptors = _register_inline_bodies(
@@ -632,6 +640,7 @@ def _assemble(
         flow_wiring,
         node_lines=n_lines,
         outputs_line=s_lines.get("output") or s_lines.get("outputs"),
+        outputs_range=outputs_range,
     )
     # human_input gates: structurally check a literal `questions:` list at load, and
     # pin a ref-form `questions: ${name}` to a declared input (the prompt-scope rule).

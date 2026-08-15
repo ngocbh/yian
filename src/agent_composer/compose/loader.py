@@ -707,12 +707,17 @@ def _load_def(
             source=source,
         )
     except LoadError as exc:
-        # Name the def in any internal error. The line stays None (a nested def has
-        # no isolated source text — the deferred line-mapping limitation). Don't re-prefix
-        # an already-named nested-def error (keep the innermost, most specific def name).
+        # Name the def without discarding the absolute parent-file diagnostic metadata.
+        # Don't re-prefix an already-named nested-def error; keep the innermost name.
         if str(exc).startswith("defs entry "):
             raise
-        raise LoadError(f"defs entry {name!r}: {exc}", line=exc.line) from exc
+        raise LoadError(
+            f"defs entry {name!r}: {exc}",
+            line=exc.line,
+            lines=exc.lines,
+            notes=exc.notes,
+            range=exc.range,
+        ) from exc
 
 
 
@@ -760,4 +765,10 @@ def _load_single_node_def(
     except LoadError as exc:
         if str(exc).startswith("defs entry "):
             raise
-        raise LoadError(f"defs entry {name!r}: {exc}", line=exc.line) from exc
+        raise LoadError(
+            f"defs entry {name!r}: {exc}",
+            line=exc.line,
+            lines=exc.lines,
+            notes=exc.notes,
+            range=exc.range,
+        ) from exc

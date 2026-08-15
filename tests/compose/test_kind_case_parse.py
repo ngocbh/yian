@@ -8,8 +8,7 @@ from agent_composer.nodes.case import CaseNode
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.case import CaseDescriptor
-from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.helpers.spanloader import load_with_spans
+from agent_composer.compose.source import SourceDocument
 from agent_composer.events import SourceRange
 
 
@@ -26,9 +25,7 @@ nodes:
 
 
 def _reader_for(text, node_id):
-    value, spans, root = load_with_spans(text, return_root=True)
-    root_reader = NodeReader(value, spans, root)
-    return root_reader.child("nodes").child(node_id)
+    return SourceDocument.parse(text).root.child("nodes").child(node_id)
 
 
 def test_case_parse_matches_descriptor_and_records_ranges():
@@ -36,7 +33,7 @@ def test_case_parse_matches_descriptor_and_records_ranges():
     desc = CaseDescriptor.parse("route", reader)
 
     # The bare `on:` key is coerced to `True` by YAML 1.1; parse maps it back to the
-    # `on` field (a SpanLoader win — the range still resolves via the raw key text).
+    # `on` field (the source cursor still resolves the range via the raw key text).
     assert desc == CaseDescriptor(
         id="route",
         on="${score.output}",

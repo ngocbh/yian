@@ -8,8 +8,8 @@ Each kind module owns the three things that used to be scattered across `parse/f
 per-kind isinstance ladder, now dissolved):
 
 - its frozen **descriptor** dataclass (subclassing `NodeDescriptor`),
-- **`parse(id, reader)`** — a classmethod that reads one node body via a located
-  `NodeReader`, recording each field's `SourceRange` into the descriptor's `field_ranges`, and
+- **`parse(id, cursor)`** — a classmethod that reads one node body via a located
+  `SourceCursor`, recording each field's `SourceRange` into the descriptor's `field_ranges`, and
 - **`build(ctx: BuildContext) -> BuildResult`** — a method that constructs the runtime `Node`
   (+ wiring, + any edges a `case` owns), stamping `.range`/`.field_ranges` onto it.
 
@@ -38,7 +38,7 @@ Importing the kind modules here cannot cycle: each takes its `build` helpers fro
 top-level import there WOULD cycle. Deriving the tables below only reads each class's
 already-defined ClassVars; it never touches `KINDS`.
 
-Knows about: compose helpers/peer phases, compile.model, nodes, typesys, expr,
+Knows about: compose source/helpers/peer phases, compile.model, nodes, typesys, expr,
              events, and llm_clients.
 Never imports: runtime, the package-root run boundary, CLI, or provider SDKs.
 """

@@ -46,8 +46,10 @@ stages: **parse → desugar → wire → check → freeze.**
 
 ```
  text
-  │  parse_file            YAML text -> a span-tagged tree (every value knows its line/col)
-  │  parse_nodes           tree      -> one frozen *descriptor* per node (kind-specific)
+  │  SourceDocument.parse  YAML text -> one safe construction + private definition graph
+  │  SourceCursor          document  -> occurrence-aware section and node views
+  │  parse_file            document  -> the strict top-level ComposeFile
+  │  parse_nodes           cursor    -> one frozen *descriptor* per node (kind-specific)
   │  desugar_*             rewrite sugar into core nodes:
   │                          inline call(...) directives, adaptive questions, case targets
   │  build (per kind)      each descriptor -> a runtime Node  (+ its flow-owned wiring;
@@ -76,6 +78,20 @@ compose/build/`. The engine core sees none of it.
 The output is a **`ComposedFlow`**: a `CompiledFlow` (the static topology) plus the
 typed `input:` declarations, the `asserts`, and a render-only *source frame* used to
 draw error tracebacks that point back at your YAML.
+
+The loader owns one `SourceDocument` for each flow source document. Source-aware parsing
+and inline extraction reuse cursors into it; later passes use descriptors and nodes that
+carry derived ranges. Physical cursors retain definition ranges and occurrence paths;
+this distinguishes two alias or flattened-merge occurrences even when they share the
+same anchored value definition. Virtual cursors represent generated, location-free
+values, while projected cursors rewrite a view and retain explicitly aligned authored
+children. Documents keep the parser graph private, projections snapshot their values,
+and public value reads are defensive copies. No phase reparses YAML to recover source.
+
+For external `uses:` files, the shared load context caches each successful
+`ComposedFlow` by resolved absolute path. Repeated aliases and diamond dependencies thus
+read, parse, and compile that physical file once during the load graph. Only successfully
+compiled flows enter the cache.
 
 → **[compose.md](compose.md)** is the full tour of this phase: the pipeline pass by
 pass, the two-axis layout, descriptors vs. nodes, and how a `${...}` becomes an edge.
@@ -185,7 +201,7 @@ Everything in the codebase is in service of four guarantees — each is a
 | **Structurally reproducible** — same authored control/data graph | the author fixes the graph; the LLM only fills leaf boxes |
 | **Durably recoverable** — replay one validated transition prefix | append-before-apply records + typed canonical state |
 | **Extensible** — new kinds don't touch the core | the kind-blind engine + per-kind front-end modules |
-| **Readable / debuggable** | the flow *is* the plan; source spans point errors back at the YAML |
+| **Readable / debuggable** | the flow *is* the plan; source ranges point errors back at the YAML |
 
 ---
 
@@ -195,7 +211,7 @@ The main compiler packages form an acyclic ladder — each layer imports only fr
 those below it:
 
 ```
-events        run + node observer vocabulary, source spans          [leaf]
+events        run + node observer vocabulary, source ranges         [leaf]
   ▲
 typesys       typed values + the VariablePool
   ▲

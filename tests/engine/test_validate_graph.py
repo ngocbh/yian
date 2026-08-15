@@ -17,9 +17,9 @@ from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import parse_file
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.validate.handles import check_case_handles
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -32,8 +32,10 @@ def _build(seed: str):
     collect its `BuildResult` (node + wiring + edges). A leaf's `.edges` is empty; a `case`'s
     `.edges` already carries its own reconciled data + control edges (its lowering is its build).
     `reconciled = infer_data_edges(leaf wiring) + all BuildResult.edges` (case edges last)."""
-    f = parse_file((_SEEDS / seed).read_text())
-    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
+    path = _SEEDS / seed
+    document = SourceDocument.parse(path.read_text(), label=str(path))
+    parse_file(document)
+    descriptors = parse_nodes(document.root.child("nodes"))
     nodes: dict = {}
     flow_wiring: dict = {}
     case_edges: list = []

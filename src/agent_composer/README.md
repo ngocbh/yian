@@ -38,8 +38,9 @@ nodes/        pure Node contract + per-kind implementations; spawners return see
                loop, human_input, wait)
 compile/      compiled IR + validation; growth builder; stable identity;
               effective static-path LLM configuration maps
-compose/      Compose-YAML front end: text -> CompiledFlow; file-private inline
-              child lowering (nodes/parse/desugar/edges/validate/build/loader)
+compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML
+              construction/navigation; later phases lower file-private children
+              (source/nodes/parse/desugar/edges/validate/build/loader)
 runtime/      run records/logs, reducer-owned RunState, kind-blind dispatcher,
               and worker pool
 run.py        public run boundary: ComposedFlow + inputs/log -> RunResult
@@ -57,6 +58,32 @@ Package-root `run.py` sits above `compose`, `compile.expand`, and `runtime`: it
 consumes a `ComposedFlow`, injects the kind-aware growth builder, and owns run-log
 creation and recovery. None of those packages imports it back.
 
+## One-pass source ownership
+
+`compose/source/` is the only production Compose package that imports PyYAML.
+Root text and each uncached external file are constructed once as
+`SourceDocument`s, whose public cursor interface is immutable and defensive. They
+retain the original text and label while keeping PyYAML's composed/constructed
+graph private. YAML aliases and merge mappings are interpreted without mutating
+that graph. Persistent pair/arc ropes keep merge topology compact, and completed
+mapping summaries bound repeated merge-DAG traversal. Public value snapshots use
+a stack-safe iterative copier that preserves shared and recursive aliases. Within
+one successful file-import graph, the loader's resolved-path cache also ensures
+that each external physical file is read, parsed, and compiled once; aliases and
+diamond imports reuse the cached `ComposedFlow`.
+
+Source-aware parsing and inline extraction navigate stable `SourceCursor` values.
+A physical cursor combines a definition range with an occurrence path (and a
+mapping-key range when applicable); a virtual cursor is a defensive, source-free
+value snapshot; a projected cursor replaces or renames values while explicitly
+retaining the physical sources of selected children. Descriptors and nodes carry
+derived ranges afterward, so no phase reparses text or touches parser objects.
+
+`SourceFrame` is persistent render-only diagnostic metadata on
+`ComposedFlow.source` and composite nodes' `child_source`. It carries source text
+and derived node/field range maps for CLI traceback rendering; it neither owns
+parsing nor exposes the private document graph.
+
 ## Inline composite lowering
 
 An authored CALL, MAP, or LOOP may contain a non-empty `nodes:` plus a required
@@ -64,8 +91,8 @@ An authored CALL, MAP, or LOOP may contain a non-empty `nodes:` plus a required
 front-end feature. `desugar.inline_bodies` retains the located child body and
 masks that occurrence as an ordinary private `call:` before the normal
 parse/build/validate pipeline runs. YAML anchors, aliases, and merged mappings
-are not mutated: extraction works on occurrence-local shallow overlays while
-keeping the original value nodes and source ranges read-only.
+are not mutated: extraction works on occurrence-local cursor projections while
+keeping the original child cursors and source ranges read-only.
 
 Each source file owns one callable scope. Alongside its authored `defs:` and
 `uses:` namespace, that scope has a resolver-private table for retained inline

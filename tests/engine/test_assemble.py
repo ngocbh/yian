@@ -34,8 +34,8 @@ from agent_composer.compose.parse.file import (
     WaitDescriptor,
     parse_file,
 )
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceCursor, SourceDocument
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -190,7 +190,7 @@ def _assemble_resolved_input_decls(input_decls):
     """Assemble an empty flow through the already-resolved input seam."""
     return _assemble(
         input_decls=input_decls,
-        nodes_reader=NodeReader.spanless({}),
+        nodes_cursor=SourceCursor.virtual({}),
         outputs_section=None,
         asserts_section=[],
         registry={},
@@ -233,7 +233,7 @@ def test_resolved_input_decls_reject_both_input_representations():
         _assemble(
             inputs_section={},
             input_decls=[],
-            nodes_reader=NodeReader.spanless({}),
+            nodes_cursor=SourceCursor.virtual({}),
             outputs_section=None,
             asserts_section=[],
             registry={},
@@ -247,7 +247,7 @@ def test_resolved_input_decls_reject_both_input_representations():
 def test_resolved_input_decls_reject_missing_input_representation():
     with pytest.raises(ValueError, match="exactly one of inputs_section or input_decls"):
         _assemble(
-            nodes_reader=NodeReader.spanless({}),
+            nodes_cursor=SourceCursor.virtual({}),
             outputs_section=None,
             asserts_section=[],
             registry={},
@@ -269,7 +269,7 @@ def test_resolved_input_decls_accept_zero_args_and_wire_empty_start():
 
     raw_flow = _assemble(
         inputs_section={},
-        nodes_reader=NodeReader.spanless({}),
+        nodes_cursor=SourceCursor.virtual({}),
         outputs_section=None,
         asserts_section=[],
         registry={},
@@ -300,9 +300,10 @@ def _all_edges(seed: str):
     (its `BuildResult.edges`), appended after the leaf data edges — mirrors the loader.
     """
     _p = (_SEEDS / seed) if (_SEEDS / seed).exists() else (_SEEDS / "_future" / seed)
-    f = parse_file(_p.read_text())
+    document = SourceDocument.parse(_p.read_text(), label=str(_p))
+    f = parse_file(document)
     registry = read_typedefs(f.typedefs)
-    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
+    descriptors = parse_nodes(document.root.child("nodes"))
     flow_wiring = {
         nid: d.build(BuildContext(registry)).wiring
         for nid, d in descriptors.items()

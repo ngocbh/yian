@@ -8,16 +8,15 @@ the declaring node descriptor's range.
 import pytest
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.edges.ordering import infer_ordering_edges
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceDocument
 
 
 def _nodes_reader(text):
-    """A span-aware NodeReader over the `nodes:` mapping of a flow document."""
-    value, spans, root = load_with_spans(text, return_root=True)
-    return NodeReader(value, spans, root).child("nodes")
+    """Return the physical cursor over a flow document's ``nodes:`` mapping."""
+
+    return SourceDocument.parse(text).root.child("nodes")
 
 
 def test_infer_ordering_edges_unknown_target_is_located():

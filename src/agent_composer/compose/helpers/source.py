@@ -1,8 +1,8 @@
 """Parse-free source-location primitives for the Compose front end.
 
 The parse-independent slice of the loader's render-only source mapping: the
-`SourceFrame` carrier plus two best-effort span-map helpers, all built directly on
-`load_with_spans` + `NodeReader` (never `parse_nodes`/`parse_file`). Kept at the bottom
+`SourceFrame` carrier plus best-effort location-map helpers over an existing source cursor.
+They never parse or call `parse_nodes`/`parse_file`. Kept at the bottom
 of the ladder (`helpers <- parse`) so `parse/` can depend on it without a cycle; the
 frame-range helpers that DO call the parser (`_frame_ranges`, `top_frame_ranges`) stay in
 `loader.py`, which sits above `parse`.
@@ -10,18 +10,15 @@ frame-range helpers that DO call the parser (`_frame_ranges`, `top_frame_ranges`
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Optional
-
-import yaml
 
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges
-from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.helpers.spanloader import load_with_spans
+from agent_composer.compose.source import SourceAccessError, SourceCursor
 
 
-def _boundary_field_ranges(text: Optional[str]) -> FieldRanges:
+def _boundary_field_ranges(root: SourceCursor) -> FieldRanges:
     """The flow-boundary source map stamped onto the top-level StartNode's `field_ranges`.
 
     Keys: each top-level `input:`/`inputs:` decl name, tagged `("input_decl", name)` -> its
@@ -31,26 +28,25 @@ def _boundary_field_ranges(text: Optional[str]) -> FieldRanges:
     `_boundary_assert_ranges`, threaded into the lowered START/END assert-range lists). Empty for a
     spanless / uncomposable flow (compact / in-memory / a def) — best-effort, boundary errors there
     fall back to the node range. Mirrors `_frame_ranges`: render metadata, never raises."""
-    if not text:
-        return {}
     try:
-        value, spans, root = load_with_spans(text, return_root=True)
-    except yaml.YAMLError:
+        value = root._value_view()
+        if not isinstance(value, Mapping):
+            return FieldRanges()
+        out: FieldRanges = FieldRanges()
+        for key in ("input", "inputs"):
+            if isinstance(value.get(key), Mapping):
+                out.update(
+                    {
+                        ("input_decl", name): rng
+                        for name, rng in root.mapping_value_ranges(key).items()
+                    }
+                )
+        return out
+    except SourceAccessError:
         return FieldRanges()
-    if not isinstance(value, dict):
-        return FieldRanges()
-    reader = NodeReader(value, spans, root)
-    out: FieldRanges = FieldRanges()
-    for key in ("input", "inputs"):
-        if isinstance(value.get(key), dict):
-            out.update(
-                {("input_decl", name): rng
-                 for name, rng in reader.mapping_value_ranges(key).items()}
-            )
-    return out
 
 
-def _boundary_assert_ranges(text: Optional[str]) -> list[SourceRange | None]:
+def _boundary_assert_ranges(root: SourceCursor) -> list[SourceRange | None]:
     """The POSITIONAL ranges of the flow-level `asserts:` list, aligned 1:1 with it in author order.
 
     The flow-boundary twin of the node-local `assert_ranges`: `lower_flow_asserts` consumes this to
@@ -58,42 +54,36 @@ def _boundary_assert_ranges(text: Optional[str]) -> list[SourceRange | None]:
     own line), and to caret a bad-ref `LoadError` at the offending assert. Positional — NOT keyed by
     text — so two identical flow asserts get distinct carets. `[]` for a spanless / uncomposable
     flow; render metadata, never raises (mirrors `_boundary_field_ranges`)."""
-    if not text:
-        return []
     try:
-        value, spans, root = load_with_spans(text, return_root=True)
-    except yaml.YAMLError:
+        if not isinstance(root._value_view(), Mapping):
+            return []
+        return root.item_range_list("asserts")
+    except SourceAccessError:
         return []
-    if not isinstance(value, dict):
-        return []
-    return NodeReader(value, spans, root).item_range_list("asserts")
 
 
-def _section_lines(text: Optional[str]) -> dict[str, int]:
+def _section_lines(root: SourceCursor) -> dict[str, int]:
     """Map each top-level section key -> its 1-based header line (best-effort).
 
     Replaces the retired `parser.section_lines`: locates a section-level error (a bad
     `typedefs:`, an eager `uses:` failure, a dangling `outputs:`/`asserts:` ref) at the
-    section's header line. Derived from the span parse (`load_with_spans` + each section
-    key's own `SourceRange`), consistent with the range-native front end — raw keys are
+    section's header line. Derived from each section key's `SourceRange` on the supplied
+    cursor, consistent with the range-native front end — raw keys are
     kept (`output`/`outputs` both surface; the loader coalesces). `{}` when the text is
     absent or PyYAML can't compose it. Render metadata, never the error path — never raises.
     """
-    if not text:
-        return {}
     try:
-        value, spans, root = load_with_spans(text, return_root=True)
-    except yaml.YAMLError:
+        value = root._value_view()
+        if not isinstance(value, Mapping):
+            return {}
+        out: dict[str, int] = {}
+        for key in value:
+            rng = root.key_range_of(key)
+            if rng is not None:
+                out[str(key)] = rng.start_line
+        return out
+    except SourceAccessError:
         return {}
-    if not isinstance(value, dict):
-        return {}
-    reader = NodeReader(value, spans, root)
-    out: dict[str, int] = {}
-    for key in value:
-        rng = reader.key_range_of(key)
-        if rng is not None:
-            out[str(key)] = rng.start_line
-    return out
 
 
 @dataclass(frozen=True)
@@ -115,8 +105,8 @@ class SourceFrame:
             external flow it is that file's own text.
         node_ranges (`dict[str, SourceRange]`):
             `node_id -> the node body's `SourceRange` in `text`` for the child's nodes.
-            Empty (frame collapses to the call line) for a compact single-node def with no
-            authored inner `nodes:` mapping.
+            A source-backed compact or single-node form projects its synthesized
+            node header onto the corresponding authored `id:` or `defs:` key.
         field_ranges (`dict[str, dict[tuple[str, str], SourceRange]]`):
             `node_id -> {(kind, key) -> `SourceRange`}` — the per-field precision, keyed by the
             location's `(SourceSpan.kind, key)` (`kind ∈ {input, input_decl, field}`, never

@@ -10,22 +10,21 @@ import pytest
 
 from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.loader import load_flow
-from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.nodes.agent import AgentDescriptor
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.events import SourceRange
 
 
 def _nodes_reader(text):
-    """A span-aware NodeReader over the `nodes:` mapping of a flow document."""
-    value, spans, root = load_with_spans(text, return_root=True)
-    return NodeReader(value, spans, root).child("nodes")
+    """Return the physical cursor over a flow document's ``nodes:`` mapping."""
+
+    return SourceDocument.parse(text).root.child("nodes")
 
 
 def _node_wiring(desc):
@@ -37,13 +36,11 @@ def _node_wiring(desc):
 def _built_flow(text):
     """Build leaf nodes + flow wiring + producers from a flow's `nodes:` (span-aware).
 
-    Mirrors the loader's leaf-build slice: parse the `nodes:` mapping off the span tree,
+    Mirrors the loader's leaf-build slice: parse the `nodes:` mapping from one source document,
     build each agent/code leaf, and split into `{nid: node}` / `{nid: wiring}` plus the
     `{nid: output_type}` producer map — enough to drive `validate_references` in isolation.
     """
-    value, spans, root = load_with_spans(text, return_root=True)
-    reader = NodeReader(value, spans, root).child("nodes")
-    descriptors = parse_nodes(reader)
+    descriptors = parse_nodes(SourceDocument.parse(text).root.child("nodes"))
     built = {
         nid: _node_wiring(d)
         for nid, d in descriptors.items()

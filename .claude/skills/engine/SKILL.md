@@ -190,6 +190,27 @@ The package-root `run.py` sits above compose and runtime and wires cross-layer
 capabilities: notably it owns log lifecycle/recovery and injects compile's
 `build_grow` into the kind-blind runtime.
 
+Compose source ownership is one-way too. `compose/source/` alone owns PyYAML and
+the private retained document graph. Root text is constructed once as a
+`SourceDocument`; each uncached external file is constructed once too. The public
+cursor interface is immutable and defensive. The default file resolver's
+successful resolved-path cache reuses one compiled flow for every alias or diamond
+reference to that external file.
+Persistent pair/arc ropes keep YAML merge topology compact; completed mapping
+summaries are reuse frontiers rather than recursively rescanned descendants.
+Defensive value snapshots are iterative and preserve shared/recursive aliases.
+Source-aware parsing and inline extraction navigate `SourceCursor`s: physical
+cursors combine definition ranges with occurrence paths (and mapping-key ranges),
+virtual cursors are defensive source-free snapshots, and projected cursors retain
+explicitly selected physical child sources while changing a view. Descriptors and
+nodes carry derived ranges thereafter. Never reparse a source slice or mutate
+anchors/aliases/merges.
+Inline extraction intentionally takes one graph-wide nodes snapshot before
+projection so unchanged aliases retain sharing; field navigation uses cursors or
+their package-private read-only view.
+`SourceFrame` is persistent render-only text/range metadata on `ComposedFlow.source`
+and composite nodes' `child_source`; it does not own parsing or the source graph.
+
 Inline composite implementation stays wholly in `compose`: `desugar/` retains
 and masks located bodies, the loader owns the file-private callable table/cache,
 and `build/` proves generated parameter types and assembles the child. The child

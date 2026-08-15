@@ -23,10 +23,9 @@ class LoadError(ValueError):
     spell out the dependency edges that close the loop (e.g. "a depends on b (a.input.x)").
     None when there's nothing to add.
 
-    `.range` carries the precise 1-based `SourceRange` the error points at, when known —
-    the span-aware successor to `.line`, filled in by the span loader / `NodeReader` cursor.
-    The two coexist during the migration off `line=`: a renderer prefers `.range` when set
-    and falls back to `.line`. None for errors raised away from a parsed node. When a
+    `.range` carries the precise 1-based `SourceRange` the error points at, when known,
+    filled in by a `SourceCursor`. A renderer prefers `.range` when set and falls back
+    to `.line`. None for errors raised away from a parsed node. When a
     `range` is given and no explicit `line`/`lines`, `.line` defaults to the range's start
     line, so legacy line-based consumers keep working as callers move to `range=`.
     """
@@ -51,4 +50,3 @@ class LoadError(ValueError):
             self.line = None
         self.notes = notes
         self.range = range
-

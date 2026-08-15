@@ -2,7 +2,7 @@
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `case` node's frozen
 `CaseDescriptor`. It inherits the template `parse` from `NodeDescriptor` (which records each
-field's `SourceRange`), overriding only the `_normalize_reader` hook — case is the sole kind
+field's `SourceRange`), overriding only the `_normalize_cursor` hook — case is the sole kind
 whose surface carries a key YAML 1.1 coerces (`on:`->`True`), so it undoes that coercion before
 the template's key-legality check runs. Registered into `KINDS`/`BINDING_FIELDS` at import so the
 shared dispatch routes here.
@@ -31,13 +31,14 @@ in `.build()`. `.build()` lowers unconditionally; the loader runs `check_case_ex
 validate phase.
 
 Imports flow down/peer only: `expr` (ref scan/rewrite), `nodes` (Case/CaseNode/ParamDecl),
-`compile.model` (Edge), and the compose peer `helpers.errors`/`helpers.reader`/`nodes.base`.
+`compile.model` (Edge), and the compose peer `source`/`helpers.errors`/`nodes.base`.
 It imports NOTHING from parse/desugar/edges/validate/build/loader (the ladder), so it stays a
 leaf of the nodes package.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
@@ -52,21 +53,44 @@ from agent_composer.expr import (
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.case import DEFAULT_HANDLE, Case, CaseNode
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from agent_composer.compose.source import SourceCursor
 
 # YAML 1.1 (PyYAML `safe_load`) coerces the bare key `on:` to the boolean `True` (likewise
 # `off`/`yes`/`no`). The case-node surface key `on:` is the only such key in any node body, so
-# this back-map + `_normalize_keys` (below) undo the coercion. Case-local: no other kind body
+# this pure key projection undoes the coercion. Case-local: no other kind body
 # carries a YAML-bool-coerced key.
 _YAML_BOOL_KEYS = {True: "on", False: "off"}
 
 
-def _normalize_keys(body: dict) -> dict:
-    """Undo YAML 1.1 boolean-key coercion for the surface key `on:`."""
-    if not any(k in _YAML_BOOL_KEYS for k in body):
-        return body
-    return {_YAML_BOOL_KEYS.get(k, k): v for k, v in body.items()}
+def _normalized_key_names(cursor: SourceCursor) -> dict[Any, Any]:
+    """Return effective YAML 1.1 boolean keys mapped to schema names.
+
+    Args:
+        cursor (`SourceCursor`):
+            Node-body cursor whose effective source pairs determine whether a
+            Python-equal key was authored as a YAML boolean or a number.
+
+    Returns:
+        `dict[Any, Any]`:
+            Displayed constructed keys mapped to their replacement schema
+            keys, usually ``"on"`` or ``"off"``.
+    """
+
+    body = cursor._value_view()
+    if not isinstance(body, Mapping):
+        return {}
+    names: dict[Any, Any] = {}
+    for key in body:
+        child = cursor.child(key)
+        source_key = child.source_key_value
+        if type(source_key) is bool:
+            names[key] = _YAML_BOOL_KEYS[source_key]
+        elif child.key_range is not None and type(key) is not type(source_key):
+            names[key] = source_key
+        elif child.document is None and type(key) is bool:
+            names[key] = _YAML_BOOL_KEYS[key]
+    return names
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -78,7 +102,7 @@ class CaseDescriptor(NodeDescriptor):
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
     `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor`.
-    It overrides ONLY the `_normalize_reader` hook (to undo the `on:`->`True` YAML coercion
+    It overrides ONLY the `_normalize_cursor` hook (to undo the `on:`->`True` YAML coercion
     before key legality runs); its field legality is otherwise the default allowed/required key
     check plus the default asserts-list check. Only the case-specific fields are declared here.
 
@@ -113,29 +137,39 @@ class CaseDescriptor(NodeDescriptor):
     then_ranges: list[Optional[SourceRange]] = field(default_factory=list, compare=False)
 
     @classmethod
-    def parse(cls, node_id: str, reader: NodeReader) -> "NodeDescriptor":
+    def parse(
+        cls,
+        node_id: str,
+        cursor: SourceCursor,
+    ) -> "NodeDescriptor":
         """Template `parse` + capture each `cases[N].when` / `.then` VALUE range positionally.
 
         `cases:` is a sequence of `{when:, then:}` mappings whose per-item fields carry no unique
         text key, so neither `field_ranges` nor `item_range_list` can reach them; the positional
         `sequence_field_ranges` does. `_desugar_searched` / `desugar_case_call_targets` read these
         to give a synth CASE param / call target its own caret."""
-        desc = super().parse(node_id, reader)
-        when_ranges = reader.sequence_field_ranges("cases", "when")
-        then_ranges = reader.sequence_field_ranges("cases", "then")
+        cursor = cls._normalize_cursor(cursor)
+        desc = super().parse(node_id, cursor)
+        cases = cursor._value_view().get("cases")
+        if isinstance(cases, Sequence) and not isinstance(cases, (str, bytes)):
+            when_ranges = cursor.sequence_field_ranges("cases", "when")
+            then_ranges = cursor.sequence_field_ranges("cases", "then")
+        else:
+            when_ranges = []
+            then_ranges = []
         if when_ranges or then_ranges:
             desc = replace(desc, when_ranges=when_ranges, then_ranges=then_ranges)
         return desc
 
     @classmethod
-    def _normalize_reader(cls, reader: NodeReader) -> None:
-        """Undo YAML 1.1's `on:`->`True` key coercion before the template's key check.
+    def _normalize_cursor(cls, cursor: SourceCursor) -> SourceCursor:
+        """Project YAML 1.1's boolean `on:` key back to its surface spelling."""
 
-        Overrides the base no-op hook: the template `parse` calls this first, before any key
-        is inspected. Rewrites `reader.value` in place via `_normalize_keys`, so spanless
-        presence checks (`_pair` reads `reader.value`) find `on`; span-aware range lookups
-        still resolve because `NodeReader` matches the RAW key text (`"on"`)."""
-        reader.value = _normalize_keys(reader.value)
+        body = cursor._value_view()
+        if not isinstance(body, Mapping):
+            return cursor
+        names = _normalized_key_names(cursor)
+        return cursor.renamed(names) if names else cursor
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Lower this `case` to a strict `CaseNode` + its control + data edges.

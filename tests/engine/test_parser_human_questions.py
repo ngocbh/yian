@@ -1,11 +1,11 @@
 import pytest
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.source import SourceCursor
 
 
 def _node(body):
-    return parse_nodes(NodeReader.spanless({"ask": {"kind": "human_input", **body}}))["ask"]
+    return parse_nodes(SourceCursor.virtual({"ask": {"kind": "human_input", **body}}))["ask"]
 
 
 def test_static_questions_ok_without_prompt():

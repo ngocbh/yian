@@ -1,9 +1,14 @@
 """External callables — the default LOCAL file resolver: search path, inert paths, cycle, cache."""
 
+from collections import Counter
+from pathlib import Path
+
 import pytest
 
+from agent_composer.compose import loader as compose_loader
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
+from agent_composer.run import run_flow
 
 _CODE = "tests.seeds.fns:one_line_summary"
 
@@ -31,6 +36,27 @@ def _write(d, filename, flow_id, **kw):
     f = d / f"{filename}.yaml"
     f.write_text(_flow(flow_id, **kw))
     return f
+
+
+def _capture_external_source_access(monkeypatch):
+    """Return lists recording file reads and source-document parse labels."""
+
+    reads: list[Path] = []
+    parses: list[str] = []
+    original_read = Path.read_text
+    original_parse = compose_loader.parse_source_document
+
+    def track_read(path, *args, **kwargs):
+        reads.append(path.resolve())
+        return original_read(path, *args, **kwargs)
+
+    def track_parse(text, label):
+        parses.append(label)
+        return original_parse(text, label)
+
+    monkeypatch.setattr(Path, "read_text", track_read)
+    monkeypatch.setattr(compose_loader, "parse_source_document", track_parse)
+    return reads, parses
 
 
 # --------------------------------------------------------------------------- #
@@ -129,6 +155,17 @@ def test_missing_ref_errors(tmp_path):
         load_flow(parent.read_text(), search_paths=[tmp_path])
 
 
+def test_malformed_external_child_is_located_load_error(tmp_path):
+    (tmp_path / "child.yaml").write_text("id: [")
+    parent = _write(tmp_path, "p", "p", call="ch", uses={"ch": "child"})
+
+    with pytest.raises(LoadError, match="invalid YAML") as caught:
+        load_flow(parent.read_text(), search_paths=[tmp_path])
+
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == 1
+
+
 def test_search_path_precedence_own_dir_first(tmp_path):
     d2 = tmp_path / "shared"
     d2.mkdir()
@@ -159,6 +196,15 @@ def test_child_own_uses_re_roots(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
+def test_load_context_has_one_typed_flow_cache():
+    context = compose_loader._LoadCtx()
+
+    assert context.loading == set()
+    assert context.flows == {}
+    assert not hasattr(context, "cache")
+    assert not hasattr(context, "documents")
+
+
 def test_cross_file_cycle_rejected(tmp_path):
     # file fa calls alias `b` -> file fb; fb calls alias `back` -> file fa. (Aliases avoid
     # the fixed node id `a`.) The shared loading-set catches the fa->fb->fa cycle.
@@ -168,11 +214,30 @@ def test_cross_file_cycle_rejected(tmp_path):
         load_flow((tmp_path / "fa.yaml").read_text(), search_paths=[tmp_path])
 
 
-def test_diamond_reuse(tmp_path):
+def test_two_aliases_of_one_file_read_and_parse_once(tmp_path, monkeypatch):
+    child = _write(tmp_path, "child", "child")
+    parent = tmp_path / "parent.yaml"
+    parent.write_text(
+        "id: parent\nname: parent\ninput: {x: str}\nnodes:\n"
+        '  a: {kind: call, call: first, input: {x: "${input.x}"}}\n'
+        '  b: {kind: call, call: second, input: {x: "${a.output}"}}\n'
+        'output: {y: "${b.output}"}\n'
+        "uses:\n  first: child\n  second: child\n"
+    )
+    parent_text = parent.read_text()
+    reads, parses = _capture_external_source_access(monkeypatch)
+
+    assert load_flow(parent_text, search_paths=[tmp_path]) is not None
+
+    assert Counter(reads) == Counter({child.resolve(): 1})
+    assert Counter(parses) == Counter({"<flow>": 1, "child.yaml": 1})
+
+
+def test_diamond_reuse_reads_and_parses_each_path_once(tmp_path, monkeypatch):
     # p -> (m1, m2) -> leaf; leaf reached twice must load once (cache), no error.
-    _write(tmp_path, "leaf", "leaf")
-    _write(tmp_path, "mid1", "mid1", call="l", uses={"l": "leaf"})
-    _write(tmp_path, "mid2", "mid2", call="l", uses={"l": "leaf"})
+    leaf = _write(tmp_path, "leaf", "leaf")
+    mid1 = _write(tmp_path, "mid1", "mid1", call="l", uses={"l": "leaf"})
+    mid2 = _write(tmp_path, "mid2", "mid2", call="l", uses={"l": "leaf"})
     parent = (tmp_path / "p.yaml")
     parent.write_text(
         "id: p\nname: p\ninput: {x: str}\nnodes:\n"
@@ -180,16 +245,31 @@ def test_diamond_reuse(tmp_path):
         '  b: {kind: call, call: m2, input: {x: "${a.output}"}}\n'
         'output: {y: "${b.output}"}\nuses:\n  m1: mid1\n  m2: mid2\n'
     )
-    assert load_flow(parent.read_text(), search_paths=[tmp_path]) is not None
+    parent_text = parent.read_text()
+    reads, parses = _capture_external_source_access(monkeypatch)
+
+    assert load_flow(parent_text, search_paths=[tmp_path]) is not None
+
+    assert Counter(reads) == Counter(
+        {
+            leaf.resolve(): 1,
+            mid1.resolve(): 1,
+            mid2.resolve(): 1,
+        }
+    )
+    assert Counter(parses) == Counter(
+        {
+            "<flow>": 1,
+            "leaf.yaml": 1,
+            "mid1.yaml": 1,
+            "mid2.yaml": 1,
+        }
+    )
 
 
 # --------------------------------------------------------------------------- #
 # runnable seed 24 (uses: an external CODE-only sibling via search path)
 # --------------------------------------------------------------------------- #
-
-from pathlib import Path
-
-from agent_composer.run import run_flow
 
 _SEEDS = Path(__file__).resolve().parents[1].parent / "tests" / "seeds"
 

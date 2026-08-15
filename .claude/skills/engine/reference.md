@@ -245,14 +245,54 @@ owning node packages. The scheduling-state vocabulary sits in the internal
 append-before-apply reducer state, and dispatch; the package-root run boundary owns
 fresh-log creation, locked prefix recovery, and log closure.
 
+## Compose source ownership
+
+`compose/source/` is the sole production Compose package that imports PyYAML. It
+constructs root text once as a `SourceDocument` with an immutable, defensive public
+cursor interface and keeps the composed and constructed YAML graph private. Each
+uncached external file gets one document too. The document owns the original text,
+label, semantic value, occurrence topology, and source ranges. Alias and merge
+semantics are retained without later mutation of PyYAML nodes or constructed
+containers. Persistent pair/arc ropes retain merge topology without expansion,
+and completed mapping summaries stop repeated parent DAG scans. Public defensive
+snapshots use a stack-safe iterative copier that preserves shared and recursive
+aliases.
+
+Source-aware parsing and inline extraction use `SourceCursor`:
+
+- A **physical cursor** navigates one document occurrence. Its value range belongs
+  to the shared definition, its path identifies the occurrence, and a mapping child
+  also retains its selecting-key range.
+- A **virtual cursor** owns a defensive, source-free snapshot for programmatic or
+  isolated values.
+- A **projected cursor** presents replacement/renamed values while retaining the
+  explicitly supplied physical source for each selected child. Desugaring uses
+  projections so occurrence-local changes never alter anchors, aliases, or merges.
+
+Inline-body extraction takes one graph-wide nodes snapshot before projection so
+unchanged aliases remain shared. Other source-aware field navigation uses cursors
+or their package-private read-only view.
+
+After cursor-based extraction and parsing, descriptors and nodes carry the derived
+ranges needed by later phases; no phase reparses source fragments or inspects the
+private document graph. The default file resolver adds a separate successful
+`resolved Path -> ComposedFlow` cache, so aliases and diamond imports read, parse,
+and compile each external physical file once within a successful load graph.
+
+`SourceFrame` is persistent render-only diagnostic metadata. The loader derives its
+node/field range maps from descriptors parsed over the existing cursors, stores the
+top frame on `ComposedFlow.source`, and gives composite nodes their child's frame as
+`child_source` for CLI tracebacks. It carries text and ranges, not parser state, and
+is not another source owner.
+
 ## Inline composite bodies (compose-only sugar)
 
 An authored CALL/MAP/LOOP may provide a non-empty `nodes:` plus `output:` instead
 of a named `call:`. The implementation boundary is deliberately above compile
 and runtime:
 
-- `compose.desugar.inline_bodies` makes occurrence-local shallow overlays for the
-  enclosing node map, retains the original located child values, and masks each
+- `compose.desugar.inline_bodies` makes occurrence-local cursor projections for the
+  enclosing node map, retains the original located child cursors, and masks each
   inline occurrence to an ordinary private `call:`. It never mutates authored
   YAML anchors/aliases/merge values.
 - The private identity is stable: `__inline_flow_` + SHA-256 of the complete
@@ -376,7 +416,8 @@ resolved to a line at the CLI boundary — never a text heuristic.
   was recorded.
 - **Resolution (CLI boundary):** `cli/run.py` prefers the pre-resolved `nf.range` →
   `result.range`; only if both are absent does `_resolve_range` map the span itself, via
-  `_top_ranges` (the flow's `SourceFrame` maps, else `loader.top_frame_ranges(text)`): a
+  `_top_ranges` (the loaded flow's `SourceFrame` maps, or the defensive
+  `loader.top_frame_ranges(document)` fallback): a
   `field` locator → that field's range, else `_node_range` (node-kind best field, e.g. a code
   node's `code:`, → node HEADER range). The winning `SourceRange` is boxed via a
   **`Diagnostic`** (severity + message + primary range + notes) through `render_diagnostic`.
@@ -384,8 +425,9 @@ resolved to a line at the CLI boundary — never a text heuristic.
   runtime-NAMESPACED (`gate/approve`, `outer/via/boom`, `gate#0/inner` for a map element).
   A `call`/`map` node bakes its child flow's render-only **`SourceFrame`** (`compose/loader`:
   label + source text + node→`SourceRange` / field→`SourceRange` maps, built by `_frame_ranges`
-  off the parsed descriptors) onto `child_source` at load — for a `defs:` child the text is the
-  PARENT file (inner nodes at their absolute parent lines, via `_def_nodes_reader`); for an
+  off descriptors parsed from the existing source cursors) onto `child_source` at load — for
+  a `defs:` child the text is the PARENT file (its projected node cursors retain absolute
+  parent-file ranges); for an
   external `uses:` child it is that file's own text, label = its filename. The frame is frozen
   and `__deepcopy__`-returns-self, so `clone_child`'s per-callsite deep-copy shares the one
   instance and it is exempt from the node-purity scan (it carries raw `${...}` YAML, but is

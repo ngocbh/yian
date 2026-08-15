@@ -21,9 +21,8 @@ from agent_composer.compose.parse.file import (
     ToolDescriptor,
     parse_file,
 )
-from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceDocument
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -31,11 +30,19 @@ _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 def _nodes(yaml_text: str):
     """Parse a bare `nodes:`-body mapping (the test inlines node maps directly).
 
-    Span-aware: the reader is built over the source text so parse errors carry a
+    Source-aware: the document is built over the source text so parse errors carry a
     `SourceRange` (and, derived from it, a legacy `.line`).
     """
-    value, spans, root = load_with_spans(yaml_text, return_root=True)
-    return parse_nodes(NodeReader(value, spans, root))
+    return parse_nodes(SourceDocument.parse(yaml_text).root)
+
+
+def _seed_nodes(name: str):
+    """Parse one seed once and return its physically located descriptors."""
+
+    path = _SEEDS / name
+    document = SourceDocument.parse(path.read_text(), label=str(path))
+    parse_file(document)
+    return parse_nodes(document.root.child("nodes"))
 
 
 # ---------- reserved boundary ids ----------
@@ -116,8 +123,7 @@ note:
 
 def test_agent_knobs_parse():
     # seed 14 — mode / tools / llm_config + object output
-    f = parse_file((_SEEDS / "14-agent-tools.yaml").read_text())
-    node = parse_nodes(NodeReader.spanless(f.nodes))["reviewer"]
+    node = _seed_nodes("14-agent-tools.yaml")["reviewer"]
     assert isinstance(node, AgentDescriptor)
     assert node.mode == "tool_calling"
     assert node.tools == ["get_web_data", "web_search", "ask_user"]
@@ -131,8 +137,7 @@ def test_agent_knobs_parse():
 
 def test_code_parses():
     # seed 01 verdict node
-    f = parse_file((_SEEDS / "01-structured-agent.yaml").read_text())
-    node = parse_nodes(NodeReader.spanless(f.nodes))["verdict"]
+    node = _seed_nodes("01-structured-agent.yaml")["verdict"]
     assert isinstance(node, CodeDescriptor)
     assert node.code == "tests.seeds.fns:one_line_summary"
     assert node.inputs == {
@@ -146,8 +151,7 @@ def test_code_parses():
 
 
 def test_model_parses():
-    f = parse_file((_SEEDS / "07-model-rating.yaml").read_text())
-    node = parse_nodes(NodeReader.spanless(f.nodes))["predict"]
+    node = _seed_nodes("07-model-rating.yaml")["predict"]
     assert isinstance(node, ModelDescriptor)
     assert node.model_id == "topic-ranker-v1"
     assert node.weights_uri == "manifold://calpha/models/topic-ranker-v1.pt"
@@ -173,8 +177,7 @@ predict:
 
 
 def test_tool_parses():
-    f = parse_file((_SEEDS / "08-tool-news.yaml").read_text())
-    node = parse_nodes(NodeReader.spanless(f.nodes))["news"]
+    node = _seed_nodes("08-tool-news.yaml")["news"]
     assert isinstance(node, ToolDescriptor)
     assert node.tool_id == "get_facts"
     assert node.inputs == {"symbol": "${input.topic}", "limit": 10}
@@ -202,8 +205,7 @@ news:
 
 def test_case_searched_parses():
     # seed 02 gate — searched form (no on:)
-    f = parse_file((_SEEDS / "02-case.yaml").read_text())
-    node = parse_nodes(NodeReader.spanless(f.nodes))["gate"]
+    node = _seed_nodes("02-case.yaml")["gate"]
     assert isinstance(node, CaseDescriptor)
     assert node.on is None
     assert node.cases == [{"when": "score.output >= 0.5", "then": "positive"}]
@@ -212,8 +214,7 @@ def test_case_searched_parses():
 
 def test_case_on_parses():
     # seed 06 route — on: form
-    f = parse_file((_SEEDS / "06-case-on.yaml").read_text())
-    node = parse_nodes(NodeReader.spanless(f.nodes))["route"]
+    node = _seed_nodes("06-case-on.yaml")["route"]
     assert isinstance(node, CaseDescriptor)
     assert node.on == "${classify.output}"
     assert node.cases == [
@@ -243,8 +244,7 @@ gate:
 
 def test_call_ref_form_parses():
     # seed 04 — a plain `call` (REF) = single application.
-    f = parse_file((_SEEDS / "04-call.yaml").read_text())
-    node = parse_nodes(NodeReader.spanless(f.nodes))["research"]
+    node = _seed_nodes("04-call.yaml")["research"]
     assert isinstance(node, CallDescriptor)
     assert node.kind == "call"                          # the REF discriminator
     assert node.call == "research-one"
@@ -302,8 +302,7 @@ x:
 
 def test_call_map_form_parses():
     # seed 05 — a `map` (kind: map + over:) = List.map.
-    f = parse_file((_SEEDS / "05-call-map.yaml").read_text())
-    node = parse_nodes(NodeReader.spanless(f.nodes))["research_each"]
+    node = _seed_nodes("05-call-map.yaml")["research_each"]
     assert isinstance(node, CallDescriptor)
     assert node.kind == "map"                           # the MAP discriminator
     assert node.call == "research-one"
@@ -456,8 +455,7 @@ n:
 
 def test_seed_11_anchored_nodes_parse():
     # merged-anchor agent nodes all parse to AgentDescriptors
-    f = parse_file((_SEEDS / "11-reuse-anchors.yaml").read_text())
-    nodes = parse_nodes(NodeReader.spanless(f.nodes))
+    nodes = _seed_nodes("11-reuse-anchors.yaml")
     for nid in ("pro", "con", "judge"):
         assert isinstance(nodes[nid], AgentDescriptor)
         assert nodes[nid].outputs == "str"

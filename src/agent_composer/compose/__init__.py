@@ -10,13 +10,14 @@ Organized along two axes: the per-node-kind axis lives in `nodes/<kind>.py`
 derives the shared `KINDS` table from those classes), and the cross-node graph-stage axis lives
 in the ordered phases `parse/ -> desugar/ -> edges/ -> validate/ -> build/`. The shared choke
 points (`parse/nodes.py`, the loader's conductor loop, `nodes/bindings.py`) dispatch through
-`KINDS` kind-blind — there is no per-kind isinstance ladder. `parse/file.py` is the YAML
-text/span front door (`parse_file`). The loader also owns each file's callable scope:
+`KINDS` kind-blind — there is no per-kind isinstance ladder. `source/` owns the one-pass
+YAML document and located cursors; `parse/file.py` consumes that document (`parse_file`).
+The loader also owns each file's callable scope:
 authored `defs:`/`uses:` plus a resolver-private, lazy cache for inline CALL/MAP/LOOP
 children lowered by `desugar/` and assembled by `build/`.
 
-Errors carry a concrete `SourceRange` (from `events`): a located `NodeReader` records
-each field's range during `parse`, the runtime funnel resolves a failure's range from
+Errors carry a concrete `SourceRange` (from `events`): a `SourceCursor` records each
+field's range during `parse`, the runtime funnel resolves a failure's range from
 `node.field_ranges`, and the CLI boxes it as a `Diagnostic`.
 
 Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes`; nothing

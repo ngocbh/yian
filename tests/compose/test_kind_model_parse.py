@@ -3,8 +3,7 @@ returns a runtime ModelNode with output_type + wiring and stamped ranges."""
 
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.model import ModelDescriptor
-from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.helpers.spanloader import load_with_spans
+from agent_composer.compose.source import SourceDocument
 from agent_composer.events import SourceRange
 
 
@@ -20,9 +19,7 @@ nodes:
 
 
 def _reader_for(text, node_id):
-    value, spans, root = load_with_spans(text, return_root=True)
-    root_reader = NodeReader(value, spans, root)
-    return root_reader.child("nodes").child(node_id)
+    return SourceDocument.parse(text).root.child("nodes").child(node_id)
 
 
 def test_model_parse_matches_descriptor_and_records_ranges():

@@ -10,7 +10,7 @@ callable:
   if/else handles -> CompiledFlow.from_parts.
 
 Holds `ComposedFlow` (the compiled+validated flow the engine runs) plus the flow
-`outputs:` reader (`_flow_outputs`). Ladder position: the LAST phase before the
+`outputs:` parser (`_flow_outputs`). Ladder position: the LAST phase before the
 loader — it may import every earlier phase (helpers/nodes/parse/desugar/edges/
 validate/build.boundary); the loader imports `_assemble`/`ComposedFlow` back from
 here. It imports NOTHING from `loader.py` (that would be a back-edge).
@@ -54,9 +54,9 @@ from agent_composer.compose.edges.ordering import infer_ordering_edges
 from agent_composer.compose.validate.call_types import check_ref_map_types
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose.validate.wiring_parity import check_wiring_parity
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.helpers.source import SourceFrame
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceAccessError, SourceCursor
 from agent_composer.compose.helpers.types import InputDecl, read_flow_inputs
 from agent_composer.compose.validate.handles import check_case_handles
 from agent_composer.compose.validate.asserts import validate_node_asserts
@@ -247,17 +247,17 @@ def _register_inline_bodies(
         if descriptor is None:
             raise LoadError(
                 f"{label}: no matching composite node descriptor",
-                range=body.nodes_reader._own_range(),
+                range=body.nodes_cursor.range,
             )
         if not isinstance(descriptor, (CallDescriptor, LoopDescriptor)):
             raise LoadError(
                 f"{label}: final node descriptor is not CALL, MAP, or LOOP",
-                range=body.nodes_reader._own_range(),
+                range=body.nodes_cursor.range,
             )
         if descriptor.call != body.flow_id:
             raise LoadError(
                 f"{label}: final node descriptor does not target its retained inline body",
-                range=body.nodes_reader._own_range(),
+                range=body.nodes_cursor.range,
             )
 
         labelled_descriptor = replace(descriptor, child_label=label)
@@ -301,7 +301,7 @@ def _assemble(
     *,
     inputs_section: Optional[dict] = None,
     input_decls: Optional[list[InputDecl]] = None,
-    nodes_reader: NodeReader,
+    nodes_cursor: SourceCursor,
     outputs_section,
     asserts_section: list,
     registry,
@@ -343,10 +343,13 @@ def _assemble(
     if (inputs_section is None) == (input_decls is None):
         raise ValueError("_assemble requires exactly one of inputs_section or input_decls")
 
-    nodes_reader, inline_bodies = extract_inline_bodies(
-        nodes_reader,
-        owner=owner,
-    )
+    try:
+        nodes_cursor, inline_bodies = extract_inline_bodies(
+            nodes_cursor,
+            owner=owner,
+        )
+    except SourceAccessError as exc:
+        raise LoadError(str(exc), range=exc.range) from exc
 
     # The flow's file label frames inline-CODE tracebacks; each inline node's content start
     # line is derived from its recorded `code:` range in the CODE build. Inert for reference-mode CODE.
@@ -358,7 +361,7 @@ def _assemble(
         inputs = list(input_decls)
     flow_input_types = {decl.name: decl.type for decl in inputs}
     flow_inputs = set(flow_input_types)
-    descriptors = parse_nodes(nodes_reader)
+    descriptors = parse_nodes(nodes_cursor)
 
     parsed_node_ranges = {
         node_id: descriptor.range
@@ -542,7 +545,7 @@ def _assemble(
         )
         return _assemble(
             input_decls=child_inputs,
-            nodes_reader=body.nodes_reader,
+            nodes_cursor=body.nodes_cursor,
             outputs_section=body.output,
             asserts_section=[],
             registry=registry,

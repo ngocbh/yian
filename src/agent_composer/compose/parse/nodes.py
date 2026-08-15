@@ -1,8 +1,8 @@
 """Graph-stage: parse the `nodes:` mapping into typed per-kind descriptors.
 
-The first cross-node assembly pass. Consumes a `NodeReader` over the flow's
-`nodes:` mapping (located, from the span tree) and dispatches each node body to its kind's
-`parse` via the `KINDS` table — replacing the legacy line-based
+The first cross-node assembly pass. Consumes a source cursor over the flow's
+`nodes:` mapping and dispatches each node body to its kind's `parse` via the
+`KINDS` table — replacing the legacy line-based
 `parser.parse_nodes`/`_parse_node`/`_KIND_SPECS` trio.
 
 Only the generic, kind-independent pre-checks live here (body-is-mapping, reserved node ids,
@@ -19,68 +19,68 @@ non-unique text, so they are a list — never keyed into `field_ranges`).
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from typing import Any
 
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes import KINDS
-from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.source import SourceAccessError, SourceCursor
 
-# Singular source keys the descriptor dataclasses carry in their plural form. The span tree
-# (a raw parse) preserves the author's singular `input:`/`output:`; ComposeFile normalizes
-# them for the dict path, but the span path bypasses ComposeFile, so we back-map here.
+# Singular source keys are projected onto the descriptor dataclasses' plural
+# field names while retaining their original child sources.
 _INPUT_OUTPUT_REMAP = {"input": "inputs", "output": "outputs"}
 
 
-def parse_nodes(nodes_reader: NodeReader) -> dict[str, Any]:
-    """Parse a `nodes:` mapping (via a `NodeReader`) into typed per-kind descriptors.
+def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
+    """Parse one source cursor into typed per-kind descriptors.
 
-    `nodes_reader` is located over the flow's `nodes:` value — span-aware over the source
-    (top-level flow) or spanless over an already-constructed dict (a compact flow's in-memory
-    node, a `defs:` sub-flow, a test). Returns `{node id -> descriptor}` in source order; each
-    descriptor carries `range`/`field_ranges` when the reader is span-aware.
+    The source is physical for a full graph, source-aligned for compact/def
+    projections, or virtual for a programmatic/test mapping. Returns descriptors
+    in source order with ranges whenever an authored source exists.
     """
     out: dict[str, Any] = {}
-    nodes = nodes_reader.value
-    if not isinstance(nodes, dict):
-        return out
-    for node_id in list(nodes):
-        desc = _parse_node(node_id, nodes_reader.child(node_id))
-        # Anchor the descriptor's node-level `.range` on the node's HEADER line (its `key:`
-        # token), not its body/value block. The header is the node-level diagnostic anchor a
-        # cycle, an unresolved ref, or a namespaced runtime failure boxes — matching the old
-        # `node_lines` map (each kind's own `parse` records the value-block range for its
-        # field-legality errors; here we promote the descriptor's stored range to the header).
-        # No-op for a spanless reader (`key_range_of` -> None). `replace` returns a new frozen
-        # descriptor sharing the same (already field-range-stamped) `field_ranges` dict.
-        header = nodes_reader.key_range_of(node_id)
-        if header is not None and getattr(desc, "range", None) is not None:
-            desc = dataclasses.replace(desc, range=header)
-        out[node_id] = desc
+    try:
+        nodes = nodes_cursor._value_view()
+        if not isinstance(nodes, Mapping):
+            return out
+        for node_id in list(nodes):
+            desc = _parse_node(node_id, nodes_cursor.child(node_id))
+            # Anchor the descriptor's node-level `.range` on the node's HEADER line (its
+            # `key:` token), not its body/value block. The header is the node-level
+            # diagnostic anchor a cycle, an unresolved ref, or a namespaced runtime failure
+            # boxes — matching the old `node_lines` map.
+            header = nodes_cursor.key_range_of(node_id)
+            if header is not None and getattr(desc, "range", None) is not None:
+                desc = dataclasses.replace(desc, range=header)
+            out[node_id] = desc
+    except SourceAccessError as exc:
+        raise LoadError(str(exc), range=exc.range) from exc
     return out
 
 
-def _parse_node(node_id: str, reader: NodeReader) -> Any:
+def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
     """Read one keyed-map node body into its typed per-kind descriptor (located)."""
-    if not isinstance(reader.value, dict):
+    body = cursor._value_view()
+    if not isinstance(body, Mapping):
         raise LoadError(
-            f"node {node_id!r}: body must be a mapping, got {type(reader.value).__name__}",
-            range=reader._own_range(),
+            f"node {node_id!r}: body must be a mapping, got {type(body).__name__}",
+            range=cursor.range,
         )
-    _reject_reserved_node_id(node_id, reader)
-    _back_map_input_output(reader)
+    _reject_reserved_node_id(node_id, cursor)
+    cursor = _back_map_input_output(cursor)
 
-    kind = reader.value.get("kind")
+    kind = cursor.get("kind")
     if kind is None:
-        raise LoadError(f"node {node_id!r}: missing `kind`", range=reader._own_range())
+        raise LoadError(f"node {node_id!r}: missing `kind`", range=cursor.range)
     cls = KINDS.get(kind)
     if cls is None:
         raise LoadError(
             f"node {node_id!r}: unknown kind {kind!r} "
             f"(allowed: {', '.join(sorted(KINDS))})",
-            range=reader.range_of("kind"),
+            range=cursor.range_of("kind"),
         )
-    desc = cls.parse(node_id, reader)
+    desc = cls.parse(node_id, cursor)
     # Kind-blind range enrichments, keyed the way the runtime failure funnel resolves them — by the
     # location's `(SourceSpan.kind, key)`, never by a bare name — so keys across namespaces cannot
     # collide (the kind already stamped its own fields as `("field", name)` in `cls.parse`):
@@ -90,27 +90,27 @@ def _parse_node(node_id: str, reader: NodeReader) -> Any:
     #     `assert_ranges` (aligned 1:1 with the authored `asserts:` list). Asserts are located by
     #     INDEX, not by their (non-unique) text, so two identical asserts get distinct carets — hence
     #     they live in a list, NOT in `field_ranges`.
-    # Both no-op for a spanless reader or a node without the field. `inputs:` is read AFTER
+    # Both no-op for a source-free cursor or a node without the field. `inputs:` is read AFTER
     # `_back_map_input_output` has renamed the author's singular `input:` key to plural.
     field_ranges = getattr(desc, "field_ranges", None)
     if isinstance(field_ranges, dict):
         field_ranges.update(
             {("input", name): rng
-             for name, rng in reader.mapping_value_ranges("inputs").items()}
+             for name, rng in cursor.mapping_value_ranges("inputs").items()}
         )
     assert_ranges = getattr(desc, "assert_ranges", None)
     if isinstance(assert_ranges, list):
-        assert_ranges.extend(reader.item_range_list("asserts"))
+        assert_ranges.extend(cursor.item_range_list("asserts"))
     return desc
 
 
-def _reject_reserved_node_id(node_id: str, reader: NodeReader) -> None:
+def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:
     """Reject a node id that collides with a reserved separator, boundary, or resolver head.
 
     Mirrors the legacy `parser._parse_node` head guards; anchors each error at the node
     body's `SourceRange` (the closest located anchor for a bad node key).
     """
-    rng = reader._own_range()
+    rng = cursor.range
     if "#" in node_id or "/" in node_id:
         raise LoadError(
             f"node id {node_id!r} uses a reserved separator ('#'/'/' are reserved for "
@@ -139,24 +139,7 @@ def _reject_reserved_node_id(node_id: str, reader: NodeReader) -> None:
         )
 
 
-def _back_map_input_output(reader: NodeReader) -> None:
-    """Rewrite singular `input:`/`output:` to the plural `inputs:`/`outputs:` the kind
-    descriptors use, on BOTH the constructed value dict AND the yaml key scalars (so
-    `range_of` still resolves — it matches raw key text).
+def _back_map_input_output(cursor: SourceCursor) -> SourceCursor:
+    """Return a pure singular-to-plural node-signature key projection."""
 
-    A no-op when the keys are already plural (a spanless reader whose value came through
-    ComposeFile normalization) or absent. Mutates the reader's private span-tree value in
-    place — safe: it is a fresh per-parse tree, and value-node identity (what `range_of`
-    keys on) is preserved.
-    """
-    value = reader.value
-    if isinstance(value, dict):
-        for singular, plural in _INPUT_OUTPUT_REMAP.items():
-            if singular in value:
-                value[plural] = value.pop(singular)
-    pairs = getattr(reader.yaml_node, "value", None)
-    if isinstance(pairs, list):
-        for key_node, _value_node in pairs:
-            raw = getattr(key_node, "value", None)
-            if raw in _INPUT_OUTPUT_REMAP:
-                key_node.value = _INPUT_OUTPUT_REMAP[raw]
+    return cursor.renamed(_INPUT_OUTPUT_REMAP)

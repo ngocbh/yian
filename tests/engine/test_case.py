@@ -31,16 +31,18 @@ from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import CaseDescriptor, parse_file
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.validate.case_exhaustive import check_case_exhaustive
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
 
 def _case_desc(seed: str, node_id: str) -> CaseDescriptor:
-    f = parse_file((_SEEDS / seed).read_text())
-    desc = parse_nodes(NodeReader.spanless(f.nodes))[node_id]
+    path = _SEEDS / seed
+    document = SourceDocument.parse(path.read_text(), label=str(path))
+    parse_file(document)
+    desc = parse_nodes(document.root.child("nodes"))[node_id]
     assert isinstance(desc, CaseDescriptor)
     return desc
 
@@ -354,8 +356,10 @@ def test_build_emits_reconciled_edges_no_provisional_group():
     # emits nothing for a case; the case owns its edges).
     from agent_composer.compose.edges.data import infer_data_edges
 
-    f = parse_file((_SEEDS / "02-case.yaml").read_text())
-    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
+    path = _SEEDS / "02-case.yaml"
+    document = SourceDocument.parse(path.read_text(), label=str(path))
+    parse_file(document)
+    descriptors = parse_nodes(document.root.child("nodes"))
     # infer_data_edges emits NO edge for the case node (it `continue`s on a case).
     flow_wiring = {
         nid: d.build(BuildContext({})).wiring

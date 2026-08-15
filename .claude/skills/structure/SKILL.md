@@ -80,8 +80,35 @@ runtime.
 When you add a package, name what it sits *above* and what it sits *below*, and
 record that in its charter's "Knows / Never imports".
 
+The Compose front end has its own ownership ladder:
+
+```
+compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/validate  <-  build  <-  loader
+```
+
+`compose/source` exclusively owns PyYAML and the private constructed YAML graph.
+It constructs each physical document once as a `SourceDocument` and exposes
+stable `SourceCursor` navigation; no other compose package may import PyYAML,
+inspect private graph slots, or reconstruct source by dumping and reparsing it.
+Source-aware parsing and inline extraction consume documents/cursors through that
+public interface; descriptors and nodes carry derived ranges afterward.
+Text-accepting parse conveniences delegate construction to `SourceDocument` before
+doing semantic work; they do not own a second parser.
+
+`compose/loader` owns the state whose lifetime is a load graph or one authored
+file. Its resolved-path context guards cycles and caches only successfully
+compiled external flows, so aliases and diamonds reuse one physical source load
+and compiled flow.
+Its file-local callable scope owns authored `defs:`/`uses:`, compiler-private
+callables, and their shared success cache. The loader resolves defs and uses eagerly;
+only compiler-private builders stay lazy. Recursive local/private construction is
+guarded separately from cross-file recursion. These are distinct caches and guards
+with distinct keys and lifetimes. Neither `compile` nor `runtime` knows
+about YAML, `SourceDocument`, `SourceCursor`, or loader-private callable scope;
+they receive ordinary compiled contracts.
+
 Compose-only anonymous children are a front-end ownership example. Located,
-read-only occurrence extraction belongs in `compose/desugar`; strict generated
+read-only `SourceCursor` projection belongs in `compose/desugar`; strict generated
 signature proof and child assembly belong in `compose/build`; the file-lifetime
 private callable table/cache belongs in `compose/loader`, beside the authored
 `defs:`/`uses:` scope it extends. `build` depends only on a small registrar/
@@ -164,5 +191,8 @@ split is doing too little.
 - [ ] `__init__.py` re-exports only; `__all__` set.
 - [ ] Imports point down or sideways only — no upward, no cycle.
 - [ ] Nodes do not import compile; runtime does not import `compile.expand`.
+- [ ] Only `compose/source` imports PyYAML or touches the private source graph.
+- [ ] Source-aware Compose entry points use `SourceDocument`/`SourceCursor`; no phase reparses source.
+- [ ] `compile` and `runtime` remain YAML- and compose-source-blind.
 - [ ] Shared types → `common.py`; pure helpers → `utils.py`; entity behavior → its own module.
 - [ ] Code added to an existing package's responsibility, not a redundant new one.

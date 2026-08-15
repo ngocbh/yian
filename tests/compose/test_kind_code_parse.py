@@ -6,8 +6,7 @@ import pytest
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.code import CodeDescriptor
-from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.helpers.spanloader import load_with_spans
+from agent_composer.compose.source import SourceDocument
 from agent_composer.events import SourceRange
 
 
@@ -25,9 +24,7 @@ nodes:
 
 
 def _reader_for(text, node_id):
-    value, spans, root = load_with_spans(text, return_root=True)
-    root_reader = NodeReader(value, spans, root)
-    return root_reader.child("nodes").child(node_id)
+    return SourceDocument.parse(text).root.child("nodes").child(node_id)
 
 
 def test_code_parse_matches_descriptor_and_records_body_range():

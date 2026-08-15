@@ -1,14 +1,14 @@
 """Unit test for parsing `kind: loop` into a LoopDescriptor.
 
 The parser layer only: `parse_file` -> `ComposeFile` (raw `nodes` dict), then
-`parse_nodes(NodeReader.spanless(f.nodes))` reads each keyed-map body into its typed descriptor.
+`parse_nodes(document.root.child("nodes"))` reads each keyed-map body into its typed descriptor.
 `kind: loop` must produce a `LoopDescriptor` with `call`/`while_`/`max`/`inputs`
 populated. Baking the descriptor into a runtime LoopNode is a later step.
 """
 
 from agent_composer.compose.parse.file import parse_file
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceDocument
 
 LOOP_YAML = """
 id: chat
@@ -29,9 +29,16 @@ nodes:
 """
 
 
+def _parse_nodes(text: str):
+    """Parse one physical flow document and return its located descriptors."""
+
+    document = SourceDocument.parse(text)
+    parse_file(document)
+    return parse_nodes(document.root.child("nodes"))
+
+
 def test_parser_reads_loop_node():
-    cf = parse_file(LOOP_YAML)
-    desc = parse_nodes(NodeReader.spanless(cf.nodes))["chat_loop"]
+    desc = _parse_nodes(LOOP_YAML)["chat_loop"]
     assert desc.call == "chat_turn"
     assert desc.while_ == "not ${exited}"
     assert desc.max == 1000
@@ -57,12 +64,11 @@ nodes:
 
 
 def test_parser_accepts_until_and_times_keys():
-    cf = parse_file(UNTIL_TIMES_YAML)
-    desc = parse_nodes(NodeReader.spanless(cf.nodes))["L"]
+    desc = _parse_nodes(UNTIL_TIMES_YAML)["L"]
     assert desc.until_ == "${n} <= 0"
     # `times:` is also an accepted loop key (exactly-one-of is a later build check, not the
     # parser's job) — a node declaring it parses into `LoopDescriptor.times`.
-    times_desc = parse_nodes(
-        NodeReader.spanless(parse_file(UNTIL_TIMES_YAML.replace("until: ${n} <= 0", "times: 4")).nodes)
+    times_desc = _parse_nodes(
+        UNTIL_TIMES_YAML.replace("until: ${n} <= 0", "times: 4")
     )["L"]
     assert times_desc.times == 4

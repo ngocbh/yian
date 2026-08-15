@@ -14,7 +14,9 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
 ```
  text
   │
-  ├─ parse_file            → a span-tagged tree (every scalar remembers its line/col)
+  ├─ SourceDocument.parse  → one safe construction + a private YAML definition graph
+  ├─ root SourceCursor     → occurrence-aware values, paths, and source ranges
+  ├─ parse_file            → the strict top-level ComposeFile
   ├─ read_typedefs         → the type registry (typedefs:)
   ├─ read_flow_inputs      → the typed input: declarations
   ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered)
@@ -38,6 +40,45 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
 
 Everything below just explains three of those words: **descriptor**, **build**, and
 **edge inference**.
+
+---
+
+## One document, many source views
+
+`load_flow()` constructs each flow source document as one `SourceDocument`. That single
+safe construction keeps the semantic value and a compact private definition graph for
+YAML anchors, aliases, duplicate keys, and `<<:` merges. Source-aware parsing and inline
+extraction navigate `SourceCursor`s into that document; later passes use descriptors and
+nodes carrying derived ranges. No phase parses the flow text again.
+
+Merge topology stays compact as identity-shared pair/arc ropes. Parent mappings reuse
+completed child summaries instead of rescanning inherited merge DAGs; explicit raw
+occurrence enumeration alone is output-sensitive.
+
+A cursor separates *what was defined* from *where it was used*. Its `range` points to the
+value's definition, while its occurrence path records the route from the document root.
+Two aliases therefore share a definition range but have different paths. A mapping alias
+also has its own selecting-key range; a sequence alias has no key range. Flattened merge
+entries likewise keep distinct logical occurrences while effective mapping lookup follows
+PyYAML's constructed-value semantics.
+
+There are three cursor forms:
+
+- A **physical cursor** retains its `SourceDocument`, definition range, and occurrence
+  path; mapping children additionally retain their selecting-key range.
+- A **virtual cursor** carries a generated value with no source location.
+- A **projected cursor** presents a rewritten mapping or sequence while explicitly
+  retaining physical sources for the authored children. Generated children stay virtual.
+
+The public source model is immutable: documents keep parser objects private, virtual and
+projected values are snapshotted, and cursor value reads use a stack-safe iterative copy
+while preserving alias and recursive-alias identity within each copy. Inline extraction
+takes one whole-nodes snapshot before projection so unchanged alias siblings stay shared.
+
+External `uses:` resolution adds one reuse boundary. During a load graph, successfully
+compiled external flows are cached by resolved absolute path. A repeated alias or diamond
+dependency therefore reuses the same `ComposedFlow`; it does not reread, reparse, or
+recompile that physical file. Only successfully compiled flows enter the cache.
 
 ---
 
@@ -66,7 +107,7 @@ clean and generic.
 - **Per node kind** → `compose/nodes/<kind>.py`. Each module owns a frozen **descriptor**
   dataclass (`CodeDescriptor`) that subclasses `NodeDescriptor`. The base holds the common
   contract; each kind carries:
-  - **`parse(node_id, reader)`** — a classmethod (the base template) that reads one node body,
+  - **`parse(node_id, cursor)`** — a classmethod (the base template) that reads one node body,
     recording each field's `SourceRange`,
   - **`build(ctx: BuildContext) -> BuildResult`** — a method that constructs the runtime
     `Node` + its flow-owned wiring (and, for a `case`, its own data+control edges). `ctx`
@@ -191,7 +232,8 @@ section header rather than guessing.
 |---|---|
 | a node kind's fields or how it builds | `compose/nodes/<kind>.py` |
 | a whole-graph pass (edges, validation, cycles) | the phase packages `compose/{parse,desugar,edges,validate,build}/` |
-| the YAML → span-tree parse | `parse/file.py` (`parse_file`) + `helpers/spanloader.py` |
-| the located cursor over the tree | `helpers/reader.py` (`NodeReader`) |
+| the one-pass YAML source document | `compose/source/document.py` (`SourceDocument`) |
+| physical, virtual, or projected source navigation | `compose/source/cursor.py` (`SourceCursor`) |
+| strict top-level section parsing | `parse/file.py` (`parse_file`) |
 | the pipeline wiring itself | `build/pipeline.py` (`_assemble`), driven by `loader.py` |
 | running the compiled flow | [engine.md](engine.md) |

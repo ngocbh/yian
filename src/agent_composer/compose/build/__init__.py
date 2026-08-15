@@ -9,7 +9,7 @@ The LAST compose phase before the loader. Three modules:
   (build every node kind-blind -> type/exhaustiveness checks -> edge inference ->
   reference/assert validation -> boundary synthesis -> cycle/handle checks ->
   `CompiledFlow.from_parts`), plus `ComposedFlow` (the compiled+validated result) and the
-  flow `outputs:` reader. It associates retained inline bodies with their final
+  flow `outputs:` parser. It associates retained inline bodies with their final
   descriptors, registers lazy builders through the loader-owned callable-scope seam,
   and uses one success-only descriptor cache for on-demand signature dependencies.
 - `inline_inputs.py` — strict structural type inference for parameters of generated

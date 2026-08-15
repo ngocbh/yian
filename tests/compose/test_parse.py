@@ -1,23 +1,22 @@
 """Tests for the parse phase: the `nodes:` mapping pass (`parse/nodes.py`).
 
-`parse_nodes` consumes a `NodeReader` over the span tree and dispatches each node
+`parse_nodes` consumes a `SourceCursor` over the source document and dispatches each node
 body to its kind's `parse` via `KINDS`, returning located descriptors that carry
-`.range`/`field_ranges` (or `None`/`{}` for a spanless reader).
+`.range`/`field_ranges` (or `None`/`{}` for a virtual cursor).
 """
 
 import pytest
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.nodes.agent import AgentDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceCursor, SourceDocument
 
 
 def _nodes_reader(text):
-    """A span-aware NodeReader over the `nodes:` mapping of a flow document."""
-    value, spans, root = load_with_spans(text, return_root=True)
-    return NodeReader(value, spans, root).child("nodes")
+    """Return the physical cursor over a flow document's ``nodes:`` mapping."""
+
+    return SourceDocument.parse(text).root.child("nodes")
 
 
 _FLOW = """\
@@ -46,7 +45,7 @@ def test_parse_nodes_uses_span_tree():
         inputs={"topic": "${input.topic}"},
         outputs="string",
     )
-    # Located: the span tree stamps ranges onto the descriptor + its fields.
+    # Located: the physical cursor stamps ranges onto the descriptor + its fields.
     assert desc.range is not None
     assert desc.field_ranges[("field", "prompt")].start_line == 6  # 1-based, the prompt line
     # The back-mapped plural fields resolve their source ranges (via the rewritten key).
@@ -68,13 +67,80 @@ def test_parse_nodes_reserved_node_id_is_loud():
         parse_nodes(_nodes_reader(text))
 
 
-def test_parse_nodes_spanless_reader():
-    # A spanless reader (defs / compact / in-memory) parses the already-plural body with
+def test_parse_nodes_virtual_cursor():
+    # A virtual cursor (defs / compact / in-memory) parses the already-plural body with
     # no source ranges — descriptors still build, ranges are None.
-    reader = NodeReader.spanless(
+    reader = SourceCursor.virtual(
         {"w": {"kind": "agent", "prompt": "hi", "inputs": {"x": "${input.x}"}, "outputs": "str"}}
     )
     desc = parse_nodes(reader)["w"]
     assert desc == AgentDescriptor(id="w", prompt="hi", inputs={"x": "${input.x}"}, outputs="str")
     assert desc.range is None
     assert desc.field_ranges == {}
+
+
+def test_parse_nodes_normalizes_without_mutating_cursor():
+    nodes = SourceDocument.parse(_FLOW).root.child("nodes")
+    before = nodes.value
+
+    desc = parse_nodes(nodes)["writer"]
+
+    assert desc.inputs == {"topic": "${input.topic}"}
+    assert desc.outputs == "string"
+    assert nodes.value == before
+    assert nodes.child("writer").has("input")
+    assert not nodes.child("writer").has("inputs")
+
+
+def test_case_on_normalization_does_not_mutate_cursor():
+    source = """\
+nodes:
+  route:
+    kind: case
+    on: ${score.output}
+    cases:
+      - when: high
+        then: hot
+"""
+    nodes = SourceDocument.parse(source).root.child("nodes")
+    route = nodes.child("route")
+
+    desc = parse_nodes(nodes)["route"]
+
+    assert desc.on == "${score.output}"
+    assert route.has(True)
+    assert not route.has("on")
+
+
+def test_case_normalization_uses_last_effective_boolean_key():
+    source = """\
+nodes:
+  route:
+    kind: case
+    1: ignored
+    on: ${score.output}
+    cases: []
+"""
+    nodes = SourceDocument.parse(source).root.child("nodes")
+
+    desc = parse_nodes(nodes)["route"]
+
+    assert desc.on == "${score.output}"
+
+
+def test_case_normalization_rejects_last_effective_numeric_key():
+    source = """\
+nodes:
+  route:
+    kind: case
+    on: ${score.output}
+    1: ignored
+    cases: []
+"""
+    nodes = SourceDocument.parse(source).root.child("nodes")
+    route = nodes.child("route")
+
+    with pytest.raises(LoadError, match="field 1 is not allowed") as caught:
+        parse_nodes(nodes)
+
+    assert caught.value.range == route.range_of(True)

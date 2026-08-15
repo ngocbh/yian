@@ -566,45 +566,50 @@ _INLINE_CHILD = """nodes:
 """
 
 
+_INLINE_SHAPE_CASES = [
+    (
+        "map",
+        "call: named\n    " + _INLINE_CHILD + "    output: ${echo.output}\n",
+        "nodes",
+        "exactly one",
+    ),
+    ("call", "input: {}\n", None, "exactly one"),
+    ("loop", _INLINE_CHILD, None, "requires `output:`"),
+    ("call", "call: named\n    output: ${named.output}\n", "output", "only valid"),
+    ("call", "nodes: {}\n    output: ${missing.output}\n", "nodes", "non-empty"),
+    ("map", "nodes: not-a-map\n    output: value\n", "nodes", "mapping"),
+    (
+        "call",
+        "input: not-a-map\n    " + _INLINE_CHILD + "    output: ${echo.output}\n",
+        "input",
+        "string keys",
+    ),
+    (
+        "loop",
+        "input:\n      1: value\n    "
+        + _INLINE_CHILD
+        + "    output: ${echo.output}\n",
+        "input",
+        "string keys",
+    ),
+]
+
+_INLINE_SHAPE_IDS = [
+    "both-call-and-nodes",
+    "neither-call-nor-nodes",
+    "inline-missing-output",
+    "named-with-output",
+    "empty-nodes",
+    "non-mapping-nodes",
+    "non-mapping-input",
+    "non-string-input-key",
+]
+
+
 @pytest.mark.parametrize(
     ("kind", "body", "range_key", "message"),
-    [
-        (
-            "map",
-            "call: named\n    " + _INLINE_CHILD + "    output: ${echo.output}\n",
-            "nodes",
-            "exactly one",
-        ),
-        ("call", "input: {}\n", None, "exactly one"),
-        ("loop", _INLINE_CHILD, None, "requires `output:`"),
-        ("call", "call: named\n    output: ${named.output}\n", "output", "only valid"),
-        ("call", "nodes: {}\n    output: ${missing.output}\n", "nodes", "non-empty"),
-        ("map", "nodes: not-a-map\n    output: value\n", "nodes", "mapping"),
-        (
-            "call",
-            "input: not-a-map\n    " + _INLINE_CHILD + "    output: ${echo.output}\n",
-            "input",
-            "string keys",
-        ),
-        (
-            "loop",
-            "input:\n      1: value\n    "
-            + _INLINE_CHILD
-            + "    output: ${echo.output}\n",
-            "input",
-            "string keys",
-        ),
-    ],
-    ids=[
-        "both-call-and-nodes",
-        "neither-call-nor-nodes",
-        "inline-missing-output",
-        "named-with-output",
-        "empty-nodes",
-        "non-mapping-nodes",
-        "non-mapping-input",
-        "non-string-input-key",
-    ],
+    _INLINE_SHAPE_CASES,
+    ids=_INLINE_SHAPE_IDS,
 )
 def test_inline_body_shape_errors_are_located_without_private_ids(
     kind: str,
@@ -627,6 +632,69 @@ def test_inline_body_shape_errors_are_located_without_private_ids(
 
     assert message in str(caught.value)
     assert INLINE_FLOW_PREFIX not in str(caught.value)
+    assert caught.value.range == expected_range
+
+
+@pytest.mark.parametrize(
+    ("kind", "body", "range_key", "message"),
+    _INLINE_SHAPE_CASES,
+    ids=_INLINE_SHAPE_IDS,
+)
+def test_inline_body_shape_matrix_flows_through_loader(
+    kind: str,
+    body: str,
+    range_key: str | None,
+    message: str,
+):
+    source = (
+        "id: inline-shape-loader\n"
+        "name: inline_shape_loader\n"
+        "nodes:\n"
+        "  composite:\n"
+        f"    kind: {kind}\n"
+        f"    {body}"
+    )
+    root, _spans = _located_root(source)
+    raw_body = root.child("nodes").child("composite")
+    expected_range = raw_body.range_of(range_key) if range_key else raw_body._own_range()
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    assert message in str(caught.value)
+    assert INLINE_FLOW_PREFIX not in str(caught.value)
+    assert caught.value.range == expected_range
+
+
+def test_loader_rejects_actual_sibling_private_digest_without_exposing_it():
+    victim_id = inline_flow_id(("root", "node", "victim", "inline"))
+    source = f"""id: inline-sibling-digest
+name: inline_sibling_digest
+nodes:
+  victim:
+    kind: call
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: safe
+        output: str
+    output: ${{echo.output}}
+  attacker:
+    kind: call
+    call: {victim_id}
+"""
+    root, _spans = _located_root(source)
+    expected_range = root.child("nodes").child("attacker").range_of("call")
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert "reserved" in message.lower()
+    assert INLINE_FLOW_PREFIX in message
+    assert victim_id not in message
     assert caught.value.range == expected_range
 
 
@@ -1168,6 +1236,277 @@ output: ${consumer.output}
     assert "consumer.input.value" in message
     assert "producer 'producer' has no available static type" in message
     assert "explicitly typed named `defs:` body" in message
+    assert INLINE_FLOW_PREFIX not in message
+    assert caught.value.range == expected_range
+
+
+def test_inline_alias_and_merge_occurrences_run_as_distinct_private_children():
+    loaded = load_flow(
+        """id: inline-alias-merge
+name: inline_alias_merge
+nodes:
+  first: &body
+    kind: call
+    input:
+      x: base
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.x}
+        output: str
+    output: ${echo.output}
+  second: *body
+  merged:
+    <<: *body
+    input:
+      x: merged
+output:
+  first: ${first.output}
+  second: ${second.output}
+  merged: ${merged.output}
+"""
+    )
+
+    calls = [loaded.compiled.nodes[name] for name in ("first", "second", "merged")]
+    assert len({node.flow_id for node in calls}) == 3
+    assert len({id(node.child) for node in calls}) == 3
+
+    result = run_flow(loaded, {})
+    assert result.status == "succeeded"
+    assert result.output == {"first": "base", "second": "base", "merged": "merged"}
+
+
+def test_inline_literal_containers_are_inert_at_edges_and_runtime():
+    loaded = load_flow(
+        """id: inline-literal-containers
+name: inline_literal_containers
+nodes:
+  producer:
+    kind: code
+    code: |
+      return "resolved"
+    output: str
+  wrapper:
+    kind: call
+    input:
+      payload:
+        producer: ${producer.output}
+        item: ${item.x}
+        parent: ${input.x}
+        dollars: $$
+        deep:
+          - ${producer.output}
+          - ${item.x}
+    nodes:
+      echo:
+        kind: code
+        code: |
+          return inputs["payload"]
+        input:
+          payload: ${input.payload}
+        output:
+          producer: str
+          item: str
+          parent: str
+          dollars: str
+          deep: list[str]
+    output: ${echo.output}
+output: ${wrapper.output}
+"""
+    )
+
+    assert not any(
+        edge.from_ == "producer" and edge.to == "wrapper"
+        for edge in loaded.compiled.edges
+    )
+    result = run_flow(loaded, {})
+    assert result.status == "succeeded"
+    assert result.output == {
+        "producer": "${producer.output}",
+        "item": "${item.x}",
+        "parent": "${input.x}",
+        "dollars": "$$",
+        "deep": ["${producer.output}", "${item.x}"],
+    }
+
+
+def test_inline_optional_record_paths_make_generated_inputs_nullable():
+    loaded = load_flow(
+        """id: inline-optional-record-paths
+name: inline_optional_record_paths
+typedefs:
+  Inner:
+    value: str
+  Outer:
+    inner: Optional[Inner]
+input:
+  root: Optional[Inner]
+  outer: Outer
+nodes:
+  wrapper:
+    kind: call
+    input:
+      root_value: ${input.root.value}
+      nested_value: ${input.outer.inner.value}
+    nodes:
+      collect:
+        kind: code
+        code: |
+          return {"root": inputs["root_value"], "nested": inputs["nested_value"]}
+        input:
+          root_value: ${input.root_value}
+          nested_value: ${input.nested_value}
+        output:
+          root: Optional[str]
+          nested: Optional[str]
+    output: ${collect.output}
+output: ${wrapper.output}
+"""
+    )
+
+    wrapper = loaded.compiled.nodes["wrapper"]
+    assert [
+        (decl.name, decl.type_str, decl.required, decl.type.nullable)
+        for decl in wrapper.child_inputs
+    ] == [
+        ("root_value", "Optional[str]", False, True),
+        ("nested_value", "Optional[str]", False, True),
+    ]
+
+    for inputs, expected in [
+        ({"root": None, "outer": {"inner": None}}, {"root": None, "nested": None}),
+        (
+            {
+                "root": {"value": "root"},
+                "outer": {"inner": {"value": "nested"}},
+            },
+            {"root": "root", "nested": "nested"},
+        ),
+    ]:
+        result = run_flow(loaded, inputs)
+        assert result.status == "succeeded"
+        assert result.output == expected
+
+
+def test_inline_multinode_body_matches_named_def_signature_and_runtime():
+    loaded = load_flow(
+        """id: inline-named-equivalence
+name: inline_named_equivalence
+defs:
+  named:
+    input:
+      x: int
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.x}
+        output: int
+      pack:
+        kind: code
+        code: |
+          return {"value": inputs["value"]}
+        input:
+          value: ${echo.output}
+        output:
+          value: int
+    output: ${pack.output}
+nodes:
+  named_call:
+    kind: call
+    call: named
+    input:
+      x: 5
+  inline_call:
+    kind: call
+    input:
+      x: 5
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.x}
+        output: int
+      pack:
+        kind: code
+        code: |
+          return {"value": inputs["value"]}
+        input:
+          value: ${echo.output}
+        output:
+          value: int
+    output: ${pack.output}
+output:
+  named: ${named_call.output}
+  inline: ${inline_call.output}
+"""
+    )
+
+    named = loaded.compiled.nodes["named_call"]
+    inline = loaded.compiled.nodes["inline_call"]
+    assert named.child_inputs == inline.child_inputs
+    assert named.output_type == inline.output_type
+    assert set(named.child.nodes) - {START_ID, END_ID} == {"echo", "pack"}
+    assert set(inline.child.nodes) - {START_ID, END_ID} == {"echo", "pack"}
+
+    result = run_flow(loaded, {})
+    assert result.status == "succeeded"
+    assert result.output == {"named": {"value": 5}, "inline": {"value": 5}}
+
+
+@pytest.mark.parametrize(
+    ("outer_nodes", "bad_ref", "namespace"),
+    [
+        (
+            "  parent:\n"
+            "    kind: code\n"
+            "    code: |\n"
+            "      return 'parent'\n"
+            "    output: str\n",
+            "${parent.output}",
+            "parent",
+        ),
+        ("", "${item}", "item"),
+    ],
+    ids=["parent-node", "item"],
+)
+def test_inline_child_scope_is_closed_and_redacts_private_identity(
+    outer_nodes: str,
+    bad_ref: str,
+    namespace: str,
+):
+    source = (
+        "id: inline-closed-scope\n"
+        "name: inline_closed_scope\n"
+        "nodes:\n"
+        f"{outer_nodes}"
+        "  wrapper:\n"
+        "    kind: call\n"
+        "    nodes:\n"
+        "      leak:\n"
+        "        kind: code\n"
+        "        code: tests.engine._compose_codefns:echo_x\n"
+        "        input:\n"
+        f"          x: {bad_ref}\n"
+        "        output: str\n"
+        "    output: ${leak.output}\n"
+        "output: ${wrapper.output}\n"
+    )
+    root, _spans = _located_root(source)
+    expected_range = (
+        root.child("nodes").child("wrapper").child("nodes").child("leak")
+        .mapping_value_ranges("input")["x"]
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    message = str(caught.value)
+    assert f"unknown namespace {namespace!r}" in message
     assert INLINE_FLOW_PREFIX not in message
     assert caught.value.range == expected_range
 

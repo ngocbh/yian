@@ -211,16 +211,17 @@ The main compiler packages form an acyclic ladder — each layer imports only fr
 those below it:
 
 ```
-events        run + node observer vocabulary, source ranges         [leaf]
-  ▲
-typesys       typed values + the VariablePool
-  ▲
-nodes         pure Node contract + one package per kind        (expr feeds this)
-  ▲
-compile       CompiledFlow IR + validation + growth construction
-  ▲
-compose       YAML front end: text -> CompiledFlow              ← all YAML lives here
+diagnostics  <-  events
+      ^
+      └────────  nodes  <-  compile  <-  compose
+                   ^
+      typesys + expr
 ```
+
+`diagnostics` owns source ranges, opaque origins, and the resolution seam;
+`events` owns transient observer values; `nodes` owns the pure node contract and
+each kind; `compile` owns compiled IR, validation, and growth construction; and
+`compose` is the only YAML front end.
 
 `_state.py` is a shared scheduler-state leaf. `runtime/` owns the append-only log,
 reducer-owned `RunState`, kind-blind engine, and worker pool; it consumes compiled
@@ -229,6 +230,10 @@ topology but never imports `compile.expand`. Package-root `run.py` sits above
 injects `build_grow`. `llm_clients/` contains lazy provider adapters, `tools/`
 contains the tool registry and host interaction seam, and `cli/` owns terminal
 presentation.
+
+The package facade exposes its existing public API lazily. Importing
+`agent_composer.diagnostics` therefore loads no YAML, compose, node, compile, or
+runtime module merely as a side effect of package initialization.
 
 The rules that keep the picture honest: **never add a back-edge**, and **never
 teach `runtime/` about a `NodeKind`**.

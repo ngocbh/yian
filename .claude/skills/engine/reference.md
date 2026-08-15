@@ -227,13 +227,20 @@ model made enforceable.
 ## Layer ladder (where code goes)
 
 ```
-events  <-  typesys  <-  nodes  <-  compile  <-  compose
-                        ^   ^
-            expr  ──────┘   └──────  llm_clients
+diagnostics  <-  events
+      ^
+      └────────  nodes  <-  compile  <-  compose
+                   ^   ^
+      typesys + expr    └──────  llm_clients
 
 _state + compile runtime contracts <── runtime
 compose + compile.expand + runtime <── package-root run.py
 ```
+
+`diagnostics.py` owns source-neutral `SourceRange`, opaque `OriginRef`, resolved
+`DiagnosticFrame`, and the `OriginResolver` protocol. It imports only the
+standard library. `events.py` imports this leaf and temporarily re-exports
+`SourceRange` while existing consumers migrate.
 
 Arrows never reverse: a package imports only lower-level or peer packages. See the
 `structure` skill. An upward import means the code is in the wrong package (extract
@@ -377,7 +384,7 @@ A runtime failure points at the **exact YAML line** it originates from, not just
 node header. The mechanism is a structured locator produced at the failure site and
 resolved to a line at the CLI boundary — never a text heuristic.
 
-- **`SourceSpan(node, kind, key)`** (in `events`, the leaf) — `kind ∈ {input, assert,
+- **`SourceSpan(node, kind, key)`** (in the low-level `events` observer module) — `kind ∈ {input, assert,
   input_decl, field}`; `key` is the input name / assert expr / input-decl name / field
   name; `node` is the node id, or `None` for a flow-level location.
 - **Carriers:** `NodeFailed.locator` (node-level) and `RunFailed.locator` /
@@ -394,7 +401,8 @@ resolved to a line at the CLI boundary — never a text heuristic.
   target's declared type; invalid node-produced data becomes a durable `NodeFailedRecord`
   with the original error type and a fallback `field` span (`key="output"`).
 - **Concrete range (when resolved at the failure site):** ALONGSIDE the symbolic `locator`, a
-  **`SourceRange`** (start/end line+col, 1-based; in `events`) may be attached. For an `input` /
+  **`SourceRange`** (start/end line+col, 1-based; owned by `diagnostics` and temporarily
+  re-exported by `events`) may be attached. For an `input` /
   `input_decl` / `field` locator produced during evaluation, the funnel keys the node's recorded `field_ranges` on the
   locator's **`(kind, key)`** tuple — kind-blind (on the locator, never `node.kind`), and
   `(kind, key)`-tagged so an input never collides with a like-named field. `field_ranges` is a

@@ -11,7 +11,7 @@ Knows about:   <lower-level/peer packages it may import, by name>
 Never imports: <higher-level packages that import IT; plus forbidden deps>
 """
 
-# re-exports only — no logic, no inline classes
+# re-exports only — no domain logic, no inline classes
 from <pkg>.<submodule> import <PublicName>
 
 __all__ = ["<PublicName>"]
@@ -20,7 +20,7 @@ __all__ = ["<PublicName>"]
 ## Real example (from this repo)
 
 `src/agent_composer/typesys/__init__.py` — the typed value system + variable pool,
-the engine's leaf layer (it imports nothing else in the engine; `nodes`,
+an independent engine leaf (it imports nothing else in the engine; `nodes`,
 `compile`, `compose`, and `runtime` import *it*, never the reverse):
 
 ```python
@@ -36,7 +36,10 @@ __all__ = ["TypedValue", "VariablePool", "build_value"]
 The worked top-level charter — with the full leaf-to-root layer diagram and the
 "nothing here imports a DB or a server" boundary — is
 `src/agent_composer/__init__.py`. Read it to see the dependency direction written
-down for the whole engine.
+down for the whole engine. It is also the deliberate facade exception: a
+standard-library-only lazy export table prevents importing the lower
+`diagnostics` submodule from bootstrapping compile, compose, or runtime while
+preserving the declared package-root API.
 
 ## Where does it go? (one-glance table)
 

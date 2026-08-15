@@ -252,6 +252,17 @@ owning node packages. The scheduling-state vocabulary sits in the internal
 append-before-apply reducer state, and dispatch; the package-root run boundary owns
 fresh-log creation, locked prefix recovery, and log closure.
 
+### Source-neutral semantic carriers
+
+`nodes/contracts.py` is the dependency-low semantic IR vocabulary. `Binding`
+owns one input source, `Parameter` owns one formal/default policy, `Assertion`
+owns executable and display text, and `ValueContract` pairs a provenance-free
+`Type` with `ContractOrigins`. Origins are optional and rewrite only through each
+carrier's pure `map_origins()` method. Do not put origin fields into `Type`, or
+recreate them in parallel maps. During the #131 migration, a consumer changes to
+the canonical carrier in its own tested cutover; the definitions alone do not
+mean all consumers have moved.
+
 ## Compose source ownership
 
 `compose/source/` is the sole production Compose package that imports PyYAML. It

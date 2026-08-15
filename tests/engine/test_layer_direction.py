@@ -99,6 +99,27 @@ def test_nodes_never_import_runtime() -> None:
     )
 
 
+def test_semantic_contracts_import_only_their_declared_project_leaves() -> None:
+    """Keep the shared semantic vocabulary independent of engine and front-end layers."""
+    path = PACKAGE_ROOT / "nodes" / "contracts.py"
+    allowed = (
+        "__future__",
+        "dataclasses",
+        "typing",
+        "agent_composer.diagnostics",
+        "agent_composer.typesys",
+    )
+    violations = [
+        f"{path.relative_to(SOURCE_ROOT)}:{line}: {statement} -> {target}"
+        for line, target, statement in _import_targets(path)
+        if not any(target == leaf or target.startswith(f"{leaf}.") for leaf in allowed)
+    ]
+    assert not violations, (
+        "nodes/contracts.py may import only stdlib plus diagnostics and typesys:\n"
+        + "\n".join(violations)
+    )
+
+
 def test_checkpoint_era_suspension_package_is_deleted() -> None:
     """Keep durable lifecycle authority in runtime logs, not a parallel package."""
     assert not (PACKAGE_ROOT / "suspension").exists()

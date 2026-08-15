@@ -234,6 +234,11 @@ result = run_flow(loaded, {"name": "Ada"})
 print(result.status, result.output)
 ```
 
+Lower-level Python graph builders and tooling can import the source-neutral
+`Binding`, `Parameter`, `Assertion`, `ValueContract`, `ContractOrigins`, and
+`ValuePath` vocabulary from `agent_composer.nodes`. Origins are optional; these
+definitions are being adopted by engine consumers incrementally.
+
 Pass `log="run.jsonl"` to create an authoritative append-only JSONL history for
 the run. If the process is interrupted, load the same flow in a later process and
 recover the durable prefix with `resume_flow(loaded, log="run.jsonl")` from

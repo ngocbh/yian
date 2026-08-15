@@ -46,7 +46,8 @@ preserving the declared package-root API.
 | The thing you're adding                          | Goes in                       |
 |--------------------------------------------------|-------------------------------|
 | Public behavior of one entity/kind               | that entity's own module      |
-| Dataclass / base type / enum / registry shared across a package's submodules | `common.py`        |
+| Shared dataclass / base type / enum with no stronger domain name | `common.py` |
+| Cohesive public contract vocabulary | a named module such as `contracts.py` |
 | Pure stateless helper function                   | `utils.py`                    |
 | A whole new distinct responsibility (>1 file)    | new package (write charter)   |
 | Something an existing package already owns        | that package (don't make a new one) |

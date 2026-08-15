@@ -36,6 +36,9 @@ Hold this model whenever you design anything:
   does not introduce a runtime kind.
 - Computation is **pure at the boundary**: a node *returns* outputs, the engine
   *binds* them under `(node_id, key)` like `let`-bindings — never a mutation.
+- Source-neutral semantic operations live in `nodes/contracts.py`: `Binding`,
+  `Parameter`, `Assertion`, and `ValueContract` carry optional opaque origins;
+  `typesys.Type` remains provenance-free.
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
   it does not rewrite the graph at runtime.
 

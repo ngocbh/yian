@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from bisect import bisect_right
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
@@ -714,19 +713,23 @@ class SourceCursor:
             key (`Any`):
                 Constructed mapping key to retrieve.
             default (`Any`, *optional*, defaults to `None`):
-                Value copied and returned when `key` is absent.
+                Value in the exact recursive SafeLoader algebra, snapshotted and
+                returned when `key` is absent.
 
         Returns:
             `Any`:
-                A fresh deep copy of the mapping value or `default`.
+                A fresh defensive snapshot of the mapping value or `default`.
 
         Raises:
             `SourceAccessError`:
                 Raised when traversal continues beyond a recursive alias cut.
+            `TypeError`:
+                Raised when an absent field's `default` is outside the exact
+                SafeLoader value algebra.
         """
 
         if not self.has(key):
-            return copy.deepcopy(default)
+            return _snapshot_safe_value(default)
         return self.child(key).value
 
     def str(self, key: Any) -> str:
@@ -922,7 +925,7 @@ class SourceCursor:
         definition = self._document._definitions[self._key_definition]
         if not isinstance(definition, _ScalarDef):
             return None
-        return copy.deepcopy(definition.value)
+        return _snapshot_safe_value(definition.value)
 
     def _own_item_ranges(self) -> dict[str, SourceRange]:
         """Collect scalar item ranges from this sequence cursor."""

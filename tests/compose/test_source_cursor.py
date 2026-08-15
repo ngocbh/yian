@@ -187,6 +187,24 @@ def test_virtual_copy_isolates_temporal_scalars_and_rejects_custom_timezone():
         SourceCursor.virtual(
             datetime(2026, 8, 15, tzinfo=CustomTimezone(1))
         )
+    with pytest.raises(TypeError, match="SafeLoader value"):
+        SourceCursor.virtual({}).get(
+            "missing",
+            datetime(2026, 8, 15, tzinfo=CustomTimezone(1)),
+        )
+
+
+def test_get_default_snapshot_is_stack_safe():
+    default = "leaf"
+    for _ in range(2_000):
+        default = [default]
+
+    copied = SourceCursor.virtual({}).get("missing", default)
+
+    assert copied is not default
+    for _ in range(2_000):
+        copied = copied[0]
+    assert copied == "leaf"
 
 
 def test_value_view_is_recursive_and_read_only():

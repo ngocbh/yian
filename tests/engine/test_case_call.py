@@ -10,6 +10,7 @@ target is a LoadError.
 import pytest
 
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.run import run_flow
 
 # An in-file `take` def (the branch callable): echoes its stance via the `took` CODE fn.
@@ -268,6 +269,54 @@ def test_nested_then_call_directive_branch_runs_taken_value():
     out = run_flow(load_flow(_flow_nested_directive()), {"score": 0.9})
     assert out.status == "succeeded"
     assert out.output == "took:took:pro"
+
+
+@pytest.mark.parametrize("branch", ["then", "else"])
+def test_private_callee_in_case_target_is_rejected_at_branch_before_resolution(
+    branch, monkeypatch
+):
+    private_name = INLINE_FLOW_PREFIX + "c" * 64
+    then_target = f"call({private_name})" if branch == "then" else "safe"
+    else_target = f"call({private_name})" if branch == "else" else "safe"
+    text = f"""id: private_case
+name: private_case
+nodes:
+  safe:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input:
+      topic: safe
+    output: str
+  gate:
+    kind: case
+    cases:
+      - when: "true"
+        then: {then_target}
+    else: {else_target}
+output: ${{gate.output}}
+"""
+    resolved = []
+
+    def resolve(*args, **kwargs):
+        resolved.append((args, kwargs))
+        raise AssertionError("the private callee reached child resolution")
+
+    monkeypatch.setattr("agent_composer.compose.nodes.call._resolve_child", resolve)
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+
+    expected_line = next(
+        number
+        for number, source_line in enumerate(text.splitlines(), start=1)
+        if private_name in source_line
+    )
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == expected_line
+    assert caught.value.line == expected_line
+    assert INLINE_FLOW_PREFIX in str(caught.value)
+    assert private_name not in str(caught.value)
+    assert resolved == []
 
 
 def test_then_span_flow_call_target_is_rejected():

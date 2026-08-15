@@ -20,9 +20,10 @@ its output). NOT `when:`/`on:` (the case condition grammar) and NOT a node-local
 `asserts:` (those stay node-local — no inline call). A `case` descriptor carries no walked
 bindings, so it is untouched.
 
-Two guards (loud): an inline call cannot capture `${item}` (the synth node is a
-top-level node with no map-element scope — use a named `call` node with `over:`), and
-a user node id may not use the reserved synth prefix `__call_`.
+Three guards (loud): an inline call cannot target the compiler-private
+`__inline_flow_` namespace or capture `${item}` (the synth node is a top-level node
+with no map-element scope — use a named `call` node with `over:`), and a user node id
+may not use the reserved synth prefix `__call_`.
 
 Located parse metadata: each parsed host descriptor carries its own `range`/`field_ranges`
 (from the span tree). A synth `call` node locates at the SITE it desugared from — the host
@@ -58,6 +59,7 @@ from agent_composer.expr.template import (
     flow_call_callees_in_spans,
 )
 from agent_composer.compose.nodes.bindings import map_binding_strings
+from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import (
     CallDescriptor,
@@ -332,11 +334,21 @@ def _to_call_descriptor(
     range: Optional[SourceRange] = None,
     line: Optional[int] = None,
 ) -> CallDescriptor:
-    """One `InlineCall` -> a synth `CallDescriptor` (`over=None`), after the `${item}`
-    guard. The synth node carries its OWN provenance: `range` is the site it desugared from
-    (a node input's binding line, or a case `then:`/`else:` line), or `line` for a section
-    host (`outputs:`/`asserts:`). It owns no authored fields, so `field_ranges` is empty and
-    a bad ref inside the directive carets `range`, never a host line."""
+    """One `InlineCall` -> a synth `CallDescriptor` (`over=None`), after its guards.
+
+    Authored calls into the compiler-private inline-flow namespace are rejected at this
+    shared boundary, before any synth descriptor can reach child resolution. The synth node
+    carries its OWN provenance: `range` is the site it desugared from (a node input's binding
+    line, or a case `then:`/`else:` line), or `line` for a section host
+    (`outputs:`/`asserts:`). It owns no authored fields, so `field_ranges` is empty and a bad
+    ref inside the directive carets `range`, never a host line."""
+    if call.callee.startswith(INLINE_FLOW_PREFIX):
+        raise LoadError(
+            f"{host}: call targets beginning with {INLINE_FLOW_PREFIX!r} are reserved "
+            "for compiler-generated inline child flows",
+            range=range,
+            line=line,
+        )
     for name, value in call.args.items():
         if _captures_item(value):
             raise LoadError(

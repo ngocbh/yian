@@ -51,6 +51,10 @@ YAML anchors, aliases, duplicate keys, and `<<:` merges. Source-aware parsing an
 extraction navigate `SourceCursor`s into that document; later passes use descriptors and
 nodes carrying derived ranges. No phase parses the flow text again.
 
+Merge topology stays compact as identity-shared pair/arc ropes. Parent mappings reuse
+completed child summaries instead of rescanning inherited merge DAGs; explicit raw
+occurrence enumeration alone is output-sensitive.
+
 A cursor separates *what was defined* from *where it was used*. Its `range` points to the
 value's definition, while its occurrence path records the route from the document root.
 Two aliases therefore share a definition range but have different paths. A mapping alias
@@ -67,8 +71,9 @@ There are three cursor forms:
   retaining physical sources for the authored children. Generated children stay virtual.
 
 The public source model is immutable: documents keep parser objects private, virtual and
-projected values are snapshotted, and cursor value reads return defensive copies while
-preserving alias and recursive-alias identity within each copy.
+projected values are snapshotted, and cursor value reads use a stack-safe iterative copy
+while preserving alias and recursive-alias identity within each copy. Inline extraction
+takes one whole-nodes snapshot before projection so unchanged alias siblings stay shared.
 
 External `uses:` resolution adds one reuse boundary. During a load graph, successfully
 compiled external flows are cached by resolved absolute path. A repeated alias or diamond

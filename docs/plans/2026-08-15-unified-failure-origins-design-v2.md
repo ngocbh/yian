@@ -241,28 +241,34 @@ SourceDocument.parse(text, label)
 ```
 
 One private `_DocumentLoader` invocation first composes the node tree and then
-constructs the value against those same nodes. PyYAML may flatten merge keys
-while constructing;
-after `SourceDocument` is created, its value, tree, and definition DAG are treated as
-read-only. No later pass mutates key nodes, mapping values, or shared aliases.
+constructs the value against those same nodes. The loader simulates PyYAML's
+delete-before-recursion merge semantics as a persistent pair rope; it does not
+mutate `MappingNode.value` or expand inherited pairs. After `SourceDocument` is
+created, its value, tree, and definition DAG are treated as read-only. No later
+pass mutates key nodes, mapping values, or shared aliases.
 
-The DAG is linear in the composed YAML graph: each unique YAML node is interned
-once, while mapping and sequence definitions retain their immediate arcs.
-`SourceCursor` creates persistent occurrence-path links only for branches that a
-compose pass actually visits. It never eagerly expands aliases. This matters for
-a small YAML document whose anchors form a binary alias DAG: eagerly materializing
-all logical occurrence paths would consume exponential memory even though
-PyYAML's constructed object graph remains shared.
+The retained graph is linear in the composed YAML/merge graph: each unique YAML
+node is interned once, while mapping definitions share persistent arc ropes with
+logical offsets and an effective-key index. Completed mapping summaries are
+opaque frontiers when a parent merge is constructed or indexed, so a deep reused
+merge DAG is not rescanned at every level. Raw occurrence enumeration remains
+output-sensitive. `SourceCursor` creates persistent occurrence-path links only
+for branches that a compose pass actually visits. It never eagerly expands
+aliases. This matters for a small YAML document whose anchors form a binary alias
+DAG: eagerly materializing all logical occurrence paths would consume
+exponential memory even though PyYAML's constructed object graph remains shared.
 
 "Parsed once" means one full-document parse of each physical source stream.
 Parsing an already-authored scalar default substring as a literal is not a
 second physical-document load, but it is separately instrumented so a future
 change cannot accidentally feed the full source through PyYAML again.
 
-`_LoadCtx` separates two caches:
+`_LoadCtx` has one successful-result cache:
 
-- resolved physical path -> `SourceDocument`;
 - resolved physical path -> canonical locally-scoped `ComposedFlow`.
+
+The cache encloses the external read, parse, and compile operation. A separate
+document cache would have no consumer and would duplicate ownership state.
 
 The root caller-provided text creates one document. Every uncached external file
 is read once and creates one document. Defs and inline bodies receive cursors into
@@ -289,6 +295,12 @@ overlay. Its rules are:
 - compact flows, single-node defs, CASE's YAML-1.1 `on` normalization, and inline
   child bodies use virtual cursors/overlays;
 - traversal has an ancestry guard, so recursive aliases cannot recurse forever.
+
+Public value reads use a stack-safe, alias-preserving iterative snapshot of the
+exact SafeLoader value algebra. Compose normally navigates through cursors and
+their package-private read-only views. Inline-body extraction deliberately takes
+one graph-wide public snapshot before projection so unchanged alias siblings keep
+their shared identity; no later pass takes another full graph snapshot.
 
 The cursor materializes its public `OccurrencePath` tuple only when an origin is
 registered. A later diagnostic replays that finite path through the definition

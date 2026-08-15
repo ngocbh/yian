@@ -253,7 +253,10 @@ cursor interface and keeps the composed and constructed YAML graph private. Each
 uncached external file gets one document too. The document owns the original text,
 label, semantic value, occurrence topology, and source ranges. Alias and merge
 semantics are retained without later mutation of PyYAML nodes or constructed
-containers.
+containers. Persistent pair/arc ropes retain merge topology without expansion,
+and completed mapping summaries stop repeated parent DAG scans. Public defensive
+snapshots use a stack-safe iterative copier that preserves shared and recursive
+aliases.
 
 Source-aware parsing and inline extraction use `SourceCursor`:
 
@@ -265,6 +268,10 @@ Source-aware parsing and inline extraction use `SourceCursor`:
 - A **projected cursor** presents replacement/renamed values while retaining the
   explicitly supplied physical source for each selected child. Desugaring uses
   projections so occurrence-local changes never alter anchors, aliases, or merges.
+
+Inline-body extraction takes one graph-wide nodes snapshot before projection so
+unchanged aliases remain shared. Other source-aware field navigation uses cursors
+or their package-private read-only view.
 
 After cursor-based extraction and parsing, descriptors and nodes carry the derived
 ranges needed by later phases; no phase reparses source fragments or inspects the

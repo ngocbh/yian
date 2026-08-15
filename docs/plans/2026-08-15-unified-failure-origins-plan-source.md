@@ -8,10 +8,11 @@ bodies reuse that document without changing compiled or run behavior.
 **Architecture**: A new chartered `compose/source/` package owns PyYAML,
 `SourceDocument`, and `SourceCursor`. The constructed YAML graph is private.
 Public value access returns recursive-alias-preserving defensive copies; compose
-passes use an explicit package-private read-only view. A temporary
-`as_cursor(NodeReader)` bridge keeps every migration commit green and is deleted
-with `NodeReader`/`SpanLoader`. `_LoadCtx` caches each successfully compiled
-external flow by resolved physical path.
+passes use cursors and an explicit package-private read-only view, except for one
+documented graph-wide inline-lowering snapshot that preserves alias sharing. A
+temporary `as_cursor(NodeReader)` bridge keeps every migration commit green and
+is deleted with `NodeReader`/`SpanLoader`. `_LoadCtx` caches each successfully
+compiled external flow by resolved physical path.
 
 **Tech stack**: Python 3.10+, PyYAML, Pydantic, pytest, MkDocs Material.
 
@@ -28,7 +29,7 @@ This revision resolves every critical item in
   `_root_node`, and an empty `_index`; cycle 2 replaces that placeholder with a
   linear definition DAG. Cursor navigation and ranges begin in cycle 2.
 - Immutability is enforceable: the internal graph is never public,
-  `SourceCursor.value`/`get`/`mapping`/`sequence` return defensive deep copies,
+  `SourceCursor.value`/`get`/`mapping`/`sequence` return defensive snapshots,
   recursive aliases remain recursive, `_value_view()` is read-only, and virtual
   overlays snapshot/freeze inputs. Root, nested, alias, and overlay mutation tests
   are required.
@@ -103,6 +104,25 @@ each external path once. Retaining a second document cache would duplicate state
 without changing behavior. Cycle 5 therefore types/renames the single flow cache
 and adds exact per-path read/parse ratchets instead.
 
+## Correction found during final adversarial review
+
+Two successful-load stress cases exposed work hidden by the compact source
+representation:
+
+- recursive validation plus `copy.deepcopy` failed on valid value graphs near
+  Python's recursion limit. One iterative safe-value copier now validates exact
+  SafeLoader types, allocates mutable cycle placeholders, finalizes immutable
+  containers bottom-up, and preserves shared and recursive aliases;
+- constructing and indexing a binary merge DAG rescanned every already-completed
+  descendant rope. Both folds now stop at cached mapping-root summaries while
+  leaving transient recursive-merge ropes uncached, preserving linear metadata
+  for wide self-merges.
+
+The final ratchets use 2,000-level value graphs and structural rope-operation
+counts rather than wall-clock thresholds. Inline-body extraction remains the one
+intentional internal use of the public value snapshot: it copies the nodes graph
+once so unchanged aliases remain shared while projections are built.
+
 ## Scope
 
 In scope:
@@ -174,25 +194,22 @@ class SourceDocument:
 
     @property
     def root(self) -> "SourceCursor": ...
-
-    @classmethod
-    def _from_constructed(
-        cls, value: Any, root_node: Any, spans: Mapping[int, SourceRange], label: str
-    ) -> "SourceDocument": ...
 ```
 
 There is deliberately no public `value`, `root_node`, `definitions`, or spans property.
-Only `text`, `label`, and the safe `root` cursor are public. `_from_constructed`
-exists only for the temporary no-reparse legacy adapter and is deleted when that
-adapter is deleted.
+Only `text`, `label`, and the safe `root` cursor are public. The temporary
+no-reparse legacy constructor was deleted with its adapter.
 
 `_DocumentLoader` composes once and constructs against the same node tree. A
 temporary `id(yaml_node) -> constructed value` table then interns each unique
-node into one frozen `_ScalarDef | _MappingDef | _SequenceDef`. Immediate mapping
-arcs retain every flattened pair plus its key node and ordinal; sequence arcs
-retain their index. Definition IDs are assigned before descent, so recursive
-aliases terminate and alias DAG storage stays linear. Temporary construction and
-node-to-definition maps are discarded before the loader is disposed.
+node into one frozen `_ScalarDef | _MappingDef | _SequenceDef`. Mapping
+definitions retain an identity-shared persistent arc rope: leaves hold authored
+non-merge pairs, while concatenations hold child offsets and a logical flattened
+count. A private effective-key index retains last-winner provenance without
+expanding raw occurrences. Definition IDs are assigned before descent, so
+recursive aliases terminate and alias DAG storage stays linear. Temporary
+construction and node-to-definition maps are discarded before the loader is
+disposed.
 
 `SourceCursor` retains its current definition ID and a persistent private path
 link. Each descent allocates one constant-size link; cycle detection scans only
@@ -206,9 +223,10 @@ for later catalog resolution. Definition IDs never appear in origin keys.
 `SourceCursor` has two deliberately different access paths:
 
 1. Public/cross-boundary access (`value`, `get`, `mapping`, `sequence`) returns a
-   fresh `copy.deepcopy` result. Python's memoized deepcopy preserves shared
-   aliases and recursive self-links inside that returned copy. Mutating it cannot
-   change the document or another read.
+   fresh iterative safe-value snapshot. Mutable placeholders preserve cycles;
+   immutable containers are finalized bottom-up; shared aliases retain identity.
+   The copier is stack-safe for deeply nested accepted graphs. Mutating a result
+   cannot change the document or another read.
 2. Package-private `_value_view()` returns `_ReadOnlyMapping`,
    `_ReadOnlySequence`, a memoized immutable set view, or an immutable SafeLoader
    scalar. The wrappers are memoized by underlying object identity, so alias
@@ -216,10 +234,10 @@ for later catalog resolution. Definition IDs never appear in origin keys.
    Compose parse/build code uses this view explicitly and tests use
    `collections.abc.Mapping`/`Sequence`/`Set`, not concrete container assumptions.
 
-Virtual cursors and overlays deep-copy incoming mutable values once, then store
-the same internal read-only representation. Every later public read is another
-copy. Mutating either the caller's original object or a returned overlay value
-cannot change the overlay.
+Virtual cursors and overlays snapshot incoming values once with the same
+iterative copier, then store the same internal read-only representation. Every
+later public read is another snapshot. Mutating either the caller's original
+object or a returned overlay value cannot change the overlay.
 
 The accepted virtual algebra is exact `dict`, `list`, `tuple`, `set`,
 `frozenset`, and SafeLoader scalar values (`None`, `bool`, `int`, `float`, `str`,
@@ -244,7 +262,7 @@ class SourceCursor:
     def path(self) -> OccurrencePath: ...
 
     @property
-    def value(self) -> Any: ...                 # defensive deep copy
+    def value(self) -> Any: ...                 # iterative defensive snapshot
 
     def _value_view(self) -> Any: ...           # read-only package-private view
 
@@ -613,9 +631,11 @@ smokes all pass.
    `test_inline_projection_leaves_original_reader_and_document_unchanged` and keep
    existing alias-sibling/merge tests.
 9. **(5 min, implementation)** Change `extract_inline_bodies` to call `as_cursor`,
-   rename `nodes_reader` to `nodes_cursor`, and implement pure projected masking.
-   Remove `_SpanOverlay`, `_copy_mapping`, wrapper mutation, `copy`, and PyYAML
-   usage from `inline_bodies.py`.
+   rename `nodes_reader` to `nodes_cursor`, take one graph-wide defensive value
+   snapshot so unchanged aliases retain sharing, and implement pure projected
+   masking. Remove `_SpanOverlay`, `_copy_mapping`, wrapper mutation, `copy`, and
+   PyYAML usage from `inline_bodies.py`. This is the sole intentional internal
+   use of public `cursor.value`.
 10. **(3 min)** Run inline tests filtered by
     `"projection or alias or merge or mutat"`.
 11. **(4 min, implementation)** Rename `_assemble(nodes_reader=...)` to
@@ -688,8 +708,9 @@ smokes all pass.
       tests/engine/test_call_source_frame.py
     ```
 
-29. **(2 min)** Run `git diff --check` and verify no internal compose consumer in
-    the edited files uses `cursor.value`; it must use `_value_view()`.
+29. **(2 min)** Run `git diff --check` and verify field navigation uses cursors or
+    `_value_view()`. The graph-wide snapshot in `inline_bodies.py` is the only
+    intentional internal `cursor.value` use.
 30. **(3 min)** Stage exactly these files and commit:
 
     ```bash
@@ -1027,7 +1048,8 @@ unchanged.
 
    - no full constructed graph escapes `SourceDocument`;
    - root, nested, alias, recursive-alias, and projected values resist mutation;
-   - no compose pass uses public copy-returning `cursor.value` internally;
+   - only inline-body extraction uses public `cursor.value` internally, once per
+     nodes graph to preserve alias sharing during projection;
    - plain/inline roots parse once;
    - multiple defs do not reparse their parent;
    - aliases/diamonds read and parse each external path once;
@@ -1042,8 +1064,8 @@ unchanged.
 5. **(3 min)** Fix every finding test-first. Add a focused green commit rather
    than hiding a fix in the docs commit.
 6. **(3 min)** Run separate spec-compliance and code-quality reviews. The quality
-   review must focus on alias recursion, deep-copy memoization, read-only wrappers,
-   overlay snapshotting, and cache/cycle identity.
+   review must focus on alias recursion, iterative snapshot memoization, read-only
+   wrappers, overlay snapshotting, and cache/cycle identity.
 7. **(3 min)** Open the PR with `Fixes #130`, link its plan comment and parent
    #110, and list exact checks/results.
 8. **(2 min)** Merge only after CI/review is green and verify the merge commit is

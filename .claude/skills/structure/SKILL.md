@@ -119,9 +119,10 @@ and compiled flow.
 Its file-local callable scope owns authored `defs:`/`uses:`, compiler-private
 callables, and their shared success cache. The loader resolves defs and uses eagerly;
 only compiler-private builders stay lazy. Recursive local/private construction is
-guarded separately from cross-file recursion. These are distinct caches and guards
-with distinct keys and lifetimes. Neither `compile` nor `runtime` knows
-about YAML, `SourceDocument`, `SourceCursor`, or loader-private callable scope;
+guarded separately from cross-file recursion. A failed callable attempt rolls back
+new private builders, nested cache entries, and catalog sites together. These are
+distinct caches and guards with distinct keys and lifetimes. Neither `compile` nor
+`runtime` knows about YAML, `SourceDocument`, `SourceCursor`, or loader-private callable scope;
 they receive ordinary compiled contracts.
 
 Compose-only anonymous children are a front-end ownership example. Located,

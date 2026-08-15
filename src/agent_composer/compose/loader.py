@@ -540,7 +540,9 @@ class _CallableScope:
     external resolver. Private declarations, local defs, and external aliases share
     one memo table. The in-progress set makes recursive private/def construction
     loud; cross-file recursion is outside this scope and belongs to the selected
-    external resolver.
+    external resolver. Failed callable construction atomically drops new private
+    declarations, nested cache entries, and source-catalog sites so a later retry
+    cannot observe a stale partial attempt.
 
     Args:
         defs_section (`dict`):
@@ -600,11 +602,13 @@ class _CallableScope:
     ) -> ComposedFlow:
         """Build one callable without caching origins from a failed attempt.
 
-        Nested resolutions may populate `_built` while `builder` runs. If the
-        outer construction fails, discard those new cache entries together with
-        the catalog registrations rolled back by the builder transaction.
+        Nested resolutions may populate `_built`, and assembly may register
+        inline builders in `_private`, while `builder` runs. If construction
+        fails, discard both sets of new entries together with the catalog sites
+        rolled back by the builder transaction.
         """
         cached_before = frozenset(self._built)
+        private_before = frozenset(self._private)
         try:
             with self._catalog_builder.transaction():
                 return builder()
@@ -612,6 +616,9 @@ class _CallableScope:
             for flow_id in tuple(self._built):
                 if flow_id not in cached_before:
                     del self._built[flow_id]
+            for flow_id in tuple(self._private):
+                if flow_id not in private_before:
+                    del self._private[flow_id]
             raise
 
     def register_private(

@@ -122,7 +122,8 @@ The loader owns two intentionally separate caches:
   alias. Defs load eagerly before the parent and uses resolve eagerly during
   assembly; only compiler-private builders stay lazy. `_in_progress` rejects
   recursive private/def construction, while `_LoadCtx.loading` guards recursive
-  external-file resolution.
+  external-file resolution. A failed callable attempt removes every private builder,
+  nested cache entry, and catalog site added by that attempt before it can be retried.
 
 `compile` owns representation-neutral flow contracts, and `runtime` executes
 compiled flows. Neither layer imports Compose source contracts, knows that YAML

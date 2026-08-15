@@ -372,7 +372,9 @@ def _assemble(
     `scope.catalog_builder` is the one registry shared by every assembly originating
     from this physical document, so root, definitions, and inline bodies mint
     collision-free local origins under `owner`. Inline-CODE traceback anchors are
-    derived from each descriptor's own `code:` range."""
+    derived from each descriptor's own `code:` range. `_assemble` performs one
+    construction attempt; retriable callable attempts run through
+    `_CallableScope.resolve`, while a failed top-level load discards its scope."""
     if (inputs_section is None) == (input_parameters is None):
         raise ValueError(
             "_assemble requires exactly one of inputs_section or input_parameters"

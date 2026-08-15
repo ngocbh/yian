@@ -256,3 +256,41 @@ nodes: {}
 
     assert retried._local_catalog.resolve(outer_node.origin) is not None
     assert retried._local_catalog.resolve(inner_node.origin) is not None
+
+
+def test_failed_def_build_discards_inline_builder_closures_before_retry():
+    """A retry assembles the current inline body, not a failed attempt's snapshot."""
+    defs = {
+        "outer": {
+            "nodes": {
+                "broken": {
+                    "kind": "code",
+                    "code": "return (",
+                    "outputs": "int",
+                },
+                "wrap": {
+                    "kind": "call",
+                    "nodes": {
+                        "worker": {
+                            "kind": "code",
+                            "code": "return 1",
+                            "outputs": "int",
+                        }
+                    },
+                    "outputs": "${worker.output}",
+                },
+            },
+            "outputs": "${wrap.output}",
+        }
+    }
+    scope = _CallableScope(defs, {}, None, {})
+
+    with pytest.raises(LoadError):
+        scope.resolve("outer")
+
+    defs["outer"]["nodes"]["broken"]["code"] = "return 0"
+    defs["outer"]["nodes"]["wrap"]["nodes"]["worker"]["code"] = "return 2"
+    retried = scope.resolve("outer")
+
+    worker = retried.compiled.nodes["wrap"].child.nodes["worker"]
+    assert worker.code == "return 2"

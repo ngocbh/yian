@@ -46,10 +46,11 @@ the package-root functions below own that setup for normal callers.
 load_flow(text: str, *, search_paths: list[str | Path] = ...) -> ComposedFlow
 ```
 
-Parses, compiles, and validates the flow `text`. Pass `search_paths` so that a
-flow's `call:` / `uses:` references resolve relative to the flow file's directory
-— typically `search_paths=[flow_dir]`. Raises `LoadError` / `FlowValidationError`
-on a bad flow (compile-time errors surface here, not at run time).
+Parses, compiles, and validates the flow `text`, including every authored input
+default. Pass `search_paths` so that a flow's `call:` / `uses:` references resolve
+relative to the flow file's directory — typically `search_paths=[flow_dir]`.
+Raises `LoadError` / `FlowValidationError` on a bad flow (compile-time errors
+surface here, not at run time).
 
 ## `run_flow`
 
@@ -67,8 +68,9 @@ run_flow(
 ) -> RunResult
 ```
 
-Coerces `inputs` against the flow's declared types, snapshots the complete LLM
-configuration, initializes the run log, and drives the flow to a terminal.
+Coerces supplied `inputs` against the flow's declared types, snapshots the
+complete LLM configuration, initializes the run log, and drives the flow to a
+terminal. Stored defaults are not coerced.
 
 - `log` — an optional JSONL path. `None` still uses the same record/reducer path
   with a process-local log. A path creates a new durable log exclusively; an

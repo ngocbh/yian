@@ -384,9 +384,9 @@ def map_subgraph(child, spawner_id: str, records: list) -> Flow:
             id=f"{cloned.end_id}->{map_end_id}#{i}",
             from_=cloned.end_id, to=map_end_id, input_group=f"e{i}"))
 
-    # The synthetic fan-out start: a StartNode with empty decls — it runs once, emits `{}`, and its
+    # The synthetic fan-out start: a StartNode with no parameters — it runs once, emits `{}`, and its
     # out-edges make every element START ready (the single-start entry, like CALL and the top level).
-    nodes[map_start_id] = StartNode(map_start_id, input_decls=[])
+    nodes[map_start_id] = StartNode(map_start_id, params=[])
     wiring[map_start_id] = {}
 
     # ONE EndNode in LIST mode — the MAP fan-in over the N child ENDs (still built + stamped at

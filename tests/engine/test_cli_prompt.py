@@ -22,24 +22,53 @@ from agent_composer.cli.run import (
     _render_run_error,
 )
 from agent_composer.compose.loader import load_flow
+from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.run import RunResult, run_flow
 from agent_composer.tools import install_ask_user
-from agent_composer.compose.helpers.types import read_flow_inputs
+from agent_composer.typesys import Type, ValueKind
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 _ERRORS = _SEEDS / "errors"
 
 
-def _decls():
-    return read_flow_inputs(
-        {
-            "topic": "str",
-            "as_of": "Optional[date]",
-            "window": "int = 30",
-            "mode": 'Literal["fast", "slow"]',
-        },
-        {},
+def _parameter(
+    name: str,
+    typ: Type,
+    *,
+    required: bool = False,
+    has_default: bool = False,
+    default=None,
+) -> Parameter:
+    """Build one source-free canonical flow parameter for CLI presentation."""
+    return Parameter(
+        name=name,
+        contract=ValueContract(typ),
+        required=required,
+        has_default=has_default,
+        default=default,
+        coerce_strings=True,
     )
+
+
+def _decls() -> list[Parameter]:
+    return [
+        _parameter("topic", Type.scalar(ValueKind.STRING), required=True),
+        _parameter("as_of", Type(kind=ValueKind.DATE, nullable=True)),
+        _parameter(
+            "window",
+            Type.scalar(ValueKind.INTEGER),
+            has_default=True,
+            default=30,
+        ),
+        _parameter(
+            "mode",
+            Type(
+                kind=ValueKind.STRING,
+                tags=frozenset({"fast", "slow"}),
+            ),
+            required=True,
+        ),
+    ]
 
 
 # --- _flow_banner: the "Running flow" identity block ------------------------- #
@@ -82,16 +111,57 @@ def test_input_label_optional_with_default():
 
 
 def test_input_label_datetime_example():
-    decls = read_flow_inputs({"at": "datetime"}, {})
-    at = next(d for d in decls if d.name == "at")
+    at = _parameter("at", Type.scalar(ValueKind.DATETIME), required=True)
     assert _input_label(at) == "at (datetime) * e.g. 2026-05-21T14:30"
 
 
 def test_input_label_default_suppresses_example():
     # A date default already shows the accepted format, so no redundant `e.g.`.
-    decls = read_flow_inputs({"as_of": "Optional[date] = 2026-01-01"}, {})
-    as_of = next(d for d in decls if d.name == "as_of")
+    as_of = _parameter(
+        "as_of",
+        Type(kind=ValueKind.DATE, nullable=True),
+        has_default=True,
+        default="2026-01-01",
+    )
     assert _input_label(as_of) == "as_of (Optional[date]) [default: 2026-01-01]"
+
+
+def test_input_label_derives_a_canonical_structural_type():
+    profile = _parameter(
+        "profile",
+        Type(
+            kind=ValueKind.OBJECT,
+            fields={
+                "z": Type.scalar(ValueKind.INTEGER),
+                "a": Type(kind=ValueKind.STRING, nullable=True),
+            },
+            required=frozenset({"z"}),
+        ),
+        required=True,
+    )
+
+    assert _input_label(profile) == 'profile ({"a":Optional[str],"z":int}) *'
+
+
+def test_input_label_displays_an_explicit_null_default():
+    maybe = _parameter(
+        "maybe",
+        Type(kind=ValueKind.INTEGER, nullable=True),
+        has_default=True,
+        default=None,
+    )
+
+    assert _input_label(maybe) == "maybe (Optional[int]) [default: None]"
+
+
+def test_input_label_supports_a_flat_list_contract():
+    items = _parameter(
+        "items",
+        Type.scalar(ValueKind.LIST_STRING),
+        required=True,
+    )
+
+    assert _input_label(items) == "items (list[str]) *"
 
 
 # --- _prompt_missing: header + labels via a fake questionary ------------------ #
@@ -100,6 +170,7 @@ class _FakeQuestionary:
 
     def __init__(self, answers):
         self.labels: list[str] = []
+        self.text_defaults: list[str] = []
         self._answers = answers
 
     def Style(self, spec):  # questionary.Style(...) — styling is irrelevant to the labels
@@ -113,6 +184,7 @@ class _FakeQuestionary:
         return ""
 
     def text(self, label, default="", **kwargs):
+        self.text_defaults.append(default)
         val = self._resolve(label)
         return SimpleNamespace(ask=lambda: val)
 
@@ -151,6 +223,41 @@ def test_prompt_skips_already_supplied(monkeypatch):
     gathered = _prompt_missing(_decls(), have)
     assert gathered == {}
     assert fake.labels == []          # no prompt issued
+
+
+def test_prompt_leaves_explicit_null_defaults_omitted_for_every_widget_kind(monkeypatch):
+    fake = _FakeQuestionary({})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+    parameters = [
+        _parameter(
+            "maybe",
+            Type(kind=ValueKind.INTEGER, nullable=True),
+            has_default=True,
+            default=None,
+        ),
+        _parameter(
+            "flag",
+            Type(kind=ValueKind.BOOLEAN, nullable=True),
+            has_default=True,
+            default=None,
+        ),
+        _parameter(
+            "mode",
+            Type(
+                kind=ValueKind.STRING,
+                tags=frozenset({"fast", "slow"}),
+                nullable=True,
+            ),
+            has_default=True,
+            default=None,
+        ),
+    ]
+
+    gathered = _prompt_missing(parameters, {})
+
+    assert gathered == {}
+    assert fake.text_defaults == ["", "", ""]
 
 
 # --- _render_run_error: a runtime failure boxes the .yaml at the PRECISE line ------ #
@@ -211,9 +318,9 @@ def test_run_error_boxes_code_wrong_type_output(monkeypatch):
     assert "╭" in out
 
 
-def test_run_error_boxes_input_decl_line(monkeypatch):
-    # e08's `window` can't coerce to int -> input-coercion failure carries an input_decl
-    # locator -> boxed at the `window:` declaration line.
+def test_run_error_boxes_flow_input_line(monkeypatch):
+    # e08's `window` cannot coerce to int, so its generic input locator selects the
+    # `window:` declaration line.
     flow = _ERRORS / "e08-input-type-mismatch.yaml"
     text = flow.read_text()
     result = run_flow(load_flow(text, search_paths=[flow.parent]), {"topic": "X", "window": "soon"})

@@ -11,11 +11,10 @@ import agent_composer.runtime.state as state_module
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.manifest import expansion_digest
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, NodeState, START_ID
-from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import NodeExpanded
 from agent_composer.nodes.base import Grow, Node, NodeKind
-from agent_composer.nodes.contracts import Binding, Parameter
+from agent_composer.nodes.contracts import Binding, Parameter, ValueContract
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.loop import LoopNode
@@ -65,7 +64,7 @@ def _parent_flow(
     """Return a complete static graph whose one spawner can be put in flight."""
     spawner = _Spawner("spawn") if spawner is None else spawner
     nodes = {
-        START_ID: StartNode(START_ID, input_decls=[]),
+        START_ID: StartNode(START_ID, params=[]),
         spawner.id: spawner,
         END_ID: EndNode.record(END_ID, output_names=[]),
     }
@@ -118,20 +117,20 @@ def _initialized_spawner(
 
 def _canonical_child(*, optional_input: bool = False) -> CompiledFlow:
     """Return a real manifestable child accepted by ``build_grow``."""
-    input_decls = (
+    parameters = (
         [
-            InputDecl(
+            Parameter(
                 name="optional",
-                type_str="str",
+                contract=ValueContract(Type.scalar(ValueKind.STRING)),
+                has_default=True,
                 default="fallback",
-                required=False,
-                type=Type.scalar(ValueKind.STRING),
+                coerce_strings=True,
             )
         ]
         if optional_input
         else []
     )
-    start = StartNode(START_ID, input_decls=input_decls)
+    start = StartNode(START_ID, params=parameters)
     end = EndNode.record(END_ID, output_names=[])
     return CompiledFlow.from_parts(
         nodes={START_ID: start, END_ID: end},
@@ -156,7 +155,7 @@ def _fragment(spawner_id: str, *, suffix: str = "child") -> Flow:
     """Return a manifestable two-boundary fragment committing under ``spawner_id``."""
     start_id = f"{spawner_id}/{suffix}/start"
     end_id = f"{spawner_id}/{suffix}/end"
-    start = StartNode(start_id, input_decls=[])
+    start = StartNode(start_id, params=[])
     end = EndNode.record(end_id, output_names=[])
     end.commit_as = spawner_id
     return Flow(
@@ -638,13 +637,12 @@ def _missing_required_fragment(spawner_id: str) -> Flow:
     end_id = f"{spawner_id}/required/end"
     start = StartNode(
         start_id,
-        input_decls=[
-            InputDecl(
+        params=[
+            Parameter(
                 name="required",
-                type_str="str",
-                default=None,
+                contract=ValueContract(Type.scalar(ValueKind.STRING)),
                 required=True,
-                type=Type.scalar(ValueKind.STRING),
+                coerce_strings=True,
             )
         ],
     )
@@ -676,7 +674,7 @@ def _unknown_reference_fragment(spawner_id: str) -> Flow:
     """Return a fragment with a valid param whose source head is absent."""
     start_id = f"{spawner_id}/ref/start"
     end_id = f"{spawner_id}/ref/end"
-    start = StartNode(start_id, input_decls=[])
+    start = StartNode(start_id, params=[])
     end = EndNode.record(end_id, output_names=["value"])
     return Flow(
         nodes={start_id: start, end_id: end},
@@ -753,7 +751,7 @@ def _invalid_fragment(case: str) -> Any:
         fragment.edges[0] = Edge(edge.id, "absent", edge.to, ordering=True)
     elif case == "unreachable-node":
         orphan_id = "spawn/child/orphan"
-        fragment.nodes[orphan_id] = StartNode(orphan_id, input_decls=[])
+        fragment.nodes[orphan_id] = StartNode(orphan_id, params=[])
         fragment.wiring[orphan_id] = {}
     elif case == "unknown-system-ambient":
         end = EndNode.record(fragment.end_id, output_names=["value"])

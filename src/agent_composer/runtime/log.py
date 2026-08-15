@@ -589,7 +589,7 @@ class _SourceSpanPayload(_StrictModel):
     """Strict JSON form of a symbolic source locator."""
 
     node: str | None
-    kind: Literal["input", "assert", "input_decl", "field"]
+    kind: Literal["input", "assert", "field"]
     key: str
 
 
@@ -808,7 +808,8 @@ def decode_record(data: bytes | str) -> RecordEnvelope:
     model_type = _KIND_TO_MODEL.get(envelope.kind)
     if model_type is None:
         raise ValueError(f"unknown run-record kind: {envelope.kind!r}")
-    payload = model_type.model_validate(envelope.payload)
+    payload_wire = _migrate_legacy_input_locator(envelope.kind, envelope.payload)
+    payload = model_type.model_validate(payload_wire)
     record = _record_from_payload(envelope.kind, payload)
     return RecordEnvelope(
         schema=envelope.schema_version,
@@ -816,6 +817,25 @@ def decode_record(data: bytes | str) -> RecordEnvelope:
         seq=envelope.seq,
         record=record,
     )
+
+
+def _migrate_legacy_input_locator(kind: str, payload: Any) -> Any:
+    """Map schema-1 START's retired ``input_decl`` locator to generic ``input``.
+
+    Encoding remains strict and emits only the current vocabulary. This decode-only
+    normalization keeps already-written schema-1 failed runs readable without
+    retaining a second semantic locator kind in the runtime model.
+    """
+    if kind != "node_failed" or not isinstance(payload, dict):
+        return payload
+    locator = payload.get("locator")
+    if not isinstance(locator, dict) or locator.get("kind") != "input_decl":
+        return payload
+    migrated = dict(payload)
+    migrated_locator = dict(locator)
+    migrated_locator["kind"] = "input"
+    migrated["locator"] = migrated_locator
+    return migrated
 
 
 def _kind_for_record(record: RunRecord) -> str:

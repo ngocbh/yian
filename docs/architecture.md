@@ -60,7 +60,7 @@ stages: **parse → desugar → wire → check → freeze.**
   │  reject_cycles         the static graph must be a DAG
   │  check_case_handles    every branch has a home
   ▼
- CompiledFlow  (wrapped, with input decls + asserts + source frame, as a ComposedFlow)
+ CompiledFlow  (wrapped, with parameters + asserts + source frame, as a ComposedFlow)
 ```
 
 Two ideas make this phase tractable:
@@ -76,8 +76,8 @@ its `build()`. Cross-node graph passes live in the ordered phase packages
 compose/build/`. The engine core sees none of it.
 
 The output is a **`ComposedFlow`**: a `CompiledFlow` (the static topology) plus the
-typed `input:` declarations, the `asserts`, and a render-only *source frame* used to
-draw error tracebacks that point back at your YAML.
+canonical typed `input:` parameters, the `asserts`, and a render-only *source frame*
+used to draw error tracebacks that point back at your YAML.
 
 The loader owns one `SourceDocument` for each flow source document. Source-aware parsing
 and inline extraction reuse cursors into it; later passes use descriptors and nodes that

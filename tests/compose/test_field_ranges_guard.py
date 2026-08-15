@@ -86,7 +86,7 @@ def test_guard_survives_build():
 def test_guard_survives_build_on_the_start_boundary():
     # The StartNode takes its map through a separate constructor path (`_boundary_field_ranges`
     # -> `StartNode(field_ranges=...)`), so it needs its own pin — it is also the node whose
-    # `("input_decl", name)` lookup was one of the two dead sites.
+    # `("input", name)` lookup was one of the two dead sites.
     start = load_flow(_FLOW).compiled.nodes["__start__"]
     assert isinstance(start.field_ranges, FieldRanges)
-    assert start.field_ranges.get(("input_decl", "topic")) is not None
+    assert start.field_ranges.get(("input", "topic")) is not None

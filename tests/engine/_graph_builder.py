@@ -13,13 +13,13 @@ and the manual `(x, END_ID)` tuples stand as bare adjacencies.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Optional
 
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
 from agent_composer.compile.expand import build_grow
 from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.expr import binding_co_skips, expr_refs_of
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.engine import FlowEngine
@@ -80,27 +80,12 @@ def _engine(
     )
 
 
-@dataclass(frozen=True)
-class _SyntheticInputDecl:
-    """A minimal Compose input declaration for a manually built START boundary.
-
-    The node-side parameter contract deliberately retains the Compose declaration at
-    ``StartNode.input_decls``. This untyped fixture keeps manual run arguments lenient.
-    """
-
-    name: str
-    default: Any = None
-    required: bool = False
-    type: Any = None
-    type_str: Any = None
-
-
-def _synth_start_input_decls(node_map: dict, wiring: Optional[dict]) -> list:
-    """Collect the `${input.X}` names a manual graph reads as START input declarations.
+def _synth_start_parameters(node_map: dict, wiring: Optional[dict]) -> list[Parameter]:
+    """Collect the `${input.X}` names a manual graph reads as START parameters.
 
     Scans every node's wiring source (the passed `wiring`, else the auto-derived one) for
     `input.<name>` reference paths so the scheduled START can `bind_params` the run args
-    against matching derived params. Returns declarations in first-seen order.
+    against matching untyped params. Returns parameters in first-seen order.
     """
     sources = wiring if wiring is not None else derive_wiring(node_map)
     seen: dict[str, None] = {}
@@ -116,7 +101,7 @@ def _synth_start_input_decls(node_map: dict, wiring: Optional[dict]) -> list:
                     name = name.split(".")[0]
                     if name and name not in seen:
                         seen[name] = None
-    return [_SyntheticInputDecl(name=n) for n in seen]
+    return [Parameter(name=name) for name in seen]
 
 
 def _graph(nodes: list, raw_edges: list[tuple], *,
@@ -127,13 +112,13 @@ def _graph(nodes: list, raw_edges: list[tuple], *,
     # drop-in. derive_wiring is DEFAULTED here — `wiring is None`
     # -> `derive_wiring(node_map)`, the same auto-derive test_engine.py passes today.
     node_map = {n.id: n for n in nodes}
-    # Synthesize START's input decls from the `${input.X}` refs the manual graph reads, so the
-    # scheduled START can bind_params the run args (an empty-decl START would drop every run arg —
+    # Synthesize START's parameters from the `${input.X}` refs the manual graph reads, so the
+    # scheduled START can bind_params the run args (an empty-param START would drop every run arg —
     # its bind reads params, and no params means no binding). The caller may still pass its own
     # StartNode in `nodes` (respected by setdefault).
     if START_ID not in node_map:
         node_map[START_ID] = StartNode(
-            START_ID, input_decls=_synth_start_input_decls(node_map, wiring))
+            START_ID, params=_synth_start_parameters(node_map, wiring))
     out_list = list(outputs or [])
     node_map.setdefault(END_ID, EndNode.record(END_ID, output_names=[o.name for o in out_list]))
 

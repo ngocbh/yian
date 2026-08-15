@@ -166,7 +166,7 @@ def _evaluate_node_stream(
         # that already carries its own `range` (any node's own `run` wrapper fires its pre/post
         # asserts and raises `NodeAssertFailed` with the assert's span — located by position) wins;
         # otherwise key the node's recorded `field_ranges` on the locator's `(kind, key)` (e.g.
-        # `("input", name)` / `("input_decl", name)`) — NOT on `node.kind`, and never on the bare key
+        # `("input", name)`) — NOT on `node.kind`, and never on the bare key
         # (which would collide across namespaces). None when neither is present.
         rng = getattr(exc, "range", None)
         if rng is None and loc is not None:

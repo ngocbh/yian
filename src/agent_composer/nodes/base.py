@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
 
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
+from agent_composer.nodes.binding import apply_defaults
 from agent_composer.nodes.contracts import Assertion, Parameter
-from agent_composer.typesys.seeding import apply_defaults
 from agent_composer.typesys.values import Type
 
 if TYPE_CHECKING:
@@ -43,8 +43,8 @@ class FieldRanges(dict):
     let two dead lookups survive both review and a green test suite when the map moved from
     string keys to tuples. Refusing the wrong shape makes the mistake loud at the first call.
 
-    Keys: `("input", name)` a node input binding · `("input_decl", name)` a flow input decl
-    (START) · `("field", name)` a kind field (`code`/`over`/`until`/`inputs`/`env`/...).
+    Keys: `("input", name)` a node or flow-boundary input · `("field", name)` a kind
+    field (`code`/`over`/`until`/`inputs`/`env`/...).
     Asserts are deliberately absent (their text is not a unique identity — they are located
     by position; see `pre_assert_ranges`).
 
@@ -62,8 +62,7 @@ class FieldRanges(dict):
         if not isinstance(key, tuple):
             raise TypeError(
                 f"field_ranges is keyed by a (kind, key) tuple — got the bare key {key!r}. "
-                f"Use ({'field'!r}, {key!r}) / ({'input'!r}, {key!r}) / "
-                f"({'input_decl'!r}, {key!r})."
+                f"Use ({'field'!r}, {key!r}) / ({'input'!r}, {key!r})."
             )
 
     def get(self, key, default=None):  # type: ignore[override]
@@ -307,7 +306,7 @@ class Node(ABC):
         #   for a fake / directly-constructed node with no known source.
         # `self.field_ranges`: `FieldRanges[(kind, key) -> SourceRange]` for the node's individual
         #   authored NAMED sites — a bad input binding (`("input", name)`), a flow input decl
-        #   (`("input_decl", name)`), or a kind field (`("field", name)`). Keyed by the location's
+        #   input, or a kind field (`("field", name)`). Keyed by the location's
         #   `(SourceSpan.kind, key)` so keys across namespaces never collide; a bare-key lookup
         #   raises rather than missing silently (see `FieldRanges`). Asserts are NOT here (their
         #   text is not a unique identity) — they are located by position, below. Empty when no
@@ -339,8 +338,8 @@ class Node(ABC):
         input the caller OMITTED but the node declares a default for. `apply_defaults`
         fills only omitted keys (a caller's explicit bound-null SHADOWS the default,
         `f(x=None)`), so it never overrides a present key; running it here is a no-op for
-        body nodes (their Parameters carry no default) and idempotent for START
-        (whose `_run_impl` also defaults — the second fill is inert).
+        body nodes (their Parameters carry no default). START uses this same wrapper,
+        so the generic parameter seam is its sole default authority.
 
         Firing reads ONLY the bound `inputs` record — never the pool — so node purity is
         preserved. `eval_node` drives this wrapper (not `_run_impl`), so firing happens

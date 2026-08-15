@@ -174,6 +174,13 @@ typedefs:
 nullable says the value may be null; default says what to use when the input
 isn't supplied at all.
 
+An explicit `Optional[int] = null` is a present default, unlike no `=`. A null
+default requires a nullable or `None` type, and an empty `=` is invalid. Defaults
+are YAML literals validated at load and are never string-coerced: use `int = 30`,
+not `int = "30"`, and quote date strings (`date = "2026-01-01"`). Only supplied
+boundary strings may be coerced. A compatible default keeps its authored payload,
+so `float = 30` remains an integer.
+
 ## Recipes
 
 **Get a structured / numeric value out of an agent.** Declare the typed shape directly

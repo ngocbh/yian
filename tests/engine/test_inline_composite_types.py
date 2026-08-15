@@ -8,13 +8,13 @@ import pytest
 
 from agent_composer.compose.build import inline_inputs
 from agent_composer.compose.build.inline_inputs import (
-    canonical_type_label,
     canonicalize_inline_type,
     infer_inline_binding_type,
     require_proven_type,
 )
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.events import SourceRange
+from agent_composer.typesys import canonical_type_label
 from agent_composer.typesys.values import Type, ValueKind
 
 
@@ -927,9 +927,8 @@ def test_every_list_kind_label_uses_its_structural_element(kind):
 
 
 @pytest.mark.parametrize("kind", _LIST_VALUE_KINDS)
-def test_canonical_list_label_rejects_a_missing_element(kind):
-    with pytest.raises(ValueError, match="without a structural element"):
-        canonical_type_label(Type(kind=kind))
+def test_canonical_flat_list_label_uses_its_storage_kind(kind):
+    assert canonical_type_label(Type(kind=kind)) == kind.value
 
 
 def test_canonical_variant_label_sorts_and_json_quotes_adversarial_tags():

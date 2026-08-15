@@ -276,6 +276,28 @@ def test_flow_input_type_failure_carries_range():
     assert result.range is not None and result.range.start_line == 20
 
 
+def test_invalid_authored_default_carries_input_range():
+    source = """id: invalid-default
+name: invalid_default
+input:
+  value: int = null
+nodes:
+  echo:
+    kind: code
+    code: tests.engine._compose_codefns:echo_x
+    input:
+      x: ${input.value}
+    output: int
+output: ${echo.output}
+"""
+
+    with pytest.raises(LoadError, match="default") as caught:
+        load_flow(source)
+
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == 4
+
+
 def test_false_boundary_assert_carries_range():
     # e18: the flow-level `asserts:` item `input.window > 0` is on line 15; window <= 0 makes it
     # false before any node runs. The RunResult carries a concrete `range` boxing that assert

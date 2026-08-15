@@ -30,9 +30,8 @@ from agent_composer.expr import (
     resolve_reference,
 )
 from agent_composer.nodes.contracts import Parameter, binding_source
-from agent_composer.typesys import TypeCheckError, build_value_as
+from agent_composer.typesys import TypeCheckError, ValueKind, build_value_as
 from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.seeding import coerce_param
 
 
 class BindingError(ValueError):
@@ -43,6 +42,80 @@ class BindingError(ValueError):
     """
 
     locator: object = None  # Optional[SourceSpan]
+
+
+def _validate_parameters(params: list[Parameter]) -> None:
+    """Require the canonical exact-list parameter carrier at every binding seam."""
+    if type(params) is not list:
+        raise TypeError(
+            f"node params must be an exact list, got {type(params).__name__}"
+        )
+    for parameter in params:
+        if type(parameter) is not Parameter:
+            raise TypeError(
+                "node params must contain Parameter values, "
+                f"got {type(parameter).__name__}"
+            )
+
+
+def coerce_param(parameter: Parameter, value: Any) -> Any:
+    """Coerce a supplied string under one parameter's explicit scalar policy."""
+    if type(parameter) is not Parameter:
+        raise TypeError(
+            "parameter must be an exact Parameter, "
+            f"got {type(parameter).__name__}"
+        )
+    if (
+        value is None
+        or not isinstance(value, str)
+        or not parameter.coerce_strings
+        or parameter.contract is None
+    ):
+        return value
+
+    raw = value.strip()
+    try:
+        if parameter.contract.type.kind is ValueKind.INTEGER:
+            return int(raw)
+        if parameter.contract.type.kind is ValueKind.NUMBER:
+            return float(raw)
+        if parameter.contract.type.kind is ValueKind.BOOLEAN:
+            return raw.lower() in ("1", "true", "yes", "y", "on")
+    except ValueError:
+        return value
+    return value
+
+
+def coerce_inputs(
+    params: list[Parameter], raw: dict[str, Any]
+) -> dict[str, Any]:
+    """Coerce supplied top-level values while retaining undeclared keys unchanged."""
+    _validate_parameters(params)
+    by_name = {parameter.name: parameter for parameter in params}
+    return {
+        name: coerce_param(by_name[name], value) if name in by_name else value
+        for name, value in raw.items()
+    }
+
+
+def apply_defaults(
+    params: list[Parameter], inputs: dict[str, Any]
+) -> dict[str, Any]:
+    """Fill validated defaults for omitted parameters without coercing payloads.
+
+    A caller-passed value, including ``None``, always shadows a default. Defaults
+    are validated against any semantic contract but retain their original Python
+    payload rather than the typed value system's normalized representation.
+    """
+    _validate_parameters(params)
+    output = dict(inputs)
+    for parameter in params:
+        if parameter.name in output or not parameter.has_default:
+            continue
+        if parameter.contract is not None:
+            build_value_as(parameter.contract.type, parameter.default)
+        output[parameter.name] = parameter.default
+    return output
 
 
 def _resolve_source(source: Any, pool: VariablePool, item: Any = None) -> Any:
@@ -99,16 +172,9 @@ def bind_params(
     Raises:
         BindingError: On a missing-required input or a type mismatch.
     """
-    if type(params) is not list:
-        raise TypeError(
-            f"node params must be an exact list, got {type(params).__name__}"
-        )
+    _validate_parameters(params)
     record: dict[str, Any] = {}
     for p in params:
-        if type(p) is not Parameter:
-            raise TypeError(
-                f"node params must contain Parameter values, got {type(p).__name__}"
-            )
         try:
             present = p.name in wiring  # an absent edge (caller OMITTED) vs a present one (incl. bound-null)
             used_default = False

@@ -126,6 +126,13 @@ Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`,
 enum of tags), and named **records**. `Optional[X]` (nullable) and `= default`
 (omission-fill) are orthogonal.
 
+An explicit `Optional[int] = null` is a present default, distinct from no `=`;
+null is invalid for a non-nullable type, and an empty `=` is invalid. The default
+RHS is a YAML literal validated at load and never string-coerced: write
+`int = 30`, not `int = "30"`, and quote date strings (`date = "2026-01-01"`).
+Only values supplied at a flow boundary may undergo string coercion. Compatible
+defaults keep their authored payload, so `float = 30` remains an integer.
+
 ```yaml
 typedefs:
   Basket: list[str]                    # alias (aliases compose)

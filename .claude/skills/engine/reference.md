@@ -277,10 +277,10 @@ contract, explicit default-presence bit, and string-coercion policy while the
 flow owns the corresponding `Binding` sources. Parameter/default/contract
 origins are manifest-neutral. A bound null shadows a default but still undergoes
 contract validation, so it is accepted only when the parameter is untyped or its
-contract accepts null (a nullable or `None`-kind type). START
-temporarily retains Compose `InputDecl` as
-its boundary authority and derives contract-free Parameters from it. Stored
-output value-contract consumers move in later tested #131 cutovers.
+contract accepts null (a nullable or `None`-kind type). Compose `input:` crosses
+directly into this exact `Parameter` shape; `ComposedFlow.input` and START use it
+without a parallel front-end carrier. Stored output value-contract consumers move
+in later tested #131 cutovers.
 
 ## Compose source ownership
 
@@ -344,7 +344,7 @@ and runtime:
   for any equivalent protection, so the baked call graph remains finite when
   that seam honors the contract.
 - `compose.build.pipeline` associates retained bodies with final descriptors.
-  Outer `input:` bindings become generated `InputDecl`s through
+  Outer `input:` bindings become generated `Parameter` values through
   `build.inline_inputs`' strict structural proof. Parent descriptors are built
   through a lazy success-only descriptor cache when a direct producer reference
   needs its output type. MAP has a separate one-proof cache: `over:` is inspected
@@ -414,27 +414,27 @@ A runtime failure points at the **exact YAML line** it originates from, not just
 node header. The mechanism is a structured locator produced at the failure site and
 resolved to a line at the CLI boundary — never a text heuristic.
 
-- **`SourceSpan(node, kind, key)`** (in the low-level `events` observer module) — `kind ∈ {input, assert,
-  input_decl, field}`; `key` is the input name / assertion display / input-decl name / field
-  name; `node` is the node id, or `None` for a flow-level location.
+- **`SourceSpan(node, kind, key)`** (in the low-level `events` observer module) —
+  `kind ∈ {input, assert, field}`; `key` is the input name, assertion display, or
+  field name; `node` is the node id. A binder uses `None` until the evaluation
+  funnel supplies the id; a genuinely flow-level location may remain `None`.
 - **Carriers:** `NodeFailed.locator` (node-level) and `RunFailed.locator` /
   `RunResult.locator` (flow-level). All default `None`.
-- **Producers:** `BindingError` stamps a node-less `input` span (`bind_params` knows the
-  param name, not the node); the node's `run` wrapper raises `NodeAssertFailed` carrying an
-  `assert` span when a pre/post assert fails (incl. the flow's boundary asserts lowered onto the
-  START node's `post_asserts` and its post asserts lowered onto the END node), and `eval_node`'s
-  funnel fills any missing node id via `replace(loc, node=node.id)`;
-  `StartNode._run_impl` stamps an `input_decl` span on the e08 `TypeCheckError` (the flow's boundary
-  `asserts:` are lowered onto START's `post_asserts` and fire through the same `run` wrapper
-  — `run.py` stamps none itself);
+- **Producers:** the generic `bind_params` path stamps a node-less `input` span on
+  `BindingError` because the binder knows the parameter name, not the node. This
+  covers missing and invalid inputs for START and every ordinary node; START has no
+  kind-specific input-error path. The node's `run` wrapper raises
+  `NodeAssertFailed` carrying an `assert` span when a pre/post assert fails
+  (including boundary asserts lowered onto START/END), and `eval_node`'s funnel
+  fills any missing node id via `replace(loc, node=node.id)`;
   success-transition preparation validates the raw `Output` against the effective
   target's declared type; invalid node-produced data becomes a durable `NodeFailedRecord`
   with the original error type and a fallback `field` span (`key="output"`).
 - **Concrete range (when resolved at the failure site):** ALONGSIDE the symbolic `locator`, a
   **`SourceRange`** (start/end line+col, 1-based; owned by `diagnostics` and temporarily
-  re-exported by `events`) may be attached. For an `input` /
-  `input_decl` / `field` locator produced during evaluation, the funnel keys the node's recorded `field_ranges` on the
-  locator's **`(kind, key)`** tuple — kind-blind (on the locator, never `node.kind`), and
+  re-exported by `events`) may be attached. For an `input` / `field` locator
+  produced during evaluation, the funnel keys the node's recorded `field_ranges`
+  on the locator's **`(kind, key)`** tuple — kind-blind (on the locator, never `node.kind`), and
   `(kind, key)`-tagged so an input never collides with a like-named field. `field_ranges` is a
   **`FieldRanges`** (`nodes/base.py`), a dict subclass whose `get` **raises `TypeError` on a
   non-tuple key**: a bare-string lookup can never match, and every caller falls back
@@ -447,7 +447,7 @@ resolved to a line at the CLI boundary — never a text heuristic.
   `NodeAssertFailed(range=…)` — so two identical assert texts get distinct carets (asserts are NOT
   in `field_ranges`). It rides `NodeFailed.range` and its flow-level twin `RunResult.range` /
   `RunFailed.range` (all default `None`; the flow twin is the boundary node's resolved range —
-  `StartNode.field_ranges[("input_decl", name)]` for an e08 input-decl,
+  `StartNode.field_ranges[("input", name)]` for a flow input failure,
   `StartNode.post_assert_ranges` / `EndNode.post_assert_ranges` for a boundary / post assert).
   Output-type failures occur after evaluation, so their durable failure may carry only the
   symbolic `field` locator; the CLI resolves it from the supplied flow when no concrete range

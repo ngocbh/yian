@@ -56,8 +56,9 @@ def check_ref_map_types(
         child_decls = {d.name: d for d in node.child_inputs}
         for param, src in flow_wiring.get(nid, {}).items():
             decl = child_decls.get(param)
-            if decl is None or decl.type is None:
+            if decl is None or decl.contract is None:
                 continue  # `over`/name-caught-in-build/opaque child input -> lenient
+            child_type = decl.contract.type
             source = _output_value_type(src, producers, flow_input_types)
             if source is None:
                 continue  # ${item}/coalesce/literal/opaque source -> lenient
@@ -70,15 +71,15 @@ def check_ref_map_types(
             # non-null guarantee (a `|` coalesce of refs stays strict).
             if (
                 source.nullable
-                and not decl.type.nullable
+                and not child_type.nullable
                 and not binding_co_skips(binding_source(src))
             ):
                 source = replace(source, nullable=False)
-            if not types_compatible(source, decl.type):
+            if not types_compatible(source, child_type):
                 rng: Optional[SourceRange] = node.field_ranges.get(("field", "inputs")) or node.range
                 raise LoadError(
                     f"call node {nid!r}: binding {param!r} — child expects "
-                    f"{decl.type.kind.value!r}, source is {source.kind.value!r}",
+                    f"{child_type.kind.value!r}, source is {source.kind.value!r}",
                     line=lines.get(nid),
                     range=rng,
                 )

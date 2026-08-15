@@ -17,7 +17,6 @@ from agent_composer.events import SourceRange
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.compose import LoadError
-from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.compose.nodes.base import BuildContext, BuildResult
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
@@ -36,6 +35,7 @@ from agent_composer.compose.parse.file import (
 )
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceCursor, SourceDocument
+from agent_composer.nodes.contracts import Parameter, ValueContract
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -186,10 +186,10 @@ def test_descriptor_build_cache_does_not_cache_failure_and_keeps_inner_line():
     ]
 
 
-def _assemble_resolved_input_decls(input_decls):
+def _assemble_resolved_parameters(parameters):
     """Assemble an empty flow through the already-resolved input seam."""
     return _assemble(
-        input_decls=input_decls,
+        input_parameters=parameters,
         nodes_cursor=SourceCursor.virtual({}),
         outputs_section=None,
         asserts_section=[],
@@ -201,7 +201,7 @@ def _assemble_resolved_input_decls(input_decls):
     )
 
 
-def test_resolved_input_decls_preserve_structural_declaration_identity():
+def test_resolved_parameters_preserve_structural_contract_identity():
     element_type = Type(
         kind=ValueKind.OBJECT,
         fields={"label": Type(kind=ValueKind.STRING, nullable=True)},
@@ -211,28 +211,27 @@ def test_resolved_input_decls_preserve_structural_declaration_identity():
         kind=ValueKind.LIST_OBJECT,
         element=element_type,
     )
-    declaration = InputDecl(
+    parameter = Parameter(
         name="items",
-        type_str="list[object]",
-        default=None,
+        contract=ValueContract(structural_type),
         required=True,
-        type=structural_type,
+        coerce_strings=True,
     )
 
-    flow = _assemble_resolved_input_decls([declaration])
+    flow = _assemble_resolved_parameters([parameter])
     start = flow.compiled.nodes[START_ID]
 
-    assert flow.input[0] is declaration
-    assert flow.input[0].type is structural_type
-    assert start.input_decls[0] is declaration
-    assert start.input_decls[0].type is structural_type
+    assert flow.input is start.params
+    assert flow.input[0] is parameter
+    assert flow.input[0].contract is not None
+    assert flow.input[0].contract.type is structural_type
 
 
-def test_resolved_input_decls_reject_both_input_representations():
-    with pytest.raises(ValueError, match="exactly one of inputs_section or input_decls"):
+def test_resolved_parameters_reject_both_input_representations():
+    with pytest.raises(ValueError, match="exactly one of inputs_section or input_parameters"):
         _assemble(
             inputs_section={},
-            input_decls=[],
+            input_parameters=[],
             nodes_cursor=SourceCursor.virtual({}),
             outputs_section=None,
             asserts_section=[],
@@ -244,8 +243,8 @@ def test_resolved_input_decls_reject_both_input_representations():
         )
 
 
-def test_resolved_input_decls_reject_missing_input_representation():
-    with pytest.raises(ValueError, match="exactly one of inputs_section or input_decls"):
+def test_resolved_parameters_reject_missing_input_representation():
+    with pytest.raises(ValueError, match="exactly one of inputs_section or input_parameters"):
         _assemble(
             nodes_cursor=SourceCursor.virtual({}),
             outputs_section=None,
@@ -258,12 +257,11 @@ def test_resolved_input_decls_reject_missing_input_representation():
         )
 
 
-def test_resolved_input_decls_accept_zero_args_and_wire_empty_start():
-    flow = _assemble_resolved_input_decls([])
+def test_resolved_parameters_accept_zero_args_and_wire_empty_start():
+    flow = _assemble_resolved_parameters([])
     start = flow.compiled.nodes[START_ID]
 
-    assert flow.input == []
-    assert start.input_decls == []
+    assert flow.input is start.params
     assert start.params == []
     assert flow.compiled.wiring[START_ID] == {}
 

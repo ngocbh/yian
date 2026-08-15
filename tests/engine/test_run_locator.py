@@ -5,7 +5,7 @@ A post-terminal assert (`${id.output} ...`) is lowered onto the END node and fir
 original assert text as the key. A boundary assert (`${input.X} ...`) is lowered onto START's
 ordinary `post_asserts` (rewritten to `${output.X}`) and fired through `eval_node` when START
 runs, so its locator names `__start__`. An input-coercion failure at the boundary sets an
-`input_decl` locator, likewise stamped with `__start__` by the eval_node funnel.
+`input` locator, likewise stamped with `__start__` by the eval_node funnel.
 """
 
 from pathlib import Path
@@ -28,11 +28,11 @@ def test_post_assert_sets_run_result_locator():
     assert result.locator.key == "calc.output > 100"
 
 
-def test_input_coercion_sets_input_decl_locator():
+def test_input_coercion_sets_input_locator():
     text = (_ERRORS / "e08-input-type-mismatch.yaml").read_text()
     result = run_flow(load_flow(text), {"topic": "X", "window": "soon"})
     assert result.status == "failed"
-    assert result.locator is not None and result.locator.kind == "input_decl"
+    assert result.locator is not None and result.locator.kind == "input"
     assert result.locator.node == "__start__"          # eval_node funnel fills START's id
     assert result.locator.key == "window"
 

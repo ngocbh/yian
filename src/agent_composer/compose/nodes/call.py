@@ -128,7 +128,7 @@ class CallDescriptor(NodeDescriptor):
                 flow_id=self.call,
                 flow_version=None,
                 child=child.compiled,
-                child_inputs=child.input,
+                child_inputs=sig.inputs,
                 child_source=child.source,        # render-only; the CLI nested-error traceback
                 parallel=self.parallel,           # inert; carried for the over case only
                 title=self.node_name,
@@ -148,7 +148,7 @@ class CallDescriptor(NodeDescriptor):
                 flow_id=self.call,
                 flow_version=None,
                 child=child.compiled,
-                child_inputs=child.input,
+                child_inputs=sig.inputs,
                 child_source=child.source,        # render-only; the CLI nested-error traceback
                 title=self.node_name,
             )
@@ -202,7 +202,7 @@ def _check_child_bindings(
                 f"input of {_callable_display(flow_id, child_label)}"
             )
     for decl in sig.inputs:
-        if decl.required and decl.name not in bound and decl.default is None:
+        if decl.required and decl.name not in bound:
             errors.append(
                 f"call node {node_id!r}: required callable input {decl.name!r} is unbound"
             )

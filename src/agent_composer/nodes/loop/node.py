@@ -22,6 +22,7 @@ from typing import Any, ClassVar, Optional
 
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.ids import map_callsite, ns
 
 
@@ -38,7 +39,7 @@ class LoopNode(Node):
 
     Fields (baked at load by `compose.nodes.loop.build`; copied onto every clone by `respawn`):
       child          the compiled body subflow (`'a -> 'a`) used by the injected growth builder.
-      child_inputs   the body's declared input decls (subset of the carried record).
+      child_inputs   the body's canonical parameters (subset of the carried record).
       predicate_kind one of "while" | "until" | "times".
       predicate      the boolean source for `while`/`until`, e.g. "not ${exited}" (bare =
                      carried-record scope); None for `times` (no predicate).
@@ -60,7 +61,7 @@ class LoopNode(Node):
         flow_id: str,
         flow_version: Optional[str] = None,
         child: Any = None,
-        child_inputs: Any = None,
+        child_inputs: Optional[list[Parameter]] = None,
         child_source: Any = None,
         predicate_kind: str = "while",
         predicate: Optional[str] = None,

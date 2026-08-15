@@ -144,7 +144,7 @@ def test_apply_default_idempotent_no_double_fill():
     a START-like node whose `_run_impl` also runs apply_defaults would default the
     same key twice, but apply_defaults only fills OMITTED keys, so the second call
     is a no-op — the default is filled exactly once, not corrupted."""
-    from agent_composer.typesys.seeding import apply_defaults
+    from agent_composer.nodes.binding import apply_defaults
 
     node = _ImplNode("n")
     node.params = [

@@ -26,7 +26,7 @@ def _empty_child():
     """Return a valid zero-field loop body."""
     return CompiledFlow.from_parts(
         nodes={
-            START_ID: StartNode(START_ID, input_decls=[]),
+            START_ID: StartNode(START_ID, params=[]),
             END_ID: EndNode.record(END_ID, output_names=[]),
         },
         edges=[Edge("boundary", START_ID, END_ID, ordering=True)],

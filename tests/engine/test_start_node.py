@@ -1,57 +1,92 @@
-import pytest
-
 from agent_composer.compile.model import START_ID
-from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.nodes.base import NodeKind, Output
-from agent_composer.nodes.contracts import Parameter
+from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import ValueKind, Type
 
 
-def _decl(name, type_, default=None, required=False, typ=None):
-    return InputDecl(name, type_, default, required,
-                     typ or Type.scalar(ValueKind.STRING))
+_MISSING = object()
+
+
+def _parameter(name, *, default=_MISSING, required=False, typ=None):
+    return Parameter(
+        name=name,
+        contract=ValueContract(typ or Type.scalar(ValueKind.STRING)),
+        required=required,
+        has_default=default is not _MISSING,
+        default=None if default is _MISSING else default,
+        coerce_strings=True,
+    )
 
 
 def test_start_kind_and_params_are_input_names():
-    node = StartNode("__start__", input_decls=[_decl("topic", "str"),
-                                               _decl("window", "int")])
+    node = StartNode(
+        "__start__",
+        params=[_parameter("topic"), _parameter("window")],
+    )
     assert node.kind == NodeKind.START
     # params = the input NAMES (so eval_node->bind_params reads its wired sources).
     assert [p.name for p in node.params] == ["topic", "window"]
     assert all(type(p) is Parameter for p in node.params)
 
 
-def test_start_run_coerces_defaults_into_a_record():
-    # integer default coerced ("30" -> 30); a caller-passed string int coerced ("7" -> 7).
-    node = StartNode("__start__", input_decls=[
-        _decl("topic", "str"),
-        _decl("window", "int", default="30",
-              typ=Type.scalar(ValueKind.INTEGER)),
-        _decl("offset", "int", typ=Type.scalar(ValueKind.INTEGER)),
-    ])
-    out = node.run({"topic": "ACME", "offset": "7"})
-    assert isinstance(out, Output)
-    assert out.value == {"topic": "ACME", "offset": 7, "window": 30}  # OBJECT keyed by input name
+def test_start_through_eval_node_coerces_and_defaults_into_a_record():
+    from types import SimpleNamespace
+
+    node = StartNode(
+        "__start__",
+        params=[
+            _parameter("topic"),
+            _parameter("window", default=30, typ=Type.scalar(ValueKind.INTEGER)),
+            _parameter("offset", typ=Type.scalar(ValueKind.INTEGER)),
+        ],
+    )
+    pool = VariablePool()
+    pool.set(START_ID, {"topic": "ACME", "offset": "7"})
+    flow = SimpleNamespace(
+        wiring={
+            "__start__": {
+                "topic": "${input.topic}",
+                "offset": "${input.offset}",
+            }
+        }
+    )
+
+    assert eval_node(node, flow, pool) == Output(
+        {"topic": "ACME", "offset": 7, "window": 30}
+    )
 
 
-def test_start_e08_type_mismatch_raises_located_message():
-    # a value violating the declared type raises the byte-stable located string.
-    node = StartNode("__start__", input_decls=[
-        _decl("n", "int", required=True, typ=Type.scalar(ValueKind.INTEGER)),
-    ])
-    with pytest.raises(Exception, match=r"input `n` — .*does not match declared type int"):
-        node.run({"n": ["not", "an", "int"]})
+def test_start_e08_type_mismatch_returns_generic_input_failure():
+    from types import SimpleNamespace
+
+    node = StartNode(
+        "__start__",
+        params=[
+            _parameter("n", required=True, typ=Type.scalar(ValueKind.INTEGER))
+        ],
+    )
+    pool = VariablePool()
+    pool.set(START_ID, {"n": ["not", "an", "int"]})
+    flow = SimpleNamespace(wiring={"__start__": {"n": "${input.n}"}})
+
+    result = eval_node(node, flow, pool)
+
+    assert isinstance(result, EvaluationFailure)
+    assert "does not match declared type int" in result.error
+    assert result.locator is not None
+    assert result.locator.kind == "input"
+    assert result.locator.key == "n"
 
 
 def test_start_through_eval_node_binds_from_wiring():
     # START_ID runs THROUGH the engine seam: bind_params reads its sources from flow.wiring[START_ID],
-    # run coerces, and eval_node returns the raw Output record.
+    # bind_params coerces, and eval_node returns the raw Output record.
     from types import SimpleNamespace
 
-    node = StartNode("__start__", input_decls=[_decl("topic", "str")])
+    node = StartNode("__start__", params=[_parameter("topic")])
     pool = VariablePool()
     pool.set(START_ID, {"topic": "ACME"})  # the seed-stand-in source the wiring points at
     flow = SimpleNamespace(wiring={"__start__": {"topic": "${input.topic}"}})
@@ -61,14 +96,17 @@ def test_start_through_eval_node_binds_from_wiring():
 def test_start_through_eval_node_fills_omitted_default():
     # when a child input is OMITTED by the caller (no wiring edge), the START_ID
     # node ITSELF fills the declared default — not the REF/MAP driver. START_ID's params carry
-    # `default`/`required`, so bind_params fills the absent input before run() coerces it.
+    # `default`/`required`, so bind_params fills the absent input before run().
     # (Pre-fix the bare params bound it as present-None, so apply_defaults could not fill it.)
     from types import SimpleNamespace
 
-    node = StartNode("__start__", input_decls=[
-        _decl("topic", "str"),
-        _decl("window", "int", default="30", typ=Type.scalar(ValueKind.INTEGER)),
-    ])
+    node = StartNode(
+        "__start__",
+        params=[
+            _parameter("topic"),
+            _parameter("window", default=30, typ=Type.scalar(ValueKind.INTEGER)),
+        ],
+    )
     pool = VariablePool()
     pool.set(START_ID, {"topic": "ACME"})
     # wiring binds ONLY topic — `window` has NO edge (the parent omitted it).
@@ -83,9 +121,12 @@ def test_start_through_eval_node_required_unbound_fails():
     # fails loudly (a runtime backstop to the load-time _check_ref_bindings gate).
     from types import SimpleNamespace
 
-    node = StartNode("__start__", input_decls=[
-        _decl("n", "int", required=True, typ=Type.scalar(ValueKind.INTEGER)),
-    ])
+    node = StartNode(
+        "__start__",
+        params=[
+            _parameter("n", required=True, typ=Type.scalar(ValueKind.INTEGER))
+        ],
+    )
     pool = VariablePool()
     flow = SimpleNamespace(wiring={"__start__": {}})  # nothing bound
     assert isinstance(eval_node(node, flow, pool), EvaluationFailure)

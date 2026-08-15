@@ -22,7 +22,7 @@ from typing import Any, Callable, ClassVar, Optional
 
 from agent_composer.nodes.base import Grow, Node, NodeKind
 from agent_composer.nodes.binding import _resolve_source
-from agent_composer.nodes.contracts import binding_source
+from agent_composer.nodes.contracts import Parameter, binding_source
 
 
 class MapNode(Node):
@@ -46,8 +46,8 @@ class MapNode(Node):
             A pinned child flow version, if any.
         child (`Any`, *optional*, defaults to `None`):
             The baked child flow (stamped at load); a `None` child raises at run time.
-        child_inputs (`list`, *optional*, defaults to `None`):
-            The child's input decls, read by compile validation.
+        child_inputs (`list[Parameter]`, *optional*, defaults to `None`):
+            The child's canonical parameters, read by compile validation.
         child_source (`Any`, *optional*, defaults to `None`):
             The child flow's render-only `SourceFrame` (label + node-line maps). Carried
             for the CLI's nested-error traceback only; `run` ignores it entirely.
@@ -62,7 +62,7 @@ class MapNode(Node):
 
     def __init__(self, node_id: str, *, flow_id: str, parallel: bool = False,
                  flow_version: Optional[int] = None, child: Any = None,
-                 child_inputs: Optional[list] = None,
+                 child_inputs: Optional[list[Parameter]] = None,
                  child_source: Any = None, title: Optional[str] = None) -> None:
         super().__init__(node_id, title=title)
         self.flow_id = flow_id

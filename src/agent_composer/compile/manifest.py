@@ -79,7 +79,7 @@ _IGNORED_NODE_FIELDS = frozenset(
 # A kind owns both the canonical fields that affect its behavior and known noncanonical fields
 # that are derived caches or render-only metadata. Unknown fields are never serialized by guess.
 _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
-    NodeKind.START: frozenset({"input_decls"}),
+    NodeKind.START: frozenset(),
     NodeKind.END: frozenset({"_mode", "_names", "_n"}),
     NodeKind.AGENT: frozenset(
         {
@@ -165,7 +165,6 @@ _VALUE_CONTRACT_CANONICAL_FIELDS = frozenset({"type"})
 _VALUE_CONTRACT_IGNORED_FIELDS = frozenset({"origins"})
 _CONTRACT_ORIGINS_IGNORED_FIELDS = frozenset({"default", "entries"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
-_INPUT_DECL_FIELDS = frozenset({"name", "type_str", "required", "default", "type"})
 _CASE_FIELDS = frozenset({"handle", "when"})
 
 # Config secrets are intentionally absent from identity. Exact names and high-confidence
@@ -1463,27 +1462,6 @@ def _parameter_manifest(
     }
 
 
-def _input_declaration_manifest(
-    value: Any,
-    ctx: _ManifestContext,
-    path: str,
-) -> dict[str, Any]:
-    """Canonicalize one retained Compose InputDecl without importing compose."""
-    _check_fields(value, _INPUT_DECL_FIELDS, path)
-    return {
-        "default": _declaration_default_manifest(
-            value.name,
-            value.default,
-            ctx,
-            f"{path}.default",
-        ),
-        "name": value.name,
-        "required": value.required,
-        "type": _type_manifest(value.type, ctx, f"{path}.type"),
-        "type_str": _canonical_value(value.type_str, ctx, f"{path}.type_str"),
-    }
-
-
 def _case_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, Any]:
     """Canonicalize one ordered CASE arm."""
     if type(value) is not Case:
@@ -1530,10 +1508,7 @@ def _node_manifest(
     }
 
     if node.kind is NodeKind.START:
-        manifest["input_decls"] = [
-            _input_declaration_manifest(decl, ctx, f"{path}.input_decls[{index}]")
-            for index, decl in enumerate(node.input_decls)
-        ]
+        pass
     elif node.kind is NodeKind.END:
         manifest["mode"] = node._mode
         manifest["names"] = (

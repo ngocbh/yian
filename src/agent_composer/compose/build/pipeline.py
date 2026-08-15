@@ -3,7 +3,7 @@
 `_assemble` is the pipeline shared by the top-level flow AND every in-file `defs:`
 callable:
 
-  flow-input decls -> build every node kind-blind (`desc.build(ctx)`; a case lowers
+  flow parameters -> build every node kind-blind (`desc.build(ctx)`; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
   edges + append each case's own edges -> validate references + classify asserts
   -> synthesize the START_ID/END_ID boundary over ALL edges -> reject cycles + check
@@ -24,11 +24,11 @@ from typing import Callable, Optional, Protocol
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges, Node
+from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.typesys.values import Type
 from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.build.inline_inputs import (
-    canonical_type_label,
     canonicalize_inline_type,
     infer_inline_binding_type,
 )
@@ -57,7 +57,7 @@ from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 from agent_composer.compose.helpers.source import SourceFrame
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceAccessError, SourceCursor
-from agent_composer.compose.helpers.types import InputDecl, read_flow_inputs
+from agent_composer.compose.helpers.types import read_flow_inputs
 from agent_composer.compose.validate.handles import check_case_handles
 from agent_composer.compose.validate.asserts import validate_node_asserts
 
@@ -170,9 +170,8 @@ class ComposedFlow:
     Attributes:
         compiled (`CompiledFlow`):
             The runnable IR (nodes + edges + outputs + wiring) the `FlowEngine` executes.
-        input (`list[InputDecl]`):
-            The declared flow inputs `run_flow` coerces and defaults run arguments
-            against. Singular for symmetry with the `input:` YAML keyword.
+        input (`list[Parameter]`):
+            A property view of the synthesized START node's canonical signature.
         version (`str`, *optional*, defaults to `None`):
             The flow's declared `version:`, or `None` if unversioned. Used to validate a
             `uses: ref@<version>` pin against the resolved file.
@@ -191,11 +190,24 @@ class ComposedFlow:
     """
 
     compiled: CompiledFlow
-    input: list[InputDecl]
     version: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
     source: Optional[SourceFrame] = None
+
+    @property
+    def input(self) -> list[Parameter]:
+        """Return the one canonical flow signature stored on the START node."""
+        start = self.compiled.nodes[self.compiled.start_id]
+        parameters = start.params
+        if type(parameters) is not list:
+            raise TypeError("compiled START params must be an exact list")
+        for parameter in parameters:
+            if type(parameter) is not Parameter:
+                raise TypeError(
+                    "compiled START params must contain exact Parameter values"
+                )
+        return parameters
 
 
 class _PrivateRegistrar(Protocol):
@@ -303,7 +315,7 @@ def _flow_outputs(outputs) -> list[FlowOutput]:
 def _assemble(
     *,
     inputs_section: Optional[dict] = None,
-    input_decls: Optional[list[InputDecl]] = None,
+    input_parameters: Optional[list[Parameter]] = None,
     nodes_cursor: SourceCursor,
     outputs_section,
     asserts_section: list,
@@ -326,14 +338,14 @@ def _assemble(
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
 
-      flow-input decls -> build every node kind-blind (`desc.build(ctx)`; a case lowers
+      flow parameters -> build every node kind-blind (`desc.build(ctx)`; a case lowers
       in its own build) -> cross-flow type check + case exhaustiveness -> infer data
       edges + append each case's own edges -> validate references + classify asserts
       -> synthesize roots/terminals -> reject cycles + check if/else handles
       -> CompiledFlow.from_parts.
 
     Exactly one input representation is required: `inputs_section` is the authored
-    mapping that still needs parsing, while `input_decls` carries declarations already
+    mapping that still needs parsing, while `input_parameters` carries parameters already
     resolved by an earlier compiler pass. `scope` owns composite call resolution
     (defs-first) and private child registration; `registry` is the file's
     `read_typedefs(...)`. `n_lines`/`s_lines` are fallback source maps — each node id /
@@ -343,8 +355,10 @@ def _assemble(
     children. `boundary_field_ranges`/`boundary_assert_ranges` locate synthesized boundary
     behavior; `outputs_range` is the retained authored codomain range when one exists.
     Inline-CODE traceback anchors are derived from each descriptor's own `code:` range."""
-    if (inputs_section is None) == (input_decls is None):
-        raise ValueError("_assemble requires exactly one of inputs_section or input_decls")
+    if (inputs_section is None) == (input_parameters is None):
+        raise ValueError(
+            "_assemble requires exactly one of inputs_section or input_parameters"
+        )
 
     try:
         nodes_cursor, inline_bodies = extract_inline_bodies(
@@ -358,12 +372,24 @@ def _assemble(
     # line is derived from its recorded `code:` range in the CODE build. Inert for reference-mode CODE.
     flow_label = source.label if source is not None else "<inline-code>"
     if inputs_section is not None:
-        inputs = read_flow_inputs(inputs_section, registry)
+        input_ranges = {
+            name: (
+                boundary_field_ranges.get(("input", name))
+                if boundary_field_ranges is not None
+                else None
+            )
+            for name in inputs_section
+        }
+        inputs = read_flow_inputs(inputs_section, registry, input_ranges)
     else:
-        assert input_decls is not None
-        inputs = list(input_decls)
-    flow_input_types = {decl.name: decl.type for decl in inputs}
-    flow_inputs = set(flow_input_types)
+        assert input_parameters is not None
+        inputs = list(input_parameters)
+    flow_input_types = {
+        parameter.name: parameter.contract.type
+        for parameter in inputs
+        if parameter.contract is not None
+    }
+    flow_inputs = {parameter.name for parameter in inputs}
     descriptors = parse_nodes(nodes_cursor)
 
     parsed_node_ranges = {
@@ -511,7 +537,7 @@ def _assemble(
 
             item_type = map_item_type
 
-        child_inputs: list[InputDecl] = []
+        child_inputs: list[Parameter] = []
         for key, value in (descriptor.inputs or {}).items():
             binding_label = f"{descriptor.id}.input.{key}"
             binding_range = body.input_ranges.get(key)
@@ -525,12 +551,11 @@ def _assemble(
             )
             canonical = canonicalize_inline_type(inferred)
             child_inputs.append(
-                InputDecl(
+                Parameter(
                     name=key,
-                    type_str=canonical_type_label(canonical),
-                    default=None,
+                    contract=ValueContract(canonical),
                     required=not canonical.nullable,
-                    type=canonical,
+                    coerce_strings=True,
                 )
             )
 
@@ -547,7 +572,7 @@ def _assemble(
             else {}
         )
         return _assemble(
-            input_decls=child_inputs,
+            input_parameters=child_inputs,
             nodes_cursor=body.nodes_cursor,
             outputs_section=body.output,
             asserts_section=[],
@@ -560,7 +585,7 @@ def _assemble(
             flow_env={},
             source=child_source,
             boundary_field_ranges={
-                ("input_decl", name): binding_range
+                ("input", name): binding_range
                 for name, binding_range in body.input_ranges.items()
             },
             outputs_range=body.output_range,
@@ -697,6 +722,6 @@ def _assemble(
     compiled = CompiledFlow.from_parts(nodes, edges, outputs=flow_outputs, wiring=flow_wiring,
                                        flow_llm_config=flow_llm_config or {})
     return ComposedFlow(
-        compiled=compiled, input=inputs,
+        compiled=compiled,
         version=version, name=name, description=description, source=source,
     )

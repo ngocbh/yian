@@ -15,7 +15,7 @@ def _with_boundary(nodes: dict) -> dict:
     # inject the real START_ID/END_ID boundary NODES (so `from_parts` roots at START_ID + END_ID
     # is the terminal node, the post-flip model).
     nodes = dict(nodes)
-    nodes.setdefault(START_ID, StartNode(START_ID, input_decls=[]))
+    nodes.setdefault(START_ID, StartNode(START_ID, params=[]))
     nodes.setdefault(END_ID, EndNode.record(END_ID, output_names=[]))
     return nodes
 

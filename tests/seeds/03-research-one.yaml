@@ -2,7 +2,7 @@
 #
 # A small CODE -> AGENT pipeline that researches ONE topic and returns {report, asof}.
 # This is the atomic unit; 04 (REF) and 05 (MAP) compose it. Shows: a CODE data-fetch
-# leaf (flat `code:`), ${input.X} + a dataclass-style parameter default (as_of), an
+# leaf (flat `code:`), ${input.X} + a typed parameter default (as_of), an
 # object output, and a node binding from another node's object field.
 
 id: research-one
@@ -11,7 +11,7 @@ description: Research a single topic into {report, asof} as of a date.
 
 input:
   topic: str
-  as_of: date = today          # a parameter with a default (dataclass-style: TYPE = default)
+  as_of: date = "2026-01-01"   # typed defaults must already satisfy their declared type
 
 nodes:
   fetch:

@@ -125,14 +125,15 @@ ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
 - `--resume PATH` recovers that log with the same flow. It rejects `--input`,
   `--inputs`, `--provider`, `--model`, and `--log`, so recovery cannot replace
   recorded inputs or model configuration.
-- `--input k=v` — set one input (repeatable). Values are coerced to each input's
-  declared type.
+- `--input k=v` — set one input (repeatable). Supplied strings are coerced, where
+  supported, against the input's declared type; stored defaults are not coerced.
 - `--inputs file.json` — load inputs from a JSON object. `--input` flags override
   individual keys.
 - At run start a boxed **banner** (to stderr) names the flow being run — its
   `name`, `version`, and `description` — unless `--quiet`.
-- Any required input still missing is **prompted interactively** — each prompt
-  labelled with the input's type, a required (`*`)/optional mark, and any default.
+- Each declared input still missing is **prompted interactively** — each prompt is
+  labelled with its canonical resolved type, a required (`*`)/optional mark, and
+  any default.
 - `HUMAN_INPUT` and an authored agent `ask_user` tool block inside the live node
   call while the CLI's main-thread broker collects the answer. `WAIT` likewise
   blocks a worker until its absolute UTC deadline and returns `None`. Each

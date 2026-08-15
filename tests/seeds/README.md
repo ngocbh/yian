@@ -242,33 +242,40 @@ case's branch targets (= the taken branch's value; seed 22).
 
 ## Defaults / optionality
 
-`Optional[X]` (nullable — *type-level*) and `= default` (omission-fill — *binding-level*) are
-**orthogonal**, not a choice. A top-level param is:
+`Optional[X]` (nullable — *type-level*) and `= default` (omission-fill —
+*parameter-level*) are **orthogonal**, not a choice. A top-level param is:
 
 - **required** ⇔ its type is **not** `Optional` **and** it has **no** `= default` (`topic: str`).
-  Omitting a required param is the only hard error.
+  Omitting it is a hard missing-input error.
 - **`Optional[date]`** (no default) → omitted yields **null**.
 - **`window: int = 30`** → omitted yields **30** (the RHS is always a YAML literal, never a type ref).
-- **`Optional[date] = today`** is legal: omitted → `today`; an explicitly-passed null is allowed.
+- **`Optional[int] = null`** has an explicit null default, distinct from no `=`.
+- **`Optional[date] = "2026-01-01"`** → omitted yields that ISO date string; an
+  explicitly supplied null shadows the default and is allowed by the nullable type.
 
-A flow input is therefore **either** a string annotation (`TYPE` / `TYPE = literal` / `Optional[TYPE]`)
-**or** — for a **record/object default** — a `{type:, default:}` **map** (inline `TYPE = {…}` breaks YAML
-on the `:` inside the literal). The map form is the structured-default escape hatch; `default:` is native
-YAML, `type:` may be `Optional[…]`:
+The default RHS is validated against its declared type while the flow loads. It
+cannot be empty and is never string-coerced: `int = "30"` is invalid, while
+`int = 30` is valid. Compatible values retain their authored payload, so
+`float = 30` keeps the integer `30`. Only supplied boundary strings may be
+coerced.
+
+A flow input is a string annotation (`TYPE`, `TYPE = literal`, or
+`Optional[TYPE]`) or a mapping that directly declares a record type. A mapping is
+not a `{type:, default:}` wrapper. Quote the whole annotation when a structured
+default contains YAML mapping syntax:
+
 ```yaml
 input:
-  budget: Amount = 1000.0          # string form — scalar default
-  bundle: Bundle = ["ACME"]       # string form — simple-list default
-  prior:                          # map form — structured (record) default
-    type: Rating
-    default: { category: pro, score: 0.0, rationale: neutral }
+  budget: Amount = 1000.0
+  bundle: Bundle = ["ACME"]
+  prior: 'Rating = {category: pro, score: 0.0, rationale: neutral}'
 ```
 
 Applied at every flow boundary (top-level run + a REF/MAP child seeding its own params). Defaults live
 on flow `input:` only — internal nodes never declare defaults; a sink that may be absent uses
 `${X:-default}` or a coalesce `${a | b}` (e.g. to pick whichever `case` branch ran). *(Distinct layers:
-`= default` / the `{type:, default:}` map set a **parameter's** default in the signature; `${X:-default}`
-is a **use-site** fallback for a possibly-null reference.)*
+`= default` sets a **parameter's** default in the signature; `${X:-default}` is a
+**use-site** fallback for a possibly-null reference.)*
 
 ## Constraints — the `asserts:` section
 

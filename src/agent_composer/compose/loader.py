@@ -770,6 +770,11 @@ def _load_def(
             flow_llm_config=body.get("llm_config") or {},
             flow_env=body.get("env") or {},
             source=source,
+            boundary_field_ranges=(
+                _boundary_field_ranges(def_cursor)
+                if def_cursor is not None
+                else None
+            ),
         )
     except LoadError as exc:
         # Name the def without discarding the absolute parent-file diagnostic metadata.
@@ -839,6 +844,11 @@ def _load_single_node_def(
                 else {}
             ),
             source=source,
+            boundary_field_ranges=(
+                _boundary_field_ranges(def_cursor)
+                if def_cursor is not None
+                else None
+            ),
             outputs_range=output_range,
         )
     except LoadError as exc:

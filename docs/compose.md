@@ -18,7 +18,7 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ root SourceCursor     → occurrence-aware values, paths, and source ranges
   ├─ parse_file            → the strict top-level ComposeFile
   ├─ read_typedefs         → the type registry (typedefs:)
-  ├─ read_flow_inputs      → the typed input: declarations
+  ├─ read_flow_inputs      → canonical Parameter values for input:
   ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered)
   │
   ├─ desugar_inline_calls        ┐  rewrite author sugar into core nodes,
@@ -35,7 +35,7 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
   ▼
- CompiledFlow   (returned inside a ComposedFlow: + input decls, asserts, source frame)
+ CompiledFlow   (returned inside a ComposedFlow: + parameters, asserts, source frame)
 ```
 
 Everything below just explains three of those words: **descriptor**, **build**, and
@@ -206,7 +206,8 @@ no special path downstream.
 
 - `compiled` — the `CompiledFlow` (immutable topology: nodes, inferred edges, wiring,
   synthesized `start`/`end` boundaries),
-- `input` — the typed `InputDecl`s (validated against caller inputs at run time),
+- `input` — the canonical typed `Parameter` values. Authored defaults are
+  validated at load; supplied values are checked when the boundary binds them,
 - `asserts` — flow-level pre/post checks,
 - `source` — a render-only `SourceFrame` (the text + per-node ranges) that lets a
   runtime failure draw a caret back at your YAML, even across nested flow calls.

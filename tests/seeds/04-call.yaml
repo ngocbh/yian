@@ -21,7 +21,7 @@ nodes:
     call: research-one          # resolves via the uses: alias above (external sibling flow)
     input:                      # sink: bind the callee's parameters
       topic: ${input.topic}
-      # as_of is omitted -> the CALLEE flow's own default (today) fills it
+      # as_of is omitted -> the CALLEE flow's own declared date default fills it
     # research's value IS the callee's return object {report, asof}; reference fields
     # downstream as ${research.output.report} / ${research.output.asof}.
 

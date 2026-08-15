@@ -90,7 +90,7 @@ def test_veto_under_workers_data_edged_branch_skips():
         Edge("con_note->end", "con_note", END_ID),
     ]
     node_map = {n.id: n for n in nodes}
-    node_map[START_ID] = StartNode(START_ID, input_decls=[])
+    node_map[START_ID] = StartNode(START_ID, params=[])
     node_map[END_ID] = EndNode.record(END_ID, output_names=[])
     engine = _engine(CompiledFlow.from_parts(node_map, edges), num_workers=4)
     _run(engine)

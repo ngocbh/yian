@@ -24,7 +24,6 @@ from agent_composer.compose.build.inline_inputs import infer_inline_binding_type
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.compose.nodes.case import _data_edges as case_data_edges
 from agent_composer.compose.nodes.resolver import _output_value_type
 from agent_composer.compose.validate.call_types import check_ref_map_types
@@ -32,7 +31,7 @@ from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import Assertion, Binding
+from agent_composer.nodes.contracts import Assertion, Binding, Parameter, ValueContract
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.typesys import Type, ValueKind
@@ -45,7 +44,7 @@ def _origin(key: str) -> OriginRef:
 
 def _manifest_fragment(value: object, *, key: str = "result") -> Flow:
     """Return a topology-only flow whose terminal wiring contains ``value``."""
-    start = StartNode("entry", input_decls=[])
+    start = StartNode("entry", params=[])
     end = EndNode.record("terminal", output_names=[key])
     return Flow(
         nodes={"entry": start, "terminal": end},
@@ -58,7 +57,7 @@ def _manifest_fragment(value: object, *, key: str = "result") -> Flow:
 
 def _manifest_compiled_output(value: object) -> CompiledFlow:
     """Return a compiled flow whose declared output metadata contains ``value``."""
-    start = StartNode(START_ID, input_decls=[])
+    start = StartNode(START_ID, params=[])
     end = EndNode.record(END_ID, output_names=["result"])
     return CompiledFlow.from_parts(
         nodes={START_ID: start, END_ID: end},
@@ -336,12 +335,11 @@ def test_call_type_error_is_identical_for_raw_and_wrapped_sources() -> None:
     """Nullable-call compatibility reads the source expression, not carrier repr."""
     child_type = Type.scalar(ValueKind.STRING)
     nullable_parent = Type(kind=ValueKind.STRING, nullable=True)
-    child_input = InputDecl(
+    child_input = Parameter(
         name="topic",
-        type_str="str",
-        default=None,
+        contract=ValueContract(child_type),
         required=True,
-        type=child_type,
+        coerce_strings=True,
     )
     node = SimpleNamespace(
         is_loop=False,

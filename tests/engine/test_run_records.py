@@ -111,6 +111,36 @@ def test_record_encoding_is_canonical_newline_free_and_byte_stable():
     assert encode_record(decode_record(encoded)) == encoded
 
 
+def test_decode_maps_legacy_input_declaration_locator_to_generic_input():
+    wire = {
+        "schema": 1,
+        "run_id": "run-legacy-input-locator",
+        "seq": 0,
+        "kind": "node_failed",
+        "payload": {
+            "node_id": "__start__",
+            "error": "bad input",
+            "error_type": "TypeCheckError",
+            "locator": {
+                "node": "__start__",
+                "kind": "input_decl",
+                "key": "window",
+            },
+            "range": None,
+            "traceback": None,
+        },
+    }
+
+    decoded = decode_record(_json_bytes(wire))
+
+    assert decoded.record.locator == SourceSpan(
+        node="__start__",
+        kind="input",
+        key="window",
+    )
+    assert b'"kind":"input"' in encode_record(decoded)
+
+
 def test_records_and_envelopes_are_frozen():
     record = NodeStartedRecord(node_id="work")
     envelope = RecordEnvelope(schema=1, run_id="run", seq=0, record=record)

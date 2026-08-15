@@ -21,13 +21,13 @@ from agent_composer.compose.source import SourceAccessError, SourceCursor
 def _boundary_field_ranges(root: SourceCursor) -> FieldRanges:
     """The flow-boundary source map stamped onto the top-level StartNode's `field_ranges`.
 
-    Keys: each top-level `input:`/`inputs:` decl name, tagged `("input_decl", name)` -> its
+    Keys: each top-level `input:`/`inputs:` decl name, tagged `("input", name)` -> its
     declaration value `SourceRange`. (The boundary input-coercion failure carries a
-    `SourceSpan(kind="input_decl", key=name)` locator, so the runtime funnel resolves the caret by
+    `SourceSpan(kind="input", key=name)` locator, so the runtime funnel resolves the caret by
     that `(kind, key)`.) Flow-level `asserts:` are NOT here — they are located by position (see
     `_boundary_assert_ranges`, threaded into the lowered START/END assert-range lists). Empty for a
-    spanless / uncomposable flow (compact / in-memory / a def) — best-effort, boundary errors there
-    fall back to the node range. Mirrors `_frame_ranges`: render metadata, never raises."""
+    spanless / in-memory flow — best-effort, boundary errors there fall back to the node range.
+    Mirrors `_frame_ranges`: render metadata, never raises."""
     try:
         value = root._value_view()
         if not isinstance(value, Mapping):
@@ -37,7 +37,7 @@ def _boundary_field_ranges(root: SourceCursor) -> FieldRanges:
             if isinstance(value.get(key), Mapping):
                 out.update(
                     {
-                        ("input_decl", name): rng
+                        ("input", name): rng
                         for name, rng in root.mapping_value_ranges(key).items()
                     }
                 )
@@ -109,7 +109,7 @@ class SourceFrame:
             node header onto the corresponding authored `id:` or `defs:` key.
         field_ranges (`dict[str, dict[tuple[str, str], SourceRange]]`):
             `node_id -> {(kind, key) -> `SourceRange`}` — the per-field precision, keyed by the
-            location's `(SourceSpan.kind, key)` (`kind ∈ {input, input_decl, field}`, never
+            location's `(SourceSpan.kind, key)` (`kind ∈ {input, field}`, never
             `assert`), used when a failing locator resolves against this frame.
     """
 

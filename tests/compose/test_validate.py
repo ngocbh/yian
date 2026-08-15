@@ -194,14 +194,21 @@ def test_check_ref_map_types_moved():
     # anchors its `.range` on the call node's `input:` mapping span (`field_ranges["inputs"]`,
     # the coarsest available binding-site span).
     from agent_composer.compose.validate.call_types import check_ref_map_types
-    from agent_composer.compose.helpers.types import InputDecl
     from agent_composer.nodes.call import CallNode
+    from agent_composer.nodes.contracts import Parameter, ValueContract
     from agent_composer.typesys.values import Type, ValueKind
 
     node = CallNode(
         "c",
         flow_id="child",
-        child_inputs=[InputDecl("n", "int", None, True, Type.scalar(ValueKind.INTEGER))],
+        child_inputs=[
+            Parameter(
+                "n",
+                contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
+                required=True,
+                coerce_strings=True,
+            )
+        ],
     )
     rng = SourceRange(start_line=7, start_col=5, end_line=8, end_col=20)
     node.field_ranges = {("field", "inputs"): rng}

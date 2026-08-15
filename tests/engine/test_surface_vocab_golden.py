@@ -73,14 +73,19 @@ def test_namespace_ref_node_first() -> None:
     """Child-cloning rewrites internal `${<X>.output}` and `${input.k}` to namespaced
     node-first references."""
     from agent_composer.compile.expand import _rens_internal
+    from agent_composer.nodes.contracts import Binding
 
     # ${<X>.output} (singular) → namespaced node-first
-    assert _rens_internal("${foo.output}", callsite="each#0") == "${each#0/foo.output}"
-    assert _rens_internal("${foo.output.bar}", callsite="each#0") == "${each#0/foo.output.bar}"
+    assert _rens_internal(
+        Binding("${foo.output}"), callsite="each#0"
+    ) == Binding("${each#0/foo.output}")
+    assert _rens_internal(
+        Binding("${foo.output.bar}"), callsite="each#0"
+    ) == Binding("${each#0/foo.output.bar}")
     # ${input.k} → namespaced START_ID's output
     assert (
-        _rens_internal("${input.x}", callsite="each#0")
-        == "${each#0/__start__.output.x}"
+        _rens_internal(Binding("${input.x}"), callsite="each#0")
+        == Binding("${each#0/__start__.output.x}")
     )
 
 

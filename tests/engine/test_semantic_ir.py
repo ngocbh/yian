@@ -67,6 +67,119 @@ def _manifest_compiled_output(value: object) -> CompiledFlow:
     )
 
 
+def test_flow_construction_normalizes_direct_wiring_values() -> None:
+    """Stored flow wiring is canonical without copying semantic payloads."""
+    payload = {"literal": ["kept-by-identity"]}
+    existing = Binding("${producer.output}", _origin("existing"))
+    nested = Binding(existing, _origin("outer"))
+    authored = {
+        "sink": {
+            "raw": payload,
+            "existing": existing,
+            "nested": nested,
+        }
+    }
+
+    flow = Flow(nodes={"sink": Node("sink")}, edges=[], wiring=authored)
+
+    assert flow.wiring is not authored
+    assert flow.wiring["sink"] is not authored["sink"]
+    assert flow.wiring["sink"]["raw"] == Binding(payload)
+    assert flow.wiring["sink"]["raw"].source is payload
+    assert flow.wiring["sink"]["existing"] is existing
+    assert flow.wiring["sink"]["nested"] is nested
+
+
+def test_compiled_flow_from_parts_normalizes_direct_wiring_values() -> None:
+    """The public compiled-graph constructor delegates to the same boundary."""
+    existing = Binding(7, _origin("count"))
+
+    flow = CompiledFlow.from_parts(
+        nodes={"sink": Node("sink")},
+        edges=[],
+        wiring={"sink": {"raw": 3, "existing": existing}},
+    )
+
+    assert flow.wiring["sink"]["raw"] == Binding(3)
+    assert flow.wiring["sink"]["existing"] is existing
+
+
+@pytest.mark.parametrize("constructor", ["flow", "compiled"])
+@pytest.mark.parametrize(
+    ("wiring", "message"),
+    [
+        ({1: {"value": "raw"}}, "node id"),
+        ({"sink": {1: "raw"}}, "parameter name"),
+    ],
+)
+def test_flow_construction_rejects_non_string_wiring_keys(
+    constructor: str,
+    wiring: dict[object, dict[object, object]],
+    message: str,
+) -> None:
+    """Both model entry points reject keys outside the compiled IR contract."""
+    nodes = {"sink": Node("sink")}
+
+    with pytest.raises(TypeError, match=message):
+        if constructor == "flow":
+            Flow(nodes=nodes, edges=[], wiring=wiring)  # type: ignore[arg-type]
+        else:
+            CompiledFlow.from_parts(  # type: ignore[arg-type]
+                nodes=nodes,
+                edges=[],
+                wiring=wiring,
+            )
+
+
+def test_add_subgraph_normalizes_wiring_and_preserves_existing_binding() -> None:
+    """Programmatic growth enters the same canonical stored representation."""
+    flow = CompiledFlow.from_parts(nodes={"base": Node("base")}, edges=[])
+    existing = Binding("${base.output}", _origin("child-value"))
+
+    flow.add_subgraph(
+        nodes={"child": Node("child")},
+        edges=[Edge("base->child", "base", "child", input_group="value")],
+        wiring={"child": {"raw": 4, "existing": existing}},
+    )
+
+    assert flow.wiring["child"]["raw"] == Binding(4)
+    assert flow.wiring["child"]["existing"] is existing
+
+
+@pytest.mark.parametrize(
+    ("wiring", "message"),
+    [
+        ({1: {"value": "raw"}}, "node id"),
+        ({"child": {1: "raw"}}, "parameter name"),
+    ],
+)
+def test_add_subgraph_rejects_bad_wiring_before_mutating_topology(
+    wiring: dict[object, dict[object, object]],
+    message: str,
+) -> None:
+    """An invalid splice cannot leave nodes, edges, or wiring partially installed."""
+    base = Node("base")
+    flow = CompiledFlow.from_parts(
+        nodes={"base": base},
+        edges=[],
+        wiring={"base": {}},
+    )
+    before_nodes = dict(flow.nodes)
+    before_edges = list(flow.edges)
+    before_wiring = dict(flow.wiring)
+
+    with pytest.raises(TypeError, match=message):
+        flow.add_subgraph(  # type: ignore[arg-type]
+            nodes={"child": Node("child")},
+            edges=[Edge("base->child", "base", "child")],
+            wiring=wiring,
+        )
+
+    assert flow.nodes == before_nodes
+    assert flow.edges == before_edges
+    assert flow.wiring == before_wiring
+
+
 def test_data_edge_inference_is_identical_for_raw_and_wrapped_sources() -> None:
     """Carrier provenance must not change producers, groups, or optionality."""
     source = "${producer.output}"

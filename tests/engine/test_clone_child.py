@@ -53,7 +53,7 @@ def test_clone_child_namespaces_ids():
     assert "each/__start__" in cloned.nodes and "each/__end__" in cloned.nodes
     # the re-namespaced wiring uses the node-first shape:
     # internal ${head.output.r} re-namespaced to ${each/head.output.r}
-    assert cloned.wiring["each/tail"]["r"] == "${each/head.output.r}"
+    assert cloned.wiring["each/tail"]["r"] == Binding("${each/head.output.r}")
     # an internal edge is re-keyed under the callsite
     assert any(e.id == "each/head->tail#0" for e in cloned.edges)
     # start_id = the namespaced child START_ID (the sole seed point), NOT each/head
@@ -91,16 +91,18 @@ def test_clone_child_seeds_start_with_call_args_as_edges():
     # a ${...} record value: the child START_ID's wiring carries it + a forward-ref edge is minted
     # (no baking into each/head).
     cloned = clone_child(_single(), callsite="each", record={"topic": "${upstream.output}"})
-    assert cloned.wiring["each/__start__"]["topic"] == "${upstream.output}"
+    assert cloned.wiring["each/__start__"]["topic"] == Binding("${upstream.output}")
     assert any(e.from_ == "upstream" and e.to == "each/__start__" and e.input_group == "topic"
                for e in cloned.edges)
     # each/head's ${input.topic} is re-pointed to the namespaced START_ID — NOT baked to a literal.
     cloned2 = clone_child(_single(), callsite="each", record={"topic": "ACME"})
     # a literal call-arg lands on the child START_ID's wiring as a constant seed (no edge).
-    assert cloned2.wiring["each/__start__"]["topic"] == "ACME"
+    assert cloned2.wiring["each/__start__"]["topic"] == Binding("ACME")
     assert not any(e.to == "each/__start__" for e in cloned2.edges)
     # each/head reads the namespaced START_ID via the node-first shape.
-    assert cloned2.wiring["each/head"]["topic"] == "${each/__start__.output.topic}"
+    assert cloned2.wiring["each/head"]["topic"] == Binding(
+        "${each/__start__.output.topic}"
+    )
 
 
 def test_clone_child_alias_target_is_child_end():
@@ -121,8 +123,8 @@ def test_clone_child_end_carries_producer_edges():
                         ("each/head", "each/__end__", "n")}
     # the cloned child END_ID's wiring is re-namespaced to the node-first shape.
     assert cloned.wiring["each/__end__"] == {
-        "report": "${each/tail.output}",
-        "n": "${each/head.output.r}",
+        "report": Binding("${each/tail.output}"),
+        "n": Binding("${each/head.output.r}"),
     }
 
 
@@ -139,7 +141,7 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     end.post_asserts = ["${__assert_tail} != ''"]
     end.assert_texts = {"${__assert_tail} != ''": "${tail.output} != ''"}
     end.params.append(ParamDecl(name="__assert_tail"))
-    child.wiring[END_ID]["__assert_tail"] = "${tail.output:-null}"
+    child.wiring[END_ID]["__assert_tail"] = Binding("${tail.output:-null}")
     child.edges.append(Edge(id=f"tail->{END_ID}#assert", from_="tail", to=END_ID,
                             input_group="__assert_tail", optional=True))
 
@@ -150,7 +152,9 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     # the author's ORIGINAL text rides along so a failure message shows `${tail.output} != ''`.
     assert ce.assert_texts == {"${__assert_tail} != ''": "${tail.output} != ''"}
     # the synth wiring feeding the param is re-namespaced under the callsite.
-    assert cloned.wiring["each/__end__"]["__assert_tail"] == "${each/tail.output:-null}"
+    assert cloned.wiring["each/__end__"]["__assert_tail"] == Binding(
+        "${each/tail.output:-null}"
+    )
     # the producer->END synth edge is re-keyed under the callsite (gates the assert on its producer).
     assert any(e.from_ == "each/tail" and e.to == "each/__end__"
                and e.input_group == "__assert_tail" for e in cloned.edges)

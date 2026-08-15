@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from agent_composer._state import NodeState
 from agent_composer.nodes.base import Node
+from agent_composer.nodes.contracts import Binding, as_binding
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 
@@ -56,6 +57,46 @@ class FlowOutput:
     from_: Any
 
 
+def _normalize_wiring(
+    wiring: Optional[dict[str, dict[str, Any]]],
+) -> dict[str, dict[str, Binding]]:
+    """Copy flow-owned wiring into its canonical carrier representation.
+
+    Args:
+        wiring (`dict[str, dict[str, Any]] | None`):
+            Raw or already-normalized sources keyed first by node id and then
+            parameter name. `None` represents empty wiring.
+
+    Returns:
+        `dict[str, dict[str, Binding]]`:
+            A fresh two-level mapping whose direct values are bindings.
+
+    Raises:
+        `TypeError`:
+            Raised when a node id or parameter name is not a string.
+    """
+    if wiring is None:
+        return {}
+
+    normalized: dict[str, dict[str, Binding]] = {}
+    for node_id, node_wiring in wiring.items():
+        if not isinstance(node_id, str):
+            raise TypeError(
+                "flow wiring node id must be a string, "
+                f"got {type(node_id).__name__}"
+            )
+        normalized_node: dict[str, Binding] = {}
+        for parameter, source in node_wiring.items():
+            if not isinstance(parameter, str):
+                raise TypeError(
+                    f"flow wiring parameter name for node {node_id!r} must be a string, "
+                    f"got {type(parameter).__name__}"
+                )
+            normalized_node[parameter] = as_binding(source)
+        normalized[node_id] = normalized_node
+    return normalized
+
+
 class Flow:
     """The shared topology core every flow carries: nodes, edges, wiring, and its boundary ids.
 
@@ -73,9 +114,10 @@ class Flow:
         edges (`list[Edge]`):
             All directed edges. Carries data edges (a producer output feeding a consumer
             input group) and pure control/ordering edges alike.
-        wiring (`dict[str, dict[str, Any]]`):
-            Authoritative input wiring `wiring[node_id][param] -> source`, where source is a
-            `${...}` binding string or a literal. `edges` is its derived data-flow projection.
+        wiring (`dict[str, dict[str, Binding]]`):
+            Authoritative input wiring `wiring[node_id][param] -> Binding`. Each
+            carrier owns a `${...}` source or literal plus its optional origin;
+            `edges` is the derived data-flow projection.
         start_id (`str`):
             The flow's single entry node id — the node the engine seeds and advances at start.
             Defaults to `START_ID` (the top-level synthesized START); spliced flows namespace it.
@@ -89,9 +131,8 @@ class Flow:
                  start_id: str = START_ID, end_id: str = END_ID) -> None:
         self.nodes = nodes                              # node id -> Node
         self.edges = edges                              # all directed edges
-        # Authoritative input wiring: wiring[node_id][param_name] -> source, where source is a
-        # `${...}` binding string or a literal. `edges` is the derived data-flow projection of this.
-        self.wiring: dict[str, dict[str, Any]] = dict(wiring or {})
+        # Normalize once so every consumer below this construction boundary reads one shape.
+        self.wiring: dict[str, dict[str, Binding]] = _normalize_wiring(wiring)
         self.start_id = start_id                        # single entry node id
         self.end_id = end_id                            # result node id
 
@@ -168,10 +209,10 @@ class CompiledFlow(Flow):
         Called while the reducer applies a prepared expansion from CALL, MAP, or LOOP.
         Adds the fragment's nodes, edges, and wiring and updates adjacency; the same
         reducer plan updates dispositions and the ready frontier."""
+        normalized_wiring = _normalize_wiring(wiring)
         self.nodes.update(nodes)
         self.edges.extend(edges)
-        for nid, w in wiring.items():
-            self.wiring[nid] = dict(w)
+        self.wiring.update(normalized_wiring)
         for edge in edges:
             self._outgoing.setdefault(edge.from_, []).append(edge)
             self._incoming.setdefault(edge.to, []).append(edge)

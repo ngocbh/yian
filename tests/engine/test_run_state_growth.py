@@ -573,7 +573,7 @@ def test_growth_accepts_the_closed_system_ambients(ambient: str):
         end.commit_as = spawner.id
         fragment.nodes[fragment.end_id] = end
         fragment.wiring[fragment.end_id] = {
-            "value": f"${{system.{ambient}}}"
+            "value": Binding(f"${{system.{ambient}}}")
         }
         return fragment
 
@@ -697,7 +697,7 @@ def _invalid_fragment(case: str) -> Any:
     elif case == "missing-wiring-entry":
         fragment.wiring.pop(fragment.end_id)
     elif case == "extra-wiring-key":
-        fragment.wiring[fragment.start_id]["extra"] = 1
+        fragment.wiring[fragment.start_id]["extra"] = Binding(1)
     elif case == "duplicate-edge-id":
         edge = fragment.edges[0]
         fragment.edges.append(
@@ -732,7 +732,7 @@ def _invalid_fragment(case: str) -> Any:
         end.commit_as = "spawn"
         fragment.nodes[fragment.end_id] = end
         fragment.wiring[fragment.end_id] = {
-            "value": "${system.not_declared}"
+            "value": Binding("${system.not_declared}")
         }
     elif case == "unknown-typed-field":
         fragment.nodes[fragment.start_id].output_type = Type(
@@ -744,7 +744,7 @@ def _invalid_fragment(case: str) -> Any:
         end.commit_as = "spawn"
         fragment.nodes[fragment.end_id] = end
         fragment.wiring[fragment.end_id] = {
-            "value": f"${{{fragment.start_id}.output.absent}}"
+            "value": Binding(f"${{{fragment.start_id}.output.absent}}")
         }
         fragment.edges[0] = Edge(
             fragment.edges[0].id,
@@ -1190,7 +1190,9 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
             state.flow.add_subgraph({}, [edge], {})
             state.edge_state[edge.id] = NodeState.UNKNOWN
         elif case == "wiring-dependency":
-            state.flow.wiring[dependent] = {"value": f"${{{old_id}.output}}"}
+            state.flow.wiring[dependent] = {
+                "value": Binding(f"${{{old_id}.output}}")
+            }
         elif case == "commit-dependency":
             state.flow.nodes[dependent].commit_as = old_id
         elif case == "origin-dependency":

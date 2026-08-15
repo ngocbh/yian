@@ -6,7 +6,10 @@ the runtime bounds (MAX_TOTAL_NODES / MAX_REF_DEPTH). The `eval_node` -> `NodeEx
 (spawner Grow grows the graph; a non-spawner Grow fails loud) is pinned in `test_eval_node_grow.py`.
 """
 
+import pytest
+
 from agent_composer.compile.expand import build_grow
+from agent_composer.nodes.contracts import Binding
 from tests.engine._fakes import stamp_reads
 
 
@@ -17,11 +20,18 @@ def test_rens_internal_input_and_output_heads():
     from agent_composer.compile.expand import _rens_internal
 
     # ${input.k} -> the namespaced child START_ID's output object; ${x.output} node-first.
-    assert _rens_internal("${input.k}", "cs") == "${cs/__start__.output.k}"
-    assert _rens_internal("${x.output.field}", "cs") == "${cs/x.output.field}"
+    assert _rens_internal(Binding("${input.k}"), "cs") == Binding(
+        "${cs/__start__.output.k}"
+    )
+    assert _rens_internal(Binding("${x.output.field}"), "cs") == Binding(
+        "${cs/x.output.field}"
+    )
     # system.X and non-string pass through untouched.
-    assert _rens_internal("${system.now}", "cs") == "${system.now}"
-    assert _rens_internal(5, "cs") == 5
+    assert _rens_internal(Binding("${system.now}"), "cs") == Binding("${system.now}")
+    assert _rens_internal(Binding(5), "cs") == Binding(5)
+
+    with pytest.raises(TypeError, match="must contain Binding"):
+        _rens_internal("${input.k}", "cs")  # type: ignore[arg-type]
 
 
 def test_rens_internal_computed_whole_span_renamespaces_all_leaves():
@@ -31,19 +41,18 @@ def test_rens_internal_computed_whole_span_renamespaces_all_leaves():
     from agent_composer.compile.expand import _rens_internal
 
     assert (
-        _rens_internal("${x.output - y.output}", "cs")
-        == "${cs/x.output - cs/y.output}"
+        _rens_internal(Binding("${x.output - y.output}"), "cs")
+        == Binding("${cs/x.output - cs/y.output}")
     )
     # embedded text + two separate spans: literal text preserved, both spans re-namespaced.
     assert (
-        _rens_internal("pre ${x.output} mid ${input.k} post", "cs")
-        == "pre ${cs/x.output} mid ${cs/__start__.output.k} post"
+        _rens_internal(Binding("pre ${x.output} mid ${input.k} post"), "cs")
+        == Binding("pre ${cs/x.output} mid ${cs/__start__.output.k} post")
     )
 
 
 # --- live CALL Grow path — clone namespaced, substitute spawner, fire out-edge ----------- #
 
-import pytest
 from agent_composer.events import RunSucceeded
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, NodeState, START_ID, END_ID
 from agent_composer.compose.helpers.types import InputDecl, read_type

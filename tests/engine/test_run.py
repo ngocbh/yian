@@ -16,6 +16,7 @@ with `status == "failed"`. The four behaviors pinned:
 
 from agent_composer.events import NodeSucceeded
 from agent_composer.compose import load_flow
+from agent_composer.nodes.contracts import Binding
 from agent_composer.run import run_flow
 
 
@@ -129,7 +130,7 @@ def test_leaf_binds_from_flow_wiring():
     # The engine binds a leaf from flow.wiring + node.params (the wiring split): the flow owns the
     # source, the node carries only the param name, and the loaded flow runs end-to-end from it.
     loaded = load_flow(_PLAN_FLOW)
-    assert loaded.compiled.wiring["plan"] == {"topic": "${input.topic}"}
+    assert loaded.compiled.wiring["plan"] == {"topic": Binding("${input.topic}")}
     assert [p.name for p in loaded.compiled.nodes["plan"].params] == ["topic"]
     result = run_flow(loaded, {"topic": "ACME"})
     assert result.status == "succeeded", result.error
@@ -153,7 +154,7 @@ def test_case_gate_binds_from_flow_wiring():
     # a case's desugared CaseNode binds its __rN inputs from
     # flow.wiring (the sources relocated off the node); the gate carries only param names.
     loaded = load_flow(_CASE_FLOW)
-    assert loaded.compiled.wiring["gate"] == {"__r0": "${score.output}"}
+    assert loaded.compiled.wiring["gate"] == {"__r0": Binding("${score.output}")}
     assert [p.name for p in loaded.compiled.nodes["gate"].params] == ["__r0"]
     result = run_flow(loaded, {"topic": "BETA", "seed": 0.7})
     assert result.status == "succeeded", result.error

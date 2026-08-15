@@ -1,0 +1,250 @@
+"""Occurrence-backed origin resolution for the Compose front end.
+
+A source catalog is the format-specific authority behind source-neutral
+``OriginRef`` values.  It retains a physical ``SourceDocument`` occurrence and
+replays that occurrence only when a diagnostic needs a concrete frame.  No
+source text is parsed or copied during resolution.
+
+The mutable builder is private to Compose construction.  ``freeze`` takes an
+immutable snapshot so later registrations cannot change an already returned
+catalog.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Literal, TypeAlias
+
+from agent_composer.diagnostics import DiagnosticFrame, OriginRef
+
+from agent_composer.compose.source.common import OccurrencePath, SourceAccessError
+from agent_composer.compose.source.cursor import SourceCursor
+from agent_composer.compose.source.document import SourceDocument
+
+
+_SourceSitePath: TypeAlias = tuple[str | int, ...]
+"""A deterministic semantic path local to one Compose catalog."""
+
+_Anchor: TypeAlias = Literal["value", "key"]
+
+
+def _escape_segment(value: str) -> str:
+    """Escape one string segment using JSON Pointer's collision-free rules.
+
+    Args:
+        value (`str`): Exact semantic-path segment.
+
+    Returns:
+        `str`: Segment with ``~`` and ``/`` escaped unambiguously.
+    """
+    return value.replace("~", "~0").replace("/", "~1")
+
+
+def _encode_site_path(path: _SourceSitePath) -> str:
+    """Encode exact string/integer segments as one opaque non-empty origin key.
+
+    Args:
+        path (`tuple[str | int, ...]`):
+            Non-empty semantic site path. Exact strings and integers are
+            accepted; booleans and subclasses are rejected.
+
+    Returns:
+        `str`:
+            Deterministic typed JSON-Pointer-style key.
+
+    Raises:
+        `TypeError`:
+            Raised when ``path`` or one of its segments has the wrong type.
+        `ValueError`:
+            Raised when ``path`` is empty.
+    """
+    if type(path) is not tuple:
+        raise TypeError("source site path must be a tuple")
+    if not path:
+        raise ValueError("source site path cannot be empty")
+
+    encoded: list[str] = []
+    for segment in path:
+        if type(segment) is str:
+            encoded.append("s:" + _escape_segment(segment))
+        elif type(segment) is int:
+            encoded.append("i:" + str(segment))
+        else:
+            raise TypeError(
+                "source site path segments must be exact str or int values, "
+                f"got {type(segment).__name__}"
+            )
+    return "/" + "/".join(encoded)
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceSite:
+    """One physical YAML occurrence and the range selected within it.
+
+    Attributes:
+        document (`SourceDocument`):
+            Retained single-parse document that owns the occurrence.
+        occurrence_path (`OccurrencePath`):
+            Finite physical path replayed from the document root.
+        anchor (`Literal["value", "key"]`):
+            Whether the diagnostic selects the occurrence value or its mapping
+            key.
+    """
+
+    document: SourceDocument
+    occurrence_path: OccurrencePath
+    anchor: _Anchor
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCatalog:
+    """Immutable Compose resolver from opaque origins to diagnostic frames.
+
+    The catalog owns no semantic program state. Its keys are local source
+    identities, and its values retain physical document occurrences. Unknown
+    origins resolve to ``None`` so a caller can compose resolvers later.
+
+    Args:
+        _sites (`Mapping[str, _SourceSite]`, *optional*):
+            Origin key to physical source site. The mapping is defensively
+            copied and made read-only.
+    """
+
+    _sites: Mapping[str, _SourceSite] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        """Validate and freeze a defensive copy of the source-site mapping."""
+        copied: dict[str, _SourceSite] = {}
+        for key, site in self._sites.items():
+            if type(key) is not str or not key:
+                raise ValueError("source catalog keys must be non-empty strings")
+            if type(site) is not _SourceSite:
+                raise TypeError("source catalog values must be source sites")
+            copied[key] = site
+        object.__setattr__(self, "_sites", MappingProxyType(copied))
+
+    def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+        """Resolve one origin by replaying its retained physical occurrence.
+
+        Args:
+            origin (`OriginRef`):
+                Opaque identity minted by this catalog's builder or a later
+                Compose rebasing pass.
+
+        Returns:
+            `DiagnosticFrame | None`:
+                Concrete source frame, or ``None`` when ``origin`` is unknown
+                or its retained anchor no longer has a range.
+
+        Raises:
+            `TypeError`:
+                Raised when ``origin`` is not an `OriginRef`.
+            `SourceAccessError`:
+                Raised if the retained occurrence path cannot be replayed.
+        """
+        if not isinstance(origin, OriginRef):
+            raise TypeError("source catalog resolve requires an OriginRef")
+        site = self._sites.get(origin.key)
+        if site is None:
+            return None
+
+        cursor = site.document._resolve_occurrence(site.occurrence_path)
+        source_range = cursor.range if site.anchor == "value" else cursor.key_range
+        if source_range is None:
+            return None
+        return DiagnosticFrame(
+            label=site.document.label,
+            text=site.document.text,
+            range=source_range,
+        )
+
+    def __deepcopy__(self, memo: dict[int, object]) -> SourceCatalog:
+        """Return this immutable catalog without copying retained source text.
+
+        Args:
+            memo (`dict[int, object]`): Standard deepcopy identity memo; unused.
+
+        Returns:
+            `SourceCatalog`: This same immutable catalog.
+        """
+        return self
+
+
+class _SourceCatalogBuilder:
+    """Mutable registration boundary that freezes immutable catalog snapshots."""
+
+    __slots__ = ("_sites",)
+
+    def __init__(self) -> None:
+        """Create an empty local source-site registry."""
+        self._sites: dict[str, _SourceSite] = {}
+
+    def register(
+        self,
+        site_path: _SourceSitePath,
+        cursor: SourceCursor,
+        *,
+        anchor: _Anchor = "value",
+    ) -> OriginRef | None:
+        """Register one physical cursor under a deterministic semantic path.
+
+        A first registration with a source-free cursor or missing selected
+        anchor returns ``None`` and does not reserve the semantic path. An
+        already registered encoded path is always an error, even when the later
+        cursor is unlocated or points at the same occurrence.
+
+        Args:
+            site_path (`tuple[str | int, ...]`):
+                Non-empty local semantic path used only to mint the opaque key.
+            cursor (`SourceCursor`):
+                Physical, projected, or virtual source occurrence. Projected
+                cursors retain their explicitly supplied physical backing.
+            anchor (`Literal["value", "key"]`, *optional*, defaults to `"value"`):
+                Range selected when the catalog resolves the returned origin.
+        Returns:
+            `OriginRef | None`:
+                Registered opaque identity, or ``None`` when no concrete
+                selected range exists.
+
+        Raises:
+            `TypeError`:
+                Raised for an invalid cursor, path, or anchor type.
+            `ValueError`:
+                Raised for an empty path.
+            `SourceAccessError`:
+                Raised when ``site_path`` is already registered.
+        """
+        key = _encode_site_path(site_path)
+        if not isinstance(cursor, SourceCursor):
+            raise TypeError("source catalog registration requires a SourceCursor")
+        if type(anchor) is not str or anchor not in ("value", "key"):
+            raise TypeError("source catalog anchor must be 'value' or 'key'")
+        document = cursor.document
+        source_range = cursor.range if anchor == "value" else cursor.key_range
+        if key in self._sites:
+            raise SourceAccessError(
+                f"duplicate source catalog site {site_path!r}",
+                source_range,
+            )
+        if document is None or source_range is None:
+            return None
+
+        self._sites[key] = _SourceSite(
+            document=document,
+            occurrence_path=cursor.path,
+            anchor=anchor,
+        )
+        return OriginRef(key)
+
+    def freeze(self) -> SourceCatalog:
+        """Return an immutable snapshot of all successful registrations.
+
+        Returns:
+            `SourceCatalog`: Snapshot isolated from later builder changes.
+        """
+        return SourceCatalog(self._sites)
+
+
+__all__ = ["SourceCatalog"]

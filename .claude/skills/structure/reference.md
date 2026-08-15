@@ -93,6 +93,7 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 |---|---|---|
 | PyYAML construction and the private YAML node/occurrence graph | `compose/source` | every other compose phase, `compile`, `runtime` |
 | Stable location-aware navigation and immutable projections | public `SourceDocument` / `SourceCursor` contracts from `compose/source` | private document slots or PyYAML nodes |
+| Immutable opaque-origin resolution by retained occurrence | public `SourceCatalog` from `compose/source` | parallel range maps or another YAML parse |
 | Semantic descriptors and flow sections | `compose/parse` consuming a document/cursor | another YAML construction pass |
 | Source-preserving inline extraction | `compose/desugar` projecting cursors | PyYAML and loader state |
 | Compiled-flow assembly | `compose/build` consuming descriptors and retained cursor sources | PyYAML and concrete loader implementation |

@@ -75,6 +75,12 @@ projected values are snapshotted, and cursor value reads use a stack-safe iterat
 while preserving alias and recursive-alias identity within each copy. Inline extraction
 takes one whole-nodes snapshot before projection so unchanged alias siblings stay shared.
 
+`SourceCatalog` is Compose's immutable implementation of `OriginResolver`. Its private
+builder maps deterministic typed semantic paths to opaque origins and retains each physical
+document occurrence plus an explicit key/value anchor. Resolution replays that occurrence
+into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and no YAML is
+reparsed or parallel range map created.
+
 External `uses:` resolution adds one reuse boundary. During a load graph, successfully
 compiled external flows are cached by resolved absolute path. A repeated alias or diamond
 dependency therefore reuses the same `ComposedFlow`; it does not reread, reparse, or
@@ -237,6 +243,7 @@ section header rather than guessing.
 | a whole-graph pass (edges, validation, cycles) | the phase packages `compose/{parse,desugar,edges,validate,build}/` |
 | the one-pass YAML source document | `compose/source/document.py` (`SourceDocument`) |
 | physical, virtual, or projected source navigation | `compose/source/cursor.py` (`SourceCursor`) |
+| opaque Compose origin resolution | `compose/source/catalog.py` (`SourceCatalog`) |
 | strict top-level section parsing | `parse/file.py` (`parse_file`) |
 | the pipeline wiring itself | `build/pipeline.py` (`_assemble`), driven by `loader.py` |
 | running the compiled flow | [engine.md](engine.md) |

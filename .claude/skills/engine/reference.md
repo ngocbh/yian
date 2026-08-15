@@ -325,6 +325,12 @@ Inline-body extraction takes one graph-wide nodes snapshot before projection so
 unchanged aliases remain shared. Other source-aware field navigation uses cursors
 or their package-private read-only view.
 
+`SourceCatalog` is Compose's immutable `OriginResolver`. Its private builder maps
+typed semantic paths to opaque origins while retaining each physical document
+occurrence and an explicit key/value anchor. Resolution replays that occurrence
+into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and no
+YAML is reparsed or parallel range map created.
+
 After cursor-based extraction and parsing, descriptors and nodes carry the derived
 ranges needed by later phases; no phase reparses source fragments or inspects the
 private document graph. The default file resolver adds a separate successful

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from agent_composer.compose import loader as compose_loader
 from agent_composer.compose.desugar import inline_bodies as inline_bodies_module
 from agent_composer.compose.desugar.inline_bodies import (
     INLINE_FLOW_PREFIX,
@@ -563,3 +564,212 @@ def test_inline_body_shape_errors_are_located_without_private_ids(
     assert message in str(caught.value)
     assert INLINE_FLOW_PREFIX not in str(caught.value)
     assert caught.value.range == expected_range
+
+
+def test_callable_scope_builds_private_once_and_same_owner_registration_is_idempotent():
+    flow_id = INLINE_FLOW_PREFIX + "opaque-once"
+    owner = ("root", "node", "wrapper", "inline")
+    child = object()
+    built: list[str] = []
+
+    def first_builder():
+        built.append("first")
+        return child
+
+    def ignored_builder():
+        built.append("ignored")
+        return object()
+
+    scope = compose_loader._CallableScope({}, object(), None, {})
+    scope.register_private(flow_id, owner, "inline body `wrapper`", first_builder)
+    scope.register_private(flow_id, owner, "ignored label", ignored_builder)
+
+    assert built == []
+    assert scope._private[flow_id].label == "inline body `wrapper`"
+    assert scope._private[flow_id].builder is first_builder
+    assert scope.resolve(flow_id) is child
+    assert scope.resolve(flow_id, "ignored-version") is child
+    assert built == ["first"]
+
+
+def test_callable_scope_rejects_non_private_id_without_registering_it():
+    flow_id = "ordinary_name"
+    built: list[str] = []
+    scope = compose_loader._CallableScope({}, object(), None, {})
+
+    with pytest.raises(LoadError) as caught:
+        scope.register_private(
+            flow_id,
+            ("root", "node", "wrapper", "inline"),
+            "inline body `wrapper`",
+            lambda: built.append("built"),
+        )
+
+    message = str(caught.value)
+    assert "inline body `wrapper`" in message
+    assert "wrapper" in message
+    assert INLINE_FLOW_PREFIX in message
+    assert flow_id not in message
+    assert built == []
+
+    with pytest.raises(LoadError, match="neither an in-file"):
+        scope.resolve(flow_id)
+    assert built == []
+
+
+def test_callable_scope_rejects_private_owner_collision_without_exposing_id():
+    flow_id = INLINE_FLOW_PREFIX + "opaque-owner-collision"
+    scope = compose_loader._CallableScope({}, object(), None, {})
+    scope.register_private(
+        flow_id,
+        ("root", "node", "first", "inline"),
+        "inline body `first`",
+        lambda: object(),
+    )
+
+    with pytest.raises(LoadError) as caught:
+        scope.register_private(
+            flow_id,
+            ("root", "node", "second", "inline"),
+            "inline body `second`",
+            lambda: object(),
+        )
+
+    message = str(caught.value)
+    assert "collision" in message
+    assert "inline body `first`" in message
+    assert "inline body `second`" in message
+    assert "first" in message and "second" in message
+    assert INLINE_FLOW_PREFIX in message
+    assert flow_id not in message
+
+
+@pytest.mark.parametrize("section", ["defs", "uses"])
+def test_callable_scope_rejects_private_authored_collision_without_exposing_id(
+    section: str,
+):
+    flow_id = INLINE_FLOW_PREFIX + "opaque-authored-collision"
+    defs = {flow_id: {"nodes": {}}} if section == "defs" else {}
+    uses = {flow_id: "library/child"} if section == "uses" else {}
+    scope = compose_loader._CallableScope(defs, object(), None, uses)
+
+    with pytest.raises(LoadError) as caught:
+        scope.register_private(
+            flow_id,
+            ("root", "node", "wrapper", "inline"),
+            "inline body `wrapper`",
+            lambda: object(),
+        )
+
+    message = str(caught.value)
+    assert "collision" in message
+    assert f"{section}:" in message
+    assert "inline body `wrapper`" in message
+    assert "wrapper" in message
+    assert INLINE_FLOW_PREFIX in message
+    assert flow_id not in message
+
+
+def test_callable_scope_reports_private_recursion_without_exposing_id():
+    flow_id = INLINE_FLOW_PREFIX + "opaque-recursion"
+    owner = ("root", "node", "wrapper", "inline")
+    scope = compose_loader._CallableScope({}, object(), None, {})
+    calls = 0
+
+    def recursive_builder():
+        nonlocal calls
+        calls += 1
+        return scope.resolve(flow_id)
+
+    scope.register_private(
+        flow_id, owner, "inline body `wrapper`", recursive_builder
+    )
+
+    with pytest.raises(LoadError) as caught:
+        scope.resolve(flow_id)
+
+    message = str(caught.value)
+    assert "recursive" in message
+    assert "inline body `wrapper`" in message
+    assert "wrapper" in message
+    assert INLINE_FLOW_PREFIX in message
+    assert flow_id not in message
+    assert calls == 1
+
+
+def test_callable_scope_retries_failed_private_builder_and_caches_success():
+    flow_id = INLINE_FLOW_PREFIX + "opaque-retry"
+    child = object()
+    attempts = 0
+
+    def flaky_builder():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise LoadError("temporary child build failure")
+        return child
+
+    scope = compose_loader._CallableScope({}, object(), None, {})
+    scope.register_private(
+        flow_id,
+        ("root", "node", "wrapper", "inline"),
+        "inline body `wrapper`",
+        flaky_builder,
+    )
+
+    with pytest.raises(LoadError, match="temporary child build failure"):
+        scope.resolve(flow_id)
+
+    assert scope.resolve(flow_id) is child
+    assert scope.resolve(flow_id) is child
+    assert attempts == 2
+
+
+def test_callable_scope_reports_unregistered_private_prefix_without_exposing_id():
+    flow_id = INLINE_FLOW_PREFIX + "opaque-unregistered"
+    scope = compose_loader._CallableScope({}, object(), None, {})
+
+    with pytest.raises(LoadError) as caught:
+        scope.resolve(flow_id)
+
+    message = str(caught.value)
+    assert "reserved" in message
+    assert "not registered" in message
+    assert INLINE_FLOW_PREFIX in message
+    assert flow_id not in message
+    assert "neither an in-file" not in message
+
+
+def test_callable_scope_eager_def_can_resolve_pre_registered_private(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    flow_id = INLINE_FLOW_PREFIX + "opaque-eager-def"
+    body = {"nodes": {}}
+    private_child = object()
+    def_child = object()
+    events: list[str] = []
+
+    def build_private():
+        events.append("private")
+        return private_child
+
+    def fake_load_def(name, value, registry, resolver, parent_text=""):
+        events.append(f"def:{name}")
+        assert value is body
+        assert resolver(flow_id) is private_child
+        return def_child
+
+    monkeypatch.setattr(compose_loader, "_load_def", fake_load_def)
+    scope = compose_loader._CallableScope({"outer": body}, object(), None, {})
+    scope.register_private(
+        flow_id,
+        ("def", "outer", "node", "wrapper", "inline"),
+        "inline body `wrapper` in defs:`outer`",
+        build_private,
+    )
+
+    scope.eager_load_defs()
+
+    assert events == ["def:outer", "private"]
+    assert scope.resolve("outer") is def_child
+    assert scope.resolve(flow_id) is private_child

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import yaml
 
@@ -425,13 +425,27 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
     )
 
 
-class _CallableScope:
-    """The file-local namespace and cache for authored callable resolution.
+@dataclass(frozen=True)
+class _PrivateCallable:
+    """One compiler-owned callable declaration awaiting lazy construction.
 
-    Resolution is defs-first, then a `uses:` alias whose declared ref supplies the
-    external path and version. A bare name in neither mapping is rejected instead of
-    reaching the external resolver. Local defs and external aliases share one memo table,
-    while an in-progress set makes recursive or mutually recursive defs loud.
+    ``owner`` is the complete lexical path that determines generated identity,
+    ``label`` is its author-facing diagnostic name, and ``builder`` constructs the
+    child flow without arguments when resolution first reaches it.
+    """
+
+    owner: tuple[str, ...]
+    label: str
+    builder: Callable[[], ComposedFlow]
+
+
+class _CallableScope:
+    """The file-local namespace and cache for callable resolution.
+
+    Compiler-owned callables resolve first, then authored ``defs:`` and ``uses:``.
+    A bare name in neither authored mapping is rejected instead of reaching the
+    external resolver. Private declarations, local defs, and external aliases share
+    one memo table, while an in-progress set makes recursive construction loud.
 
     Args:
         defs_section (`dict`):
@@ -466,8 +480,53 @@ class _CallableScope:
         self._external = external
         self._uses = uses
         self._parent_text = parent_text
+        self._private: dict[str, _PrivateCallable] = {}
         self._built: dict[str, ComposedFlow] = {}
         self._in_progress: set[str] = set()
+
+    def register_private(
+        self,
+        flow_id: str,
+        owner: tuple[str, ...],
+        label: str,
+        builder: Callable[[], ComposedFlow],
+    ) -> None:
+        """Register one lazy compiler-owned callable in this file scope.
+
+        Re-registering the same generated identity for the same complete lexical
+        owner is idempotent: the first label and builder remain authoritative.
+        Generated-identity diagnostics deliberately report only the friendly label,
+        owner, and reserved prefix; the opaque generated identifier is never exposed.
+        """
+        if not flow_id.startswith(INLINE_FLOW_PREFIX):
+            raise LoadError(
+                f"compiler-generated callable {label!r} owned by {owner!r} must use "
+                f"the reserved prefix {INLINE_FLOW_PREFIX!r}"
+            )
+
+        existing = self._private.get(flow_id)
+        if existing is not None:
+            if existing.owner == owner:
+                return
+            raise LoadError(
+                "compiler-generated callable collision in reserved prefix "
+                f"{INLINE_FLOW_PREFIX!r}: {existing.label!r} owned by "
+                f"{existing.owner!r} conflicts with {label!r} owned by {owner!r}"
+            )
+
+        authored_section = None
+        if flow_id in self._defs_section:
+            authored_section = "defs"
+        elif flow_id in self._uses:
+            authored_section = "uses"
+        if authored_section is not None:
+            raise LoadError(
+                "compiler-generated callable collision in reserved prefix "
+                f"{INLINE_FLOW_PREFIX!r}: {label!r} owned by {owner!r} conflicts "
+                f"with an authored {authored_section}: name"
+            )
+
+        self._private[flow_id] = _PrivateCallable(owner, label, builder)
 
     def resolve(
         self, flow_id: str, version: Optional[str] = None
@@ -475,6 +534,22 @@ class _CallableScope:
         """Resolve one callable once; a `uses:` declaration owns its external version."""
         if flow_id in self._built:
             return self._built[flow_id]
+        if flow_id in self._private:
+            private = self._private[flow_id]
+            if flow_id in self._in_progress:
+                raise LoadError(
+                    "recursive compiler-generated callable in reserved prefix "
+                    f"{INLINE_FLOW_PREFIX!r}: {private.label!r} owned by "
+                    f"{private.owner!r} is defined in terms of itself "
+                    "(the baked call graph must be finite)"
+                )
+            self._in_progress.add(flow_id)
+            try:
+                loaded = private.builder()
+            finally:
+                self._in_progress.discard(flow_id)
+            self._built[flow_id] = loaded
+            return loaded
         if flow_id in self._defs_section:
             if flow_id in self._in_progress:
                 raise LoadError(
@@ -513,6 +588,11 @@ class _CallableScope:
                 )
             self._built[flow_id] = self._external(ref.path, ref.version)
             return self._built[flow_id]
+        if flow_id.startswith(INLINE_FLOW_PREFIX):
+            raise LoadError(
+                "compiler-generated callable with reserved prefix "
+                f"{INLINE_FLOW_PREFIX!r} was not registered in this file scope"
+            )
         raise LoadError(
             f"callable {flow_id!r} is neither an in-file defs: callable nor a uses: "
             f"alias — external flows are reachable only through a uses: alias "

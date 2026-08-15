@@ -280,7 +280,7 @@ nodes:
     kind: map
     over: ${input.topics}         # a list[T]
     call: research-one            # node value is list[U]
-    input: { topic: ${item} }     # per-element call args (sink-bind the child's params)
+    input: { topic: "${item}" }   # per-element call args (sink-bind the child's params)
 ```
 `call:` resolves **defs-first, else a `uses:` alias** (an external flow on the
 search path, by filename; `alias@v1` adds a version guard). A CALL's record fields

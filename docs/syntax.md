@@ -552,7 +552,7 @@ Inline-body rules:
   storage still rejects an actual null element ([#128](https://github.com/ngocbh/agent-composer/issues/128));
   nullable intermediate record fields work normally.
 - Strings nested inside literal lists or mappings stay literal. For example,
-  `payload: {text: ${input.text}}` passes the characters `${input.text}`; nested
+  `payload: {text: "${input.text}"}` passes the characters `${input.text}`; nested
   containers are not scanned for references.
 - Existing composite configuration keeps its existing owner and meaning:
   LOOP drivers still configure the outer composite, `env:` stays on that node

@@ -19,7 +19,6 @@ from agent_composer.compose import loader as compose_loader
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.source import document as source_document
-from agent_composer.compose.helpers import spanloader as legacy_spanloader
 from agent_composer.events import SourceRange
 from agent_composer.run import run_flow
 from agent_composer.compose.parse.file import parse_file
@@ -128,22 +127,14 @@ def test_callable_scope_eagerly_builds_defs_and_memoizes_resolution(monkeypatch)
 
 def test_multiple_defs_share_one_parent_document_parse(monkeypatch):
     source_loads = 0
-    legacy_loads = 0
     original_source_init = source_document._DocumentLoader.__init__
-    original_legacy_init = legacy_spanloader.SpanLoader.__init__
 
     def count_source(self, *args, **kwargs):
         nonlocal source_loads
         source_loads += 1
         original_source_init(self, *args, **kwargs)
 
-    def count_legacy(self, *args, **kwargs):
-        nonlocal legacy_loads
-        legacy_loads += 1
-        original_legacy_init(self, *args, **kwargs)
-
     monkeypatch.setattr(source_document._DocumentLoader, "__init__", count_source)
-    monkeypatch.setattr(legacy_spanloader.SpanLoader, "__init__", count_legacy)
 
     load_flow(
         """id: two-defs
@@ -176,7 +167,6 @@ output: ${root.output}
     )
 
     assert source_loads == 1
-    assert legacy_loads == 0
 
 
 def test_defs_callable_runs_end_to_end_without_external_resolver():

@@ -67,8 +67,8 @@ def _section_lines(root: SourceCursor) -> dict[str, int]:
 
     Replaces the retired `parser.section_lines`: locates a section-level error (a bad
     `typedefs:`, an eager `uses:` failure, a dangling `outputs:`/`asserts:` ref) at the
-    section's header line. Derived from the span parse (`load_with_spans` + each section
-    key's own `SourceRange`), consistent with the range-native front end — raw keys are
+    section's header line. Derived from each section key's `SourceRange` on the supplied
+    cursor, consistent with the range-native front end — raw keys are
     kept (`output`/`outputs` both surface; the loader coalesces). `{}` when the text is
     absent or PyYAML can't compose it. Render metadata, never the error path — never raises.
     """

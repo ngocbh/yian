@@ -5,8 +5,6 @@ from datetime import datetime
 
 import pytest
 
-from agent_composer.compose.helpers.reader import NodeReader, as_cursor
-from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.source import (
     SourceAccessError,
     SourceCursor,
@@ -15,39 +13,7 @@ from agent_composer.compose.source import (
 from agent_composer.events import SourceRange
 
 
-def test_as_cursor_preserves_legacy_ranges_without_parsing(monkeypatch):
-    text = (
-        "nodes:\n"
-        "  route:\n"
-        "    kind: case\n"
-        "    on: ${score.output}\n"
-        "    cases: []\n"
-    )
-    value, spans, root = load_with_spans(text, return_root=True)
-    reader = NodeReader(value, spans, root).child("nodes")
-    loader_calls = 0
-
-    def count_loader(*args, **kwargs):
-        nonlocal loader_calls
-        loader_calls += 1
-        raise AssertionError("legacy adaptation must not parse YAML")
-
-    monkeypatch.setattr(
-        "agent_composer.compose.source.document._DocumentLoader.__init__",
-        count_loader,
-    )
-
-    cursor = as_cursor(reader, label="legacy.yaml")
-
-    assert loader_calls == 0
-    assert cursor.document is not None
-    assert cursor.document.label == "legacy.yaml"
-    assert cursor.range == reader._own_range()
-    assert cursor.key_range_of("route") == reader.key_range_of("route")
-    assert cursor.child("route").range_of(True) == reader.child("route").range_of("on")
-
-
-def test_as_cursor_reuses_exact_constructed_keys_and_effective_collision_ranges():
+def test_document_preserves_constructed_keys_and_effective_collision_ranges():
     text = """\
 values:
   0x10: hexadecimal
@@ -59,30 +25,26 @@ collision:
   1:
     nested: second
 """
-    value, spans, root = load_with_spans(text, return_root=True)
-    reader = NodeReader(value, spans, root)
-
-    cursor = as_cursor(reader)
-    legacy_values = reader.child("values")
-    values = cursor.child("values")
+    root = SourceDocument.parse(text).root
+    values = root.child("values")
     timestamp_key = next(
-        key for key in legacy_values.value if isinstance(key, datetime)
+        key for key in values.value if isinstance(key, datetime)
     )
 
     assert values.get(16) == "hexadecimal"
     assert values.get(1.5) == "floating"
     assert values.get(timestamp_key) == "timestamp"
     assert values.get(b"a") == "binary"
-    assert values.range_of(16) == legacy_values.range_of("0x10")
+    assert values.range_of(16) == SourceRange(2, 9, 2, 20)
 
-    legacy_collision = reader.child("collision")
-    collision = cursor.child("collision").child(True)
+    collision = root.child("collision").child(True)
     assert collision.source_key_value == 1
     assert type(collision.source_key_value) is int
-    assert collision.range == legacy_collision.range_of("1")
+    assert collision.range == SourceRange(9, 5, 10, 1)
     assert collision.str("nested") == "second"
 
-    legacy_values.value[16] = "mutated"
+    copied_values = values.value
+    copied_values[16] = "mutated"
     assert values.get(16) == "hexadecimal"
 
 

@@ -25,8 +25,8 @@ from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose import LoadError
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.parse.file import parse_file
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceCursor, SourceDocument
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -41,8 +41,10 @@ def _build(desc, registry=None):
 
 
 def _seed_nodes(name: str):
-    f = parse_file((_SEEDS / name).read_text())
-    return parse_nodes(NodeReader.spanless(f.nodes))
+    path = _SEEDS / name
+    document = SourceDocument.parse(path.read_text(), label=str(path))
+    parse_file(document)
+    return parse_nodes(document.root.child("nodes"))
 
 
 # ---------- agent ----------
@@ -81,7 +83,9 @@ def test_agent_unknown_mode_is_loud_loaderror():
         "    output: str\n    prompt: \"hi ${topic}\"\n    mode: react\n"
         "output: ${note.output}\n"
     )
-    desc = parse_nodes(NodeReader.spanless(parse_file(text).nodes))["note"]
+    document = SourceDocument.parse(text)
+    parse_file(document)
+    desc = parse_nodes(document.root.child("nodes"))["note"]
     with pytest.raises(LoadError, match="unknown mode"):
         _build(desc)
 
@@ -128,7 +132,7 @@ def test_node_name_becomes_title():
     assert note.title is None
     named, _ = _build(
         parse_nodes(
-            NodeReader.spanless(
+            SourceCursor.virtual(
                 {
                     "n": {
                         "kind": "code",
@@ -226,7 +230,7 @@ def test_output_type_resolves_registry_name():
     registry = read_typedefs({"Rating": {"category": "str", "score": "float"}})
     # an agent descriptor whose outputs name a registry record.
     nodes = parse_nodes(
-        NodeReader.spanless(
+        SourceCursor.virtual(
             {
                 "synth": {
                     "kind": "agent",

@@ -24,8 +24,8 @@ from agent_composer.compose.parse.file import (
     CodeDescriptor,
     parse_file,
 )
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceCursor, SourceDocument
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -38,8 +38,10 @@ def _wiring(desc):
 def _seed(name: str):
     """(descriptors, flow_wiring) for a seed — leaf-kind wiring built, case/ref/map skipped.
     infer_data_edges now derives leaf edges from the flow-owned wiring."""
-    f = parse_file((_SEEDS / name).read_text())
-    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
+    path = _SEEDS / name
+    document = SourceDocument.parse(path.read_text(), label=str(path))
+    parse_file(document)
+    descriptors = parse_nodes(document.root.child("nodes"))
     flow_wiring = {
         nid: _wiring(desc)
         for nid, desc in descriptors.items()
@@ -94,7 +96,7 @@ def test_edge_id_is_synthesized():
 def test_coalesce_sink_shares_input_group():
     # A node input bound to ${pro.output | con.output} -> two edges, same group.
     descriptors = parse_nodes(
-        NodeReader.spanless(
+        SourceCursor.virtual(
             {
                 "pro": {"kind": "agent", "outputs": "str", "prompt": "x"},
                 "con": {"kind": "agent", "outputs": "str", "prompt": "x"},
@@ -123,7 +125,7 @@ def test_coalesce_sink_shares_input_group():
 
 def test_map_over_ref_produces_data_edge():
     descriptors = parse_nodes(
-        NodeReader.spanless(
+        SourceCursor.virtual(
             {
                 "bundle": {"kind": "code", "outputs": "list[str]", "code": "m:f"},
                 "each": {
@@ -191,8 +193,9 @@ def test_case_when_produces_no_infer_edge_in_every_spelling():
             '  lo:\n    kind: agent\n    prompt: "lo"\n    output: str\n'
             "output: ${hi.output | lo.output}\n"
         )
-        f = parse_file(text)
-        descriptors = parse_nodes(NodeReader.spanless(f.nodes))
+        document = SourceDocument.parse(text)
+        parse_file(document)
+        descriptors = parse_nodes(document.root.child("nodes"))
         built = {
             nid: _wiring(desc)
             for nid, desc in descriptors.items()

@@ -29,9 +29,9 @@ from agent_composer.compose.parse.file import (
     CaseDescriptor,
     parse_file,
 )
-from agent_composer.compose.helpers.reader import NodeReader
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.helpers.types import read_flow_inputs
+from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.events import SourceRange
 from tests.engine._fakes import derive_wiring, stamp_reads
@@ -43,8 +43,10 @@ def _load(seed: str):
     """(nodes, flow_inputs, producers, outputs, flow_wiring) for a seed — every descriptor
     built kind-blind via `desc.build(...)`. A `case`'s lowering (its `__rN`/`__on` split) is
     part of its own build, so its rewritten `.node`/`.wiring` come out of the same call."""
-    f = parse_file((_SEEDS / seed).read_text())
-    descriptors = parse_nodes(NodeReader.spanless(f.nodes))
+    path = _SEEDS / seed
+    document = SourceDocument.parse(path.read_text(), label=str(path))
+    f = parse_file(document)
+    descriptors = parse_nodes(document.root.child("nodes"))
     # First pass: build leaf nodes to learn the producer output types the case build reads.
     nodes: dict = {}
     flow_wiring: dict = {}

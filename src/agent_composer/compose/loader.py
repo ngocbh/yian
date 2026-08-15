@@ -169,18 +169,18 @@ def _single_node_def_cursor(
 
 
 def _frame_ranges(
-    reader: SourceCursor,
+    cursor: SourceCursor,
 ) -> tuple[dict[str, SourceRange], dict[str, FieldRanges]]:
     """The `(node_ranges, field_ranges)` a `SourceFrame` carries, from a best-effort parse.
 
-    Runs `parse_nodes(reader)` and pulls each descriptor's own `.range`/`.field_ranges` — the
+    Runs `parse_nodes(cursor)` and pulls each descriptor's own `.range`/`.field_ranges` — the
     render-only location maps the CLI's call-traceback boxes. A virtual compact cursor yields
     empty maps; a malformed `nodes:` (which the build path rejects with
     its own located error) is swallowed here to empty maps — this is render metadata, never the
     error path, so it must not raise.
     """
     try:
-        descriptors = parse_nodes(reader)
+        descriptors = parse_nodes(cursor)
     except (LoadError, SourceAccessError):
         return {}, {}
     node_ranges: dict[str, SourceRange] = {}

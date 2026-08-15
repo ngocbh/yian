@@ -2,7 +2,7 @@
 
 These cover the class-level pieces the descriptor base gains before any kind is
 converted onto it: the `allowed`/`required` key sets, the `allow`/`require`
-extension helpers, and the parse-template hooks (`_normalize_reader` no-op,
+extension helpers, and the parse-template hooks (`_normalize_cursor` no-op,
 `_validate_fields` default asserts check). Behavioral parity of `_check_keys`/
 `_read_common_fields`/`parse` with the old `helpers.py` free functions is
 exercised indirectly by the existing per-kind parse tests once the kinds are
@@ -16,7 +16,7 @@ import pytest
 
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import NodeDescriptor
-from agent_composer.compose.helpers.reader import NodeReader
+from agent_composer.compose.source import SourceCursor
 
 
 def test_allow_unions_with_parent():
@@ -51,18 +51,14 @@ def test_validate_fields_default_skips_absent_asserts():
     D._validate_fields("n", {}, {}, None)  # no raise
 
 
-def test_normalize_reader_default_noop():
-    class R:
-        value = {"a": 1}
+def test_normalize_cursor_default_noop():
+    cursor = SourceCursor.virtual({"a": 1})
 
-    r = R()
-    NodeDescriptor._normalize_reader(r)
-    assert r.value == {"a": 1}
+    assert NodeDescriptor._normalize_cursor(cursor) is cursor
 
 
-def test_parse_template_constructs_subclass_from_spanless_reader():
-    """The template `parse` reads a kind's OWN keys + the commons off a spanless
-    reader and constructs the subclass with them (no ranges in spanless mode)."""
+def test_parse_template_constructs_subclass_from_virtual_cursor():
+    """The template parses a kind's own keys from a location-free cursor."""
 
     @dataclass(frozen=True, kw_only=True)
     class D(NodeDescriptor):
@@ -70,7 +66,7 @@ def test_parse_template_constructs_subclass_from_spanless_reader():
         allowed = NodeDescriptor.allow("greeting")
         greeting: str = ""
 
-    reader = NodeReader.spanless(
+    reader = SourceCursor.virtual(
         {"kind": "d", "greeting": "hi", "node_name": "n1", "env": {"K": "v"}}
     )
     desc = D.parse("n1", reader)
@@ -79,7 +75,7 @@ def test_parse_template_constructs_subclass_from_spanless_reader():
     assert desc.greeting == "hi"
     assert desc.node_name == "n1"
     assert desc.env == {"K": "v"}
-    assert desc.field_ranges == {}  # spanless -> no ranges recorded
+    assert desc.field_ranges == {}  # virtual -> no ranges recorded
 
 
 def test_parse_template_rejects_unknown_key():
@@ -91,6 +87,6 @@ def test_parse_template_rejects_unknown_key():
         allowed = NodeDescriptor.allow("greeting")
         greeting: str = ""
 
-    reader = NodeReader.spanless({"kind": "d", "bogus": 1})
+    reader = SourceCursor.virtual({"kind": "d", "bogus": 1})
     with pytest.raises(LoadError):
         D.parse("n1", reader)

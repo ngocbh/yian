@@ -195,8 +195,8 @@ def test_case_condition_escape_marks_optional():
 
 def test_item_head_ref_yields_no_edge_but_producer_ref_does():
     from agent_composer.compose.edges.data import infer_data_edges
-    from agent_composer.compose.helpers.reader import NodeReader
     from agent_composer.compose.parse.nodes import parse_nodes
+    from agent_composer.compose.source import SourceCursor
 
     # A CODE `producer` and a stand-in `mapbody` consumer whose wiring binds both an
     # `${item.foo}` (body-local) and a `${producer.output}` (a real producer ref). We drive
@@ -204,7 +204,7 @@ def test_item_head_ref_yields_no_edge_but_producer_ref_does():
     # branch reads `flow_wiring[node_id]` verbatim), so this exercises the exact producer
     # ref-walk the map/loop body inputs go through.
     descriptors = parse_nodes(
-        NodeReader.spanless(
+        SourceCursor.virtual(
             {
                 "producer": {
                     "kind": "code",

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Hashable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -312,7 +311,6 @@ def _build_definitions(
     root_node: yaml.Node | None,
     root_value: Any,
     node_values: dict[int, Any],
-    range_lookup: Any = None,
     mapping_values: dict[int, dict[Any, Any]] | None = None,
     pair_sequences: dict[int, _PairSequence] | None = None,
 ) -> tuple[tuple[_Definition, ...], int]:
@@ -326,9 +324,12 @@ def _build_definitions(
             Constructed value aligned with ``root_node``.
         node_values (`dict[int, Any]`):
             Exact constructed value for each YAML-node identity.
-        range_lookup (`Any`, *optional*, defaults to `None`):
-            Existing ``id(node) -> SourceRange`` lookup. ``None`` derives
-            ranges from node marks; a supplied lookup is authoritative.
+        mapping_values (`dict[int, dict[Any, Any]] | None`, *optional*):
+            Effective mapping values retained by the document loader, keyed by
+            YAML-node identity. Absent for non-mapping nodes.
+        pair_sequences (`dict[int, _PairSequence] | None`, *optional*):
+            Compact flattened merge plans retained by the document loader,
+            keyed by mapping-node identity.
 
     Returns:
         `tuple[tuple[_Definition, ...], int]`:
@@ -452,11 +453,7 @@ def _build_definitions(
             value = mapping_values.get(identity, _MISSING)
         if value is _MISSING:
             raise TypeError("constructed value missing for retained YAML node")
-        source_range = (
-            _mark_to_range(node)
-            if range_lookup is None
-            else range_lookup.get(identity)
-        )
+        source_range = _mark_to_range(node)
 
         if isinstance(node, MappingNode):
             sequence = (
@@ -574,58 +571,6 @@ class SourceDocument:
         for step in path:
             cursor = cursor._descend_occurrence_step(step)
         return cursor
-
-    @classmethod
-    def _from_constructed(
-        cls,
-        value: Any,
-        root_node: yaml.Node,
-        spans: Any,
-        *,
-        label: str = "<legacy>",
-    ) -> "SourceDocument":
-        """Adapt one legacy constructed tree without invoking a YAML parser.
-
-        Args:
-            value (`Any`):
-                Root value already produced by the temporary span loader.
-            root_node (`yaml.Node`):
-                Composed root whose identities index ``spans``.
-            spans (`Any`):
-                Legacy range index retaining exact node values privately.
-            label (`str`, *optional*, defaults to `"<legacy>"`):
-                Diagnostic identity assigned to the adapted document.
-
-        Returns:
-            `SourceDocument`:
-                Independent document snapshot sharing no mutable values with
-                the legacy reader.
-
-        Raises:
-            `TypeError`:
-                Raised when ``spans`` lacks exact constructed-node metadata.
-        """
-
-        node_values = getattr(spans, "_source_values", None)
-        if node_values is None:
-            raise TypeError(
-                "legacy source adaptation requires retained constructed-node values"
-            )
-        snapshot, snapshot_values = copy.deepcopy((value, node_values))
-        definitions, root_definition = _build_definitions(
-            root_node,
-            snapshot,
-            snapshot_values,
-            range_lookup=spans,
-        )
-        return cls(
-            text="",
-            label=label,
-            _value=snapshot,
-            _root_node=root_node,
-            _definitions=definitions,
-            _root_definition=root_definition,
-        )
 
     @classmethod
     def parse(cls, text: str, label: str = "<flow>") -> "SourceDocument":

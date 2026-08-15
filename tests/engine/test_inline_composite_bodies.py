@@ -6,7 +6,6 @@ from dataclasses import replace
 from datetime import date
 
 import pytest
-import yaml
 
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose import loader as compose_loader
@@ -19,31 +18,35 @@ from agent_composer.compose.desugar.inline_bodies import (
     inline_flow_id,
 )
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.reader import NodeReader, as_cursor
-from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.helpers.types import InputDecl
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceDocument
+from agent_composer.compose.source import SourceCursor, SourceDocument
 from agent_composer.events import RunFailed, SourceRange
 from agent_composer.run import run_flow
 from agent_composer.typesys.values import Type, ValueKind
 
 
-def _located_root(text: str) -> tuple[NodeReader, dict]:
-    """Parse YAML text into a located root reader and expose its base span table."""
-    value, spans, root = load_with_spans(text, return_root=True)
-    return NodeReader(value, spans, root), spans
+def _located_root(text: str) -> tuple[SourceCursor, SourceDocument]:
+    """Parse YAML text once and return its physical root cursor and document."""
+    document = SourceDocument.parse(text)
+    return document.root, document
 
 
-def _yaml_pairs(reader: NodeReader, key: str) -> list[tuple[yaml.Node, yaml.Node]]:
-    """Return every composed pair for ``key`` in author/effective merge order."""
-    return [
-        (key_node, value_node)
-        for key_node, value_node in reader.yaml_node.value
-        if key_node.value == key
-    ]
+def _mapping_snapshot(
+    cursor: SourceCursor,
+) -> tuple[tuple[object, SourceRange | None, SourceRange | None, object], ...]:
+    """Capture flattened mapping values and their physical source locations."""
+    return tuple(
+        (
+            occurrence.source_key_value,
+            occurrence.key_range,
+            occurrence.range,
+            occurrence.value,
+        )
+        for occurrence in cursor.mapping_occurrences()
+    )
 
 
 class _RecordingRegistrar:
@@ -155,7 +158,7 @@ def test_inline_alias_projection_keeps_shared_payload_and_lightweight_sources():
 
 def _association_fixture():
     """Return located retained bodies and their final CALL/MAP/LOOP descriptors."""
-    root, _spans = _located_root(
+    root, _document = _located_root(
         """nodes:
   call_node:
     kind: call
@@ -198,7 +201,7 @@ def _association_fixture():
 
 
 def test_extract_one_inline_body_masks_only_the_occurrence_and_retains_locations():
-    root, base_spans = _located_root(
+    root, document = _located_root(
         """nodes:
   wrapper:
     kind: call
@@ -217,9 +220,9 @@ def test_extract_one_inline_body_masks_only_the_occurrence_and_retains_locations
     original_nodes = root.child("nodes")
     original_body = original_nodes.child("wrapper")
     original_child_nodes = original_body.child("nodes")
-    original_body_value = dict(original_body.value)
-    original_pairs = tuple(original_body.yaml_node.value)
-    original_span_entries = dict(base_spans)
+    original_body_value = original_body.value
+    original_pairs = _mapping_snapshot(original_body)
+    original_document_value = document.root.value
     child_owner = ("root", "node", "wrapper", "inline")
 
     masked_nodes, bodies = extract_inline_bodies(original_nodes, owner=("root",))
@@ -234,7 +237,7 @@ def test_extract_one_inline_body_masks_only_the_occurrence_and_retains_locations
     assert body.owner == child_owner
     assert body.flow_id == inline_flow_id(child_owner)
     assert body.nodes_cursor.value == original_child_nodes.value
-    assert body.nodes_cursor.range == original_child_nodes._own_range()
+    assert body.nodes_cursor.range == original_child_nodes.range
     assert body.output == "${echo.output}"
     assert body.output_range == original_body.range_of("output")
     assert body.input_ranges == original_body.mapping_value_ranges("input")
@@ -251,12 +254,12 @@ def test_extract_one_inline_body_masks_only_the_occurrence_and_retains_locations
     assert list(masked_body._value_view()) == ["kind", "input", "call"]
 
     assert original_body.value == original_body_value
-    assert tuple(original_body.yaml_node.value) == original_pairs
-    assert base_spans == original_span_entries
+    assert _mapping_snapshot(original_body) == original_pairs
+    assert document.root.value == original_document_value
 
 
-def test_inline_projection_leaves_original_reader_and_document_unchanged():
-    root, base_spans = _located_root(
+def test_inline_projection_leaves_original_cursor_and_document_unchanged():
+    root, document = _located_root(
         """nodes:
   wrapper:
     kind: call
@@ -271,27 +274,22 @@ def test_inline_projection_leaves_original_reader_and_document_unchanged():
 """
     )
     original_nodes = root.child("nodes")
-    original_value = original_nodes.value.copy()
-    original_pairs = tuple(original_nodes.yaml_node.value)
-    original_spans = dict(base_spans)
-    nodes_cursor = as_cursor(original_nodes)
-    document = nodes_cursor.document
-    assert document is not None
+    original_value = original_nodes.value
+    original_pairs = _mapping_snapshot(original_nodes)
     original_document_value = document.root.value
 
-    masked, bodies = extract_inline_bodies(nodes_cursor, owner=("root",))
+    masked, bodies = extract_inline_bodies(original_nodes, owner=("root",))
 
     assert masked.child("wrapper").has("call")
     assert not masked.child("wrapper").has("nodes")
     assert bodies["wrapper"].nodes_cursor.child("echo").str("kind") == "code"
     assert original_nodes.value == original_value
-    assert tuple(original_nodes.yaml_node.value) == original_pairs
-    assert base_spans == original_spans
+    assert _mapping_snapshot(original_nodes) == original_pairs
     assert document.root.value == original_document_value
 
 
 def test_extract_alias_occurrences_get_distinct_ids_and_share_retained_children():
-    root, base_spans = _located_root(
+    root, document = _located_root(
         """
 body: &body
   kind: call
@@ -313,10 +311,12 @@ nodes:
     original_nodes = root.child("nodes")
     anchor = root.child("body")
     anchor_children = anchor.child("nodes")
-    original_anchor_value = dict(anchor.value)
-    original_anchor_pairs = tuple(anchor.yaml_node.value)
-    original_anchor_keys = [key.value for key, _value in anchor.yaml_node.value]
-    original_span_entries = dict(base_spans)
+    original_anchor_value = anchor.value
+    original_anchor_pairs = _mapping_snapshot(anchor)
+    original_anchor_keys = [
+        occurrence.source_key_value for occurrence in anchor.mapping_occurrences()
+    ]
+    original_document_value = document.root.value
 
     masked_nodes, bodies = extract_inline_bodies(original_nodes, owner=("root",))
 
@@ -326,7 +326,7 @@ nodes:
     assert bodies["first"].flow_id != bodies["second"].flow_id
     for body in bodies.values():
         assert body.nodes_cursor.value == anchor_children.value
-        assert body.nodes_cursor.range == anchor_children._own_range()
+        assert body.nodes_cursor.range == anchor_children.range
         assert body.output == "${echo.output}"
         assert body.output_range == anchor.range_of("output")
 
@@ -341,13 +341,15 @@ nodes:
     assert list(second._value_view()).count("call") == 1
 
     assert anchor.value == original_anchor_value
-    assert tuple(anchor.yaml_node.value) == original_anchor_pairs
-    assert [key.value for key, _value in anchor.yaml_node.value] == original_anchor_keys
-    assert base_spans == original_span_entries
+    assert _mapping_snapshot(anchor) == original_anchor_pairs
+    assert [
+        occurrence.source_key_value for occurrence in anchor.mapping_occurrences()
+    ] == original_anchor_keys
+    assert document.root.value == original_document_value
 
 
 def test_extract_merged_inline_body_retains_anchor_values_and_ranges():
-    root, base_spans = _located_root(
+    root, document = _located_root(
         """
 body: &body
   kind: call
@@ -370,15 +372,18 @@ nodes:
     anchor_children = anchor.child("nodes")
     original_nodes = root.child("nodes")
     merged_before = original_nodes.child("merged")
-    original_merged_pairs = tuple(merged_before.yaml_node.value)
-    original_merged_keys = [key.value for key, _value in merged_before.yaml_node.value]
-    original_span_entries = dict(base_spans)
+    original_merged_pairs = _mapping_snapshot(merged_before)
+    original_merged_keys = [
+        occurrence.source_key_value
+        for occurrence in merged_before.mapping_occurrences()
+    ]
+    original_document_value = document.root.value
 
     masked_nodes, bodies = extract_inline_bodies(original_nodes, owner=("root",))
 
     body = bodies["merged"]
     assert body.nodes_cursor.value == anchor_children.value
-    assert body.nodes_cursor.range == anchor_children._own_range()
+    assert body.nodes_cursor.range == anchor_children.range
     assert body.output == "${echo.output}"
     assert body.output_range == anchor.range_of("output")
 
@@ -390,15 +395,16 @@ nodes:
     }
     assert masked.range_of("call") == anchor.range_of("nodes")
     assert list(masked._value_view()).count("call") == 1
-    assert tuple(merged_before.yaml_node.value) == original_merged_pairs
-    assert [key.value for key, _value in merged_before.yaml_node.value] == (
-        original_merged_keys
-    )
-    assert base_spans == original_span_entries
+    assert _mapping_snapshot(merged_before) == original_merged_pairs
+    assert [
+        occurrence.source_key_value
+        for occurrence in merged_before.mapping_occurrences()
+    ] == original_merged_keys
+    assert document.root.value == original_document_value
 
 
 def test_extract_merged_local_body_override_uses_effective_values_and_ranges():
-    root, base_spans = _located_root(
+    root, document = _located_root(
         """
 body: &body
   kind: call
@@ -426,19 +432,22 @@ nodes:
     anchor = root.child("body")
     original_nodes = root.child("nodes")
     merged_before = original_nodes.child("merged")
-    nodes_pairs = _yaml_pairs(merged_before, "nodes")
-    output_pairs = _yaml_pairs(merged_before, "output")
+    nodes_pairs = merged_before.mapping_occurrences("nodes")
+    output_pairs = merged_before.mapping_occurrences("output")
     assert len(nodes_pairs) == 2
     assert len(output_pairs) == 2
-    local_nodes_node = nodes_pairs[-1][1]
-    local_output_node = output_pairs[-1][1]
-    local_nodes_range = base_spans[id(local_nodes_node)]
-    local_output_range = base_spans[id(local_output_node)]
-    original_merged_pairs = tuple(merged_before.yaml_node.value)
-    original_anchor_pairs = tuple(anchor.yaml_node.value)
-    original_merged_keys = [key.value for key, _value in merged_before.yaml_node.value]
-    original_anchor_keys = [key.value for key, _value in anchor.yaml_node.value]
-    original_span_entries = dict(base_spans)
+    local_nodes_range = nodes_pairs[-1].range
+    local_output_range = output_pairs[-1].range
+    original_merged_pairs = _mapping_snapshot(merged_before)
+    original_anchor_pairs = _mapping_snapshot(anchor)
+    original_merged_keys = [
+        occurrence.source_key_value
+        for occurrence in merged_before.mapping_occurrences()
+    ]
+    original_anchor_keys = [
+        occurrence.source_key_value for occurrence in anchor.mapping_occurrences()
+    ]
+    original_document_value = document.root.value
 
     assert list(merged_before.value["nodes"]) == ["local"]
     assert merged_before.value["output"] == "${local.output}"
@@ -457,17 +466,20 @@ nodes:
     assert len(masked.mapping_occurrences("call")) == 1
     assert masked.range_of("call") == local_nodes_range
 
-    assert tuple(merged_before.yaml_node.value) == original_merged_pairs
-    assert tuple(anchor.yaml_node.value) == original_anchor_pairs
-    assert [key.value for key, _value in merged_before.yaml_node.value] == (
-        original_merged_keys
-    )
-    assert [key.value for key, _value in anchor.yaml_node.value] == original_anchor_keys
-    assert base_spans == original_span_entries
+    assert _mapping_snapshot(merged_before) == original_merged_pairs
+    assert _mapping_snapshot(anchor) == original_anchor_pairs
+    assert [
+        occurrence.source_key_value
+        for occurrence in merged_before.mapping_occurrences()
+    ] == original_merged_keys
+    assert [
+        occurrence.source_key_value for occurrence in anchor.mapping_occurrences()
+    ] == original_anchor_keys
+    assert document.root.value == original_document_value
 
 
 def test_extract_rejects_authored_private_call_target_without_mutating_source():
-    root, base_spans = _located_root(
+    root, document = _located_root(
         f"""nodes:
   attacker:
     kind: call
@@ -476,9 +488,9 @@ def test_extract_rejects_authored_private_call_target_without_mutating_source():
     )
     original_nodes = root.child("nodes")
     attacker = original_nodes.child("attacker")
-    original_value = dict(attacker.value)
-    original_pairs = tuple(attacker.yaml_node.value)
-    original_span_entries = dict(base_spans)
+    original_value = attacker.value
+    original_pairs = _mapping_snapshot(attacker)
+    original_document_value = document.root.value
 
     with pytest.raises(LoadError) as caught:
         extract_inline_bodies(original_nodes, owner=("root",))
@@ -487,8 +499,8 @@ def test_extract_rejects_authored_private_call_target_without_mutating_source():
     assert INLINE_FLOW_PREFIX in str(caught.value)
     assert caught.value.range == attacker.range_of("call")
     assert attacker.value == original_value
-    assert tuple(attacker.yaml_node.value) == original_pairs
-    assert base_spans == original_span_entries
+    assert _mapping_snapshot(attacker) == original_pairs
+    assert document.root.value == original_document_value
 
 
 def test_load_translates_recursive_inline_preflight_access_to_load_error():
@@ -530,21 +542,21 @@ def test_extract_rejects_sibling_private_id_attack_before_masking_any_body(
     output: ${echo.output}
 """
     first, second = (attacker, victim) if attacker_first else (victim, attacker)
-    root, base_spans = _located_root("nodes:\n" + first + second)
+    root, document = _located_root("nodes:\n" + first + second)
     original_nodes = root.child("nodes")
-    attacker_reader = original_nodes.child("attacker")
-    victim_reader = original_nodes.child("victim")
-    original_attacker = dict(attacker_reader.value)
-    original_victim = dict(victim_reader.value)
-    original_attacker_pairs = tuple(attacker_reader.yaml_node.value)
-    original_victim_pairs = tuple(victim_reader.yaml_node.value)
-    original_span_entries = dict(base_spans)
+    attacker_cursor = original_nodes.child("attacker")
+    victim_cursor = original_nodes.child("victim")
+    original_attacker = attacker_cursor.value
+    original_victim = victim_cursor.value
+    original_attacker_pairs = _mapping_snapshot(attacker_cursor)
+    original_victim_pairs = _mapping_snapshot(victim_cursor)
+    original_document_value = document.root.value
     mask_calls: list[str] = []
     original_mask = inline_bodies_module._mask_inline_body
 
-    def track_mask(reader: NodeReader, flow_id: str) -> None:
+    def track_mask(cursor: SourceCursor, flow_id: str, body_value: dict):
         mask_calls.append(flow_id)
-        original_mask(reader, flow_id)
+        return original_mask(cursor, flow_id, body_value)
 
     monkeypatch.setattr(inline_bodies_module, "_mask_inline_body", track_mask)
 
@@ -554,17 +566,17 @@ def test_extract_rejects_sibling_private_id_attack_before_masking_any_body(
     assert "reserved" in str(caught.value).lower()
     assert INLINE_FLOW_PREFIX in str(caught.value)
     assert victim_target not in str(caught.value)
-    assert caught.value.range == attacker_reader.range_of("call")
+    assert caught.value.range == attacker_cursor.range_of("call")
     assert mask_calls == []
-    assert attacker_reader.value == original_attacker
-    assert victim_reader.value == original_victim
-    assert tuple(attacker_reader.yaml_node.value) == original_attacker_pairs
-    assert tuple(victim_reader.yaml_node.value) == original_victim_pairs
-    assert base_spans == original_span_entries
+    assert attacker_cursor.value == original_attacker
+    assert victim_cursor.value == original_victim
+    assert _mapping_snapshot(attacker_cursor) == original_attacker_pairs
+    assert _mapping_snapshot(victim_cursor) == original_victim_pairs
+    assert document.root.value == original_document_value
 
 
 def test_extract_allows_private_prefix_in_graph_node_id():
-    root, _spans = _located_root(
+    root, _document = _located_root(
         f"""nodes:
   {INLINE_FLOW_PREFIX}host:
     kind: call
@@ -662,18 +674,18 @@ def test_inline_body_shape_errors_are_located_without_private_ids(
     range_key: str | None,
     message: str,
 ):
-    root, _spans = _located_root(
+    root, _document = _located_root(
         "nodes:\n"
         "  composite:\n"
         f"    kind: {kind}\n"
         f"    {body}"
     )
-    nodes_reader = root.child("nodes")
-    raw_body = nodes_reader.child("composite")
-    expected_range = raw_body.range_of(range_key) if range_key else raw_body._own_range()
+    nodes_cursor = root.child("nodes")
+    raw_body = nodes_cursor.child("composite")
+    expected_range = raw_body.range_of(range_key) if range_key else raw_body.range
 
     with pytest.raises(LoadError) as caught:
-        extract_inline_bodies(nodes_reader, owner=("root",))
+        extract_inline_bodies(nodes_cursor, owner=("root",))
 
     assert message in str(caught.value)
     assert INLINE_FLOW_PREFIX not in str(caught.value)
@@ -699,9 +711,9 @@ def test_inline_body_shape_matrix_flows_through_loader(
         f"    kind: {kind}\n"
         f"    {body}"
     )
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     raw_body = root.child("nodes").child("composite")
-    expected_range = raw_body.range_of(range_key) if range_key else raw_body._own_range()
+    expected_range = raw_body.range_of(range_key) if range_key else raw_body.range
 
     with pytest.raises(LoadError) as caught:
         load_flow(source)
@@ -730,7 +742,7 @@ nodes:
     kind: call
     call: {victim_id}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = root.child("nodes").child("attacker").range_of("call")
 
     with pytest.raises(LoadError) as caught:
@@ -795,7 +807,7 @@ def test_register_inline_bodies_associates_call_map_loop_and_stays_lazy():
     ],
 )
 def test_child_label_is_not_authorable(kind: str, body: str):
-    root, _spans = _located_root(
+    root, _document = _located_root(
         "nodes:\n"
         "  composite:\n"
         f"    kind: {kind}\n"
@@ -1145,7 +1157,7 @@ nodes:
     output: ${echo.output}
 output: ${first.output}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = (
         root.child("nodes").child("first").mapping_value_ranges("input")["value"]
     )
@@ -1191,7 +1203,7 @@ nodes:
     output: ${echo_right.output}
 output: ${left.output}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = (
         root.child("nodes").child("right")
         .mapping_value_ranges("input")["from_left"]
@@ -1228,7 +1240,7 @@ nodes:
     output: ${echo.output}
 output: ${consumer.output}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = (
         root.child("nodes").child("consumer")
         .mapping_value_ranges("input")["value"]
@@ -1268,7 +1280,7 @@ nodes:
       topic: no-static-output
 output: ${consumer.output}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = (
         root.child("nodes").child("consumer")
         .mapping_value_ranges("input")["value"]
@@ -1541,7 +1553,7 @@ def test_inline_child_scope_is_closed_and_redacts_private_identity(
         "    output: ${leak.output}\n"
         "output: ${wrapper.output}\n"
     )
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = (
         root.child("nodes").child("wrapper").child("nodes").child("leak")
         .mapping_value_ranges("input")["x"]
@@ -1785,7 +1797,7 @@ nodes:
     output: ${{echo.output}}
 output: ${{each.output}}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     each = root.child("nodes").child("each")
     expected_range = each.mapping_value_ranges("input")["row"]
     over_range = each.range_of("over")
@@ -1877,7 +1889,7 @@ nodes:
     output: ${echo.output}
 output: ${each.output}
     """
-    direct_root, _spans = _located_root(direct_source)
+    direct_root, _document = _located_root(direct_source)
     expected_request_range = (
         direct_root.child("nodes").child("each")
         .mapping_value_ranges("input")["row"]
@@ -2012,7 +2024,7 @@ nodes:
     output: ${echo.output}
 output: ${each.output}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = (
         root.child("nodes").child("each")
         .mapping_value_ranges("input")["value"]
@@ -2303,7 +2315,7 @@ nodes:
     output: ${leak.output}
 output: ${each.output}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = (
         root.child("nodes").child("each").child("nodes").child("leak")
         .mapping_value_ranges("input")["x"]
@@ -2782,7 +2794,7 @@ nodes:
     output: str
 output: ${broken.output}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = (
         root.child("nodes").child("broken")
         .mapping_value_ranges("input")["x"]
@@ -2817,7 +2829,7 @@ nodes:
     output: ${echo.output}
 output: ${wrapper.output}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_ranges = (
         root.child("nodes").child("wrapper").mapping_value_ranges("input")
     )
@@ -2847,7 +2859,7 @@ nodes:
     output: ${missing.output}
 output: ${wrapper.output}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = root.child("nodes").child("wrapper").range_of("output")
 
     with pytest.raises(LoadError) as caught:
@@ -2880,7 +2892,7 @@ nodes:
     call: outer
 output: ${invoke.output}
 """
-    root, _spans = _located_root(source)
+    root, _document = _located_root(source)
     expected_range = (
         root.child("defs").child("outer").child("nodes")
         .child("wrapper").range_of("output")

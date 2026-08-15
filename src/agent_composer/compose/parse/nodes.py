@@ -25,7 +25,6 @@ from typing import Any
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes import KINDS
-from agent_composer.compose.helpers.reader import NodeReader, as_cursor
 from agent_composer.compose.source import SourceAccessError, SourceCursor
 
 # Singular source keys are projected onto the descriptor dataclasses' plural
@@ -33,26 +32,25 @@ from agent_composer.compose.source import SourceAccessError, SourceCursor
 _INPUT_OUTPUT_REMAP = {"input": "inputs", "output": "outputs"}
 
 
-def parse_nodes(nodes_reader: NodeReader | SourceCursor) -> dict[str, Any]:
-    """Parse a cursor or legacy reader into typed per-kind descriptors.
+def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
+    """Parse one source cursor into typed per-kind descriptors.
 
     The source is physical for a full graph, source-aligned for compact/def
     projections, or virtual for a programmatic/test mapping. Returns descriptors
     in source order with ranges whenever an authored source exists.
     """
-    cursor = as_cursor(nodes_reader)
     out: dict[str, Any] = {}
     try:
-        nodes = cursor._value_view()
+        nodes = nodes_cursor._value_view()
         if not isinstance(nodes, Mapping):
             return out
         for node_id in list(nodes):
-            desc = _parse_node(node_id, cursor.child(node_id))
+            desc = _parse_node(node_id, nodes_cursor.child(node_id))
             # Anchor the descriptor's node-level `.range` on the node's HEADER line (its
             # `key:` token), not its body/value block. The header is the node-level
             # diagnostic anchor a cycle, an unresolved ref, or a namespaced runtime failure
             # boxes — matching the old `node_lines` map.
-            header = cursor.key_range_of(node_id)
+            header = nodes_cursor.key_range_of(node_id)
             if header is not None and getattr(desc, "range", None) is not None:
                 desc = dataclasses.replace(desc, range=header)
             out[node_id] = desc
@@ -61,28 +59,28 @@ def parse_nodes(nodes_reader: NodeReader | SourceCursor) -> dict[str, Any]:
     return out
 
 
-def _parse_node(node_id: str, reader: SourceCursor) -> Any:
+def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
     """Read one keyed-map node body into its typed per-kind descriptor (located)."""
-    body = reader._value_view()
+    body = cursor._value_view()
     if not isinstance(body, Mapping):
         raise LoadError(
             f"node {node_id!r}: body must be a mapping, got {type(body).__name__}",
-            range=reader.range,
+            range=cursor.range,
         )
-    _reject_reserved_node_id(node_id, reader)
-    reader = _back_map_input_output(reader)
+    _reject_reserved_node_id(node_id, cursor)
+    cursor = _back_map_input_output(cursor)
 
-    kind = reader.get("kind")
+    kind = cursor.get("kind")
     if kind is None:
-        raise LoadError(f"node {node_id!r}: missing `kind`", range=reader.range)
+        raise LoadError(f"node {node_id!r}: missing `kind`", range=cursor.range)
     cls = KINDS.get(kind)
     if cls is None:
         raise LoadError(
             f"node {node_id!r}: unknown kind {kind!r} "
             f"(allowed: {', '.join(sorted(KINDS))})",
-            range=reader.range_of("kind"),
+            range=cursor.range_of("kind"),
         )
-    desc = cls.parse(node_id, reader)
+    desc = cls.parse(node_id, cursor)
     # Kind-blind range enrichments, keyed the way the runtime failure funnel resolves them — by the
     # location's `(SourceSpan.kind, key)`, never by a bare name — so keys across namespaces cannot
     # collide (the kind already stamped its own fields as `("field", name)` in `cls.parse`):
@@ -92,27 +90,27 @@ def _parse_node(node_id: str, reader: SourceCursor) -> Any:
     #     `assert_ranges` (aligned 1:1 with the authored `asserts:` list). Asserts are located by
     #     INDEX, not by their (non-unique) text, so two identical asserts get distinct carets — hence
     #     they live in a list, NOT in `field_ranges`.
-    # Both no-op for a spanless reader or a node without the field. `inputs:` is read AFTER
+    # Both no-op for a source-free cursor or a node without the field. `inputs:` is read AFTER
     # `_back_map_input_output` has renamed the author's singular `input:` key to plural.
     field_ranges = getattr(desc, "field_ranges", None)
     if isinstance(field_ranges, dict):
         field_ranges.update(
             {("input", name): rng
-             for name, rng in reader.mapping_value_ranges("inputs").items()}
+             for name, rng in cursor.mapping_value_ranges("inputs").items()}
         )
     assert_ranges = getattr(desc, "assert_ranges", None)
     if isinstance(assert_ranges, list):
-        assert_ranges.extend(reader.item_range_list("asserts"))
+        assert_ranges.extend(cursor.item_range_list("asserts"))
     return desc
 
 
-def _reject_reserved_node_id(node_id: str, reader: SourceCursor) -> None:
+def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:
     """Reject a node id that collides with a reserved separator, boundary, or resolver head.
 
     Mirrors the legacy `parser._parse_node` head guards; anchors each error at the node
     body's `SourceRange` (the closest located anchor for a bad node key).
     """
-    rng = reader.range
+    rng = cursor.range
     if "#" in node_id or "/" in node_id:
         raise LoadError(
             f"node id {node_id!r} uses a reserved separator ('#'/'/' are reserved for "
@@ -141,7 +139,7 @@ def _reject_reserved_node_id(node_id: str, reader: SourceCursor) -> None:
         )
 
 
-def _back_map_input_output(reader: SourceCursor) -> SourceCursor:
+def _back_map_input_output(cursor: SourceCursor) -> SourceCursor:
     """Return a pure singular-to-plural node-signature key projection."""
 
-    return reader.renamed(_INPUT_OUTPUT_REMAP)
+    return cursor.renamed(_INPUT_OUTPUT_REMAP)

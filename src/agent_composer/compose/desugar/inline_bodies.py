@@ -1,8 +1,8 @@
 """Occurrence-local extraction for inline composite child-flow bodies.
 
 Extraction projects immutable source cursors. Each alias occurrence therefore
-gets its own masked view while the document graph and legacy readers stay
-unchanged, and retained child cursors keep their original paths and ranges.
+gets its own masked view while the document graph stays unchanged, and retained
+child cursors keep their original paths and ranges.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.reader import NodeReader, as_cursor
 from agent_composer.compose.source import SourceCursor
 from agent_composer.events import SourceRange
 
@@ -61,7 +60,7 @@ def inline_flow_id(owner: tuple[str, ...]) -> str:
 
 
 def extract_inline_bodies(
-    nodes_cursor: NodeReader | SourceCursor,
+    nodes_cursor: SourceCursor,
     *,
     owner: tuple[str, ...],
 ) -> tuple[SourceCursor, dict[str, InlineBody]]:
@@ -70,10 +69,9 @@ def extract_inline_bodies(
     The returned cursor is an occurrence-local projection. Named composites remain
     unchanged. An inline composite becomes an ordinary private ``call:`` in that
     overlay, while the returned body record retains its original child/output
-    values and source locations. The supplied reader and its YAML anchors remain
+    values and source locations. The supplied cursor and its YAML anchors remain
     read-only.
     """
-    nodes_cursor = as_cursor(nodes_cursor)
     nodes = nodes_cursor._value_view()
     if not isinstance(nodes, Mapping):
         return nodes_cursor, {}
@@ -198,7 +196,7 @@ def _reject_authored_private_call_targets(nodes_cursor: SourceCursor) -> None:
 
 
 def _mask_inline_body(
-    reader: SourceCursor,
+    cursor: SourceCursor,
     flow_id: str,
     body_value: dict[Any, Any],
 ) -> tuple[SourceCursor, dict[Any, Any]]:
@@ -209,8 +207,8 @@ def _mask_inline_body(
     for key, value in body_value.items():
         if key == "nodes":
             masked["call"] = flow_id
-            entries["call"] = (None, reader.child("nodes"))
+            entries["call"] = (None, cursor.child("nodes"))
         elif key != "output":
             masked[key] = value
-            entries[key] = (None, reader.child(key))
-    return reader.project_mapping(entries), masked
+            entries[key] = (None, cursor.child(key))
+    return cursor.project_mapping(entries), masked

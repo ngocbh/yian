@@ -31,7 +31,7 @@ in `.build()`. `.build()` lowers unconditionally; the loader runs `check_case_ex
 validate phase.
 
 Imports flow down/peer only: `expr` (ref scan/rewrite), `nodes` (Case/CaseNode/ParamDecl),
-`compile.model` (Edge), and the compose peer `helpers.errors`/`helpers.reader`/`nodes.base`.
+`compile.model` (Edge), and the compose peer `source`/`helpers.errors`/`nodes.base`.
 It imports NOTHING from parse/desugar/edges/validate/build/loader (the ladder), so it stays a
 leaf of the nodes package.
 """
@@ -53,7 +53,6 @@ from agent_composer.expr import (
 from agent_composer.nodes.binding import ParamDecl
 from agent_composer.nodes.case import DEFAULT_HANDLE, Case, CaseNode
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.reader import NodeReader, as_cursor
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.source import SourceCursor
 
@@ -64,11 +63,11 @@ from agent_composer.compose.source import SourceCursor
 _YAML_BOOL_KEYS = {True: "on", False: "off"}
 
 
-def _normalized_key_names(reader: SourceCursor) -> dict[Any, Any]:
+def _normalized_key_names(cursor: SourceCursor) -> dict[Any, Any]:
     """Return effective YAML 1.1 boolean keys mapped to schema names.
 
     Args:
-        reader (`SourceCursor`):
+        cursor (`SourceCursor`):
             Node-body cursor whose effective source pairs determine whether a
             Python-equal key was authored as a YAML boolean or a number.
 
@@ -78,12 +77,12 @@ def _normalized_key_names(reader: SourceCursor) -> dict[Any, Any]:
             keys, usually ``"on"`` or ``"off"``.
     """
 
-    body = reader._value_view()
+    body = cursor._value_view()
     if not isinstance(body, Mapping):
         return {}
     names: dict[Any, Any] = {}
     for key in body:
-        child = reader.child(key)
+        child = cursor.child(key)
         source_key = child.source_key_value
         if type(source_key) is bool:
             names[key] = _YAML_BOOL_KEYS[source_key]
@@ -141,7 +140,7 @@ class CaseDescriptor(NodeDescriptor):
     def parse(
         cls,
         node_id: str,
-        reader: NodeReader | SourceCursor,
+        cursor: SourceCursor,
     ) -> "NodeDescriptor":
         """Template `parse` + capture each `cases[N].when` / `.then` VALUE range positionally.
 
@@ -149,7 +148,7 @@ class CaseDescriptor(NodeDescriptor):
         text key, so neither `field_ranges` nor `item_range_list` can reach them; the positional
         `sequence_field_ranges` does. `_desugar_searched` / `desugar_case_call_targets` read these
         to give a synth CASE param / call target its own caret."""
-        cursor = cls._normalize_cursor(as_cursor(reader))
+        cursor = cls._normalize_cursor(cursor)
         desc = super().parse(node_id, cursor)
         cases = cursor._value_view().get("cases")
         if isinstance(cases, Sequence) and not isinstance(cases, (str, bytes)):
@@ -163,14 +162,14 @@ class CaseDescriptor(NodeDescriptor):
         return desc
 
     @classmethod
-    def _normalize_cursor(cls, reader: SourceCursor) -> SourceCursor:
+    def _normalize_cursor(cls, cursor: SourceCursor) -> SourceCursor:
         """Project YAML 1.1's boolean `on:` key back to its surface spelling."""
 
-        body = reader._value_view()
+        body = cursor._value_view()
         if not isinstance(body, Mapping):
-            return reader
-        names = _normalized_key_names(reader)
-        return reader.renamed(names) if names else reader
+            return cursor
+        names = _normalized_key_names(cursor)
+        return cursor.renamed(names) if names else cursor
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Lower this `case` to a strict `CaseNode` + its control + data edges.

@@ -8,8 +8,6 @@ synth composer genuinely SHARES the gate's inputs verbatim and so correctly inhe
 gate's `.range`/`field_ranges`.
 """
 
-from agent_composer.compose.helpers.reader import NodeReader
-from agent_composer.compose.helpers.spanloader import load_with_spans
 from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.desugar.case_targets import desugar_case_call_targets
 from agent_composer.compose.desugar.inline_calls import (
@@ -17,12 +15,13 @@ from agent_composer.compose.desugar.inline_calls import (
     desugar_inline_calls,
 )
 from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceDocument
 
 
 def _nodes_reader(text):
-    """A span-aware NodeReader over the `nodes:` mapping of a flow document."""
-    value, spans, root = load_with_spans(text, return_root=True)
-    return NodeReader(value, spans, root).child("nodes")
+    """Return the physical cursor over a flow document's ``nodes:`` mapping."""
+
+    return SourceDocument.parse(text).root.child("nodes")
 
 
 def test_desugar_inline_calls_locate_at_their_binding_site():

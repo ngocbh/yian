@@ -54,7 +54,6 @@ from agent_composer.compose.edges.ordering import infer_ordering_edges
 from agent_composer.compose.validate.call_types import check_ref_map_types
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose.validate.wiring_parity import check_wiring_parity
-from agent_composer.compose.helpers.reader import NodeReader, as_cursor
 from agent_composer.compose.helpers.source import SourceFrame
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceAccessError, SourceCursor
@@ -302,7 +301,7 @@ def _assemble(
     *,
     inputs_section: Optional[dict] = None,
     input_decls: Optional[list[InputDecl]] = None,
-    nodes_cursor: NodeReader | SourceCursor,
+    nodes_cursor: SourceCursor,
     outputs_section,
     asserts_section: list,
     registry,
@@ -344,7 +343,6 @@ def _assemble(
     if (inputs_section is None) == (input_decls is None):
         raise ValueError("_assemble requires exactly one of inputs_section or input_decls")
 
-    nodes_cursor = as_cursor(nodes_cursor)
     try:
         nodes_cursor, inline_bodies = extract_inline_bodies(
             nodes_cursor,

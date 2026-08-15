@@ -1,17 +1,96 @@
 """Source-document ownership tests for the Compose loading boundary."""
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from agent_composer.compose import loader as compose_loader
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers import types as compose_types
-from agent_composer.compose.helpers import spanloader as legacy_spanloader
 from agent_composer.compose.parse.file import (
     parse_file,
     parse_source_document,
 )
 from agent_composer.compose.source import SourceDocument, parse_yaml_literal
 from agent_composer.compose.source import document as source_document
+
+
+_PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "src" / "agent_composer"
+_COMPOSE_ROOT = _PACKAGE_ROOT / "compose"
+_SOURCE_ROOT = _COMPOSE_ROOT / "source"
+
+
+def _production_modules(root=_COMPOSE_ROOT):
+    """Yield `(relative path, parsed AST)` for each production module below `root`."""
+
+    for path in sorted(root.rglob("*.py")):
+        yield path.relative_to(root), ast.parse(path.read_text())
+
+
+def test_only_source_package_imports_pyyaml():
+    offenders = []
+    for relative, tree in _production_modules(_PACKAGE_ROOT):
+        for node in ast.walk(tree):
+            imported = []
+            if isinstance(node, ast.Import):
+                imported = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                imported = [node.module]
+            if any(name == "yaml" or name.startswith("yaml.") for name in imported):
+                if relative.parts[:2] != ("compose", "source"):
+                    offenders.append(f"{relative}:{node.lineno}")
+    assert offenders == []
+
+
+def test_legacy_source_modules_are_absent():
+    assert not (_COMPOSE_ROOT / "helpers" / "reader.py").exists()
+    assert not (_COMPOSE_ROOT / "helpers" / "spanloader.py").exists()
+
+
+def test_source_package_has_no_upward_imports():
+    offenders = []
+    for path in sorted(_SOURCE_ROOT.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+                line = node.lineno
+            elif isinstance(node, ast.ImportFrom):
+                if node.level >= 2:
+                    offenders.append(
+                        f"{path.relative_to(_COMPOSE_ROOT)}:{node.lineno}:relative-upward"
+                    )
+                    continue
+                modules = [node.module] if node.module is not None else []
+                line = node.lineno
+            else:
+                continue
+            for module in modules:
+                if (
+                    module == "agent_composer.compose"
+                    or module.startswith("agent_composer.compose.")
+                ) and not module.startswith("agent_composer.compose.source"):
+                    offenders.append(f"{path.relative_to(_COMPOSE_ROOT)}:{line}:{module}")
+    assert offenders == []
+
+
+def test_document_graph_slots_are_private_to_source_package():
+    private_slots = {
+        "_value",
+        "_root_node",
+        "_definitions",
+        "_root_definition",
+        "_index",
+    }
+    offenders = []
+    for relative, tree in _production_modules():
+        if relative.parts[0] == "source":
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr in private_slots:
+                offenders.append(f"{relative}:{node.lineno}:{node.attr}")
+    assert offenders == []
 
 
 _FLOW = """\
@@ -103,40 +182,26 @@ def test_parse_source_document_translates_syntax_error():
     [_FLOW, _INLINE_FLOW, _DEFS_FLOW],
     ids=["plain", "inline", "defs"],
 )
-def test_root_variants_use_one_document_and_no_legacy_loader(
+def test_root_variants_use_one_document(
     monkeypatch,
     source,
 ):
     document_calls = 0
-    legacy_calls = 0
     original_init = source_document._DocumentLoader.__init__
-    original_legacy_init = legacy_spanloader.SpanLoader.__init__
 
     def count_loader(self, *args, **kwargs):
         nonlocal document_calls
         document_calls += 1
         original_init(self, *args, **kwargs)
 
-    def count_legacy_loader(self, *args, **kwargs):
-        nonlocal legacy_calls
-        legacy_calls += 1
-        original_legacy_init(self, *args, **kwargs)
-
     monkeypatch.setattr(
         source_document._DocumentLoader,
         "__init__",
         count_loader,
     )
-    monkeypatch.setattr(
-        legacy_spanloader.SpanLoader,
-        "__init__",
-        count_legacy_loader,
-    )
-
     compose_loader.load_flow(source)
 
     assert document_calls == 1
-    assert legacy_calls == 0
 
 
 def test_root_load_does_not_mutate_captured_document(monkeypatch):

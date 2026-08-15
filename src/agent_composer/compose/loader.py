@@ -537,7 +537,9 @@ class _CallableScope:
     Compiler-owned callables resolve first, then authored ``defs:`` and ``uses:``.
     A bare name in neither authored mapping is rejected instead of reaching the
     external resolver. Private declarations, local defs, and external aliases share
-    one memo table, while an in-progress set makes recursive construction loud.
+    one memo table. The in-progress set makes recursive private/def construction
+    loud; cross-file recursion is outside this scope and belongs to the selected
+    external resolver.
 
     Args:
         defs_section (`dict`):

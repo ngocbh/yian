@@ -13,7 +13,7 @@ passes use an explicit package-private read-only view. A temporary
 with `NodeReader`/`SpanLoader`. `_LoadCtx` separately caches physical documents
 and compiled flows.
 
-**Tech stack**: Python 3.11, PyYAML, Pydantic, pytest, MkDocs Material.
+**Tech stack**: Python 3.10+, PyYAML, Pydantic, pytest, MkDocs Material.
 
 **Tracking**: [issue #130](https://github.com/ngocbh/agent-composer/issues/130),
 delivery slice 1 of
@@ -24,9 +24,9 @@ delivery slice 1 of
 This revision resolves every critical item in
 `docs/plans/2026-08-15-unified-failure-origins-plan-source-review.md`:
 
-- `SourceDocument` now has explicit private slots `_value`, `_root_node`, and
-  `_index`; cycle 1 tests only loading, constructed values, and syntax errors.
-  Cursor navigation and ranges begin in cycle 2.
+- `SourceDocument` starts cycle 1 with explicit private slots `_value`,
+  `_root_node`, and an empty `_index`; cycle 2 replaces that placeholder with a
+  linear definition DAG. Cursor navigation and ranges begin in cycle 2.
 - Immutability is enforceable: the internal graph is never public,
   `SourceCursor.value`/`get`/`mapping`/`sequence` return defensive deep copies,
   recursive aliases remain recursive, `_value_view()` is read-only, and virtual
@@ -47,6 +47,27 @@ This revision resolves every critical item in
 - Every staging command names exact files. There is no broad `git add` over test
   or source directories.
 
+## Correction found during cycle-1 adversarial review
+
+The original cycle-2 plan eagerly materialized every occurrence path. That is
+unsafe for a compact binary alias DAG: PyYAML retains shared definitions, but an
+eager occurrence tree can grow exponentially. The implementation instead interns
+each unique YAML node once in a read-only definition DAG. A `SourceCursor`
+creates a persistent path link only for a branch compose actually visits, and
+materializes its `OccurrencePath` tuple only when an origin is registered.
+
+This correction also closes three boundary ambiguities before implementation:
+
+- `mapping_occurrences()` uses a private no-filter sentinel, so
+  `mapping_occurrences(None)` can select an authored YAML null key;
+- package-private views cover SafeLoader's mutable `set` values as well as
+  mapping/list/tuple containers; virtual/projected values accept only the exact
+  recursive SafeLoader value algebra and reject custom objects or container
+  subclasses;
+- physical occurrence-key encoding distinguishes `None`, exact `bool`, exact
+  `int`, and `str`. In particular, YAML 1.1's bare `on:` key constructs as
+  `True` and must not collide with integer key `1`.
+
 ## Scope
 
 In scope:
@@ -54,7 +75,7 @@ In scope:
 - one full-document parse per physical source;
 - occurrence paths that distinguish alias appearances while ranges point at the
   anchor definition;
-- last-effective duplicate/merge lookup with every raw pair still indexable;
+- last-effective duplicate/merge lookup with every raw pair still navigable;
 - immutable virtual views for singular/plural keys, CASE's YAML-1.1 `on`, inline
   bodies, compact flows, and single-node defs;
 - separate external document and compiled-flow caches;
@@ -110,9 +131,8 @@ class SourceDocument:
     label: str
     _value: Any = field(repr=False, compare=False)
     _root_node: Any = field(repr=False, compare=False)
-    _index: Mapping[OccurrencePath, _Occurrence] = field(
-        repr=False, compare=False
-    )
+    _definitions: tuple[_Definition, ...] = field(repr=False, compare=False)
+    _root_definition: int = field(repr=False, compare=False)
 
     @classmethod
     def parse(cls, text: str, label: str = "<flow>") -> "SourceDocument": ...
@@ -126,14 +146,23 @@ class SourceDocument:
     ) -> "SourceDocument": ...
 ```
 
-There is deliberately no public `value`, `root_node`, `index`, or spans property.
+There is deliberately no public `value`, `root_node`, `definitions`, or spans property.
 Only `text`, `label`, and the safe `root` cursor are public. `_from_constructed`
 exists only for the temporary no-reparse legacy adapter and is deleted when that
 adapter is deleted.
 
-`_DocumentLoader` composes once, constructs against the same node tree, builds
-the index, and is disposed. Temporary construction maps are not retained on the
-document. `_index` is wrapped read-only.
+`_DocumentLoader` composes once and constructs against the same node tree. A
+temporary `id(yaml_node) -> constructed value` table then interns each unique
+node into one frozen `_ScalarDef | _MappingDef | _SequenceDef`. Immediate mapping
+arcs retain every flattened pair plus its key node and ordinal; sequence arcs
+retain their index. Definition IDs are assigned before descent, so recursive
+aliases terminate and alias DAG storage stays linear. Temporary construction and
+node-to-definition maps are discarded before the loader is disposed.
+
+`SourceCursor` retains its current definition ID and a persistent private path
+link. Descending is O(1); `cursor.path` materializes a tuple only on demand.
+`SourceDocument._resolve_occurrence(path)` replays a finite path through the DAG
+for later catalog resolution. Definition IDs never appear in origin keys.
 
 ### Enforced value immutability
 
@@ -144,16 +173,22 @@ document. `_index` is wrapped read-only.
    aliases and recursive self-links inside that returned copy. Mutating it cannot
    change the document or another read.
 2. Package-private `_value_view()` returns `_ReadOnlyMapping`,
-   `_ReadOnlySequence`, or an immutable scalar. The wrappers are memoized by
-   underlying object identity, so alias identity and recursive cycles are
-   preserved, but no mutation API exists. Compose parse/build code uses this view
-   explicitly and tests use `collections.abc.Mapping`/`Sequence`, not concrete
-   `dict`/`list` assumptions.
+   `_ReadOnlySequence`, a memoized immutable set view, or an immutable SafeLoader
+   scalar. The wrappers are memoized by underlying object identity, so alias
+   identity and recursive cycles are preserved, but no mutation API exists.
+   Compose parse/build code uses this view explicitly and tests use
+   `collections.abc.Mapping`/`Sequence`/`Set`, not concrete container assumptions.
 
 Virtual cursors and overlays deep-copy incoming mutable values once, then store
 the same internal read-only representation. Every later public read is another
 copy. Mutating either the caller's original object or a returned overlay value
 cannot change the overlay.
+
+The accepted virtual algebra is exact `dict`, `list`, `tuple`, `set`,
+`frozenset`, and SafeLoader scalar values (`None`, `bool`, `int`, `float`, `str`,
+`bytes`, `date`, and `datetime`), recursively. Custom objects and container
+subclasses raise `TypeError`; a future Python graph front end does not pass
+through this YAML-specific cursor layer.
 
 ### Complete `SourceCursor` API
 
@@ -187,7 +222,7 @@ class SourceCursor:
     def child(self, key: Any) -> "SourceCursor": ...
     def children(self) -> tuple["SourceCursor", ...]: ...
     def mapping_occurrences(
-        self, key: Any | None = None
+        self, key: Any = _NO_FILTER
     ) -> tuple["SourceCursor", ...]: ...
 
     def str(self, key: Any) -> str: ...
@@ -224,15 +259,17 @@ Semantics are fixed before implementation:
 - `mapping_occurrences()` is mapping-only raw occurrence enumeration. It returns
   flattened pairs in pair order, including ignored duplicates; an optional key
   filters using the same constructed-key equality as the mapping. It returns `()`
-  for sequences/scalars.
+  for sequences/scalars. A private sentinel represents no filter, so passing
+  `None` filters a real null key.
 - `get`, `mapping`, and `sequence` return defensive copies. `str` and `int`
   return immutable scalars. `mapping` never accepts a sequence and `sequence`
   never accepts a mapping.
 - `_MapStep(constructed_key, pair_ordinal)` and `_SeqStep(index)` form paths.
   Aliases at two authored locations have distinct paths even when they share a
   YAML node and definition range.
-- An ancestry guard records a recursive alias occurrence and stops descending
-  through it; document construction cannot recurse forever.
+- A persistent-link ancestry guard records a recursive alias occurrence and
+  marks it cycle-cut. Its value/ranges/path remain readable and replayable, but
+  further child/occurrence traversal raises a located `SourceAccessError`.
 - A projected parent retains its own document, path, and range. A projected child
   with a source cursor retains that source cursor's document/path/key/value
   ranges while exposing the replacement value. A child with `source=None` is
@@ -376,14 +413,16 @@ navigation.
 5. **(2 min)** Run only `test_document_has_private_retained_slots`; expect green.
 6. **(3 min, test first)** Add
    `test_document_uses_one_loader_instance` by spying on
-   `_DocumentLoader.__init__`; assert one call for one `SourceDocument.parse`.
+   `_DocumentLoader.__init__`, `get_single_node`, `construct_document`, and
+   `dispose`; assert one call to each for one non-empty `SourceDocument.parse`.
 7. **(3 min)** Run the loader-instance test; fix only construction/disposal defects.
 8. **(3 min, test first)** Add
    `test_document_raises_source_syntax_error_with_problem_range` and
-   `test_document_rejects_multiple_documents`.
+   `test_document_rejects_multiple_documents`. Also pin empty-document behavior
+   and ReaderError positions after LF, CR, CRLF, NEL, LS, and PS line breaks.
 9. **(4 min, implementation)** Translate PyYAML scanner/parser/composer failures to
-   `SourceSyntaxError(message, range)` inside `document.py`; do not import
-   `LoadError`.
+   `SourceSyntaxError(message, range)` inside `document.py`, including failures
+   raised while the loader is initialized; do not import `LoadError`.
 10. **(3 min)** Run all source-document tests.
 11. **(2 min)** Run `git diff --check`, inspect status, and stage exactly:
 
@@ -409,34 +448,50 @@ Each substep adds one behavior and runs only its named tests before proceeding.
 3. **(2 min)** Run the defensive-copy test.
 4. **(4 min, test first)** Add
    `test_value_copy_preserves_alias_identity_and_recursive_alias` and
-   `test_value_view_is_recursive_and_read_only`.
-5. **(5 min, implementation)** Add memoized `_ReadOnlyMapping` and
-   `_ReadOnlySequence` in `common.py`; implement `_value_view()` without mutation
-   methods and with identity memoization.
+   `test_value_view_is_recursive_and_read_only`. Add `!!set`, `!!omap`, and
+   `!!pairs` cases plus virtual rejection of custom objects/container subclasses.
+5. **(5 min, implementation)** Add memoized `_ReadOnlyMapping`,
+   `_ReadOnlySequence`, and immutable set handling in `common.py`; implement
+   `_value_view()` without mutation methods and with identity memoization. Validate
+   virtual/projected snapshots against the exact recursive SafeLoader value
+   algebra.
 6. **(3 min)** Run the two alias/view tests; explicitly assert
    `copy["root"]["self"] is copy["root"]` and the same relationship for views.
-7. **(3 min, test first)** Add `test_mapping_child_and_children_use_effective_order`
-   plus 1-based value/key range assertions.
-8. **(5 min, implementation)** Retain temporary per-YAML-node constructed values in
-   `_DocumentLoader`; build `_MapStep` occurrences and effective child selection,
-   then discard the temporary maps before `SourceDocument.parse` returns.
-9. **(3 min)** Run the mapping/range test.
+7. **(3 min, test first)** Add
+   `test_definition_dag_is_linear_for_binary_alias_graph` using at least 24
+   levels, `test_deep_alias_path_is_lazy`, and
+   `test_mapping_child_and_children_use_effective_order` with 1-based value/key
+   range assertions.
+8. **(5 min, implementation)** Override `_DocumentLoader.construct_object()` only
+   to retain a temporary YAML-node-to-constructed-value table. After construction,
+   intern every unique YAML node once into frozen scalar/mapping/sequence
+   definitions. Mapping definitions retain every flattened pair arc and their
+   effective first-key-order/last-value ordinals. Assign a definition ID before
+   descending, discard both temporary maps, and add persistent cursor path links.
+   Do not materialize an occurrence tree or `OccurrencePath -> _Occurrence` map.
+9. **(3 min)** Run the DAG/lazy mapping/range tests and assert definition count is
+   linear in the unique composed graph.
 10. **(3 min, test first)** Add
     `test_sequence_child_and_children_follow_indices`.
-11. **(4 min, implementation)** Add `_SeqStep`, sequence occurrence indexing,
-    integer `child`, and sequence `children`.
+11. **(4 min, implementation)** Add `_SeqStep`, sequence definition arcs,
+    non-negative non-bool integer `child`, and sequence `children`.
 12. **(2 min)** Run the sequence test.
 13. **(3 min, test first)** Add
     `test_duplicate_lookup_is_last_but_occurrences_keep_both` and
-    `test_merge_local_value_wins_but_inherited_occurrence_remains`.
+    `test_merge_local_value_wins_but_inherited_occurrence_remains`. Add
+    `test_null_key_filter_is_distinct_from_no_filter`.
 14. **(5 min, implementation)** Complete `mapping_occurrences` and last-effective
-    lookup using pair ordinals; do not collapse raw pairs in the index.
+    lookup using pair ordinals; use a private no-filter sentinel and do not
+    collapse raw definition arcs.
 15. **(3 min)** Run duplicate/merge tests.
 16. **(3 min, test first)** Add
     `test_alias_occurrences_have_distinct_paths_and_anchor_ranges` and
-    `test_recursive_alias_index_stops_at_ancestor`.
-17. **(5 min, implementation)** Add occurrence-local path descent plus the ancestry
-    guard. Record the recursive child occurrence before stopping.
+    `test_recursive_alias_path_stops_at_ancestor`. Materialize one cursor path,
+    discard the cursor, and assert the document replays it to the same range.
+17. **(5 min, implementation)** Add occurrence-local persistent-link descent plus
+    a definition-ID ancestry guard. Record the recursive child occurrence before
+    marking it cycle-cut; preserve its value/range/path and reject further
+    traversal.
 18. **(3 min)** Run alias and recursion tests.
 19. **(3 min, test first)** Port typed/range cases from `test_reader.py` under these
     exact names:
@@ -495,8 +550,9 @@ smokes all pass.
    one located `NodeReader`, and assert zero new loader calls plus equal ranges.
 2. **(5 min, implementation)** Add `_from_constructed` to `SourceDocument` and
    `as_cursor` to `compose/helpers/reader.py`; deep-copy the value, reuse the
-   already-composed tree/range lookup only to build the private occurrence index,
-   and never expose it.
+   already-composed tree/range lookup only to build the private definition DAG,
+   and never expose it. The temporary adapter needs only effective values; it is
+   deleted before this issue closes and must not become a second constructor.
 3. **(2 min)** Run the adapter test.
 4. **(3 min, test first)** In `tests/compose/test_parse.py`, add
    `test_parse_nodes_normalizes_without_mutating_cursor` and
@@ -743,8 +799,9 @@ smokes all pass.
    `test_legacy_source_modules_are_absent`, and
    `test_source_package_has_no_upward_imports`. Add
    `test_document_graph_slots_are_private_to_source_package`, which scans
-   production AST/text and rejects `_value`, `_root_node`, or `_index` access
-   outside `compose/source/`.
+   production AST/text and rejects `_value`, `_root_node`, `_definitions`, or
+   `_root_definition` access outside `compose/source/`; `_index` must be absent
+   after the cycle-2 placeholder is removed.
 2. **(2 min)** Run those tests; expect the first two to fail while legacy modules
    remain.
 
@@ -972,7 +1029,7 @@ unchanged.
 - A plain/inline root and a parent with multiple defs use one `_DocumentLoader`.
 - Every external physical file is read and parsed once per load graph, including
   repeated aliases and diamond imports.
-- `SourceDocument` exposes no constructed value/tree/index.
+- `SourceDocument` exposes no constructed value/tree/definition DAG.
 - No production module outside `compose/source/` reads its private graph slots.
 - Every public cursor value read is a defensive recursive-alias-preserving copy;
   the internal view is recursively read-only; overlay inputs are snapshotted.

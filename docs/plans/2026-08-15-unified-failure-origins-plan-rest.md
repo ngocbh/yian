@@ -469,7 +469,9 @@ git commit -m "refactor(engine): carry parameters and value contracts through co
 6. `SourceCatalogBuilder.register(semantic_path, cursor)` rejects duplicate
    origin keys, `freeze()` is immutable, and the resulting `SourceCatalog`
    resolves each registered frame. Duplicate mapping pairs, aliases,
-   adversarial `~`/`/`, numeric strings, and integer indices cannot collide.
+   adversarial `~`/`/`, null/bool/int/string mapping keys, numeric strings, and
+   integer indices cannot collide. In particular, CASE's bare YAML-1.1 `on:`
+   key (`True`) is distinct from integer key `1`.
 7. renamed/projected virtual overlays register their backing authored cursor;
    a wholly source-free virtual cursor returns `None` and creates no entry.
 
@@ -507,17 +509,22 @@ JSON-Pointer `~0`/`~1` escaping before `/` joining):
 encode(("semantic", *semantic_path, "occurrence", *occurrence_tokens))
 string x -> s:<escaped-x>
 integer n -> i:<base-10-n>
+null mapping key -> n:null
+boolean mapping key -> b:0 or b:1
 _MapStep(key, pair_ordinal) -> ("map", key, pair_ordinal)
 _SeqStep(index)             -> ("seq", index)
 ```
 
 Thus a mapping pair contributes the three typed segments
 `s:map/<typed-key>/i:<pair_ordinal>` and a sequence item contributes
-`s:seq/i:<index>`. Compose syntax has already rejected unsupported mapping-key
-types; the builder raises the current located `LoadError` if one nevertheless
-reaches this internal boundary. Pair ordinal is mandatory even for the effective
-last duplicate. Alias occurrences retain different occurrence keys while their
-`SourceSite`s deliberately resolve to the same anchor definition range.
+`s:seq/i:<index>`. Encode occurrence mapping keys by exact type in this order:
+`None -> n:null`, `bool -> b:0|b:1`, `int -> i:<decimal>`, and escaped
+`str -> s:<text>`; checking `bool` before `int` is mandatory. Other key types may
+remain navigable in a cursor, but the builder raises the current located
+`LoadError` if compose tries to register one. Pair ordinal is mandatory even for
+the effective last duplicate. Alias occurrences retain different occurrence
+keys while their `SourceSite`s deliberately resolve to the same anchor definition
+range.
 
 `freeze()` copies into an immutable mapping and rejects every duplicate key;
 `SourceCatalog.resolve()` derives a `DiagnosticFrame` from the retained

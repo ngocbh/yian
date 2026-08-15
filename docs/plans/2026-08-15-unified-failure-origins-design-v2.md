@@ -133,6 +133,14 @@ This prevents collisions between a key named `"0"` and index `0`, or between
 adversarial node/def/alias names. The spelling is tested but is not a public path
 API.
 
+Physical YAML occurrence tokens use the same typed discipline, but must also
+represent PyYAML's constructed mapping keys. They encode exact types in the
+order `None -> n:null`, `bool -> b:0|b:1`, `int -> i:<decimal>`, and
+`str -> s:<escaped>`. The exact-`bool` case is load-bearing because YAML 1.1
+constructs the authored key `on:` as `True`; it must not collide with integer
+key `1`. Other mapping-key types remain navigable but are rejected, with their
+source location, if compose tries to register them as semantic origins.
+
 ### Failure
 
 ```python
@@ -229,13 +237,22 @@ The same renderer consumes load-time `error.diagnostic` and runtime
 SourceDocument.parse(text, label)
     -> constructed Python value
     -> one retained YAML node tree
-    -> occurrence-path index
+    -> one definition DAG over unique YAML nodes
 ```
 
-One `SpanLoader` invocation first composes the node tree and then constructs the
-value against those same nodes. PyYAML may flatten merge keys while constructing;
-after `SourceDocument` is created, its value, tree, and indexes are treated as
+One private `_DocumentLoader` invocation first composes the node tree and then
+constructs the value against those same nodes. PyYAML may flatten merge keys
+while constructing;
+after `SourceDocument` is created, its value, tree, and definition DAG are treated as
 read-only. No later pass mutates key nodes, mapping values, or shared aliases.
+
+The DAG is linear in the composed YAML graph: each unique YAML node is interned
+once, while mapping and sequence definitions retain their immediate arcs.
+`SourceCursor` creates persistent occurrence-path links only for branches that a
+compose pass actually visits. It never eagerly expands aliases. This matters for
+a small YAML document whose anchors form a binary alias DAG: eagerly materializing
+all logical occurrence paths would consume exponential memory even though
+PyYAML's constructed object graph remains shared.
 
 "Parsed once" means one full-document parse of each physical source stream.
 Parsing an already-authored scalar default substring as a literal is not a
@@ -258,11 +275,12 @@ constructed key and pair ordinal; sequence steps retain their index. This gives
 two appearances of one aliased YAML node distinct occurrence identities even
 when both display the anchor definition's range.
 
-`SourceCursor` is an immutable view containing a document, occurrence path, and
-optional virtual name/value overlay. Its rules are:
+`SourceCursor` is an immutable view containing a document, one definition-DAG
+node, a lazily linked occurrence path, and an optional virtual name/value
+overlay. Its rules are:
 
 - duplicate mapping keys select the last effective pair, matching current
-  behavior; ignored earlier pairs remain indexable for load diagnostics;
+  behavior; ignored earlier pairs remain navigable for load diagnostics;
 - merge keys use PyYAML's existing flattened precedence; a local/last value wins;
 - aliases have occurrence-local paths but intentionally resolve to their anchor
   definition range;
@@ -272,8 +290,15 @@ optional virtual name/value overlay. Its rules are:
   child bodies use virtual cursors/overlays;
 - traversal has an ancestry guard, so recursive aliases cannot recurse forever.
 
-Range lookup is occurrence-path based, not `id(yaml_node)` based. Multiple
-occurrence paths may intentionally point to the same definition-site range.
+The cursor materializes its public `OccurrencePath` tuple only when an origin is
+registered. A later diagnostic replays that finite path through the definition
+DAG. Alias siblings therefore share one definition but retain distinct paths;
+the definition ID is private process state and never enters an `OriginRef`.
+
+Range lookup is occurrence-path based. Node identity is used only during the one
+construction pass to associate SafeLoader results with retained definitions; it
+is not a stored source-site identity. Multiple occurrence paths may intentionally
+point to the same definition-site range.
 
 ## SourceCatalog and deterministic child composition
 

@@ -13,6 +13,12 @@ from agent_composer.compose.source.common import (
     SourceAccessError,
     SourceSyntaxError,
 )
+from agent_composer.compose.source.cursor import SourceCursor
 from agent_composer.compose.source.document import SourceDocument
 
-__all__ = ["SourceAccessError", "SourceDocument", "SourceSyntaxError"]
+__all__ = [
+    "SourceAccessError",
+    "SourceCursor",
+    "SourceDocument",
+    "SourceSyntaxError",
+]

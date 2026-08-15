@@ -15,14 +15,18 @@ def test_document_has_private_retained_slots():
 
     assert document._value == {"count": 30, "flag": True}
     assert document._root_node is not None
-    assert document._index == {}
-    with pytest.raises(TypeError):
-        document._index[()] = None
+    assert document._definitions
+    assert document._root_definition == 0
+    with pytest.raises(FrozenInstanceError):
+        document._definitions[0].range = None
     assert document.text == text
     assert document.label == "flow.yaml"
     assert not hasattr(document, "value")
     assert not hasattr(document, "root_node")
+    assert not hasattr(document, "definitions")
+    assert not hasattr(document, "root_definition")
     assert not hasattr(document, "index")
+    assert not hasattr(document, "_index")
     assert not hasattr(document, "__dict__")
     with pytest.raises(FrozenInstanceError):
         document.label = "other.yaml"
@@ -54,6 +58,7 @@ def test_document_uses_one_loader_instance(monkeypatch):
 
     def counting_dispose(loader):
         calls["dispose"] += 1
+        assert loader._source_values == {}
         return original_dispose(loader)
 
     monkeypatch.setattr(document_module._DocumentLoader, "__init__", counting_init)
@@ -110,3 +115,5 @@ def test_document_accepts_an_empty_document():
 
     assert document._value is None
     assert document._root_node is None
+    assert document._root_definition == 0
+    assert len(document._definitions) == 1

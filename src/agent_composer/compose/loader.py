@@ -5,12 +5,12 @@ call resolver, load every `defs:` callable, and hand the parsed sections to the
 post-parse conductor (`build.pipeline._assemble`, imported back here) which returns
 the `ComposedFlow`. This module owns the span readers (`_nodes_reader`/`_def_nodes_reader`/
 `_frame_ranges`/`top_frame_ranges`), the resolver composition (`make_file_resolver`/
-`_make_call_resolver`), and the defs loaders (`_load_def`/`_load_single_node_def`) —
+`_CallableScope`), and the defs loaders (`_load_def`/`_load_single_node_def`) —
 not the assembly pipeline itself.
 
 `call` resolution is **defs-first**: a `call:` names an in-file `defs:` callable (built
-in-loader by the same `_assemble`) or, failing that, an external flow via the
-injected `child_resolver` (`(flow_id, version) -> ComposedFlow`). `_make_call_resolver`
+in-loader by the same `_assemble`) or a `uses:` alias resolved through the injected
+`child_resolver` (`(flow_id, version) -> ComposedFlow`). `_CallableScope`
 composes the two (and rejects recursive/mutual defs). `call` nodes are resolved-and-baked
 at load: the loader derives the callable's signature (a plain call re-exports the single
 codomain `Type`; a mapped call stamps `list[<codomain>]`; bindings are name/arity- and
@@ -387,10 +387,11 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
         external = None                                      # no resolver -> non-def call: is loud
 
     # The composite call resolver: defs-first, then a `uses:` alias (external, with the
-    # ref's version), then a legacy bare name. Building the defs eagerly surfaces a
+    # ref's version); an undeclared bare name is loud. Building the defs eagerly surfaces a
     # broken/recursive callable at load (loud, not a hang). `text` is threaded so each
     # def's `SourceFrame` indexes its inner nodes at their absolute lines in THIS file.
-    resolver = _make_call_resolver(f.defs, registry, external, f.uses, text)
+    callable_scope = _CallableScope(f.defs, registry, external, f.uses, text)
+    callable_scope.eager_load_defs()
 
     # Render-only source frame for THIS flow: copied onto child call/map nodes for the
     # nested-error traceback. For an external file (loaded via make_file_resolver) the
@@ -409,7 +410,7 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
         outputs_section=f.outputs,
         asserts_section=f.asserts,
         registry=registry,
-        resolver=resolver,
+        resolver=callable_scope.resolve,
         n_lines={nid: rng.start_line for nid, rng in top_node_ranges.items()},
         s_lines=_section_lines(text),
         uses_aliases=set(f.uses),
@@ -424,79 +425,104 @@ def _load_flow(text, child_resolver, search_paths, ctx: "_LoadCtx") -> ComposedF
     )
 
 
-def _make_call_resolver(
-    defs_section: dict, registry, external: Optional[ChildResolver], uses: dict,
-    parent_text: str = "",
-) -> ChildResolver:
-    """A `(flow_id, version) -> ComposedFlow` resolver: **defs-first** (in-file `defs:`)
-    → **`uses:` alias** (external, with the ref's `@<version>`). A bare `call:` that is
-    NEITHER a `defs:` callable NOR a `uses:` alias is a `LoadError` — external flows are
-    reachable ONLY through a `uses:` alias (no bare-name backdoor to `external`).
-    Each callable builds once (memoized); an in-progress set detects recursive/mutual
-    `defs:` references (-> `LoadError`, never a load hang). Every def is built eagerly so a
-    broken/unused one is still loud at load (eager `uses:` resolution is in `_assemble`,
-    after the node-id collision guard).
+class _CallableScope:
+    """The file-local namespace and cache for authored callable resolution.
 
-    `parent_text` is the source of the file declaring these `defs:` — threaded into each
-    `_load_def` so a def's `SourceFrame` indexes its inner nodes at their absolute lines
-    in that file (the nested-error traceback).
+    Resolution is defs-first, then a `uses:` alias whose declared ref supplies the
+    external path and version. A bare name in neither mapping is rejected instead of
+    reaching the external resolver. Local defs and external aliases share one memo table,
+    while an in-progress set makes recursive or mutually recursive defs loud.
 
-    `uses:` translates an alias to its `UsesRef`: a `hub:` scheme is the (deferred)
-    marketplace, any other scheme is unknown, and a local ref is handed to `external` as
-    `(path, version)`. A name in both `defs:` and `uses:` is loud (one callable namespace)."""
-    both = sorted(set(defs_section) & set(uses))
-    if both:
-        raise LoadError(
-            f"name(s) {both} declared in both defs: and uses: (a callable has one namespace)"
-        )
+    Args:
+        defs_section (`dict`):
+            In-file callable name -> raw `defs:` body, retained in insertion order.
+        registry:
+            The file's parsed typedef registry, shared by every local def.
+        external (`ChildResolver`, *optional*):
+            Resolver for local refs declared through `uses:`; `None` disables them.
+        uses (`dict`):
+            Callable alias -> authored external reference.
+        parent_text (`str`, *optional*, defaults to `""`):
+            Source declaring the defs, used to retain absolute source locations.
+    """
 
-    built: dict[str, ComposedFlow] = {}
-    in_progress: set[str] = set()
+    def __init__(
+        self,
+        defs_section: dict,
+        registry,
+        external: Optional[ChildResolver],
+        uses: dict,
+        parent_text: str = "",
+    ) -> None:
+        both = sorted(set(defs_section) & set(uses))
+        if both:
+            raise LoadError(
+                f"name(s) {both} declared in both defs: and uses: "
+                f"(a callable has one namespace)"
+            )
 
-    def resolve(flow_id: str, version: Optional[str] = None) -> ComposedFlow:
-        if flow_id in built:
-            return built[flow_id]
-        if flow_id in defs_section:
-            if flow_id in in_progress:
+        self._defs_section = defs_section
+        self._registry = registry
+        self._external = external
+        self._uses = uses
+        self._parent_text = parent_text
+        self._built: dict[str, ComposedFlow] = {}
+        self._in_progress: set[str] = set()
+
+    def resolve(
+        self, flow_id: str, version: Optional[str] = None
+    ) -> ComposedFlow:
+        """Resolve one callable once; a `uses:` declaration owns its external version."""
+        if flow_id in self._built:
+            return self._built[flow_id]
+        if flow_id in self._defs_section:
+            if flow_id in self._in_progress:
                 raise LoadError(
                     f"recursive defs reference: callable {flow_id!r} is defined in terms "
                     f"of itself (the baked call graph must be finite)"
                 )
-            in_progress.add(flow_id)
+            self._in_progress.add(flow_id)
             try:
-                loaded = _load_def(flow_id, defs_section[flow_id], registry, resolve, parent_text)
+                loaded = _load_def(
+                    flow_id,
+                    self._defs_section[flow_id],
+                    self._registry,
+                    self.resolve,
+                    self._parent_text,
+                )
             finally:
-                in_progress.discard(flow_id)
-            built[flow_id] = loaded
+                self._in_progress.discard(flow_id)
+            self._built[flow_id] = loaded
             return loaded
-        if flow_id in uses:
-            ref = parse_uses_ref(uses[flow_id])
+        if flow_id in self._uses:
+            ref = parse_uses_ref(self._uses[flow_id])
             if ref.scheme == "hub":
                 raise LoadError(
-                    f"callable {flow_id!r} (uses: {uses[flow_id]!r}): marketplace not "
-                    f"supported yet (hub: scheme)"
+                    f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): marketplace "
+                    f"not supported yet (hub: scheme)"
                 )
             if ref.scheme is not None:
                 raise LoadError(
-                    f"callable {flow_id!r} (uses: {uses[flow_id]!r}): unknown scheme "
-                    f"{ref.scheme!r}: (recognized: a local ref, or hub:)"
+                    f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): unknown "
+                    f"scheme {ref.scheme!r}: (recognized: a local ref, or hub:)"
                 )
-            if external is None:
+            if self._external is None:
                 raise LoadError(
-                    f"callable {flow_id!r} (uses: {uses[flow_id]!r}) needs a search path "
-                    f"or child_resolver to resolve (load with search_paths=[...])"
+                    f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}) needs a search "
+                    f"path or child_resolver to resolve (load with search_paths=[...])"
                 )
-            built[flow_id] = external(ref.path, ref.version)
-            return built[flow_id]
+            self._built[flow_id] = self._external(ref.path, ref.version)
+            return self._built[flow_id]
         raise LoadError(
             f"callable {flow_id!r} is neither an in-file defs: callable nor a uses: "
             f"alias — external flows are reachable only through a uses: alias "
             f"(declare `uses: {{{flow_id}: <ref>}}`)"
         )
 
-    for name in defs_section:
-        resolve(name)  # eager: a broken/recursive def is loud at load, not at first call
-    return resolve
+    def eager_load_defs(self) -> None:
+        """Build every local def in authored mapping order before the parent flow."""
+        for name in self._defs_section:
+            self.resolve(name)
 
 
 def _load_def(name: str, body, registry, resolver: ChildResolver, parent_text: str = "") -> ComposedFlow:

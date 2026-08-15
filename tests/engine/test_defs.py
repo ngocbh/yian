@@ -15,6 +15,7 @@ real CODE-only children through `run_flow` (no LLM). Pinned here:
 
 import pytest
 
+from agent_composer.compose import loader as compose_loader
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.run import run_flow
 from agent_composer.compose.parse.file import parse_file
@@ -63,6 +64,52 @@ def test_defs_section_parses():
     f = parse_file(_DEFS_PARENT)
     assert "research_pair" in f.defs
     assert "nodes" in f.defs["research_pair"]
+
+
+def test_callable_scope_eagerly_builds_defs_and_memoizes_resolution(monkeypatch):
+    """One scope eagerly builds local defs and resolves each external alias once."""
+    events = []
+    local_child = object()
+    external_child = object()
+    registry = object()
+    body = {"nodes": {}}
+    seen_resolvers = []
+
+    def fake_load_def(name, value, seen_registry, resolver, parent_text=""):
+        events.append(("def", name))
+        seen_resolvers.append(resolver)
+        assert value is body
+        assert seen_registry is registry
+        assert parent_text == "parent source"
+        return local_child
+
+    def external(path, version=None):
+        events.append(("external", path, version))
+        return external_child
+
+    monkeypatch.setattr(compose_loader, "_load_def", fake_load_def)
+    scope = compose_loader._CallableScope(
+        {"local": body},
+        registry,
+        external,
+        {"remote": "library/child@declared-v1"},
+        "parent source",
+    )
+
+    scope.eager_load_defs()
+    assert events == [("def", "local")]
+    assert seen_resolvers == [scope.resolve]
+    assert scope.resolve("local") is local_child
+    assert scope.resolve("local") is local_child
+
+    first = scope.resolve("remote", "caller-version-is-ignored")
+    second = scope.resolve("remote", "another-caller-version")
+    assert events == [
+        ("def", "local"),
+        ("external", "library/child", "declared-v1"),
+    ]
+    assert first is external_child
+    assert second is first
 
 
 def test_defs_callable_runs_end_to_end_without_external_resolver():

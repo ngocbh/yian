@@ -22,6 +22,7 @@ from typing import Any, Callable, ClassVar, Optional
 
 from agent_composer.nodes.base import Grow, Node, NodeKind
 from agent_composer.nodes.binding import _resolve_source
+from agent_composer.nodes.contracts import binding_source
 
 
 class MapNode(Node):
@@ -81,8 +82,9 @@ class MapNode(Node):
         over_src = node_wiring["over"]
         items = _resolve_source(over_src, pool)
         if items is None or not isinstance(items, list):
+            display_src = binding_source(over_src)
             raise RuntimeError(
-                f"MAP node {self.id!r}: `over` ({over_src}) did not resolve to a list"
+                f"MAP node {self.id!r}: `over` ({display_src}) did not resolve to a list"
             )
         return {"over": items}
 

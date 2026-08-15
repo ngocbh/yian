@@ -29,6 +29,7 @@ from agent_composer.expr import (
     eval_binding,
     resolve_reference,
 )
+from agent_composer.nodes.contracts import binding_source
 from agent_composer.typesys import TypeCheckError, Type, build_value_as, type_for
 from agent_composer.typesys.pool import VariablePool
 
@@ -72,9 +73,11 @@ class ParamDecl:
 
 
 def _resolve_source(source: Any, pool: VariablePool, item: Any = None) -> Any:
-    """Resolve a binding's `source` to a value via the `expr.template` language.
+    """Resolve one raw or carrier-wrapped source via the template language.
 
-    A value that is exactly one `${...}` yields the **typed** value of that reference
+    Exactly one semantic ``Binding`` layer is removed at this read boundary; a
+    nested ``Binding`` remains an ordinary literal payload. A value that is
+    exactly one `${...}` yields the **typed** value of that reference
     (type preserved); a `${...}` embedded in surrounding text is **stringified** into
     it; a value with no `${...}` is a plain literal (after `$$` -> `$`). The interior
     is a `|` coalesce, first-non-None, where an atom is a ref, a `:-` literal-or-
@@ -84,6 +87,7 @@ def _resolve_source(source: Any, pool: VariablePool, item: Any = None) -> Any:
     Parse/eval errors (malformed ref, two-level nesting, an unbound `:?`) surface as
     `BindingError` — `expr`'s `ExpressionError`/`RequiredError` never leak across the
     `nodes <- expr` boundary."""
+    source = binding_source(source)
     if not isinstance(source, str):
         return source
     try:

@@ -36,6 +36,7 @@ from agent_composer.events import (
 )
 from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.nodes.base import Grow, Node
+from agent_composer.nodes.contracts import binding_source
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
     NodeExpandedRecord,
@@ -2280,8 +2281,9 @@ def _validate_growth_wiring_refs(
     producer_types: dict[str, Any],
     reserved: set[str],
 ) -> None:
-    """Apply the compiled language's closed reference rules to fragment wiring."""
+    """Apply closed reference rules to raw or carrier-wrapped fragment wiring."""
     for param, source in wiring.items():
+        source = binding_source(source)
         if not isinstance(source, str):
             continue
         try:
@@ -2473,6 +2475,7 @@ def _validate_prune_dependencies_data(
                 f"surviving node {node_id!r} has pruned origin {node.origin_id!r}"
             )
         for source in combined_wiring.get(node_id, {}).values():
+            source = binding_source(source)
             if not isinstance(source, str):
                 continue
             try:

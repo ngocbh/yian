@@ -339,6 +339,10 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
     )
     return {
         "topology": flow_manifest(state.flow),
+        "origin_context": {
+            node_id: node.origin_context
+            for node_id, node in state.flow.nodes.items()
+        },
         "node_order": tuple(state.flow.nodes),
         "edges": edges,
         "wiring": copy.deepcopy(state.flow.wiring),

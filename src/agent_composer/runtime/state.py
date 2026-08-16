@@ -3229,13 +3229,12 @@ def _make_terminal_unreachable_failure(
 ) -> Failure:
     """Build the source-neutral failure for one causal terminal skip."""
     node = state.flow.nodes[causal_node_id]
-    trace = () if node.origin is None else (node.origin,)
     output_name = _terminal_skipped_output_name(state, edge_updates)
     return Failure(
         code="graph.terminal_unreachable",
         message=f"terminal output {output_name!r} skipped",
         node_id=causal_node_id,
-        trace=trace,
+        trace=node.failure_trace(),
     )
 
 
@@ -3263,8 +3262,6 @@ def _validate_recorded_terminal_failure(
         raise ValueError("route terminal failure has the wrong causal node ID")
     if failure.message != expected_message:
         raise ValueError("route terminal failure has the wrong message")
-    if len(failure.trace) > 1:
-        raise ValueError("route terminal failure trace must contain at most one origin")
     if failure.cause_type is not None or failure.traceback is not None:
         raise ValueError("route terminal failure cannot carry exception diagnostics")
     return failure

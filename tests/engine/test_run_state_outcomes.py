@@ -2045,6 +2045,8 @@ def test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record()
 
 def test_route_latches_causal_terminal_failure_until_sibling_quiescence():
     state, log = _terminal_skip_with_sibling_in_flight()
+    outer_origin = OriginRef("outer-site")
+    state.flow.nodes["router"].origin_context = (outer_origin,)
 
     prepared = prepare_node_routed(state, "router", "go")
     failure = prepared._plan.delta.terminal_unreachable_failure
@@ -2053,9 +2055,12 @@ def test_route_latches_causal_terminal_failure_until_sibling_quiescence():
         code="graph.terminal_unreachable",
         message="terminal output 'zeta' skipped",
         node_id="router",
-        trace=(OriginRef("router-site"),),
+        trace=(outer_origin, OriginRef("router-site")),
     )
-    assert failure.trace == (state.flow.nodes["router"].origin,)
+    assert failure.trace == (
+        outer_origin,
+        state.flow.nodes["router"].origin,
+    )
     assert prepared.record.terminal_failure is failure
     assert prepared._plan.terminal is None
     assert all(not isinstance(event, RunFailed) for event in prepared.observers)
@@ -2209,15 +2214,6 @@ def test_noncausal_route_replay_rejects_a_terminal_failure():
                 "graph.terminal_unreachable",
                 "terminal output 'zeta' skipped",
                 "router",
-                trace=(OriginRef("one"), OriginRef("two")),
-            ),
-            "at most one origin",
-        ),
-        (
-            Failure(
-                "graph.terminal_unreachable",
-                "terminal output 'zeta' skipped",
-                "router",
                 cause_type="RuntimeError",
             ),
             "exception diagnostics",
@@ -2232,7 +2228,7 @@ def test_noncausal_route_replay_rejects_a_terminal_failure():
             "exception diagnostics",
         ),
     ],
-    ids=["code", "node", "message", "trace", "cause", "traceback"],
+    ids=["code", "node", "message", "cause", "traceback"],
 )
 def test_causal_route_replay_rejects_mismatched_terminal_failure(
     failure: Failure,
@@ -2273,6 +2269,7 @@ def test_quiescence_without_retained_causal_failure_is_a_graph_fault():
 
 def test_terminal_unreachable_latch_replays_before_and_at_quiescence():
     live_state, live_log = _terminal_skip_with_sibling_in_flight()
+    live_state.flow.nodes["router"].origin_context = (OriginRef("outer-site"),)
     commit_prepared(
         live_log,
         live_state,
@@ -2281,6 +2278,9 @@ def test_terminal_unreachable_latch_replays_before_and_at_quiescence():
     replay_flow = _terminal_skip_route_flow(
         router_origin=OriginRef("rebased-router-site"),
         sibling=True,
+    )
+    replay_flow.nodes["router"].origin_context = (
+        OriginRef("rebased-outer-site"),
     )
 
     prefix_state, prefix_log, prefix_observers = _replay_outcome_log(
@@ -2301,11 +2301,15 @@ def test_terminal_unreachable_latch_replays_before_and_at_quiescence():
         live_state,
         prepare_node_succeeded(live_state, "unrelated", {"done": True}),
     )
+    final_replay_flow = _terminal_skip_route_flow(
+        router_origin=OriginRef("rebased-router-site"),
+        sibling=True,
+    )
+    final_replay_flow.nodes["router"].origin_context = (
+        OriginRef("rebased-outer-site"),
+    )
     final_state, final_log, final_observers = _replay_outcome_log(
-        _terminal_skip_route_flow(
-            router_origin=OriginRef("rebased-router-site"),
-            sibling=True,
-        ),
+        final_replay_flow,
         live_log,
     )
 
@@ -2314,7 +2318,10 @@ def test_terminal_unreachable_latch_replays_before_and_at_quiescence():
     assert tuple(final_log) == tuple(live_log)
     assert final_state.result.failure is final_state.terminal_unreachable_failure
     assert final_state.result.failure.node_id == "router"
-    assert final_state.result.failure.trace == (OriginRef("router-site"),)
+    assert final_state.result.failure.trace == (
+        OriginRef("outer-site"),
+        OriginRef("router-site"),
+    )
 
 
 def test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause():

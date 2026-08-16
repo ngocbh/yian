@@ -384,11 +384,15 @@ def test_node_execution_prefers_operation_origin_then_node_fallback(
     operation_origin: OriginRef | None,
     expected_key: str,
 ) -> None:
-    """Body diagnostics use one operation origin, falling back to node context."""
-    result = drive(_OperationOriginNode("n", operation_origin))
+    """Body diagnostics append the selected local origin after outer ancestry."""
+    outer = OriginRef("outer:call")
+    node = _OperationOriginNode("n", operation_origin)
+    node.origin_context = (outer,)
+
+    result = drive(node)
 
     assert isinstance(result, EvaluationFailure)
-    assert result.failure.trace == (OriginRef(expected_key),)
+    assert result.failure.trace == (outer, OriginRef(expected_key))
 
 
 @pytest.mark.parametrize(

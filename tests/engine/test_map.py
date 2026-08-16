@@ -109,6 +109,12 @@ def test_map_child_failure_fails_the_run():
     assert result.status != "succeeded"
     assert result.failure is not None
     assert "boom" in result.failure.message
+    mapped = flow.compiled.nodes["each"]
+    assert result.failure.node_id == "each#0/emit"
+    assert result.failure.trace == (
+        mapped.origin,
+        mapped.child.nodes["emit"].origin,
+    )
 
 
 # `over:` with a `|` coalesce resolves at run through the same template layer it

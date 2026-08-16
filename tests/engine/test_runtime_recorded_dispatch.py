@@ -532,6 +532,7 @@ def test_serial_yields_and_callbacks_follow_post_durable_observer_order():
 def test_invalid_raw_output_constructs_contract_failure_with_operation_origin(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    outer_origin = OriginRef("nodes/outer")
     node_origin = OriginRef("nodes/work")
     contract_origin = OriginRef("nodes/work/output")
     node = _ActionNode(
@@ -543,6 +544,7 @@ def test_invalid_raw_output_constructs_contract_failure_with_operation_origin(
         ),
         origin=node_origin,
     )
+    node.origin_context = (outer_origin,)
     state, log = _initialized(_flow([node]), num_workers=0)
     failures = _capture_semantic_failures(monkeypatch)
 
@@ -551,7 +553,7 @@ def test_invalid_raw_output_constructs_contract_failure_with_operation_origin(
     assert len(failures) == 1
     assert failures[0].code == "contract.output"
     assert failures[0].node_id == "work"
-    assert failures[0].trace == (contract_origin,)
+    assert failures[0].trace == (outer_origin, contract_origin)
     assert failures[0].cause_type == "TypeCheckError"
     assert failures[0].traceback is not None
     assert isinstance(events[-2], NodeFailed)
@@ -766,9 +768,12 @@ def test_route_raw_outcome_is_prepared_committed_and_reduced():
 def test_invalid_route_constructs_contract_failure_with_node_origin(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    outer_origin = OriginRef("nodes/outer")
     node_origin = OriginRef("nodes/route")
+    node = _InvalidRouteNode("route", origin=node_origin)
+    node.origin_context = (outer_origin,)
     state, log = _initialized(
-        _flow([_InvalidRouteNode("route", origin=node_origin)]),
+        _flow([node]),
         num_workers=0,
     )
     failures = _capture_semantic_failures(monkeypatch)
@@ -778,7 +783,7 @@ def test_invalid_route_constructs_contract_failure_with_node_origin(
     assert len(failures) == 1
     assert failures[0].code == "contract.route"
     assert failures[0].node_id == "route"
-    assert failures[0].trace == (node_origin,)
+    assert failures[0].trace == (outer_origin, node_origin)
     assert failures[0].cause_type == "ValueError"
     assert isinstance(events[-2], NodeFailed)
     assert events[-2].failure.node_id == "route"
@@ -928,22 +933,29 @@ def test_invalid_grow_builder_return_remains_a_host_failure(num_workers: int):
 
 
 @pytest.mark.parametrize(
-    ("origin", "expected_trace"),
+    ("origin", "origin_context", "expected_trace"),
     [
-        (OriginRef("nodes/spawn"), (OriginRef("nodes/spawn"),)),
-        (None, ()),
+        (
+            OriginRef("nodes/spawn"),
+            (OriginRef("nodes/outer"),),
+            (OriginRef("nodes/outer"), OriginRef("nodes/spawn")),
+        ),
+        (None, (), ()),
     ],
     ids=("authored", "source-free"),
 )
 def test_legal_kind_malformed_seed_constructs_contract_growth_failure(
     monkeypatch: pytest.MonkeyPatch,
     origin: OriginRef | None,
+    origin_context: tuple[OriginRef, ...],
     expected_trace: tuple[OriginRef, ...],
 ):
     from agent_composer.compile.expand import build_grow
 
+    node = _MalformedSeedGrowNode("spawn", origin=origin)
+    node.origin_context = origin_context
     state, log = _initialized(
-        _flow([_MalformedSeedGrowNode("spawn", origin=origin)]),
+        _flow([node]),
         num_workers=0,
     )
     failures = _capture_semantic_failures(monkeypatch)

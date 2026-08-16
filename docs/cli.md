@@ -277,10 +277,11 @@ a code node's `code:` field — and then to the node header. A failure with no n
 behind it *and* no resolvable line prints the plain `run failed: <message>` line.
 
 For a failure inside a called or mapped child flow, the CLI adds the outer call sites as
-a traceback of source frames. The innermost child frame keeps the evaluator's same precise
-operation range—such as the exact failing `input:` binding—rather than replacing it with
-the child's `code:` field or node header. Those coarser sites remain fallbacks only when the
-run did not resolve a concrete operation range.
+a traceback of source frames. The deepest current node that owns the evaluator-resolved
+operation site keeps its exact range—such as a failing child `input:` binding or an
+intermediate caller assertion. If no current node owns a retained coordinate, as after a
+source-only edit, the walk uses that frame's current field, kind, or header fallback instead
+of applying the stale coordinate to unrelated child text.
 
 Failures with **no node behind them** are still boxed at their precise line: a
 false boundary/post `assert:` boxes the offending `asserts:` expression, an

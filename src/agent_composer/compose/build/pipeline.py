@@ -25,7 +25,13 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Optional, Protocol
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
-from agent_composer.diagnostics import OriginRef, OriginResolver
+from agent_composer.diagnostics import (
+    Diagnostic,
+    DiagnosticFrame,
+    Failure,
+    OriginRef,
+    OriginResolver,
+)
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges, Node
 from agent_composer.nodes.contracts import Parameter, ValueContract, as_binding
@@ -73,6 +79,8 @@ from agent_composer.compose.validate.asserts import validate_node_asserts
 # `FlowOutput`, `terminal_output` returns the bare resolved value, so the name
 # only labels the carrier.
 _SINGLE_OUTPUT_NAME = "result"
+
+_PRESENTATION_UNAVAILABLE_NOTE = "Source presentation was unavailable."
 
 
 @dataclass(frozen=True)
@@ -227,6 +235,60 @@ class ComposedFlow:
                     "compiled START params must contain exact Parameter values"
                 )
         return parameters
+
+    def diagnose(self, failure: Failure) -> Diagnostic:
+        """Resolve one semantic failure through this flow's source authority.
+
+        Resolution is presentation-only. A missing, incomplete, malformed, or
+        failing resolver produces an unlocated diagnostic without changing the
+        semantic failure fields.
+
+        Args:
+            failure (`Failure`):
+                Valid source-neutral failure whose trace is ordered outermost to
+                innermost.
+
+        Returns:
+            `Diagnostic`:
+                The unchanged semantic fields plus every resolved frame in trace
+                order, or no frames and one generic note when presentation is
+                unavailable.
+
+        Raises:
+            TypeError: Raised when `failure` is not a `Failure`.
+        """
+        if not isinstance(failure, Failure):
+            raise TypeError("diagnose requires a Failure")
+
+        diagnostic = Diagnostic(
+            code=failure.code,
+            message=failure.message,
+            node_id=failure.node_id,
+            cause_type=failure.cause_type,
+            traceback=failure.traceback,
+        )
+        if not failure.trace:
+            return diagnostic
+
+        unavailable = replace(
+            diagnostic,
+            notes=(_PRESENTATION_UNAVAILABLE_NOTE,),
+        )
+        resolver = self.origin_resolver
+        if resolver is None:
+            return unavailable
+
+        frames: list[DiagnosticFrame] = []
+        for origin in failure.trace:
+            try:
+                frame = resolver.resolve(origin)
+            except Exception:
+                return unavailable
+            if not isinstance(frame, DiagnosticFrame):
+                return unavailable
+            frames.append(frame)
+
+        return replace(diagnostic, frames=tuple(frames))
 
 
 class _PrivateRegistrar(Protocol):

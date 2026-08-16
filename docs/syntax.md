@@ -149,6 +149,12 @@ required input has neither; `lookback: int = 30` defaults when omitted; and
 `Optional[int] = null` is a present default, distinct from having no `=`. A null
 default for a non-nullable type is invalid, as is an empty `=`.
 
+Typed storage for `list[Optional[X]]` accepts actual null items because its
+refined element type is nullable. When `X` has a specialized list storage kind,
+those items remain `None` without lowering that kind to `list[Any]`. Cross-flow
+bindings compare element contracts too: `list[X]` may fill
+`list[Optional[X]]`, but the nullable source cannot fill the strict sink.
+
 The default RHS is a YAML literal validated against the declared type while the
 flow loads. Stored defaults are never string-coerced: write `int = 30`, not
 `int = "30"`; a date string must likewise be quoted, such as
@@ -558,10 +564,9 @@ Inline-body rules:
 - MAP proves the `over:` element type only when an outer argument is a lone
   whole-value `${item...}` reference. An opaque `over:` therefore remains legal
   when the inline body does not need the item. When item typing is requested,
-  `over:` must have an exact proven list element type. Current limitation:
-  inference can mark an element of `list[Optional[record]]` optional, but typed
-  storage still rejects an actual null element ([#128](https://github.com/ngocbh/agent-composer/issues/128));
-  nullable intermediate record fields work normally.
+  `over:` must have an exact proven list element type. That proof retains
+  element nullability, so an optional element admits actual null items and
+  preserves them as `None` in typed storage.
 - Strings nested inside literal lists or mappings stay literal. For example,
   `payload: {text: "${input.text}"}` passes the characters `${input.text}`; nested
   containers are not scanned for references.

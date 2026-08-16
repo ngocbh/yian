@@ -125,8 +125,9 @@ Contract:
   (with int/float widening), and
   lone direct references retain exact structure. Record field walks require
   proven fields and carry any root/intermediate nullability into the result.
-  Actual null elements in `list[Optional[record]]` are currently rejected by
-  typed storage (issue #128); nullable intermediate fields work.
+  An optional proven element `Type` admits actual null list items; a specialized
+  list keeps its storage discriminator and round-trips those items as `None`.
+  Cross-flow bindings accept strict-to-nullable elements but reject the reverse.
   Unsupported whole-value computations, empty/heterogeneous lists, producers
   without an available static output type, or incomplete list element types fail
   at the authored binding; use a typed named `defs:` body as the escape hatch.

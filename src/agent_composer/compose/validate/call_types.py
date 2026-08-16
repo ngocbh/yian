@@ -25,6 +25,7 @@ from agent_composer.compose.nodes.base import BuildResult
 from agent_composer.diagnostics import SourceRange
 from agent_composer.expr import binding_co_skips
 from agent_composer.nodes.contracts import ValueContract, binding_source
+from agent_composer.typesys import canonical_type_label
 
 
 def check_ref_map_types(
@@ -95,6 +96,7 @@ def check_ref_map_types(
                 )
                 raise diagnostics.error(
                     f"call node {nid!r}: binding {param!r} — child expects "
-                    f"{child_type.kind.value!r}, source is {source.kind.value!r}",
+                    f"{canonical_type_label(child_type)!r}, source is "
+                    f"{canonical_type_label(source)!r}",
                     range=rng,
                 )

@@ -25,6 +25,7 @@ from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.nodes.base import BuildResult
 from agent_composer.diagnostics import SourceRange
 from agent_composer.nodes.contracts import ValueContract
+from agent_composer.typesys import canonical_type_label
 
 
 def check_loop_type_contract(
@@ -89,7 +90,8 @@ def check_loop_type_contract(
                 )
                 raise diagnostics.error(
                     f"loop node {nid!r}: carried field {field_name!r} — body output is "
-                    f"{body_field.kind.value!r}, carried source is "
-                    f"{source.kind.value!r} (the body must return the same 'a it reads)",
+                    f"{canonical_type_label(body_field)!r}, carried source is "
+                    f"{canonical_type_label(source)!r} "
+                    "(the body must return the same 'a it reads)",
                     range=rng,
                 )

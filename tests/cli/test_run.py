@@ -2,26 +2,38 @@
 
 These use a CODE-only flow (no AGENT) so the suite never hits a network or needs a
 provider key. They cover: a successful run, flag-supplied inputs, `--inputs` JSON,
-flag-over-JSON precedence, a failing run's non-zero exit, and the `k=v` parse error.
+flag-over-JSON precedence, non-TTY missing-input policy and setup ordering, a failing
+run's non-zero exit, and the `k=v` parse error.
 """
 
 from __future__ import annotations
 
+from ast import literal_eval
 import json
 from pathlib import Path
+import re
+import sys
 
 import pytest
 from typer.testing import CliRunner
 
+import agent_composer.cli.run as run_cli
 from agent_composer.cli import app
 
 runner = CliRunner()
+
+_ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def _write_flow(dir_: Path, body: str) -> Path:
     path = dir_ / "flow.yaml"
     path.write_text(body)
     return path
+
+
+def _plain(text: str) -> str:
+    """Remove optional Rich styling from CLI output assertions."""
+    return _ANSI_SGR.sub("", text)
 
 
 ECHO_FLOW = """\
@@ -73,6 +85,48 @@ output:
   topic: ${shout.output}
 """
 
+OMITTABLE_INPUTS_FLOW = """\
+id: cli_omittable_inputs
+name: cli_omittable_inputs
+input:
+  topic: str
+  limit: int = 7
+  labels: list[str] = [alpha, beta]
+  note: Optional[str]
+nodes:
+  show:
+    kind: code
+    input:
+      topic: ${input.topic}
+      limit: ${input.limit}
+      labels: ${input.labels}
+      note: ${input.note}
+    output: object
+    code: |
+      return inputs
+output: ${show.output}
+"""
+
+REQUIRED_INPUTS_FLOW = """\
+id: cli_required_inputs
+name: cli_required_inputs
+input:
+  first: str
+  optional: Optional[str]
+  second: int
+nodes:
+  show:
+    kind: code
+    input:
+      first: ${input.first}
+      optional: ${input.optional}
+      second: ${input.second}
+    output: object
+    code: |
+      return inputs
+output: ${show.output}
+"""
+
 
 def test_run_succeeds_with_input_flag(tmp_path: Path):
     flow = _write_flow(tmp_path, ECHO_FLOW)
@@ -120,6 +174,85 @@ def test_bad_kv_is_rejected(tmp_path: Path):
     flow = _write_flow(tmp_path, ECHO_FLOW)
     result = runner.invoke(app, ["run", str(flow), "--input", "no_equals_sign"])
     assert result.exit_code != 0
+
+
+def test_non_tty_run_omits_optional_and_defaulted_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A scripted run leaves omittable declarations for START to resolve."""
+    flow = _write_flow(tmp_path, OMITTABLE_INPUTS_FLOW)
+    log = tmp_path / "run.jsonl"
+    monkeypatch.setitem(sys.modules, "questionary", None)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(flow),
+            "--input",
+            "topic=clouds",
+            "--log",
+            str(log),
+            "--quiet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert log.is_file()
+    assert literal_eval(result.stdout) == {
+        "labels": ["alpha", "beta"],
+        "limit": 7,
+        "note": None,
+        "topic": "clouds",
+    }
+    assert "Input is not a terminal" not in _plain(result.output)
+
+
+def test_non_tty_run_reports_all_missing_required_inputs_before_setup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A scripted run rejects every missing required name before host setup."""
+    flow = _write_flow(tmp_path, REQUIRED_INPUTS_FLOW)
+    calls: list[str] = []
+    monkeypatch.setitem(sys.modules, "questionary", None)
+
+    def fail_if_called(name: str):
+        def fail(*args, **kwargs):
+            calls.append(name)
+            raise AssertionError(f"{name} must not run")
+
+        return fail
+
+    monkeypatch.setattr(
+        run_cli,
+        "_ensure_provider_keys",
+        fail_if_called("provider"),
+    )
+    monkeypatch.setattr(
+        run_cli,
+        "_default_run_log_path",
+        fail_if_called("default log path"),
+    )
+    monkeypatch.setattr(
+        run_cli,
+        "_report_run_log",
+        fail_if_called("log report"),
+    )
+
+    result = runner.invoke(app, ["run", str(flow), "--quiet"])
+
+    assert result.exit_code == 2
+    assert isinstance(result.exception, SystemExit)
+    output = _plain(result.output)
+    assert "missing required flow inputs" in output
+    assert output.index("first") < output.index("second")
+    assert "optional" not in output
+    assert "Input is not a terminal" not in output
+    assert "Aborted" not in output
+    assert "Run log:" not in output
+    assert calls == []
 
 
 def test_missing_flow_file_errors(tmp_path: Path):

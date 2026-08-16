@@ -1,9 +1,9 @@
 """The `ac` command-line interface — a brokered host over the run boundary.
 
-`ac run FLOW.yaml` loads a Compose flow, gathers fresh inputs (flags first, then
-an interactive prompt for every missing declaration), selects and reports a
-durable run-log path, and drives it to a terminal. Optional/defaulted prompts can
-be omitted, leaving START to apply a declared default or retain optional absence.
+`ac run FLOW.yaml` loads a Compose flow, gathers fresh inputs from flags and an
+available interactive prompt, selects and reports a durable run-log path, and drives
+it to a terminal. Without an interactive stdin, optional/defaulted declarations stay
+absent for START to resolve and missing required declarations fail before host setup.
 ``--resume`` instead recovers an existing path without gathering fresh inputs or
 model configuration. The main thread owns terminal prompts/renders while a
 controller drives the flow;

@@ -1,11 +1,13 @@
 """`ac run` — load a flow, gather inputs, drive it to a terminal, render the output.
 
-Fresh inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`); any
-declared input still missing is prompted for interactively (required ones are
-starred). Optional/defaulted prompts can be omitted so START retains ownership of
-any declared default or optional absence. Fresh runs use a reported durable log under
-``~/.agent_composer/runs`` unless ``--log`` selects a new path. ``--resume``
-recovers an existing path without gathering fresh inputs or model configuration.
+Fresh inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`). On
+an interactive stdin, every declaration still missing is prompted for (required ones
+are starred); optional/defaulted prompts can be omitted so START retains ownership of
+any declared default or optional absence. Without an interactive stdin, omittable
+declarations stay absent and missing required declarations are rejected together.
+Fresh runs use a reported durable log under ``~/.agent_composer/runs`` unless
+``--log`` selects a new path. ``--resume`` recovers an existing path without gathering
+fresh inputs or model configuration.
 
 The engine runs behind a main-thread terminal broker: blocking HUMAN_INPUT and
 agent ``ask_user`` calls wait for that broker and then continue inside the same
@@ -703,32 +705,60 @@ def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
     return value
 
 
-def _prompt_missing(
-    decls: List[Parameter], have: Dict[str, Any]
+def _gather_missing_inputs(
+    decls: List[Parameter],
+    have: Dict[str, Any],
+    *,
+    prompt_available: bool,
 ) -> Optional[Dict[str, Any]]:
-    """Collect explicit overrides for each declared input not already supplied.
+    """Gather explicit overrides for each declared input not already supplied.
 
-    Returns a dictionary containing only explicit values, or ``None`` if the user
-    cancels. The per-input helper owns widget choice and translates use-default/omit
-    actions to a private sentinel; this collector never applies flow defaults itself.
+    Missing optional/defaulted declarations stay absent when no prompt is available,
+    leaving START to apply defaults and optional absence. Missing required declarations
+    are rejected together. With an available prompt, the per-input helper owns widget
+    choice and translates use-default/omit actions to a private sentinel; this collector
+    never applies flow defaults itself.
 
     Each prompt's label carries the input's type + a required/optional mark + default
     (see `_input_label`).
 
     Args:
-        decls (`list[Parameter]`): Canonical flow input declarations in prompt order.
-        have (`dict[str, Any]`): Values already supplied by JSON or repeatable flags.
+        decls (`list[Parameter]`):
+            Canonical flow input declarations in prompt and error-reporting order.
+        have (`dict[str, Any]`):
+            Values already supplied by JSON or repeatable flags. Key presence, including
+            a falsey value, means the declaration is supplied.
+        prompt_available (`bool`):
+            Whether this invocation may open interactive Questionary widgets.
 
     Returns:
-        `dict[str, Any] | None`: Explicitly gathered overrides, or ``None`` on cancel.
+        `dict[str, Any] | None`:
+            Explicitly gathered overrides, or ``None`` when an interactive prompt is
+            cancelled.
+
+    Raises:
+        `typer.BadParameter`:
+            One or more required declarations are missing without an available prompt.
     """
+    missing = [decl for decl in decls if decl.name not in have]
+    if not missing:
+        return {}
+
+    if not prompt_available:
+        required = [decl.name for decl in missing if decl.required]
+        if required:
+            noun = "input" if len(required) == 1 else "inputs"
+            raise typer.BadParameter(
+                f"missing required flow {noun}: {', '.join(required)}",
+                param_hint=("--input", "--inputs"),
+            )
+        return {}
+
     import questionary
 
     style = _q_style()
     gathered: Dict[str, Any] = {}
-    for decl in decls:
-        if decl.name in have:
-            continue
+    for decl in missing:
         value = _prompt_input(decl, questionary, style)
         if value is None:
             return None
@@ -1189,7 +1219,11 @@ def run(
         if input:
             supplied.update(_parse_kv(input))
 
-        prompted = _prompt_missing(loaded.input, supplied)
+        prompted = _gather_missing_inputs(
+            loaded.input,
+            supplied,
+            prompt_available=sys.stdin.isatty(),
+        )
         if prompted is None:
             err_console.print("[yellow]run cancelled[/yellow]")
             raise typer.Exit(code=1)

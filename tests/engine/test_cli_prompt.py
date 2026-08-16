@@ -2,9 +2,10 @@
 
 At run start the CLI prints a `_flow_banner` (name/description/version); each prompt's
 label carries the input's declared `type`, a required (`*`) / `optional` mark, and any
-default (`_input_label`). `_prompt_missing` is exercised with a fake `questionary` so the
-labels it builds are observable without a TTY. A runtime failure (`_render_run_error`)
-boxes the `.yaml` at the node that raised, mirroring the compile-error frame.
+default (`_input_label`). `_gather_missing_inputs` covers both non-TTY omission/error
+policy and an interactive path with fake `questionary`, so prompt labels are observable
+without a real TTY. A runtime failure (`_render_run_error`) boxes the `.yaml` at the node
+that raised, mirroring the compile-error frame.
 """
 
 import sys
@@ -13,13 +14,15 @@ from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from rich.console import Console
+import typer
 
 import agent_composer.cli.run as climod
 from agent_composer.cli.run import (
     _flow_banner,
+    _gather_missing_inputs,
     _input_label,
-    _prompt_missing,
     _render_run_error,
 )
 from agent_composer.compose.loader import load_flow
@@ -166,7 +169,7 @@ def test_input_label_supports_a_flat_list_contract():
     assert _input_label(items) == "items (list[str]) *"
 
 
-# --- _prompt_missing: header + labels via a fake questionary ------------------ #
+# --- _gather_missing_inputs: policy + interactive labels --------------------- #
 class _FakeChoice:
     """Questionary-compatible display/value pair used by the prompt test double."""
 
@@ -257,7 +260,7 @@ def test_prompt_labels_carry_marks(monkeypatch):
     fake = _FakeQuestionary({"topic": "ACME", "mode": "fast"})
     monkeypatch.setitem(sys.modules, "questionary", fake)
     _sink(monkeypatch)
-    _prompt_missing(_decls(), {})
+    _gather_missing_inputs(_decls(), {}, prompt_available=True)
     joined = " || ".join(fake.labels)
     assert "topic (str) *" in joined
     assert "as_of (Optional[date]) [optional]" in joined
@@ -270,9 +273,69 @@ def test_prompt_skips_already_supplied(monkeypatch):
     monkeypatch.setitem(sys.modules, "questionary", fake)
     _sink(monkeypatch)
     have = {"topic": "x", "as_of": "2026-01-01", "window": 5, "mode": "fast"}
-    gathered = _prompt_missing(_decls(), have)
+    gathered = _gather_missing_inputs(_decls(), have, prompt_available=True)
     assert gathered == {}
     assert fake.labels == []          # no prompt issued
+
+
+def test_gather_treats_present_falsey_values_as_supplied_without_questionary(
+    monkeypatch,
+):
+    parameters = [
+        _parameter(
+            "none",
+            Type(kind=ValueKind.STRING, nullable=True),
+            required=True,
+        ),
+        _parameter("false", Type.scalar(ValueKind.BOOLEAN), required=True),
+        _parameter("zero", Type.scalar(ValueKind.INTEGER), required=True),
+        _parameter("blank", Type.scalar(ValueKind.STRING), required=True),
+    ]
+    monkeypatch.setitem(sys.modules, "questionary", None)
+
+    gathered = _gather_missing_inputs(
+        parameters,
+        {"none": None, "false": False, "zero": 0, "blank": ""},
+        prompt_available=True,
+    )
+
+    assert gathered == {}
+
+
+def test_gather_non_tty_leaves_optional_and_defaulted_inputs_absent(monkeypatch):
+    parameters = [
+        _parameter("optional", Type(kind=ValueKind.STRING, nullable=True)),
+        _parameter(
+            "defaulted",
+            Type.scalar(ValueKind.INTEGER),
+            has_default=True,
+            default=7,
+        ),
+    ]
+    monkeypatch.setitem(sys.modules, "questionary", None)
+
+    gathered = _gather_missing_inputs(
+        parameters,
+        {},
+        prompt_available=False,
+    )
+
+    assert gathered == {}
+
+
+def test_gather_non_tty_reports_all_missing_required_inputs_in_order(monkeypatch):
+    parameters = [
+        _parameter("first", Type.scalar(ValueKind.STRING), required=True),
+        _parameter("optional", Type(kind=ValueKind.STRING, nullable=True)),
+        _parameter("second", Type.scalar(ValueKind.INTEGER), required=True),
+    ]
+    monkeypatch.setitem(sys.modules, "questionary", None)
+
+    with pytest.raises(typer.BadParameter) as captured:
+        _gather_missing_inputs(parameters, {}, prompt_available=False)
+
+    assert captured.value.message == "missing required flow inputs: first, second"
+    assert captured.value.param_hint == ("--input", "--inputs")
 
 
 def test_prompt_accepting_omission_preserves_start_owned_defaults(monkeypatch):
@@ -301,7 +364,7 @@ output: ${show.output}
     monkeypatch.setitem(sys.modules, "questionary", fake)
     _sink(monkeypatch)
 
-    gathered = _prompt_missing(loaded.input, {})
+    gathered = _gather_missing_inputs(loaded.input, {}, prompt_available=True)
 
     assert gathered == {}
     result = run_flow(loaded, gathered)
@@ -351,7 +414,7 @@ def test_prompt_collects_false_enum_and_text_overrides(monkeypatch):
         ),
     ]
 
-    gathered = _prompt_missing(parameters, {})
+    gathered = _gather_missing_inputs(parameters, {}, prompt_available=True)
 
     assert gathered == {
         "flag": False,
@@ -372,7 +435,7 @@ def test_prompt_distinguishes_literal_values_from_omission_labels(monkeypatch):
         default="ordinary",
     )
 
-    gathered = _prompt_missing([parameter], {})
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
 
     assert gathered == {"mode": collision}
     choices = fake.calls[0].choices
@@ -388,9 +451,10 @@ def test_prompt_distinguishes_cancellation_from_omission(monkeypatch):
     monkeypatch.setitem(sys.modules, "questionary", fake)
     _sink(monkeypatch)
 
-    gathered = _prompt_missing(
+    gathered = _gather_missing_inputs(
         [_parameter("flag", Type(kind=ValueKind.BOOLEAN, nullable=True))],
         {},
+        prompt_available=True,
     )
 
     assert gathered is None
@@ -410,7 +474,7 @@ def test_prompt_preserves_required_false_enum_and_blank_text(monkeypatch):
         _parameter("note", Type.scalar(ValueKind.STRING), required=True),
     ]
 
-    gathered = _prompt_missing(parameters, {})
+    gathered = _gather_missing_inputs(parameters, {}, prompt_available=True)
 
     assert gathered == {"flag": False, "mode": "slow", "note": ""}
     assert [call.kind for call in fake.calls] == ["confirm", "select", "text"]
@@ -445,7 +509,7 @@ def test_prompt_leaves_explicit_null_defaults_omitted_for_every_widget_kind(monk
         ),
     ]
 
-    gathered = _prompt_missing(parameters, {})
+    gathered = _gather_missing_inputs(parameters, {}, prompt_available=True)
 
     assert gathered == {}
     assert [call.kind for call in fake.calls] == ["text", "select", "select"]
@@ -456,9 +520,10 @@ def test_prompt_treats_optional_whitespace_as_omission(monkeypatch):
     monkeypatch.setitem(sys.modules, "questionary", fake)
     _sink(monkeypatch)
 
-    gathered = _prompt_missing(
+    gathered = _gather_missing_inputs(
         [_parameter("note", Type(kind=ValueKind.STRING, nullable=True))],
         {},
+        prompt_available=True,
     )
 
     assert gathered == {}

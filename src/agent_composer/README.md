@@ -29,7 +29,7 @@ shape of it:
 ## Layout
 
 ```
-diagnostics.py source-neutral ranges, opaque origins, and exact resolver routing [leaf]
+diagnostics.py semantic failures, ranges, opaque origins, exact resolver routing [leaf]
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
 _state.py     shared scheduler-state vocabulary                          [leaf]
@@ -62,6 +62,22 @@ submodule does not bootstrap those higher layers.
 Package-root `run.py` sits above `compose`, `compile.expand`, and `runtime`: it
 consumes a `ComposedFlow`, injects the kind-aware growth builder, and owns run-log
 creation and recovery. None of those packages imports it back.
+
+`diagnostics.Failure` is the canonical source-neutral semantic failure value. It
+is a frozen product of `code`, `message`, optional execution `node_id`, an
+outermost-to-innermost `tuple[OriginRef, ...]` trace, optional Python
+`cause_type`, and optional debugging `traceback`. The exception class is retained
+only as diagnostic data; consumers must branch on the closed semantic code,
+never on `cause_type` or traceback text. `Failure` is imported from the leaf
+module while the evaluator/record/public-result cutover is in progress; it is
+not yet a package-root export.
+
+The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
+`node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
+`contract.growth`, and `graph.terminal_unreachable`. They cover expected
+flow-owned rejection. Producer classification and enforcement of the
+host/compiler boundary remain part of the runtime cutover; the current flattened
+pipeline still behaves as documented below.
 
 ## Semantic IR carriers
 
@@ -290,9 +306,10 @@ of the closed result sum:
 | `Grow(seed, prune)` | one canonical deterministic expansion description |
 
 Failure is a `raise`, not another result variant. `eval_node` binds inputs and
-turns the exception into an evaluation failure for the dispatcher to record. A
-streaming kind may yield transient `StreamChunk` values and then return one of the
-same three results.
+turns the exception into an evaluation failure for the dispatcher to record; the
+source-neutral semantic contract for that pipeline is `diagnostics.Failure`. A
+streaming kind may yield transient `StreamChunk` values and then return one of
+the same three results.
 
 The runtime core is **kind-blind**. It dispatches on this result sum and node-owned
 traits (`is_spawner`, `binds_per_item`, `bind_reserved`, `grow_depth_delta`,

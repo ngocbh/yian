@@ -8,17 +8,164 @@ from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 import subprocess
 import sys
-from typing import NamedTuple
+from typing import NamedTuple, get_args
 
 import pytest
 
+import agent_composer.diagnostics as diagnostics
 from agent_composer.diagnostics import (
     DiagnosticFrame,
+    FAILURE_CODES,
+    Failure,
+    FailureCode,
     OriginRef,
     OriginResolver,
     ResolverTable,
     SourceRange,
 )
+
+
+EXPECTED_FAILURE_CODES = frozenset(
+    {
+        "binding.evaluate",
+        "contract.input",
+        "assertion.failed",
+        "node.execute",
+        "contract.node_result",
+        "contract.output",
+        "contract.route",
+        "contract.growth",
+        "graph.terminal_unreachable",
+    }
+)
+
+
+def test_failure_has_one_closed_source_neutral_shape() -> None:
+    """The semantic failure value is immutable and keeps ordered authored identity."""
+    outer = OriginRef("root:call")
+    operation = OriginRef("child:input:topic")
+    failure = Failure(
+        code="contract.input",
+        message="expected integer",
+        node_id="review/score",
+        trace=(outer, operation, operation),
+        cause_type="TypeCheckError",
+        traceback="Traceback ...",
+    )
+
+    assert frozenset(get_args(FailureCode)) == EXPECTED_FAILURE_CODES
+    assert FAILURE_CODES == EXPECTED_FAILURE_CODES
+    assert type(FAILURE_CODES) is frozenset
+    assert {"FAILURE_CODES", "Failure", "FailureCode"} <= set(diagnostics.__all__)
+    assert [field.name for field in fields(Failure)] == [
+        "code",
+        "message",
+        "node_id",
+        "trace",
+        "cause_type",
+        "traceback",
+    ]
+    assert failure.trace == (outer, operation, operation)
+    assert failure == Failure(
+        code="contract.input",
+        message="expected integer",
+        node_id="review/score",
+        trace=(outer, operation, operation),
+        cause_type="TypeCheckError",
+        traceback="Traceback ...",
+    )
+    assert hash(failure) == hash(replace(failure))
+    assert not hasattr(failure, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        failure.message = "changed"  # type: ignore[misc]
+
+
+def test_failure_accepts_every_closed_code_and_source_free_optional_values() -> None:
+    """Every declared code is usable without YAML, a node id, or debug metadata."""
+    for code in EXPECTED_FAILURE_CODES:
+        failure = Failure(
+            code=code,  # type: ignore[arg-type]
+            message="",
+            node_id=None,
+            cause_type="",
+            traceback="",
+        )
+
+        assert failure.code == code
+        assert failure.trace == ()
+
+    assert Failure("node.execute", "", "").node_id == ""
+
+
+@pytest.mark.parametrize(
+    ("changes", "error_type", "message"),
+    [
+        ({"code": "unknown"}, ValueError, "unknown failure code"),
+        ({"code": 1}, TypeError, "failure code must be a string"),
+        ({"message": None}, TypeError, "failure message must be a string"),
+        ({"node_id": 1}, TypeError, "failure node_id must be a string or None"),
+        ({"trace": []}, TypeError, "failure trace must be a tuple"),
+        ({"trace": ("origin",)}, TypeError, "failure trace item must be an OriginRef"),
+        ({"cause_type": 1}, TypeError, "failure cause_type must be a string or None"),
+        ({"traceback": 1}, TypeError, "failure traceback must be a string or None"),
+    ],
+)
+def test_failure_rejects_malformed_fields(changes, error_type, message: str) -> None:
+    """Malformed semantic fields fail at the leaf instead of entering a run log."""
+    values = {
+        "code": "node.execute",
+        "message": "boom",
+        "node_id": "work",
+    }
+    values.update(changes)
+
+    with pytest.raises(error_type, match=message):
+        Failure(**values)  # type: ignore[arg-type]
+
+
+def test_failure_requires_exact_string_fields_and_revalidates_origin_subclasses() -> None:
+    """String subclasses and origin subclasses cannot bypass canonical invariants."""
+
+    class DerivedString(str):
+        """A non-canonical string value."""
+
+    class InvalidOrigin(OriginRef):
+        def __post_init__(self) -> None:
+            pass
+
+    class ValidOrigin(OriginRef):
+        """A valid specialized origin remains an authored identity."""
+
+    class OriginTuple(tuple):
+        """A tuple subclass is not the canonical trace container."""
+
+    for field_name in ("code", "message", "node_id", "cause_type", "traceback"):
+        values = {
+            "code": "node.execute",
+            "message": "boom",
+            "node_id": "work",
+            field_name: DerivedString("node.execute" if field_name == "code" else "x"),
+        }
+        with pytest.raises(TypeError, match=f"failure {field_name}"):
+            Failure(**values)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        Failure(
+            code="node.execute",
+            message="boom",
+            node_id="work",
+            trace=(InvalidOrigin(""),),
+        )
+
+    valid_origin = ValidOrigin("specialized")
+    assert Failure("node.execute", "boom", "work", (valid_origin,)).trace[0] is valid_origin
+    with pytest.raises(TypeError, match="failure trace must be a tuple"):
+        Failure(
+            "node.execute",
+            "boom",
+            "work",
+            OriginTuple((OriginRef("operation"),)),  # type: ignore[arg-type]
+        )
 
 
 def test_origin_ref_is_a_validated_frozen_single_key() -> None:
@@ -324,7 +471,7 @@ def test_public_diagnostics_import_does_not_load_engine_or_yaml_layers() -> None
     source_root = Path(__file__).parents[2] / "src"
     script = """
 import sys
-from agent_composer.diagnostics import DiagnosticFrame, OriginRef, OriginResolver, ResolverTable, SourceRange
+from agent_composer.diagnostics import FAILURE_CODES, DiagnosticFrame, Failure, FailureCode, OriginRef, OriginResolver, ResolverTable, SourceRange
 
 loaded_project_modules = sorted(
     name

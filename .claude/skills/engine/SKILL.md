@@ -51,6 +51,15 @@ Hold this model whenever you design anything:
   once and returns the rewritten graph with its exact table; source-free graphs
   must carry no resolver. Lexical key construction remains a front-end
   responsibility.
+- `diagnostics.Failure` is the frozen source-neutral semantic failure product:
+  stable code/message, optional execution node, ordered outer-to-inner opaque
+  origins, and optional exception-name/traceback debug data. Its exact closed
+  codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
+  `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
+  `contract.growth`, and `graph.terminal_unreachable`. Exception classes and
+  traceback text must never decide behavior. These codes are reserved for
+  expected flow-owned rejection; classifying producers and enforcing the
+  host/compiler boundary are separate runtime cutover work.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;
@@ -244,14 +253,15 @@ The package-root `run.py` sits above compose and runtime and wires cross-layer
 capabilities: notably it owns log lifecycle/recovery and injects compile's
 `build_grow` into the kind-blind runtime.
 
-`diagnostics.ResolverTable` owns immutable exact resolver routing without source
-or key-format knowledge. `compile/origins.py` owns the representation-neutral
-whole-graph walk: it visits flow-owned wiring and outputs, delegates node-local
-slots and children to node hooks, and deep-copies before rewriting. Its rebasing
-operation precomputes one mapping per distinct reachable old origin and returns
-the rewritten graph plus a table containing exactly those routes. Nodes never
-import this higher layer; binding sources, defaults, environments, and render
-metadata remain opaque.
+`diagnostics.Failure` owns semantic failure identity and
+`diagnostics.ResolverTable` owns immutable exact resolver routing; neither knows
+a source format or runtime state. `compile/origins.py` owns the
+representation-neutral whole-graph walk: it visits flow-owned wiring and
+outputs, delegates node-local slots and children to node hooks, and deep-copies
+before rewriting. Its rebasing operation precomputes one mapping per distinct
+reachable old origin and returns the rewritten graph plus a table containing
+exactly those routes. Nodes never import this higher layer; binding sources,
+defaults, environments, and render metadata remain opaque.
 
 Compose source ownership is one-way too. `compose/source/` alone owns PyYAML and
 the private retained document graph. Root text is constructed once as a

@@ -1,14 +1,45 @@
-"""Source-neutral values for locating and presenting diagnostics.
+"""Source-neutral values for semantic failures and diagnostic presentation.
 
 This dependency-free leaf separates semantic code from any authoring front end.
-Engine values carry opaque ``OriginRef`` instances; a front end implements
-``OriginResolver`` to turn those references into concrete presentation frames.
-``ResolverTable`` composes those namespaces through exact immutable routes.
+``Failure`` carries stable meaning plus opaque ``OriginRef`` instances; a front
+end implements ``OriginResolver`` to turn those references into concrete
+presentation frames. ``ResolverTable`` composes those namespaces through exact
+immutable routes.
 """
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Iterable, Mapping, Protocol
+from typing import Final, Iterable, Literal, Mapping, Protocol, TypeAlias
+
+
+FailureCode: TypeAlias = Literal[
+    "binding.evaluate",
+    "contract.input",
+    "assertion.failed",
+    "node.execute",
+    "contract.node_result",
+    "contract.output",
+    "contract.route",
+    "contract.growth",
+    "graph.terminal_unreachable",
+]
+"""Closed semantic categories for expected flow-owned failures."""
+
+
+FAILURE_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "binding.evaluate",
+        "contract.input",
+        "assertion.failed",
+        "node.execute",
+        "contract.node_result",
+        "contract.output",
+        "contract.route",
+        "contract.growth",
+        "graph.terminal_unreachable",
+    }
+)
+"""Runtime census of every accepted :class:`Failure` code."""
 
 
 @dataclass(frozen=True)
@@ -70,6 +101,54 @@ class OriginRef:
         """Reject keys that cannot serve as stable opaque identities."""
         if type(self.key) is not str or not self.key:
             raise ValueError("origin key must be a non-empty string")
+
+
+@dataclass(frozen=True, slots=True)
+class Failure:
+    """One immutable source-neutral account of an expected flow failure.
+
+    Attributes:
+        code (`FailureCode`): Stable semantic category from ``FAILURE_CODES``.
+        message (`str`): Human-readable failure detail; it may be empty.
+        node_id (`str | None`): Runtime execution identity, or ``None`` when the
+            failure is not attributable to one executing node.
+        trace (`tuple[OriginRef, ...]`): Authored identities ordered outermost to
+            innermost; the final item is the most precise available operation.
+        cause_type (`str | None`): Python exception class name retained only for
+            debugging, never for semantic classification.
+        traceback (`str | None`): Optional formatted Python traceback retained as
+            opaque debugging text.
+    """
+
+    code: FailureCode
+    message: str
+    node_id: str | None
+    trace: tuple[OriginRef, ...] = ()
+    cause_type: str | None = None
+    traceback: str | None = None
+
+    def __post_init__(self) -> None:
+        """Reject values that cannot enter the canonical failure pipeline."""
+        if type(self.code) is not str:
+            raise TypeError("failure code must be a string")
+        if self.code not in FAILURE_CODES:
+            raise ValueError(f"unknown failure code {self.code!r}")
+        if type(self.message) is not str:
+            raise TypeError("failure message must be a string")
+        if self.node_id is not None and type(self.node_id) is not str:
+            raise TypeError("failure node_id must be a string or None")
+        if type(self.trace) is not tuple:
+            raise TypeError("failure trace must be a tuple")
+        for origin in self.trace:
+            if not isinstance(origin, OriginRef):
+                raise TypeError("failure trace item must be an OriginRef")
+            # A subclass can bypass OriginRef.__post_init__; replay the canonical
+            # constructor without erasing the exact authored identity object.
+            OriginRef(origin.key)
+        if self.cause_type is not None and type(self.cause_type) is not str:
+            raise TypeError("failure cause_type must be a string or None")
+        if self.traceback is not None and type(self.traceback) is not str:
+            raise TypeError("failure traceback must be a string or None")
 
 
 @dataclass(frozen=True)
@@ -303,6 +382,9 @@ class ResolverTable:
 
 __all__ = [
     "DiagnosticFrame",
+    "FAILURE_CODES",
+    "Failure",
+    "FailureCode",
     "OriginRef",
     "OriginResolver",
     "ResolverTable",

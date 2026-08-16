@@ -112,8 +112,11 @@ cases:
 
 def test_compact_rejects_non_leaf_kind():
     # case/call/map reference other nodes a one-node flow has none of.
-    with pytest.raises(LoadError, match="not allowed inline"):
+    with pytest.raises(LoadError, match="not allowed inline") as exc:
         parse_file(_COMPACT_NON_LEAF)
+
+    assert exc.value.range == SourceRange(6, 7, 6, 11)
+    assert exc.value.line == 6
 
 
 _COMPACT_NO_ID = """
@@ -126,5 +129,27 @@ code: tests.engine._compose_codefns:echo
 
 
 def test_compact_requires_id():
-    with pytest.raises(LoadError, match="top-level `id:` is required"):
-        parse_file(_COMPACT_NO_ID)
+    document = parse_source_document(_COMPACT_NO_ID, "compact.yaml")
+
+    with pytest.raises(LoadError, match="top-level `id:` is required") as exc:
+        parse_file(document)
+
+    assert exc.value.range == document.root.range
+    assert exc.value.line == document.root.range.start_line
+
+
+_COMPACT_BAD_INPUT = """
+id: echo_one
+name: echo_one
+input: [topic]
+kind: code
+code: tests.engine._compose_codefns:echo
+"""
+
+
+def test_compact_invalid_input_has_value_range():
+    with pytest.raises(LoadError, match="must be a param map") as exc:
+        parse_file(_COMPACT_BAD_INPUT)
+
+    assert exc.value.range == SourceRange(4, 8, 4, 15)
+    assert exc.value.line == 4

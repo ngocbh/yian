@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compose import LoadError
-from agent_composer.compose.parse.file import ComposeFile, parse_file
+from agent_composer.compose.parse.file import (
+    ComposeFile,
+    parse_file,
+    parse_source_document,
+)
+from agent_composer.events import SourceRange
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -41,10 +46,57 @@ def test_minimal_parses():
 
 
 def test_unknown_top_level_key_is_loud():
-    text = _MINIMAL + "\nbogus: 1\n"
+    text = "id: x\nname: x\nnodes: {}\nbogus: 1\n"
     with pytest.raises(LoadError) as exc:
         parse_file(text)
     assert "bogus" in str(exc.value)
+    assert exc.value.range == SourceRange(4, 1, 4, 6)
+    assert exc.value.line == 4
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "id: x\nname: x\nnodes: {}\nasserts:\n  - true\n",
+            SourceRange(5, 5, 5, 9),
+        ),
+        (
+            "id: x\nname: x\nnodes: {}\ninput: []\n",
+            SourceRange(4, 8, 4, 10),
+        ),
+        (
+            "id: x\nname: x\nnodes: {}\nuses:\n  7: child\n",
+            SourceRange(5, 3, 5, 4),
+        ),
+    ],
+)
+def test_schema_error_replays_pydantic_location(text, expected):
+    with pytest.raises(LoadError) as exc:
+        parse_file(text)
+
+    assert exc.value.range == expected
+    assert exc.value.line == expected.start_line
+
+
+def test_schema_error_uses_first_location_that_replays():
+    document = parse_source_document("name: [bad]\nnodes: {}\n", "flow.yaml")
+
+    with pytest.raises(LoadError) as exc:
+        parse_file(document)
+
+    assert exc.value.range == SourceRange(1, 7, 1, 12)
+    assert exc.value.line == 1
+
+
+def test_missing_schema_field_falls_back_to_root_range():
+    document = parse_source_document("id: x\nname: x\n", "flow.yaml")
+
+    with pytest.raises(LoadError) as exc:
+        parse_file(document)
+
+    assert exc.value.range == document.root.range
+    assert exc.value.line == document.root.range.start_line
 
 
 def test_x_keys_ignored():

@@ -174,7 +174,7 @@ def test_inline_map_scalar_over_does_not_use_input_named_over_range():
 
 def test_desugar_adaptive_questions_preserves_ranges():
     # An adaptive human_input gate lifts a synth composer agent (`<gate>__compose`).
-    # The synth agent must inherit the gate node's range/field_ranges (no node_lines map).
+    # The synth agent must inherit the gate node's range/field_ranges.
     text = (
         "id: f\nname: f\nnodes:\n"
         "  ask:\n    kind: human_input\n"

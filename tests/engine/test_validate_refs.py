@@ -26,7 +26,7 @@ from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.contracts import ContractOrigins, ValueContract
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.parse.file import (
     CaseDescriptor,
     parse_file,
@@ -39,6 +39,12 @@ from agent_composer.events import SourceRange
 from tests.engine._fakes import derive_wiring, stamp_reads
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
+
+
+def _seed_diagnostics(seed: str) -> LoadDiagnostics:
+    """Return the source authority for one seed file."""
+    path = _SEEDS / seed
+    return LoadDiagnostics(label=str(path), text=path.read_text())
 
 
 def _load(seed: str):
@@ -120,12 +126,13 @@ def test_dangling_flow_output_uses_supplied_range():
             outputs,
             flow_wiring,
             outputs_range=expected,
+            diagnostics=_seed_diagnostics("errors/e01-undeclared-ref.yaml"),
         )
 
-    assert exc.value.range == expected
+    assert exc.value.diagnostic.frames[0].range == expected
 
 
-def test_aggregate_location_keeps_line_and_range_on_the_same_error():
+def test_aggregate_location_uses_first_available_range():
     node = AgentNode("broken", prompt="fixed")
     node.output_contract = ValueContract(Type.scalar(ValueKind.STRING))
     stamp_reads(node, {"value": "${missing_node.output}"})
@@ -143,10 +150,13 @@ def test_aggregate_location_keeps_line_and_range_on_the_same_error():
             node_lines={"broken": 5},
             outputs_line=20,
             outputs_range=later_output_range,
+            diagnostics=LoadDiagnostics(
+                label="flow.yaml",
+                text=("x" * 80 + "\n") * 30,
+            ),
         )
 
-    assert exc.value.line == 5
-    assert exc.value.range is None
+    assert exc.value.diagnostic.frames[0].range == later_output_range
 
 
 # --------------------------------------------------------------------------- #

@@ -5,8 +5,8 @@ Each binding's SOURCE contract is resolved from its `${<id>.output}`/`${input.X}
 the PARENT producer + flow-input contracts, then its `Type` is projected and checked for
 structural compatibility with the CHILD input's declared `Type` (`types_compatible`,
 C-EQUIV). It carries
-a `.range` anchor off the built call node's `field_ranges[("field", "inputs")]` (the coarse `input:`
-mapping span) — the transitional `node_lines` still feeds `.line`.
+a range anchor off the built call node's `field_ranges[("field", "inputs")]` (the coarse
+`input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
 analysis), `compose.nodes.resolver` (`_output_value_contract`, the shared contract resolver —
@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 from agent_composer.compile.validation import types_compatible
 from agent_composer.compose.nodes.resolver import _output_value_contract
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.events import SourceRange
 from agent_composer.expr import binding_co_skips
 from agent_composer.nodes.contracts import ValueContract, binding_source
@@ -33,6 +33,8 @@ def check_ref_map_types(
     flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
     node_lines: Optional[dict] = None,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Cross-flow type check for every `call` binding (a loader post-build pass).
 
@@ -41,10 +43,12 @@ def check_ref_map_types(
     structurally compatible with the CHILD input's declared `Type` (`types_compatible`,
     C-EQUIV). A `${item}`/coalesce/literal/opaque source — or an opaque/absent child input
     (incl. the reserved `over` key) — stays lenient (skipped). Loud + located at the
-    node's `input:` mapping range (`field_ranges[("field", "inputs")]`, else the node's own range);
-    `node_lines` still feeds the transitional `.line`. Iterates the WIRING (not the params)
+    node's `input:` mapping range (`field_ranges[("field", "inputs")]`, else the node's own range).
+    `node_lines` is accepted for transitional caller compatibility but is not location authority.
+    Iterates the WIRING (not the params)
     so a mis-named binding still surfaces here when its child decl is absent rather than
     being silently skipped."""
+    diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),
         ("flow input", flow_inputs),
@@ -55,7 +59,6 @@ def check_ref_map_types(
                     f"{label} contracts must be exact ValueContract values, "
                     f"got {type(contract).__name__} for {name!r}"
                 )
-    lines = node_lines or {}
     for nid, node in nodes.items():
         # CALL/MAP carry `child_inputs` to type-check against; a LOOP also carries a child but
         # its `'a -> 'a` contract is checked by check_loop_type_contract/carried_types instead.
@@ -88,9 +91,8 @@ def check_ref_map_types(
                 source = replace(source, nullable=False)
             if not types_compatible(source, child_type):
                 rng: Optional[SourceRange] = node.field_ranges.get(("field", "inputs")) or node.range
-                raise LoadError(
+                raise diagnostics.error(
                     f"call node {nid!r}: binding {param!r} — child expects "
                     f"{child_type.kind.value!r}, source is {source.kind.value!r}",
-                    line=None if rng is not None else lines.get(nid),
                     range=rng,
                 )

@@ -17,6 +17,7 @@ from agent_composer.events import SourceRange
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.compose import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.nodes.base import BuildContext, BuildResult
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.edges.data import infer_data_edges
@@ -39,6 +40,11 @@ from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.nodes.contracts import Parameter, ValueContract
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
+
+
+def _range_diagnostics() -> LoadDiagnostics:
+    """Return source text large enough for synthetic descriptor ranges."""
+    return LoadDiagnostics(label="flow.yaml", text=("x" * 80 + "\n") * 60)
 
 
 class _FakeBuildDescriptor:
@@ -108,14 +114,18 @@ def test_descriptor_build_cache_reports_only_mutual_cycle_with_closing_range():
             lambda: cache.build_one("a", "b.input.y", closing_range),
         ),
     }
-    cache = _DescriptorBuildCache(descriptors, BuildContext(registry={}), {})
+    cache = _DescriptorBuildCache(
+        descriptors,
+        BuildContext(registry={}, diagnostics=_range_diagnostics()),
+        {},
+    )
 
     with pytest.raises(LoadError) as caught:
         cache.build_in_source_order()
 
     assert str(caught.value).endswith("a.input.x -> b.input.y -> a")
     assert "outside.input.seed" not in str(caught.value)
-    assert caught.value.range is closing_range
+    assert caught.value.diagnostic.frames[0].range == closing_range
     assert not isinstance(caught.value, RecursionError)
 
 
@@ -133,13 +143,17 @@ def test_descriptor_build_cycle_falls_back_to_first_cycle_edge_range():
             "b", calls, lambda: cache.build_one("a", "b.input.y")
         ),
     }
-    cache = _DescriptorBuildCache(descriptors, BuildContext(registry={}), {})
+    cache = _DescriptorBuildCache(
+        descriptors,
+        BuildContext(registry={}, diagnostics=_range_diagnostics()),
+        {},
+    )
 
     with pytest.raises(LoadError) as caught:
         cache.build_in_source_order()
 
     assert str(caught.value).endswith("a.input.x -> b.input.y -> a")
-    assert caught.value.range is first_edge_range
+    assert caught.value.diagnostic.frames[0].range == first_edge_range
 
 
 def test_descriptor_build_cycle_uses_node_ids_when_an_edge_has_no_label():
@@ -161,7 +175,7 @@ def test_descriptor_build_cycle_uses_node_ids_when_an_edge_has_no_label():
     assert str(caught.value).endswith("a -> b -> a")
 
 
-def test_descriptor_build_cache_does_not_cache_failure_and_keeps_inner_line():
+def test_descriptor_build_cache_does_not_cache_unlocated_failure():
     calls = []
     cache = None
 
@@ -181,7 +195,7 @@ def test_descriptor_build_cache_does_not_cache_failure_and_keeps_inner_line():
     for _ in range(2):
         with pytest.raises(LoadError, match="broken descriptor") as caught:
             cache.build_one("outer")
-        assert caught.value.line == 42
+        assert caught.value.diagnostic.frames == ()
 
     assert [node_id for node_id, _ in calls] == [
         "outer",
@@ -206,15 +220,14 @@ def test_descriptor_build_cache_prefers_descriptor_range_over_line_map():
     )
     cache = _DescriptorBuildCache(
         {"broken": descriptor},
-        BuildContext(registry={}),
+        BuildContext(registry={}, diagnostics=_range_diagnostics()),
         {"broken": 24},
     )
 
     with pytest.raises(LoadError, match="broken descriptor") as caught:
         cache.build_one("broken")
 
-    assert caught.value.range is source_range
-    assert caught.value.line == 27
+    assert caught.value.diagnostic.frames[0].range == source_range
 
 
 def _assemble_resolved_parameters(parameters):

@@ -53,7 +53,7 @@ from agent_composer.compose.desugar.inline_bodies import (
 )
 from agent_composer.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from agent_composer.compose.desugar.case_outputs import expand_case_outputs
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from agent_composer.compose.desugar.case_targets import desugar_case_call_targets
 from agent_composer.compose.validate.case_exhaustive import check_case_exhaustive
@@ -108,7 +108,6 @@ class _DescriptorBuildCache:
     ) -> None:
         self._descriptors = descriptors
         self._context = context
-        self._node_lines = node_lines
         self._built: dict[str, BuildResult] = {}
         self._building: list[BuildRequest] = []
 
@@ -148,7 +147,7 @@ class _DescriptorBuildCache:
                 ),
                 None,
             )
-            raise LoadError(
+            raise self._context.diagnostics.error(
                 f"node build dependency cycle: {' -> '.join(path)}",
                 range=error_range,
             )
@@ -158,15 +157,17 @@ class _DescriptorBuildCache:
             try:
                 result = self._descriptors[node_id].build(self._context)
             except LoadError as exc:
-                if exc.range is None and exc.line is None:
-                    exc.range = getattr(self._descriptors[node_id], "range", None)
-                if exc.line is None:
-                    exc.line = (
-                        exc.range.start_line
-                        if exc.range is not None
-                        else self._node_lines.get(node_id)
-                    )
-                raise
+                if exc.diagnostic.frames:
+                    raise
+                descriptor_range = getattr(
+                    self._descriptors[node_id], "range", None
+                )
+                if descriptor_range is None:
+                    raise
+                raise self._context.diagnostics.prepend(
+                    exc,
+                    range=descriptor_range,
+                ) from exc
             self._built[node_id] = result
             return result
         finally:
@@ -368,6 +369,7 @@ def _register_inline_bodies(
     bodies: dict[str, InlineBody],
     *,
     registrar: _PrivateRegistrar,
+    diagnostics: LoadDiagnostics | None = None,
     build_child: Callable[
         [InlineBody, CallDescriptor | LoopDescriptor], ComposedFlow
     ],
@@ -379,6 +381,11 @@ def _register_inline_bodies(
     label; the input descriptors remain unchanged. Child construction stays lazy until the
     registrar invokes a captured zero-argument builder.
     """
+    if diagnostics is None:
+        first_body = next(iter(bodies.values()), None)
+        diagnostics = LoadDiagnostics.from_cursor(
+            None if first_body is None else first_body.nodes_cursor
+        )
     associated = dict(descriptors)
     registrations: list[
         tuple[InlineBody, CallDescriptor | LoopDescriptor, str]
@@ -388,17 +395,17 @@ def _register_inline_bodies(
         label = f"inline body of node '{body.node_id}'"
         descriptor = descriptors.get(body.node_id)
         if descriptor is None:
-            raise LoadError(
+            raise diagnostics.error(
                 f"{label}: no matching composite node descriptor",
                 range=body.nodes_cursor.range,
             )
         if not isinstance(descriptor, (CallDescriptor, LoopDescriptor)):
-            raise LoadError(
+            raise diagnostics.error(
                 f"{label}: final node descriptor is not CALL, MAP, or LOOP",
                 range=body.nodes_cursor.range,
             )
         if descriptor.call != body.flow_id:
-            raise LoadError(
+            raise diagnostics.error(
                 f"{label}: final node descriptor does not target its retained inline body",
                 range=body.nodes_cursor.range,
             )
@@ -422,6 +429,7 @@ def _register_inline_bodies(
 def _assertion_cursors(
     assertions: list,
     asserts_cursor: SourceCursor | None,
+    diagnostics: LoadDiagnostics,
 ) -> tuple[SourceCursor | None, ...]:
     """Align one retained assertion sequence with its semantic source order.
 
@@ -444,9 +452,9 @@ def _assertion_cursors(
     try:
         cursors = asserts_cursor.children()
     except SourceAccessError as exc:
-        raise LoadError(str(exc), range=exc.range) from exc
+        raise diagnostics.error(str(exc), range=exc.range) from exc
     if len(cursors) != len(assertions):
-        raise LoadError(
+        raise diagnostics.error(
             "retained assertion cursor does not align with semantic assertions",
             range=asserts_cursor.range,
         )
@@ -457,6 +465,7 @@ def _register_assertion_origin(
     cursor: SourceCursor | None,
     site_path: tuple[str | int, ...],
     catalog_builder: _SourceCatalogBuilder,
+    diagnostics: LoadDiagnostics,
 ) -> OriginRef | None:
     """Register one authored assertion item without exposing source to consumers.
 
@@ -481,7 +490,7 @@ def _register_assertion_origin(
     try:
         return catalog_builder.register(site_path, cursor)
     except SourceAccessError as exc:
-        raise LoadError(str(exc), range=exc.range) from exc
+        raise diagnostics.error(str(exc), range=exc.range) from exc
 
 
 def _stamp_node_wiring_origins(
@@ -492,6 +501,7 @@ def _stamp_node_wiring_origins(
     *,
     owner: tuple[str, ...],
     catalog_builder: _SourceCatalogBuilder,
+    diagnostics: LoadDiagnostics,
 ) -> None:
     """Attach authored node-wiring sites to their canonical carriers.
 
@@ -593,7 +603,7 @@ def _stamp_node_wiring_origins(
             if parameters_changed:
                 node.params = parameters
         except SourceAccessError as exc:
-            raise LoadError(str(exc), range=exc.range) from exc
+            raise diagnostics.error(str(exc), range=exc.range) from exc
 
 
 def _flow_outputs(outputs) -> list[FlowOutput]:
@@ -627,6 +637,7 @@ def _stamp_flow_output_origins(
     *,
     owner: tuple[str, ...],
     catalog_builder: _SourceCatalogBuilder,
+    diagnostics: LoadDiagnostics,
 ) -> list[FlowOutput]:
     """Attach authored output values to their final canonical bindings.
 
@@ -668,7 +679,7 @@ def _stamp_flow_output_origins(
         try:
             cursors = tuple(outputs_cursor.child(key) for key in raw_keys)
         except SourceAccessError as exc:
-            raise LoadError(str(exc), range=exc.range) from exc
+            raise diagnostics.error(str(exc), range=exc.range) from exc
     else:
         if len(flow_outputs) != 1:
             raise ValueError("a bare flow output requires exactly one carrier")
@@ -685,7 +696,7 @@ def _stamp_flow_output_origins(
                 cursor,
             )
         except SourceAccessError as exc:
-            raise LoadError(str(exc), range=exc.range) from exc
+            raise diagnostics.error(str(exc), range=exc.range) from exc
         stamped.append(
             flow_output
             if origin is None
@@ -734,9 +745,8 @@ def _assemble(
     mapping that still needs parsing, while `input_parameters` carries parameters already
     resolved by an earlier compiler pass. `scope` owns composite call resolution
     (defs-first) and private child registration; `registry` is the file's
-    `read_typedefs(...)`. `n_lines`/`s_lines` are fallback source maps — each node id /
-    top-level section key -> its 1-based header line; located descriptors refresh node lines
-    after inline lowering, including inside a nested def.
+    `read_typedefs(...)`. `n_lines`/`s_lines` are accepted only for transitional caller
+    compatibility; retained ranges and `nodes_cursor` own diagnostic locations.
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
     children. `boundary_field_ranges` locates synthesized boundary-input behavior;
     `asserts_cursor` is the single authority for each flow assertion's temporary range and
@@ -753,6 +763,8 @@ def _assemble(
             "_assemble requires exactly one of inputs_section or input_parameters"
         )
 
+    diagnostics = LoadDiagnostics.from_cursor(nodes_cursor)
+
     if outputs_range is None and outputs_cursor is not None:
         outputs_range = outputs_cursor.range
 
@@ -765,10 +777,14 @@ def _assemble(
             owner=owner,
         )
     except SourceAccessError as exc:
-        raise LoadError(str(exc), range=exc.range) from exc
+        raise diagnostics.error(str(exc), range=exc.range) from exc
 
     catalog_builder = scope.catalog_builder
-    flow_assertion_cursors = _assertion_cursors(asserts_section, asserts_cursor)
+    flow_assertion_cursors = _assertion_cursors(
+        asserts_section,
+        asserts_cursor,
+        diagnostics,
+    )
     flow_assertion_ranges = [
         cursor.range if cursor is not None else None
         for cursor in flow_assertion_cursors
@@ -780,6 +796,7 @@ def _assemble(
             flow_assertion_cursors[index],
             (*owner, "assert", index),
             catalog_builder,
+            diagnostics,
         )
 
     def flow_assertion_range_at(index: int) -> SourceRange | None:
@@ -801,12 +818,13 @@ def _assemble(
                 return None
             cursor = node_cursor.child("asserts").child(index)
         except SourceAccessError as exc:
-            raise LoadError(str(exc), range=exc.range) from exc
+            raise diagnostics.error(str(exc), range=exc.range) from exc
         return (
             _register_assertion_origin(
                 cursor,
                 (*owner, "node", node_id, "assert", index),
                 catalog_builder,
+                diagnostics,
             ),
             cursor.range,
         )
@@ -823,7 +841,12 @@ def _assemble(
             )
             for name in inputs_section
         }
-        inputs = read_flow_inputs(inputs_section, registry, input_ranges)
+        inputs = read_flow_inputs(
+            inputs_section,
+            registry,
+            input_ranges,
+            diagnostics=diagnostics,
+        )
     else:
         assert input_parameters is not None
         inputs = list(input_parameters)
@@ -856,7 +879,7 @@ def _assemble(
             for node_id, descriptor in descriptors.items()
         }
     except SourceAccessError as exc:
-        raise LoadError(str(exc), range=exc.range) from exc
+        raise diagnostics.error(str(exc), range=exc.range) from exc
 
     parsed_node_ranges = {
         node_id: descriptor.range
@@ -867,13 +890,6 @@ def _assemble(
         node_id: FieldRanges(descriptor.field_ranges)
         for node_id, descriptor in descriptors.items()
         if descriptor.field_ranges
-    }
-    n_lines = {
-        **n_lines,
-        **{
-            node_id: node_range.start_line
-            for node_id, node_range in parsed_node_ranges.items()
-        },
     }
     if source is not None:
         source = replace(
@@ -887,17 +903,12 @@ def _assemble(
     # node ids exist, and BEFORE eager resolution so the message is the precise collision.
     collide = sorted(uses_aliases & set(descriptors))
     if collide:
-        raise LoadError(f"uses: alias {collide} collides with a node id")
+        raise diagnostics.error(f"uses: alias {collide} collides with a node id")
 
     # Eager `uses:` resolution (mirrors eager defs): resolve every alias now so a
     # declared-but-uncalled broken/`hub:`/missing target is loud at load, not at first call.
     for alias in uses_aliases:
-        try:
-            scope.resolve(alias)
-        except LoadError as exc:
-            if exc.line is None:
-                exc.line = s_lines.get("uses")
-            raise
+        scope.resolve(alias)
 
     # Desugar inline `${ f(...) }` call expressions: each becomes a synth `call`
     # node (CallDescriptor, over=None) and its host binding is rewritten to
@@ -908,24 +919,30 @@ def _assemble(
         descriptors,
         outputs_section,
         asserts_section=asserts_section,
-        outputs_line=s_lines.get("output") or s_lines.get("outputs"),
-        asserts_line=s_lines.get("asserts"),
         outputs_range=outputs_range,
         assertion_range_at=flow_assertion_range_at,
         assertion_origin_at=flow_assertion_origin_at,
         next_id=mint,
+        diagnostics=diagnostics,
     )
 
     # Lower each `human_input` `adaptive_questions:` block into a synth composer agent
     # + the rewritten gate. A descriptor-level pass (the `desugar_inline_calls` precedent
     # above): runs BEFORE the build loop so the synth agent flows through build + prompt-
     # scope validation + ref wiring like any author-written agent.
-    descriptors = desugar_adaptive_questions(descriptors)
+    descriptors = desugar_adaptive_questions(
+        descriptors,
+        diagnostics=diagnostics,
+    )
 
     # `then:/else: ${call}`: a `case` branch target that is an inline call becomes a
     # synth `call` node, the then:/else: rewritten to its id. Runs BEFORE expand_case_outputs
     # (so the synth args + the rewritten then-targets are visible to it) and shares `mint`.
-    descriptors = desugar_case_call_targets(descriptors, mint)
+    descriptors = desugar_case_call_targets(
+        descriptors,
+        mint,
+        diagnostics=diagnostics,
+    )
 
     # Expand `${<case>.output}` value refs to a coalesce over the case's branch targets.
     # Runs after the inline-call desugar (so synth-node bindings are covered too)
@@ -934,11 +951,9 @@ def _assemble(
         descriptors,
         outputs_section,
         asserts_section,
-        node_lines=n_lines,
-        outputs_line=s_lines.get("output") or s_lines.get("outputs"),
-        asserts_line=s_lines.get("asserts"),
         outputs_range=outputs_range,
         assertion_range_at=flow_assertion_range_at,
+        diagnostics=diagnostics,
     )
 
     descriptor_cache: _DescriptorBuildCache | None = None
@@ -956,7 +971,7 @@ def _assemble(
         ) -> Type:
             """Resolve one parent producer through this assembly's build cache."""
             def unavailable_type() -> LoadError:
-                return LoadError(
+                return diagnostics.error(
                     f"cannot infer type for inline binding {binding_label!r}: "
                     f"producer {producer_id!r} has no available static type; use an "
                     "explicitly typed named `defs:` body",
@@ -1004,9 +1019,10 @@ def _assemble(
                     producer_type=producer_type,
                     binding_label=binding_label,
                     binding_range=binding_range,
+                    diagnostics=diagnostics,
                 )
                 if not over_type.kind.is_list() or over_type.element is None:
-                    raise LoadError(
+                    raise diagnostics.error(
                         f"cannot infer type for inline binding {binding_label!r}: "
                         "MAP `over:` must have a proven list element type; use an "
                         "explicitly typed named `defs:` body",
@@ -1028,6 +1044,7 @@ def _assemble(
                 item_type=item_type,
                 binding_label=binding_label,
                 binding_range=binding_range,
+                diagnostics=diagnostics,
             )
             canonical = canonicalize_inline_type(inferred)
             child_inputs.append(
@@ -1046,11 +1063,6 @@ def _assemble(
             node_ranges={},
             field_ranges={},
         )
-        output_lines = (
-            {"output": body.output_range.start_line}
-            if body.output_range is not None
-            else {}
-        )
         return _assemble(
             input_parameters=child_inputs,
             nodes_cursor=body.nodes_cursor,
@@ -1060,7 +1072,7 @@ def _assemble(
             scope=scope,
             owner=body.owner,
             n_lines={},
-            s_lines=output_lines,
+            s_lines={},
             flow_llm_config={},
             flow_env={},
             source=child_source,
@@ -1076,6 +1088,7 @@ def _assemble(
         descriptors,
         inline_bodies,
         registrar=scope,
+        diagnostics=diagnostics,
         build_child=build_inline_child,
     )
 
@@ -1088,8 +1101,9 @@ def _assemble(
         registry=registry,
         resolver=scope.resolve,
         source_file=flow_label,
+        diagnostics=diagnostics,
     )
-    descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base, n_lines)
+    descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base, {})
     build_results = descriptor_cache.build_in_source_order()
     nodes_built: dict[str, Node] = {
         nid: result.node for nid, result in build_results.items()
@@ -1104,6 +1118,7 @@ def _assemble(
         flow_wiring,
         owner=owner,
         catalog_builder=catalog_builder,
+        diagnostics=diagnostics,
     )
     # A case's own data+control edges; every other kind returns an empty tuple.
     case_edges: list[Edge] = [
@@ -1139,7 +1154,7 @@ def _assemble(
         producers,
         flow_input_contracts,
         flow_wiring,
-        n_lines,
+        diagnostics=diagnostics,
     )
     # loop `'a -> 'a` type contract (types): each carried field's seed-source Type vs the
     # body output's same-named field Type (needs producers, so it runs alongside the
@@ -1149,18 +1164,26 @@ def _assemble(
         producers,
         flow_input_contracts,
         flow_wiring,
-        n_lines,
+        diagnostics=diagnostics,
     )
     # case `on:` enum-exhaustiveness (a validate-phase check — needs the assembled producer
     # types). Runs right after the type contracts, the same phase-position as the old
     # desugar-time check, so error ordering is preserved.
-    check_case_exhaustive(descriptors, producers, node_lines=n_lines)
+    check_case_exhaustive(
+        descriptors,
+        producers,
+        diagnostics=diagnostics,
+    )
 
     nodes: dict[str, Node] = dict(nodes_built)
 
     # flow.wiring/params key parity over EVERY node (catches an orphan/
     # missing source or a node absent from the wiring). Runs once the wiring is complete.
-    check_wiring_parity(nodes, flow_wiring, n_lines)
+    check_wiring_parity(
+        nodes,
+        flow_wiring,
+        diagnostics=diagnostics,
+    )
 
     # Data edges — the projection of flow.wiring (leaf + WAIT + REF/MAP); a case owns its own
     # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended here.
@@ -1176,20 +1199,22 @@ def _assemble(
         producers,
         outputs_section,
         flow_wiring,
-        node_lines=n_lines,
-        outputs_line=s_lines.get("output") or s_lines.get("outputs"),
         outputs_range=outputs_range,
+        diagnostics=diagnostics,
     )
     # human_input gates: structurally check a literal `questions:` list at load, and
     # pin a ref-form `questions: ${name}` to a declared input (the prompt-scope rule).
-    validate_human_questions(nodes, node_lines=n_lines)
+    validate_human_questions(
+        nodes,
+        diagnostics=diagnostics,
+    )
     # Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post +
     # stamp onto each built leaf/call node. Shared by defs (a def's internal nodes too).
     validate_node_asserts(
         nodes_built,
         descriptors,
-        n_lines,
         assertion_site_at=node_assertion_site_at,
+        diagnostics=diagnostics,
     )
     # Lower the flow-level `asserts:` into node-local asserts stamped on the synthesized
     # START/END. Fires uniformly via eval_node — a cross-node post
@@ -1200,12 +1225,17 @@ def _assemble(
     lowered = lower_flow_asserts(
         asserts_section, flow_inputs, set(descriptors), producers,
         assert_ranges=flow_assertion_ranges,
+        diagnostics=diagnostics,
     )
 
     # Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in
     # BEFORE root synthesis so an ordering-only dependent is demoted from root, and into
     # the cycle check below so an ordering cycle is loud.
-    ordering_edges = infer_ordering_edges(descriptors, node_ids := set(descriptors))
+    ordering_edges = infer_ordering_edges(
+        descriptors,
+        node_ids := set(descriptors),
+        diagnostics=diagnostics,
+    )
 
     # DAG assembly: synthesize the START_ID/END_ID boundary NODES + their edges over the
     # FULL reconciled body-edge set (the __start__/__end__ sentinels retire; the strings
@@ -1219,6 +1249,7 @@ def _assemble(
         outputs_cursor=outputs_cursor,
         owner=owner,
         catalog_builder=catalog_builder,
+        diagnostics=diagnostics,
     )
     structural = reconciled + ordering_edges
     boundary_nodes, boundary_edges, boundary_wiring = synthesize_boundary_graph(
@@ -1234,8 +1265,13 @@ def _assemble(
     node_ranges = {
         nid: d.range for nid, d in descriptors.items() if getattr(d, "range", None)
     }
-    reject_cycles(edges, node_ids, n_lines, node_ranges)
-    check_case_handles(nodes, edges)
+    reject_cycles(
+        edges,
+        node_ids,
+        node_ranges=node_ranges,
+        diagnostics=diagnostics,
+    )
+    check_case_handles(nodes, edges, diagnostics=diagnostics)
 
     compiled = CompiledFlow.from_parts(nodes, edges, outputs=flow_outputs, wiring=flow_wiring,
                                        flow_llm_config=flow_llm_config or {})

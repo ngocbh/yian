@@ -53,7 +53,7 @@ from agent_composer.compose.desugar.inline_calls import desugar_call_directives
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import Assertion, Parameter, ValueContract
 from agent_composer.typesys.values import ValueKind
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 
 
 # Reserved prefix for the END params synthesized from a lowered post-assert. Authors
@@ -100,6 +100,8 @@ def lower_flow_asserts(
     valid_targets: "set[str]",
     producers: "dict[str, ValueContract]",
     assert_ranges: "list[SourceRange | None] | None" = None,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> LoweredAsserts:
     """Lower a flow's `asserts:` into node-local asserts for the START/END boundary nodes.
 
@@ -120,6 +122,7 @@ def lower_flow_asserts(
 
     Raises `LoadError` on the first malformed assert, bad ref, or `${system}` ref.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     result = LoweredAsserts()
     # The representation-neutral leaf checker speaks Type. Project only at that boundary;
     # the canonical ValueContract carriers (and their origins) stay untouched here.
@@ -170,25 +173,27 @@ def lower_flow_asserts(
 
     for i, assertion in enumerate(assert_list):
         expr = assertion.expression
+        rng = ranges[i] if i < len(ranges) else None
         # 1. parse-check + collect refs on the ONE unified condition walk (any brace spelling).
         try:
             refs = condition_refs(expr)
         except ExpressionError as exc:
-            raise LoadError(
-                f"assert {assertion.display!r} is not a valid boolean expression: {exc}"
+            raise diagnostics.error(
+                f"assert {assertion.display!r} is not a valid boolean expression: {exc}",
+                range=rng,
             ) from exc
-
-        rng = ranges[i] if i < len(ranges) else None
 
         # 2. validate each ref + forbid `${system}` + detect any outputs-head ref (-> post).
         is_post = False
         for path in refs:
             err = _classify_path(path, valid_targets, flow_inputs, (), producer_types)
             if err is not None:
-                raise LoadError(f"assert {assertion.display!r}: {err}", range=rng)
+                raise diagnostics.error(
+                    f"assert {assertion.display!r}: {err}", range=rng
+                )
             head = path.split(".")[0]
             if head == "system":
-                raise LoadError(
+                raise diagnostics.error(
                     f"assert {assertion.display!r}: the `system` namespace is not allowed in asserts "
                     f"(it is ambient — there is no producer to draw an edge from; move the "
                     f"check into a body node)",
@@ -263,6 +268,8 @@ def validate_node_asserts(
         [str, int],
         tuple[OriginRef | None, SourceRange | None] | None,
     ] | None = None,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Validate + classify + stamp each node's `asserts:` — the per-node contract.
 
@@ -279,8 +286,8 @@ def validate_node_asserts(
     subflow's internal nodes get this too. Accumulates all errors into one `LoadError`, located
     at the first available exact assertion, offending field, or node range.
     """
-    lines = node_lines or {}
-    errors: list[tuple[str, int | None, SourceRange | None]] = []
+    diagnostics = diagnostics or LoadDiagnostics()
+    errors: list[tuple[str, SourceRange | None]] = []
     for nid, node in nodes.items():
         desc = descriptors.get(nid)
         asserts = list(getattr(desc, "asserts", None) or [])
@@ -290,7 +297,6 @@ def validate_node_asserts(
         aranges = list(getattr(desc, "assert_ranges", None) or [])
         if not asserts:
             continue
-        line = lines.get(nid)
         descriptor_ranges = getattr(desc, "field_ranges", None)
         if not isinstance(descriptor_ranges, dict):
             descriptor_ranges = {}
@@ -309,7 +315,6 @@ def validate_node_asserts(
                 (
                     f"node {nid!r}: `asserts:` is not allowed on a mapped call "
                     f"(`kind: map`) — assert inside the def, or on a downstream node",
-                    line,
                     asserts_range,
                 )
             )
@@ -320,7 +325,6 @@ def validate_node_asserts(
                 (
                     f"node {nid!r}: a declared input named 'output' collides with the "
                     f"node-assert `${{output}}` keyword — rename the input",
-                    line,
                     field_range("input", "output") or asserts_range,
                 )
             )
@@ -349,7 +353,6 @@ def validate_node_asserts(
                     (
                         f"node {nid!r} assert {a!r}: an inline call is not allowed in a "
                         f"node-local assert (use a flow-level assert)",
-                        line,
                         error_range,
                     )
                 )
@@ -361,7 +364,6 @@ def validate_node_asserts(
                 errors.append(
                     (
                         f"node {nid!r} assert {a!r}: not a valid boolean expression ({exc})",
-                        line,
                         error_range,
                     )
                 )
@@ -386,7 +388,6 @@ def validate_node_asserts(
                                     f"node {nid!r} assert: ${{{ref}}} — the node output is "
                                     f"not a record, so it has no field "
                                     f"{'.'.join(segs[1:])!r}",
-                                    line,
                                     error_range,
                                 )
                             )
@@ -396,7 +397,6 @@ def validate_node_asserts(
                                 errors.append(
                                     (
                                         f"node {nid!r} assert: {err}",
-                                        line,
                                         error_range,
                                     )
                                 )
@@ -407,7 +407,6 @@ def validate_node_asserts(
                         (
                             f"node {nid!r} assert: ${{{ref}}} — node asserts are node-local; "
                             f"use `${{name}}` (a declared input) or `${{output}}`",
-                            line,
                             error_range,
                         )
                     )
@@ -416,7 +415,6 @@ def validate_node_asserts(
                         (
                             f"node {nid!r} assert: ${{{ref}}} is not a declared input or "
                             f"`${{output}}`",
-                            line,
                             error_range,
                         )
                     )
@@ -431,19 +429,12 @@ def validate_node_asserts(
         node.pre_assert_ranges = pre_r
         node.post_assert_ranges = post_r
     if errors:
-        first_line, first_range = next(
-            (
-                (line, error_range)
-                for _, line, error_range in errors
-                if line is not None or error_range is not None
-            ),
-            (None, None),
+        first_range = next(
+            (error_range for _, error_range in errors if error_range is not None),
+            None,
         )
-        if first_range is not None:
-            first_line = None
-        raise LoadError(
+        raise diagnostics.error(
             "flow has invalid node asserts:\n  "
-            + "\n  ".join(msg for msg, _, _ in errors),
-            line=first_line,
+            + "\n  ".join(msg for msg, _ in errors),
             range=first_range,
         )

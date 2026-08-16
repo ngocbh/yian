@@ -7,8 +7,7 @@ bound seed source (`${<id>.output}`/`${input.X}` over the parent producer + flow
 contracts, via `_output_value_contract`), projects its Type, and checks it is structurally
 compatible (`types_compatible`, C-EQUIV) with the body OUTPUT's same-named field Type. It
 carries a `.range` anchor off the built loop
-node's `field_ranges[("field", "inputs")]` (the coarse `input:` mapping span) — the transitional
-`node_lines` still feeds `.line`.
+node's `field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `compose.nodes.resolver`
 (`_output_value_contract`, the shared contract resolver — `resolver` imports no later phase, so
@@ -22,7 +21,7 @@ from typing import Any, Optional
 
 from agent_composer.compile.validation import types_compatible
 from agent_composer.compose.nodes.resolver import _output_value_contract
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.events import SourceRange
 from agent_composer.nodes.contracts import ValueContract
 
@@ -33,6 +32,8 @@ def check_loop_type_contract(
     flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
     node_lines: Optional[dict] = None,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """The TYPE-level half of a `loop`'s `'a -> 'a` contract (a loader post-build pass).
 
@@ -46,7 +47,9 @@ def check_loop_type_contract(
     literal/coalesce/opaque seed source, or an opaque body output field, stays lenient
     (skipped). Loud + located at the loop node's `input:` mapping range
     (`field_ranges[("field", "inputs")]`, else the node's own range) on a
-    same-names/different-TYPES mismatch; `node_lines` still feeds the transitional `.line`."""
+    same-names/different-TYPES mismatch. `node_lines` is accepted for transitional caller
+    compatibility but is not location authority."""
+    diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),
         ("flow input", flow_inputs),
@@ -57,7 +60,6 @@ def check_loop_type_contract(
                     f"{label} contracts must be exact ValueContract values, "
                     f"got {type(contract).__name__} for {name!r}"
                 )
-    lines = node_lines or {}
     for nid, node in nodes.items():
         if not node.is_loop:
             continue
@@ -82,10 +84,9 @@ def check_loop_type_contract(
             source = source_contract.type
             if not types_compatible(source, body_field):
                 rng: Optional[SourceRange] = node.field_ranges.get(("field", "inputs")) or node.range
-                raise LoadError(
+                raise diagnostics.error(
                     f"loop node {nid!r}: carried field {field_name!r} — body output is "
                     f"{body_field.kind.value!r}, carried source is "
                     f"{source.kind.value!r} (the body must return the same 'a it reads)",
-                    line=None if rng is not None else lines.get(nid),
                     range=rng,
                 )

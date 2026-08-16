@@ -30,7 +30,7 @@ from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode
 from agent_composer.nodes.contracts import ValueContract
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.nodes.base import BuildContext
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.parse.file import CaseDescriptor, parse_file
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceDocument
@@ -315,10 +315,16 @@ def test_exhaustiveness_dotted_missing_tag_raises():
         range=descriptor_range,
     )
     with pytest.raises(LoadError) as exc:
-        check_case_exhaustive({desc.id: desc}, {"synth": ValueContract(view)})
+        check_case_exhaustive(
+            {desc.id: desc},
+            {"synth": ValueContract(view)},
+            diagnostics=LoadDiagnostics(
+                label="flow.yaml",
+                text=("x" * 80 + "\n") * 30,
+            ),
+        )
     assert "neutral" in str(exc.value)
-    assert exc.value.range == descriptor_range
-    assert exc.value.line == descriptor_range.start_line
+    assert exc.value.diagnostic.frames[0].range == descriptor_range
 
 
 def test_exhaustiveness_rejects_noncanonical_producer_contract():

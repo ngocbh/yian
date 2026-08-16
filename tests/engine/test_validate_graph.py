@@ -68,7 +68,7 @@ def test_e02_cycle_carries_dependency_legend():
     node_ids, edges, _ = _build("errors/e02-cycle.yaml")
     with pytest.raises(LoadError) as exc:
         reject_cycles(edges, node_ids)
-    notes = exc.value.notes or []
+    notes = exc.value.diagnostic.notes
     # Every note reads "<consumer> depends on <producer> (...)" and both stuck nodes appear
     # on both sides of the loop.
     assert notes, "a cycle must carry a dependency legend"

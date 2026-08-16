@@ -2,15 +2,15 @@
 
 Cross-node assembly pass. After all data + ordering edges are inferred, a flow graph
 must be a DAG — the scheduler resolves nodes by settling their producers, so a loop
-(`a -> b -> a`) can never make progress. This pass runs Kahn's algorithm over the
-non-sentinel edges and raises a located `LoadError` naming the stuck nodes when a cycle
-remains. The boundary sentinels (`__start__`/`__end__`) are acyclic by construction, so
-passing the fully-assembled edge set is fine.
+(`a -> b -> a`) can never make progress. This pass uses Kahn's algorithm to detect a
+cycle, then isolates the cyclic strongly connected components so downstream blocked
+nodes are not blamed. The boundary sentinels (`__start__`/`__end__`) are acyclic by
+construction, so passing the fully-assembled edge set is fine.
 
 Located parse metadata: the caller passes `node_ranges` (node id -> `SourceRange`). The
-cycle diagnostic carries one frame per located stuck node in authored source order. Its
-notes form a "why" legend: one line per dependency edge inside the loop, so the author sees
-which `${...}` reference closes the cycle.
+cycle diagnostic carries one frame per located cycle member in authored source order.
+Its notes form a "why" legend: one line per dependency edge inside a cyclic component,
+so the author sees which `${...}` reference closes the cycle.
 
 Imports flow down/peer only: `compile.model` (Edge + boundary ids), `compile.validation`
 (the shared Kahn check), `compose.helpers.errors`, `events` (SourceRange). Only the loader (and
@@ -35,10 +35,10 @@ def reject_cycles(
 ) -> None:
     """Raise a `LoadError` if the inferred (real-node) graph has a directed cycle.
 
-    Delegates to the shared `_reject_cycles` (Kahn's algorithm over the non-sentinel
-    edges); a cyclic flow (`a -> b -> a`) is loud and names the stuck nodes. Sentinel
-    `__start__`/`__end__` edges can't close a cycle, so passing the fully-assembled edge
-    set is fine.
+    Delegates detection to the shared `_reject_cycles` (Kahn's algorithm over the
+    non-sentinel edges), then identifies the actual cyclic strongly connected
+    components. A node blocked downstream of a cycle is not a cycle member. Sentinel
+    `__start__`/`__end__` edges cannot close a cycle.
 
     `node_ranges` (node id -> `SourceRange`) gives every located node in the loop its own
     frame, ordered by authored line and column. `node_lines` remains only for transitional
@@ -53,7 +53,8 @@ def reject_cycles(
     try:
         _reject_cycles(edges, node_ids)
     except FlowValidationError as exc:
-        stuck = _stuck_nodes(edges, node_ids)
+        components = _cyclic_components(edges, node_ids)
+        cycle_nodes = set().union(*components)
         authored = sorted(
             (
                 source_range.start_line,
@@ -61,7 +62,7 @@ def reject_cycles(
                 node_id,
                 source_range,
             )
-            for node_id in stuck
+            for node_id in cycle_nodes
             if (source_range := ranges.get(node_id)) is not None
         )
         frames = tuple(
@@ -69,27 +70,36 @@ def reject_cycles(
             for _, _, _, source_range in authored
             if (frame := diagnostics.frame(source_range)) is not None
         )
-        notes = _cycle_notes(edges, set(stuck))
+        notes = _cycle_notes(edges, components)
         raise diagnostics.error(
-            str(exc),
+            f"flow has a cycle involving {sorted(cycle_nodes)}; flows must be acyclic",
             frames=frames,
             notes=notes,
         ) from exc
 
 
-def _cycle_notes(edges: list[Edge], stuck: "set[str]") -> list[str]:
-    """The "why" legend for a cycle: one line per dependency edge between stuck nodes.
+def _cycle_notes(
+    edges: list[Edge],
+    components: tuple[frozenset[str], ...],
+) -> list[str]:
+    """Return one note per dependency edge within a cyclic component.
 
-    Each loop-internal edge `from_ -> to` reads as "`to` consumes `from_`", i.e. the consumer
-    depends on the producer; we name the consumer's input group so the author finds the exact
-    `${...}` reference that closes the loop. A data edge cites `to.input.<group>`; a pure
-    ordering edge (`depends_on`/`runs_after`, no data) is labelled as such. Sorted + de-duped
-    for a deterministic legend.
+    Each loop-internal edge `from_ -> to` reads as "`to` consumes `from_`", i.e. the
+    consumer depends on the producer. An edge connecting two separate cycles is not
+    itself cyclic and is omitted. A data edge cites `to.input.<group>`; a pure ordering
+    edge (`depends_on`/`runs_after`, no data) is labelled as such. Notes are sorted and
+    de-duplicated for deterministic presentation.
     """
+    component_by_node = {
+        node_id: index
+        for index, component in enumerate(components)
+        for node_id in component
+    }
     seen: set[tuple[str, str, str]] = set()
     notes: list[str] = []
     for e in edges:
-        if e.from_ in stuck and e.to in stuck and e.from_ != e.to:
+        component = component_by_node.get(e.from_)
+        if component is not None and component_by_node.get(e.to) == component:
             via = f"{e.to}.input.{e.input_group}" if e.input_group else "ordering"
             key = (e.to, e.from_, via)
             if key not in seen:
@@ -98,24 +108,61 @@ def _cycle_notes(edges: list[Edge], stuck: "set[str]") -> list[str]:
     return sorted(notes)
 
 
-def _stuck_nodes(edges: list[Edge], node_ids: "set[str]") -> list[str]:
-    """The nodes left with in-degree > 0 after a Kahn pass (the cycle members), sorted.
+def _cyclic_components(
+    edges: list[Edge],
+    node_ids: set[str],
+) -> tuple[frozenset[str], ...]:
+    """Return the graph's cyclic strongly connected components deterministically.
 
-    Mirrors the stuck-set `_reject_cycles` reports so each located member can receive a
-    frame. Sentinel `__start__`/`__end__` edges are ignored.
+    Two iterative depth-first passes implement Kosaraju's algorithm without a Python
+    recursion-depth limit. Components with multiple nodes are cyclic; a singleton is
+    cyclic only when it has a self-edge. Sentinel edges are ignored.
     """
-    in_degree = {nid: 0 for nid in node_ids}
-    adjacency: dict[str, list[str]] = {nid: [] for nid in node_ids}
+    adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    reverse: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
     for edge in edges:
         if edge.from_ in (START_ID, END_ID) or edge.to in (START_ID, END_ID):
             continue
-        adjacency[edge.from_].append(edge.to)
-        in_degree[edge.to] += 1
-    queue = [nid for nid in node_ids if in_degree[nid] == 0]
-    while queue:
-        nid = queue.pop()
-        for nxt in adjacency[nid]:
-            in_degree[nxt] -= 1
-            if in_degree[nxt] == 0:
-                queue.append(nxt)
-    return sorted(nid for nid in node_ids if in_degree[nid] > 0)
+        adjacency[edge.from_].add(edge.to)
+        reverse[edge.to].add(edge.from_)
+
+    visited: set[str] = set()
+    finish_order: list[str] = []
+    for start in sorted(node_ids):
+        if start in visited:
+            continue
+        stack = [(start, False)]
+        while stack:
+            node_id, expanded = stack.pop()
+            if expanded:
+                finish_order.append(node_id)
+                continue
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            stack.append((node_id, True))
+            stack.extend(
+                (target, False)
+                for target in sorted(adjacency[node_id], reverse=True)
+                if target not in visited
+            )
+
+    assigned: set[str] = set()
+    components: list[frozenset[str]] = []
+    for start in reversed(finish_order):
+        if start in assigned:
+            continue
+        component: set[str] = set()
+        stack = [start]
+        assigned.add(start)
+        while stack:
+            node_id = stack.pop()
+            component.add(node_id)
+            for source in sorted(reverse[node_id], reverse=True):
+                if source not in assigned:
+                    assigned.add(source)
+                    stack.append(source)
+        if len(component) > 1 or start in adjacency[start]:
+            components.append(frozenset(component))
+
+    return tuple(sorted(components, key=lambda item: tuple(sorted(item))))

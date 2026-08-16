@@ -96,6 +96,68 @@ def test_reject_cycles_no_ranges_leaves_range_none():
     assert exc.value.diagnostic.frames == ()
 
 
+def test_reject_cycles_excludes_nodes_only_blocked_downstream() -> None:
+    edges = [
+        Edge(id="a->b", from_="a", to="b", input_group="from_a"),
+        Edge(id="b->a", from_="b", to="a", input_group="from_b"),
+        Edge(id="b->tail", from_="b", to="tail", input_group="from_b"),
+        Edge(id="tail->end", from_="tail", to="end", input_group="from_tail"),
+    ]
+    ranges = {
+        "tail": SourceRange(1, 1, 1, 5),
+        "b": SourceRange(3, 1, 3, 2),
+        "a": SourceRange(5, 1, 5, 2),
+        "end": SourceRange(7, 1, 7, 4),
+    }
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(
+            edges,
+            set(ranges),
+            node_ranges=ranges,
+            diagnostics=_range_diagnostics(),
+        )
+
+    assert [frame.range for frame in caught.value.diagnostic.frames] == [
+        ranges["b"],
+        ranges["a"],
+    ]
+    assert "tail" not in str(caught.value)
+    assert all("tail" not in note for note in caught.value.diagnostic.notes)
+
+
+def test_reject_cycles_omits_edges_between_separate_cycles() -> None:
+    edges = [
+        Edge(id="a->b", from_="a", to="b", input_group="from_a"),
+        Edge(id="b->a", from_="b", to="a", input_group="from_b"),
+        Edge(id="b->c", from_="b", to="c", input_group="bridge"),
+        Edge(id="c->d", from_="c", to="d", input_group="from_c"),
+        Edge(id="d->c", from_="d", to="c", input_group="from_d"),
+    ]
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(edges, {"a", "b", "c", "d"})
+
+    assert set(caught.value.diagnostic.notes) == {
+        "a depends on b (a.input.from_b)",
+        "b depends on a (b.input.from_a)",
+        "c depends on d (c.input.from_d)",
+        "d depends on c (d.input.from_c)",
+    }
+
+
+def test_reject_cycles_reports_a_self_dependency() -> None:
+    edge = Edge(id="a->a", from_="a", to="a", input_group="self")
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles([edge], {"a"})
+
+    assert "['a']" in str(caught.value)
+    assert caught.value.diagnostic.notes == (
+        "a depends on a (a.input.self)",
+    )
+
+
 def test_validate_references_diag_has_range():
     # A node input binding that references an unknown node (`${ghost.output}`) is a dangling
     # ref. The aggregate LoadError anchors its `range` on the OFFENDING ENTRY — the per-binding

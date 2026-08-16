@@ -509,6 +509,49 @@ def test_growth_rejects_invalid_node_owned_topology_targets(
     assert type(caught.value.original) is error
 
 
+def test_growth_rejects_invalid_skipped_output_hook_target() -> None:
+    """A future hook override cannot hide a missing logical output target."""
+    state, _ = _initialized_spawner()
+
+    def invalid_target_builder(spawner: Node, seed: Any) -> Flow:
+        fragment = _fragment(spawner.id)
+        fragment.nodes[fragment.end_id].skipped_output_target = lambda: "missing"
+        return fragment
+
+    with pytest.raises(GrowthRejected, match="skipped output target.*does not exist"):
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            invalid_target_builder,
+        )
+
+
+def test_growth_rejects_duplicate_redirect_owner_in_final_topology() -> None:
+    """A growth fragment cannot add a second completion for one logical output."""
+    state, log = _initialized_spawner()
+    existing = _OverlayNode("existing-owner")
+    existing.commit_as = "spawn"
+    state.flow.add_subgraph(
+        {existing.id: existing},
+        [],
+        {existing.id: {}},
+    )
+    state.node_state[existing.id] = NodeState.UNKNOWN
+    before = _snapshot(state)
+
+    with pytest.raises(GrowthRejected, match="multiple skipped output owners"):
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda spawner, seed: _fragment(spawner.id),
+        )
+
+    assert _snapshot(state) == before
+    assert log.next_sequence == 4
+
+
 @pytest.mark.parametrize(
     ("attribute", "value", "error"),
     [
@@ -1420,6 +1463,7 @@ def test_growth_rejects_live_node_collision_even_when_the_id_is_pruned():
         "wiring-dependency",
         "commit-dependency",
         "origin-dependency",
+        "skipped-output-dependency",
     ],
 )
 def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
@@ -1510,6 +1554,8 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
             state.flow.nodes[dependent].commit_as = old_id
         elif case == "origin-dependency":
             state.flow.nodes[dependent].origin_id = old_id
+        elif case == "skipped-output-dependency":
+            state.flow.nodes[dependent].skipped_output_target = lambda: old_id
         prune_ids = frozenset({old_id})
 
     before = _snapshot(state)

@@ -342,13 +342,113 @@ def test_redirected_skip_completes_coalesced_fallback_and_run() -> None:
     assert isinstance(state.result, RunSucceeded)
 
 
-def test_malformed_skipped_output_target_leaves_state_unchanged() -> None:
+@pytest.mark.parametrize(
+    ("target", "error"),
+    [
+        ("missing", ValueError),
+        ("", ValueError),
+        (0, TypeError),
+    ],
+)
+def test_malformed_skipped_output_target_leaves_state_unchanged(
+    target: Any,
+    error: type[Exception],
+) -> None:
     state, log = _router_in_flight(_call_redirect_flow())
-    state.flow.nodes[_CHILD_END].commit_as = "missing"
+    state.flow.nodes[_CHILD_END].commit_as = target
     before = _state_snapshot(state)
     sequence = log.next_sequence
 
-    with pytest.raises(ValueError):
+    with pytest.raises(error):
+        prepare_node_routed(state, "router", "default")
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == sequence
+
+
+def test_multiple_redirect_owners_are_rejected_before_skip() -> None:
+    """One skipped alias cannot settle a target another alias may still produce."""
+    first = FuncNode("first", lambda inputs: inputs)
+    first.commit_as = "target"
+    second = FuncNode("second", lambda inputs: inputs)
+    second.commit_as = "target"
+    flow = CompiledFlow.from_parts(
+        nodes={
+            START_ID: StartNode(START_ID),
+            "router": FuncNode("router", lambda inputs: inputs),
+            "first": first,
+            "second": second,
+            "target": FuncNode("target", lambda inputs: inputs),
+            END_ID: EndNode.record(END_ID, output_names=[]),
+        },
+        edges=[
+            Edge(id="start-router", from_=START_ID, to="router"),
+            Edge(
+                id="router-first",
+                from_="router",
+                to="first",
+                source_handle="first",
+            ),
+            Edge(
+                id="router-second",
+                from_="router",
+                to="second",
+                source_handle="second",
+            ),
+            Edge(
+                id="target-end",
+                from_="target",
+                to=END_ID,
+                input_group="result",
+            ),
+        ],
+    )
+    state, log = _router_in_flight(flow)
+    before = _state_snapshot(state)
+    sequence = log.next_sequence
+
+    with pytest.raises(ValueError, match="multiple skipped output owners"):
+        prepare_node_routed(state, "router", "second")
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == sequence
+
+
+def test_live_redirect_target_is_rejected_before_skip() -> None:
+    """A logical anchor cannot race a redirected producer for the same output."""
+    owner = FuncNode("owner", lambda inputs: inputs)
+    owner.commit_as = "target"
+    flow = CompiledFlow.from_parts(
+        nodes={
+            START_ID: StartNode(START_ID),
+            "router": FuncNode("router", lambda inputs: inputs),
+            "owner": owner,
+            "target": FuncNode("target", lambda inputs: inputs),
+            END_ID: EndNode.record(END_ID, output_names=[]),
+        },
+        edges=[
+            Edge(id="start-router", from_=START_ID, to="router"),
+            Edge(id="start-target", from_=START_ID, to="target"),
+            Edge(
+                id="router-owner",
+                from_="router",
+                to="owner",
+                source_handle="owner",
+            ),
+            Edge(
+                id="target-end",
+                from_="target",
+                to=END_ID,
+                input_group="result",
+            ),
+        ],
+    )
+    state, log = _router_in_flight(flow)
+    assert tuple(state.ready) == ("target",)
+    before = _state_snapshot(state)
+    sequence = log.next_sequence
+
+    with pytest.raises(ValueError, match="also executable"):
         prepare_node_routed(state, "router", "default")
 
     assert _state_snapshot(state) == before

@@ -494,7 +494,7 @@ class Node(ABC):
         strand their parent's outgoing edges.  Kinds whose output target is
         selected by other node-owned state override this hook.
         """
-        return self.commit_as or self.id
+        return self.id if self.commit_as is None else self.commit_as
 
     def validate_execution_setup(self) -> None:
         """Reject malformed node-owned execution setup before entering the body stage.

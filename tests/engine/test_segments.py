@@ -305,6 +305,10 @@ def test_nested_type_failure_carries_the_contract_relative_path() -> None:
     assert caught.value.path == ("payload", "items", 1, "score")
     assert str(caught.value) == "'bad' does not match declared type int"
 
+    with pytest.raises(TypeCheckError) as container:
+        build_value_as(root, {"payload": {"items": "not-a-list"}})
+    assert container.value.path == ("payload", "items")
+
 
 def test_flat_list_failure_carries_the_actual_element_index() -> None:
     """A storage-kind-only list has the same index semantics as a refined list."""

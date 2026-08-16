@@ -1,8 +1,11 @@
 """Seed-first growth: nodes describe expansion; compile constructs topology."""
 
-from agent_composer.compile.model import Flow
+import pytest
+
+import agent_composer.compile.expand as expand_module
+from agent_composer.compile.model import Flow, GrowthRejected
 from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.base import Grow
+from agent_composer.nodes.base import Grow, Node, NodeKind
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.contracts import Assertion, Parameter
 from agent_composer.nodes.loop import LoopNode
@@ -119,3 +122,78 @@ def test_compile_builder_reconstructs_every_growth_kind():
         loop.respawn(iteration + 1),
     )
     _assert_same_fragment(build_grow(loop, list(loop_grow.seed)), loop_expected)
+
+
+@pytest.mark.parametrize(
+    ("producer_index", "seed", "original_type", "message"),
+    [
+        (0, [], TypeError, "CALL growth seed must be a record"),
+        (0, {1: "value"}, TypeError, "record keys must be strings"),
+        (0, {"": "value"}, ValueError, "record keys must be non-empty"),
+        (1, {}, TypeError, "MAP growth seed must be a list of records"),
+        (1, [[]], TypeError, "MAP item 0 growth seed must be a record"),
+        (2, [{}], ValueError, "two-item"),
+        (2, [[], 0], TypeError, "LOOP carried growth seed must be a record"),
+        (2, [{}, True], TypeError, "iteration must be an integer"),
+        (2, [{}, -1], ValueError, "iteration must be non-negative"),
+    ],
+    ids=(
+        "call-container",
+        "call-key-type",
+        "call-empty-key",
+        "map-container",
+        "map-item",
+        "loop-arity",
+        "loop-record",
+        "loop-boolean-index",
+        "loop-negative-index",
+    ),
+)
+def test_compile_builder_marks_only_explicit_legal_seed_rejection(
+    producer_index: int,
+    seed,
+    original_type: type[Exception],
+    message: str,
+):
+    """Malformed legal-kind seeds retain their typed rejection in one marker."""
+    from agent_composer.compile.expand import build_grow
+
+    spawner = _growth_producers()[producer_index][0]
+
+    with pytest.raises(GrowthRejected, match=message) as caught:
+        build_grow(spawner, seed)
+
+    assert type(caught.value.original) is original_type
+
+
+def test_compile_builder_keeps_an_unsupported_kind_outside_growth_rejection():
+    """A trait/kind compiler mismatch is not node-produced legal-kind seed data."""
+    from agent_composer.compile.expand import build_grow
+
+    spawner = Node("unsupported")
+    spawner.kind = NodeKind.CODE
+
+    with pytest.raises(ValueError, match="cannot build graph growth") as caught:
+        build_grow(spawner, {})
+
+    assert type(caught.value) is ValueError
+
+
+def test_compile_builder_preserves_helper_fault_identity_after_seed_validation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Only seed validation marks rejection; compiler construction faults stay raw."""
+    from agent_composer.compile.expand import build_grow
+
+    call = _growth_producers()[0][0]
+    expected = TypeError("compiler helper fault")
+
+    def broken_helper(*_args, **_kwargs):
+        raise expected
+
+    monkeypatch.setattr(expand_module, "call_subgraph", broken_helper)
+
+    with pytest.raises(TypeError) as caught:
+        build_grow(call, {"x": 1})
+
+    assert caught.value is expected

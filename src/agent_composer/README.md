@@ -83,10 +83,19 @@ best operation origin, or the authored node origin as fallback. Host control,
 stream callbacks, unexpected binder faults, and malformed compiled/setup state
 escape this expected-failure sum.
 
-`FlowEngine` still projects evaluator failures into schema-1 `NodeFailedRecord`
-fields, so `code` and opaque `trace` are not durable yet. Dispatcher-owned
-output/route/growth rejection, terminal-graph failure, records, observers, and
-public results remain part of the canonical cutover.
+The dispatcher assigns the next three codes structurally from the closed result
+sum: rejected `Output`, `Route`, and `Grow` data become `contract.output`,
+`contract.route`, and `contract.growth`. Output rejection uses the effective
+target contract's root origin when present, then the executing node origin;
+route and growth use the executing node origin. Source-free operations have an
+empty trace. Unsupported growth kinds and arbitrary builder, compiler,
+spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
+faults escape rather than becoming flow failures.
+
+`FlowEngine` projects evaluator and dispatcher failures through one schema-1
+`NodeFailedRecord` boundary, so `code` and opaque `trace` are not durable yet.
+Terminal-graph failure plus durable record, observer, and public-result cutover
+remain tracked by #182.
 
 ## Semantic IR carriers
 
@@ -316,18 +325,22 @@ of the closed result sum:
 
 Failure is a `raise`, not another result variant. `eval_node` structurally turns
 expected binding, assertion, body, and result rejection into
-`EvaluationFailure(Failure)`; host control, stream callbacks, unexpected binder
-faults, and malformed setup escape. The dispatcher currently flattens that
-canonical evaluator value into a schema-1
-`NodeFailedRecord`. A streaming kind may yield transient `StreamChunk` values and
-then return one of the same three results.
+`EvaluationFailure(Failure)`. Result preparation constructs the same canonical
+value for expected output, route, and growth rejection. Both paths use one
+schema-1 projector; host control, stream callbacks, unexpected binder faults,
+malformed setup, and arbitrary host/compiler faults escape. A streaming kind may
+yield transient `StreamChunk` values and then return one of the same three results.
 
 The runtime core is **kind-blind**. It dispatches on this result sum and node-owned
 traits/hooks (`is_spawner`, `binds_per_item`, `bind_reserved`,
 `validate_execution_setup`, `exception_origin`, `grow_depth_delta`, `is_loop`,
 and `needs_stop_event`), never on `NodeKind`. The closed kind-aware
-growth match lives in `compile.expand.build_grow`, outside runtime. The kind census
-test keeps runtime's `NodeKind`/expansion dispatch count at zero.
+growth match lives in `compile.expand.build_grow`, outside runtime.
+`compile.model.GrowthRejected` crosses that boundary only when a legal
+CALL/MAP/LOOP kind supplies a malformed seed. Unsupported kinds and builder or
+compiler helper faults remain raw; runtime marks only explicit seed, fragment,
+budget, depth, and prune-policy rejection as expected growth data. The kind
+census test keeps runtime's `NodeKind`/expansion dispatch count at zero.
 
 ## One append-only authority
 

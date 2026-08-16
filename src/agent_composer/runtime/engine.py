@@ -17,8 +17,9 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-from agent_composer.compile.model import Flow
-from agent_composer.events import RunFailed, SourceSpan, StreamChunk
+from agent_composer.compile.model import GrowthRejected
+from agent_composer.diagnostics import Failure, FailureCode, OriginRef
+from agent_composer.events import RunFailed, SourceRange, SourceSpan, StreamChunk
 from agent_composer.nodes.base import Grow, Output, Route, _HostStop
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.runtime.log import RunLog
@@ -52,14 +53,6 @@ class _RecordedCompletion:
 
     node_id: str
     future: Future
-
-
-class _GrowBuilderError(Exception):
-    """Keep an injected builder exception distinct from reducer programming errors."""
-
-    def __init__(self, original: Exception) -> None:
-        super().__init__(str(original))
-        self.original = original
 
 
 class FlowEngine:
@@ -261,24 +254,17 @@ class FlowEngine:
     ) -> tuple[Any, ...]:
         """Prepare node data, append its record, and apply the total reducer plan.
 
-        Evaluator ``Failure`` values are projected into the current schema-1 record
-        fields here; their semantic code and origin trace await the record cutover.
+        Evaluator and dispatcher ``Failure`` values are projected into the current
+        schema-1 record fields here; their semantic code and origin trace await the
+        record cutover.
         """
         if isinstance(outcome, EvaluationFailure):
             failure = outcome.failure
-            if failure.node_id != node_id:
-                raise RuntimeError(
-                    "raw evaluation failure node identity mismatch: "
-                    f"expected {node_id!r}, found {failure.node_id!r}"
-                )
-            prepared = prepare_node_failed(
-                self.state,
+            prepared = self._prepare_failure(
                 node_id,
-                failure.message,
-                error_type=failure.cause_type or "",
+                failure,
                 locator=outcome.locator,
                 range=outcome.range,
-                traceback=failure.traceback,
             )
             return commit_prepared(self.log, self.state, prepared)
 
@@ -301,9 +287,11 @@ class FlowEngine:
                     target = self.state.flow.nodes[node_id].commit_as
                 if type(target) is not str or not target:
                     target = node_id
-                prepared = self._prepare_data_failure(
+                prepared = self._prepare_contract_failure(
                     node_id,
+                    "contract.output",
                     wrapped.original,
+                    origin=wrapped.origin,
                     traceback_text=self._format_exception(wrapped.original),
                     fallback_locator=SourceSpan(
                         node=target,
@@ -319,9 +307,11 @@ class FlowEngine:
                     outcome.handle,
                 )
             except _NodeDataError as wrapped:
-                prepared = self._prepare_data_failure(
+                prepared = self._prepare_contract_failure(
                     node_id,
+                    "contract.route",
                     wrapped.original,
+                    origin=wrapped.origin,
                     traceback_text=self._format_exception(wrapped.original),
                 )
         else:
@@ -330,52 +320,71 @@ class FlowEngine:
                     self.state,
                     node_id,
                     outcome,
-                    self._build_growth,
+                    self.grow_builder,
                 )
-            except _GrowBuilderError as wrapped:
-                prepared = self._prepare_data_failure(
+            except GrowthRejected as wrapped:
+                prepared = self._prepare_contract_failure(
                     node_id,
-                    wrapped.original,
-                    traceback_text=self._format_exception(wrapped.original),
-                )
-            except _NodeDataError as wrapped:
-                prepared = self._prepare_data_failure(
-                    node_id,
+                    "contract.growth",
                     wrapped.original,
                     traceback_text=self._format_exception(wrapped.original),
                 )
         return commit_prepared(self.log, self.state, prepared)
 
-    def _build_growth(self, spawner: Any, seed: Any) -> Flow:
-        """Call only the injected growth seam under a distinct failure boundary."""
-        try:
-            return self.grow_builder(spawner, seed)
-        except _HostStop:
-            raise
-        except Exception as exc:  # noqa: BLE001 - injected node-data builder boundary
-            raise _GrowBuilderError(exc) from exc
-
-    def _prepare_data_failure(
+    def _prepare_failure(
         self,
         node_id: str,
-        exception: Exception,
+        failure: Failure,
         *,
-        traceback_text: str | None = None,
-        fallback_locator: SourceSpan | None = None,
+        locator: SourceSpan | None = None,
+        range: SourceRange | None = None,
     ) -> PreparedTransition:
-        """Prepare the legacy failure view for dispatcher-side transition rejection."""
-        locator = getattr(exception, "locator", None) or fallback_locator
-        range_ = getattr(exception, "range", None)
+        """Project one canonical failure into the temporary schema-1 record."""
+        if failure.node_id != node_id:
+            raise RuntimeError(
+                "raw evaluation failure node identity mismatch: "
+                f"expected {node_id!r}, found {failure.node_id!r}"
+            )
         return prepare_node_failed(
             self.state,
             node_id,
-            str(exception),
-            error_type=type(exception).__name__,
+            failure.message,
+            error_type=failure.cause_type or "",
             locator=locator,
-            range=range_,
+            range=range,
+            traceback=failure.traceback,
+        )
+
+    def _prepare_contract_failure(
+        self,
+        node_id: str,
+        code: FailureCode,
+        exception: Exception,
+        *,
+        origin: OriginRef | None = None,
+        traceback_text: str | None = None,
+        fallback_locator: SourceSpan | None = None,
+    ) -> PreparedTransition:
+        """Construct and project one expected dispatcher contract rejection."""
+        node = self.state.flow.nodes[node_id]
+        selected_origin = origin if origin is not None else node.origin
+        failure = Failure(
+            code=code,
+            message=str(exception),
+            node_id=node_id,
+            trace=(() if selected_origin is None else (selected_origin,)),
+            cause_type=type(exception).__name__,
             traceback=(
                 traceback_text if traceback_text is not None else _tb.format_exc()
             ),
+        )
+        locator = getattr(exception, "locator", None) or fallback_locator
+        range_ = getattr(exception, "range", None)
+        return self._prepare_failure(
+            node_id,
+            failure,
+            locator=locator,
+            range=range_,
         )
 
     @staticmethod

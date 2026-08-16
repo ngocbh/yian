@@ -656,14 +656,17 @@ def canonical_typed(
         `ValueError`:
             The typed value contains data that cannot be represented as canonical JSON.
     """
-    _reject_unordered_containers(value)
-    typed = build_value(value) if declared is None else build_value_as(declared, value)
-    dumped = ANY_VALUE_ADAPTER.dump_python(typed, mode="json", warnings="error")
-    wire = _copy_json(dumped)
-    if not isinstance(wire, dict):  # defensive: every AnyValue model is an object
-        raise ValueError("typed value did not encode to a JSON object")
-    decoded = _decode_typed(wire)
-    return wire, decoded
+    try:
+        _reject_unordered_containers(value)
+        typed = build_value(value) if declared is None else build_value_as(declared, value)
+        dumped = ANY_VALUE_ADAPTER.dump_python(typed, mode="json", warnings="error")
+        wire = _copy_json(dumped)
+        if not isinstance(wire, dict):  # defensive: every AnyValue model is an object
+            raise ValueError("typed value did not encode to a JSON object")
+        decoded = _decode_typed(wire)
+        return wire, decoded
+    except RecursionError as exc:
+        raise ValueError("canonical data nesting exceeds the supported depth") from exc
 
 
 def canonical_seed(value: Any) -> tuple[Any, Any]:
@@ -683,10 +686,13 @@ def canonical_seed(value: Any) -> tuple[Any, Any]:
         `ValueError`:
             The seed contains an unsupported or non-finite JSON value.
     """
-    _reject_unordered_containers(value)
-    dumped = _ANY_ADAPTER.dump_python(value, mode="json", warnings="error")
-    wire = _copy_json(dumped)
-    return wire, _copy_json(wire)
+    try:
+        _reject_unordered_containers(value)
+        dumped = _ANY_ADAPTER.dump_python(value, mode="json", warnings="error")
+        wire = _copy_json(dumped)
+        return wire, _copy_json(wire)
+    except RecursionError as exc:
+        raise ValueError("canonical data nesting exceeds the supported depth") from exc
 
 
 def encode_pool(pool: VariablePool) -> dict[str, Any]:
@@ -995,32 +1001,58 @@ def _copy_json(value: Any) -> Any:
     raise ValueError(f"{type(value).__name__} is not a canonical JSON value")
 
 
-def _reject_unordered_containers(value: Any) -> None:
-    """Reject sets before Pydantic can turn hash iteration order into durable order."""
+def _reject_unordered_containers(
+    value: Any,
+    *,
+    _active: set[int] | None = None,
+) -> None:
+    """Reject unordered, cyclic, or non-string-keyed canonical input containers."""
     if type(value) is str:
         _validated_json_string(value)
         return
     if isinstance(value, (set, frozenset)):
         raise ValueError("unordered container cannot be canonicalized")
-    if isinstance(value, TypedValue):
-        _reject_unordered_containers(value.to_object())
+    is_container = (
+        isinstance(value, (TypedValue, BaseModel, dict, list, tuple))
+        or (is_dataclass(value) and not isinstance(value, type))
+    )
+    if not is_container:
         return
-    if isinstance(value, BaseModel):
-        for field_name in type(value).model_fields:
-            _reject_unordered_containers(getattr(value, field_name))
-        return
-    if is_dataclass(value) and not isinstance(value, type):
-        for field in fields(value):
-            _reject_unordered_containers(getattr(value, field.name))
-        return
-    if isinstance(value, dict):
-        for key, item in value.items():
-            _reject_unordered_containers(key)
-            _reject_unordered_containers(item)
-        return
-    if isinstance(value, (list, tuple)):
+
+    active = set() if _active is None else _active
+    identity = id(value)
+    if identity in active:
+        raise ValueError("cyclic container cannot be canonicalized")
+    active.add(identity)
+    try:
+        if isinstance(value, TypedValue):
+            _reject_unordered_containers(value.to_object(), _active=active)
+            return
+        if isinstance(value, BaseModel):
+            for field_name in type(value).model_fields:
+                _reject_unordered_containers(
+                    getattr(value, field_name),
+                    _active=active,
+                )
+            return
+        if is_dataclass(value) and not isinstance(value, type):
+            for field in fields(value):
+                _reject_unordered_containers(
+                    getattr(value, field.name),
+                    _active=active,
+                )
+            return
+        if isinstance(value, dict):
+            if any(type(key) is not str for key in value):
+                raise ValueError("canonical JSON object keys must be strings")
+            for key, item in value.items():
+                _reject_unordered_containers(key, _active=active)
+                _reject_unordered_containers(item, _active=active)
+            return
         for item in value:
-            _reject_unordered_containers(item)
+            _reject_unordered_containers(item, _active=active)
+    finally:
+        active.remove(identity)
 
 
 def _validated_json_string(value: str) -> str:

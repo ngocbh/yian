@@ -36,8 +36,9 @@ A streaming kind is a generator that yields `StreamChunk` and *returns* a
 `NodeResult`. **Failure is not a variant** — a node `raise`s and the engine
 evaluation boundary returns `EvaluationFailure(Failure)` for expected rejection;
 host control, stream callbacks, unexpected binder faults, and malformed setup
-escape. The dispatcher currently projects that value into a schema-1
-`NodeFailedRecord`, and the reducer derives `NodeFailed`/`RunFailed` observers.
+escape. Result preparation constructs the same canonical value for expected
+output, route, and growth rejection. One schema-1 projector handles both paths,
+and the reducer derives `NodeFailed`/`RunFailed` observers.
 `Node.on_failure` is a dormant future seam, not currently driven by `eval_node`.
 
 The dependency-free `diagnostics` leaf defines the canonical semantic value for
@@ -64,10 +65,18 @@ not semantic categories. The contract reserves these codes for expected
 flow-owned rejection. The evaluator structurally assigns `binding.evaluate`,
 `contract.input`, `assertion.failed`, `node.execute`, and
 `contract.node_result`; it never classifies by exception type. `EvaluationFailure`
-owns that single `Failure` plus temporary locator/range metadata. `FlowEngine`
-still projects it into flattened schema-1 fields, dropping semantic `code` and
-opaque `trace`; dispatcher, observer, and public-result cutover follows
-separately.
+owns that single `Failure` plus temporary locator/range metadata. Dispatcher
+classification is structural too:
+
+| Result rejected during preparation | Code | Best current origin |
+|---|---|---|
+| `Output` | `contract.output` | effective target contract root, then executing node |
+| `Route` | `contract.route` | executing node |
+| `Grow` | `contract.growth` | executing node |
+
+`FlowEngine` projects both sources into flattened schema-1 fields, dropping
+semantic `code` and opaque `trace`. Durable/public/terminal cutover remains
+tracked by #182.
 
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine
@@ -81,6 +90,12 @@ spawner returns a canonical seed only. `compile.expand.build_grow` is the sole
 kind-aware constructor; package-root `run.py` injects it into `FlowEngine` for live
 growth and into reducer replay for recovery. Runtime may consume compile's execution
 contracts but never imports `compile.expand`, so the splice remains kind-blind.
+`compile.expand.build_grow` raises `compile.model.GrowthRejected` only for an
+explicit malformed seed after selecting a legal CALL/MAP/LOOP kind. Unsupported
+kinds and arbitrary builder, compiler, spawner/fragment-copy, digest,
+topology-materialization, reducer, append, or log faults propagate raw. Runtime
+classifies only explicit seed, validated-fragment, budget, depth, and
+prune-policy rejection as `contract.growth`.
 
 **Capabilities (`caps`)** are narrow, engine-owned effects passed as keyword args to
 `run`; each is gated by a node trait. A mapped call gets `caps['bind_item']`
@@ -574,9 +589,11 @@ never a text heuristic.
   `Failure.trace` contains one operation origin, or the node origin as fallback.
   `eval_node` fills a legacy locator's missing node id via
   `replace(loc, node=node.id)`;
-  success-transition preparation validates the raw `Output` against the effective
-  target's declared type; invalid node-produced data becomes a durable `NodeFailedRecord`
-  with the original error type and a fallback `field` span (`key="output"`).
+  dispatcher preparation assigns `contract.output`, `contract.route`, or
+  `contract.growth` from the result arm. Output uses the effective target
+  contract's root origin when available and otherwise the executing node origin;
+  route and growth use the executing node origin. Schema-1 output projection
+  retains the original error type and fallback `field` span (`key="output"`).
 - **Concrete range (when resolved at the failure site):** ALONGSIDE the symbolic `locator`, a
   **`SourceRange`** (start/end line+col, 1-based; owned by `diagnostics` and temporarily
   re-exported by `events`) may be attached. For an `input` / `field` locator
@@ -599,11 +616,12 @@ never a text heuristic.
   Output-type failures occur after evaluation, so their durable failure may carry only the
   symbolic `field` locator; the CLI resolves it from the supplied flow when no concrete range
   was recorded.
-- **Migration boundary:** evaluator failures now carry one canonical `Failure`,
-  while `FlowEngine` projects only its message/cause/traceback into schema-1
-  records and retains locator/range beside it. Durable records and CLI rendering
-  therefore still consume the legacy projection. Authored nodes and assertions
-  carry opaque origins, and every
+- **Migration boundary:** evaluator and dispatcher rejection now construct one
+  canonical `Failure`, while `FlowEngine` projects only its
+  message/cause/traceback into schema-1 records and retains locator/range beside
+  it. Durable records and CLI rendering therefore still consume the legacy
+  projection; durable/public/terminal cutover remains tracked by #182. Authored
+  nodes and assertions carry opaque origins, and every
   flow returned by `load_flow` carries one complete source-neutral resolver (or `None` when
   source-free). Runtime and CLI failure rendering still use the legacy locator/range path
   above. For assertions, Compose derives that temporary positional range and

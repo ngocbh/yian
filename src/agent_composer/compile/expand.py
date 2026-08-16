@@ -28,11 +28,17 @@ import copy
 from dataclasses import replace
 from typing import Any, Optional
 
-from agent_composer.compile.model import Edge, END_ID, Flow, START_ID
+from agent_composer.compile.model import (
+    END_ID,
+    START_ID,
+    Edge,
+    Flow,
+    GrowthRejected,
+)
+from agent_composer.diagnostics import SourceRange
 from agent_composer.expr import rewrite_template_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.nodes.base import Node, NodeKind
-from agent_composer.diagnostics import SourceRange
 from agent_composer.nodes.contracts import Assertion, Binding, Parameter
 from agent_composer.nodes.end.node import EndNode
 from agent_composer.nodes.ids import map_callsite, ns
@@ -466,6 +472,49 @@ def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) ->
                 start_id=cloned.start_id, end_id=body_end)
 
 
+def _growth_record(seed: Any, *, label: str) -> dict[str, Any]:
+    """Require one exact string-keyed record from a legal spawner seed."""
+    if type(seed) is not dict:
+        error = TypeError(f"{label} growth seed must be a record")
+        raise GrowthRejected(error) from error
+    if any(type(key) is not str for key in seed):
+        error = TypeError(f"{label} growth seed record keys must be strings")
+        raise GrowthRejected(error) from error
+    if any(not key for key in seed):
+        error = ValueError(f"{label} growth seed record keys must be non-empty")
+        raise GrowthRejected(error) from error
+    return seed
+
+
+def _map_growth_records(seed: Any) -> list[dict[str, Any]]:
+    """Require MAP's exact ordered list of per-item records."""
+    if type(seed) is not list:
+        error = TypeError("MAP growth seed must be a list of records")
+        raise GrowthRejected(error) from error
+    return [
+        _growth_record(record, label=f"MAP item {index}")
+        for index, record in enumerate(seed)
+    ]
+
+
+def _loop_growth_seed(seed: Any) -> tuple[dict[str, Any], int]:
+    """Require LOOP's carried record and exact non-negative iteration index."""
+    if type(seed) not in (list, tuple) or len(seed) != 2:
+        error = ValueError(
+            "LOOP growth seed must be a two-item (record, iteration) pair"
+        )
+        raise GrowthRejected(error) from error
+    carried = _growth_record(seed[0], label="LOOP carried")
+    iteration = seed[1]
+    if type(iteration) is not int:
+        error = TypeError("LOOP growth seed iteration must be an integer")
+        raise GrowthRejected(error) from error
+    if iteration < 0:
+        error = ValueError("LOOP growth seed iteration must be non-negative")
+        raise GrowthRejected(error) from error
+    return carried, iteration
+
+
 def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
     """Build the deterministic fragment described by one spawner's canonical seed.
 
@@ -482,26 +531,29 @@ def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
         The self-contained `Flow` fragment the runtime splices into its private live graph.
 
     Raises:
+        GrowthRejected: If a legal spawner kind produced a malformed seed.
         ValueError: If `spawner` is not one of the closed legal growth kinds.
     """
     match spawner.kind:
         case NodeKind.CALL:
+            record = _growth_record(canonical_seed, label="CALL")
             return call_subgraph(
                 spawner.child,
                 callsite=spawner.id,
-                record=dict(canonical_seed),
+                record=dict(record),
                 post_asserts=spawner.post_asserts,
                 post_assert_ranges=spawner.post_assert_ranges,
                 input_names={param.name for param in (spawner.params or [])},
             )
         case NodeKind.MAP:
+            records = _map_growth_records(canonical_seed)
             return map_subgraph(
                 spawner.child,
                 spawner_id=spawner.id,
-                records=[dict(record) for record in canonical_seed],
+                records=[dict(record) for record in records],
             )
         case NodeKind.LOOP:
-            carried, iteration = canonical_seed
+            carried, iteration = _loop_growth_seed(canonical_seed)
             return loop_continue_subgraph(
                 spawner.child,
                 spawner.origin_id,

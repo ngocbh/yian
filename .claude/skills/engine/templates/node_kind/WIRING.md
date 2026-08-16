@@ -26,10 +26,12 @@ vocabulary (no registry/metaclass); the engine core does NOT dispatch on it, so 
 leaf needs no engine change — its behavior is entirely in its own `_run_impl`. A
 spawner additionally owns its growth traits/hooks (`is_spawner`,
 `grow_depth_delta`, `is_loop`) and the compile interpretation described in §2a.
-The other node-owned capability traits/hooks (`binds_per_item`, `bind_reserved`,
-`reserved_wiring_keys`, `needs_stop_event`, `skipped_output_target`) remain
-available to either shape. The base `Node.run` is a concrete template method that
-fires the node's asserts around `_run_impl`; do not override it.
+The other node-owned hooks split into execution-semantic capabilities
+(`binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event`,
+`skipped_output_target`) and the identity-neutral diagnostic projections
+`exception_origin` and `failure_trace`. They remain available to either shape.
+The base `Node.run` is a concrete template method that fires the node's asserts
+around `_run_impl`; do not override it.
 `skipped_output_target()` is a pure, deterministic topology hook: ordinary nodes
 inherit baked `commit_as` or their own id. A result-carried `Output.commit_as`
 redirects success only. If absence must cross that same boundary, override the
@@ -54,6 +56,12 @@ another output-Type field or compatibility property.
 origin when cloning, and never interpret it as execution state. Nodes expose only
 their local origin hooks; they never import `compile.rebase_flow_origins` or
 `diagnostics.ResolverTable`, because whole-graph rebasing belongs to `compile`.
+`Node.origin_context` is separate generated outer-to-inner spawner ancestry. It
+starts empty on direct/static nodes and stays outside local origin traversal,
+rewriting, manifests, fingerprints, and expansion digests. Expected failure
+producers call `node.failure_trace(operation_origin)`, which appends that operation
+origin or the node origin to the context, omitting only an absent local suffix and
+preserving order/duplicates; never reconstruct this rule in runtime by kind.
 
 ```python
 class NodeKind(str, Enum):
@@ -86,6 +94,12 @@ must preserve the layer boundary:
 - Add the kind-aware interpretation to the closed match in
   `compile/expand.py::build_grow(spawner, canonical_seed)`. It validates the seed
   and returns one deterministic, self-contained `Flow` fragment.
+- Propagate diagnostic ancestry during that compile-owned construction. Prefix
+  every cloned child and generated boundary with `spawner.failure_trace()`; if a
+  clone already has generated ancestry, append it after that prefix without
+  deduplication. A self-respawning driver copies only `spawner.origin_context`,
+  so its local authored origin is appended once by `failure_trace()`. Do not add
+  a runtime kind branch or derive ancestry from runtime node ids.
 - Add focused tests proving the node returns only the canonical seed and
   `build_grow` reconstructs the expected entry/end ids, topology, and wiring.
 - A returned `Flow` owns canonical `Binding` values. Its constructor may accept

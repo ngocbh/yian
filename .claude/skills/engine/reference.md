@@ -98,13 +98,18 @@ missing, malformed, or raising resolution atomically returns no frames plus
 exactly `Source presentation was unavailable.` `ComposedFlow.diagnose()` does
 not inspect the compiled graph or `SourceFrame`, and it does not parse or reparse
 YAML; resolution may delegate to the resolver's retained source document.
-Runtime currently supplies at most one trace origin;
-nested outer context is not yet implemented. The locator/range and
-`SourceFrame` CLI bridges below remain temporary current behavior.
+The locator/range and `SourceFrame` CLI bridges below remain temporary current
+behavior.
 
-The trace is authored identity ordered outermost to innermost; its final item is
-the most precise available operation, while `node_id` remains runtime execution
-identity. The closed plain-string codes are `binding.evaluate`,
+`Node.origin_context` is generated outer-to-inner spawner ancestry. It is empty
+on direct/static nodes, diagnostic-only, omitted from manifests/fingerprints/
+expansion digests, and deliberately absent from local authored-origin traversal
+and rewriting. `Node.failure_trace(operation_origin=None)` is the only trace
+construction rule: append the supplied operation origin, or the node origin when
+none was supplied, to that context. Only an absent local suffix is omitted;
+order and duplicates are preserved. When present, the final item is therefore
+the most precise available local operation, while `node_id` remains runtime
+execution identity. The closed plain-string codes are `binding.evaluate`,
 `contract.input`, `assertion.failed`, `node.execute`, `contract.node_result`,
 `contract.output`, `contract.route`, `contract.growth`, and
 `graph.terminal_unreachable`. Exception names and traceback text are debug data,
@@ -133,13 +138,20 @@ inputs); a node never writes the pool (it *describes* `Output(value)`, the engin
 records it, and the reducer performs the write). Nodes stay pure; the dispatcher
 is the sole live state writer. `Node.origin` is optional opaque diagnostic
 provenance for the authored node context, not execution state; it is unrelated to
-the LOOP-only `origin_id` attribution field.
+the LOOP-only `origin_id` attribution field. Generated `Node.origin_context` is
+not another authored provenance slot.
 
 Growth uses the same inversion boundary. Node modules never import `compile`: a
 spawner returns a canonical seed only. `compile.expand.build_grow` is the sole
 kind-aware constructor; package-root `run.py` injects it into `FlowEngine` for live
 growth and into reducer replay for recovery. Runtime may consume compile's execution
 contracts but never imports `compile.expand`, so the splice remains kind-blind.
+CALL/MAP/LOOP construction passes `spawner.failure_trace()` as the prefix for
+every child clone; MAP also gives that context to its generated fan-out/fan-in
+boundaries. A LOOP respawn copies only its driver's enclosing `origin_context`,
+while body clones receive the complete trace, so later failures include the
+authored loop origin exactly once. Existing child ancestry is appended without
+deduplication.
 `compile.expand.build_grow` raises `compile.model.GrowthRejected` only for an
 explicit malformed seed after selecting a legal CALL/MAP/LOOP kind. Unsupported
 kinds and arbitrary builder, compiler, spawner/fragment-copy, digest,
@@ -158,10 +170,10 @@ ordinary tool registry.
 
 ## Node-owned traits/hooks (how the core stays kind-blind)
 
-The engine core reads these node members instead of branching on `node.kind`. Defaults sit on the
-base `Node`; a kind overrides only what it needs.
+Runtime and compile validation read these node members instead of branching on
+`node.kind`. Defaults sit on the base `Node`; a kind overrides only what it needs.
 
-| Member | Where the core reads it | Default → overrides |
+| Member | Where it is read | Default → overrides |
 |--------|-------------------------|---------------------|
 | `is_spawner: bool` | result boundary: permit `Grow` only from a graph-expanding node | `False` → `True` on call/map/loop |
 | `binds_per_item: bool` | read boundary (`eval_node`): bind PER ELEMENT via a `bind_item` cap vs bind `params` once | `False` → `True` on `map` |
@@ -169,14 +181,19 @@ base `Node`; a kind overrides only what it needs.
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
 | `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `_run_impl` → baked child on call/map/loop; complete predicates on case |
 | `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin |
+| `failure_trace(operation_origin=None)` | evaluator, dispatcher, and terminal-unreachable producers: combine generated ancestry with the best local origin | `origin_context + (operation origin or node origin)`; omit only an absent local suffix |
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
 | `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
 
-These are runtime execution capabilities. The source-neutral
-`iter_local_origins`, `rewrite_local_origins`, and `origin_children` hooks are
-consumed by `compile.origins`, not by the engine core.
+The table spans execution-semantic traits/hooks and diagnostic-only projections.
+Any node field whose value can affect execution through an execution-semantic
+member must be manifest-backed. `exception_origin` and `failure_trace` only
+project diagnostics; their `origin` and `origin_context` inputs are intentionally
+identity-neutral. The source-neutral `iter_local_origins`,
+`rewrite_local_origins`, and `origin_children` hooks are consumed by
+`compile.origins`, not by the engine core.
 
 The rest of the splice (add subgraph, enforce `MAX_TOTAL_NODES`, mint one uniform `NodeExpandedRecord`,
 finish/mark the spawner, apply the origin `commit_as` to the derived terminal, schedule the
@@ -203,7 +220,8 @@ are likewise live leaves returning `Output`.
 
 `NodeKind` is a closed enum (no registry/metaclass), but the engine **core does not dispatch on
 it** — `runtime/engine.py` + `runtime/eval_node.py` branch only on the closed
-worker-result and run-record sums and on node-owned traits/hooks (below). Ordinary
+worker-result and run-record sums, then consult node-owned execution-semantic
+traits/hooks and diagnostic projections (below). Ordinary
 behavior lives in each node's own `_run_impl`; growth construction's sanctioned
 closed kind match lives in `compile.expand.build_grow`, which
 interprets node-produced seeds outside the runtime core. A ratchet test
@@ -314,13 +332,16 @@ model made enforceable.
   canonicalizes execution semantics, `flow_fingerprint` hashes it, and
   `expansion_digest` covers an expanded fragment's entry/end ids and topology.
   Assertion expression/display/order/multiplicity and an output contract's semantic
-  `Type` affect identity. Every field consulted by an execution hook must likewise
-  be manifest-backed; `skipped_output_target()` currently derives from `commit_as`
-  or LOOP's `origin_id`. Node/carrier origins and render-only ranges, comments,
-  and object identity do not affect identity.
+  `Type` affect identity. Every field consulted by an execution-semantic hook must
+  likewise be manifest-backed; `skipped_output_target()` currently derives from
+  `commit_as` or LOOP's `origin_id`. Diagnostic-only `exception_origin` and
+  `failure_trace` project node/carrier origins and generated `origin_context`,
+  which remain identity-neutral alongside render-only ranges, comments, and
+  object identity.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
-  core dispatches on worker-result/run-record variants + node-owned traits/hooks, never on
-  `node.kind` (ratchet: census 0).
+  core dispatches on worker-result/run-record variants and consults node-owned
+  execution-semantic traits/hooks plus diagnostic projections, never `node.kind`
+  (ratchet: census 0).
 - **Single writer** — workers are pure executors; the dispatcher is the only
   ready-frontier consumer and mutator. A pooled drive records starts before submission,
   records accepted outcomes before applying them, and signals cooperative stop before
@@ -643,9 +664,10 @@ never a text heuristic.
   span. Base-wrapper `NodeAssertFailed` carries its exact `Assertion` and becomes
   `assertion.failed`; the same class raised by node code remains `node.execute`.
   Body exceptions become `node.execute`; invalid ordinary/generator terminal
-  values and a non-spawner `Grow` become `contract.node_result`. The current
-  `Failure.trace` contains one operation origin, or the node origin as fallback.
-  `eval_node` fills a temporary locator's missing node id via
+  values and a non-spawner `Grow` become `contract.node_result`. Every producer
+  calls `Node.failure_trace(best_operation_origin)`, which retains generated
+  outer context and uses the node origin only when no operation origin is
+  available. `eval_node` fills a temporary locator's missing node id via
   `replace(loc, node=node.id)`;
   dispatcher preparation assigns `contract.output`, `contract.route`, or
   `contract.growth` from the result arm. Output uses the effective target
@@ -680,13 +702,15 @@ never a text heuristic.
   locator/range presentation bridge. `_FailureDelta`, `NodeFailed`, `RunFailed`,
   and `RunResult.failure` carry no semantic aliases. The first route whose skip
   closure reaches END latches `graph.terminal_unreachable` with that router and
-  its node origin on the causal `NodeRoutedRecord`; recovery structurally
-  revalidates the route and restores the recorded value, and an explicit node
-  failure supersedes it. Authored nodes and assertions
+  its `failure_trace()` on the causal `NodeRoutedRecord`; recovery structurally
+  revalidates the route and restores the recorded value and trace even if the
+  current graph's origins were rebased, and an explicit node failure supersedes
+  it. Authored nodes and assertions
   carry opaque origins, and every
   flow returned by `load_flow` carries one complete source-neutral resolver (or `None` when
-  source-free). Runtime and CLI failure rendering still use the temporary locator/range path
-  above. For assertions, Compose derives that temporary positional range and
+  source-free). Runtime results retain the temporary locator/range path above, and CLI
+  runtime-failure rendering still consumes it. For assertions, Compose derives that
+  temporary positional range and
   `Assertion.origin` from the same retained item cursor before rewrites preserve both.
 - **Resolution (CLI boundary):** `cli/run.py` reads the node id, message, and
   debugging traceback directly from `result.failure`, then prefers the

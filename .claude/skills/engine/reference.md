@@ -288,10 +288,13 @@ contract accepts null (a nullable or `None`-kind type). Compose `input:` crosses
 directly into this exact `Parameter` shape; `ComposedFlow.input` and START use it
 without a parallel front-end carrier. For ordinary source-backed node inputs, final
 assembly stamps the selecting key on `Parameter.origin` and the value on the
-corresponding `Binding.origin`. Desugaring may replace `Binding.source` but retains
-that value origin. Inputs without a retained source occurrence remain origin-free;
-source-backed projections inherit their backing site. Reserved kind-specific wiring and
-synthesized boundaries are deferred.
+corresponding `Binding.origin`. Source-backed reserved MAP `over:` and WAIT `until:`
+wiring receives a `Binding.origin` only; neither field is a formal `Parameter`.
+Desugaring may replace `Binding.source` but retains that value origin. Without a retained
+source occurrence, Compose mints no origin and preserves any explicit programmatic origin;
+source-backed projections inherit their backing site. CASE wiring, synthesized boundaries,
+flow outputs, assertions,
+contracts, external rebasing, and runtime diagnostic consumption are deferred.
 
 `Node.output_contract` is the sole stored output declaration: an exact
 `ValueContract`, or `None` for an unenforced output. Runtime success/replay
@@ -342,12 +345,13 @@ occurrence and an explicit key/value anchor. Resolution replays that occurrence
 into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and no
 YAML is reparsed or parallel range map created. The loader creates one builder per
 physical document and shares it through root, `defs:`, and inline-body assembly.
-Authored node headers and ordinary node-input key/value occurrences are registered under
-their complete lexical owner paths and carried by the semantic IR rather than a parallel
-map; sites without a retained source occurrence remain origin-free. Each assembled flow
-receives a frozen snapshot as private `ComposedFlow._local_catalog` staging metadata. It
-is not the complete resolver for reachable external children until their origins are
-lexically rebased.
+Authored node headers, ordinary node-input keys and values, and source-backed reserved
+MAP/WAIT wiring values are registered under their complete lexical owner paths and carried
+by the semantic IR rather than a parallel map. Without a retained source occurrence,
+Compose mints no origin and preserves any explicit programmatic origin. Each assembled
+flow receives a frozen snapshot as private
+`ComposedFlow._local_catalog` staging metadata. It is not the complete resolver for
+reachable external children until their origins are lexically rebased.
 
 After cursor-based extraction and parsing, descriptors and nodes carry the derived
 ranges needed by later phases; no phase reparses source fragments or inspects the

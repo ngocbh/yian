@@ -106,9 +106,11 @@ Copy `code.py`.
   `_validate_fields` hooks only if the kind needs pre-normalization or extra checks
   (see `case.py` / `human_input.py` for examples). Most leaves need neither.
 - The assembly conductor stamps `NodeDescriptor.origin` from the authored node-header
-  occurrence after parsing. After desugaring/building, it also stamps each source-backed
-  ordinary `input:` key/value directly on the matching `Parameter`/`Binding`. A kind must
-  not mint these origins or keep a parallel source map.
+  occurrence after parsing. After desugaring/building, it also stamps source-backed wiring
+  values directly on their canonical `Binding`: ordinary `input:` entries plus node-owned
+  reserved fields (currently MAP `over:` and WAIT `until:`). Only an ordinary input's key
+  stamps a matching `Parameter`; reserved wiring has no formal parameter. A kind must not
+  mint these origins or keep a parallel source map.
 - **Override `build`** — an instance method `build(self, ctx: BuildContext) -> BuildResult`
   that constructs `XxxNode(...)`, sets the output contract / params / wiring, and returns
   `self._finish(node, wiring)` (which stamps `.origin` plus the legacy ranges and wraps a
@@ -123,9 +125,9 @@ Copy `code.py`.
   reads them). A leaf kind reads only `ctx.registry`.
 
 `BuildResult.wiring` is still pre-IR Compose data and may remain raw. Final assembly
-canonicalizes source-backed ordinary input entries with their origins; the shared
-`CompiledFlow.from_parts` boundary normalizes any remaining raw wiring. Do not add a
-second normalization map to a descriptor.
+canonicalizes source-backed ordinary input and reserved wiring entries with their value
+origins; the shared `CompiledFlow.from_parts` boundary normalizes any remaining raw wiring.
+Do not add a second normalization map to a descriptor.
 
 ## 4. `compose/nodes/__init__.py` — add to the `_DESCRIPTORS` tuple
 

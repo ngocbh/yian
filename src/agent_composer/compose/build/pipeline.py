@@ -6,14 +6,14 @@ callable:
   flow parameters -> build every node kind-blind (`desc.build(ctx)`; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
   edges + append each case's own edges -> validate references + classify asserts
-  -> synthesize the START_ID/END_ID boundary over ALL edges -> reject cycles + check
-  if/else handles -> CompiledFlow.from_parts.
+  -> attach authored output origins -> synthesize the START_ID/END_ID boundary over
+  ALL edges -> reject cycles + check if/else handles -> CompiledFlow.from_parts.
 
 Holds `ComposedFlow` (the compiled+validated flow the engine runs) plus the flow
-`outputs:` parser (`_flow_outputs`). Ladder position: the LAST phase before the
-loader — it may import every earlier phase (helpers/nodes/parse/desugar/edges/
-validate/build.boundary); the loader imports `_assemble`/`ComposedFlow` back from
-here. It imports NOTHING from `loader.py` (that would be a back-edge).
+`outputs:` parser and source-origin attachment. Ladder position: the LAST phase
+before the loader — it may import every earlier phase (helpers/nodes/parse/desugar/
+edges/validate/build.boundary); the loader imports `_assemble`/`ComposedFlow` back
+from here. It imports NOTHING from `loader.py` (that would be a back-edge).
 """
 
 from __future__ import annotations
@@ -549,8 +549,8 @@ def _assemble(
       flow parameters -> build every node kind-blind (`desc.build(ctx)`; a case lowers
       in its own build) -> cross-flow type check + case exhaustiveness -> infer data
       edges + append each case's own edges -> validate references + classify asserts
-      -> synthesize roots/terminals -> reject cycles + check if/else handles
-      -> CompiledFlow.from_parts.
+      -> attach authored output origins -> synthesize roots/terminals -> reject cycles
+      + check if/else handles -> CompiledFlow.from_parts.
 
     Exactly one input representation is required: `inputs_section` is the authored
     mapping that still needs parsing, while `input_parameters` carries parameters already

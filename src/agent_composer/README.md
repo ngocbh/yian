@@ -71,7 +71,7 @@ one responsibility:
 
 | Carrier | Meaning |
 | --- | --- |
-| `Binding` | one flow-owned expression or literal supplied to an input |
+| `Binding` | one flow-owned input or output expression/literal |
 | `Parameter` | one formal input, its optional contract, and default/coercion policy |
 | `Assertion` | one executable expression plus stable author-facing display text |
 | `ValueContract` | one recursive semantic `Type` plus nested origin selection |
@@ -123,8 +123,13 @@ wiring carries only the value origin on its canonical `Binding`: MAP `over:` and
 without moving that value origin. When no source occurrence is retained, Compose
 mints no origin and preserves any explicit programmatic origin; source-backed
 projections inherit their backing site. CASE wiring,
-synthesized flow boundaries, flow outputs, assertions, contracts, external rebasing,
-and runtime diagnostic consumption remain outside this migration step.
+synthesized flow-boundary parameters, assertions, contracts, external rebasing, and
+runtime diagnostic consumption remain outside this migration step. Source-backed bare and
+mapped flow-output values on root flows, multi-node definitions, and inline children stamp
+the final `FlowOutput.binding` after desugaring rewrites; the synthesized END boundary
+reuses that exact binding. Output mapping keys carry no origin. Compact-root and
+single-node-definition reexports are generated without an authored binding occurrence and
+remain origin-free; their authored output type is reserved for contract-origin work.
 
 `Node.output_contract` is the canonical compiled output declaration: exactly one
 `ValueContract`, or `None` when the output is unenforced. Runtime enforcement and
@@ -169,9 +174,13 @@ map. Virtual or unanchored cursors produce no origin. One builder is shared by
 the root flow, its `defs:`, and its inline bodies, and each assembled
 `ComposedFlow` retains a frozen document-local snapshot as `_local_catalog`.
 Final assembly registers authored node headers, ordinary node-input keys and values,
-and source-backed reserved MAP/WAIT wiring values directly on their canonical semantic
-carriers; it does not build a parallel location map. For sites without retained
-occurrences, Compose mints no origin and preserves any explicit programmatic origin.
+source-backed reserved MAP/WAIT wiring values, and source-backed flow-output values directly
+on their canonical semantic carriers; it does not build a parallel location map. Flow
+outputs are stamped after rewrites on `FlowOutput.binding`, and END reuses that binding;
+mapping keys are not origin sites. For sites without retained occurrences, Compose mints
+no origin and preserves any explicit programmatic origin. Generated compact-root and
+single-node-definition reexports are such source-free sites; the authored output type is a
+contract site whose origin remains deferred.
 That field is intentionally private: external child origins still require
 lexical rebasing before the returned flow can expose one complete resolver.
 

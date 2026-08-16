@@ -108,10 +108,15 @@ copies, renders, or reparses YAML to reconstruct source.
 The loader creates one package-private catalog builder per physical document and
 threads it through root, definition, and inline-body assembly. The conductor stamps
 authored node-header origins, ordinary node-input keys and values, and source-backed
-reserved MAP/WAIT wiring values directly on their canonical carriers. Only ordinary keys
-belong to `Parameter`; ordinary and reserved values belong to `Binding`. It then freezes a
-snapshot on each `ComposedFlow._local_catalog`; without a retained occurrence, Compose
-mints no origin and preserves any explicit programmatic origin. The private field cannot
+reserved MAP/WAIT wiring values directly on their canonical carriers. It also stamps
+source-backed bare/mapped root, multi-node-definition, and inline-child output values on the
+final `FlowOutput.binding` after rewrites; END reuses that binding, and output mapping keys
+stay origin-free. Only ordinary input keys belong to `Parameter`; ordinary, reserved, and
+flow-output values belong to `Binding`. Generated compact-root and single-node-definition
+reexports remain origin-free because their output declaration is a contract site whose origin
+remains deferred. It then
+freezes a snapshot on each `ComposedFlow._local_catalog`; without a retained occurrence,
+Compose mints no origin and preserves any explicit programmatic origin. The private field cannot
 stand in for a returned-flow resolver until external
 child origins are rebased into the caller's lexical namespace.
 

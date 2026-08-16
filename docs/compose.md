@@ -35,6 +35,9 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ infer_data_edges       → read every ${...} → draw the edges (nobody draws them by hand);
   │                            append each case's own data+control edges from its build
   ├─ validate_references    → every ${...} resolves & type-checks; classify asserts
+  ├─ stamp flow outputs     → source-backed bare/mapped values on final
+  │                            FlowOutput bindings (mapping keys stay origin-free)
+  ├─ synthesize boundary    → START/END nodes, edges, and binding-preserving wiring
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
   ▼
@@ -84,10 +87,12 @@ document occurrence plus an explicit key/value anchor. Resolution replays that o
 into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and no YAML is
 reparsed or parallel range map created. The loader shares one builder across a physical
 document's root, `defs:`, and inline bodies. Assembly registers authored node headers,
-ordinary node-input keys and values, and source-backed reserved MAP/WAIT wiring values on
-the canonical carriers themselves. Without a retained source occurrence, Compose mints
-no origin and preserves any explicit programmatic origin. Each assembled `ComposedFlow`
-receives a frozen snapshot as private
+ordinary node-input keys and values, source-backed reserved MAP/WAIT wiring values, and
+source-backed flow-output values on the canonical carriers themselves. Flow-output
+registration happens after desugaring, so an authored occurrence locates the final
+`FlowOutput.binding` source. Output mapping keys stay origin-free. Without a retained
+source occurrence, Compose mints no origin and preserves any explicit programmatic origin.
+Each assembled `ComposedFlow` receives a frozen snapshot as private
 `_local_catalog` staging metadata. It is deliberately not a public, complete resolver yet:
 cached external-child origins still need lexical rebasing.
 
@@ -184,9 +189,16 @@ so they have no `Parameter.origin`. The final (possibly rewritten) payload stays
 `Binding.source`, so lowering does not detach provenance from the authored value. Entries
 without a retained source occurrence receive no new Compose origin; an explicit
 programmatic origin remains intact, and source-backed projections inherit their backing
-occurrence. CASE wiring, synthesized START/END boundaries, flow outputs,
-assertions, contracts, external rebasing, and runtime diagnostic consumption remain
+occurrence. CASE wiring, synthesized START/END boundary parameters, assertions, contracts,
+external rebasing, and runtime diagnostic consumption remain
 separate migration steps.
+
+Source-backed bare and mapped output values on root flows, multi-node `defs:`, and inline
+children stamp the final `FlowOutput.binding` after output rewrites. The synthesized END
+boundary reuses that exact binding. Output mapping keys do not carry origins. Compact root
+flows and single-node defs generate a reexport rather than retaining an authored binding
+occurrence, so that generated binding stays origin-free; their authored `output:` value is
+the output contract and is reserved for separate contract-origin work.
 
 ---
 

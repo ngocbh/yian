@@ -46,7 +46,11 @@ Hold this model whenever you design anything:
 - Compiled flow-owned wiring has one shape: `Flow` construction wraps each
   direct source as `Binding`, and `FlowOutput.binding` owns declared outputs.
   Python builders may pass raw values at construction, but must not write raw
-  values into an already-constructed flow.
+  values into an already-constructed flow. Compose stamps source-backed bare/mapped
+  root, multi-node-definition, and inline-child output values on the final binding after
+  rewrites, and END reuses that exact carrier; output mapping keys stay origin-free.
+  Generated compact-root and single-node-definition reexports remain origin-free because
+  their authored output declaration is reserved for contract-origin work.
 - Compiled node assertions also have one shape: ordered `Assertion` carriers.
   Evaluate `.expression`, report `.display`, and preserve `.origin` whenever a
   compile/growth rewrite creates a new carrier. Do not add parallel text maps.
@@ -239,8 +243,12 @@ typed semantic paths to opaque origins and retains document occurrences with exp
 key/value anchors. Resolution replays an occurrence without reparsing or adding a
 parallel range map; virtual or unanchored cursors produce no origin. One builder is
 shared by a physical document's root, definitions, and inline bodies. Assembly stamps
-authored node headers, ordinary node-input keys and values, and source-backed reserved
-MAP/WAIT wiring values directly on their canonical carriers, then freezes a
+authored node headers, ordinary node-input keys and values, source-backed reserved
+MAP/WAIT wiring values, and source-backed flow-output values directly on their canonical
+carriers. Flow-output values are stamped after rewrites on `FlowOutput.binding`; END reuses
+that binding and output mapping keys remain origin-free. Generated compact-root and
+single-node-definition reexports have no authored binding occurrence and stay origin-free;
+their output declaration is reserved for contract-origin work. Assembly then freezes a
 document-local snapshot on
 `ComposedFlow._local_catalog`; the private field is not a complete cross-file resolver
 until embedded external origins are lexically rebased.

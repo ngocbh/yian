@@ -108,10 +108,14 @@ doing semantic work; they do not own a second parser.
 
 One package-private catalog builder is shared across a physical document's root,
 definitions, and inline bodies. Assembly registers authored node headers, ordinary
-node-input keys and values, and source-backed reserved MAP/WAIT wiring values directly on
-the canonical `Parameter`/`Binding` carriers. Only ordinary keys belong to `Parameter`;
-ordinary and reserved values belong to `Binding`. Without a retained occurrence, Compose
-mints no origin and preserves any explicit programmatic origin. Assembly then stores a
+node-input keys and values, source-backed reserved MAP/WAIT wiring values, and source-backed
+flow-output values directly on the canonical carriers. Only ordinary input keys belong to
+`Parameter`; ordinary, reserved, and flow-output values belong to `Binding`. Flow outputs
+are stamped after rewrites and reused by END; output mapping keys stay origin-free.
+Generated compact-root and single-node-definition reexports have no authored binding
+occurrence and stay origin-free; their output declaration is reserved for contract-origin
+work. Without a retained occurrence, Compose mints no origin and preserves any explicit
+programmatic origin. Assembly then stores a
 frozen snapshot on `ComposedFlow._local_catalog`.
 That field stays private and document-local: it is not a complete resolver for embedded
 external flows until their origins are lexically rebased.

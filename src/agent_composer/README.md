@@ -29,7 +29,7 @@ shape of it:
 ## Layout
 
 ```
-diagnostics.py source-neutral ranges, opaque origins, and resolution seam       [leaf]
+diagnostics.py source-neutral ranges, opaque origins, and exact resolver routing [leaf]
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
 _state.py     shared scheduler-state vocabulary                          [leaf]
@@ -37,7 +37,7 @@ expr/         one ${...} grammar: parse -> AST -> evaluate / ref-walk
 nodes/        pure Node contract + per-kind implementations; spawners return seeds
               (start, end, agent, code, model, tool, case, call, map,
                loop, human_input, wait)
-compile/      compiled IR + validation; identity-safe origin traversal;
+compile/      compiled IR + validation; identity-safe origin traversal/rebasing;
               growth builder; stable identity; static-path LLM config maps
 compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML
               construction/navigation and opaque-origin resolution; later phases
@@ -153,7 +153,7 @@ contract, while MAP deliberately derives a new list contract. There is no parall
 output-Type API: Python-authored nodes pass `output_contract=` explicitly.
 The authored `output:` / `outputs:` YAML syntax is unchanged.
 
-### Compiled origin traversal
+### Compiled origin traversal and rebasing
 
 Nodes own their provenance layout. The base `Node` enumerates and rewrites its
 node origin, output contract, parameters, and assertions; CALL/MAP/LOOP also own
@@ -171,6 +171,21 @@ and deliberate cycles survive while the authored graph remains unchanged. Bindin
 parameter defaults, node environments, and render metadata are opaque even when
 they contain an `OriginRef`. Origins remain excluded from manifests,
 fingerprints, and expansion digests.
+
+`diagnostics.ResolverTable` composes opaque namespaces without owning any source
+format. Each public origin key routes to exactly one delegate resolver and one origin
+in that delegate's namespace. Duplicate public keys are rejected; unknown
+origins return `None`; delegate exceptions propagate; and malformed delegate
+results are rejected. The table never parses keys or introduces resolver precedence.
+
+`rebase_flow_origins(flow, mapper, resolver=...)` pairs a pure graph rewrite with
+those exact routes. It preserves first structural-visit order while deduplicating
+reachable old origins by their opaque key, calls `mapper` once per distinct old key,
+and rejects collisions between distinct mapped keys before rewriting through
+the precomputed map. The result is an independent graph of the same concrete type
+plus a table containing only its reachable routes. An originful graph requires a
+resolver; a source-free graph requires `None` and returns an empty table. The
+operation defines no lexical key policy and knows nothing about Compose or YAML.
 
 ## One-pass source ownership
 

@@ -41,7 +41,9 @@ clones or rewrites the node. Python callers pass `output_contract=`; do not add
 another output-Type field or compatibility property.
 `Node.origin` is optional opaque diagnostic provenance and is unrelated to LOOP's
 `origin_id`. A programmatic/generated node defaults to `None`; preserve an existing
-origin when cloning, and never interpret it as execution state.
+origin when cloning, and never interpret it as execution state. Nodes expose only
+their local origin hooks; they never import `compile.rebase_flow_origins` or
+`diagnostics.ResolverTable`, because whole-graph rebasing belongs to `compile`.
 
 ```python
 class NodeKind(str, Enum):

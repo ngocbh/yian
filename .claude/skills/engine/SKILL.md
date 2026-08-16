@@ -45,6 +45,12 @@ Hold this model whenever you design anything:
   and outputs, rewriting an isolated copy by identity and returning a finalized
   copy whose hash containers are rebuilt. Shared or cyclic graphs remain safe
   without a `NodeKind` branch.
+- `diagnostics.ResolverTable` composes opaque namespaces through exact
+  new-origin-to-delegate/old-origin routes without parsing keys or resolver
+  fallback. `compile.rebase_flow_origins` maps each distinct reachable old key
+  once and returns the rewritten graph with its exact table; source-free graphs
+  must carry no resolver. Lexical key construction remains a front-end
+  responsibility.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;
@@ -238,10 +244,14 @@ The package-root `run.py` sits above compose and runtime and wires cross-layer
 capabilities: notably it owns log lifecycle/recovery and injects compile's
 `build_grow` into the kind-blind runtime.
 
-`compile/origins.py` owns the representation-neutral whole-graph walk. It visits
-flow-owned wiring and outputs, delegates node-local slots and children to node
-hooks, and deep-copies before rewriting. Nodes never import this higher layer;
-binding sources, defaults, environments, and render metadata remain opaque.
+`diagnostics.ResolverTable` owns immutable exact resolver routing without source
+or key-format knowledge. `compile/origins.py` owns the representation-neutral
+whole-graph walk: it visits flow-owned wiring and outputs, delegates node-local
+slots and children to node hooks, and deep-copies before rewriting. Its rebasing
+operation precomputes one mapping per distinct reachable old origin and returns
+the rewritten graph plus a table containing exactly those routes. Nodes never
+import this higher layer; binding sources, defaults, environments, and render
+metadata remain opaque.
 
 Compose source ownership is one-way too. `compose/source/` alone owns PyYAML and
 the private retained document graph. Root text is constructed once as a

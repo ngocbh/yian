@@ -3,10 +3,12 @@
 This dependency-free leaf separates semantic code from any authoring front end.
 Engine values carry opaque ``OriginRef`` instances; a front end implements
 ``OriginResolver`` to turn those references into concrete presentation frames.
+``ResolverTable`` composes those namespaces through exact immutable routes.
 """
 
 from dataclasses import dataclass
-from typing import Protocol
+from types import MappingProxyType
+from typing import Iterable, Mapping, Protocol
 
 
 @dataclass(frozen=True)
@@ -95,4 +97,214 @@ class OriginResolver(Protocol):
         ...
 
 
-__all__ = ["DiagnosticFrame", "OriginRef", "OriginResolver", "SourceRange"]
+@dataclass(frozen=True, slots=True)
+class _ResolutionTarget:
+    """One exact delegation target retained by a resolver table.
+
+    Attributes:
+        resolver (`OriginResolver`): Authority for the target's local namespace.
+        origin (`OriginRef`): Exact local identity passed to that authority.
+    """
+
+    resolver: OriginResolver
+    origin: OriginRef
+
+
+class ResolverTable:
+    """Immutable collision-safe composition of opaque origin namespaces.
+
+    Each public `OriginRef.key` routes to exactly one resolver and one origin in
+    that resolver's local namespace. Keys stay opaque: the table performs no
+    prefix parsing and never falls through to another resolver. Delegate
+    exceptions propagate; delegate results must honor the `OriginResolver`
+    return contract.
+
+    Construct an empty table directly, or use `from_entries()` for exact routes.
+    Raw target mappings are deliberately not part of the public constructor.
+    """
+
+    __slots__ = ("_targets",)
+
+    _targets: Mapping[str, _ResolutionTarget]
+
+    def __init__(self) -> None:
+        """Create an empty immutable resolver table."""
+        object.__setattr__(self, "_targets", MappingProxyType({}))
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Reject mutation after construction.
+
+        Args:
+            name (`str`): Attribute name a caller attempted to assign.
+            value (`object`): Replacement value a caller attempted to assign.
+
+        Raises:
+            AttributeError: Always raised because the route table is immutable.
+        """
+        raise AttributeError("ResolverTable is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        """Reject route deletion after construction.
+
+        Args:
+            name (`str`): Attribute name a caller attempted to delete.
+
+        Raises:
+            AttributeError: Always raised because the route table is immutable.
+        """
+        raise AttributeError("ResolverTable is immutable")
+
+    @classmethod
+    def from_entries(
+        cls,
+        entries: Iterable[tuple[OriginRef, OriginResolver, OriginRef]],
+    ) -> "ResolverTable":
+        """Build a table from exact new-to-delegate/old routes.
+
+        Args:
+            entries (`Iterable[tuple[OriginRef, OriginResolver, OriginRef]]`):
+                Triples of public origin, delegate resolver, and the exact origin
+                understood by that delegate.
+
+        Returns:
+            `ResolverTable`: An immutable defensive snapshot of the routes.
+
+        Raises:
+            TypeError: Raised when an entry contains a malformed origin or delegate.
+            ValueError:
+                Raised when an origin subclass carries an invalid key or the same
+                public key occurs more than once.
+        """
+        targets: dict[str, _ResolutionTarget] = {}
+        for entry in entries:
+            if not isinstance(entry, tuple) or len(entry) != 3:
+                raise TypeError("resolver table entry must be a three-item tuple")
+            new_origin, delegate, old_origin = entry
+            if not isinstance(new_origin, OriginRef):
+                raise TypeError("resolver table new origin must be an OriginRef")
+            new_key = OriginRef(new_origin.key).key
+            if not callable(getattr(delegate, "resolve", None)):
+                raise TypeError("resolver table delegate must implement resolve")
+            if not isinstance(old_origin, OriginRef):
+                raise TypeError("resolver table old origin must be an OriginRef")
+            # Subclasses can override OriginRef.__post_init__; replay the canonical
+            # value constructor without discarding the exact delegate-local object.
+            OriginRef(old_origin.key)
+            if new_key in targets:
+                raise ValueError(
+                    f"duplicate resolver table origin {new_key!r}"
+                )
+            targets[new_key] = _ResolutionTarget(delegate, old_origin)
+        table = cls()
+        object.__setattr__(table, "_targets", MappingProxyType(dict(targets)))
+        return table
+
+    @classmethod
+    def merge(cls, *tables: "ResolverTable") -> "ResolverTable":
+        """Combine disjoint tables without adding resolver precedence.
+
+        Args:
+            *tables (`ResolverTable`): Tables whose public origins must be disjoint.
+
+        Returns:
+            `ResolverTable`: One immutable table containing every route.
+
+        Raises:
+            TypeError: Raised when an argument is not a `ResolverTable`.
+            ValueError: Raised when two tables contain the same public origin key.
+        """
+        entries: list[tuple[OriginRef, OriginResolver, OriginRef]] = []
+        for table in tables:
+            if not isinstance(table, ResolverTable):
+                raise TypeError("resolver table merge requires ResolverTable values")
+            entries.extend(
+                (OriginRef(key), target.resolver, target.origin)
+                for key, target in table._targets.items()
+            )
+        return cls.from_entries(entries)
+
+    @property
+    def origins(self) -> frozenset[OriginRef]:
+        """Return the exact public origins routed by this table.
+
+        Returns:
+            `frozenset[OriginRef]`: Canonical refs for every routed opaque key.
+        """
+        return frozenset(OriginRef(key) for key in self._targets)
+
+    def __len__(self) -> int:
+        """Return the number of exact public-origin routes."""
+        return len(self._targets)
+
+    def __contains__(self, origin: object) -> bool:
+        """Return whether one exact `OriginRef` key has a route.
+
+        Args:
+            origin (`object`): Candidate identity; non-`OriginRef` values are absent.
+
+        Returns:
+            `bool`: `True` exactly when the candidate's opaque key is routed.
+        """
+        return (
+            isinstance(origin, OriginRef)
+            and type(origin.key) is str
+            and bool(origin.key)
+            and origin.key in self._targets
+        )
+
+    def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+        """Resolve one public origin through its exact delegate route.
+
+        Args:
+            origin (`OriginRef`): Public opaque identity to look up.
+
+        Returns:
+            `DiagnosticFrame | None`: The delegate result, or `None` when no route
+            exists or the selected delegate cannot resolve its local origin.
+
+        Raises:
+            TypeError:
+                Raised when `origin` is not an `OriginRef` or the selected
+                delegate returns neither a `DiagnosticFrame` nor `None`.
+            ValueError: Raised when an origin subclass carries an invalid key.
+        """
+        if not isinstance(origin, OriginRef):
+            raise TypeError("resolver table resolve requires an OriginRef")
+        origin_key = OriginRef(origin.key).key
+        target = self._targets.get(origin_key)
+        if target is None:
+            return None
+        frame = target.resolver.resolve(target.origin)
+        if frame is not None and not isinstance(frame, DiagnosticFrame):
+            raise TypeError(
+                "resolver table delegate must return a DiagnosticFrame or None"
+            )
+        return frame
+
+    def __copy__(self) -> "ResolverTable":
+        """Return this immutable table without reconstructing its routes.
+
+        Returns:
+            `ResolverTable`: This same immutable table.
+        """
+        return self
+
+    def __deepcopy__(self, memo: dict[int, object]) -> "ResolverTable":
+        """Return this immutable table without copying delegate resolvers.
+
+        Args:
+            memo (`dict[int, object]`): Standard deepcopy identity memo; unused.
+
+        Returns:
+            `ResolverTable`: This same immutable table.
+        """
+        return self
+
+
+__all__ = [
+    "DiagnosticFrame",
+    "OriginRef",
+    "OriginResolver",
+    "ResolverTable",
+    "SourceRange",
+]

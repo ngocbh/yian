@@ -248,9 +248,9 @@ compose + compile.expand + runtime <── package-root run.py
 ```
 
 `diagnostics.py` owns source-neutral `SourceRange`, opaque `OriginRef`, resolved
-`DiagnosticFrame`, and the `OriginResolver` protocol. It imports only the
-standard library. `events.py` imports this leaf and temporarily re-exports
-`SourceRange` while existing consumers migrate.
+`DiagnosticFrame`, the `OriginResolver` protocol, and immutable exact-route
+`ResolverTable`. It imports only the standard library. `events.py` imports this
+leaf and temporarily re-exports `SourceRange` while existing consumers migrate.
 
 Arrows never reverse: a package imports only lower-level or peer packages. See the
 `structure` skill. An upward import means the code is in the wrong package (extract
@@ -263,8 +263,9 @@ append-before-apply reducer state, and dispatch; the package-root run boundary o
 fresh-log creation, locked prefix recovery, and log closure.
 
 The same direction governs provenance: nodes describe their local origin slots
-and static children, while `compile.origins` owns flow wiring, declared outputs,
-identity guards, copying, and recursion. No node imports the compile walker.
+and static children, `diagnostics` owns source-neutral resolver routing, and
+`compile.origins` owns flow wiring, declared outputs, identity guards, copying,
+recursion, and graph-wide rebasing. No node imports the compile walker.
 
 ### Source-neutral semantic carriers
 
@@ -350,8 +351,24 @@ mapper results fail loudly. Equal origins stored in distinct
 carriers remain distinct occurrences. Neither operation inspects binding
 sources, parameter defaults, node environments, or render metadata.
 
+`diagnostics.ResolverTable` is an immutable collision-safe routing value. Each
+public `OriginRef.key` selects exactly one `(delegate resolver, old OriginRef)`
+pair; construction and merge reject duplicate public keys, unknown origins return
+`None`, delegate exceptions propagate, and malformed delegate results are
+rejected. It does not parse keys, try resolvers in order, or add fallback
+precedence.
+
+`compile.origins.rebase_flow_origins(flow, mapper, resolver=...)` first
+ordered-deduplicates reachable old origins by opaque key. It calls `mapper` once
+per distinct old key, rejects collisions between distinct mapped keys, and
+uses that precomputed mapping to return an independent same-type graph plus a
+table containing exactly its reachable routes. An originful graph requires an
+`OriginResolver`; a source-free graph requires `None` and returns an empty table.
+Traversal and rewriting preserve their existing alias/cycle guarantees.
+
 Origin changes remain manifest-, fingerprint-, and expansion-digest-neutral.
-This seam performs no origin resolution and defines no source-key policy.
+None of these operations defines a source-key format or imports Compose; lexical
+key construction and returned-flow resolver integration remain front-end work.
 
 ## Compose source ownership
 

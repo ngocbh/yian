@@ -7,7 +7,11 @@ from typing import Any
 
 import pytest
 
-from agent_composer.compile import iter_flow_origins, rewrite_flow_origins
+from agent_composer.compile import (
+    iter_flow_origins,
+    rebase_flow_origins,
+    rewrite_flow_origins,
+)
 from agent_composer.compile.manifest import (
     expansion_digest,
     flow_fingerprint,
@@ -21,7 +25,12 @@ from agent_composer.compile.model import (
     Flow,
     FlowOutput,
 )
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import (
+    DiagnosticFrame,
+    OriginRef,
+    ResolverTable,
+    SourceRange,
+)
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.code import CodeNode
@@ -678,3 +687,225 @@ def test_rewriting_origins_preserves_manifest_and_stable_identity() -> None:
     assert all(
         origin.key.startswith("mapped/") for origin in iter_flow_origins(rewritten)
     )
+
+
+def test_rebase_maps_equal_origins_once_and_routes_the_exact_old_identity() -> None:
+    """Equal keys share one new identity and route across distinct carrier classes."""
+    old = _origin("opaque/~and/slash")
+    binding = Binding(1, old)
+
+    class DerivedOrigin(OriginRef):
+        """Distinct Python class that retains the same opaque key contract."""
+
+    node = Node("only", origin=DerivedOrigin("opaque/~and/slash"))
+    flow = Flow(
+        nodes={"only": node},
+        edges=[],
+        wiring={"only": {"value": binding}},
+        start_id="only",
+        end_id="only",
+    )
+    frame = DiagnosticFrame(
+        label="memory",
+        text="value\n",
+        range=SourceRange(1, 1, 1, 6),
+    )
+    resolved: list[OriginRef] = []
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            resolved.append(origin)
+            return frame if origin == old else None
+
+    mapped: list[OriginRef] = []
+
+    def mapper(origin: OriginRef) -> OriginRef:
+        mapped.append(origin)
+        return _origin("scope/~opaque/key")
+
+    rebased, table = rebase_flow_origins(flow, mapper, resolver=Resolver())
+
+    assert mapped == [old]
+    assert list(iter_flow_origins(flow)) == [old, node.origin]
+    assert list(iter_flow_origins(rebased)) == [
+        _origin("scope/~opaque/key"),
+        _origin("scope/~opaque/key"),
+    ]
+    assert table.origins == frozenset({_origin("scope/~opaque/key")})
+    assert table.resolve(_origin("scope/~opaque/key")) == frame
+    assert resolved == [old]
+
+
+def test_rebase_is_chainable_and_preserves_graph_identity_and_manifests() -> None:
+    """A later namespace delegates through the earlier table without graph mutation."""
+    flow = _manifestable_flow()
+    original_origins = list(iter_flow_origins(flow))
+    original_manifest = flow_manifest(flow)
+    original_fingerprint = flow_fingerprint(flow)
+    original_digest = expansion_digest(flow)
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return DiagnosticFrame(
+                label=origin.key,
+                text="value\n",
+                range=SourceRange(1, 1, 1, 6),
+            )
+
+    first, first_table = rebase_flow_origins(
+        flow,
+        lambda origin: _origin(f"first/{origin.key}"),
+        resolver=Resolver(),
+    )
+    first_origins = list(iter_flow_origins(first))
+    second, second_table = rebase_flow_origins(
+        first,
+        lambda origin: _origin(f"second/{origin.key}"),
+        resolver=first_table,
+    )
+
+    assert list(iter_flow_origins(flow)) == original_origins
+    assert list(iter_flow_origins(first)) == first_origins
+    assert all(origin.key.startswith("first/") for origin in first_origins)
+    assert all(
+        origin.key.startswith("second/first/")
+        for origin in iter_flow_origins(second)
+    )
+    sample = original_origins[0]
+    final = _origin(f"second/first/{sample.key}")
+    assert second_table.resolve(final).label == sample.key  # type: ignore[union-attr]
+    assert flow_manifest(second) == original_manifest
+    assert flow_fingerprint(second) == original_fingerprint
+    assert expansion_digest(second) == original_digest
+
+
+def test_rebase_rejects_missing_resolution_and_distinct_origin_collisions() -> None:
+    """Present origins require a delegate and distinct old keys cannot collapse."""
+    flow = Flow(
+        nodes={"only": Node("only", origin=_origin("node"))},
+        edges=[],
+        wiring={"only": {"value": Binding(1, _origin("binding"))}},
+        start_id="only",
+        end_id="only",
+    )
+
+    with pytest.raises(ValueError, match="originful flow requires an origin resolver"):
+        rebase_flow_origins(flow, lambda origin: origin, resolver=None)
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return None
+
+    with pytest.raises(ValueError, match="mapped origin collision 'same'"):
+        rebase_flow_origins(
+            flow,
+            lambda _origin_ref: _origin("same"),
+            resolver=Resolver(),
+        )
+
+    assert [origin.key for origin in iter_flow_origins(flow)] == ["binding", "node"]
+
+
+@pytest.mark.parametrize("invalid", [None, "not-an-origin"])
+def test_rebase_rejects_invalid_mapper_results(invalid: Any) -> None:
+    """A namespace mapper must return an `OriginRef` for every distinct old ref."""
+    flow = Flow(
+        nodes={"only": Node("only", origin=_origin("node"))},
+        edges=[],
+        wiring={"only": {}},
+        start_id="only",
+        end_id="only",
+    )
+
+    with pytest.raises(TypeError, match="origin mapper must return an OriginRef"):
+        rebase_flow_origins(
+            flow,
+            lambda _origin_ref: invalid,
+            resolver=ResolverTable(),
+        )
+
+
+def test_rebase_revalidates_origin_subclass_keys() -> None:
+    """Subclass overrides cannot introduce an empty old or mapped opaque key."""
+
+    class InvalidOrigin(OriginRef):
+        def __post_init__(self) -> None:
+            pass
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return None
+
+    invalid = InvalidOrigin("")
+    flow = Flow(
+        nodes={"only": Node("only", origin=invalid)},
+        edges=[],
+        wiring={"only": {}},
+        start_id="only",
+        end_id="only",
+    )
+
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        rebase_flow_origins(flow, lambda origin: origin, resolver=Resolver())
+
+    flow.nodes["only"].origin = _origin("valid")
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        rebase_flow_origins(flow, lambda _origin: invalid, resolver=Resolver())
+
+
+def test_rebase_source_free_graph_returns_an_independent_copy_and_empty_table() -> None:
+    """Python-built graphs need no front-end resolver when no origins are present."""
+    node = Node("python")
+    flow = Flow(
+        nodes={"python": node},
+        edges=[],
+        wiring={"python": {}},
+        start_id="python",
+        end_id="python",
+    )
+
+    def unexpected(_origin_ref: OriginRef) -> OriginRef:
+        pytest.fail("source-free graph called the namespace mapper")
+
+    rebased, table = rebase_flow_origins(flow, unexpected, resolver=None)
+
+    assert rebased is not flow
+    assert rebased.nodes["python"] is not node
+    assert list(iter_flow_origins(rebased)) == []
+    assert len(table) == 0
+
+    with pytest.raises(
+        ValueError,
+        match="source-free flow cannot have an origin resolver",
+    ):
+        rebase_flow_origins(flow, unexpected, resolver=ResolverTable())
+
+
+def test_rebase_retains_a_deliberate_child_cycle() -> None:
+    """Atomic rebasing inherits traversal's identity guards and cycle-safe copying."""
+    cycle = Flow(
+        nodes={},
+        edges=[],
+        wiring={},
+        start_id="self",
+        end_id="self",
+    )
+    driver = CallNode("self", flow_id="self", child=cycle)
+    driver.origin = _origin("cycle/node")
+    cycle.nodes["self"] = driver
+    cycle.wiring["self"] = {}
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return None
+
+    rebased, table = rebase_flow_origins(
+        cycle,
+        lambda origin: _origin(f"mapped/{origin.key}"),
+        resolver=Resolver(),
+    )
+
+    assert rebased.nodes["self"].child is rebased
+    assert rebased.nodes["self"].origin == _origin("mapped/cycle/node")
+    assert cycle.nodes["self"].child is cycle
+    assert table.origins == frozenset({_origin("mapped/cycle/node")})

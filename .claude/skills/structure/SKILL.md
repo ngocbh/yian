@@ -71,9 +71,10 @@ compose + compile.expand + runtime <── package-root run.py
 ```
 
 `diagnostics.py` is the lowest source-neutral value leaf. It owns concrete
-ranges, opaque origins, and the authoring-format-neutral resolution protocol;
-`events` imports it. The package facade resolves its declared public exports
-lazily so importing this leaf does not bootstrap compose or runtime.
+ranges, opaque origins, the authoring-format-neutral resolution protocol, and
+immutable exact routing across resolver namespaces; `events` imports it. The
+package facade resolves its declared public exports lazily so importing this leaf
+does not bootstrap compose or runtime.
 
 The package-root run boundary is the composition root: it may import compose,
 compile's concrete builders, and runtime. Lower layers never import it. **Arrows
@@ -91,9 +92,11 @@ When you add a package, name what it sits *above* and what it sits *below*, and
 record that in its charter's "Knows / Never imports".
 
 Compiled-origin traversal follows the same direction. Semantic carriers and
-nodes own their local origin slots and static-child hooks; `compile/origins.py`
-owns flow wiring, outputs, identity guards, copying, and recursion. Nodes never
-import that walker, and the walker never inspects arbitrary payloads.
+nodes own their local origin slots and static-child hooks; `diagnostics` owns the
+exact resolver table; and `compile/origins.py` owns flow wiring, outputs,
+identity guards, copying, recursion, and graph-wide rebasing into that table.
+Nodes never import the walker, and the walker never inspects arbitrary payloads
+or assigns meaning to opaque source keys.
 
 The Compose front end has its own ownership ladder:
 

@@ -337,7 +337,8 @@ model made enforceable.
   `commit_as` or LOOP's `origin_id`. Diagnostic-only `exception_origin` and
   `failure_trace` project node/carrier origins and generated `origin_context`,
   which remain identity-neutral alongside render-only ranges, comments, and
-  object identity.
+  object identity. CODE's executable `code` text affects identity, while its
+  whole-source and exact-line origins are diagnostic-only and do not.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
   core dispatches on worker-result/run-record variants and consults node-owned
   execution-semantic traits/hooks plus diagnostic projections, never `node.kind`
@@ -413,6 +414,11 @@ The base `Node` separately carries one optional `OriginRef` for the authored nod
 context. Compose stamps physical root/definition/inline headers; direct Python and
 generated nodes default to `None`, and cloning preserves an existing value. It is
 manifest-neutral and unrelated to LOOP's execution-only `origin_id`.
+`CodeNode` additionally carries `code_origin`, the whole authored scalar fallback,
+and `code_line_origins`, an immutable tuple in exact constructed literal-line order.
+Quoted and folded scalars have no exact-line tuple; source-free nodes use `None`
+and `()`. These fields carry provenance only and do not change CODE execution or
+traceback framing.
 `Node.pre_asserts` / `post_asserts` are likewise canonical ordered `Assertion`
 lists. Compose crosses raw YAML text into one carrier per authored flow/node list
 position. That item's retained cursor supplies both the carrier origin and the
@@ -472,7 +478,8 @@ assertions through `iter_local_origins()`. `rewrite_local_origins()` mutates onl
 a compile-owned copied node and shares a frozen-carrier identity guard across
 the graph. CALL/MAP/LOOP extend those hooks with their cached `child_inputs` and
 return a non-`None` baked child from `origin_children()`; ordinary nodes return no
-children. CASE and CODE currently need only the common hook.
+children. CODE extends the local hooks with its whole-source fallback followed by
+its ordered exact-line origins. CASE currently needs only the common hook.
 
 `compile.origins.iter_flow_origins(flow)` visits wiring, `CompiledFlow.outputs`,
 nodes, and their static children in deterministic structural order. Identity
@@ -546,6 +553,13 @@ replays that occurrence and reselects the range without storing coordinates in t
 site identity. Unavailable exact line registration leaves the path unreserved for a
 whole-scalar fallback; no YAML is reparsed or parallel range map created. The loader creates one builder per
 physical document and shares it through root, `defs:`, and inline-body assembly.
+After the common header stamp, assembly calls the descriptor's immutable
+`with_source_origins(...)` hook while its located cursor is still available. The
+base hook is a no-op. CODE registers the whole `code:` value and, for a literal
+block only, each exact constructed line in order, then transfers those opaque
+references to `CodeNode`. Quoted and folded scalars keep only the whole-value
+fallback; source-free descriptors keep no CODE origins. The hook never retains a
+cursor, coordinates, or a parallel source map.
 Authored node headers, ordinary node-input keys and values, and source-backed reserved
 MAP/WAIT wiring values, plus source-backed flow-output values and flow/node assertion
 occurrences, are registered under their complete lexical owner paths and carried by the

@@ -742,9 +742,10 @@ def _assemble(
     mapping that still needs parsing, while `input_parameters` carries parameters already
     resolved by an earlier compiler pass. `scope` owns composite call resolution
     (defs-first) and private child registration; `registry` is the file's
-    `read_typedefs(...)`. Retained ranges and `nodes_cursor` own diagnostic locations.
-    `owner` is this flow's complete lexical path and seeds stable identities for
-    anonymous children. `boundary_field_ranges` locates synthesized boundary-input behavior;
+    `read_typedefs(...)`. Retained ranges and `nodes_cursor` own diagnostic locations; after
+    the common header stamp each descriptor may immutably attach kind-owned opaque origins.
+    `owner` is this flow's complete lexical path and seeds stable identities for anonymous
+    children. `boundary_field_ranges` locates synthesized boundary-input behavior;
     `asserts_cursor` is the single authority for each flow assertion's temporary range and
     durable origin. `outputs_range` is the retained authored codomain range when one exists,
     while `outputs_cursor` retains each physically authored output binding occurrence.

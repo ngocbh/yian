@@ -6,14 +6,18 @@ of a node's `outputs:` / a flow's `inputs:` is read directly into one
 `list[IOField]`; nested records are native.
 
 Organized along two axes: the per-node-kind axis lives in `nodes/<kind>.py`
-(each owns its descriptor + `parse` + `build(ctx) -> BuildResult` methods; `nodes/__init__.py`
+(each owns its descriptor + `parse` + immutable source-origin attachment +
+`build(ctx) -> BuildResult` methods; `nodes/__init__.py`
 derives the shared `KINDS` table from those classes), and the cross-node graph-stage axis lives
 in the ordered phases `parse/ -> desugar/ -> edges/ -> validate/ -> build/`. The shared choke
 points (`parse/nodes.py`, the loader's conductor loop, `nodes/bindings.py`) dispatch through
 `KINDS` kind-blind — there is no per-kind isinstance ladder. `source/` owns the one-pass
 YAML document, located cursors, and immutable occurrence-backed origin catalogs;
 assembly stamps authored node headers, ordinary node-input keys and values, and
-source-backed reserved MAP/WAIT wiring values on their canonical carriers. It creates one
+source-backed reserved MAP/WAIT wiring values on their canonical carriers. After each
+common header stamp, assembly makes one kind-blind descriptor-hook call; CODE uses it to
+carry the whole `code:` value plus ordered exact literal-line origins, while other
+descriptors use the no-op default. It creates one
 `Assertion` per authored flow/node list position, deriving the carrier origin and temporary
 range from the same retained item cursor; source-order indexing keeps duplicate text
 distinct. Full roots and multi-node definitions retain flow assertion cursors and reuse the

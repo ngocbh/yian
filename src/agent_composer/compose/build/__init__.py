@@ -9,9 +9,12 @@ The LAST compose phase before the loader. Three modules:
   (build every node kind-blind -> type/exhaustiveness checks -> edge inference ->
   reference/assert validation -> boundary synthesis -> cycle/handle checks ->
   `CompiledFlow.from_parts`), plus `ComposedFlow` (the compiled+validated result) and the
-  flow `outputs:` parser. It stamps authored node-header origins, source-backed ordinary
-  `input:` keys and values, and source-backed reserved MAP/WAIT wiring values through the
-  file-owned catalog builder. Only ordinary input keys stamp `Parameter` origins; each of
+  flow `outputs:` parser. It stamps authored node-header origins, then invokes each
+  descriptor's immutable source-origin hook while its located cursor is available. CODE uses
+  that hook for its whole `code:` value and ordered exact literal-line sites; other descriptors
+  currently keep the no-op default. It also stamps source-backed ordinary `input:` keys and
+  values, and source-backed reserved MAP/WAIT wiring values through the file-owned catalog
+  builder. Only ordinary input keys stamp `Parameter` origins; each of
   those retained wiring values stamps its canonical `Binding`. It aligns retained assertion
   item cursors with source order. Flow desugaring receives an origin callback while the
   conductor derives its aligned temporary ranges from that same cursor sequence; node

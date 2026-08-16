@@ -3,22 +3,28 @@
 The Compose front end is split along two axes: the *node-kind* axis lives here
 (`compose/nodes/<kind>.py`), and the cross-node *graph-stage* axis lives in the
 `compose/parse/`, `compose/desugar/`, `compose/edges/`, and `compose/validate/` phases.
-Each kind module owns the three things that used to be scattered across `parse/file.py`
+Each kind module owns the four things that used to be scattered across `parse/file.py`
 (its descriptor + the `_KIND_SPECS` row) and the old leaf-build branch (its slice of the
 per-kind isinstance ladder, now dissolved):
 
 - its frozen **descriptor** dataclass (subclassing `NodeDescriptor`),
 - **`parse(id, cursor)`** — a classmethod that reads one node body via a located
-  `SourceCursor`, recording each field's `SourceRange` into the descriptor's `field_ranges`, and
+  `SourceCursor`, recording each field's `SourceRange` into the descriptor's
+  `field_ranges`, and
+- **`with_source_origins(cursor, *, site_path, catalog_builder)`** — an immutable
+  attachment hook for kind-owned semantic source sites; the base implementation is a
+  no-op, and
 - **`build(ctx: BuildContext) -> BuildResult`** — a method that constructs the runtime `Node`
   (+ wiring, + any edges a `case` owns), stamping the descriptor's optional `.origin`
   plus its legacy `.range`/`.field_ranges` onto it. The assembly conductor, not a
-  per-kind parser, assigns authored node-header origins before build.
+  per-kind parser, assigns authored node-header origins and invokes the source hook
+  before build.
 
 `parse`/`build` ride on the descriptor class itself, so `KINDS` maps the surface `kind:`
 string straight to the descriptor class — no bundling wrapper. The shared dispatch sites
 (`parse/nodes.py::_parse_node`, the loader's conductor loop) look the class up and
-call `cls.parse(...)` / `desc.build(ctx)`, so adding/altering a kind is a local edit here —
+call `cls.parse(...)` / `desc.with_source_origins(...)` / `desc.build(ctx)`, so
+adding/altering a kind is a local edit here —
 the engine core never sees any of it (kind-blind invariant, `tests/engine/test_kind_census.py`).
 
 `BINDING_FIELDS` is the sibling trait table: per kind, the descriptor fields that carry

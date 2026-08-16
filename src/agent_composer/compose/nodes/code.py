@@ -4,8 +4,9 @@ One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `code` node's
 `CodeDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`, incl. the `code:` body's own range), and overriding `build` (which
 constructs the runtime `CodeNode` + wiring, reconciling the inline `def main(inputs):` wrapper
-offset so tracebacks frame at absolute YAML lines). Registered into `KINDS`/`BINDING_FIELDS`
-at import so the shared dispatch routes here.
+offset so tracebacks frame at absolute YAML lines). Its source-origin hook registers the whole
+`code:` scalar and exact literal constructed lines without retaining YAML objects. Registered
+into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 """
 
 from __future__ import annotations
@@ -43,8 +44,9 @@ class CodeDescriptor(NodeDescriptor):
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
     `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `inputs:`
     call-arg map and the template `parse` (no custom parse hook — code's field legality is the
-    default allowed/required key check + the asserts-list check). Only the code-specific fields
-    (`code`, `asserts`) are declared here; `inputs`/`outputs` come from the base.
+    default allowed/required key check + the asserts-list check). The code-specific semantic
+    fields (`code`, `asserts`) and diagnostic origin carriers (`code_origin`,
+    `code_line_origins`) are declared here; `inputs`/`outputs` come from the base.
 
     Class attrs: `kind="code"`; `allowed` adds `code`/`inputs`/`outputs`/`asserts` to the
     commons; `required` is `{"code"}` (the one mandatory flat field); `binding_fields=("inputs",)`
@@ -138,8 +140,10 @@ class CodeDescriptor(NodeDescriptor):
           no-`return` load error (which carries no interior line). Without an override, the
           descriptor's full `code:` range is retained, then the node range is the fallback.
 
-        `ctx.source_file` (the flow's file label) frames inline tracebacks at the flow filename.
-        `ctx.resolver` is unused (leaf kind); it rides the shared context for call/map/loop.
+        The descriptor's source-neutral whole-code and exact-line origins are transferred to
+        the runtime node unchanged. `ctx.source_file` (the flow's file label) frames inline
+        tracebacks at the flow filename. `ctx.resolver` is unused (leaf kind); it rides the
+        shared context for call/map/loop.
         """
         source_file = ctx.source_file
         code_line = ctx.code_line

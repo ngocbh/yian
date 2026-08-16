@@ -2,7 +2,7 @@
 
 > A map for contributors. If [Home](index.md) tells you *why* Agent Composer looks
 > the way it does, this page tells you *how* it works end to end — the journey one
-> `flow.yaml` takes to become a result. Every box below links to a deeper page.
+> `flow.yaml` takes to become a result. The final links lead to deeper pages.
 
 ## The 10-second model
 
@@ -11,7 +11,7 @@ interpreter:
 
 ```
    flow.yaml  ──load──▶  ComposedFlow  ──run──▶  RunResult
-   (text)               (a typed graph)       (output | error)
+   (text)               (a typed graph)       (output | failure)
                               │
                               └── execute through an append-only RunLog
 ```
@@ -40,6 +40,154 @@ print(result.output)
 Those two functions are the ordinary public seam between the two halves of the
 codebase. `resume_flow()` in `agent_composer.run` re-enters the run half from an
 existing durable log.
+
+The complete control path keeps source presentation at the Compose boundary and
+state authority at the run-log boundary:
+
+```mermaid
+flowchart TD
+    yaml["YAML text"] --> document["SourceDocument.parse once"]
+    document --> compose["Compose: lower and validate"]
+    compose -->|reject| load_error["LoadError with Diagnostic"]
+    compose -->|accept| flow["ComposedFlow"]
+
+    flow --> fresh["run_flow: prepare start"]
+    fresh --> start_log["RunLog: append RunStartedRecord"]
+    start_log --> start_apply["Reducer: apply to RunState"]
+    start_apply --> ready{"Ready node?"}
+    ready --> node_start["Prepare, append, apply NodeStartedRecord"]
+    node_start --> evaluate["FlowEngine: evaluate via eval_node"]
+    evaluate --> result{"Evaluation boundary"}
+    result -->|Output, Route, or Grow| outcome["Validate and prepare outcome record"]
+    result -->|EvaluationFailure| failed["Prepare NodeFailedRecord"]
+    outcome -->|contract rejection| failed
+    outcome --> append["RunLog: append prepared record"]
+    failed --> append
+    append --> apply["Reducer: apply to RunState"]
+    apply --> terminal{"Terminal?"}
+    terminal -->|no| ready
+    terminal -->|success| success["RunResult with output"]
+    terminal -->|expected failure| failure["RunResult with Failure"]
+    failure -. caller may diagnose .-> diagnose["ComposedFlow.diagnose returns Diagnostic"]
+
+    flow --> resume["resume_flow: lock, repair, read prefix"]
+    resume --> replay["Reducer: validate and replay records"]
+    replay -->|already terminal| recovered["RunResult"]
+    replay -->|nonterminal| resumed["Prepare, append, apply RunResumedRecord"]
+    resumed --> ready
+
+    result -->|host or control exception| raised["Propagate; keep the durable prefix"]
+    fresh -. any non-flow exception .-> raised
+    resume -. any non-flow exception .-> raised
+```
+
+Only an expected evaluation or outcome-contract rejection becomes a
+`NodeFailedRecord`. Host, control, log, and invariant exceptions propagate; they
+are never translated into a semantic failure record and may leave only the
+durable prefix committed before the exception.
+
+## The core objects at a glance
+
+The loader deliberately uses different carriers from the engine. Build-time
+validation ranges stop at `BuildResult`; opaque origins are the only source
+identity that can cross into `CompiledFlow` or runtime semantics. The
+presentation-only resolver on `ComposedFlow` separately retains source
+occurrences so it can materialize diagnostic frames later.
+
+| Type or contract | One responsibility |
+|------------------|--------------------|
+| `SourceDocument` | Safely constructs one physical YAML document once and privately owns its definition graph. |
+| `SourceCursor` | Provides occurrence-aware navigation, values, and ranges over that document or a source-free projection. |
+| `NodeDescriptor` | Holds one kind-specific, validated parse product and its Compose-owned source metadata. |
+| `BuildResult` | Carries one built `Node`, its wiring and edges, and transient ranges used only by Compose validators. |
+| `ComposedFlow` | Wraps the `CompiledFlow` with flow metadata and the optional origin resolver used by `diagnose()`. |
+| `OriginResolver` | Resolves an opaque `OriginRef` to one presentation frame without entering runtime semantics. |
+| `CompiledFlow` | Owns semantic nodes, edges, wiring, outputs, and static model configuration, but no mutable run state or YAML ranges. |
+| `Node` | Owns kind-specific execution and produces `Output`, `Route`, or `Grow` without writing the shared pool. |
+| `VariablePool` | Stores typed node and system values, resolves `${...}` reads, and round-trips losslessly for replay. |
+| `RunRecord` | Is the closed union of durable initialization, resume, node-start, outcome, growth, and failure transitions. |
+| `NodeFailedRecord` | Carries exactly one canonical `Failure` as the durable expected-failure transition. |
+| `RunLog` | Defines the append-only authoritative sequence of `RunRecord` values. |
+| `MemoryRunLog` | Provides the same canonical record authority for a process-local run. |
+| `JsonlRunLog` | Provides the locked, fsynced canonical JSONL authority used for recovery. |
+| `RunState` | Holds reducer-derived state for one private graph copy, including the pool, frontier, and terminal result. |
+| `FlowEngine` | Dispatches ready nodes and commits transitions as the kind-blind, single state writer. |
+| `Failure` | Carries a source-neutral semantic run failure and its opaque origin trace. |
+| `Diagnostic` | Carries resolved, presentation-only frames and notes for a load or run failure. |
+| `RunResult` | Returns the public terminal success or failure for one fresh or recovered invocation. |
+
+The relationships are intentionally curated: they show the ownership boundaries,
+not every helper or field in the implementation.
+
+```mermaid
+classDiagram
+    direction TB
+    class SourceDocument
+    class SourceCursor
+    class NodeDescriptor
+    class BuildResult
+    class ComposedFlow {
+        +compiled
+        +origin_resolver
+        +diagnose()
+    }
+    class OriginResolver
+    class CompiledFlow {
+        +nodes
+        +edges
+        +wiring
+    }
+    class Node {
+        +run()
+    }
+    class VariablePool {
+        +resolve()
+    }
+    class RunRecord
+    class RunLog {
+        +append()
+    }
+    class RunState {
+        +pool
+        +ready
+        +result
+    }
+    class FlowEngine {
+        +run()
+    }
+    class RunResult {
+        +status
+        +output
+        +failure
+    }
+    class Failure {
+        +code
+        +trace
+    }
+    class Diagnostic {
+        +frames
+        +notes
+    }
+
+    SourceDocument *-- SourceCursor : supplies source graph
+    SourceCursor ..> NodeDescriptor : parsed into
+    NodeDescriptor ..> BuildResult : builds
+    BuildResult o-- Node : carries
+    BuildResult ..> CompiledFlow : assembled into
+    ComposedFlow *-- CompiledFlow : wraps
+    ComposedFlow o-- OriginResolver : uses
+    CompiledFlow *-- Node : contains
+    RunState *-- VariablePool : owns
+    RunState o-- CompiledFlow : tracks private copy
+    FlowEngine --> RunState : drives
+    FlowEngine --> Node : evaluates
+    FlowEngine --> RunLog : commits through reducer
+    RunLog --> RunRecord : appends
+    RunRecord ..> Failure : failure variants carry
+    RunResult o-- Failure : failed result
+    ComposedFlow ..> Failure : diagnoses
+    ComposedFlow ..> Diagnostic : produces
+```
 
 ---
 
@@ -82,8 +230,9 @@ compose/build/`. The engine core sees none of it.
 
 The output is a **`ComposedFlow`**: a `CompiledFlow` (the static topology) plus the
 canonical typed `input:` parameter view and an optional complete `origin_resolver`.
-It carries no source-text or range snapshot. Source-free graphs use `None`; every
-Compose-owned origin reachable from an originful graph has one exact diagnostic-frame route.
+The semantic `CompiledFlow` carries no source-text or range snapshot. Source-free
+graphs use `None`; every Compose-owned origin reachable from an originful graph has
+one exact diagnostic-frame route.
 `ComposedFlow.diagnose(failure)` is the authoring-front-end boundary that resolves
 the complete trace through that authority into presentation-only `Diagnostic` data.
 
@@ -219,15 +368,44 @@ Everything in the codebase is in service of four guarantees — each is a
 
 ## Where the code lives
 
-The main compiler packages form an acyclic ladder — each layer imports only from
-those below it:
+The main packages form an acyclic dependency ladder — each layer imports only
+from those below it. Arrows below point from a lower-level owner to a principal
+consumer; they are a dependency map, not an exhaustive import graph.
 
-```
-diagnostics  <-  events
-      ^
-      └────────  nodes  <-  compile  <-  compose
-                   ^
-      typesys + expr
+```mermaid
+flowchart TB
+    diagnostics["diagnostics.py"]
+    events["events.py"]
+    state["_state.py"]
+    typesys["typesys"]
+    expr["expr"]
+    llm["llm_clients"]
+    tools["tools"]
+    nodes["nodes"]
+    compile["compile"]
+    compose["compose"]
+    runtime["runtime"]
+    run["run.py"]
+    cli["cli"]
+
+    diagnostics --> events
+    diagnostics --> nodes
+    typesys --> nodes
+    expr --> nodes
+    llm --> nodes
+    tools --> nodes
+    state --> compile
+    nodes --> compile
+    events --> runtime
+    state --> runtime
+    typesys --> runtime
+    compile --> runtime
+    diagnostics --> compose
+    compile --> compose
+    compose --> run
+    compile --> run
+    runtime --> run
+    run --> cli
 ```
 
 `diagnostics` owns source ranges, opaque origins, and the resolution seam;

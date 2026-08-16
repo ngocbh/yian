@@ -85,11 +85,25 @@ missing, incomplete, malformed, or raising resolver for a non-empty trace yields
 no frames and exactly the generic note `Source presentation was unavailable.`;
 semantic and debug fields remain unchanged.
 
-Runtime currently emits zero or one trace origin, so nested outer call context
-is not yet present in these diagnostics. Runtime results still retain their
-temporary `SourceSpan` locator and concrete range, while the CLI retains its
-`SourceFrame` graph walk until the remaining source-diagnostic cutover lands.
-Those bridges are not an alternative origin-resolution API.
+Every node builds failures through one source-neutral rule:
+`Node.failure_trace(operation_origin=None)` returns its generated, outermost-to-
+innermost `origin_context` followed by the supplied operation origin, or by the
+node's own origin when no operation origin is supplied. Only an absent local
+suffix is omitted; order and duplicates are preserved. Direct and static nodes
+start with an empty context. The context is diagnostic-only generated ancestry,
+not authored provenance: origin traversal and rewriting ignore it, and manifests,
+fingerprints, and expansion digests exclude it.
+
+Compile-owned CALL/MAP/LOOP expansion prefixes cloned children with the
+spawner's complete `failure_trace()`. MAP's generated boundaries receive the
+same context. A LOOP respawn instead copies only the driver's outer
+`origin_context`, so the loop's own origin is appended exactly once when the
+next driver builds a failure. Evaluator, dispatcher, and terminal-unreachable
+failure producers remain kind-blind and call the same node-owned rule. Runtime
+results still retain their temporary `SourceSpan` locator and concrete range,
+while the CLI retains its `SourceFrame` graph walk until the remaining
+source-diagnostic cutover lands. Those bridges are not an alternative
+origin-resolution API.
 
 The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
 `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
@@ -97,8 +111,9 @@ The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
 flow-owned rejection. `EvaluationFailure` owns one `Failure` plus temporary
 locator/range presentation metadata. The evaluator assigns its first five codes by
 operation stage: expression/default/required binding, supplied-input contracts,
-base-wrapper assertions, node execution, and result validation. Its trace is the
-best operation origin, or the authored node origin as fallback. Host control,
+base-wrapper assertions, node execution, and result validation. Each producer
+passes its best operation origin, if any, through `Node.failure_trace()`; the
+node origin is the local fallback after any generated ancestry. Host control,
 stream callbacks, unexpected binder faults, and malformed compiled/setup state
 escape this expected-failure sum.
 
@@ -106,8 +121,9 @@ The dispatcher assigns the next three codes structurally from the closed result
 sum: rejected `Output`, `Route`, and `Grow` data become `contract.output`,
 `contract.route`, and `contract.growth`. Output rejection uses the effective
 target contract's root origin when present, then the executing node origin;
-route and growth use the executing node origin. Source-free operations have an
-empty trace. Unsupported growth kinds and arbitrary builder, compiler,
+route and growth use the executing node origin. The trace is empty only when
+generated ancestry is empty and neither the operation nor node fallback supplies
+a local origin. Unsupported growth kinds and arbitrary builder, compiler,
 spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
 faults escape rather than becoming flow failures.
 
@@ -119,10 +135,11 @@ and `RunResult.failure` without flattened aliases; live carriers share the same
 object, while recovery reconstructs an equal canonical value. `locator` and
 `range` remain adjacent temporary YAML presentation metadata until operation
 origins provide equivalent precision. A route that first skip-floods END latches
-`graph.terminal_unreachable` with the causal router and its origin. That
+`graph.terminal_unreachable` with the causal router and its `failure_trace()`. That
 `NodeRoutedRecord` persists the derived failure; replay structurally revalidates
-the route and restores the recorded value. No additional terminal record is
-added, and an explicit node failure still supersedes the latch.
+the route and restores the recorded value, including its complete trace, even if
+the supplied graph now carries rebased origins. No additional terminal record
+is added, and an explicit node failure still supersedes the latch.
 
 ## Semantic IR carriers
 
@@ -154,10 +171,13 @@ remaining migration.
 `Node.origin` is the same source-neutral provenance shape for an authored node
 context. Compose stamps the authored node-header occurrence for root, `defs:`,
 and inline-body nodes; direct Python construction defaults to origin-free, and
-loader/desugar-synthesized nodes remain so. Clones preserve an existing origin,
-but manifests, fingerprints, and expansion digests ignore it. The legacy
-`range` fields remain the active render bridge while diagnostics migrate to
-origin resolution.
+loader/desugar-synthesized nodes remain so. Clones preserve an existing origin.
+`Node.origin_context` separately carries generated outer-to-inner spawner
+ancestry for nested failure traces; it is empty on direct/static nodes and is
+neither enumerated nor rewritten as local authored provenance. Both fields are
+diagnostic-only and excluded from manifests, fingerprints, and expansion
+digests. The legacy `range` fields remain the active render bridge while
+diagnostics migrate to origin resolution.
 
 `Node.pre_asserts` and `Node.post_asserts` are ordered `Assertion` lists. Parsed
 YAML remains raw text until the inline-call pass crosses each flow assertion into
@@ -372,11 +392,13 @@ result. Host control, stream callbacks, unexpected binder faults, malformed
 setup, and arbitrary host/compiler faults escape. A streaming kind may yield
 transient `StreamChunk` values and then return one of the same three results.
 
-The runtime core is **kind-blind**. It dispatches on this result sum and node-owned
-traits/hooks (`is_spawner`, `binds_per_item`, `bind_reserved`,
-`validate_execution_setup`, `exception_origin`, `grow_depth_delta`, `is_loop`,
-`needs_stop_event`, and `skipped_output_target`), never on `NodeKind`. The
-closed kind-aware growth match lives in `compile.expand.build_grow`, outside runtime.
+The runtime core is **kind-blind**. It dispatches on this result sum and consults
+node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`,
+`bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
+`needs_stop_event`, and `skipped_output_target`) plus the diagnostic-only
+projections `exception_origin` and `failure_trace`, never on `NodeKind`. The
+diagnostic projections do not affect program identity. The closed kind-aware
+growth match lives in `compile.expand.build_grow`, outside runtime.
 `compile.model.GrowthRejected` crosses that boundary only when a legal
 CALL/MAP/LOOP kind supplies a malformed seed. Unsupported kinds and builder or
 compiler helper faults remain raw; runtime marks only explicit seed, fragment,
@@ -459,8 +481,12 @@ A spawner node returns `Grow(seed, prune)` without importing `compile`. The
 kind-aware `compile.expand.build_grow(spawner, seed)` converts the canonical seed
 into a deterministic `Flow`; package-root `run.py` injects that callable into both
 live execution and replay. Runtime validates and splices the fragment generically,
-remaining kind-blind. Expansion digests cover entry/end IDs and topology, while
-loop pruning keeps only one dynamic iteration resident at a time.
+remaining kind-blind. During that compile-owned construction, CALL/MAP/LOOP
+prefix child clones with `spawner.failure_trace()`; MAP also stamps its generated
+boundaries, while a LOOP's next driver keeps only the enclosing
+`origin_context`. Expansion digests cover entry/end IDs and topology but exclude
+that diagnostic context, while loop pruning keeps only one dynamic iteration
+resident at a time.
 
 Compile also owns stable identity for the static program. `flow_manifest`
 canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and

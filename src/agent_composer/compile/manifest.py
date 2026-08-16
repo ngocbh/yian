@@ -68,6 +68,7 @@ _COMMON_NODE_FIELDS = frozenset(
 _IGNORED_NODE_FIELDS = frozenset(
     {
         "origin",
+        "origin_context",
         "range",
         "field_ranges",
         "wiring_labels",

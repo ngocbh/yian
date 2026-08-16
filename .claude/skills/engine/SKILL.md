@@ -84,14 +84,27 @@ Hold this model whenever you design anything:
   outermost-to-innermost order, and preserves duplicate origins. Empty traces
   remain unlocated without a warning. A missing, incomplete, malformed, or
   raising resolver for a non-empty trace discards every frame and adds exactly
-  `Source presentation was unavailable.` Runtime traces currently contain zero
-  or one origin; nested outer context is not implemented. Keep the temporary
+  `Source presentation was unavailable.` Runtime traces are built only through
+  `Node.failure_trace(operation_origin=None)`: generated outer-to-inner
+  `origin_context`, then the supplied operation origin or the node origin,
+  omitting only an absent local suffix and preserving order/duplicates. The
+  evaluator, dispatcher, and terminal-unreachable producer use that node-owned
+  rule without a kind branch. Durable records preserve the complete trace, and
+  replay restores it even when current origins were rebased. Keep the temporary
   runtime locator/range and CLI `SourceFrame` graph-walk bridges accurate until
   their later cutover; do not route new origin resolution around `diagnose()`.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;
   source-free/generated nodes default to `None` and clones preserve a value.
+- `Node.origin_context` is generated diagnostic ancestry, ordered outermost to
+  innermost. Direct/static nodes start empty. It is excluded from authored-origin
+  traversal/rewriting and from manifests/fingerprints/expansion digests. The
+  compile-owned CALL/MAP/LOOP builders prefix child clones with
+  `spawner.failure_trace()`; MAP boundaries receive it too. LOOP respawn copies
+  only the driver's outer context, so `failure_trace()` appends the loop origin
+  once. New spawners propagate this context while constructing their fragment;
+  runtime never gains a kind branch for it.
 - Compiled flow-owned wiring has one shape: `Flow` construction wraps each
   direct source as `Binding`, and `FlowOutput.binding` owns declared outputs.
   Python builders may pass raw values at construction, but must not write raw
@@ -231,11 +244,13 @@ Most are just the functional model (above) made enforceable:
   registry/metaclass), but the engine core (`runtime/engine.py` + `runtime/eval_node.py`) does NOT
   branch on it. Ordinary behavior lives in a node's own `_run_impl`; growth construction's
   sanctioned kind match lives in `compile.expand.build_grow`. The core dispatches only on the
-  closed worker-result and run-record sums and on node-owned traits/hooks
+  closed worker-result and run-record sums and consults node-owned
+  execution-semantic traits/hooks
   (`is_spawner`, `binds_per_item`,
   `bind_reserved`, `reserved_wiring_keys`, `validate_execution_setup`,
-  `exception_origin`, `grow_depth_delta`, `is_loop`, `needs_stop_event`,
-  `skipped_output_target`). `skipped_output_target()` is pure, deterministic
+  `grow_depth_delta`, `is_loop`, `needs_stop_event`, `skipped_output_target`)
+  plus the diagnostic-only projections `exception_origin` and `failure_trace`.
+  Those projections are identity-neutral. `skipped_output_target()` is pure, deterministic
   topology authority derived only from manifest-backed node state. Its base
   behavior is baked `commit_as` or the physical id; LOOP returns its origin to
   mirror dynamic `Output.commit_as`, which otherwise affects success only. A

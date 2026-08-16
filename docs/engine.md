@@ -3,8 +3,8 @@
 > Phase 2 of the [lifecycle](architecture.md). The [front end](compose.md) produced a
 > typed graph; the engine *interprets* it. The core (`runtime/engine.py` +
 > `runtime/eval_node.py`) is **kind-blind**: it branches on the closed `NodeResult`
-> sum and on node-owned traits/hooks, never on a node's `NodeKind`. The node side of the same
-> contract is in [Nodes](nodes.md).
+> sum and consults node-owned execution traits plus diagnostic projections, never
+> a node's `NodeKind`. The node side of the same contract is in [Nodes](nodes.md).
 
 ## Two actors, one narrow contract
 
@@ -145,6 +145,11 @@ top-level flow, below), and those boundary nodes are cloned into the parent alon
 rest of the child — so the child's boundary asserts fire through `StartNode.run` and its
 post asserts through the same base template, on the ordinary node path, identically to
 the top level.
+The compile-owned builder also propagates diagnostic ancestry: CALL/MAP/LOOP
+prefix child clones with `spawner.failure_trace()`, MAP stamps its generated
+fan-out/fan-in boundaries with the same context, and LOOP respawn copies only its
+driver's outer context so the authored loop origin appears once. Runtime only
+splices the resulting fragment and never branches on kind to construct a trace.
 `prune` is growth's generic inverse: a self-respawning loop retires the
 iteration it just finished in the same step, so it grows without leaking. Adding a new
 spawner kind means setting traits on its node; the core never gains a branch. Details:
@@ -167,10 +172,17 @@ For a Compose-authored graph, `ComposedFlow.diagnose(failure)` converts that
 source-neutral value into the canonical presentation-only
 `diagnostics.Diagnostic`. It copies `code`, `message`, `node_id`, `cause_type`,
 and `traceback`, then resolves the complete ordered origin trace atomically
-through the flow's resolver. Runtime traces currently carry zero or one origin;
-nested outer call context is not yet propagated. Runtime results retain temporary
-locator/range fields, and the CLI
-retains its `SourceFrame` bridge until the remaining source-diagnostic cutover.
+through the flow's resolver. Each node's diagnostic-only `origin_context` is
+generated outer-to-inner spawner ancestry and is empty on direct/static nodes.
+It is excluded from authored-origin traversal/rewriting and from manifests,
+fingerprints, and expansion digests. `Node.failure_trace(operation_origin=None)`
+appends the supplied operation origin, or the node origin when none is supplied,
+to that context; it omits only an absent local suffix and preserves order and
+duplicates. Evaluator, dispatcher, and terminal-unreachable failure producers
+all use this node-owned rule without a kind branch. Durable replay restores the
+recorded complete trace even when the current graph carries rebased origins.
+Runtime results retain temporary locator/range fields, and the CLI retains its
+`SourceFrame` bridge until the remaining source-diagnostic cutover.
 
 Every execution uses one `RunLog`. `MemoryRunLog` gives a process-local run the same
 ordering semantics; `JsonlRunLog` holds a nonblocking exclusive lock and fsyncs each
@@ -184,10 +196,11 @@ NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord
 There is no separate terminal record: success is derived when the terminal node's
 success transition reduces. Failure is derived either from `NodeFailedRecord` or
 from a reduced route that skip-floods the declared terminal output. The first such
-route latches `graph.terminal_unreachable` with the causal router and its authored
-origin, even when unrelated pooled work drains later, and persists that failure on
-the causal `NodeRoutedRecord`. Replay structurally revalidates the route before
-restoring the recorded failure; a later explicit node failure still wins immediately.
+route latches `graph.terminal_unreachable` with the causal router and its complete
+`failure_trace()`, even when unrelated pooled work drains later, and persists that
+failure on the causal `NodeRoutedRecord`. Replay structurally revalidates the route
+before restoring the recorded failure; a later explicit node failure still wins
+immediately.
 
 `resume_flow(flow, log=path)` locks and validates an existing contiguous prefix,
 checks the authored-flow fingerprint, rebuilds a private graph, and folds every record
@@ -218,6 +231,7 @@ before the run boundary releases the log.
 | `node.is_spawner` | may it return `Grow`? |
 | read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event` |
 | growth traits | `grow_depth_delta`, `is_loop` |
+| diagnostic-only projections | `exception_origin(exc)` selects the local origin; `failure_trace(operation_origin=None)` combines it with ordered ancestry without affecting program identity |
 | `node.skipped_output_target()` | logical output whose successors observe this physical node's absence |
 
 That is the complete list — a small set of traits/hooks plus the run/body pair. No `NodeKind` is

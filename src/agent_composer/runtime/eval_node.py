@@ -62,12 +62,6 @@ class EvaluationFailure:
     range: SourceRange | None = None
 
 
-def _failure_trace(node, origin: OriginRef | None) -> tuple[OriginRef, ...]:
-    """Return the operation origin, or the authored node origin as fallback."""
-    selected = origin if origin is not None else node.origin
-    return () if selected is None else (selected,)
-
-
 def _evaluation_failure(
     node,
     code: FailureCode,
@@ -88,7 +82,7 @@ def _evaluation_failure(
             code=code,
             message=str(exception),
             node_id=node.id,
-            trace=_failure_trace(node, origin),
+            trace=node.failure_trace(origin),
             cause_type=type(exception).__name__,
             traceback=(traceback_text if traceback_text is not None else _tb.format_exc()),
         ),

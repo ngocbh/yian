@@ -11,7 +11,7 @@ from agent_composer.nodes.contracts import Assertion, Parameter
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.map import MapNode
 
-from tests.engine.test_expand import _child_flow
+from tests.engine.test_expand import _child_flow, _parent_with_spawner
 
 
 def _growth_producers():
@@ -60,6 +60,7 @@ def _assert_same_fragment(actual: Flow, expected: Flow) -> None:
         assert type(left) is type(right)
         assert left.commit_as == right.commit_as
         assert left.origin_id == right.origin_id
+        assert left.origin_context == right.origin_context
         assert left.post_asserts == right.post_asserts
         assert left.post_assert_ranges == right.post_assert_ranges
 
@@ -78,12 +79,81 @@ def test_loop_respawn_preserves_diagnostic_origin_separately_from_origin_id():
     """Every fresh driver keeps its authored site while retaining runtime attribution."""
     loop = LoopNode("loop", flow_id="child", origin_id="runtime-loop")
     authored_origin = OriginRef("root/node/loop")
+    outer_origin = OriginRef("root/node/call")
     loop.origin = authored_origin
+    loop.origin_context = (outer_origin,)
 
     clone = loop.respawn(2)
 
     assert clone.origin is authored_origin
+    assert clone.origin_context == (outer_origin,)
+    assert clone.failure_trace() == (outer_origin, authored_origin)
     assert clone.origin_id == "runtime-loop"
+
+
+def test_compile_builder_derives_prefix_from_each_spawner_failure_trace():
+    (call, call_grow), (map_node, map_grow), (loop, loop_grow) = _growth_producers()
+    outer = OriginRef("root/nodes/outer")
+    local_origins = [
+        OriginRef("root/nodes/call"),
+        OriginRef("root/nodes/map"),
+        OriginRef("root/nodes/loop"),
+    ]
+
+    for spawner, local in zip((call, map_node, loop), local_origins, strict=True):
+        spawner.origin_context = (outer,)
+        spawner.origin = local
+
+    call_fragment = expand_module.build_grow(call, call_grow.seed)
+    assert {
+        node.origin_context for node in call_fragment.nodes.values()
+    } == {(outer, local_origins[0])}
+
+    map_fragment = expand_module.build_grow(map_node, map_grow.seed)
+    assert {
+        node.origin_context for node in map_fragment.nodes.values()
+    } == {(outer, local_origins[1])}
+
+    loop_fragment = expand_module.build_grow(loop, loop_grow.seed)
+    next_driver = loop_fragment.nodes["loop~1"]
+    body_contexts = {
+        node.origin_context
+        for node_id, node in loop_fragment.nodes.items()
+        if node_id != next_driver.id
+    }
+    assert body_contexts == {(outer, local_origins[2])}
+    assert next_driver.origin_context == (outer,)
+    assert next_driver.failure_trace() == (outer, local_origins[2])
+
+
+def test_source_free_spawners_do_not_invent_generated_context():
+    for spawner, grow in _growth_producers():
+        fragment = expand_module.build_grow(spawner, grow.seed)
+        assert all(node.origin_context == () for node in fragment.nodes.values())
+
+
+def test_nested_map_then_call_extends_context_only_when_inner_expands():
+    """A nested spawner carries outer ancestry without pre-stamping its baked child."""
+    leaf = _child_flow()
+    middle = _parent_with_spawner(leaf, {"x": 1})
+    outer_origin = OriginRef("root/nodes/each")
+    inner_origin = OriginRef("middle/nodes/inner")
+    middle.nodes["sp"].origin = inner_origin
+    outer = MapNode("each", flow_id="middle", child=middle)
+    outer.origin = outer_origin
+
+    map_fragment = expand_module.build_grow(outer, [{"x": 1}])
+    inner = map_fragment.nodes["each#0/sp"]
+
+    assert inner.origin_context == (outer_origin,)
+    assert all(node.origin_context == () for node in inner.child.nodes.values())
+
+    call_fragment = expand_module.build_grow(inner, {"x": 1})
+
+    assert call_fragment.nodes["each#0/sp/head"].origin_context == (
+        outer_origin,
+        inner_origin,
+    )
 
 
 def test_compile_builder_reconstructs_every_growth_kind():

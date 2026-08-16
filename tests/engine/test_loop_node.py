@@ -183,6 +183,36 @@ def test_build_grow_matches_live_clone_and_origin_replay_byte_for_byte():
     assert live.nodes["lp~3"].iteration == replay.nodes["lp~3"].iteration == 3
 
 
+def test_later_loop_growth_does_not_duplicate_the_loop_origin():
+    child = _child_flow()
+    outer = OriginRef("root/nodes/call")
+    loop_origin = OriginRef("child/nodes/loop")
+    origin = LoopNode(
+        "lp",
+        flow_id="f",
+        child=child,
+        predicate_kind="while",
+        predicate="${x}",
+        max_iters=10,
+    )
+    origin.params = child.nodes[child.start_id].params
+    origin.origin_context = (outer,)
+    origin.origin = loop_origin
+
+    first = build_grow(origin, [{"x": 1}, 0])
+    driver = first.nodes["lp~1"]
+    second = build_grow(driver, [{"x": 1}, 1])
+
+    assert driver.failure_trace() == (outer, loop_origin)
+    assert second.nodes["lp~2"].failure_trace() == (outer, loop_origin)
+    body_prefix = ns(map_callsite("lp", 1), "")
+    assert {
+        node.origin_context
+        for node_id, node in second.nodes.items()
+        if node_id.startswith(body_prefix)
+    } == {(outer, loop_origin)}
+
+
 def test_runaway_guard_raises_loop_max_exceeded():
     import pytest
 

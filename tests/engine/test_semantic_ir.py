@@ -101,6 +101,61 @@ def test_node_origin_is_optional_validated_and_distinct_from_loop_attribution() 
         Node("invalid", origin="node/header")  # type: ignore[arg-type]
 
 
+def test_node_failure_trace_selects_local_origin_after_generated_context() -> None:
+    """Failure ancestry remains ordered while operation precision wins locally."""
+    outer = _origin("outer/call")
+    node_origin = _origin("child/node")
+    operation = _origin("child/input/value")
+    node = Node("child", origin=node_origin)
+
+    assert node.origin_context == ()
+    assert node.failure_trace() == (node_origin,)
+    assert node.failure_trace(operation) == (operation,)
+
+    node.origin_context = (outer,)
+    assert node.failure_trace() == (outer, node_origin)
+    assert node.failure_trace(operation) == (outer, operation)
+
+
+def test_node_failure_trace_preserves_source_free_context_and_duplicates() -> None:
+    """Missing local origins omit the suffix without deduplicating outer ancestry."""
+    repeated = _origin("shared/site")
+    source_free = Node("source-free")
+
+    assert source_free.failure_trace() == ()
+
+    source_free.origin_context = (repeated, repeated)
+    assert source_free.failure_trace() == (repeated, repeated)
+    assert source_free.failure_trace(repeated) == (repeated, repeated, repeated)
+
+
+def test_node_failure_trace_rejects_malformed_generated_origins() -> None:
+    """Malformed generated metadata cannot cross into a canonical Failure."""
+
+    class InvalidOrigin(OriginRef):
+        def __post_init__(self) -> None:
+            pass
+
+    node = Node("node")
+    node.origin_context = []  # type: ignore[assignment]
+    with pytest.raises(TypeError, match="origin_context must be a tuple"):
+        node.failure_trace()
+
+    node.origin_context = ("outer",)  # type: ignore[assignment]
+    with pytest.raises(TypeError, match="origin_context item must be an OriginRef"):
+        node.failure_trace()
+
+    node.origin_context = (InvalidOrigin(""),)
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        node.failure_trace()
+
+    node.origin_context = ()
+    with pytest.raises(TypeError, match="failure operation origin must be an OriginRef"):
+        node.failure_trace("operation")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        node.failure_trace(InvalidOrigin(""))
+
+
 def test_flow_construction_normalizes_direct_wiring_values() -> None:
     """Stored flow wiring is canonical without copying semantic payloads."""
     payload = {"literal": ["kept-by-identity"]}

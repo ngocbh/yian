@@ -105,6 +105,12 @@ def test_ref_child_failure_fails_the_run():
     result = run_flow(parent, {"topic": "ACME"})
     assert result.status != "succeeded"
     assert "boom" in result.failure.message
+    call = parent.compiled.nodes["research"]
+    assert result.failure.node_id == "research/emit"
+    assert result.failure.trace == (
+        call.origin,
+        call.child.nodes["emit"].origin,
+    )
 
 
 def test_ref_child_applies_its_own_default():

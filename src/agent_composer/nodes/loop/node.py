@@ -174,9 +174,10 @@ class LoopNode(Node):
         attributes its grow/commit to the compiled loop and self-prunes (`id != origin`).
 
         `params` must be copied for `eval_node` to bind the clone's carried inputs off the CONTINUE
-        wiring. The complete `output_contract` and asserts are copied for clone
-        self-consistency only — the STOP commit validates against the COMPILED origin
-        `L`'s contract via its commit target, not the clone's."""
+        wiring. Generated `origin_context` is copied unchanged while the authored loop origin
+        remains local, so each iteration's failure trace contains that origin once. The complete
+        `output_contract` and asserts are copied for clone self-consistency only — the STOP commit
+        validates against the COMPILED origin `L`'s contract via its commit target, not the clone's."""
         clone = LoopNode(
             f"{self.origin_id}~{k}", flow_id=self.flow_id, flow_version=self.flow_version,
             child=self.child, child_inputs=self.child_inputs,
@@ -184,6 +185,10 @@ class LoopNode(Node):
             predicate=self.predicate, times=self.times, max_iters=self.max_iters,
             title=self.title, iteration=k, origin_id=self.origin_id)
         clone.origin = self.origin
+        # Keep only the enclosing ancestry. ``failure_trace()`` appends this driver's
+        # authored loop origin, so copying that origin into the context would duplicate it
+        # on every later iteration.
+        clone.origin_context = self.origin_context
         clone.params = self.params
         clone.output_contract = self.output_contract
         clone.pre_asserts = list(self.pre_asserts)

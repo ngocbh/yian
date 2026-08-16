@@ -363,12 +363,11 @@ class FlowEngine:
     ) -> PreparedTransition:
         """Construct and project one expected dispatcher contract rejection."""
         node = self.state.flow.nodes[node_id]
-        selected_origin = origin if origin is not None else node.origin
         failure = Failure(
             code=code,
             message=str(exception),
             node_id=node_id,
-            trace=(() if selected_origin is None else (selected_origin,)),
+            trace=node.failure_trace(origin),
             cause_type=type(exception).__name__,
             traceback=(
                 traceback_text if traceback_text is not None else _tb.format_exc()

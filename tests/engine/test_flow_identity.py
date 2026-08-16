@@ -2340,6 +2340,20 @@ def test_node_origin_does_not_affect_program_or_expansion_identity():
     assert expansion_digest(first) == expansion_digest(second)
 
 
+def test_node_origin_context_does_not_affect_program_or_expansion_identity():
+    """Generated failure ancestry is diagnostic-only manifest data."""
+    first = _fragment()
+    second = copy.deepcopy(first)
+    second.nodes["body"].origin_context = (
+        OriginRef("root/nodes/invoke"),
+        OriginRef("child/nodes/map"),
+    )
+
+    assert flow_manifest(first) == flow_manifest(second)
+    assert flow_fingerprint(first) == flow_fingerprint(second)
+    assert expansion_digest(first) == expansion_digest(second)
+
+
 def test_output_contract_cutover_preserves_manifest_shape_and_fingerprint():
     """The carrier cutover must not invalidate equivalent durable flow identity."""
     fragment = _fragment()

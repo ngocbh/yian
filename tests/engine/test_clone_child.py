@@ -80,6 +80,24 @@ def test_clone_child_preserves_node_origin_while_namespacing_runtime_ids():
     assert child.nodes["head"].id == "head"
 
 
+def test_clone_child_prefixes_existing_generated_origin_context():
+    """A clone keeps nested ancestry after the enclosing spawner ancestry."""
+    child = _single()
+    outer = OriginRef("root/nodes/call")
+    nested = OriginRef("child/nodes/map")
+    child.nodes["head"].origin_context = (nested,)
+
+    cloned = clone_child(
+        child,
+        callsite="each",
+        record={"topic": "ACME"},
+        origin_context=(outer,),
+    )
+
+    assert cloned.nodes["each/head"].origin_context == (outer, nested)
+    assert child.nodes["head"].origin_context == (nested,)
+
+
 def test_clone_child_rewrites_one_binding_layer_and_preserves_its_origin():
     """Child namespacing rewrites semantic source text without replacing provenance."""
     child = _single()

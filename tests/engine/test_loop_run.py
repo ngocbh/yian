@@ -99,6 +99,54 @@ def test_while_loop_max_permits_exactly_max_body_runs():
     assert run_flow(load_flow(below), {}).status != "succeeded"
 
 
+NESTED_CALL_LOOP_MAXED = """
+id: nested-call-loop-maxed
+name: nested_call_loop_maxed
+defs:
+  keep:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:loop_countdown
+        input:
+          n: ${input.n}
+        output:
+          n: int
+    output: ${step.output}
+  runaway:
+    nodes:
+      repeat:
+        kind: loop
+        call: keep
+        input:
+          n: 0
+        while: "true"
+        max: 1
+    output: ${repeat.output}
+nodes:
+  outer:
+    kind: call
+    call: runaway
+output: ${outer.output}
+"""
+
+
+def test_nested_call_loop_respawn_failure_keeps_each_authored_origin_once():
+    """A respawned LOOP driver retains CALL ancestry without appending itself twice."""
+    loaded = load_flow(NESTED_CALL_LOOP_MAXED)
+
+    result = run_flow(loaded, {})
+
+    outer = loaded.compiled.nodes["outer"]
+    repeat = outer.child.nodes["repeat"]
+    assert result.status != "succeeded"
+    assert result.failure.node_id == "outer/repeat~1"
+    assert result.failure.cause_type == "LoopMaxExceeded"
+    assert result.failure.trace == (outer.origin, repeat.origin)
+
+
 # The chat-shaped slice: a body blocks each turn on a `human_input` leaf, folds the
 # returned message into the carried {messages, exited} record, and loops until "bye".
 LOOP_CHAT = """

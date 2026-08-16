@@ -713,8 +713,12 @@ never a text heuristic.
   temporary positional range and
   `Assertion.origin` from the same retained item cursor before rewrites preserve both.
 - **Resolution (CLI boundary):** `cli/run.py` reads the node id, message, and
-  debugging traceback directly from `result.failure`, then prefers the
-  pre-resolved `result.range`. Only when it is absent does `_resolve_range` map
+  debugging traceback directly from `result.failure`. The single-frame path prefers the
+  pre-resolved `result.range`. In a nested call traceback, `_walk_call_frames` places that
+  concrete range on the deepest current baked node that owns the exact locator site; an
+  unowned or stale range cannot be interpreted against child text. Other nested frames keep
+  current field/kind/header fallbacks. Only when the single-frame concrete range is absent
+  does `_resolve_range` map
   `result.locator` itself, via
   `_top_ranges` (the loaded flow's `SourceFrame` maps, or the defensive
   `loader.top_frame_ranges(document)` fallback): a
@@ -745,10 +749,12 @@ never a text heuristic.
   namespaced id and walks segment-by-segment through the baked IR (`node.child`/
   `node.child_source`), collecting one frame per level; `_render_frame_stack` boxes them
   stacked, most-recent-call-last (Python-traceback style), falling back to the single-frame
-  box when fewer than two frames resolve. Each call-chain frame anchors at the node HEADER
-  line; the failing leaf at its precise field / kind-fallback line. A frame title names WHERE
-  it lives: a top/external file frame is the filename alone, a `defs:` frame is
-  filename-qualified (`<file> defs:<name>`) since its nodes physically live in that file.
+  box when fewer than two frames resolve. The deepest current node that owns the
+  evaluator-resolved operation range uses it. Other call-chain frames anchor at the node
+  HEADER; when no node owns the range, the failing leaf uses its precise field / kind
+  fallback. A frame title names WHERE it lives: a top/external file frame is the filename
+  alone; a `defs:` frame is filename-qualified (`<file> defs:<name>`) since its nodes
+  physically live in that file.
 
 ## Design-note template (step 3 of the workflow)
 

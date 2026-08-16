@@ -109,8 +109,11 @@ next driver builds a failure. Evaluator, dispatcher, and terminal-unreachable
 failure producers remain kind-blind and call the same node-owned rule. Runtime
 results still retain their temporary `SourceSpan` locator and concrete range,
 while the CLI retains its `SourceFrame` graph walk until the remaining
-source-diagnostic cutover lands. Those bridges are not an alternative
-origin-resolution API.
+source-diagnostic cutover lands. During that bridge, the evaluator-resolved concrete
+range is authoritative at the deepest current baked node that owns its exact locator
+site. The source-frame walk supplies outer call context and keeps current
+locator/kind/header fallbacks when a range is caller-owned elsewhere in the chain or is
+stale after a source-only edit. Those bridges are not an alternative origin-resolution API.
 
 The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
 `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,

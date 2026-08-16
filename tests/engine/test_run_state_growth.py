@@ -26,6 +26,7 @@ from agent_composer.nodes.contracts import (
     Binding,
     ContractOrigins,
     Parameter,
+    PartialRecordContract,
     ValueContract,
 )
 from agent_composer.nodes.call import CallNode
@@ -1084,6 +1085,25 @@ def _invalid_fragment(case: str) -> Any:
             fragment.end_id,
             input_group="value",
         )
+    elif case == "unknown-partial-field":
+        fragment.nodes[fragment.start_id].output_contract = PartialRecordContract(
+            fields=(
+                ("known", ValueContract(Type.scalar(ValueKind.STRING))),
+                ("opaque", None),
+            )
+        )
+        end = EndNode.record(fragment.end_id, output_names=["value"])
+        end.commit_as = "spawn"
+        fragment.nodes[fragment.end_id] = end
+        fragment.wiring[fragment.end_id] = {
+            "value": Binding(f"${{{fragment.start_id}.output.absent}}")
+        }
+        fragment.edges[0] = Edge(
+            fragment.edges[0].id,
+            fragment.start_id,
+            fragment.end_id,
+            input_group="value",
+        )
     elif case == "cycle":
         fragment.edges.append(
             Edge(
@@ -1122,6 +1142,7 @@ def _invalid_fragment(case: str) -> Any:
         "unreachable-node",
         "unknown-system-ambient",
         "unknown-typed-field",
+        "unknown-partial-field",
         "unknown-reference",
         "cycle",
     ],

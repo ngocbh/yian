@@ -18,6 +18,7 @@ next driver by plain wiring.
 from agent_composer.compile.expand import build_grow
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import run_flow
+from agent_composer.nodes.contracts import PartialRecordContract
 from agent_composer.tools import install_ask_user
 from agent_composer.typesys import ValueKind
 from tests.engine._graph_builder import _engine
@@ -244,6 +245,215 @@ def test_loop_body_can_compute_carried_boolean_in_its_output_binding():
     assert result.status == "succeeded", result.failure
     assert result.output == {"messages": [], "exited": True}
     assert prompts == ["your message"]
+
+
+OPAQUE_ARITHMETIC_LOOP = """
+id: opaque-arithmetic-loop
+name: opaque_arithmetic_loop
+input:
+  initial_n: int
+defs:
+  bump:
+    input:
+      n: int
+      exited: bool
+    nodes: {}
+    output:
+      n: ${input.n + 1}
+      exited: ${input.exited}
+nodes:
+  loop:
+    kind: loop
+    call: bump
+    input:
+      n: ${input.initial_n}
+      exited: false
+    times: 1
+output: ${loop.output}
+"""
+
+
+def test_loop_keeps_declared_record_shape_when_one_field_type_is_opaque():
+    """Unknown computation stays lenient without becoming an actual None field."""
+    loaded = load_flow(OPAQUE_ARITHMETIC_LOOP)
+
+    loop = loaded.compiled.nodes["loop"]
+    assert type(loop.output_contract) is PartialRecordContract
+    assert loop.output_contract.names == ("n", "exited")
+    assert loop.output_contract.fields[0] == ("n", None)
+    assert loop.output_contract.fields[1][1] is not None
+    assert loop.respawn(1).output_contract is loop.output_contract
+    assert not hasattr(loop, "output_field_contracts")
+
+    result = run_flow(loaded, {"initial_n": 1})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 2, "exited": False}
+
+
+OPAQUE_TURN_ZERO_LOOP = """
+id: opaque-turn-zero
+name: opaque_turn_zero
+input:
+  initial_n: str
+defs:
+  body:
+    input:
+      n: int
+      note: str
+    nodes: {}
+    output:
+      n: ${input.n}
+      note: ${input.note + "!"}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    input:
+      n: ${input.initial_n + ""}
+      note: seed
+    while: "false"
+    max: 1
+output: ${loop.output}
+"""
+
+
+def test_partial_loop_contract_rejects_invalid_turn_zero_seed():
+    """Known body fields remain enforced when an opaque sibling hides the aggregate."""
+    result = run_flow(load_flow(OPAQUE_TURN_ZERO_LOOP), {"initial_n": "not-an-int"})
+
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert "int" in result.failure.message
+
+
+NESTED_OPAQUE_TURN_ZERO_LOOP = """
+id: nested-opaque-turn-zero
+name: nested_opaque_turn_zero
+input:
+  initial_n: str
+defs:
+  inner_body:
+    input:
+      n: int
+      note: str
+    nodes: {}
+    output:
+      n: ${input.n}
+      note: ${input.note + "!"}
+  outer_body:
+    input:
+      n: int
+      note: str
+    nodes:
+      inner:
+        kind: loop
+        call: inner_body
+        input:
+          n: ${input.n}
+          note: ${input.note}
+        while: "false"
+        max: 1
+    output:
+      n: ${inner.output.n}
+      note: ${inner.output.note}
+nodes:
+  outer:
+    kind: loop
+    call: outer_body
+    input:
+      n: ${input.initial_n + ""}
+      note: seed
+    while: "false"
+    max: 1
+output: ${outer.output}
+"""
+
+
+def test_partial_loop_contract_survives_nested_child_projection():
+    """A nested LOOP cannot drop a proven sibling before turn-zero validation."""
+    loaded = load_flow(NESTED_OPAQUE_TURN_ZERO_LOOP)
+
+    outer = loaded.compiled.nodes["outer"]
+    assert type(outer.output_contract) is PartialRecordContract
+    assert outer.output_contract.fields[0][0] == "n"
+    assert outer.output_contract.fields[0][1] is not None
+
+    result = run_flow(loaded, {"initial_n": "not-an-int"})
+
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert "int" in result.failure.message
+
+
+PASSTHROUGH_OPAQUE_TURN_ZERO_LOOP = """
+id: passthrough-opaque-turn-zero
+name: passthrough_opaque_turn_zero
+input:
+  initial_n: str
+defs:
+  inner_body:
+    input:
+      n: int
+      note: str
+    nodes: {}
+    output:
+      n: ${input.n}
+      note: ${input.note + "!"}
+  middle:
+    input:
+      n: int
+      note: str
+    nodes:
+      inner:
+        kind: loop
+        call: inner_body
+        input:
+          n: ${input.n}
+          note: ${input.note}
+        while: "false"
+        max: 1
+    output: ${inner.output}
+  outer_body:
+    input:
+      n: int
+      note: str
+    nodes:
+      middle_call:
+        kind: call
+        call: middle
+        input:
+          n: ${input.n}
+          note: ${input.note}
+    output:
+      n: ${middle_call.output.n}
+      note: ${middle_call.output.note}
+nodes:
+  outer:
+    kind: loop
+    call: outer_body
+    input:
+      n: ${input.initial_n + ""}
+      note: seed
+    while: "false"
+    max: 1
+output: ${outer.output}
+"""
+
+
+def test_partial_loop_contract_survives_transparent_call_passthrough():
+    """Whole-value child and CALL boundaries preserve the partial contract arm."""
+    loaded = load_flow(PASSTHROUGH_OPAQUE_TURN_ZERO_LOOP)
+
+    outer = loaded.compiled.nodes["outer"]
+    assert type(outer.output_contract) is PartialRecordContract
+    assert outer.output_contract.fields[0][1] is not None
+
+    result = run_flow(loaded, {"initial_n": "not-an-int"})
+
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert "int" in result.failure.message
 
 
 # A loop that is NOT the terminal node: its committed record feeds a downstream code node.

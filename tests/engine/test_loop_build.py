@@ -54,6 +54,42 @@ output: ${chat_loop.output}
 """
 
 
+PARTIAL_OUTPUT_REFERENCE = """
+id: loop-partial-reference
+name: loop_partial_reference
+defs:
+  body:
+    input:
+      n: int
+      note: str
+    nodes: {}
+    output:
+      n: ${input.n}
+      note: ${input.note + "!"}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    input:
+      n: 1
+      note: seed
+    times: 1
+  sink:
+    kind: code
+    code: tests.engine._compose_codefns:echo_x
+    input:
+      x: ${loop.output.missing}
+    output: str
+output: ${sink.output}
+"""
+
+
+def test_partial_loop_contract_rejects_unknown_downstream_field_at_load():
+    """The closed partial name set participates in graph reference validation."""
+    with pytest.raises(LoadError, match="unknown field 'missing'"):
+        load_flow(PARTIAL_OUTPUT_REFERENCE)
+
+
 # The body output OMITS `exited`, so its output field NAMES ({n}) != the carried keys
 # ({n, exited}) -> caught in build_loop_node (the field-name-set half).
 BAD_FIELDSET = """
@@ -122,6 +158,60 @@ nodes:
       exited: false
     while: not ${exited}
     max: 5
+output: ${chat_loop.output}
+"""
+
+
+# One opaque body field must not erase the independently proven type of a sibling.
+# `note + "!"` is deliberately outside static inference, while direct `input.note`
+# proves that the body returns `str` for carried `n` (which is seeded as `int`).
+PARTIAL_OPAQUE_BAD_TYPES = """
+id: loop-partial-opaque-bad-types
+name: loop_partial_opaque_bad_types
+input:
+  n0: int
+  note0: str
+defs:
+  bump:
+    input:
+      n: int
+      note: str
+    nodes: {}
+    output:
+      n: ${input.note}
+      note: ${input.note + "!"}
+nodes:
+  chat_loop:
+    kind: loop
+    call: bump
+    input:
+      n: ${input.n0}
+      note: ${input.note0}
+    times: 1
+output: ${chat_loop.output}
+"""
+
+
+NULLABLE_SEED_LOOP = """
+id: loop-nullable-seed
+name: loop_nullable_seed
+defs:
+  keep:
+    input:
+      maybe: Optional[str]
+      done: bool
+    nodes: {}
+    output:
+      maybe: ${input.maybe}
+      done: ${input.done}
+nodes:
+  chat_loop:
+    kind: loop
+    call: keep
+    input:
+      maybe: ${null}
+      done: false
+    times: 1
 output: ${chat_loop.output}
 """
 
@@ -205,6 +295,21 @@ def test_body_output_types_must_equal_carried():
     # pin the failure to the TYPE pass (check_loop_type_contract), not any LoadError.
     assert "carried field" in str(e.value)
     assert e.value.diagnostic.frames[-1].range.start_line is not None
+
+
+def test_opaque_body_field_does_not_erase_proven_sibling_type_mismatch():
+    """Unknown evidence is field-local during LOOP's compile-time type check."""
+    with pytest.raises(LoadError, match="carried field 'n'"):
+        load_flow(PARTIAL_OPAQUE_BAD_TYPES)
+
+
+def test_loop_accepts_proven_null_for_nullable_carried_field():
+    """A None seed is admissible to the body's nullable field contract."""
+    loaded = load_flow(NULLABLE_SEED_LOOP)
+
+    maybe = loaded.compiled.nodes["chat_loop"].output_contract.type.fields["maybe"]
+    assert maybe.kind is ValueKind.STRING
+    assert maybe.nullable is True
 
 
 def test_multi_segment_template_output_types_as_str():

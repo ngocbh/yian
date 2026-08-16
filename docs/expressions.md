@@ -94,12 +94,20 @@ expression). `$$` escapes a literal `$`. Evaluation then follows one rule:
 - a span **embedded** in surrounding text is **stringified** into it;
 - text with no span is a plain literal.
 
-Compile-time output typing mirrors this: a lone direct-reference span is an exact typed
-passthrough (including provenance); a statically proven computed span gets its result type
+Compile-time output typing mirrors this: a lone direct-reference span preserves the
+producer's exact or partial contract (including provenance), and a known field selected
+from a partial record is an exact typed passthrough. A statically proven computed span gets its result type
 (`==`, membership, and `not`/`and`/`or` produce `bool`); and a concatenating template
 (text around spans, or 2+ spans) is always `str`. Unsupported computed expressions remain
-untyped, never the type of one reference leaf. This lets a loop body compute a carried
-boolean directly, for example `exited: ${ask.output == "/exit"}`.
+untyped, never the type of one reference leaf. Compose retains each declared output's
+optional field-local contract, deriving names from that one representation. An opaque
+field is therefore not misrepresented as actual `None`, MAP can tell an opaque result
+from a missing declaration, and LOOP enforces every proven sibling at load when its seed
+source is also statically proven, then unconditionally at commit and replay even when
+another field remains opaque. A proven `${null}` source fits a nullable
+sink, including recursively inside lists, matching runtime coercion. This lets a loop body
+compute a carried boolean directly, for example
+`exited: ${ask.output == "/exit"}`.
 
 A **prompt** is the strict context: it reads only the node's own declared inputs (bare
 `${name}`), renders in `STRICT_RAISE` mode, and may call a builtin.

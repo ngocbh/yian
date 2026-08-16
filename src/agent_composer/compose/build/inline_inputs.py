@@ -6,8 +6,8 @@ Compose source proves structurally; it never falls back to the runtime value
 builder's lenient ``Any`` behavior. Top-level strings retain binding-template
 semantics, while strings nested in literal containers remain ordinary strings.
 
-Knows about: ``expr`` template syntax, the node-owned semantic binding carrier,
-``typesys`` structural types, and Compose source ranges/errors.
+Knows about: ``expr`` template syntax, node-owned semantic binding/output-contract
+carriers, ``typesys`` structural types, and Compose source ranges/errors.
 Never imports: ``compose.loader``, ``compile``, ``runtime``, or node kinds.
 """
 
@@ -20,16 +20,25 @@ from typing import Any
 from lark import Token, Tree
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
+from agent_composer.compose.helpers.output_contracts import (
+    output_contract_path_error,
+    project_output_contract,
+)
 from agent_composer.diagnostics import SourceRange
 from agent_composer.expr.expressions import ExpressionError
 from agent_composer.expr.template import Span, scan_template
-from agent_composer.nodes.contracts import binding_source
+from agent_composer.nodes.contracts import (
+    OutputContract,
+    PartialRecordContract,
+    ValueContract,
+    binding_source,
+)
 from agent_composer.typesys.values import Type, ValueKind
 
 
 _EXPLICIT_TYPE_HINT = "use an explicitly typed named `defs:` body"
 
-ProducerType = Callable[[str, str, SourceRange | None], Type]
+ProducerType = Callable[[str, str, SourceRange | None], Type | OutputContract]
 ItemType = Callable[[str, SourceRange | None], Type]
 
 _SCALAR_TOKEN_KINDS: dict[str, ValueKind] = {
@@ -83,8 +92,9 @@ def infer_inline_binding_type(
         parent_input_types (`Mapping[str, Type]`):
             Parent flow input declarations available through ``${input.<name>}``.
         producer_type (`ProducerType`):
-            Resolves a node id to its output type. Receives the requesting
-            binding label/range so lazy-build failures retain their source site.
+            Resolves a node id to its output type or canonical output contract.
+            Receives the requesting binding label/range so lazy-build failures
+            retain their source site.
         item_type (`ItemType | None`, *optional*, defaults to `None`):
             Lazily supplies a MAP element type for a direct ``${item...}`` read.
             ``None`` rejects item references outside an outer MAP input.
@@ -398,6 +408,26 @@ def _infer_direct_reference(
             )
         root = producer_type(head, binding_label, binding_range)
         fields = parts[2:]
+
+        if type(root) in (ValueContract, PartialRecordContract):
+            path_error = output_contract_path_error(root, list(fields), path)
+            if path_error is not None:
+                raise _inference_error(
+                    binding_label,
+                    binding_range,
+                    path_error,
+                    diagnostics,
+                )
+            projected = project_output_contract(root, list(fields))
+            if type(projected) is not ValueContract:
+                raise _inference_error(
+                    binding_label,
+                    binding_range,
+                    f"reference ${{{path}}} has no statically proven exact type",
+                    diagnostics,
+                )
+            root = projected.type
+            fields = ()
 
     proven_root = require_proven_type(
         root,

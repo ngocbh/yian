@@ -37,7 +37,8 @@ Hold this model whenever you design anything:
 - Computation is **pure at the boundary**: a node *returns* outputs, the engine
   *binds* them under `(node_id, key)` like `let`-bindings — never a mutation.
 - Source-neutral semantic operations live in `nodes/contracts.py`: `Binding`,
-  `Parameter`, `Assertion`, and `ValueContract` carry optional opaque origins;
+  `Parameter`, `Assertion`, `ValueContract`, and `PartialRecordContract` carry
+  optional opaque origins;
   `iter_origins()` and `map_origins()` touch only declared provenance slots, and
   `typesys.Type` remains provenance-free while arbitrary payloads stay opaque.
 - Nodes own local origin enumeration/rewrite and expose static children through
@@ -183,11 +184,15 @@ Hold this model whenever you design anything:
   `Parameter.contract.origins.at(TypeCheckError.path)` before the parameter
   fallback; default failures keep default-site ownership. Never add a parallel
   source map.
-- Compiled `Node.output_contract` has one shape: an exact `ValueContract`, or
-  `None` for an unenforced output. Runtime and node behavior project `.type`, while
-  manifests exclude `.origins`. Compose descriptors, child signatures, producer
+- Compiled `Node.output_contract` is one closed sum: an exact `ValueContract`, a
+  closed `PartialRecordContract` with optional field contracts, or `None` for an
+  unenforced output. Runtime success and replay enforce the same sum; behavior that
+  needs a whole semantic type uses only the exact arm. Manifests exclude origins. Compose
+  descriptors, child signatures, producer
   maps, and validators retain the contract and project `.type` only inside type
-  algorithms. Python-authored nodes pass `output_contract=`; there is no parallel
+  algorithms. Compose and runtime growth reference validation share the source-neutral
+  closed-field walk from `nodes/contracts.py`. Python-authored nodes pass
+  `output_contract=`; there is no parallel
   output-Type API. Authored `output:` syntax (the descriptor's normalized `outputs` field)
   stays unchanged. Compose injects an optional source-aware reader through `BuildContext`;
   `NodeDescriptor.output_contract()` invokes it
@@ -204,7 +209,14 @@ Hold this model whenever you design anything:
   Compose's `helpers/output_contracts.py` alone adds template shape, reference
   projection, and provenance. Unsupported computed outputs remain opaque instead
   of inheriting a reference leaf's type; inline-composite input inference stays
-  strict and separate.
+  strict and separate, but may project an exact known field from a partial producer.
+  Direct whole references and `ChildSignature.output` preserve either output-contract
+  arm. Multi-output assembly creates an exact record when possible and otherwise a
+  closed `PartialRecordContract`; unknown type evidence is never concrete `None`.
+  CALL/LOOP preserve that carrier, while MAP wraps only an exact child type. Live commit,
+  replay, validators, and manifests therefore share one authority. A `None` source is
+  compatible with any nullable sink, including recursively inside lists, matching
+  runtime coercion.
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
   it does not rewrite the graph at runtime.
 

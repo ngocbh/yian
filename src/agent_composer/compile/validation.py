@@ -75,11 +75,11 @@ def _reject_cycles(edges: "list", node_ids: set[str]) -> None:
 def types_compatible(source: Type, sink: Type) -> bool:
     """Return structural compatibility of a source value type with a sink slot.
 
-    Same `kind` (with int->number widening, mirroring `_coerce_scalar`); records
-    match structurally (every field the sink REQUIRES is present + compatible); enums by
-    tag-subset (source tags within the sink's accepted tags); list elements recurse,
-    treating a bare specialized list as its non-null scalar element contract; a nullable
-    source cannot fill a non-nullable sink.
+    Same `kind` (with int->number widening, mirroring `_coerce_scalar`); the singleton
+    `None` source may fill any nullable sink; records match structurally (every field the
+    sink REQUIRES is present + compatible); enums by tag-subset (source tags within the
+    sink's accepted tags); list elements recurse, treating a bare specialized list as its
+    non-null scalar element contract; a nullable source cannot fill a non-nullable sink.
 
     Args:
         source (`Type`): Type guaranteed by the producer.
@@ -88,22 +88,29 @@ def types_compatible(source: Type, sink: Type) -> bool:
     Returns:
         `bool`: Whether every value admitted by ``source`` is admitted by ``sink``.
     """
+    if source.kind is ValueKind.NONE:
+        return sink.kind is ValueKind.NONE or sink.nullable
     if source.nullable and not sink.nullable:
         return False
-    if source.kind != sink.kind:
-        if not (sink.kind == ValueKind.NUMBER and source.kind == ValueKind.INTEGER):
+    source_is_list = source.kind.is_list()
+    sink_is_list = sink.kind.is_list()
+    if source_is_list or sink_is_list:
+        if not (source_is_list and sink_is_list):
             return False
-    if sink.kind.is_list():
         source_element = source.element
         if source_element is None and source.kind.element_kind is not None:
             source_element = Type.scalar(source.kind.element_kind)
         sink_element = sink.element
         if sink_element is None and sink.kind.element_kind is not None:
             sink_element = Type.scalar(sink.kind.element_kind)
-        if sink_element is not None and (
-            source_element is None
-            or not types_compatible(source_element, sink_element)
-        ):
+        if sink_element is None:
+            return True
+        return source_element is not None and types_compatible(
+            source_element,
+            sink_element,
+        )
+    if source.kind != sink.kind:
+        if not (sink.kind == ValueKind.NUMBER and source.kind == ValueKind.INTEGER):
             return False
     if sink.fields is not None:
         if source.fields is None:

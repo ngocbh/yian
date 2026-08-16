@@ -1472,6 +1472,54 @@ output: ${wrapper.output}
         assert result.output == expected
 
 
+def test_inline_input_inference_projects_known_partial_loop_field():
+    """An opaque LOOP sibling does not hide a known field from an inline child."""
+    loaded = load_flow(
+        """id: inline-partial-producer-field
+name: inline_partial_producer_field
+defs:
+  body:
+    input:
+      n: int
+      note: str
+    nodes: {}
+    output:
+      n: ${input.n}
+      note: ${input.note + "!"}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    input:
+      n: 7
+      note: seed
+    times: 1
+  wrapper:
+    kind: call
+    input:
+      value: ${loop.output.n}
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.value}
+        output: int
+    output: ${echo.output}
+output: ${wrapper.output}
+"""
+    )
+
+    wrapper = loaded.compiled.nodes["wrapper"]
+    assert wrapper.child_inputs == [
+        _parameter("value", Type.scalar(ValueKind.INTEGER))
+    ]
+
+    result = run_flow(loaded, {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == 7
+
+
 def test_inline_multinode_body_matches_named_def_signature_and_runtime():
     loaded = load_flow(
         """id: inline-named-equivalence

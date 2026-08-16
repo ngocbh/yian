@@ -35,7 +35,16 @@ from agent_composer.events import (
 )
 from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.nodes.base import Grow, Node
-from agent_composer.nodes.contracts import Parameter, ValueContract, binding_source
+from agent_composer.nodes.contracts import (
+    OutputContract,
+    Parameter,
+    PartialRecordContract,
+    binding_source,
+    missing_output_contract_field,
+    output_contract_origin,
+    output_contract_type,
+    validate_output_contract,
+)
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
     NodeExpandedRecord,
@@ -75,19 +84,19 @@ GrowBuilder = Callable[[Node, Any], Flow]
 
 
 def _node_output_type(node: Node) -> Type | None:
-    """Project one node's semantic output type from its exact canonical contract."""
-    contract = node.output_contract
-    if contract is None:
-        return None
-    if type(contract) is not ValueContract:
-        raise TypeError(
-            "node output_contract must be an exact ValueContract or None, "
-            f"got {type(contract).__name__}"
-        )
-    if not isinstance(contract.type, Type):
-        raise TypeError("node output contract type must be a Type")
-    contract.type.validate_shape()
-    return contract.type
+    """Project a whole-value type while validating the closed contract sum."""
+    return output_contract_type(node.output_contract)
+
+
+def _canonical_output_value(
+    output: Any,
+    contract: OutputContract | None,
+    declared_type: Type | None,
+) -> tuple[dict[str, Any], TypedValue]:
+    """Canonicalize live or replayed output through the same contract path."""
+    if type(contract) is PartialRecordContract:
+        validate_output_contract(contract, output)
+    return canonical_typed(output, declared_type)
 
 
 class _NodeDataError(Exception):
@@ -759,16 +768,16 @@ def prepare_node_succeeded(
     target_node = state.flow.nodes[target]
     declared_type = _node_output_type(target_node)
     output_contract = target_node.output_contract
-    output_origin = (
-        output_contract.origins.default
-        if output_contract is not None
-        else None
-    )
+    output_origin = output_contract_origin(output_contract, ())
     try:
-        value_wire, typed = canonical_typed(output, declared_type)
+        value_wire, typed = _canonical_output_value(
+            output,
+            output_contract,
+            declared_type,
+        )
     except (TypeError, ValueError) as exc:
-        if isinstance(exc, TypeCheckError) and output_contract is not None:
-            output_origin = output_contract.origins.at(exc.path)
+        if isinstance(exc, TypeCheckError):
+            output_origin = output_contract_origin(output_contract, exc.path)
         _raise_node_data(exc, origin=output_origin)
     return _prepare_success_transition(
         state,
@@ -2166,15 +2175,16 @@ def _validate_growth_fragment(
         state.flow.edges,
         as_growth_rejection=False,
     )
-    static_producer_types = {
-        node_id: _node_output_type(node)
-        for node_id, node in state.flow.nodes.items()
-        if node.output_contract is not None
-    }
+    static_producer_contracts: dict[str, OutputContract] = {}
+    for node_id, node in state.flow.nodes.items():
+        contract = node.output_contract
+        if contract is not None:
+            output_contract_type(contract)
+            static_producer_contracts[node_id] = contract
     return _validate_growth_fragment_data(
         state,
         fragment,
-        static_producer_types=static_producer_types,
+        static_producer_contracts=static_producer_contracts,
     )
 
 
@@ -2182,11 +2192,11 @@ def _validate_growth_fragment_data(
     state: RunState,
     fragment: Flow,
     *,
-    static_producer_types: dict[str, Type] | None = None,
+    static_producer_contracts: dict[str, OutputContract] | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Require a collision-free, self-contained, acyclic fragment.
 
-    ``static_producer_types`` is the already validated live-topology projection.
+    ``static_producer_contracts`` is the already validated live-topology map.
     When omitted, it is derived after the fragment's basic carrier checks; live
     contract invariant errors still remain outside ``GrowthRejected``.
     """
@@ -2251,35 +2261,25 @@ def _validate_growth_fragment_data(
     combined_nodes = dict(state.flow.nodes)
     combined_nodes.update(fragment.nodes)
     combined_node_ids = set(combined_nodes)
-    if static_producer_types is None:
-        static_producer_types = {
-            node_id: _node_output_type(node)
-            for node_id, node in state.flow.nodes.items()
-            if node.output_contract is not None
-        }
-    fragment_producer_types: dict[str, Type | None] = {}
+    if static_producer_contracts is None:
+        static_producer_contracts = {}
+        for node_id, node in state.flow.nodes.items():
+            contract = node.output_contract
+            if contract is not None:
+                output_contract_type(contract)
+                static_producer_contracts[node_id] = contract
+    fragment_producer_contracts: dict[str, OutputContract] = {}
     for node_id, node in fragment.nodes.items():
         contract = node.output_contract
         if contract is None:
             continue
-        if type(contract) is not ValueContract:
-            _raise_growth_rejected(
-                TypeError(
-                    "node output_contract must be an exact ValueContract or None, "
-                    f"got {type(contract).__name__}"
-                )
-            )
-        if not isinstance(contract.type, Type):
-            _raise_growth_rejected(
-                TypeError("node output contract type must be a Type")
-            )
         try:
-            contract.type.validate_shape()
+            output_contract_type(contract)
         except (TypeError, ValueError) as exc:
             _raise_growth_rejected(exc)
-        fragment_producer_types[node_id] = contract.type
-    producer_types = dict(static_producer_types)
-    producer_types.update(fragment_producer_types)
+        fragment_producer_contracts[node_id] = contract
+    producer_contracts = dict(static_producer_contracts)
+    producer_contracts.update(fragment_producer_contracts)
     for node_id, node in fragment.nodes.items():
         for attribute in ("commit_as", "origin_id"):
             target = getattr(node, attribute)
@@ -2379,7 +2379,7 @@ def _validate_growth_fragment_data(
             node,
             wiring,
             combined_node_ids,
-            producer_types,
+            producer_contracts,
             reserved,
         )
 
@@ -2482,7 +2482,7 @@ def _validate_growth_wiring_refs(
     node: Node,
     wiring: dict[str, Any],
     combined_node_ids: set[str],
-    producer_types: dict[str, Any],
+    producer_contracts: dict[str, OutputContract],
     reserved: set[str],
 ) -> None:
     """Apply closed reference rules to raw or carrier-wrapped fragment wiring."""
@@ -2508,8 +2508,22 @@ def _validate_growth_wiring_refs(
                 combined_node_ids,
                 set(),
                 extra_heads,
-                producer_types,
             )
+            parts = path.split(".")
+            if (
+                error is None
+                and len(parts) >= 2
+                and parts[1] == "output"
+                and parts[0] in producer_contracts
+            ):
+                missing = missing_output_contract_field(
+                    producer_contracts[parts[0]], parts[2:]
+                )
+                if missing is not None:
+                    error = (
+                        f"reference ${{{path}}} reads unknown field {missing!r} "
+                        "on record"
+                    )
             if error is not None:
                 _raise_growth_rejected(
                     ValueError(
@@ -2816,9 +2830,12 @@ def _validate_success_value(
         typed = ANY_VALUE_ADAPTER.validate_python(record.value, strict=True)
     except ValueError as exc:
         raise ValueError("NodeSucceededRecord value is not a typed value") from exc
-    wire, decoded = canonical_typed(
+    target_node = state.flow.nodes[record.commit_target]
+    contract = target_node.output_contract
+    wire, decoded = _canonical_output_value(
         typed,
-        _node_output_type(state.flow.nodes[record.commit_target]),
+        contract,
+        _node_output_type(target_node),
     )
     if wire != record.value:
         raise ValueError("NodeSucceededRecord value is not canonical for its target")

@@ -506,22 +506,31 @@ remain origin-free. This is only the flow-output binding rule: their physical to
 output-contract provenance.
 
 `Node.output_contract` is the sole stored output declaration: an exact
-`ValueContract`, or `None` for an unenforced output. Runtime success/replay
-validation and structured agent generation read `output_contract.type`; growth
-clones retain the carrier so its origins survive lexical rewrites. Manifests encode
-the semantic type but deliberately omit `ContractOrigins`, keeping provenance
-changes identity-neutral. Live output validation resolves a `TypeCheckError.path`
-through the effective commit target's contract; non-type canonicalization uses
-the contract default. The structural path is consumed before `Failure` and never
-enters the durable record schema.
+`ValueContract`, a closed `PartialRecordContract`, or `None` for an unenforced output.
+The partial arm lists every record field and attaches a `ValueContract` only where a
+type is proven. Runtime success and replay validate the effective commit target through
+the same sum; structured agent generation reads `.type` only from the exact arm. Growth
+clones retain the carrier so its origins survive lexical rewrites. Manifests encode exact
+or partial semantics but deliberately omit `ContractOrigins`, keeping provenance changes
+identity-neutral. Live output validation resolves a `TypeCheckError.path` through the
+whole or field-local contract. The structural path is consumed before `Failure` and
+never enters the durable record schema.
+Compose and runtime growth reference validation both call the source-neutral closed-field
+walk in `nodes/contracts.py`; exact nested records and partial root name sets therefore
+reject the same provably absent paths without importing Compose into runtime.
 
-Compose output derivation, builders, producer maps, and `ChildSignature.output`
-retain exact `ValueContract` carriers. Reference, assert, CASE, CALL, and LOOP
-algorithms project `.type` only at the point where a semantic type is required.
-Whole direct references preserve contract identity; nested references rebase their
-origin paths. Python-authored nodes pass `output_contract=`; there is no
-parallel output-Type compatibility API. The authored singular `output:` YAML
-surface is unchanged; descriptors normalize it to their internal `outputs` field.
+Compose output derivation, builders, child signatures, and producer maps retain the
+complete output-contract sum. `ChildSignature.declared_outputs` retains ordered
+`(name, optional OutputContract)` evidence and derives `output_names`; its `output`
+follows terminal arity and is exact or partial. Multi-output assembly creates a closed
+`PartialRecordContract` whenever an exact aggregate is unavailable, retaining every
+exact sibling. Reference, assert, CASE, CALL, and LOOP algorithms project an exact
+type only where one is required and use the partial arm's closed name set otherwise.
+Whole direct references preserve contract identity; nested references rebase exact
+field origins. Python-authored nodes pass
+`output_contract=`; there is no parallel output-Type compatibility API. The authored
+singular `output:` YAML surface is unchanged; descriptors normalize it to their
+internal `outputs` field.
 
 Compose assembly owns an optional `BuildContext.output_contract_reader` with the
 `(node_id, output_spec) -> ValueContract | None` contract. An authored-output leaf still
@@ -753,10 +762,16 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
 (a `when:` → falsy), `STRICT_RAISE` (a prompt → raise; no silent blank).
 
 Compose's `helpers/output_contracts.py` owns the template and provenance envelope:
-direct refs retain exact `ValueContract`s, proven computed results are source-free,
-and unsupported computations stay opaque. Validation imports this lower helper,
-not the child resolver. Strict inline-composite input inference remains a separate
-surface and does not accept computed whole-value expressions.
+direct refs retain exact or partial contracts, known partial fields remain projectable,
+proven computed results are source-free, and unsupported computations stay opaque.
+Validation imports this lower helper, not the child resolver. Strict inline-composite
+input inference remains a separate surface and does not accept computed whole-value
+expressions, whole partial records, or opaque partial fields. `ChildSignature` retains
+each declared terminal's optional contract and derives its names, so opaque output is
+distinct from no output and never concrete `None`. Its exact-or-partial codomain is
+preserved by CALL/LOOP and enforced in live execution and replay. The shared type
+compatibility relation admits the singleton `None` source to nullable sinks,
+including recursively inside lists.
 
 **`call(...)` desugar — a flow call is NOT an expression.** A child-flow call is a
 compile-time directive recognized at TWO sites, by ONE whole-value rule (only the

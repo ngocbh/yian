@@ -17,6 +17,7 @@ from agent_composer.nodes.contracts import (
     Assertion,
     ContractOrigins,
     Parameter,
+    PartialRecordContract,
     ValueContract,
 )
 from agent_composer.run import run_flow
@@ -95,6 +96,26 @@ def test_node_assert_field_walk_uses_the_canonical_output_contract():
     ]
     assert node.output_contract.type is contract_type
     assert node.output_contract.origins is origins
+
+
+def test_node_assert_rejects_unknown_field_on_partial_output_contract():
+    """Node-local asserts use the partial contract's closed root field set."""
+    node = Node(
+        "x",
+        output_contract=PartialRecordContract(
+            fields=(
+                ("score", ValueContract(Type.scalar(ValueKind.NUMBER))),
+                ("note", None),
+            )
+        ),
+    )
+    descriptor = SimpleNamespace(
+        asserts=["${output.missing} >= 0"],
+        assert_ranges=[],
+    )
+
+    with pytest.raises(LoadError, match="unknown field 'missing'"):
+        validate_node_asserts({"x": node}, {"x": descriptor})
 
 
 @pytest.mark.parametrize("pre", ["n >= 0", "${n} >= 0", "${n >= 0}"])

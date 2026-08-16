@@ -9,18 +9,24 @@ This lives in the validate phase (not in `CaseDescriptor.build`) because it need
 built. `.build()` lowers the case unconditionally; the loader runs `check_case_exhaustive` in
 the validate phase, alongside the other cross-node checks.
 
-Imports flow down/peer only: `expr` (ref scan), `nodes.contracts` (ValueContract),
-`typesys` (Type), `compile.validation` (`_walk_record_fields`, a representation-neutral leaf
-checker, imported locally inside the resolver to avoid coupling the walk twice), and the
-compose peers `helpers.errors`, `parse.file`. Nothing in the engine imports this back.
+Imports flow down/peer only: `expr` (ref scan), `nodes.contracts` (the output-contract
+sum), `typesys` (Type), and the compose peers `helpers.output_contracts`/`errors` and
+`parse.file`. Nothing in the engine imports this back.
 """
 
 from __future__ import annotations
 
 from typing import Optional
 
+from agent_composer.compose.helpers.output_contracts import (
+    resolve_output_binding_contract,
+)
 from agent_composer.expr import ExpressionError, expr_refs_of
-from agent_composer.nodes.contracts import ValueContract
+from agent_composer.nodes.contracts import (
+    OutputContract,
+    PartialRecordContract,
+    ValueContract,
+)
 from agent_composer.typesys.values import Type
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.parse.file import CaseDescriptor
@@ -28,7 +34,7 @@ from agent_composer.compose.parse.file import CaseDescriptor
 
 def check_case_exhaustive(
     descriptors,
-    producers: dict[str, ValueContract],
+    producers: dict[str, OutputContract],
     *,
     diagnostics: LoadDiagnostics | None = None,
 ):
@@ -36,14 +42,15 @@ def check_case_exhaustive(
     (range-stamped at the case node) on a non-exhaustive enum with no else:.
 
     `descriptors` is the flow's `{node_id -> NodeDescriptor}`; `producers` maps producer-node
-    id -> its exact `ValueContract` (whose semantic type drives the dotted-field walk).
-    The descriptor's own range is authoritative.
+    id -> its exact or partial output contract. A known field projected from either arm
+    can drive enum coverage. The descriptor's own range is authoritative.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     for producer_id, contract in producers.items():
-        if type(contract) is not ValueContract:
+        if type(contract) not in (ValueContract, PartialRecordContract):
             raise TypeError(
-                "output producer contracts must be exact ValueContract values, "
+                "output producer contracts must be ValueContract or "
+                "PartialRecordContract values, "
                 f"got {type(contract).__name__} for {producer_id!r}"
             )
     for desc in descriptors.values():
@@ -61,18 +68,15 @@ def _on_covered(desc: CaseDescriptor) -> set[str]:
 
 def _resolve_on_type(
     on_ref: str,
-    producers: dict[str, ValueContract],
+    producers: dict[str, OutputContract],
 ) -> Optional[Type]:
     """The `Type` an `on: ${<id>.output[.<field>…]}` ref resolves to, else None.
 
-    Projects the producing node's exact `ValueContract` to its semantic type at
-    the dotted-field algorithm boundary, then walks it field by field
-    (`_walk_record_fields`) into a record to reach the named field. A
-    non-node-first head / opaque producer / non-record step -> None (lenient: no
-    exhaustiveness check). Imported here to avoid coupling the walk logic twice.
+    Resolves the binding through the shared output-contract projector, so an exact
+    contract or a known field of a partial record can supply the enum Type. A
+    non-node-first head, opaque result, or non-record step returns ``None`` (lenient:
+    no exhaustiveness check).
     """
-    from agent_composer.compile.validation import _walk_record_fields
-
     try:
         refs = expr_refs_of(on_ref)
     except ExpressionError:
@@ -81,34 +85,16 @@ def _resolve_on_type(
         return None
     parts = refs[0].split(".")
     # Singular only: `<id>.output[.<field>…]`.
-    if len(parts) >= 2 and parts[1] == "output":
-        producer_id = parts[0]
-        fields = parts[2:]
-    else:
+    if len(parts) < 2 or parts[1] != "output":
         return None
-    contract = producers.get(producer_id)
-    if contract is None:
-        return None
-    if type(contract) is not ValueContract:
-        raise TypeError(
-            "output producer contracts must be exact ValueContract values, "
-            f"got {type(contract).__name__} for {producer_id!r}"
-        )
-    typ = contract.type
-    # Reuse the dotted-field walk only to FAIL on a bad dotted field; then re-walk to the Type.
-    if _walk_record_fields(typ, fields, refs[0]) is not None:
-        return None  # bad field -> the reference-wiring pass reports it; skip exhaustiveness
-    for f in fields:
-        if typ is None or typ.fields is None:
-            return None
-        typ = typ.fields.get(f)
-    return typ
+    contract = resolve_output_binding_contract(on_ref, producers, {})
+    return contract.type if type(contract) is ValueContract else None
 
 
 def _check_exhaustive(
     desc: CaseDescriptor,
     covered: set[str],
-    producers: dict[str, ValueContract],
+    producers: dict[str, OutputContract],
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Enum-exhaustiveness for the `on:` form.

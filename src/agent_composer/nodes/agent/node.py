@@ -16,6 +16,7 @@ from agent_composer.nodes.agent.modes import MODES, AgentRunContext
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
 from agent_composer.nodes.base import Node, NodeKind, Output
+from agent_composer.nodes.contracts import ValueContract
 
 DEFAULT_MODE = "plain"
 
@@ -71,9 +72,9 @@ class AgentNode(Node):
     def _ctx(self, prompt: str, *, stop_event=None) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
-            None
-            if self.output_contract is None
-            else self.output_contract.type
+            self.output_contract.type
+            if type(self.output_contract) is ValueContract
+            else None
         )
         return AgentRunContext(
             node_id=self.id,
@@ -93,7 +94,7 @@ class AgentNode(Node):
         authored provenance retain the common node-origin fallback.
         """
         contract = self.output_contract
-        if contract is None:
+        if type(contract) is not ValueContract:
             return super().exception_origin(exception)
         path = _structured_validation_path(exception, contract.type)
         if path is None:

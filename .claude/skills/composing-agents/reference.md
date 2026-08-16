@@ -57,9 +57,15 @@ reads a variable). A whole-string `${ref}` resolves to the **typed value**;
 embedded in surrounding text it is **stringified**. A child-flow call is the
 whole-value `call(...)` directive (below), never a `${flow(args)}` span.
 
-Child-flow output typing retains an exact direct-reference contract and proves
-comparisons, membership, and `not`/`and`/`or` as `bool`. Unsupported computed
-results stay unknown rather than inheriting one referenced operand's type.
+Child-flow output typing retains an exact or partial direct-reference contract, projects
+known partial-record fields exactly, and proves comparisons, membership, and
+`not`/`and`/`or` as `bool`. Unsupported computed
+results stay unknown rather than inheriting one referenced operand's type. Each
+declared output retains optional field-local evidence, so an opaque field is never
+encoded as actual `None`, MAP can distinguish an opaque result from no declaration,
+and LOOP still checks proven siblings. A `${null}` source may fill a nullable sink.
+For LOOP, those proven siblings and the complete field-name set remain enforced even
+when `while:` stops before the first body run or a durable run is replayed.
 
 ## The three expression contexts (one grammar)
 
@@ -245,12 +251,13 @@ is resident at a time. See `loop.yaml`.
 **Conversational REPL (LOOP + human_input).** A chat is a `loop` whose body blocks at
 `ask` (`human_input`), then a CASE routes exact `/exit` and `/quit` values to an exit
 record before `reply` (`agent`). The normal branch appends the message and reply to the
-transcript. Defaulted output bindings rejoin those branches into the carried 2-field
-record `{transcript: str, exited: bool}` (`'a -> 'a`). Typed exit is flow-owned; only
-terminal EOF is normalized by the bundled host. The loop body's `output:` must EQUAL the
-carried record. A lone multi-ref coalesce has no inferable type, so the template uses
-adjacent defaulted spans for the `str` field and a lone defaulted span for `bool`. This is
-the shape `ac chat` runs; see `chat.yaml` (and `examples/chat.yaml` for a runnable copy).
+transcript. Output bindings rejoin those branches into the carried 2-field record
+`{transcript: str, exited: bool}` (`'a -> 'a`). Typed exit is flow-owned; only terminal
+EOF is normalized by the bundled host. The loop body's `output:` must EQUAL the carried
+record. A lone multi-ref coalesce has no inferable type, so the template uses adjacent
+defaulted spans for the `str` field and compares the optional exit field with `true` to
+prove `bool`. This is the shape `ac chat` runs; see `chat.yaml` (and
+`examples/chat.yaml` for a runnable copy).
 
 ## Gotchas
 

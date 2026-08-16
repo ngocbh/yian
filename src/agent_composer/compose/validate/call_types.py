@@ -25,13 +25,18 @@ from agent_composer.compose.helpers.output_contracts import (
 from agent_composer.compose.nodes.base import BuildResult
 from agent_composer.diagnostics import SourceRange
 from agent_composer.expr import binding_co_skips
-from agent_composer.nodes.contracts import ValueContract, binding_source
+from agent_composer.nodes.contracts import (
+    OutputContract,
+    PartialRecordContract,
+    ValueContract,
+    binding_source,
+)
 from agent_composer.typesys import canonical_type_label
 
 
 def check_ref_map_types(
     build_results: dict[str, BuildResult],
-    producers: dict[str, ValueContract],
+    producers: dict[str, OutputContract],
     flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
     *,
@@ -54,9 +59,19 @@ def check_ref_map_types(
         ("flow input", flow_inputs),
     ):
         for name, contract in contracts.items():
-            if type(contract) is not ValueContract:
+            allowed = (
+                (ValueContract, PartialRecordContract)
+                if label == "output producer"
+                else (ValueContract,)
+            )
+            if type(contract) not in allowed:
+                required = (
+                    "ValueContract or PartialRecordContract"
+                    if label == "output producer"
+                    else "exact ValueContract"
+                )
                 raise TypeError(
-                    f"{label} contracts must be exact ValueContract values, "
+                    f"{label} contracts must be {required} values, "
                     f"got {type(contract).__name__} for {name!r}"
                 )
     for nid, result in build_results.items():
@@ -80,6 +95,13 @@ def check_ref_map_types(
             )
             if source_contract is None:
                 continue  # ${item}/coalesce/literal/opaque source -> lenient
+            if type(source_contract) is PartialRecordContract:
+                continue  # a whole partial record has no exact Type to compare
+            if type(source_contract) is not ValueContract:
+                raise TypeError(
+                    "resolved source contract must be ValueContract, "
+                    "PartialRecordContract, or None"
+                )
             source = source_contract.type
             # A nullable source is fine for a non-nullable child input ONLY when the
             # binding GUARANTEES a non-null value — a non-null literal escape or a `:?`

@@ -87,6 +87,40 @@ def test_map_runs_child_per_element_collecting_results():
     assert result.output == ["ACME", "BETA", "GOOG"]
 
 
+_OPAQUE_OUTPUT_MAP = """
+id: opaque-output-map
+name: opaque_output_map
+input:
+  values: list[int]
+defs:
+  increment:
+    input:
+      value: int
+    nodes: {}
+    output: ${input.value + 1}
+nodes:
+  each:
+    kind: map
+    call: increment
+    over: ${input.values}
+    input:
+      value: ${item}
+output: ${each.output}
+"""
+
+
+def test_map_distinguishes_declared_opaque_output_from_no_output():
+    """A declared but unproven child output maps without a false list contract."""
+    loaded = load_flow(_OPAQUE_OUTPUT_MAP)
+
+    assert loaded.compiled.nodes["each"].output_contract is None
+
+    result = run_flow(loaded, {"values": [1, 4]})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == [2, 5]
+
+
 def test_map_empty_over_yields_empty_list():
     flow = load_flow(_map_flow("echo-one", parallel=False),
                      child_resolver=_resolver(**{"echo-one": _ECHO_CHILD}))

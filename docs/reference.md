@@ -113,8 +113,11 @@ raised exception, not a node-result variant.
 These source-neutral frozen values give binding, parameter, assertion, and value
 contract provenance one canonical home. Origins are optional for Python-authored
 graphs. Compiled wiring, assertions, and node parameters use these carriers;
-`Node.output_contract` is canonical too. Compose output derivation crosses its
-temporary Type-valued compatibility view until the next #131 child.
+`Node.output_contract` is canonical too. Compose output derivation retains exact or
+partial carriers through `compose/helpers/output_contracts.py`; multi-output assembly
+uses `PartialRecordContract` when any field is opaque, retaining the exact key set and
+proven siblings through child signatures, CALL/LOOP, validation, runtime, replay,
+origins, and manifests.
 
 ::: agent_composer.nodes.contracts.Binding
 
@@ -123,6 +126,10 @@ temporary Type-valued compatibility view until the next #131 child.
 ::: agent_composer.nodes.contracts.Assertion
 
 ::: agent_composer.nodes.contracts.ValueContract
+
+::: agent_composer.nodes.contracts.PartialRecordContract
+
+::: agent_composer.nodes.contracts.OutputContract
 
 ::: agent_composer.nodes.contracts.ContractOrigins
 

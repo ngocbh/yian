@@ -237,7 +237,10 @@ output:
 
 def test_map_child_with_no_output_is_loud():
     child = load_flow(_CHILD_NO_OUTPUT)
-    assert child_signature(child).output is None  # no codomain -> MAP cannot form list[U]
+    signature = child_signature(child)
+    assert signature.output is None
+    assert signature.output_names == ()  # no declaration -> MAP cannot form list[U]
+    assert signature.declared_outputs == ()
 
     def resolver(flow_id, version=None):
         assert flow_id == "no-output"
@@ -246,6 +249,35 @@ def test_map_child_with_no_output_is_loud():
     with pytest.raises(LoadError) as exc:
         load_flow(_MAP_OVER_NO_OUTPUT, child_resolver=resolver)
     assert "exactly one" in str(exc.value) or "output" in str(exc.value).lower()
+
+
+_NULL_TO_NULLABLE_CALL = """
+id: null-to-nullable-call
+name: null_to_nullable_call
+defs:
+  echo:
+    input:
+      maybe: Optional[str]
+    nodes: {}
+    output: ${input.maybe}
+nodes:
+  invoke:
+    kind: call
+    call: echo
+    input:
+      maybe: ${null}
+output: ${invoke.output}
+"""
+
+
+def test_call_accepts_proven_null_for_nullable_child_input():
+    """Static binding compatibility mirrors runtime nullable coercion."""
+    loaded = load_flow(_NULL_TO_NULLABLE_CALL)
+
+    contract = loaded.compiled.nodes["invoke"].output_contract
+    assert contract is not None
+    assert contract.type.kind is ValueKind.STRING
+    assert contract.type.nullable is True
 
 
 # --------------------------------------------------------------------------- #

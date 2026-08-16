@@ -42,6 +42,21 @@ def test_exact_reference_uses_injected_dotted_path_type() -> None:
     assert paths == ["node#0.output.answer"]
 
 
+def test_wrapped_reference_uses_the_same_injected_type() -> None:
+    """The grammar's back-compat wrapped-ref token remains a typed reference."""
+    expected = Type.scalar(ValueKind.INTEGER)
+    paths: list[str] = []
+
+    def ref_type(path: str) -> Type | None:
+        paths.append(path)
+        return expected
+
+    inferred = infer_expr_type(parse_expr("${producer.output}"), ref_type)
+
+    assert inferred is expected
+    assert paths == ["producer.output"]
+
+
 def test_unknown_exact_reference_stays_unknown() -> None:
     assert infer_expr_type(parse_expr("missing.output"), lambda _path: None) is None
 
@@ -91,7 +106,6 @@ def test_boolean_result_roots_are_non_nullable_bool(source: str) -> None:
         "left :- right",
         'left :? "required"',
         "upper(value)",
-        "${value}",
     ],
 )
 def test_unsupported_expression_forms_stay_unknown(source: str) -> None:

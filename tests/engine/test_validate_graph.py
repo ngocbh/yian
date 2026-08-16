@@ -101,6 +101,29 @@ def test_list_element_compatibility_preserves_nullable_direction() -> None:
     assert types_compatible(nullable, strict) is False
 
 
+def test_none_source_is_compatible_exactly_with_none_or_nullable_sinks() -> None:
+    """Static compatibility mirrors runtime acceptance of the singleton None value."""
+    none = Type.scalar(ValueKind.NONE)
+    strict_string = Type.scalar(ValueKind.STRING)
+    nullable_string = Type(kind=ValueKind.STRING, nullable=True)
+
+    assert types_compatible(none, none) is True
+    assert types_compatible(none, nullable_string) is True
+    assert types_compatible(none, strict_string) is False
+
+    source_record = Type(
+        kind=ValueKind.OBJECT,
+        fields={"note": none},
+        required=frozenset({"note"}),
+    )
+    sink_record = Type(
+        kind=ValueKind.OBJECT,
+        fields={"note": nullable_string},
+        required=frozenset({"note"}),
+    )
+    assert types_compatible(source_record, sink_record) is True
+
+
 def test_bare_list_compatibility_uses_its_storage_element_contract() -> None:
     """Bare specialized lists stay strict while bare LIST_ANY stays unconstrained."""
     strict_element = Type.scalar(ValueKind.INTEGER)
@@ -122,6 +145,16 @@ def test_bare_list_compatibility_uses_its_storage_element_contract() -> None:
     assert types_compatible(nullable_integer, bare_integer) is False
     assert types_compatible(refined_any, bare_any) is True
     assert types_compatible(bare_any, refined_any) is False
+
+
+def test_list_element_compatibility_recurses_before_storage_kind_rejection() -> None:
+    """A list of None values may fill a list whose elements are nullable."""
+    none = Type.scalar(ValueKind.NONE)
+    nullable_string = Type(kind=ValueKind.STRING, nullable=True)
+    source = Type(kind=ValueKind.LIST_ANY, element=none)
+    sink = Type(kind=ValueKind.LIST_STRING, element=nullable_string)
+
+    assert types_compatible(source, sink) is True
 
 
 def test_case_seed_passes_cycle_check():

@@ -3,7 +3,7 @@
 A `call`/`map`/`loop` node names a CALLABLE (a `defs:` entry or an external flow). The child
 resolver is the load-time seam: `(flow_id, version) -> ComposedFlow` (the loader composes the
 defs-first resolution). From the resolved child the kind builder derives its `ChildSignature` —
-canonical parameters + single codomain `ValueContract` — to stamp the node's
+canonical parameters + the exact-or-partial codomain contract — to stamp a CALL/LOOP's
 `output_contract` and to
 name/arity- + type-check the bindings, AND bakes the child's compiled flow onto the node
 (resolve-and-bake — the call graph, incl. nested flows, is fixed at compile). The bake itself
@@ -27,22 +27,81 @@ from agent_composer.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
 from agent_composer.diagnostics import SourceRange
-from agent_composer.nodes.contracts import Parameter, ValueContract
+from agent_composer.nodes.contracts import (
+    OutputContract,
+    Parameter,
+    PartialRecordContract,
+    ValueContract,
+)
 
 
 @dataclass(frozen=True)
 class ChildSignature:
     """A child flow's compile-time signature: canonical parameters + the single
-    codomain `ValueContract` (the value the child returns; `None` when it declares
-    no outputs).
+    codomain `OutputContract` and its declared terminal outputs.
 
     `inputs` are the child's canonical `Parameter`s (the name/arity check reads
-    their names + required/default policy). `output` is the child's single value:
-    one declared output -> that output's contract; >=2 -> a closed-record contract
-    keyed by name (the same arity rule `terminal_output` assembles: one value out)."""
+    their names + required/default policy). `declared_outputs` retains one
+    `(name, optional contract)` pair per terminal declaration, so absent, opaque, and
+    proven results remain distinct without duplicating a names list. `output` is the
+    child's single codomain: one declared output re-exports that binding's exact or
+    partial contract; >=2 produces an exact or partial closed record keyed by name;
+    `None` means no output or no statically known shape. This follows the same arity
+    rule `terminal_output` assembles."""
 
     inputs: list[Parameter]
-    output: Optional[ValueContract]
+    output: OutputContract | None
+    declared_outputs: tuple[tuple[str, OutputContract | None], ...] = ()
+
+    def __post_init__(self) -> None:
+        """Reject contradictory declared-output evidence when callers provide it."""
+        if self.output is not None and type(self.output) not in (
+            ValueContract,
+            PartialRecordContract,
+        ):
+            raise TypeError(
+                "child output must be ValueContract, PartialRecordContract, or None, got "
+                f"{type(self.output).__name__}"
+            )
+        if type(self.declared_outputs) is not tuple:
+            raise TypeError("declared child outputs must be a tuple")
+        if not self.declared_outputs:
+            return  # preserves the legacy two-argument source-free constructor
+        names: set[str] = set()
+        for pair in self.declared_outputs:
+            if type(pair) is not tuple or len(pair) != 2:
+                raise TypeError(
+                    "declared child outputs must be (name, optional contract) tuples"
+                )
+            name, contract = pair
+            if type(name) is not str or not name:
+                raise TypeError("declared child output names must be non-empty strings")
+            if name in names:
+                raise ValueError(f"duplicate declared child output {name!r}")
+            names.add(name)
+            if contract is not None and type(contract) not in (
+                ValueContract,
+                PartialRecordContract,
+            ):
+                raise TypeError(
+                    "declared child output contracts must be ValueContract, "
+                    "PartialRecordContract, or None, got "
+                    f"{type(contract).__name__} for {name!r}"
+                )
+        expected = (
+            self.declared_outputs[0][1]
+            if len(self.declared_outputs) == 1
+            else combine_output_contracts(dict(self.declared_outputs))
+        )
+        if self.output != expected:
+            raise ValueError(
+                "child output contract contradicts its declared output evidence"
+            )
+
+    @property
+    def output_names(self) -> tuple[str, ...]:
+        """Return declared terminal names derived from the canonical output pairs."""
+        return tuple(name for name, _contract in self.declared_outputs)
 
 
 # resolver(flow_id, flow_version) -> ComposedFlow (the load-time child seam; duck-typed
@@ -56,39 +115,49 @@ def child_signature(loaded: Any) -> ChildSignature:
 
     Duck-typed on `loaded.input` (the canonical parameters) + `loaded.compiled`
     so `build` need not import `loader` (which imports `build`). The codomain contract
-    follows `terminal_output`'s arity rule over the flow outputs: one output -> its exact
-    value contract; >=2 -> a closed-record contract keyed by name (every output is a
-    field; an output whose value contract cannot be resolved is present but opaque)."""
-    producers: dict[str, ValueContract] = {
-        nid: node.output_contract
-        for nid, node in loaded.compiled.nodes.items()
-        if node.output_contract is not None
-    }
+    follows `terminal_output`'s arity rule over the flow outputs: one output re-exports
+    its exact or partial contract; >=2 produces an exact or partial closed record keyed
+    by name."""
+    producers: dict[str, OutputContract] = {}
+    for nid, node in loaded.compiled.nodes.items():
+        contract = node.output_contract
+        if contract is None:
+            continue
+        if type(contract) not in (ValueContract, PartialRecordContract):
+            raise TypeError(
+                "child output producer contracts must be ValueContract, "
+                "PartialRecordContract, or None values, "
+                f"got {type(contract).__name__} for {nid!r}"
+            )
+        producers[nid] = contract
     flow_inputs = {
         parameter.name: parameter.contract
         for parameter in loaded.input
         if parameter.contract is not None
     }
     outs = list(loaded.compiled.outputs)
-    if not outs:
-        output: Optional[ValueContract] = None
-    elif len(outs) == 1:
-        output = resolve_output_binding_contract(
-            outs[0].binding,
-            producers,
-            flow_inputs,
-        )
-    else:
-        fields = {
-            o.name: resolve_output_binding_contract(
-                o.binding,
+    declared_outputs = tuple(
+        (
+            declared.name,
+            resolve_output_binding_contract(
+                declared.binding,
                 producers,
                 flow_inputs,
-            )
-            for o in outs
-        }
-        output = combine_output_contracts(fields)
-    return ChildSignature(inputs=list(loaded.input), output=output)
+            ),
+        )
+        for declared in outs
+    )
+    if not declared_outputs:
+        output: OutputContract | None = None
+    elif len(declared_outputs) == 1:
+        output = declared_outputs[0][1]
+    else:
+        output = combine_output_contracts(dict(declared_outputs))
+    return ChildSignature(
+        inputs=list(loaded.input),
+        output=output,
+        declared_outputs=declared_outputs,
+    )
 
 
 def _callable_display(flow_id: str, child_label: str | None = None) -> str:

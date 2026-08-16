@@ -6,7 +6,8 @@
 #
 # The contract ('a -> 'a): the body's `output:` shape must EQUAL the carried record
 # (the loop `input:`), and the names the body reads must be a SUBSET of the carried
-# names. Field NAMES are checked at build, field TYPES at load.
+# names. Field NAMES are checked at build; statically proven body and seed TYPES
+# are compared at load, and proven output fields are enforced at runtime/replay.
 #
 # Customize: point `code:` at an importable `module:function` on your PYTHONPATH.
 #   def fold_turn(inputs: dict) -> dict:      # receives its bound input record

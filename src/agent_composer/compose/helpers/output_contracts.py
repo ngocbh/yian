@@ -2,9 +2,9 @@
 
 This module owns the Compose-specific envelope around the generic expression
 engine: template shape, reference-to-contract lookup, record-field projection,
-and provenance retention.  Direct references re-export their exact contract;
-computed expressions receive a source-free contract only when ``expr`` proves
-their result type.
+and provenance retention. Direct references re-export their exact or partial
+contract; computed expressions receive a source-free exact contract only when
+``expr`` proves their result type.
 
 Knows about: ``expr`` AST result inference, semantic binding/contract carriers,
 and source-neutral ``typesys`` values.
@@ -14,32 +14,63 @@ or runtime.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from agent_composer.expr import ExpressionError, infer_expr_type
 from agent_composer.expr.template import Span, scan_template, template_refs
 from agent_composer.nodes.contracts import (
     ContractOrigins,
+    OutputContract,
+    PartialRecordContract,
     ValueContract,
     binding_source,
+    missing_output_contract_field,
+    output_contract_type,
 )
 from agent_composer.typesys.values import Type, ValueKind
 
 
-def _project_output_contract(
-    contract: ValueContract,
+def project_output_contract(
+    contract: OutputContract,
     fields: list[str],
-) -> ValueContract | None:
-    """Project a nested record contract and rebase its origins to the field."""
+) -> OutputContract | None:
+    """Project a proven path from an exact or partial record output contract."""
+    if type(contract) is PartialRecordContract:
+        contract.validate_shape()
+        if not fields:
+            return contract
+        field_name, *remaining = fields
+        field_contracts = dict(contract.fields)
+        if field_name not in field_contracts:
+            return None
+        field_contract = field_contracts[field_name]
+        if field_contract is None:
+            return None
+        return project_output_contract(field_contract, remaining)
+    if type(contract) is not ValueContract:
+        raise TypeError(
+            "output contract must be an exact ValueContract or "
+            f"PartialRecordContract, got {type(contract).__name__}"
+        )
     if not fields:
         return contract
     typ = contract.type
+    path_nullable = typ.nullable
     for field in fields:
         if typ.fields is None:
             return None
-        typ = typ.fields.get(field)
-        if typ is None:
+        field_type = typ.fields.get(field)
+        if field_type is None:
             return None
+        path_nullable = (
+            path_nullable
+            or field not in (typ.required or frozenset())
+            or field_type.nullable
+        )
+        typ = field_type
+    if path_nullable and not typ.nullable:
+        typ = replace(typ, nullable=True)
     prefix = tuple(fields)
     entries = tuple(
         (path[len(prefix) :], origin)
@@ -57,40 +88,62 @@ def _project_output_contract(
 
 def _reference_contract(
     path: str,
-    producers: dict[str, ValueContract],
+    producers: dict[str, OutputContract],
     flow_inputs: dict[str, ValueContract],
-) -> ValueContract | None:
+) -> OutputContract | None:
     """Resolve one supported reference path to its exact or projected contract."""
     parts = path.split(".")
     head = parts[0]
-    if head == "input" and len(parts) == 2:
+    if head == "input" and len(parts) >= 2:
         contract = flow_inputs.get(parts[1])
         if contract is not None and type(contract) is not ValueContract:
             raise TypeError(
                 "flow input contracts must be exact ValueContract values, "
                 f"got {type(contract).__name__} for {parts[1]!r}"
             )
-        return contract
+        if contract is None:
+            return None
+        return project_output_contract(contract, parts[2:])
     if len(parts) < 2 or parts[1] != "output":
         return None
 
     producer_id = parts[0]
     contract = producers.get(producer_id)
-    if contract is not None and type(contract) is not ValueContract:
+    if contract is not None and type(contract) not in (
+        ValueContract,
+        PartialRecordContract,
+    ):
         raise TypeError(
-            "output producer contracts must be exact ValueContract values, "
+            "output producer contracts must be ValueContract or "
+            "PartialRecordContract values, "
             f"got {type(contract).__name__} for {producer_id!r}"
         )
     if contract is None:
         return None
-    return _project_output_contract(contract, parts[2:])
+    return project_output_contract(contract, parts[2:])
+
+
+def output_contract_path_error(
+    contract: OutputContract,
+    fields: list[str],
+    path: str,
+) -> str | None:
+    """Return an unknown-field error for a closed output path, else ``None``.
+
+    An opaque field inside a partial record remains lenient below that field,
+    while the partial record's closed root name set is still enforced.
+    """
+    missing = missing_output_contract_field(contract, fields)
+    if missing is None:
+        return None
+    return f"reference ${{{path}}} reads unknown field {missing!r} on record"
 
 
 def resolve_output_binding_contract(
     binding: Any,
-    producers: dict[str, ValueContract],
+    producers: dict[str, OutputContract],
     flow_inputs: dict[str, ValueContract],
-) -> ValueContract | None:
+) -> OutputContract | None:
     """Resolve one Compose output binding to its canonical value contract.
 
     A direct whole-value reference retains the referenced contract, including
@@ -102,20 +155,21 @@ def resolve_output_binding_contract(
     Args:
         binding (`Any`):
             A raw binding value or exact semantic ``Binding`` carrier.
-        producers (`dict[str, ValueContract]`):
-            Exact node output contracts keyed by producer id.
+        producers (`dict[str, OutputContract]`):
+            Exact or partial node output contracts keyed by producer id. A
+            proven field of a partial record remains projectable.
         flow_inputs (`dict[str, ValueContract]`):
             Exact flow input contracts keyed by input name.
 
     Returns:
-        `ValueContract | None`:
-            The proven canonical contract, or ``None`` when the binding's result
-            type is not statically proven.
+        `OutputContract | None`:
+            The proven canonical exact or partial contract, or ``None`` when the
+            binding's result shape is not statically proven.
 
     Raises:
         `TypeError`:
-            A referenced producer or flow-input contract is not an exact
-            ``ValueContract``.
+            A referenced producer is not an ``OutputContract``, or a flow-input
+            contract is not an exact ``ValueContract``.
     """
     source = binding_source(binding)
     if not isinstance(source, str):
@@ -127,24 +181,32 @@ def resolve_output_binding_contract(
     spans = [segment for segment in segments if isinstance(segment, Span)]
     if not spans:
         return None
+    refs = template_refs(segments)
+    reference_contracts = {
+        path: _reference_contract(path, producers, flow_inputs) for path in refs
+    }
     if not (len(segments) == 1 and isinstance(segments[0], Span)):
         return ValueContract(Type.scalar(ValueKind.STRING))
 
     expression = segments[0].tree
-    refs = template_refs(segments)
-    is_direct_reference = getattr(expression, "data", None) == "refcall" and not any(
-        getattr(child, "data", None) == "call_suffix"
-        for child in getattr(expression, "children", ())
+    is_direct_reference = getattr(expression, "type", None) == "WRAPPED_REF" or (
+        getattr(expression, "data", None) == "refcall"
+        and not any(
+            getattr(child, "data", None) == "call_suffix"
+            for child in getattr(expression, "children", ())
+        )
     )
     if is_direct_reference:
         if len(refs) != 1:
             return None
-        return _reference_contract(refs[0], producers, flow_inputs)
+        return reference_contracts[refs[0]]
 
     def reference_type(path: str) -> Type | None:
         """Project one referenced contract to the type requested by ``expr``."""
-        contract = _reference_contract(path, producers, flow_inputs)
-        return None if contract is None else contract.type
+        contract = reference_contracts.get(path)
+        if path not in reference_contracts:
+            contract = _reference_contract(path, producers, flow_inputs)
+        return output_contract_type(contract)
 
     inferred = infer_expr_type(expression, reference_type)
     return None if inferred is None else ValueContract(inferred)
@@ -160,24 +222,46 @@ def _origin_path_sort_key(
 
 
 def combine_output_contracts(
-    fields: dict[str, ValueContract | None],
-) -> ValueContract:
-    """Combine named output contracts into one closed-record contract.
+    fields: dict[str, OutputContract | None],
+) -> OutputContract:
+    """Combine named outputs into one exact or partial closed-record contract.
 
     Args:
-        fields (`dict[str, ValueContract | None]`):
+        fields (`dict[str, OutputContract | None]`):
             Output field names mapped to proven contracts or ``None`` for opaque
-            fields. Insertion order is retained in the resulting record type.
+            fields. A nested partial contract cannot be represented inside one
+            root field and is therefore retained as opaque at this boundary.
+            Insertion order is retained.
 
     Returns:
-        `ValueContract`:
-            One closed record whose proven field origins are prefixed by their
-            output names.
+        `OutputContract`:
+            One exact closed record when every field is exact; otherwise one
+            partial record that retains the closed name set and every exact
+            sibling contract.
     """
+    for name, contract in fields.items():
+        if contract is not None and type(contract) not in (
+            ValueContract,
+            PartialRecordContract,
+        ):
+            raise TypeError(
+                "output fields must contain ValueContract, PartialRecordContract, "
+                f"or None values, got {type(contract).__name__} for {name!r}"
+            )
+    if any(type(contract) is not ValueContract for contract in fields.values()):
+        return PartialRecordContract(
+            tuple(
+                (
+                    name,
+                    contract if type(contract) is ValueContract else None,
+                )
+                for name, contract in fields.items()
+            )
+        )
+
     origins: list[tuple[tuple[str | int, ...], Any]] = []
     for name, contract in fields.items():
-        if contract is None:
-            continue
+        assert type(contract) is ValueContract
         if contract.origins.default is not None:
             origins.append(((name,), contract.origins.default))
         origins.extend(
@@ -187,20 +271,16 @@ def combine_output_contracts(
     return ValueContract(
         type=Type(
             kind=ValueKind.OBJECT,
-            fields={
-                name: (
-                    contract.type
-                    if contract is not None
-                    else Type.scalar(ValueKind.NONE)
-                )
-                for name, contract in fields.items()
-            },
-            required=frozenset(
-                name for name, contract in fields.items() if contract is not None
-            ),
+            fields={name: contract.type for name, contract in fields.items()},
+            required=frozenset(fields),
         ),
         origins=ContractOrigins(entries=tuple(origins)),
     )
 
 
-__all__ = ["combine_output_contracts", "resolve_output_binding_contract"]
+__all__ = [
+    "combine_output_contracts",
+    "output_contract_path_error",
+    "project_output_contract",
+    "resolve_output_binding_contract",
+]

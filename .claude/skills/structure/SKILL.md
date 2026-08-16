@@ -130,9 +130,12 @@ populate `ContractOrigins`, and packed defaults stamp `default_origin`; START re
 those carriers. Scalar alias/list type expressions fall back to the contract root.
 Python/source-free declarations and inferred inline parameters remain source-free.
 `compose/helpers/output_contracts.py` separately owns source-neutral binding-template
-result contracts: exact direct-reference projection/provenance, proven computed types,
-and multi-output record assembly. Node resolution and validation both import this lower
-helper; it never owns YAML navigation or graph-stage policy.
+result contracts: exact-or-partial direct-reference projection/provenance, proven
+computed types, and exact-or-partial closed-record assembly. Node resolution, inline
+input inference, and validation import this lower helper; it never owns YAML navigation
+or graph-stage policy. `ChildSignature` and the producer map preserve the source-neutral
+`OutputContract` sum owned by `nodes/contracts.py`; no temporary Compose metadata becomes
+a second runtime authority.
 For authored node outputs, `compose/build` injects a Compose-owned optional reader through
 `BuildContext`; the base descriptor invokes it only when an output-authoring leaf reaches
 its established contract step. This preserves earlier kind-owned validation order while

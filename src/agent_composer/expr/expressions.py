@@ -627,11 +627,12 @@ def infer_expr_type(
 ) -> "Type | None":
     """Return the statically proven type of one parsed expression, if any.
 
-    Inference is deliberately conservative: literal tokens, exact references,
-    comparisons, and boolean combinators have fixed result types. Other forms
-    remain unknown until their runtime value semantics can be modeled without
-    guessing. Reference lookup is injected so this source-neutral expression
-    layer does not know about a flow graph or Compose document.
+    Inference is deliberately conservative: literal tokens, exact references
+    (including the wrapped back-compat spelling), comparisons, and boolean
+    combinators have fixed result types. Other forms remain unknown until their
+    runtime value semantics can be modeled without guessing. Reference lookup is
+    injected so this source-neutral expression layer does not know about a flow
+    graph or Compose document.
 
     Args:
         tree (`Tree | Token`):
@@ -656,6 +657,8 @@ def infer_expr_type(
         ```
     """
     if isinstance(tree, Token):
+        if tree.type == "WRAPPED_REF":
+            return ref_type_fn(str(tree)[2:-1])
         if tree.type == "NUMBER":
             kind = ValueKind.NUMBER if "." in str(tree) else ValueKind.INTEGER
             return Type.scalar(kind)

@@ -1,12 +1,12 @@
-# Conversational REPL — a turn-by-turn chat, built AS a flow (this is what `ac chat` runs).
+# Conversational REPL — the same turn-by-turn LOOP shape used by `ac chat`.
 # The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE; exact exit text builds the
 # exit record, otherwise AGENT + a second CODE node build the normal transcript. The LLM
-# only fills the reply; defaulted bindings rejoin the branches into the carried record.
+# only fills the reply; output bindings rejoin the branches into the carried record.
 #
 # Carried record ('a): {transcript: str, exited: bool} — threaded turn to turn ('a -> 'a).
 # The loop body's `output:` MUST equal this record. A raw multi-ref coalesce has no
-# inferable type, so adjacent defaulted spans preserve `str` and a lone defaulted
-# span preserves `bool` below.
+# inferable type, so adjacent defaulted spans preserve `str`; comparing the optional
+# exit field with `true` proves `bool` below.
 
 id: chat
 name: chat
@@ -72,7 +72,7 @@ defs:
           )
     output:                         # exact carried record type ('a -> 'a)
       transcript: '${exit_turn.output.transcript:-""}${normal_turn.output:-""}'
-      exited: ${exit_turn.output.exited:-false}
+      exited: ${exit_turn.output.exited == true}  # comparison is always bool
 
 nodes:
   chat:

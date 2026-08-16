@@ -15,8 +15,9 @@ flow-assertion site. It also owns resolver composition
 in-loader by the same `_assemble`) or a `uses:` alias resolved through the injected
 `child_resolver` (`(flow_id, version) -> ComposedFlow`). `_CallableScope`
 composes the two (and rejects recursive/mutual defs). `call` nodes are resolved-and-baked
-at load: the loader derives the callable's signature (a plain call re-exports the single
-codomain `ValueContract`; a mapped call derives a `list[<codomain>]` contract; bindings
+at load: the loader derives the callable's signature (a plain call re-exports the exact
+or partial codomain contract; a mapped call derives `list[<codomain>]` only from an exact
+contract; bindings
 are name/arity- and type-checked against it) AND bakes the callable's compiled flow onto the built
 `CallNode` so `run` drives the embedded child. A flow whose `call`s are all
 in-file defs loads resolver-free; a `call` to a non-def callable without a resolver is

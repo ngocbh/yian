@@ -14,7 +14,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from agent_composer.expr import ExpressionError, condition_refs
-from agent_composer.nodes.contracts import ValueContract
+from agent_composer.nodes.contracts import (
+    OutputContract,
+    PartialRecordContract,
+)
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.resolver import (
@@ -78,8 +81,9 @@ class LoopDescriptor(NodeDescriptor):
         is higher-order), derives its `ChildSignature`, bakes the compiled child + parameters,
         stamps `output_contract` (the body codomain, which IS the carried record contract), and enforces
         the FIELD-NAME half of the contract + slice legality (`while:` present, `max:` present).
-        The deep TYPE-level half (body output Type == carried record Type) is the loader pass
-        `check_loop_type_contract`, which needs the assembled parent producers/flow-input types.
+        The deep TYPE-level half compares every statically proven body field with its
+        statically proven carried seed in the loader pass `check_loop_type_contract`, which
+        needs the assembled parent producers/flow-input contracts.
         `ctx.registry` is unused (loop resolves its output contract from the body signature); the
         inline-CODE anchors on `ctx` are read only by the CODE build.
         """
@@ -180,7 +184,9 @@ class LoopDescriptor(NodeDescriptor):
         # slice of the carried record). A non-record body output (no fields) can't match a
         # multi-field carried record — flag it too.
         carried = set(self.inputs or {})
-        out_names = _contract_field_names(sig.output)
+        out_names = _contract_field_names(node.output_contract)
+        if out_names is None and len(sig.output_names) >= 2:
+            out_names = set(sig.output_names)
         if out_names is None:
             errors.append(
                 f"loop node {self.id!r}: body {child_display} must declare a record "
@@ -228,9 +234,11 @@ class LoopDescriptor(NodeDescriptor):
 
 
 def _contract_field_names(
-    contract: Optional[ValueContract],
+    contract: OutputContract | None,
 ) -> Optional[set[str]]:
     """The field names of a closed record contract, else `None`."""
+    if type(contract) is PartialRecordContract:
+        return set(contract.names)
     if contract is None or contract.type.fields is None:
         return None
     return set(contract.type.fields)

@@ -42,7 +42,7 @@ compile/      compiled IR + validation; identity-safe origin traversal/rebasing;
 compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML
               construction/navigation and opaque-origin resolution; later phases
               lower file-private children
-              (source/nodes/parse/desugar/edges/validate/build/loader)
+              (source/helpers/nodes/parse/desugar/edges/validate/build/loader)
 runtime/      run records/logs, reducer-owned RunState, kind-blind dispatcher,
               and worker pool
 run.py        public run boundary: ComposedFlow + inputs/log -> RunResult
@@ -163,6 +163,7 @@ one responsibility:
 | `Parameter` | one formal input, its optional contract, and default/coercion policy |
 | `Assertion` | one executable expression plus stable author-facing display text |
 | `ValueContract` | one recursive semantic `Type` plus nested origin selection |
+| `PartialRecordContract` | one closed record shape with optional field-local value contracts |
 | `ContractOrigins` | immutable root/nested origin lookup for a value contract |
 
 For a refined specialized list, `Type.element.nullable` permits `None` alongside
@@ -171,7 +172,9 @@ rejects it. Existing `LIST_ANY` and explicit `None`-element semantics remain
 unchanged. The nullable specialized list retains its `LIST_*` discriminator and
 carrier through canonical value, pool, and run-record round-trips. Cross-flow
 compatibility recursively applies the same nullable-source-to-strict-sink rule
-to list elements.
+to list elements. The singleton `None` source is compatible with every nullable
+sink, matching runtime coercion, but remains incompatible with a strict non-`None`
+sink.
 
 All origins are optional, so Python-authored values default to source-free and
 may supply an opaque origin explicitly. The carriers are frozen only at their
@@ -296,27 +299,35 @@ remain origin-free. That binding provenance is separate from node-output contrac
 provenance: a physical `output:` type declaration owns the root and authored nested sites
 on `Node.output_contract`, including when compact/flat lowering generates the reexport.
 
-`Node.output_contract` is the canonical compiled output declaration: exactly one
-`ValueContract`, or `None` when the output is unenforced. Runtime enforcement and
-node-owned structured generation project its semantic `.type`; nested origins remain
-attached to the same carrier for diagnostics. A live type rejection resolves its
-contract-relative structural path through those origins; redirected output uses the
-effective commit target's contract. The path is consumed before `Failure` construction
-and is not part of the run-record wire. The manifest projects only the semantic type,
-so changing or rebasing contract origins does not change flow or expansion identity.
+`Node.output_contract` is the canonical compiled output declaration: an exact
+`ValueContract`, a `PartialRecordContract`, or `None` when the output is unenforced.
+The partial arm is a closed record: every field name is enforced, proven fields retain
+their recursive contracts, and opaque fields retain presence without pretending their
+type is `None`. Runtime success and replay validate the effective commit target through
+this same sum. Exact contracts also drive node-owned structured generation. A live type
+rejection resolves its contract-relative structural path through the matching exact or
+field-local origins. The path is consumed before `Failure` construction and is not part
+of the run-record wire. Manifests include the semantic exact/partial contract but omit
+origins, so changing or rebasing provenance does not change flow or expansion identity.
+Compose and runtime growth reference validation share the source-neutral closed-field
+walk in `nodes/contracts.py`, so a partial record cannot expose a provably absent field.
 
-Compose descriptors derive `ValueContract` directly. Builders, child signatures,
-producer maps, and validators retain the carrier; algorithms that only compare or walk
-types project `.type` at their boundary. CALL and LOOP preserve a child's output
-contract, while MAP deliberately derives a new list contract. The child contract is
-resolved through `compose/helpers/output_contracts.py`: a direct output binding keeps
-its exact carrier and origins, while a statically proven computed expression receives a
-source-free contract from `expr.infer_expr_type`. Unsupported computations remain opaque
-instead of inheriting a reference leaf's type. The same helper serves post-build CALL/LOOP
-validation without a `validate -> nodes.resolver` dependency. Strict inline-composite
-input inference is deliberately separate and continues to require literals or direct
-typed references. There is no parallel output-Type API: Python-authored nodes pass
-`output_contract=` explicitly.
+Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
+builders, child signatures, producer maps, and validators retain the complete
+`OutputContract` sum; algorithms project an exact type only where one is required. The
+shared `compose/helpers/output_contracts.py` preserves exact or partial whole-value
+references, projects independently proven fields, assigns source-free contracts to
+results proven by `expr.infer_expr_type`, and keeps unsupported computations opaque.
+Multi-output assembly produces an exact record when every field is exact, otherwise a
+closed `PartialRecordContract` with the proven siblings. `ChildSignature.output` follows
+the terminal arity rule and CALL/LOOP preserve it. MAP derives `list[U]` only from an exact
+child contract because the output-contract sum has no partial-list arm. Strict inline
+input inference remains separate: it accepts literals, direct exact references, and
+proven fields projected from partial records, while rejecting whole or opaque partial
+reads. LOOP uses the same canonical carrier for proven seed checks at load and for every
+zero- or later-iteration commit, replay, origin lookup, and expansion identity; no
+transient field-evidence authority exists.
+There is no parallel output-Type API: Python-authored nodes pass `output_contract=` explicitly.
 For a physical node `output:` declaration, Compose injects a source-aware reader into the
 descriptor's existing per-kind build position. The shared recursive compiler returns the
 canonical contract with its declaration root and each authored nested record field; this

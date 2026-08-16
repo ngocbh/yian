@@ -123,10 +123,10 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 | Stable location-aware navigation, immutable projections, and whole/exact-literal provenance | public `SourceDocument` / `SourceCursor` / `ScalarSource` contracts from `compose/source` | private document slots, PyYAML nodes/tokens, or another parse |
 | Immutable document-local origin resolution, semantic constructed-line selection, exact ownership, pre-finalization registered-site lookup, and Compose-private typed key/scoping policy | public `SourceCatalog` plus its package-private builder/encoder in `compose/source` | stored coordinates, parallel range maps, another YAML parse, parsing an opaque child key, per-node snapshots, or a premature cross-file resolver |
 | Source-free and cursor-aware recursive type/contract compilation | `compose/helpers/types.py` | cursor/catalog/YAML concepts below Compose or a duplicated type-shape traversal |
-| Template-aware output-binding contract inference and multi-output assembly | `compose/helpers/output_contracts.py` | child resolution, graph-stage ownership, YAML/source documents, or runtime |
+| Template-aware exact/partial output-contract projection and closed-record assembly | `compose/helpers/output_contracts.py` | child resolution, graph-stage ownership, YAML/source documents, or runtime |
 | Semantic descriptors and flow sections | `compose/nodes` and `compose/parse` consuming a document/cursor | another YAML construction pass or retained parser object |
 | Source-preserving inline extraction | `compose/desugar` projecting cursors | PyYAML and loader state |
-| Compiled-flow assembly, per-occurrence carrier stamping, and temporary post-build location metadata | `compose/build` consuming descriptors and retained cursor sources | PyYAML, concrete loader implementation, or leaking `SourceRange` into semantic nodes / `CompiledFlow` |
+| Compiled-flow assembly, per-occurrence carrier stamping, and temporary post-build locations | `compose/build` consuming descriptor `BuildResult`s and retained cursor sources | PyYAML, concrete loader implementation, or leaking temporary ranges into semantic nodes / `CompiledFlow` |
 | Resolved-file reuse, cycles, and one file's callable namespace | `compose/loader` | `compile` and `runtime` |
 
 Only modules under `compose/source` may import PyYAML or traverse the retained

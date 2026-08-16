@@ -32,8 +32,9 @@ from agent_composer.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
 from agent_composer.compose.nodes.case import _data_edges as case_data_edges
-from agent_composer.compose.nodes.resolver import child_signature
+from agent_composer.compose.nodes.resolver import ChildSignature, child_signature
 from agent_composer.compose.validate.call_types import check_ref_map_types
+from agent_composer.compose.validate.loop_types import check_loop_type_contract
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
@@ -43,6 +44,7 @@ from agent_composer.nodes.contracts import (
     Binding,
     ContractOrigins,
     Parameter,
+    PartialRecordContract,
     ValueContract,
 )
 from agent_composer.nodes.end import EndNode
@@ -435,6 +437,13 @@ def test_output_contract_resolution_retains_whole_value_identity() -> None:
     assert computed.type == Type.scalar(ValueKind.BOOLEAN)
     assert computed.origins == ContractOrigins()
 
+    wrapped = resolve_output_binding_contract(
+        "${${producer.output}}",
+        {"producer": contract},
+        {},
+    )
+    assert wrapped is contract
+
     for expression, expression_producers in (
         ("${false}", {}),
         ("${true and false}", {}),
@@ -467,6 +476,59 @@ def test_output_contract_resolution_retains_whole_value_identity() -> None:
             {},
             {"topic": output_type},
         )
+    with pytest.raises(TypeError, match="output producer contracts.*ValueContract"):
+        resolve_output_binding_contract(  # type: ignore[dict-item]
+            '${producer.output == "/exit"}',
+            {"producer": output_type},
+            {},
+        )
+
+
+@pytest.mark.parametrize(
+    ("source", "kind"),
+    [
+        ("${42}", ValueKind.INTEGER),
+        ("${1.5}", ValueKind.NUMBER),
+        ('${"text"}', ValueKind.STRING),
+        ("${null}", ValueKind.NONE),
+    ],
+)
+def test_output_contract_resolution_infers_whole_span_literals(
+    source: str,
+    kind: ValueKind,
+) -> None:
+    """Compose turns a proven scalar literal span into a source-free contract."""
+    contract = resolve_output_binding_contract(source, {}, {})
+
+    assert contract == ValueContract(Type.scalar(kind))
+
+
+@pytest.mark.parametrize(
+    ("source", "producers", "flow_inputs", "message"),
+    [
+        (
+            "prefix ${producer.output}",
+            {"producer": Type.scalar(ValueKind.STRING)},
+            {},
+            "output producer contracts.*ValueContract",
+        ),
+        (
+            "prefix ${input.topic}",
+            {},
+            {"topic": Type.scalar(ValueKind.STRING)},
+            "flow input contracts.*ValueContract",
+        ),
+    ],
+)
+def test_output_contract_resolution_validates_embedded_reference_contracts(
+    source: str,
+    producers: dict[str, ValueContract],
+    flow_inputs: dict[str, ValueContract],
+    message: str,
+) -> None:
+    """Template shape must not bypass exact semantic-carrier validation."""
+    with pytest.raises(TypeError, match=message):
+        resolve_output_binding_contract(source, producers, flow_inputs)
 
 
 def test_output_contract_resolution_rebases_nested_origins() -> None:
@@ -516,6 +578,15 @@ def test_output_contract_resolution_rebases_nested_origins() -> None:
         ),
     )
 
+    input_projected = resolve_output_binding_contract(
+        "${input.payload.result}",
+        {},
+        {"payload": contract},
+    )
+    assert type(input_projected) is ValueContract
+    assert input_projected.type is nested_type
+    assert input_projected.origins == projected.origins
+
     fallback_contract = ValueContract(
         root_type,
         ContractOrigins(
@@ -530,6 +601,86 @@ def test_output_contract_resolution_rebases_nested_origins() -> None:
     )
     assert leaf.origins.default == _origin("result")
     assert leaf.origins.entries == ()
+
+
+def test_output_contract_projection_propagates_optional_field_path() -> None:
+    """A missing optional ancestor makes a strict descendant value nullable."""
+    strict_leaf = Type.scalar(ValueKind.INTEGER)
+    optional_record = Type(
+        kind=ValueKind.OBJECT,
+        fields={"value": strict_leaf},
+        required=frozenset({"value"}),
+    )
+    root = Type(
+        kind=ValueKind.OBJECT,
+        fields={"payload": optional_record},
+        required=frozenset(),
+    )
+
+    projected = resolve_output_binding_contract(
+        "${producer.output.payload.value}",
+        {"producer": ValueContract(root)},
+        {},
+    )
+
+    assert type(projected) is ValueContract
+    assert projected.type.kind is ValueKind.INTEGER
+    assert projected.type.nullable is True
+
+
+def test_output_contract_resolution_projects_proven_partial_record_fields() -> None:
+    """Known fields remain typed when an opaque sibling prevents an exact record."""
+    known = ValueContract(
+        Type(
+            kind=ValueKind.OBJECT,
+            fields={"value": Type.scalar(ValueKind.INTEGER)},
+            required=frozenset({"value"}),
+        ),
+        ContractOrigins(default=_origin("known")),
+    )
+    partial = PartialRecordContract(
+        fields=(("known", known), ("opaque", None)),
+    )
+
+    projected = resolve_output_binding_contract(
+        "${producer.output.known.value}",
+        {"producer": partial},
+        {},
+    )
+
+    assert type(projected) is ValueContract
+    assert projected.type == Type.scalar(ValueKind.INTEGER)
+    assert projected.origins.default == _origin("known")
+    assert (
+        resolve_output_binding_contract(
+            "${producer.output.opaque}",
+            {"producer": partial},
+            {},
+        )
+        is None
+    )
+    assert (
+        resolve_output_binding_contract(
+            "${producer.output}",
+            {"producer": partial},
+            {},
+        )
+        is partial
+    )
+    compared = resolve_output_binding_contract(
+        "${producer.output == null}",
+        {"producer": partial},
+        {},
+    )
+    assert type(compared) is ValueContract
+    assert compared.type == Type.scalar(ValueKind.BOOLEAN)
+    embedded = resolve_output_binding_contract(
+        "record: ${producer.output}",
+        {"producer": partial},
+        {},
+    )
+    assert type(embedded) is ValueContract
+    assert embedded.type == Type.scalar(ValueKind.STRING)
 
 
 def test_child_signature_prefixes_multi_output_contract_origins() -> None:
@@ -576,6 +727,68 @@ def test_child_signature_prefixes_multi_output_contract_origins() -> None:
             (("beta",), _origin("beta-root")),
         )
     )
+
+
+def test_child_signature_retains_partial_contract_when_one_field_is_opaque() -> None:
+    """Declared output shape and proven siblings form one partial codomain."""
+    integer = ValueContract(Type.scalar(ValueKind.INTEGER))
+    loaded = SimpleNamespace(
+        input=[],
+        compiled=SimpleNamespace(
+            nodes={"step": Node("step", output_contract=integer)},
+            outputs=[
+                FlowOutput("n", "${step.output + 1}"),
+                FlowOutput("done", "${false}"),
+            ],
+        ),
+    )
+
+    signature = child_signature(loaded)
+
+    assert type(signature.output) is PartialRecordContract
+    assert signature.output.names == ("n", "done")
+    assert signature.output.fields[0] == ("n", None)
+    assert signature.output.fields[1][1] is not None
+    assert signature.output_names == ("n", "done")
+    assert signature.declared_outputs[0] == ("n", None)
+    assert signature.declared_outputs[1][0] == "done"
+    assert signature.declared_outputs[1][1].type == Type.scalar(ValueKind.BOOLEAN)
+
+
+def test_child_signature_keeps_nested_partial_output_opaque_at_record_field() -> None:
+    """A root partial cannot falsely become an exact nested field contract."""
+    integer = ValueContract(Type.scalar(ValueKind.INTEGER))
+    nested = PartialRecordContract(fields=(("n", integer), ("note", None)))
+    loaded = SimpleNamespace(
+        input=[],
+        compiled=SimpleNamespace(
+            nodes={"inner": Node("inner", output_contract=nested)},
+            outputs=[
+                FlowOutput("nested", "${inner.output}"),
+                FlowOutput("done", "${false}"),
+            ],
+        ),
+    )
+
+    signature = child_signature(loaded)
+
+    assert signature.declared_outputs[0] == ("nested", nested)
+    assert type(signature.output) is PartialRecordContract
+    assert signature.output.fields[0] == ("nested", None)
+    assert signature.output.fields[1][0] == "done"
+    assert signature.output.fields[1][1] is not None
+
+
+def test_child_signature_rejects_contradictory_declared_output_evidence() -> None:
+    """The exported signature cannot carry two incompatible output authorities."""
+    boolean = ValueContract(Type.scalar(ValueKind.BOOLEAN))
+
+    with pytest.raises(ValueError, match="contradicts"):
+        ChildSignature(
+            inputs=[],
+            output=boolean,
+            declared_outputs=(("result", None),),
+        )
 
 
 def test_composite_builders_preserve_or_deliberately_wrap_child_contract() -> None:
@@ -656,6 +869,67 @@ def test_call_type_error_is_identical_for_raw_and_wrapped_sources() -> None:
     assert "child expects 'str', source is 'Optional[str]'" in errors[0]
 
 
+def test_call_type_check_projects_known_partial_producer_field() -> None:
+    """A partial sibling cannot hide a proven source mismatch from a child call."""
+    child_input = Parameter(
+        name="topic",
+        contract=ValueContract(Type.scalar(ValueKind.STRING)),
+        required=True,
+        coerce_strings=True,
+    )
+    result = BuildResult(
+        node=SimpleNamespace(is_loop=False, child_inputs=[child_input]),
+        wiring={},
+    )
+    partial = PartialRecordContract(
+        fields=(
+            ("n", ValueContract(Type.scalar(ValueKind.INTEGER))),
+            ("note", None),
+        )
+    )
+
+    with pytest.raises(LoadError, match="child expects 'str', source is 'int'"):
+        check_ref_map_types(
+            {"call": result},
+            {"producer": partial},
+            {},
+            {"call": {"topic": "${producer.output.n}"}},
+        )
+
+
+def test_loop_type_check_projects_known_partial_seed_field() -> None:
+    """A partial sibling cannot hide a proven carried-field mismatch."""
+    loop_contract = PartialRecordContract(
+        fields=(
+            ("n", ValueContract(Type.scalar(ValueKind.STRING))),
+            ("note", None),
+        )
+    )
+    producer_contract = PartialRecordContract(
+        fields=(
+            ("n", ValueContract(Type.scalar(ValueKind.INTEGER))),
+            ("note", None),
+        )
+    )
+    result = BuildResult(
+        node=SimpleNamespace(is_loop=True, output_contract=loop_contract),
+        wiring={},
+    )
+
+    with pytest.raises(LoadError, match="body output is 'str'.*source is 'int'"):
+        check_loop_type_contract(
+            {"loop": result},
+            {"producer": producer_contract},
+            {},
+            {
+                "loop": {
+                    "n": "${producer.output.n}",
+                    "note": "opaque literal",
+                }
+            },
+        )
+
+
 def test_case_edge_inference_reads_wrapped_lowered_wiring() -> None:
     """CASE-owned data dependencies cannot disappear behind a carrier."""
     edges = case_data_edges(
@@ -713,6 +987,56 @@ def test_wiring_identity_uses_source_and_ignores_binding_origin() -> None:
     assert flow_manifest(changed) != manifests[0]
     assert flow_fingerprint(changed) != fingerprints[0]
     assert expansion_digest(changed) != digests[0]
+
+
+def test_partial_output_contract_is_manifested_without_origins() -> None:
+    """Field-local acceptance semantics affect identity; diagnostics do not."""
+    def partial(kind: ValueKind, origin: str) -> PartialRecordContract:
+        return PartialRecordContract(
+            fields=(
+                (
+                    "known",
+                    ValueContract(
+                        Type.scalar(kind),
+                        ContractOrigins(default=_origin(origin)),
+                    ),
+                ),
+                ("opaque", None),
+            )
+        )
+
+    flows = []
+    for contract in (
+        partial(ValueKind.INTEGER, "first"),
+        partial(ValueKind.INTEGER, "second"),
+        partial(ValueKind.STRING, "first"),
+    ):
+        flow = _manifest_fragment("value")
+        flow.nodes["entry"].output_contract = contract
+        flows.append(flow)
+
+    first, same_semantics, changed_type = flows
+    first_manifest = flow_manifest(first)
+    assert first_manifest["nodes"]["entry"]["output_type"] == {
+        "partial_record": [
+            {
+                "name": "known",
+                "type": {
+                    "element": None,
+                    "fields": None,
+                    "kind": "int",
+                    "nullable": False,
+                    "required": None,
+                    "tags": None,
+                },
+            },
+            {"name": "opaque", "type": None},
+        ]
+    }
+    assert flow_manifest(same_semantics) == first_manifest
+    assert flow_fingerprint(same_semantics) == flow_fingerprint(first)
+    assert flow_manifest(changed_type) != first_manifest
+    assert flow_fingerprint(changed_type) != flow_fingerprint(first)
 
 
 def test_flow_output_identity_uses_source_and_ignores_binding_origin() -> None:

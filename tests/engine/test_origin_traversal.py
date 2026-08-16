@@ -40,6 +40,7 @@ from agent_composer.nodes.contracts import (
     Binding,
     ContractOrigins,
     Parameter,
+    PartialRecordContract,
     ValueContract,
 )
 from agent_composer.nodes.end import EndNode
@@ -282,6 +283,42 @@ def test_parameter_origins_follow_the_carriers_canonical_order() -> None:
         "parameter",
         "parameter/default",
     ]
+
+
+def test_partial_output_contract_origins_traverse_and_rewrite() -> None:
+    """Only proven fields contribute origins through the common node seam."""
+    node = Node(
+        "only",
+        output_contract=PartialRecordContract(
+            fields=(
+                (
+                    "known",
+                    ValueContract(
+                        Type.scalar(ValueKind.INTEGER),
+                        ContractOrigins(default=_origin("output/known")),
+                    ),
+                ),
+                ("opaque", None),
+            )
+        ),
+    )
+    flow = Flow(
+        nodes={"only": node},
+        edges=[],
+        wiring={"only": {}},
+        start_id="only",
+        end_id="only",
+    )
+
+    assert [origin.key for origin in iter_flow_origins(flow)] == ["output/known"]
+    rewritten = rewrite_flow_origins(
+        flow,
+        lambda origin: _origin(f"mapped/{origin.key}"),
+    )
+    contract = rewritten.nodes["only"].output_contract
+    assert type(contract) is PartialRecordContract
+    assert contract.fields[0][1].origins.default == _origin("mapped/output/known")
+    assert node.output_contract.fields[0][1].origins.default == _origin("output/known")
 
 
 def test_case_predicate_origins_traverse_and_rewrite_by_arm_identity() -> None:

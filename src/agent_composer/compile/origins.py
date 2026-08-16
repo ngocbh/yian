@@ -12,7 +12,7 @@ from __future__ import annotations
 import copy
 from typing import Callable, Iterator, TypeVar, cast
 
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import OriginRef, OriginResolver, ResolverTable
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import (
     _iter_origin_carrier,
@@ -162,6 +162,79 @@ def rewrite_flow_origins(
     return cast(_FlowT, copy.deepcopy(working))
 
 
+def rebase_flow_origins(
+    flow: _FlowT,
+    mapper: Callable[[OriginRef], OriginRef],
+    *,
+    resolver: OriginResolver | None,
+) -> tuple[_FlowT, ResolverTable]:
+    """Atomically rewrite reachable origins and retain their resolution routes.
+
+    Equal old origins are one namespace identity even when they occur in
+    distinct semantic carriers, so `mapper` runs once per distinct `OriginRef`.
+    The returned table routes each mapped identity back through `resolver` with
+    its exact old identity. Keys remain opaque to this operation.
+
+    Args:
+        flow (`Flow`): Compiled topology or compile-owned fragment to copy.
+        mapper (`Callable[[OriginRef], OriginRef]`):
+            Namespace transform called once per distinct reachable old origin.
+        resolver (`OriginResolver | None`):
+            Authority for the old identities. `None` is valid only when the graph
+            is source-free.
+
+    Returns:
+        `tuple[Flow, ResolverTable]`:
+            Independent graph copy of the same concrete type and exact routes for
+            all of its mapped origins. A source-free graph returns an empty table.
+
+    Raises:
+        TypeError:
+            Raised when the flow, mapper, resolver, mapper result, or static graph
+            shape is invalid.
+        ValueError:
+            Raised when an originful graph has no resolver or distinct old origins
+            map to the same new origin.
+    """
+    if not isinstance(flow, Flow):
+        raise TypeError(f"flow must be a Flow, got {type(flow).__name__}")
+    if not callable(mapper):
+        raise TypeError(f"origin mapper must be callable, got {type(mapper).__name__}")
+    if resolver is not None and not callable(getattr(resolver, "resolve", None)):
+        raise TypeError("origin resolver must implement resolve")
+
+    # Materializing validates the entire static graph before a user mapper can
+    # have side effects. Dict insertion order retains the first structural visit.
+    old_origins = tuple(dict.fromkeys(iter_flow_origins(flow)))
+    if old_origins and resolver is None:
+        raise ValueError("originful flow requires an origin resolver")
+
+    mapped_by_old: dict[OriginRef, OriginRef] = {}
+    old_by_mapped: dict[OriginRef, OriginRef] = {}
+    for old_origin in old_origins:
+        new_origin = mapper(old_origin)
+        if not isinstance(new_origin, OriginRef):
+            raise TypeError(
+                "origin mapper must return an OriginRef, "
+                f"got {type(new_origin).__name__}"
+            )
+        if new_origin in old_by_mapped:
+            raise ValueError(f"mapped origin collision {new_origin.key!r}")
+        mapped_by_old[old_origin] = new_origin
+        old_by_mapped[new_origin] = old_origin
+
+    table = (
+        ResolverTable()
+        if resolver is None
+        else ResolverTable.from_entries(
+            (new_origin, resolver, old_origin)
+            for old_origin, new_origin in mapped_by_old.items()
+        )
+    )
+    rewritten = rewrite_flow_origins(flow, mapped_by_old.__getitem__)
+    return rewritten, table
+
+
 def _rewrite_flow_origin_graph(
     flow: Flow,
     *,
@@ -215,4 +288,8 @@ def _rewrite_flow_origin_graph(
             )
 
 
-__all__ = ["iter_flow_origins", "rewrite_flow_origins"]
+__all__ = [
+    "iter_flow_origins",
+    "rebase_flow_origins",
+    "rewrite_flow_origins",
+]

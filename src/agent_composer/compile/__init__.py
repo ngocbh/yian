@@ -10,7 +10,11 @@ Never imports: compose, runtime, the package-root run boundary, CLI, or provider
 """
 
 from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, NodeState
-from agent_composer.compile.origins import iter_flow_origins, rewrite_flow_origins
+from agent_composer.compile.origins import (
+    iter_flow_origins,
+    rebase_flow_origins,
+    rewrite_flow_origins,
+)
 
 __all__ = [
     "END_ID",
@@ -19,5 +23,6 @@ __all__ = [
     "CompiledFlow",
     "NodeState",
     "iter_flow_origins",
+    "rebase_flow_origins",
     "rewrite_flow_origins",
 ]

@@ -18,11 +18,16 @@ Per-iteration (driver@k = `L` when k==0 else `L~k`, run on the carried record):
 The compile-owned injected builder constructs body/driver at the ORIGIN callsite
 (`self.origin_id`), never `self.id`, so live and durable-replay windows are byte-identical.
 """
-from typing import Any, ClassVar, Optional
+from typing import Any, Callable, ClassVar, Iterator, Optional
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output
-from agent_composer.nodes.contracts import Parameter
+from agent_composer.nodes.contracts import (
+    Parameter,
+    _iter_origin_carrier,
+    _rewrite_origin_carrier,
+)
 from agent_composer.nodes.ids import map_callsite, ns
 
 
@@ -84,6 +89,37 @@ class LoopNode(Node):
         self.iteration = iteration
         # The compiled `L` sets origin_id == self.id (uniform); a clone `L~k` carries the origin.
         self.origin_id = origin_id or node_id
+
+    def iter_local_origins(
+        self,
+        *,
+        _seen_carriers: Optional[set[int]] = None,
+    ) -> Iterator[OriginRef]:
+        """Yield common origins followed by the cached body signature."""
+        seen = _seen_carriers if _seen_carriers is not None else set()
+        yield from super().iter_local_origins(_seen_carriers=seen)
+        if self.child_inputs is not None:
+            for parameter in self.child_inputs:
+                yield from _iter_origin_carrier(parameter, seen)
+
+    def rewrite_local_origins(
+        self,
+        mapper: Callable[[OriginRef], OriginRef],
+        *,
+        _carrier_memo: Optional[dict[int, object]] = None,
+    ) -> None:
+        """Rewrite common and cached-signature origins on a copied LOOP."""
+        memo = _carrier_memo if _carrier_memo is not None else {}
+        super().rewrite_local_origins(mapper, _carrier_memo=memo)
+        if self.child_inputs is not None:
+            for index, parameter in enumerate(self.child_inputs):
+                self.child_inputs[index] = _rewrite_origin_carrier(
+                    parameter, mapper, memo
+                )
+
+    def origin_children(self) -> tuple[Any, ...]:
+        """Return the baked body flow, or no child for an unbaked LOOP."""
+        return () if self.child is None else (self.child,)
 
     def _run_impl(self, inputs: dict[str, Any], **caps: Any):
         """Own the WHOLE loop policy (no engine `_loop_step`): decide continue-vs-stop on the

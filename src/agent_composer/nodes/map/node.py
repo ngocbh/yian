@@ -18,11 +18,17 @@ nodes and survive the `clone_child` deep-copy per element. `parallel` is inert (
 engine's `num_workers`); it is carried for the over case.
 """
 
-from typing import Any, Callable, ClassVar, Optional
+from typing import Any, Callable, ClassVar, Iterator, Optional
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Grow, Node, NodeKind
 from agent_composer.nodes.binding import _resolve_source
-from agent_composer.nodes.contracts import Parameter, binding_source
+from agent_composer.nodes.contracts import (
+    Parameter,
+    _iter_origin_carrier,
+    _rewrite_origin_carrier,
+    binding_source,
+)
 
 
 class MapNode(Node):
@@ -72,6 +78,35 @@ class MapNode(Node):
         self.child_inputs = child_inputs or []
         # Render-only: the child's SourceFrame for the CLI error traceback. `run` never reads it.
         self.child_source = child_source
+
+    def iter_local_origins(
+        self,
+        *,
+        _seen_carriers: Optional[set[int]] = None,
+    ) -> Iterator[OriginRef]:
+        """Yield common origins followed by the cached child signature."""
+        seen = _seen_carriers if _seen_carriers is not None else set()
+        yield from super().iter_local_origins(_seen_carriers=seen)
+        for parameter in self.child_inputs:
+            yield from _iter_origin_carrier(parameter, seen)
+
+    def rewrite_local_origins(
+        self,
+        mapper: Callable[[OriginRef], OriginRef],
+        *,
+        _carrier_memo: Optional[dict[int, object]] = None,
+    ) -> None:
+        """Rewrite common and cached-signature origins on a copied MAP."""
+        memo = _carrier_memo if _carrier_memo is not None else {}
+        super().rewrite_local_origins(mapper, _carrier_memo=memo)
+        for index, parameter in enumerate(self.child_inputs):
+            self.child_inputs[index] = _rewrite_origin_carrier(
+                parameter, mapper, memo
+            )
+
+    def origin_children(self) -> tuple[Any, ...]:
+        """Return the baked child flow, or no child for an unbaked MAP."""
+        return () if self.child is None else (self.child,)
 
     def bind_reserved(self, node_wiring: dict, pool) -> dict:
         """Pre-resolve the MAP `over` source into the list `run` maps over.

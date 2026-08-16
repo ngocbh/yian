@@ -13,10 +13,15 @@ pre-defaults. `child`/`child_inputs` are baked at load by
 survive the `clone_child` deep-copy of the spliced subgraph.
 """
 
-from typing import Any, ClassVar, Optional
+from typing import Any, Callable, ClassVar, Iterator, Optional
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Grow, Node, NodeKind
-from agent_composer.nodes.contracts import Parameter
+from agent_composer.nodes.contracts import (
+    Parameter,
+    _iter_origin_carrier,
+    _rewrite_origin_carrier,
+)
 
 
 class CallNode(Node):
@@ -61,6 +66,35 @@ class CallNode(Node):
         self.child_inputs = child_inputs or []
         # Render-only: the child's SourceFrame for the CLI error traceback. `run` never reads it.
         self.child_source = child_source
+
+    def iter_local_origins(
+        self,
+        *,
+        _seen_carriers: Optional[set[int]] = None,
+    ) -> Iterator[OriginRef]:
+        """Yield common origins followed by the cached child signature."""
+        seen = _seen_carriers if _seen_carriers is not None else set()
+        yield from super().iter_local_origins(_seen_carriers=seen)
+        for parameter in self.child_inputs:
+            yield from _iter_origin_carrier(parameter, seen)
+
+    def rewrite_local_origins(
+        self,
+        mapper: Callable[[OriginRef], OriginRef],
+        *,
+        _carrier_memo: Optional[dict[int, object]] = None,
+    ) -> None:
+        """Rewrite common and cached-signature origins on a copied CALL."""
+        memo = _carrier_memo if _carrier_memo is not None else {}
+        super().rewrite_local_origins(mapper, _carrier_memo=memo)
+        for index, parameter in enumerate(self.child_inputs):
+            self.child_inputs[index] = _rewrite_origin_carrier(
+                parameter, mapper, memo
+            )
+
+    def origin_children(self) -> tuple[Any, ...]:
+        """Return the baked child flow, or no child for an unbaked CALL."""
+        return () if self.child is None else (self.child,)
 
     def _run_impl(self, inputs: dict, **caps: Any):
         if self.child is None:

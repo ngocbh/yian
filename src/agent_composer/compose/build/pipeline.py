@@ -442,6 +442,83 @@ def _flow_outputs(outputs) -> list[FlowOutput]:
     return [FlowOutput(name=_SINGLE_OUTPUT_NAME, binding=outputs)]
 
 
+def _stamp_flow_output_origins(
+    flow_outputs: list[FlowOutput],
+    outputs_section,
+    outputs_cursor: SourceCursor | None,
+    *,
+    owner: tuple[str, ...],
+    catalog_builder: _SourceCatalogBuilder,
+) -> list[FlowOutput]:
+    """Attach authored output values to their final canonical bindings.
+
+    Desugaring has already produced each final binding source, while the cursor
+    retains the original occurrence. Mapping keys identify their effective raw
+    source children, but only values receive origins. A generated or source-free
+    output has no cursor; an explicitly originated binding remains untouched.
+
+    Args:
+        flow_outputs (`list[FlowOutput]`):
+            Final normalized output carriers in section order.
+        outputs_section (`dict | object | None`):
+            Final post-desugar output values used to align mapping keys.
+        outputs_cursor (`SourceCursor | None`):
+            Retained authored ``output:`` value, or ``None`` for generated output.
+        owner (`tuple[str, ...]`):
+            Complete lexical owner path used to namespace output sites.
+        catalog_builder (`_SourceCatalogBuilder`):
+            File-owned origin catalog builder shared by all lexical children.
+
+    Returns:
+        `list[FlowOutput]`:
+            Output carriers whose physically authored bindings own their origin.
+
+    Raises:
+        `ValueError`:
+            Raised when the normalized carriers do not align with the section.
+        `LoadError`:
+            Raised when the retained cursor cannot be traversed or a catalog site
+            collides with another registration.
+    """
+    if outputs_cursor is None or not flow_outputs:
+        return flow_outputs
+
+    if isinstance(outputs_section, dict):
+        raw_keys = tuple(outputs_section)
+        if len(raw_keys) != len(flow_outputs):
+            raise ValueError("flow output carriers do not align with their section")
+        try:
+            cursors = tuple(outputs_cursor.child(key) for key in raw_keys)
+        except SourceAccessError as exc:
+            raise LoadError(str(exc), range=exc.range) from exc
+    else:
+        if len(flow_outputs) != 1:
+            raise ValueError("a bare flow output requires exactly one carrier")
+        cursors = (outputs_cursor,)
+
+    stamped: list[FlowOutput] = []
+    for index, (flow_output, cursor) in enumerate(zip(flow_outputs, cursors)):
+        if flow_output.binding.origin is not None:
+            stamped.append(flow_output)
+            continue
+        try:
+            origin = catalog_builder.register(
+                (*owner, "output", index, "binding"),
+                cursor,
+            )
+        except SourceAccessError as exc:
+            raise LoadError(str(exc), range=exc.range) from exc
+        stamped.append(
+            flow_output
+            if origin is None
+            else replace(
+                flow_output,
+                binding=replace(flow_output.binding, origin=origin),
+            )
+        )
+    return stamped
+
+
 def _assemble(
     *,
     inputs_section: Optional[dict] = None,
@@ -464,6 +541,7 @@ def _assemble(
     boundary_field_ranges: Optional[dict] = None,
     boundary_assert_ranges: Optional[list] = None,
     outputs_range: Optional[SourceRange] = None,
+    outputs_cursor: SourceCursor | None = None,
 ) -> ComposedFlow:
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
@@ -483,7 +561,8 @@ def _assemble(
     after inline lowering, including inside a nested def.
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
     children. `boundary_field_ranges`/`boundary_assert_ranges` locate synthesized boundary
-    behavior; `outputs_range` is the retained authored codomain range when one exists.
+    behavior; `outputs_range` is the retained authored codomain range when one exists,
+    while `outputs_cursor` retains each physically authored output binding occurrence.
     `scope.catalog_builder` is the one registry shared by every assembly originating
     from this physical document, so root, definitions, and inline bodies mint
     collision-free local origins under `owner`. Inline-CODE traceback anchors are
@@ -753,6 +832,7 @@ def _assemble(
                 for name, binding_range in body.input_ranges.items()
             },
             outputs_range=body.output_range,
+            outputs_cursor=body.output_cursor,
         )
 
     descriptors = _register_inline_bodies(
@@ -891,7 +971,13 @@ def _assemble(
     # (one per producer per output, keyed by output name, with the coalesce/optional stance)
     # + the START_ID root edges + (0-output) the bare START_ID->END_ID root edge,
     # and returns parity-clean START_ID/END_ID wiring.
-    flow_outputs = _flow_outputs(outputs_section)
+    flow_outputs = _stamp_flow_output_origins(
+        _flow_outputs(outputs_section),
+        outputs_section,
+        outputs_cursor=outputs_cursor,
+        owner=owner,
+        catalog_builder=catalog_builder,
+    )
     structural = reconciled + ordering_edges
     boundary_nodes, boundary_edges, boundary_wiring = synthesize_boundary_graph(
         inputs, flow_outputs, node_ids, structural, boundary_field_ranges, lowered=lowered

@@ -515,6 +515,11 @@ def _load_flow(
         source=source,
         boundary_field_ranges=_boundary_field_ranges(root),
         boundary_assert_ranges=_boundary_assert_ranges(root),
+        outputs_cursor=(
+            root.child("output")
+            if root.has("nodes") and root.has("output")
+            else None
+        ),
     )
 
 
@@ -818,6 +823,10 @@ def _load_def(
                 _boundary_field_ranges(def_cursor)
                 if def_cursor is not None
                 else None
+            ),
+            outputs_cursor=(
+                _source_child(def_cursor, "output")
+                or _source_child(def_cursor, "outputs")
             ),
         )
     except LoadError as exc:

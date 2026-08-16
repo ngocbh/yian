@@ -33,8 +33,7 @@ class InlineBody:
         owner: The complete lexical owner path for this anonymous child.
         flow_id: The stable private callable id derived from ``owner``.
         nodes_cursor: The original located cursor for the child's ``nodes:`` value.
-        output: The authored child ``output:`` value.
-        output_range: The authored ``output:`` value range, when located.
+        output_cursor: The original located cursor for the child's ``output:`` value.
         input_ranges: Outer input name to authored binding-value range.
     """
 
@@ -42,9 +41,18 @@ class InlineBody:
     owner: tuple[str, ...]
     flow_id: str
     nodes_cursor: SourceCursor
-    output: Any
-    output_range: SourceRange | None
+    output_cursor: SourceCursor
     input_ranges: dict[str, SourceRange]
+
+    @property
+    def output(self) -> Any:
+        """Return an immutable snapshot of the authored child output value."""
+        return self.output_cursor.value
+
+    @property
+    def output_range(self) -> SourceRange | None:
+        """Return the authored child output value range when source-backed."""
+        return self.output_cursor.range
 
 
 def inline_flow_id(owner: tuple[str, ...]) -> str:
@@ -150,8 +158,7 @@ def extract_inline_bodies(
             owner=child_owner,
             flow_id=flow_id,
             nodes_cursor=body_cursor.child("nodes"),
-            output=body_cursor.get("output"),
-            output_range=body_cursor.range_of("output"),
+            output_cursor=body_cursor.child("output"),
             input_ranges=body_cursor.mapping_value_ranges("input"),
         )
         bodies[node_id] = body

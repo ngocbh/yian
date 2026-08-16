@@ -171,6 +171,47 @@ output:
     )
 
 
+def test_output_alias_and_merge_sites_keep_distinct_occurrences():
+    """Shared definitions retain occurrence-local output identities."""
+    text = """id: aliased-output-origins
+name: aliased-output-origins
+x-shared: &shared
+  merged: &value ${worker.output}
+nodes:
+  worker:
+    kind: code
+    code: return 1
+    output: int
+output:
+  <<: *shared
+  alias: *value
+"""
+    document = SourceDocument.parse(text)
+    loaded = load_flow(text)
+    output_cursor = document.root.child("output")
+    merged_cursor = output_cursor.child("merged")
+    alias_cursor = output_cursor.child("alias")
+
+    merged_origin = _assert_output_site(
+        loaded._local_catalog,
+        loaded.compiled,
+        "merged",
+        merged_cursor,
+        source="${worker.output}",
+    )
+    alias_origin = _assert_output_site(
+        loaded._local_catalog,
+        loaded.compiled,
+        "alias",
+        alias_cursor,
+        source="${worker.output}",
+    )
+
+    assert merged_cursor.range == alias_cursor.range
+    assert merged_cursor.path != alias_cursor.path
+    assert merged_origin != alias_origin
+
+
 def test_output_rewrites_keep_authored_sites_with_final_binding_sources():
     """Desugaring changes output sources without moving their authored sites."""
     text = """id: rewritten-output-origins

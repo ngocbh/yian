@@ -271,7 +271,7 @@ def _node_owns_resolved_range(
 
     Args:
         node:
-            Current baked node for the final runtime-id segment, or `None`.
+            Current baked node for one traversed runtime-id segment, or `None`.
         span (`SourceSpan | None`): Symbolic operation site retained with the failure.
         resolved_range (`SourceRange | None`): Evaluator-resolved concrete range.
 
@@ -294,9 +294,6 @@ def _node_owns_resolved_range(
                 for assertion, range_ in zip(assertions, ranges)
             ):
                 return True
-    span_leaf = _last_segment(span.node)
-    if span_leaf == _strip_clone_suffix(node.id):
-        return node.range == resolved_range
     return False
 
 
@@ -314,16 +311,16 @@ def _walk_call_frames(
     A runtime failure inside a called child surfaces with a NAMESPACED id (`gate/approve` =
     node `approve` inside the child the top-level `call` node `gate` invokes; `gate#0/inner`
     for a map element). This walks the id segment-by-segment — frame 0 the top flow, then each
-    child a `call`/`map` descends into (a `defs:` callable or an external `uses:` file via the
-    node's render-only `child_source` `SourceFrame`) — down to the failing leaf.
+    child a CALL/MAP/LOOP descends into (a `defs:` callable or an external `uses:` file via
+    the node's render-only `child_source` `SourceFrame`) — down to the failing leaf.
 
     Returns `list[(label, text, range)]`, most-recent-call-last (ready to render stacked). Each
     frame's `label` names WHERE it lives: a top/external file frame is the filename alone; a
     `defs:` child frame is filename-qualified (`<file> defs:<name>`) since its nodes physically
     live in that file. A segment with NO recorded range (a synthetic `__start__`/`__end__`/`__ask…`
     runtime segment, or a collapsed compact single-node def) is SKIPPED — its frame is dropped, the
-    frames collected so far kept. Descent stops at the first segment that is not a call/map
-    with a baked child (the leaf), or when a segment can't be resolved. The evaluator's
+    frames collected so far kept. Descent stops at the first segment without a baked child
+    (the leaf), or when a segment can't be resolved. The evaluator's
     already-resolved range replaces the fallback on the deepest traversed node that owns the
     exact locator site. This prevents a caller-owned relocated assertion or a stale durable
     range from being interpreted against unrelated child text. Without an owned concrete
@@ -429,7 +426,7 @@ def _render_frame_stack(frames, message: str) -> None:
     (outermost `call` first, the failing leaf last), then the error message in red. Each
     frame carries a `SourceRange`; the box anchors on its `start_line` (one line per frame,
     like a Python traceback), which for a call-chain node is its header line and for the failing
-    failing operation its source-owned resolved range or best available fallback."""
+    operation its source-owned resolved range or best available fallback."""
     err_console.print(Text("call traceback (most recent call last):", style="red bold"))
     for label, ftext, rng in frames:
         _render_frame_box(ftext, [rng.start_line], label)

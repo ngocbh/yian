@@ -656,14 +656,13 @@ def _build_for_type(
         unknown = value.keys() - typ.fields.keys()
         if unknown:
             all_string_keys = all(type(name) is str for name in unknown)
-            ordered_unknown = (
-                sorted(unknown)
-                if all_string_keys
-                else sorted(
+            try:
+                ordered_unknown = sorted(unknown)
+            except TypeError:
+                ordered_unknown = sorted(
                     unknown,
                     key=lambda name: (type(name).__qualname__, repr(name)),
                 )
-            )
             unknown_path = (
                 path + (ordered_unknown[0],)
                 if all_string_keys
@@ -673,11 +672,13 @@ def _build_for_type(
                 f"record has unknown fields: {ordered_unknown}",
                 path=unknown_path,
             )
+        canonical_names = {name: name for name in typ.fields}
         for fname, fval in value.items():
+            canonical_name = canonical_names[fname]
             _build_for_type(
                 typ.fields[fname],
                 fval,
-                path=path + (fname,),
+                path=path + (canonical_name,),
             )
         return ObjectValue(value=value)
 

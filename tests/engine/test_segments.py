@@ -349,10 +349,29 @@ def test_record_non_string_key_keeps_the_record_path() -> None:
         required=frozenset({"known"}),
     )
     with pytest.raises(TypeCheckError) as caught:
-        build_value_as(record, {"known": 1, 3: "unknown"})
+        build_value_as(record, {"known": 1, 10: "later", 2: "earlier"})
 
     assert caught.value.path == ()
-    assert str(caught.value) == "record has unknown fields: [3]"
+    assert str(caught.value) == "record has unknown fields: [2, 10]"
+
+
+def test_record_uses_the_declared_name_for_equal_string_subclass_keys() -> None:
+    """A mapping-key subtype cannot introduce an invalid structural segment."""
+    from agent_composer.typesys.values import Type
+
+    class FieldName(str):
+        """Test-only key subtype equal to one declared field name."""
+
+    record = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": Type.scalar(ValueKind.INTEGER)},
+        required=frozenset({"score"}),
+    )
+    with pytest.raises(TypeCheckError) as caught:
+        build_value_as(record, {FieldName("score"): "bad"})
+
+    assert caught.value.path == ("score",)
+    assert type(caught.value.path[0]) is str
 
 
 def test_nullable_and_variant_failures_use_the_current_field_path() -> None:

@@ -465,8 +465,6 @@ def test_virtual_assertions_do_not_mint_or_erase_programmatic_origins():
         registry={},
         scope=_CallableScope({}, {}, None, {}),
         owner=("root",),
-        n_lines={},
-        s_lines={},
     )
 
     start = loaded.compiled.nodes[START_ID]

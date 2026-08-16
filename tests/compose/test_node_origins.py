@@ -207,8 +207,6 @@ output: ${invoke.output}
         registry={},
         scope=scope,
         owner=("root",),
-        n_lines={},
-        s_lines={},
     )
 
     root_node = loaded.compiled.nodes["invoke"]

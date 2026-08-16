@@ -66,8 +66,11 @@ Hold this model whenever you design anything:
   executing node origin; route and growth use the executing node origin. Both
   paths feed one schema-2 `NodeFailedRecord(failure, locator, range)` boundary;
   reducer state, `NodeFailed`, `RunFailed`, and `RunResult.failure` retain that
-  same semantic authority without flattened aliases. Host control, stream callbacks, unexpected
-  binder faults, malformed compiled/setup state, unsupported growth kinds, and
+  same semantic authority without flattened aliases. That durable boundary
+  collapses any valid `OriginRef` subclass to exact `OriginRef(key)`, because
+  subclass identity is not part of the single-key wire. Host control, stream
+  callbacks, unexpected binder faults, malformed compiled/setup state,
+  unsupported growth kinds, and
   arbitrary builder/compiler/spawner-or-fragment-copy/digest/materialization/reducer/log faults
   escape. The first route that skip-floods END latches a causal
   `graph.terminal_unreachable` failure on its `NodeRoutedRecord`; replay

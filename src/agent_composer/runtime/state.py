@@ -1175,6 +1175,14 @@ def _prepare_success_transition(
     )
 
 
+def _canonical_wire_failure(failure: Failure) -> Failure:
+    """Collapse origin subclasses to the wire's single-key identity shape."""
+    return replace(
+        failure,
+        trace=tuple(OriginRef(origin.key) for origin in failure.trace),
+    )
+
+
 def _prepare_route_transition(
     state: RunState,
     record: NodeRoutedRecord,
@@ -1187,7 +1195,14 @@ def _prepare_route_transition(
         record,
         derive_terminal_failure=derive_terminal_failure,
     )
-    record_for_wire = replace(record, terminal_failure=causal_failure)
+    record_for_wire = replace(
+        record,
+        terminal_failure=(
+            _canonical_wire_failure(causal_failure)
+            if causal_failure is not None
+            else None
+        ),
+    )
     run_id = state.run_id
     if not isinstance(run_id, str):  # established by initialized-state validation
         raise ValueError("run state is not initialized")
@@ -1261,19 +1276,23 @@ def _prepare_failure_transition(
     run_id = state.run_id
     if not isinstance(run_id, str):  # established by initialized-state validation
         raise ValueError("run state is not initialized")
+    record_for_wire = replace(
+        record,
+        failure=_canonical_wire_failure(record.failure),
+    )
     canonical_bytes = encode_record(
         RecordEnvelope(
             schema=SCHEMA_VERSION,
             run_id=run_id,
             seq=state.next_sequence,
-            record=record,
+            record=record_for_wire,
         )
     )
     canonical_envelope = decode_record(canonical_bytes)
     canonical_record = canonical_envelope.record
     if not isinstance(canonical_record, NodeFailedRecord):
         raise TypeError("node-failure envelope decoded to a different record kind")
-    if canonical_record != record:
+    if canonical_record != record_for_wire:
         raise ValueError("NodeFailedRecord is not in canonical wire form")
 
     delta = _failure_delta(canonical_record)

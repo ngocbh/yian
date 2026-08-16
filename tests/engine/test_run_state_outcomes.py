@@ -66,6 +66,10 @@ _FINGERPRINT = "b" * 64
 _RUN_ID = "outcome-run"
 
 
+class _SpecialOrigin(OriginRef):
+    """Valid front-end-specific origin used to test durable normalization."""
+
+
 def _node_failure(
     node_id: str,
     message: str = "boom",
@@ -2084,6 +2088,31 @@ def test_route_latches_causal_terminal_failure_until_sibling_quiescence():
     ]
 
 
+def test_causal_route_canonicalizes_origin_subclass_for_wire():
+    flow = _terminal_skip_route_flow(
+        router_origin=_SpecialOrigin("special-router-site")
+    )
+    state, log = _initialized_and_started(flow)
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, "router"))
+
+    prepared = prepare_node_routed(state, "router", "go")
+    failure = prepared.record.terminal_failure
+
+    assert failure is not None
+    assert failure.trace == (OriginRef("special-router-site"),)
+    assert type(failure.trace[0]) is OriginRef
+    assert failure is prepared._plan.delta.terminal_unreachable_failure
+
+    commit_prepared(log, state, prepared)
+
+    assert state.result is not None
+    assert state.result.failure is failure
+    logged = tuple(log)[-1].record.terminal_failure
+    assert logged == failure
+    assert type(logged.trace[0]) is OriginRef
+
+
 def test_explicit_failure_wins_after_terminal_unreachable_is_latched():
     state, log = _terminal_skip_with_sibling_in_flight()
     route = prepare_node_routed(state, "router", "go")
@@ -2619,6 +2648,33 @@ def test_failure_is_terminal_and_preserves_diagnostics():
     assert state.edge_state == edges_before
     assert state.next_sequence == sequence_before + 1
     assert tuple(log)[-1].record == expected_record
+
+
+def test_failure_transition_canonicalizes_origin_subclass_for_wire():
+    state, log = _failure_in_flight()
+    supplied = Failure(
+        code="node.execute",
+        message="boom",
+        node_id="failing",
+        trace=(_SpecialOrigin("special-failure-site"),),
+    )
+
+    prepared = prepare_node_failed(state, supplied)
+    failure = prepared.record.failure
+
+    assert failure.trace == (OriginRef("special-failure-site"),)
+    assert type(failure.trace[0]) is OriginRef
+    assert failure is prepared._plan.delta.failure
+    assert prepared.observers[0].failure is failure
+    assert prepared.observers[1].failure is failure
+
+    commit_prepared(log, state, prepared)
+
+    assert state.result is not None
+    assert state.result.failure is failure
+    logged = tuple(log)[-1].record.failure
+    assert logged == failure
+    assert type(logged.trace[0]) is OriginRef
 
 
 def test_failure_record_replay_reconstructs_identical_state():

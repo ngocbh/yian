@@ -92,12 +92,14 @@ empty trace. Unsupported growth kinds and arbitrary builder, compiler,
 spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
 faults escape rather than becoming flow failures.
 
-Schema-2 `NodeFailedRecord` retains that exact nested value. The reducer carries
-the canonical immutable `Failure` through `NodeFailed`, terminal `RunFailed`, and
-`RunResult.failure` without flattened aliases; live carriers share the same
-object, while recovery reconstructs an equal value. `locator` and `range` remain
-adjacent temporary YAML presentation metadata until operation origins provide
-equivalent precision. A route that first skip-floods END latches
+At the schema-2 boundary, every trace item becomes an exact base
+`OriginRef(key)`: front-end-specific subclasses are valid in memory, but class
+identity is intentionally absent from the single-key wire. The reducer carries
+that canonical immutable `Failure` through `NodeFailed`, terminal `RunFailed`,
+and `RunResult.failure` without flattened aliases; live carriers share the same
+object, while recovery reconstructs an equal canonical value. `locator` and
+`range` remain adjacent temporary YAML presentation metadata until operation
+origins provide equivalent precision. A route that first skip-floods END latches
 `graph.terminal_unreachable` with the causal router and its origin. That
 `NodeRoutedRecord` persists the derived failure; replay structurally revalidates
 the route and restores the recorded value. No additional terminal record is

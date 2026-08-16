@@ -158,7 +158,9 @@ schema-2 `NodeFailedRecord` carrying one nested, immutable `Failure` plus tempor
 source `locator`/`range` presentation metadata. Only after the record is appended
 does the reducer expose that same `Failure` through `NodeFailed`, terminal
 `RunFailed`, and `RunResult.failure`. There are no flattened error, type, node, or
-traceback aliases. The `Node.on_failure` method remains reserved for a future
+traceback aliases. The single-key wire canonicalizes any valid front-end
+`OriginRef` subclass to exact `OriginRef(key)`; subclass identity is not durable.
+The `Node.on_failure` method remains reserved for a future
 error-strategy seam and is not driven today.
 
 Every execution uses one `RunLog`. `MemoryRunLog` gives a process-local run the same

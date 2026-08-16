@@ -95,8 +95,10 @@ classification is structural too:
 
 `FlowEngine` passes both sources into
 `NodeFailedRecord(failure, locator, range)` without flattening semantic fields.
-Live record, reducer, observer, and public-result carriers share that immutable
-`Failure`; replay reconstructs an equal value. Schema 1 is deliberately rejected.
+The durable boundary normalizes valid `OriginRef` subclasses to exact base
+`OriginRef(key)` values because the wire owns only that key. Live record, reducer,
+observer, and public-result carriers share the resulting immutable `Failure`;
+replay reconstructs an equal canonical value. Schema 1 is deliberately rejected.
 
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine

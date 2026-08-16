@@ -131,23 +131,25 @@ are stamped after rewrites and reused by END; output mapping keys stay origin-fr
 Generated compact-root and single-node-definition reexports have no authored binding
 occurrence and stay origin-free; their output declaration is reserved for contract-origin
 work. Without a retained occurrence, Compose mints no origin and preserves any explicit
-programmatic origin. Assembly then stores a
-frozen snapshot on `ComposedFlow._local_catalog`.
-That field stays private and document-local: it is not a complete resolver for embedded
-external flows until their origins are lexically rebased.
+programmatic origin. Private assembly leaves the resolver unset while its shared catalog
+grows. The loader validates and lexically rebases external children per alias, freezes the
+catalog once at the physical-file boundary, and installs the exact
+`ComposedFlow.origin_resolver`; source-free graphs use `None`.
 
 `compose/loader` owns the state whose lifetime is a load graph or one authored
 file. Its resolved-path context guards cycles and caches only successfully
-compiled external flows, so aliases and diamonds reuse one physical source load
-and compiled flow.
+compiled external flows with complete resolvers, so aliases and diamonds reuse one
+canonical physical source load and compiled flow.
 Its file-local callable scope owns authored `defs:`/`uses:`, compiler-private
-callables, and their shared success cache. The loader resolves defs and uses eagerly;
-only compiler-private builders stay lazy. Recursive local/private construction is
+callables, and their shared success cache. Each external alias is a rebased graph copy;
+repeated calls through that alias reuse the copy without mutating the path cache. The
+loader resolves defs and uses eagerly; only compiler-private builders stay lazy.
+Recursive local/private construction is
 guarded separately from cross-file recursion. A failed callable attempt rolls back
 new private builders, nested cache entries, and catalog sites together. These are
 distinct caches and guards with distinct keys and lifetimes. Neither `compile` nor
-`runtime` knows about YAML, `SourceDocument`, `SourceCursor`, or loader-private callable scope;
-they receive ordinary compiled contracts.
+`runtime` knows about YAML, `SourceDocument`, `SourceCursor`, or loader-private
+callable scope; they receive ordinary compiled contracts.
 
 Compose-only anonymous children are a front-end ownership example. Located,
 read-only `SourceCursor` projection belongs in `compose/desugar`; strict generated

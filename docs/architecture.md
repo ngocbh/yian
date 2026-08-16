@@ -76,8 +76,9 @@ its `build()`. Cross-node graph passes live in the ordered phase packages
 compose/build/`. The engine core sees none of it.
 
 The output is a **`ComposedFlow`**: a `CompiledFlow` (the static topology) plus the
-canonical typed `input:` parameters, the `asserts`, and a render-only *source frame*
-used to draw error tracebacks that point back at your YAML.
+canonical typed `input:` parameters, the `asserts`, a render-only *source frame*, and
+an optional complete `origin_resolver`. Source-free graphs use `None`; every Compose-
+owned origin reachable from an originful graph has one exact diagnostic-frame route.
 
 The loader owns one `SourceDocument` for each flow source document. Source-aware parsing
 and inline extraction reuse cursors into it; later passes use descriptors and nodes that
@@ -91,7 +92,10 @@ and public value reads are defensive copies. No phase reparses YAML to recover s
 For external `uses:` files, the shared load context caches each successful
 `ComposedFlow` by resolved absolute path. Repeated aliases and diamond dependencies thus
 read, parse, and compile that physical file once during the load graph. Only successfully
-compiled flows enter the cache.
+compiled flows with complete resolvers enter the cache. A file-local alias cache holds
+rebased graph copies: repeated calls through one alias reuse its copy, while different
+aliases and diamond branches get disjoint lexical origin namespaces without changing the
+canonical path-cache entry.
 
 → **[compose.md](compose.md)** is the full tour of this phase: the pipeline pass by
 pass, the two-axis layout, descriptors vs. nodes, and how a `${...}` becomes an edge.

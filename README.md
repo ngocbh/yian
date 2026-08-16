@@ -235,6 +235,11 @@ result = run_flow(loaded, {"name": "Ada"})
 print(result.status, result.output)
 ```
 
+`loaded.origin_resolver` is the source-neutral authority for every origin reachable
+from the compiled Compose graph. It is `None` only when that graph is source-free;
+otherwise it resolves local, nested, and external-file origins to diagnostic frames.
+Resolver metadata does not affect flow equality, fingerprints, or growth digests.
+
 Lower-level Python graph builders and tooling can import the source-neutral
 `Binding`, `Parameter`, `Assertion`, `ValueContract`, `ContractOrigins`, and
 `ValuePath` vocabulary from `agent_composer.nodes`. Origins are optional; these

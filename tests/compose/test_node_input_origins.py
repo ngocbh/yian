@@ -12,9 +12,9 @@ from agent_composer.compose.build.pipeline import (
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import _CallableScope
 from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.compose.source import SourceCatalog, SourceCursor, SourceDocument
+from agent_composer.compose.source import SourceCursor, SourceDocument
 from agent_composer.compose.source.catalog import _SourceCatalogBuilder
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import OriginRef, OriginResolver
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import Binding, Parameter
 
@@ -29,7 +29,7 @@ def _parameter(node: Node, name: str) -> Parameter:
 
 
 def _assert_input_site(
-    catalog: SourceCatalog,
+    catalog: OriginResolver,
     node: Node,
     binding: Binding,
     name: str,
@@ -55,7 +55,7 @@ def _assert_input_site(
 
 
 def _assert_binding_site(
-    catalog: SourceCatalog,
+    catalog: OriginResolver,
     binding: Binding,
     cursor: SourceCursor,
     *,
@@ -64,8 +64,8 @@ def _assert_binding_site(
     """Assert one authored value origin carried only by a flow ``Binding``.
 
     Args:
-        catalog (`SourceCatalog`):
-            Document-local catalog that must resolve the binding origin.
+        catalog (`OriginResolver`):
+            Resolver that must locate the binding origin.
         binding (`Binding`):
             Canonical flow-owned binding under test.
         cursor (`SourceCursor`):
@@ -127,7 +127,8 @@ output:
 """
     document = SourceDocument.parse(text)
     loaded = load_flow(text)
-    catalog = loaded._local_catalog
+    catalog = loaded.origin_resolver
+    assert catalog is not None
 
     root_node = loaded.compiled.nodes["worker"]
     named_node = loaded.compiled.nodes["named_call"].child.nodes["worker"]
@@ -204,7 +205,7 @@ output: ${invoke.output}
     )
 
     _assert_input_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         child.nodes["compact"],
         child.wiring["compact"]["x"],
         "x",
@@ -261,7 +262,7 @@ output: ${consumer.output}
 
     host = loaded.compiled.nodes["consumer"]
     _assert_input_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         host,
         loaded.compiled.wiring["consumer"]["x"],
         "x",
@@ -329,7 +330,7 @@ output: ${worker.output}
     )
 
     _assert_input_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         loaded.compiled.nodes["worker"],
         loaded.compiled.wiring["worker"]["x"],
         "x",
@@ -364,7 +365,7 @@ output: ${ask.output}
         .child("topic")
     )
     _assert_input_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         gate,
         loaded.compiled.wiring["ask"]["topic"],
         "topic",
@@ -445,7 +446,7 @@ output: ${mapping.output}
     )
 
     _assert_input_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         mapping,
         loaded.compiled.wiring["mapping"]["x"],
         "x",
@@ -454,13 +455,13 @@ output: ${mapping.output}
     )
 
     mapping_origin = _assert_binding_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         loaded.compiled.wiring["mapping"]["over"],
         document.root.child("nodes").child("mapping").child("over"),
         source="${input.items}",
     )
     waiting_origin = _assert_binding_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         loaded.compiled.wiring["waiting"]["until"],
         document.root.child("nodes").child("waiting").child("until"),
         source="${input.deadline}",
@@ -517,7 +518,7 @@ output: ${mapping.output}
         "x": "${item}",
     }
     _assert_binding_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         wiring["over"],
         document.root.child("nodes").child("mapping").child("over"),
         source="${__call_0.output}",
@@ -605,7 +606,7 @@ output:
         assert node.params == []
         origins.add(
             _assert_binding_site(
-                loaded._local_catalog,
+        loaded.origin_resolver,
                 binding,
                 cursor,
                 source=source,

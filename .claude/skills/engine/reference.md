@@ -415,10 +415,10 @@ Flow-output values are registered after rewrites on `FlowOutput.binding`; END re
 binding, and output mapping keys are not origin sites. Generated compact-root and
 single-node-definition reexports stay origin-free because their output declaration is a
 contract site whose origin remains deferred. Without a retained source occurrence,
-Compose mints no origin and preserves any explicit programmatic origin. Each assembled
-flow receives a frozen snapshot as private
-`ComposedFlow._local_catalog` staging metadata. It is not the complete resolver for
-reachable external children until their origins are lexically rebased.
+Compose mints no origin and preserves any explicit programmatic origin. Private assembly
+leaves the resolver unset. At the physical-file boundary, the loader validates and
+lexically rebases canonical external children per alias, freezes the shared local catalog,
+and installs an exact `ComposedFlow.origin_resolver`; source-free graphs use `None`.
 
 After cursor-based extraction and parsing, descriptors and nodes carry the derived
 ranges needed by later phases; no phase reparses source fragments or inspects the
@@ -562,12 +562,11 @@ resolved to a line at the CLI boundary — never a text heuristic.
   Output-type failures occur after evaluation, so their durable failure may carry only the
   symbolic `field` locator; the CLI resolves it from the supplied flow when no concrete range
   was recorded.
-- **Migration boundary:** authored nodes and assertions now carry opaque origins, but runtime
-  and CLI failure rendering still use the legacy locator/range path above. For assertions,
-  Compose derives that temporary positional range and `Assertion.origin` from the same
-  retained item cursor before rewrites preserve both. The document-local catalog remains
-  private until the remaining carrier stamping and cross-file rebasing make one
-  returned-flow resolver complete.
+- **Migration boundary:** authored nodes and assertions now carry opaque origins, and every
+  flow returned by `load_flow` carries one complete source-neutral resolver (or `None` when
+  source-free). Runtime and CLI failure rendering still use the legacy locator/range path
+  above. For assertions, Compose derives that temporary positional range and
+  `Assertion.origin` from the same retained item cursor before rewrites preserve both.
 - **Resolution (CLI boundary):** `cli/run.py` prefers the pre-resolved `nf.range` →
   `result.range`; only if both are absent does `_resolve_range` map the span itself, via
   `_top_ranges` (the loaded flow's `SourceFrame` maps, or the defensive

@@ -199,7 +199,8 @@ mapping summaries bound repeated merge-DAG traversal. Public value snapshots use
 a stack-safe iterative copier that preserves shared and recursive aliases. Within
 one successful file-import graph, the loader's resolved-path cache also ensures
 that each external physical file is read, parsed, and compiled once; aliases and
-diamond imports reuse the cached `ComposedFlow`.
+diamond imports reuse that canonical `ComposedFlow` as the source for their
+lexically rebased views.
 
 Source-aware parsing and inline extraction navigate stable `SourceCursor` values.
 A physical cursor combines a definition range with an occurrence path (and a
@@ -208,13 +209,14 @@ value snapshot; a projected cursor replaces or renames values while explicitly
 retaining the physical sources of selected children. Descriptors and nodes carry
 derived ranges afterward, so no phase reparses text or touches parser objects.
 
-`SourceCatalog` is Compose's immutable `OriginResolver`. Its private builder maps
-typed semantic paths to opaque origins while retaining the physical document
-occurrence and an explicit key/value anchor. Resolution replays that occurrence
-into a `DiagnosticFrame`; it neither reparses YAML nor creates a parallel range
-map. Virtual or unanchored cursors produce no origin. One builder is shared by
-the root flow, its `defs:`, and its inline bodies, and each assembled
-`ComposedFlow` retains a frozen document-local snapshot as `_local_catalog`.
+`SourceCatalog` is Compose's immutable document-local `OriginResolver`. Its private
+builder maps typed semantic paths to opaque origins while retaining the physical
+document occurrence and an explicit key/value anchor. Resolution replays that
+occurrence into a `DiagnosticFrame`; it neither reparses YAML nor creates a parallel
+range map. Virtual or unanchored cursors produce no origin. One builder is shared by
+the root flow, its `defs:`, and its inline bodies. Private assembly leaves the public
+resolver unset; the loader freezes the builder once when the physical-file root is
+complete.
 Final assembly registers authored node headers, ordinary node-input keys and values,
 source-backed reserved MAP/WAIT wiring values, assertions, and source-backed flow-output
 values directly on their canonical semantic carriers; it does not build a parallel
@@ -228,8 +230,13 @@ keys are not origin sites. For sites without retained occurrences, Compose mints
 and preserves any explicit programmatic origin. Generated compact-root and
 single-node-definition reexports are such source-free output sites; the authored output
 type is a contract site whose origin remains deferred.
-That field is intentionally private: external child origins still require
-lexical rebasing before the returned flow can expose one complete resolver.
+At each `uses:` alias, the loader validates the canonical child's complete resolver,
+copies and rebases its compiled origin graph under a collision-free lexical key, and
+caches that alias view. The physical resolved-path cache remains canonical and is never
+mutated. Finalization filters the document catalog and alias tables to the exact reachable
+origin set and installs one immutable `ResolverTable` as
+`ComposedFlow.origin_resolver`; a source-free graph carries `None`. Repeated calls through
+one alias reuse its view, while distinct aliases and diamond branches remain disjoint.
 
 `SourceFrame` is persistent render-only diagnostic metadata on
 `ComposedFlow.source` and composite nodes' `child_source`. It carries source text

@@ -283,10 +283,10 @@ their assertions onto the synthesized node, where they remain node-local. Flow-o
 values are stamped after rewrites on `FlowOutput.binding`; END reuses that binding and
 output mapping keys remain origin-free. Generated compact-root and
 single-node-definition reexports have no authored binding occurrence and stay origin-free;
-their output declaration is reserved for contract-origin work. Assembly then freezes a
-document-local snapshot on
-`ComposedFlow._local_catalog`; the private field is not a complete cross-file resolver
-until embedded external origins are lexically rebased.
+their output declaration is reserved for contract-origin work. Private assembly keeps the
+resolver unset while the shared catalog grows. The loader validates and lexically rebases
+each external alias view, then freezes the local catalog once and installs an exact
+`ComposedFlow.origin_resolver`; source-free graphs use `None`.
 Inline extraction intentionally takes one graph-wide nodes snapshot before
 projection so unchanged aliases retain sharing; field navigation uses cursors or
 their package-private read-only view.

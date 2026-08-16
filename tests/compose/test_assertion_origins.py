@@ -7,13 +7,13 @@ from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.compose import load_flow
 from agent_composer.compose.build.pipeline import _assemble
 from agent_composer.compose.loader import _CallableScope
-from agent_composer.compose.source import SourceCatalog, SourceCursor, SourceDocument
-from agent_composer.diagnostics import OriginRef
+from agent_composer.compose.source import SourceCursor, SourceDocument
+from agent_composer.diagnostics import OriginRef, OriginResolver
 from agent_composer.nodes.contracts import Assertion
 
 
 def _assert_assertion_site(
-    catalog: SourceCatalog,
+    catalog: OriginResolver,
     assertion: Assertion,
     cursor: SourceCursor,
     *,
@@ -60,7 +60,8 @@ asserts:
 """
     document = SourceDocument.parse(text)
     loaded = load_flow(text)
-    catalog = loaded._local_catalog
+    catalog = loaded.origin_resolver
+    assert catalog is not None
     assertion_cursors = document.root.child("asserts")
     start = loaded.compiled.nodes[START_ID]
     end = loaded.compiled.nodes[END_ID]
@@ -124,7 +125,8 @@ asserts:
 """
     document = SourceDocument.parse(text)
     loaded = load_flow(text)
-    catalog = loaded._local_catalog
+    catalog = loaded.origin_resolver
+    assert catalog is not None
 
     first_cursor = (
         document.root.child("nodes")
@@ -220,7 +222,8 @@ output:
 """
     document = SourceDocument.parse(text)
     loaded = load_flow(text)
-    catalog = loaded._local_catalog
+    catalog = loaded.origin_resolver
+    assert catalog is not None
 
     sites = (
         (
@@ -292,7 +295,7 @@ asserts:
     cursor = document.root.child("asserts").child(0)
 
     _assert_assertion_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         node.post_asserts[0],
         cursor,
         expression="${output} >= 0",
@@ -330,7 +333,8 @@ output: ${drive.output}
 """
     document = SourceDocument.parse(text)
     loaded = load_flow(text)
-    catalog = loaded._local_catalog
+    catalog = loaded.origin_resolver
+    assert catalog is not None
     drive = loaded.compiled.nodes["drive"]
     cursors = (
         document.root.child("nodes").child("drive").child("asserts")
@@ -388,7 +392,8 @@ output: ${invoke.output}
 """
     document = SourceDocument.parse(text)
     loaded = load_flow(text)
-    catalog = loaded._local_catalog
+    catalog = loaded.origin_resolver
+    assert catalog is not None
     invoke = loaded.compiled.nodes["invoke"]
     child = invoke.child
     child_asserts = (
@@ -470,4 +475,4 @@ def test_virtual_assertions_do_not_mint_or_erase_programmatic_origins():
     assert start.post_asserts[0].origin is None
     assert end.post_asserts[0].display == programmatic.display
     assert end.post_asserts[0].origin is explicit
-    assert loaded._local_catalog.resolve(explicit) is None
+    assert loaded.origin_resolver is None

@@ -863,17 +863,24 @@ def _assemble(
     flow_inputs = {parameter.name for parameter in inputs}
     descriptors = parse_nodes(nodes_cursor)
     try:
-        descriptors = {
-            node_id: replace(
+        located_descriptors: dict[str, NodeDescriptor] = {}
+        for node_id, descriptor in descriptors.items():
+            authored_cursor = nodes_cursor.child(node_id)
+            node_path = (*owner, "node", node_id)
+            located = replace(
                 descriptor,
                 origin=catalog_builder.register(
-                    (*owner, "node", node_id),
-                    nodes_cursor.child(node_id),
+                    node_path,
+                    authored_cursor,
                     anchor="key",
                 ),
             )
-            for node_id, descriptor in descriptors.items()
-        }
+            located_descriptors[node_id] = located.with_source_origins(
+                normalize_node_signature_cursor(authored_cursor),
+                site_path=node_path,
+                catalog_builder=catalog_builder,
+            )
+        descriptors = located_descriptors
     except SourceAccessError as exc:
         raise diagnostics.error(str(exc), range=exc.range) from exc
 

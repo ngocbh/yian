@@ -39,9 +39,12 @@ import ast
 import importlib
 import re
 import textwrap
+from typing import Callable, Iterator, Optional, cast
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.code.watchdog import node_watchdog
+from agent_composer.nodes.contracts import _map_origin, _validate_optional_origin
 from agent_composer.typesys.values import ANY_VALUE_ADAPTER, TypeCheckError, build_value
 
 # A reference is a single dotted module path + one colon + a function identifier:
@@ -140,6 +143,11 @@ class CodeNode(Node):
         code_line (`int`, *optional*, defaults to `1`):
             The 1-based YAML line where the inline `code:` block content begins, used only in
             inline mode for absolute-YAML-line traceback framing (via leading-newline padding).
+        code_origin (`OriginRef | None`, *optional*, defaults to `None`):
+            Opaque authored identity for the whole ``code:`` scalar. Diagnostic-only.
+        code_line_origins (`tuple[OriginRef, ...]`, *optional*, defaults to `()`):
+            Opaque identities for exact constructed literal lines in value order.
+            Empty when line-level provenance is unavailable. Diagnostic-only.
         title (`str`, *optional*, defaults to `None`):
             Display title.
 
@@ -158,10 +166,15 @@ class CodeNode(Node):
         code: str,
         source_file: str = "<inline-code>",
         code_line: int = 1,
+        code_origin: OriginRef | None = None,
+        code_line_origins: tuple[OriginRef, ...] = (),
         title=None,
     ) -> None:
         super().__init__(node_id, title=title)
         self.code = code
+        self.code_origin = code_origin
+        self.code_line_origins = code_line_origins
+        self._validate_code_origins()
         self._mode = classify_code_source(code)  # "reference" | "inline"; raises on reject
         if self._mode == "reference":
             self.ref = code  # reference-mode callable target (kept for the in-process path)
@@ -179,6 +192,42 @@ class CodeNode(Node):
         main_fn = ast.parse(wrapped).body[0]
         if not _returns_in_scope(main_fn.body):
             raise ValueError("inline `code:` has no `return` (the body must return a value)")
+
+    def _validate_code_origins(self) -> None:
+        """Require immutable source-neutral CODE diagnostic carriers."""
+        _validate_optional_origin(self.code_origin, "CODE source origin")
+        if type(self.code_line_origins) is not tuple:
+            raise TypeError("CODE line origins must be a tuple")
+        for origin in self.code_line_origins:
+            if not isinstance(origin, OriginRef):
+                raise TypeError("CODE line origins must contain only OriginRef values")
+
+    def iter_local_origins(
+        self,
+        *,
+        _seen_carriers: Optional[set[int]] = None,
+    ) -> Iterator[OriginRef]:
+        """Yield common origins followed by whole-source and exact line origins."""
+        self._validate_code_origins()
+        yield from super().iter_local_origins(_seen_carriers=_seen_carriers)
+        if self.code_origin is not None:
+            yield self.code_origin
+        yield from self.code_line_origins
+
+    def rewrite_local_origins(
+        self,
+        mapper: Callable[[OriginRef], OriginRef],
+        *,
+        _seen_carriers: Optional[set[int]] = None,
+    ) -> None:
+        """Rewrite common and CODE-specific origins on a copied node graph."""
+        self._validate_code_origins()
+        super().rewrite_local_origins(mapper, _seen_carriers=_seen_carriers)
+        self.code_origin = _map_origin(self.code_origin, mapper)
+        self.code_line_origins = tuple(
+            cast(OriginRef, _map_origin(origin, mapper))
+            for origin in self.code_line_origins
+        )
 
     def _run_impl(self, inputs: dict) -> Output:
         # Only CODE needs the soft-budget diagnostic: its author Python executes in-process

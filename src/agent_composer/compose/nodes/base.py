@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Optional
 
 from agent_composer.nodes.base import FieldRanges, Node
 from agent_composer.nodes.contracts import Parameter, ValueContract
@@ -40,6 +40,9 @@ from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.source import SourceCursor
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceRange
+
+if TYPE_CHECKING:
+    from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 
 
 @dataclass(frozen=True)
@@ -345,6 +348,37 @@ class NodeDescriptor:
                 f"node {node_id!r} (kind={cls.kind}): `asserts:` must be a list of strings",
                 range=ranges.get(("field", "asserts")),
             )
+
+    # --- Source-origin attachment ------------------------------------------------------
+
+    def with_source_origins(
+        self,
+        cursor: SourceCursor,
+        *,
+        site_path: tuple[str | int, ...],
+        catalog_builder: "_SourceCatalogBuilder",
+    ) -> "NodeDescriptor":
+        """Return this descriptor with kind-owned authored origins attached.
+
+        The Compose conductor calls this immutable hook once for every authored
+        descriptor after it stamps the common node-header origin. Most kinds own no
+        additional semantic source sites and return themselves unchanged. A kind with
+        ordered or interior operations overrides the hook and registers those sites
+        through the file-owned catalog builder.
+
+        Args:
+            cursor (`SourceCursor`):
+                Normalized authored node occurrence for this descriptor.
+            site_path (`tuple[str | int, ...]`):
+                Complete semantic path of the node occurrence.
+            catalog_builder (`_SourceCatalogBuilder`):
+                File-owned registry that mints source-neutral origins.
+
+        Returns:
+            `NodeDescriptor`:
+                This immutable descriptor, unchanged by the default implementation.
+        """
+        return self
 
     # --- Build-side machinery -----------------------------------------------------------
 

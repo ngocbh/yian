@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.source import SourceDocument
 
 
@@ -31,8 +32,7 @@ def test_root_section_failures_keep_the_authored_range(filename: str, section: s
     with pytest.raises(LoadError) as caught:
         load_flow(text)
 
-    assert caught.value.range == expected
-    assert caught.value.line == expected.start_line
+    assert caught.value.diagnostic.frames[-1].range == expected
 
 
 def test_definition_output_failure_keeps_its_absolute_value_range() -> None:
@@ -60,12 +60,15 @@ output: ${run.output}
     with pytest.raises(LoadError, match="defs entry 'child'") as caught:
         load_flow(text)
 
-    assert caught.value.range == expected
-    assert caught.value.line == expected.start_line
+    frames = caught.value.diagnostic.frames
+    assert [frame.range for frame in frames] == [
+        document.root.child("defs").child("child").range,
+        expected,
+    ]
 
 
-def test_mapped_root_output_legacy_line_derives_from_retained_range() -> None:
-    """A mapped output never pairs its key line with its value-block range."""
+def test_mapped_root_output_keeps_the_retained_range() -> None:
+    """A mapped output retains its complete authored value-block range."""
     text = """id: mapped-output-range
 name: mapped_output_range
 nodes:
@@ -83,8 +86,7 @@ output:
     with pytest.raises(LoadError, match="unresolved references") as caught:
         load_flow(text)
 
-    assert caught.value.range == expected
-    assert caught.value.line == expected.start_line
+    assert caught.value.diagnostic.frames[-1].range == expected
 
 
 @pytest.mark.parametrize(
@@ -101,10 +103,10 @@ output:
 """,
     ],
 )
-def test_definition_wrapper_does_not_mix_an_inner_line_with_its_fallback_range(
+def test_definition_wrapper_prepends_context_without_replacing_inner_location(
     definition: str,
 ) -> None:
-    """A def wrapper adds its coarse range only when the inner error is unlocated."""
+    """A def wrapper retains both its outer body and the precise inner uses site."""
     text = f"""id: def-inner-line
 name: def_inner_line
 uses:
@@ -118,19 +120,25 @@ defs:
 output: ${{invoke.output}}
 """
 
+    document = SourceDocument.parse(text)
+    expected = [
+        document.root.child("defs").child("local").range,
+        document.root.child("uses").child("external").range,
+    ]
+
     def fail_resolver(_path: str, _version: str | None = None):
-        raise LoadError("external failure", line=999)
+        raise LoadDiagnostics().error("external failure")
 
     with pytest.raises(LoadError, match="defs entry 'local'") as caught:
         load_flow(text, child_resolver=fail_resolver)
 
-    assert caught.value.line == 999
-    assert caught.value.range is None
+    assert [frame.range for frame in caught.value.diagnostic.frames] == expected
 
 
 def test_external_resolver_error_location_is_owned_by_each_source_document() -> None:
     """Locating a shared resolver exception never mutates or reuses its first site."""
-    shared_error = LoadError("external failure")
+    shared_error = LoadDiagnostics().error("external failure")
+    original_diagnostic = shared_error.diagnostic
 
     def fail_resolver(_path: str, _version: str | None = None):
         raise shared_error
@@ -171,10 +179,11 @@ output: ${invoke.output}
         with pytest.raises(LoadError, match="external failure") as caught:
             load_flow(text, child_resolver=fail_resolver)
         assert caught.value is not shared_error
-        assert caught.value.range == expected
-        assert caught.value.line == expected.start_line
-        seen_ranges.append(caught.value.range)
+        frames = caught.value.diagnostic.frames
+        assert len(frames) == 1
+        assert frames[0].range == expected
+        seen_ranges.append(frames[0].range)
 
     assert seen_ranges[0] != seen_ranges[1]
-    assert shared_error.range is None
-    assert shared_error.line is None
+    assert shared_error.diagnostic is original_diagnostic
+    assert shared_error.diagnostic.frames == ()

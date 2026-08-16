@@ -134,7 +134,7 @@ def test_render_diagnostic_renders_ordered_frames_and_context_notes() -> None:
     with err_console.capture() as cap:
         render_diagnostic(diag)
     out = cap.get()
-    assert "source context (outermost first):" in out
+    assert "source locations:" in out
     assert out.index("root.yaml:4") < out.index("child.yaml:2") < out.index("leaf failed")
     assert "while invoking child" in out
     assert "inside leaf" in out

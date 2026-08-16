@@ -57,7 +57,7 @@ from agent_composer.compose.desugar.inline_bodies import (
     extract_inline_bodies,
 )
 from agent_composer.compose.nodes.resolver import ChildResolver
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.helpers.uses import parse_uses_ref
 from agent_composer.compose.helpers.source import (
     SourceFrame,
@@ -77,6 +77,9 @@ from agent_composer.compose.source import (
     SourceDocument,
 )
 from agent_composer.compose.source.catalog import _SourceCatalogBuilder, _scope_origin
+
+
+_UNLOCATED_DIAGNOSTICS = LoadDiagnostics()
 
 
 def _restore_node_surface(nodes):
@@ -251,16 +254,25 @@ def top_frame_ranges(
 _DEF_ALLOWED = frozenset({"inputs", "nodes", "outputs", "asserts", "llm_config"})
 
 
-def _validate_system(system: dict) -> None:
+def _validate_system(
+    system: dict,
+    cursor: SourceCursor | None = None,
+) -> None:
     """Validate the top-level `system:` SECTION shape. Only `paths:` (a list of
     strings) is allowed — this is the resolution search path, NOT the strict
     `${system.X}` ambient namespace (a `${system.paths}` ref stays a compile error)."""
     extra = sorted(set(system) - {"paths"})
     if extra:
-        raise LoadError(f"system: unknown key(s) {extra} (allowed: paths)")
+        raise LoadDiagnostics.from_cursor(cursor).error(
+            f"system: unknown key(s) {extra} (allowed: paths)",
+            range=(cursor.key_range_of(extra[0]) if cursor is not None else None),
+        )
     paths = system.get("paths", [])
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
-        raise LoadError("system: paths must be a list of strings")
+        raise LoadDiagnostics.from_cursor(cursor).error(
+            "system: paths must be a list of strings",
+            range=(cursor.range_of("paths") if cursor is not None else None),
+        )
 
 
 def _reject_authored_private_callable_names(
@@ -293,7 +305,7 @@ def _reject_authored_private_callable_names(
         )
 
         noun = "callable names" if section == "defs" else "aliases"
-        raise LoadError(
+        raise LoadDiagnostics.from_cursor(root).error(
             f"{section}: {noun} with prefix {INLINE_FLOW_PREFIX!r} are reserved "
             "for compiler-generated inline child flows",
             range=declaration_range,
@@ -326,7 +338,7 @@ def _check_version(child: "ComposedFlow", path: str, version: Optional[str]) -> 
             The pinned `@<version>`; `None` means unpinned (no check).
     """
     if version is not None and child.version != version:
-        raise LoadError(
+        raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: ref pinned {path}@{version} but the resolved file declares "
             f"version: {child.version!r} (file-per-version: name a file that declares {version!r})"
         )
@@ -366,39 +378,39 @@ def _validate_external_child(alias: str, child: object) -> tuple[OriginRef, ...]
             not match provenance, or any reachable origin lacks a concrete frame.
     """
     if not isinstance(child, ComposedFlow):
-        raise LoadError(
+        raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: alias {alias!r} resolver returned "
             f"{type(child).__name__}, expected ComposedFlow"
         )
     try:
         origins = _distinct_origins(child.compiled)
     except Exception as exc:
-        raise LoadError(
+        raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: alias {alias!r} returned an invalid compiled origin graph: {exc}"
         ) from exc
 
     resolver = child.origin_resolver
     if not origins:
         if resolver is not None:
-            raise LoadError(
+            raise _UNLOCATED_DIAGNOSTICS.error(
                 f"uses: alias {alias!r} returned a source-free child with an "
                 "origin resolver"
             )
         return origins
     if resolver is None:
-        raise LoadError(
+        raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: alias {alias!r} returned an originful child without an "
             "origin resolver"
         )
     try:
         resolve = getattr(resolver, "resolve", None)
     except Exception as exc:
-        raise LoadError(
+        raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: alias {alias!r} child origin resolver could not expose "
             f"resolve: {exc}"
         ) from exc
     if not callable(resolve):
-        raise LoadError(
+        raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: alias {alias!r} child origin resolver does not implement resolve"
         )
 
@@ -406,13 +418,13 @@ def _validate_external_child(alias: str, child: object) -> tuple[OriginRef, ...]
         try:
             frame = resolve(origin)
         except Exception as exc:
-            raise LoadError(
+            raise _UNLOCATED_DIAGNOSTICS.error(
                 f"uses: alias {alias!r} child origin resolver failed for "
                 f"{origin.key!r}: {exc}"
             ) from exc
         if not isinstance(frame, DiagnosticFrame):
             detail = "no frame" if frame is None else type(frame).__name__
-            raise LoadError(
+            raise _UNLOCATED_DIAGNOSTICS.error(
                 f"uses: alias {alias!r} child origin resolver returned {detail} "
                 f"for {origin.key!r}"
             )
@@ -442,11 +454,11 @@ def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
             resolver=child.origin_resolver,
         )
     except Exception as exc:
-        raise LoadError(
+        raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: alias {alias!r} could not rebase child origins: {exc}"
         ) from exc
     if len(table) != len(origins):
-        raise LoadError(
+        raise _UNLOCATED_DIAGNOSTICS.error(
             f"uses: alias {alias!r} produced an incomplete rebased origin table"
         )
     return replace(
@@ -460,6 +472,7 @@ def _finalize_composed_flow(
     staged: ComposedFlow,
     local_catalog: SourceCatalog,
     external_tables: tuple[ResolverTable, ...],
+    diagnostics: LoadDiagnostics = _UNLOCATED_DIAGNOSTICS,
 ) -> ComposedFlow:
     """Install one exact resolver over a fully assembled physical file.
 
@@ -481,7 +494,7 @@ def _finalize_composed_flow(
     try:
         origins = _distinct_origins(staged.compiled)
     except (TypeError, ValueError) as exc:
-        raise LoadError(f"invalid compiled origin graph: {exc}") from exc
+        raise diagnostics.error(f"invalid compiled origin graph: {exc}") from exc
     if not origins:
         return replace(staged, origin_resolver=None)
 
@@ -492,23 +505,23 @@ def _finalize_composed_flow(
             authorities.append(local_catalog)
         authorities.extend(table for table in external_tables if origin in table)
         if not authorities:
-            raise LoadError(
+            raise diagnostics.error(
                 f"reachable origin {origin.key!r} has no resolver route"
             )
         if len(authorities) != 1:
-            raise LoadError(
+            raise diagnostics.error(
                 f"reachable origin {origin.key!r} has multiple resolver routes"
             )
         authority = authorities[0]
         try:
             frame = authority.resolve(origin)
         except Exception as exc:
-            raise LoadError(
+            raise diagnostics.error(
                 f"resolver route failed for origin {origin.key!r}: {exc}"
             ) from exc
         if not isinstance(frame, DiagnosticFrame):
             detail = "no frame" if frame is None else type(frame).__name__
-            raise LoadError(
+            raise diagnostics.error(
                 f"resolver route returned {detail} for origin {origin.key!r}"
             )
         entries.append((origin, authority, origin))
@@ -561,7 +574,9 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
                 _check_version(child, path, version)
                 return child
             if cand in ctx.loading:
-                raise LoadError(f"flow-reference cycle across files: {cand}")
+                raise _UNLOCATED_DIAGNOSTICS.error(
+                    f"flow-reference cycle across files: {cand}"
+                )
             ctx.loading.add(cand)
             try:
                 child_document = parse_source_document(
@@ -579,7 +594,7 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
             ctx.flows[cand] = child
             _check_version(child, path, version)
             return child
-        raise LoadError(
+        raise _UNLOCATED_DIAGNOSTICS.error(
             f"flow {rel!r} not found on search path {[str(d) for d in search_paths]}; "
             f"marketplace resolution needs a server — not available yet"
         )
@@ -592,6 +607,7 @@ def load_flow(
     *,
     child_resolver: Optional[ChildResolver] = None,
     search_paths: Optional[list] = None,
+    source_label: str = "<flow>",
 ) -> ComposedFlow:
     """
     Load Compose YAML text into a runnable `ComposedFlow`.
@@ -615,6 +631,8 @@ def load_flow(
             (`<dir>/<path>.yaml`). Pass the flow file's own directory so relative
             `call:`/`uses:` references resolve; the list is extended by the flow's
             `system: paths:`.
+        source_label (`str`, *optional*, defaults to `"<flow>"`):
+            Human-facing name retained by load diagnostics for this source text.
 
     Returns:
         `ComposedFlow`:
@@ -632,7 +650,9 @@ def load_flow(
         loaded = load_flow(open("hello.yaml").read(), search_paths=["."])
         ```
     """
-    document = parse_source_document(text, "<flow>")
+    if type(source_label) is not str:
+        raise TypeError("source_label must be a string")
+    document = parse_source_document(text, source_label)
     return _load_flow(document, child_resolver, search_paths, _LoadCtx())
 
 
@@ -644,16 +664,20 @@ def _load_flow(
 ) -> ComposedFlow:
     root = document.root
     text = document.text
+    diagnostics = LoadDiagnostics.from_document(document)
     f = parse_file(document)
     _reject_authored_private_callable_names(root, f.defs, f.uses)
-    _validate_system(f.system)
+    _validate_system(
+        f.system,
+        root.child("system") if root.has("system") else None,
+    )
 
     try:
         registry = read_typedefs(f.typedefs)
     except TypeCheckError as exc:
         # The typesys layer is source-neutral, so the authored section key is the
         # narrowest source-backed location available at this boundary.
-        raise LoadError(
+        raise diagnostics.error(
             f"bad typedefs: {exc}",
             range=(root.key_range_of("typedefs") if root.has("typedefs") else None),
         ) from exc
@@ -689,6 +713,7 @@ def _load_flow(
         f.uses,
         defs_cursor,
         uses_cursor=uses_cursor,
+        diagnostics=diagnostics,
     )
     callable_scope.eager_load_defs()
 
@@ -778,6 +803,9 @@ class _CallableScope:
         catalog_builder (`_SourceCatalogBuilder | None`, *optional*):
             Mutable document-local registry shared by root, definitions, and
             inline bodies. A private builder is created for programmatic scopes.
+        diagnostics (`LoadDiagnostics | None`, *optional*):
+            Physical document authority for load diagnostics. When omitted, it is
+            derived from the first retained declaration cursor, or source-free.
     """
 
     def __init__(
@@ -789,12 +817,21 @@ class _CallableScope:
         defs_cursor: SourceCursor | None = None,
         uses_cursor: SourceCursor | None = None,
         catalog_builder: _SourceCatalogBuilder | None = None,
+        diagnostics: LoadDiagnostics | None = None,
     ) -> None:
+        source_cursor = defs_cursor if defs_cursor is not None else uses_cursor
+        owned_diagnostics = (
+            diagnostics
+            if diagnostics is not None
+            else LoadDiagnostics.from_cursor(source_cursor)
+        )
         both = sorted(set(defs_section) & set(uses))
         if both:
-            raise LoadError(
+            collision_cursor = _source_child(defs_cursor, both[0])
+            raise owned_diagnostics.error(
                 f"name(s) {both} declared in both defs: and uses: "
-                f"(a callable has one namespace)"
+                f"(a callable has one namespace)",
+                range=(collision_cursor.range if collision_cursor is not None else None),
             )
 
         self._defs_section = defs_section
@@ -803,6 +840,7 @@ class _CallableScope:
         self._uses = uses
         self._defs_cursor = defs_cursor
         self._uses_cursor = uses_cursor
+        self._diagnostics = owned_diagnostics
         self._catalog_builder = (
             catalog_builder
             if catalog_builder is not None
@@ -816,6 +854,11 @@ class _CallableScope:
     def catalog_builder(self) -> _SourceCatalogBuilder:
         """Return this physical file's mutable origin registry."""
         return self._catalog_builder
+
+    @property
+    def diagnostics(self) -> LoadDiagnostics:
+        """Return this physical file's immutable load-diagnostic authority."""
+        return self._diagnostics
 
     def finalize(self, staged: ComposedFlow) -> ComposedFlow:
         """Install the exact resolver for one completed physical-file root.
@@ -834,21 +877,26 @@ class _CallableScope:
         for alias in self._uses:
             child = self._built.get(alias)
             if child is None:
-                raise LoadError(
-                    f"uses: alias {alias!r} was not resolved before finalization"
+                alias_cursor = _source_child(self._uses_cursor, alias)
+                raise self._diagnostics.error(
+                    f"uses: alias {alias!r} was not resolved before finalization",
+                    range=(alias_cursor.range if alias_cursor is not None else None),
                 )
             resolver = child.origin_resolver
             if resolver is None:
                 continue
             if not isinstance(resolver, ResolverTable):
-                raise LoadError(
-                    f"uses: alias {alias!r} did not retain a rebased resolver table"
+                alias_cursor = _source_child(self._uses_cursor, alias)
+                raise self._diagnostics.error(
+                    f"uses: alias {alias!r} did not retain a rebased resolver table",
+                    range=(alias_cursor.range if alias_cursor is not None else None),
                 )
             tables.append(resolver)
         return _finalize_composed_flow(
             staged,
             self._catalog_builder.freeze(),
             tuple(tables),
+            self._diagnostics,
         )
 
     def _build_transactionally(
@@ -891,7 +939,7 @@ class _CallableScope:
         owner, and reserved prefix; the opaque generated identifier is never exposed.
         """
         if not flow_id.startswith(INLINE_FLOW_PREFIX):
-            raise LoadError(
+            raise self._diagnostics.error(
                 f"compiler-generated callable {label!r} owned by {owner!r} must use "
                 f"the reserved prefix {INLINE_FLOW_PREFIX!r}"
             )
@@ -900,7 +948,7 @@ class _CallableScope:
         if existing is not None:
             if existing.owner == owner:
                 return
-            raise LoadError(
+            raise self._diagnostics.error(
                 "compiler-generated callable collision in reserved prefix "
                 f"{INLINE_FLOW_PREFIX!r}: {existing.label!r} owned by "
                 f"{existing.owner!r} conflicts with {label!r} owned by {owner!r}"
@@ -912,7 +960,7 @@ class _CallableScope:
         elif flow_id in self._uses:
             authored_section = "uses"
         if authored_section is not None:
-            raise LoadError(
+            raise self._diagnostics.error(
                 "compiler-generated callable collision in reserved prefix "
                 f"{INLINE_FLOW_PREFIX!r}: {label!r} owned by {owner!r} conflicts "
                 f"with an authored {authored_section}: name"
@@ -929,7 +977,7 @@ class _CallableScope:
         if flow_id in self._private:
             private = self._private[flow_id]
             if flow_id in self._in_progress:
-                raise LoadError(
+                raise self._diagnostics.error(
                     "recursive compiler-generated callable in reserved prefix "
                     f"{INLINE_FLOW_PREFIX!r}: {private.label!r} owned by "
                     f"{private.owner!r} is defined in terms of itself "
@@ -944,9 +992,11 @@ class _CallableScope:
             return loaded
         if flow_id in self._defs_section:
             if flow_id in self._in_progress:
-                raise LoadError(
+                def_cursor = _source_child(self._defs_cursor, flow_id)
+                raise self._diagnostics.error(
                     f"recursive defs reference: callable {flow_id!r} is defined in terms "
-                    f"of itself (the baked call graph must be finite)"
+                    f"of itself (the baked call graph must be finite)",
+                    range=(def_cursor.range if def_cursor is not None else None),
                 )
             self._in_progress.add(flow_id)
             try:
@@ -971,49 +1021,42 @@ class _CallableScope:
             return loaded
         if flow_id in self._uses:
             try:
-                ref = parse_uses_ref(self._uses[flow_id])
+                ref = parse_uses_ref(
+                    self._uses[flow_id],
+                    diagnostics=self._diagnostics,
+                )
                 if ref.scheme == "hub":
-                    raise LoadError(
+                    raise self._diagnostics.error(
                         f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): marketplace "
                         f"not supported yet (hub: scheme)"
                     )
                 if ref.scheme is not None:
-                    raise LoadError(
+                    raise self._diagnostics.error(
                         f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): unknown "
                         f"scheme {ref.scheme!r}: (recognized: a local ref, or hub:)"
                     )
                 if self._external is None:
-                    raise LoadError(
+                    raise self._diagnostics.error(
                         f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}) needs a search "
                         f"path or child_resolver to resolve (load with search_paths=[...])"
                     )
                 child = self._external(ref.path, ref.version)
                 loaded = _rebase_external_child(flow_id, child)
             except LoadError as exc:
-                if (
-                    exc.range is None
-                    and exc.line is None
-                    and self._uses_cursor is not None
-                ):
-                    try:
-                        alias_cursor = self._uses_cursor.child(flow_id)
-                    except SourceAccessError:
-                        alias_cursor = self._uses_cursor
-                    raise LoadError(
-                        str(exc),
-                        lines=exc.lines,
-                        notes=exc.notes,
-                        range=alias_cursor.range,
-                    ) from exc
-                raise
+                alias_cursor = _source_child(self._uses_cursor, flow_id)
+                raise self._diagnostics.prepend(
+                    exc,
+                    range=(alias_cursor.range if alias_cursor is not None else None),
+                    note=f"uses alias {flow_id!r}",
+                ) from exc
             self._built[flow_id] = loaded
             return loaded
         if flow_id.startswith(INLINE_FLOW_PREFIX):
-            raise LoadError(
+            raise self._diagnostics.error(
                 "compiler-generated callable with reserved prefix "
                 f"{INLINE_FLOW_PREFIX!r} was not registered in this file scope"
             )
-        raise LoadError(
+        raise self._diagnostics.error(
             f"callable {flow_id!r} is neither an in-file defs: callable nor a uses: "
             f"alias — external flows are reachable only through a uses: alias "
             f"(declare `uses: {{{flow_id}: <ref>}}`)"
@@ -1040,9 +1083,11 @@ def _load_def(
     body: it retains absolute locations, and `_assemble` derives the def's
     `SourceFrame` from its lowered descriptors.
     """
+    diagnostics = scope.diagnostics
     if not isinstance(body, dict):
-        raise LoadError(
-            f"defs entry {name!r}: body must be a mapping, got {type(body).__name__}"
+        raise diagnostics.error(
+            f"defs entry {name!r}: body must be a mapping, got {type(body).__name__}",
+            range=(def_cursor.range if def_cursor is not None else None),
         )
     if "nodes" not in body:
         if "kind" in body:
@@ -1053,15 +1098,21 @@ def _load_def(
                 scope,
                 def_cursor,
             )
-        raise LoadError(
+        raise diagnostics.error(
             f"defs entry {name!r}: a callable needs a `nodes:` sub-flow body "
-            f"(inputs?/nodes/outputs?) OR a single-node `kind:` form"
+            f"(inputs?/nodes/outputs?) OR a single-node `kind:` form",
+            range=(def_cursor.range if def_cursor is not None else None),
         )
     extra = sorted(set(body) - _DEF_ALLOWED)
     if extra:
-        raise LoadError(
+        raise diagnostics.error(
             f"defs entry {name!r}: unknown field(s) {extra} "
-            f"(allowed: {', '.join(sorted(_DEF_ALLOWED))})"
+            f"(allowed: {', '.join(sorted(_DEF_ALLOWED))})",
+            range=(
+                def_cursor.key_range_of(extra[0])
+                if def_cursor is not None
+                else None
+            ),
         )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
     source_text = (
@@ -1101,26 +1152,12 @@ def _load_def(
             ),
         )
     except LoadError as exc:
-        # Name the def without discarding the absolute parent-file diagnostic metadata.
-        # Don't re-prefix an already-named nested-def error; keep the innermost name.
-        if str(exc).startswith("defs entry "):
-            raise
-        error_range = exc.range
-        if (
-            error_range is None
-            and exc.line is None
-            and not exc.lines
-            and def_cursor is not None
-        ):
-            error_range = def_cursor.range
-        raise LoadError(
-            f"defs entry {name!r}: {exc}",
-            line=exc.line,
-            lines=exc.lines,
-            notes=exc.notes,
-            range=error_range,
+        raise diagnostics.prepend(
+            exc,
+            range=(def_cursor.range if def_cursor is not None else None),
+            message=f"defs entry {name!r}: {exc}",
+            note=f"definition {name!r}",
         ) from exc
-
 
 
 def _load_single_node_def(
@@ -1141,10 +1178,19 @@ def _load_single_node_def(
     sub-flow and runs through the same `_assemble` as the multi-node form. The synthetic
     node projects its header, logic, generated bindings, and output type onto the flat
     authored def cursor without mutating that source."""
+    diagnostics = scope.diagnostics
     param_types = body.get("inputs") or {}
     if not isinstance(param_types, dict):
-        raise LoadError(
-            f"defs entry {name!r}: single-node `inputs:` must be a param map (name: TYPE)"
+        input_cursor = _source_child(def_cursor, "input") or _source_child(
+            def_cursor, "inputs"
+        )
+        raise diagnostics.error(
+            f"defs entry {name!r}: single-node `inputs:` must be a param map (name: TYPE)",
+            range=(
+                input_cursor.range
+                if input_cursor is not None
+                else (def_cursor.range if def_cursor is not None else None)
+            ),
         )
     nodes_cursor = _single_node_def_cursor(name, body, def_cursor)
     output_source = _source_child(def_cursor, "output")
@@ -1184,20 +1230,9 @@ def _load_single_node_def(
             outputs_range=output_range,
         )
     except LoadError as exc:
-        if str(exc).startswith("defs entry "):
-            raise
-        error_range = exc.range
-        if (
-            error_range is None
-            and exc.line is None
-            and not exc.lines
-            and def_cursor is not None
-        ):
-            error_range = def_cursor.range
-        raise LoadError(
-            f"defs entry {name!r}: {exc}",
-            line=exc.line,
-            lines=exc.lines,
-            notes=exc.notes,
-            range=error_range,
+        raise diagnostics.prepend(
+            exc,
+            range=(def_cursor.range if def_cursor is not None else None),
+            message=f"defs entry {name!r}: {exc}",
+            note=f"definition {name!r}",
         ) from exc

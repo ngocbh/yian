@@ -314,11 +314,20 @@ def _structured_validation_path(
     A Pydantic error can also come from AGENT tool arguments or provider internals.
     Ownership requires the exhausted error's exact native/fallback frame, the same
     semantic type object, the frame's final-error identity, and an exact Pydantic
-    validation frame for the generated schema. Record locations already match contract
-    paths; scalar/list wrapper fields are removed. ``()`` identifies the output-contract
-    root, while ``None`` means the exception is not generated structured output.
+    validation frame for the generated schema. A native parser may preserve that
+    validation error as the exhausted error's direct cause; deeper cause chains are not
+    followed. Record locations already match contract paths; scalar/list wrapper fields
+    are removed. ``()`` identifies the output-contract root, while ``None`` means the
+    exception is not generated structured output.
     """
-    if not isinstance(exception, ValidationError):
+    validation_error = (
+        exception
+        if isinstance(exception, ValidationError)
+        else exception.__cause__
+        if isinstance(exception.__cause__, ValidationError)
+        else None
+    )
+    if validation_error is None:
         return None
 
     traceback = exception.__traceback__
@@ -337,18 +346,18 @@ def _structured_validation_path(
             if (
                 isinstance(candidate, type)
                 and issubclass(candidate, BaseModel)
-                and candidate.__name__ == exception.title
+                and candidate.__name__ == validation_error.title
             ):
                 schema = candidate
                 break
         traceback = traceback.tb_next
-    if schema is None or not _validated_by_schema(exception, schema):
+    if schema is None or not _validated_by_schema(validation_error, schema):
         return None
 
     is_record = expected_type.kind == ValueKind.OBJECT and bool(expected_type.fields)
     is_list = expected_type.kind == ValueKind.LIST_ANY or expected_type.kind.is_list()
     wrapper = None if is_record else "items" if is_list else "value"
-    details = exception.errors()
+    details = validation_error.errors()
     if not details:
         return None
     location = details[0].get("loc")

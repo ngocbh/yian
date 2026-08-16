@@ -3,6 +3,8 @@
 import json
 
 import pytest
+from langchain_core.exceptions import OutputParserException
+from langchain_core.output_parsers import PydanticOutputParser
 from pydantic import ValidationError, create_model
 
 from agent_composer.nodes.agent.structured import (
@@ -106,14 +108,18 @@ def test_retry_exhausted_raises():
         generate_structured(_Always(), [], typ, max_retries=2)
 
 
-def _validation_error(typ, payload, *, native=True):
+def _validation_error(typ, payload, *, native=True, constructor=False):
     """Return one retry-exhausted generated-schema validation error."""
 
     class _Invalid:
         def with_structured_output(self, schema):
             class _Bound:
                 def invoke(self, _messages):
-                    return schema.model_validate(payload)
+                    return (
+                        schema(**payload)
+                        if constructor
+                        else schema.model_validate(payload)
+                    )
 
             return _Bound()
 
@@ -196,6 +202,76 @@ def test_structured_validation_path_strips_only_generated_wrappers():
 
     assert _structured_validation_path(scalar_error, scalar) == ()
     assert _structured_validation_path(list_error, listed) == (1, "age")
+
+
+def test_structured_validation_path_accepts_generated_constructor_frame():
+    """LangChain's Pydantic constructor route proves the same exact schema."""
+    typ = Type.scalar(ValueKind.INTEGER)
+    error = _validation_error(
+        typ,
+        {"value": "bad"},
+        constructor=True,
+    )
+
+    assert _structured_validation_path(error, typ) == ()
+
+
+def test_structured_validation_path_accepts_direct_parser_wrapped_error():
+    """Native parsers may wrap the generated-schema error exactly once."""
+    typ = Type.scalar(ValueKind.INTEGER)
+
+    class _Invalid:
+        def with_structured_output(self, schema):
+            parser = PydanticOutputParser(pydantic_object=schema)
+
+            class _Bound:
+                def invoke(self, _messages):
+                    return parser.parse('{"value": "bad"}')
+
+            return _Bound()
+
+    with pytest.raises(OutputParserException) as caught:
+        generate_structured(
+            _Invalid(),
+            [],
+            typ,
+            max_retries=0,
+            llm_config={"provider": "google", "model": "gemini-2.0-flash"},
+        )
+
+    cause = caught.value.__cause__
+    assert isinstance(cause, ValidationError)
+    assert _structured_validation_path(caught.value, typ) == ()
+
+
+def test_structured_validation_path_rejects_wrapped_same_title_foreign_schema():
+    """A direct cause still must come from the exact generated schema."""
+    typ = Type.scalar(ValueKind.INTEGER)
+
+    class _Invalid:
+        def with_structured_output(self, schema):
+            foreign_schema = create_model(schema.__name__, value=(int, ...))
+
+            class _Bound:
+                def invoke(self, _messages):
+                    try:
+                        return foreign_schema.model_validate({"value": "bad"})
+                    except ValidationError as error:
+                        raise RuntimeError("parser rejected output") from error
+
+            return _Bound()
+
+    with pytest.raises(RuntimeError) as caught:
+        generate_structured(
+            _Invalid(),
+            [],
+            typ,
+            max_retries=0,
+            llm_config={"provider": "openai", "model": "gpt-4o"},
+        )
+
+    assert isinstance(caught.value.__cause__, ValidationError)
+    assert _structured_validation_path(caught.value, typ) is None
 
 
 def test_structured_validation_path_uses_first_pydantic_error():

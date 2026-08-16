@@ -483,8 +483,8 @@ retain exact `ValueContract` carriers. Reference, assert, CASE, CALL, and LOOP
 algorithms project `.type` only at the point where a semantic type is required.
 Whole direct references preserve contract identity; nested references rebase their
 origin paths. Python-authored nodes pass `output_contract=`; there is no
-parallel output-Type compatibility API. The authored `output:` / `outputs:` YAML
-surface is unchanged.
+parallel output-Type compatibility API. The authored singular `output:` YAML
+surface is unchanged; descriptors normalize it to their internal `outputs` field.
 
 Compose assembly owns an optional `BuildContext.output_contract_reader` with the
 `(node_id, output_spec) -> ValueContract | None` contract. An authored-output leaf still

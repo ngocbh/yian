@@ -11,7 +11,8 @@ from agent_composer.nodes.contracts import ValueContract
 from agent_composer.nodes.human_input.questions import question_list_type
 
 
-def test_contract_override_wins_over_outputs_string():
+def test_contract_override_wins_without_invoking_the_output_reader():
+    """A semantic override bypasses an authored-declaration reader entirely."""
     contract = ValueContract(question_list_type())
     desc = AgentDescriptor(
         id="g__compose",
@@ -20,5 +21,9 @@ def test_contract_override_wins_over_outputs_string():
         outputs="str",
         output_contract_override=contract,
     )
-    node = desc.build(BuildContext({})).node
+
+    def unexpected_reader(_node_id, _output_spec):
+        raise AssertionError("an output override must bypass the Compose reader")
+
+    node = desc.build(BuildContext({}, output_contract_reader=unexpected_reader)).node
     assert node.output_contract is contract

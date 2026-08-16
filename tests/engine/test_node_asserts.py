@@ -10,9 +10,14 @@ import pytest
 
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.compose.validate.asserts import validate_node_asserts
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import Assertion, ContractOrigins, ValueContract
+from agent_composer.nodes.contracts import (
+    Assertion,
+    ContractOrigins,
+    Parameter,
+    ValueContract,
+)
 from agent_composer.run import run_flow
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -114,8 +119,58 @@ def test_reject_unknown_input_ref_in_all_spellings(bad):
 
 
 def test_reject_unknown_input_ref():
-    with pytest.raises(LoadError, match="not a declared input"):
-        load_flow(_flow(["${nope} > 0"]))
+    source = _flow(["${nope} > 0", "${input.v} > 0"])
+    expected_line = next(
+        line_no
+        for line_no, line in enumerate(source.splitlines(), start=1)
+        if "${nope} > 0" in line
+    )
+    with pytest.raises(LoadError, match="not a declared input") as caught:
+        load_flow(source)
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == expected_line
+    assert caught.value.line == expected_line
+
+
+def test_node_assert_field_error_prefers_the_exact_input_range():
+    """A pre-loop field error uses its field before the asserts block or node."""
+    input_range = SourceRange(5, 3, 5, 9)
+    descriptor = SimpleNamespace(
+        asserts=["${output} >= 0"],
+        assert_ranges=[SourceRange(8, 5, 8, 20)],
+        field_ranges={
+            ("input", "output"): input_range,
+            ("field", "asserts"): SourceRange(7, 3, 8, 20),
+        },
+        range=SourceRange(2, 1, 2, 2),
+    )
+    node = Node("x")
+    node.params = [Parameter(name="output")]
+
+    with pytest.raises(LoadError, match="collides") as caught:
+        validate_node_asserts({"x": node}, {"x": descriptor})
+
+    assert caught.value.range == input_range
+    assert caught.value.line == input_range.start_line
+
+
+def test_node_assert_error_falls_back_to_the_descriptor_range():
+    """A source-backed node still locates an error when its item range is absent."""
+    node_range = SourceRange(4, 3, 4, 4)
+    descriptor = SimpleNamespace(
+        asserts=["${missing} > 0"],
+        assert_ranges=[],
+        field_ranges={},
+        range=node_range,
+    )
+    node = Node("x")
+    node.params = []
+
+    with pytest.raises(LoadError, match="not a declared input") as caught:
+        validate_node_asserts({"x": node}, {"x": descriptor})
+
+    assert caught.value.range == node_range
+    assert caught.value.line == node_range.start_line
 
 
 def test_reject_pool_head_ref():

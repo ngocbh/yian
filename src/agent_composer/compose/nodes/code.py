@@ -14,7 +14,22 @@ from dataclasses import dataclass, field
 
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from agent_composer.diagnostics import SourceRange
 from agent_composer.nodes.code import CodeNode
+
+
+def _line_range(line: int | None) -> SourceRange | None:
+    """Return a zero-width source range for one trustworthy absolute line.
+
+    Args:
+        line (`int | None`): Positive 1-based line, or `None` when unavailable.
+
+    Returns:
+        `SourceRange | None`: A point at column one, or `None` for an invalid line.
+    """
+    if type(line) is not int or line < 1:
+        return None
+    return SourceRange(line, 1, line, 1)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -53,9 +68,9 @@ class CodeDescriptor(NodeDescriptor):
           `range.start_line + 1` for a multi-line block scalar (algebraically identical to
           `start_mark.line + 2`), else `1` (a single-line `module:function` ref has no body to
           pad); a caller may override it.
-        - `ctx.code_field_line` — the `code:` value's own start line, the anchor for a reject /
-          no-`return` load error (which carries no interior line); `range.start_line` when the
-          caller does not supply it. `None` -> the loader anchors at the node header.
+        - `ctx.code_field_line` — an explicit `code:` start-line override for a reject /
+          no-`return` load error (which carries no interior line). Without an override, the
+          descriptor's full `code:` range is retained, then the node range is the fallback.
 
         `ctx.source_file` (the flow's file label) frames inline tracebacks at the flow filename.
         `ctx.resolver` is unused (leaf kind); it rides the shared context for call/map/loop.
@@ -73,6 +88,11 @@ class CodeDescriptor(NodeDescriptor):
                 code_line = code_rng.start_line + 1
             else:
                 code_line = 1
+        code_error_range = (
+            _line_range(code_field_line)
+            if ctx.code_field_line is not None
+            else code_rng
+        ) or self.range
 
         try:
             node = CodeNode(
@@ -88,13 +108,16 @@ class CodeDescriptor(NodeDescriptor):
             # missing-return as the loader's one error type (loud), anchored precisely:
             #  - an inline SyntaxError's padded compile gives an ABSOLUTE `lineno` (the real YAML
             #    line of the slip) — box it, but only with a real anchor (`code_line > 1`).
-            #  - a reject / no-`return` ValueError has no trustworthy interior line, so fall to
-            #    the `code:` field line (None -> the loader anchors at the node header).
+            #  - a reject / no-`return` ValueError has no trustworthy interior line, so retain
+            #    the `code:` field range (or the node range when source metadata is partial).
             if isinstance(exc, SyntaxError) and code_line > 1:
-                line = exc.lineno
+                error_range = _line_range(exc.lineno) or code_error_range
             else:
-                line = code_field_line
-            raise LoadError(f"node {self.id!r}: {exc}", line=line) from exc
+                error_range = code_error_range
+            raise LoadError(
+                f"node {self.id!r}: {exc}",
+                range=error_range,
+            ) from exc
 
         node.output_contract = self.output_contract(ctx.registry)
         node.params = self.sink_params()

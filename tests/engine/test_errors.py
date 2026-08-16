@@ -237,6 +237,22 @@ def test_compile_error_gallery(filename, substr, line):
 
 
 @pytest.mark.parametrize(
+    ("filename", "line"),
+    [
+        ("e30-inline-syntax-error.yaml", 15),
+        ("e31-inline-no-return.yaml", 15),
+        ("e32-malformed-code-ref.yaml", 15),
+    ],
+)
+def test_inline_code_construction_errors_carry_ranges(filename, line):
+    """Every CODE construction rejection exposes a range, not only a legacy line."""
+    err = _load_error(filename)
+    assert err.range is not None
+    assert err.range.start_line == line
+    assert err.line == line
+
+
+@pytest.mark.parametrize(
     ("filename", "inputs", "substr"),
     [
         ("e18-false-boundary-assert.yaml", {"window": -5}, "assert failed"),
@@ -318,7 +334,7 @@ def test_bad_input_ref_locates_the_offending_entry():
     # 11 alone — the block range would highlight all three.
     #
     # NOTE this asserts on e14 deliberately: of every error seed, it is the ONLY node-input ref
-    # (e01/e03 are flow-output refs, which carry no range; e15 is the prompt path), so it IS the
+    # (e01/e03 are flow-output refs; e15 is the prompt path), so it IS the
     # regression surface for per-binding location. Its bad entry is also the SECOND one, which
     # proves the lookup is genuinely per-entry rather than accidentally "first entry wins".
     # Reordering e14's inputs will break this — correctly.
@@ -383,29 +399,21 @@ def test_input_named_like_a_field_does_not_collide():
 
 
 # --------------------------------------------------------------------------- #
-# KNOWN-WRONG location, pinned so each bug is reproducible and its fix is loud (#88, reopened).
-#
-# These assert the CURRENT, INCORRECT diagnostic — either a caret on the wrong line (e37/e38) or
-# no range at all (e39/e40/e41). They are reproductions, not specifications: each fixture's header
-# states the expected diagnostic next to the current one. **When the underlying bug is fixed these
-# tests SHOULD fail** — that is the signal, and the fixer updates them to the expected line. They
-# are here because a bug nobody can run is a bug nobody can confirm.
+# Source-location regressions. Fixed cases remain positive pins; the structured-output
+# case below deliberately preserves its separate runtime reproduction until that contract
+# is addressed.
 # --------------------------------------------------------------------------- #
 
 
-def test_llm_config_error_names_the_key_but_carries_no_range():
-    # e39: the message says `provider` — the failure site KNOWS which entry is bad — and then
-    # attaches range=None. The caret comes from the LEGACY LINE-MAP (the node header, L24) while the
-    # offending line is L27.
-    #
-    # The point for #88: descending into `llm_config:` would stamp a range nothing asks for. The
-    # missing half is the LOCATOR, not the stamp.
-    # ⚠ Prerequisite for #91/L4c: this renders ONLY via the legacy line — retiring line-maps without
-    # giving it a range= first would drop its frame entirely.
+def test_llm_config_error_carries_the_field_range():
+    # e39: the descriptor already records the `llm_config:` value range. The build error must
+    # retain it, so the first offending config entry on L27 is the primary anchor rather than
+    # the node header on L24.
     err = _load_error("e39-llm-config-no-range.yaml")
     assert "llm_config" in str(err) and "provider" in str(err)  # the entry IS named
-    assert err.range is None                                     # ...and no range is attached
-    assert err.line == 24  # the node header, via the legacy line-map; expected 27 (the `provider:`)
+    assert err.range is not None
+    assert err.range.start_line == 27
+    assert err.line == 27
 
 
 def test_agent_controls_field_is_retired_and_located():

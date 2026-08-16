@@ -45,7 +45,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from agent_composer.compile.validation import _classify_path, _walk_record_fields
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.expr.template import flow_call_callees_in_spans
@@ -54,7 +54,6 @@ from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import Assertion, Parameter, ValueContract
 from agent_composer.typesys.values import ValueKind
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.events import SourceRange  # for the positional assert-range annotations
 
 
 # Reserved prefix for the END params synthesized from a lowered post-assert. Authors
@@ -277,10 +276,11 @@ def validate_node_asserts(
     `node.pre_asserts` / `node.post_asserts`. ``assertion_site_at`` optionally supplies each
     carrier's opaque origin and temporary range from the same authored occurrence, keyed by
     node id and original authored index. Runs in the shared `_assemble`, so a `defs:`
-    subflow's internal nodes get this too. Accumulates all errors into one `LoadError`.
+    subflow's internal nodes get this too. Accumulates all errors into one `LoadError`, located
+    at the first available exact assertion, offending field, or node range.
     """
     lines = node_lines or {}
-    errors: list[tuple[str, "int | None"]] = []
+    errors: list[tuple[str, int | None, SourceRange | None]] = []
     for nid, node in nodes.items():
         desc = descriptors.get(nid)
         asserts = list(getattr(desc, "asserts", None) or [])
@@ -291,22 +291,52 @@ def validate_node_asserts(
         if not asserts:
             continue
         line = lines.get(nid)
+        descriptor_ranges = getattr(desc, "field_ranges", None)
+        if not isinstance(descriptor_ranges, dict):
+            descriptor_ranges = {}
+        node_ranges = getattr(node, "field_ranges", None)
+        if not isinstance(node_ranges, dict):
+            node_ranges = {}
+
+        def field_range(kind: str, key: str) -> SourceRange | None:
+            """Return one descriptor-owned field range, then the built-node copy."""
+            return descriptor_ranges.get((kind, key)) or node_ranges.get((kind, key))
+
+        node_range = getattr(desc, "range", None) or getattr(node, "range", None)
+        asserts_range = field_range("field", "asserts") or node_range
         if node.binds_per_item:
-            errors.append((
-                f"node {nid!r}: `asserts:` is not allowed on a mapped call (`kind: map`) — assert "
-                f"inside the def, or on a downstream node", line))
+            errors.append(
+                (
+                    f"node {nid!r}: `asserts:` is not allowed on a mapped call "
+                    f"(`kind: map`) — assert inside the def, or on a downstream node",
+                    line,
+                    asserts_range,
+                )
+            )
             continue
         declared = {p.name for p in (node.params or [])}
         if "output" in declared:
-            errors.append((
-                f"node {nid!r}: a declared input named 'output' collides with the node-assert "
-                f"`${{output}}` keyword — rename the input", line))
+            errors.append(
+                (
+                    f"node {nid!r}: a declared input named 'output' collides with the "
+                    f"node-assert `${{output}}` keyword — rename the input",
+                    line,
+                    field_range("input", "output") or asserts_range,
+                )
+            )
             continue
         pre: list[Assertion] = []
         post: list[Assertion] = []
         pre_r: list = []   # aligned with `pre`
         post_r: list = []  # aligned with `post`
         for i, a in enumerate(asserts):
+            site = assertion_site_at(nid, i) if assertion_site_at is not None else None
+            if site is None:
+                origin = None
+                rng = aranges[i] if i < len(aranges) else None
+            else:
+                origin, rng = site
+            error_range = rng or asserts_range
             # node asserts are node-local — an inline call (a whole-value `call(...)` directive
             # or the retired `${flow(args)}` span) belongs in a flow-level assert, not here.
             try:
@@ -315,16 +345,26 @@ def validate_node_asserts(
             except ExpressionError:
                 directive_calls, span_callees = ["(malformed call)"], []
             if directive_calls or span_callees:
-                errors.append((
-                    f"node {nid!r} assert {a!r}: an inline call is not allowed in a "
-                    f"node-local assert (use a flow-level assert)", line))
+                errors.append(
+                    (
+                        f"node {nid!r} assert {a!r}: an inline call is not allowed in a "
+                        f"node-local assert (use a flow-level assert)",
+                        line,
+                        error_range,
+                    )
+                )
                 continue
             # parse-check + collect refs on the ONE unified condition walk (any spelling).
             try:
                 refs = condition_refs(a)
             except ExpressionError as exc:
-                errors.append((
-                    f"node {nid!r} assert {a!r}: not a valid boolean expression ({exc})", line))
+                errors.append(
+                    (
+                        f"node {nid!r} assert {a!r}: not a valid boolean expression ({exc})",
+                        line,
+                        error_range,
+                    )
+                )
                 continue
             reads_output = False
             for ref in refs:
@@ -341,29 +381,45 @@ def validate_node_asserts(
                             )
                         sh = contract.type if contract is not None else None
                         if sh is not None and sh.kind != ValueKind.OBJECT:
-                            errors.append((
-                                f"node {nid!r} assert: ${{{ref}}} — the node output is not a "
-                                f"record, so it has no field {'.'.join(segs[1:])!r}", line))
+                            errors.append(
+                                (
+                                    f"node {nid!r} assert: ${{{ref}}} — the node output is "
+                                    f"not a record, so it has no field "
+                                    f"{'.'.join(segs[1:])!r}",
+                                    line,
+                                    error_range,
+                                )
+                            )
                         else:
                             err = _walk_record_fields(sh, segs[1:], ref)
                             if err is not None:
-                                errors.append((f"node {nid!r} assert: {err}", line))
+                                errors.append(
+                                    (
+                                        f"node {nid!r} assert: {err}",
+                                        line,
+                                        error_range,
+                                    )
+                                )
                 elif head in declared:
                     continue
                 elif head in _POOL_HEADS:
-                    errors.append((
-                        f"node {nid!r} assert: ${{{ref}}} — node asserts are node-local; use "
-                        f"`${{name}}` (a declared input) or `${{output}}`", line))
+                    errors.append(
+                        (
+                            f"node {nid!r} assert: ${{{ref}}} — node asserts are node-local; "
+                            f"use `${{name}}` (a declared input) or `${{output}}`",
+                            line,
+                            error_range,
+                        )
+                    )
                 else:
-                    errors.append((
-                        f"node {nid!r} assert: ${{{ref}}} is not a declared input or `${{output}}`",
-                        line))
-            site = assertion_site_at(nid, i) if assertion_site_at is not None else None
-            if site is None:
-                origin = None
-                rng = aranges[i] if i < len(aranges) else None
-            else:
-                origin, rng = site
+                    errors.append(
+                        (
+                            f"node {nid!r} assert: ${{{ref}}} is not a declared input or "
+                            f"`${{output}}`",
+                            line,
+                            error_range,
+                        )
+                    )
             if reads_output:
                 post.append(Assertion(expression=a, display=a, origin=origin))
                 post_r.append(rng)
@@ -375,8 +431,15 @@ def validate_node_asserts(
         node.pre_assert_ranges = pre_r
         node.post_assert_ranges = post_r
     if errors:
-        first_line = next((ln for _, ln in errors if ln is not None), None)
+        first_range = next((rng for _, _, rng in errors if rng is not None), None)
+        first_line = (
+            None
+            if first_range is not None
+            else next((ln for _, ln, _ in errors if ln is not None), None)
+        )
         raise LoadError(
-            "flow has invalid node asserts:\n  " + "\n  ".join(msg for msg, _ in errors),
+            "flow has invalid node asserts:\n  "
+            + "\n  ".join(msg for msg, _, _ in errors),
             line=first_line,
+            range=first_range,
         )

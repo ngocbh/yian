@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
 import subprocess
@@ -14,6 +15,7 @@ from agent_composer.diagnostics import (
     DiagnosticFrame,
     OriginRef,
     OriginResolver,
+    ResolverTable,
     SourceRange,
 )
 
@@ -72,6 +74,161 @@ def test_origin_resolver_is_structural_and_may_return_none() -> None:
     assert resolver.resolve(OriginRef("missing")) is None
 
 
+def test_resolver_table_routes_each_new_origin_to_one_exact_delegate_origin() -> None:
+    """One frozen table can route colliding delegate-local keys without precedence."""
+    first_frame = DiagnosticFrame(
+        label="first",
+        text="first\n",
+        range=SourceRange(1, 1, 1, 6),
+    )
+    second_frame = DiagnosticFrame(
+        label="second",
+        text="second\n",
+        range=SourceRange(1, 1, 1, 7),
+    )
+    calls: list[tuple[str, OriginRef]] = []
+
+    class Resolver:
+        def __init__(self, name: str, frame: DiagnosticFrame) -> None:
+            self.name = name
+            self.frame = frame
+
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            calls.append((self.name, origin))
+            return self.frame if origin == OriginRef("local") else None
+
+    first = Resolver("first", first_frame)
+    second = Resolver("second", second_frame)
+    first_new = OriginRef("call/a")
+    second_new = OriginRef("call/b")
+    table = ResolverTable.from_entries(
+        [
+            (first_new, first, OriginRef("local")),
+            (second_new, second, OriginRef("local")),
+        ]
+    )
+
+    assert len(table) == 2
+    assert table.origins == frozenset({first_new, second_new})
+    assert first_new in table
+    assert second_new in table
+    assert OriginRef("missing") not in table
+    assert table.resolve(first_new) == first_frame
+    assert table.resolve(second_new) == second_frame
+    assert table.resolve(OriginRef("missing")) is None
+    assert calls == [
+        ("first", OriginRef("local")),
+        ("second", OriginRef("local")),
+    ]
+
+
+def test_resolver_table_merge_is_strict_and_preserves_delegate_behavior() -> None:
+    """Merging uses exact disjoint routes and never adds fallback semantics."""
+
+    class Resolver:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            if origin != OriginRef("old"):
+                return None
+            return DiagnosticFrame(
+                label=self.label,
+                text="value\n",
+                range=SourceRange(1, 1, 1, 6),
+            )
+
+    first = ResolverTable.from_entries(
+        [(OriginRef("first"), Resolver("first"), OriginRef("old"))]
+    )
+    second = ResolverTable.from_entries(
+        [(OriginRef("second"), Resolver("second"), OriginRef("old"))]
+    )
+
+    merged = ResolverTable.merge(first, second)
+
+    assert len(merged) == 2
+    assert merged.resolve(OriginRef("first")).label == "first"  # type: ignore[union-attr]
+    assert merged.resolve(OriginRef("second")).label == "second"  # type: ignore[union-attr]
+    assert len(ResolverTable.merge()) == 0
+
+
+def test_resolver_table_rejects_duplicate_routes_before_information_is_lost() -> None:
+    """Duplicate public keys fail even when their resolution targets are identical."""
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return None
+
+    resolver = Resolver()
+    new = OriginRef("same")
+    old = OriginRef("old")
+
+    with pytest.raises(ValueError, match="duplicate resolver table origin 'same'"):
+        ResolverTable.from_entries(
+            [(new, resolver, old), (new, resolver, old)]
+        )
+
+    first = ResolverTable.from_entries([(new, resolver, old)])
+    second = ResolverTable.from_entries([(new, resolver, old)])
+    with pytest.raises(ValueError, match="duplicate resolver table origin 'same'"):
+        ResolverTable.merge(first, second)
+
+
+def test_resolver_table_is_defensive_immutable_and_propagates_delegate_failures() -> None:
+    """Routes are snapshotted, deepcopy is free, and delegates retain authority."""
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            raise RuntimeError(f"cannot resolve {origin.key}")
+
+    entries = [(OriginRef("new"), Resolver(), OriginRef("old"))]
+    table = ResolverTable.from_entries(entries)
+    entries.clear()
+
+    assert len(table) == 1
+    assert copy.deepcopy(table) is table
+    with pytest.raises(RuntimeError, match="cannot resolve old"):
+        table.resolve(OriginRef("new"))
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        (
+            lambda: ResolverTable.from_entries(
+                [("new", object(), OriginRef("old"))]  # type: ignore[list-item]
+            ),
+            "new origin must be an OriginRef",
+        ),
+        (
+            lambda: ResolverTable.from_entries(
+                [(OriginRef("new"), object(), OriginRef("old"))]
+            ),
+            "delegate must implement resolve",
+        ),
+        (
+            lambda: ResolverTable.from_entries(
+                [(OriginRef("new"), ResolverTable(), "old")]  # type: ignore[list-item]
+            ),
+            "old origin must be an OriginRef",
+        ),
+        (
+            lambda: ResolverTable.merge(ResolverTable(), object()),  # type: ignore[arg-type]
+            "merge requires ResolverTable values",
+        ),
+        (
+            lambda: ResolverTable().resolve("new"),  # type: ignore[arg-type]
+            "resolve requires an OriginRef",
+        ),
+    ],
+)
+def test_resolver_table_rejects_malformed_routes(operation, message: str) -> None:
+    """Malformed routing values fail at the public boundary with stable errors."""
+    with pytest.raises(TypeError, match=message):
+        operation()
+
+
 def test_diagnostics_module_imports_only_the_standard_library() -> None:
     """The diagnostic value spine must remain below every project package."""
     path = Path(__file__).parents[2] / "src" / "agent_composer" / "diagnostics.py"
@@ -92,7 +249,7 @@ def test_diagnostics_module_imports_only_the_standard_library() -> None:
     )
 
     assert not relative_imports
-    assert imports <= {"dataclasses", "typing"}
+    assert imports <= {"dataclasses", "types", "typing"}
 
 
 def test_public_diagnostics_import_does_not_load_engine_or_yaml_layers() -> None:
@@ -100,7 +257,7 @@ def test_public_diagnostics_import_does_not_load_engine_or_yaml_layers() -> None
     source_root = Path(__file__).parents[2] / "src"
     script = """
 import sys
-from agent_composer.diagnostics import DiagnosticFrame, OriginRef, OriginResolver, SourceRange
+from agent_composer.diagnostics import DiagnosticFrame, OriginRef, OriginResolver, ResolverTable, SourceRange
 
 loaded_project_modules = sorted(
     name

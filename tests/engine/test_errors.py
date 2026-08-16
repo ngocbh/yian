@@ -261,7 +261,7 @@ def test_compile_error_gallery(filename, substr, line):
 def test_runtime_error_gallery(filename, inputs, substr):
     result = run_flow(load_flow((_ERRORS / filename).read_text()), inputs)
     assert result.status != "succeeded"          # a failed/aborted run, not a crash
-    assert substr in (result.error or "")
+    assert substr in result.failure.message
 
 
 def test_flow_input_type_failure_carries_range():
@@ -427,8 +427,8 @@ def test_structured_output_failure_names_whole_field_and_range_is_none():
     #     #81's opening complaint, live.
     result = run_flow(load_flow((_ERRORS / "e41-structured-output-no-range.yaml").read_text()), {})
     assert result.status == "failed"
-    assert "does not match declared type int" in str(result.error)
-    assert "score" not in str(result.error)  # the failing field is never named
+    assert "does not match declared type int" in result.failure.message
+    assert "score" not in result.failure.message  # the failing field is never named
     assert result.locator is not None
     assert result.locator.kind == "field" and result.locator.key == "output"  # not `score`
     assert result.range is None  # the singular/plural drift; the CLI recovers via the alias

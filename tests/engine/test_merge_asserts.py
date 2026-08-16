@@ -88,7 +88,7 @@ nodes:
 output: ${{callee.output}}
 """
     res = run_flow(load_flow(flow), {"seed": 5})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == {"n": 6}
 
 
@@ -115,7 +115,7 @@ nodes:
 output: ${{fan.output}}
 """
     res = run_flow(load_flow(flow), {"seeds": [5, 6, 7]})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == [{"n": 6}, {"n": 7}, {"n": 8}]
 
 
@@ -145,7 +145,8 @@ output: ${{fan.output}}
 """
     res = run_flow(load_flow(flow), {"seeds": [5, -5, 7]})  # -5 -> n=-4 violates >= 1
     assert res.status == "failed"
-    assert "assert" in (res.error or "").lower()
+    assert res.failure is not None
+    assert "assert" in res.failure.message.lower()
 
 
 def test_c2_loop_bare_internal_assert_succeeds():
@@ -186,7 +187,7 @@ nodes:
 output: ${spin.output}
 """
     res = run_flow(load_flow(flow), {"start": 5})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == {"n": 8}
 
 
@@ -315,7 +316,7 @@ def test_c1_optional_edge_taken_branch_completes():
     or drop END. Documents the optional-edge contract the refactor must preserve.
     """
     res = run_flow(load_flow(_c1_flow("lo.output >= 0")), {"v": 5})  # -> lo taken
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == 10
 
 
@@ -328,7 +329,8 @@ def test_c1_ordered_assert_on_skipped_producer_fails_loudly():
     """
     res = run_flow(load_flow(_c1_flow("hi.output >= 0")), {"v": 5})  # hi skipped
     assert res.status == "failed"
-    assert "assert" in (res.error or "").lower()
+    assert res.failure is not None
+    assert "assert" in res.failure.message.lower()
 
 
 # =========================================================================== #

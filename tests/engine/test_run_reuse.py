@@ -169,7 +169,7 @@ def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monke
         {"topics": ["alpha", "beta"]},
         llm_config={"provider": "openai", "max_tokens": 111},
     )
-    assert first.status == "succeeded", first.error
+    assert first.status == "succeeded", first.failure
     assert _graph_snapshot(loaded.compiled) == static
     first_configs = list(seen)
     seen.clear()
@@ -179,7 +179,7 @@ def test_loaded_recursive_flow_can_be_run_twice_without_graph_or_llm_leaks(monke
         {"topics": ["alpha", "beta"]},
         llm_config={"provider": "google", "max_tokens": 222},
     )
-    assert second.status == "succeeded", second.error
+    assert second.status == "succeeded", second.failure
     assert second.output == first.output
     assert _graph_snapshot(loaded.compiled) == static
 
@@ -214,6 +214,6 @@ def test_log_resume_restores_into_a_private_graph(tmp_path: Path):
     with install_ask_user(lambda **request: "yes"):
         resumed = resume_flow(fresh, log=path)
 
-    assert resumed.status == "succeeded", resumed.error
+    assert resumed.status == "succeeded", resumed.failure
     assert resumed.output == "yes"
     assert _graph_snapshot(fresh.compiled) == static

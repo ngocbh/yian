@@ -246,13 +246,15 @@ def test_pre_assert_passes_and_runs():
 def test_pre_assert_violated_fails_before_body():
     out = run_flow(load_flow(_flow(["${n} >= 0"])), {"v": -1})
     assert out.status != "succeeded"
-    assert "pre-assert" in (out.error or "")
+    assert out.failure is not None
+    assert "pre-assert" in out.failure.message
 
 
 def test_post_assert_violated_fails():
     out = run_flow(load_flow(_flow(["${output} >= 0"])), {"v": -1})  # double(-1) = -2
     assert out.status != "succeeded"
-    assert "post-assert" in (out.error or "")
+    assert out.failure is not None
+    assert "post-assert" in out.failure.message
 
 
 def test_post_assert_on_nonscalar_output_fails_cleanly():

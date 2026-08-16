@@ -2293,7 +2293,7 @@ nodes:
 
     assert result.status == "failed"
     failures = [event for event in result.events if isinstance(event, RunFailed)]
-    assert failures and failures[-1].error_type == "NodeAssertFailed"
+    assert failures and failures[-1].failure.cause_type == "NodeAssertFailed"
 
 
 def test_inline_map_child_keeps_item_namespace_closed():

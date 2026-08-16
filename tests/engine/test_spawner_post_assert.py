@@ -91,7 +91,7 @@ def _load_output(value: int):
 def test_output_post_assert_satisfying_succeeds():
     # v=5 -> output 10 < 100 -> the assert holds, the run succeeds.
     res = run_flow(_load_output(5), {})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == 10
 
 
@@ -100,8 +100,8 @@ def test_output_post_assert_violating_fails_on_child_end():
     res = run_flow(_load_output(60), {})
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
-    assert failed and failed[0].error_type == "NodeAssertFailed"
-    assert "post-assert" in (res.error or "").lower()
+    assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
+    assert "post-assert" in res.failure.message.lower()
     # The failing node id identifies the cloned CHILD END (callsite + end id), NOT the spawner.
     loc = res.locator
     assert loc is not None and loc.kind == "assert"
@@ -144,7 +144,7 @@ def _load_input():
 def test_declared_input_post_assert_satisfying_succeeds():
     # v=5 >= 0 -> holds; output 10.
     res = run_flow(_load_input(), {"v": 5})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == 10
 
 
@@ -153,7 +153,7 @@ def test_declared_input_post_assert_violating_fails():
     res = run_flow(_load_input(), {"v": -3})
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
-    assert failed and failed[0].error_type == "NodeAssertFailed"
+    assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
     assert res.locator is not None and res.locator.node == "callee/__end__"
 
 
@@ -226,8 +226,8 @@ def test_spawner_post_assert_fires_after_log_recovery(tmp_path: Path):
 
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
-    assert failed and failed[0].error_type == "NodeAssertFailed"
-    assert "post-assert" in (res.error or "").lower()
+    assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
+    assert "post-assert" in res.failure.message.lower()
 
 
 # =========================================================================== #
@@ -358,7 +358,7 @@ def test_spawner_lowering_preserves_presentation_origin_and_range():
 def test_collision_case_run_satisfying_succeeds():
     # v=5: satisfies BOTH `${input.v} >= 0` (child) and `${v} < 100` (spawner). output == 10.
     res = run_flow(_load_collision(), {"v": 5})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == 10
 
 
@@ -368,8 +368,8 @@ def test_collision_case_run_violating_spawner_assert_fails_on_child_end():
     res = run_flow(_load_collision(), {"v": 120})
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
-    assert failed and failed[0].error_type == "NodeAssertFailed"
-    assert "post-assert" in (res.error or "").lower()
+    assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
+    assert "post-assert" in res.failure.message.lower()
     assert res.locator is not None and res.locator.node == "callee/__end__"
 
 
@@ -416,5 +416,5 @@ def test_repeated_input_ref_shares_one_synth_param():
 
 def test_repeated_input_ref_run_succeeds():
     res = run_flow(_load_repeated(), {"v": 5})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == 10

@@ -291,8 +291,8 @@ def _gate_flow(log, output_from):
 
 def test_skipped_terminal_producer_fails_run():
     last = _run(_engine(_gate_flow([], "${t.output}")))[-1]
-    assert isinstance(last, RunFailed) and "skipped" in last.error
-    assert last.error_type == "TerminalSkipped"
+    assert isinstance(last, RunFailed) and "skipped" in last.failure.message
+    assert last.failure.code == "graph.terminal_unreachable"
 
 
 def test_coalesce_terminal_one_branch_skipped_succeeds():
@@ -328,7 +328,7 @@ def test_node_failure_produces_graph_failed():
     )
     events = _run(_engine(g))
     assert isinstance(events[-1], RunFailed)
-    assert events[-1].error == "nope"
+    assert events[-1].failure.message == "nope"
 
 
 # --- write-boundary output enforcement (slice 2) ---------------------------- #

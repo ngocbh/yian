@@ -437,7 +437,7 @@ def test_single_node_def_runs():
     # `topic` (a def param) auto-binds by name into the echo node; echo returns it.
     loaded = load_flow(_SINGLE_NODE_DEF)
     res = run_flow(loaded, {"t": "ACME"})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == "ACME"
 
 
@@ -802,7 +802,7 @@ def test_nullable_source_with_literal_escape_ok():
     # `:-safe` guarantees a non-null value (fires on null, present-null included) -> ok.
     loaded = load_flow(_NULLABLE_WITH_LITERAL_ESCAPE)
     res = run_flow(loaded, {"x": None})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == "safe"
 
 
@@ -836,7 +836,7 @@ output: ${go.output}
 def test_parent_null_shadows_child_default():
     loaded = load_flow(_SHADOW)
     res = run_flow(loaded, {"x": None})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output is None  # the parent's explicit null shadows the child default
 
 
@@ -869,7 +869,7 @@ output: ${go.output}
     assert parameter.coerce_strings is True
 
     result = run_flow(loaded, {})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output is None
 
 

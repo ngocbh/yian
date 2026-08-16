@@ -77,10 +77,13 @@ def test_while_loop_max_exceeded_fails_run():
     # Assert the runaway guard fired specifically — not just any error mentioning "max"
     # (a `MAX_TOTAL_NODES` budget blowup also contains "max"). The guard message is
     # `loop 'loop' exceeded max (2)`; the budget error says "exceeded node budget".
-    assert "exceeded max" in (result.error or "")
-    # And confirm the located error type reaches the RunFailed event.
-    error_types = {getattr(e, "error_type", None) for e in result.events}
-    assert "LoopMaxExceeded" in error_types
+    assert "exceeded max" in result.failure.message
+    # And confirm the located cause type reaches the RunFailed event.
+    cause_types = {
+        getattr(getattr(e, "failure", None), "cause_type", None)
+        for e in result.events
+    }
+    assert "LoopMaxExceeded" in cause_types
 
 
 def test_while_loop_max_permits_exactly_max_body_runs():
@@ -139,7 +142,7 @@ def test_loop_body_blocks_for_each_human_turn():
     with install_ask_user(lambda **request: next(answers)):
         result = run_flow(loaded, {})
 
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == {"messages": ["hi", "bye"], "exited": True}
 
 
@@ -161,7 +164,7 @@ output: ${after.output}""",
 
 def test_loop_feeding_downstream_node_commits_and_advances():
     result = run_flow(load_flow(DOWNSTREAM), {})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == 6          # loop ends at n=3; double(3) = 6
 
 
@@ -205,7 +208,7 @@ def test_while_loop_predicate_runtime_error_fails_run():
     # (via `_should_stop_now`), which `eval_node`'s boundary turns into a NodeFailed.
     result = run_flow(load_flow(PREDICATE_RAISES), {})
     assert result.status != "succeeded"
-    assert "division by zero" in (result.error or "")
+    assert "division by zero" in result.failure.message
 
 
 # `until:` is a DO-WHILE: the body must run AT LEAST once before the predicate is ever
@@ -261,7 +264,7 @@ def test_loop_budget_exceeded_in_step_fails_run(monkeypatch):
     monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", 6)
     result = run_flow(load_flow(COUNTER), {})
     assert result.status != "succeeded"
-    assert "node budget" in (result.error or "")
+    assert "node budget" in result.failure.message
 
 
 # `times: N` is a fixed count: exactly N body runs, no predicate. Seed n=10, times 3 ->

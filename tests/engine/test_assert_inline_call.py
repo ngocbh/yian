@@ -64,4 +64,5 @@ def test_inline_call_assert_passes():
 def test_inline_call_assert_fails_post():
     out = run_flow(load_flow(_FLOW), {"v": -3})  # dbl(-3) = -6, violates `>= 0`
     assert out.status != "succeeded"
-    assert "assert" in (out.error or "").lower()
+    assert out.failure is not None
+    assert "assert" in out.failure.message.lower()

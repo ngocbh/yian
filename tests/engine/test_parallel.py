@@ -107,7 +107,8 @@ def test_terminal_skipped_fails_under_workers():
         outputs=[FlowOutput("result", "${t.output}")],
     )
     last = _run(_engine(g, num_workers=4))[-1]
-    assert isinstance(last, RunFailed) and last.error_type == "TerminalSkipped"
+    assert isinstance(last, RunFailed)
+    assert last.failure.code == "graph.terminal_unreachable"
 
 
 def test_fan_out_actually_overlaps():
@@ -139,7 +140,7 @@ def test_failure_under_workers():
     )
     events = _run(_engine(g, num_workers=4))
     assert isinstance(events[-1], RunFailed)
-    assert events[-1].error == "nope"
+    assert events[-1].failure.message == "nope"
 
 
 def test_terminal_output_under_workers():

@@ -103,7 +103,7 @@ class FailNode(Node):
 
 
 class Policy(Exception):
-    """Named so the boundary yields NodeFailed(error_type='Policy')."""
+    """Named so the boundary yields a failure with cause type ``Policy``."""
 
 
 class ReturnsFailedNode(Node):

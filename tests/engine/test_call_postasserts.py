@@ -9,7 +9,7 @@ END id (e.g. `research/__end__`), not the spawner. Before this branch they fired
 redirect-commit site (naming the spawner); before an earlier fix they were silently dropped.
 
 These pin: a true call post-assert passes, a false one fails the run LOUDLY (RunFailed,
-error_type "NodeAssertFailed", a non-null locator at the assert on the child END), a post-assert
+failure cause type "NodeAssertFailed", a non-null locator at the assert on the child END), a post-assert
 reading BOTH a declared call input AND `${output}` fires correctly (the input mapped onto the
 cloned child START's coerced output), and (durability) the lowered assert survives authoritative
 log recovery — the injected builder re-lowers it onto the replayed child END.
@@ -88,7 +88,7 @@ def test_call_post_assert_true_passes():
     # a true `${output.field}` post-assert -> the run succeeds.
     loaded = _load("      - ${output.n} == 4")
     res = run_flow(loaded, {})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == {"report": "report for ACME", "n": 4}
 
 
@@ -96,7 +96,7 @@ def test_call_post_assert_true_passes():
 
 
 def test_call_post_assert_false_fails_loudly():
-    # a false `${output}` post-assert -> RunFailed, error_type NodeAssertFailed, a non-null
+    # a false `${output}` post-assert -> RunFailed, cause_type NodeAssertFailed, a non-null
     # locator pinned at the assert on the CLONED CHILD END (`research/__end__`), where the
     # lowered assert now rides. (Before this branch it named the spawner `research`; before an
     # earlier fix this passed SILENTLY.)
@@ -104,7 +104,7 @@ def test_call_post_assert_false_fails_loudly():
     res = run_flow(loaded, {})
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
-    assert failed and failed[0].error_type == "NodeAssertFailed"
+    assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
     loc = res.locator
     assert loc is not None
     assert loc.node == "research/__end__" and loc.kind == "assert"
@@ -119,7 +119,7 @@ def test_call_post_assert_reads_input_and_output_true():
     # n == len("ACME") == 4, so `len(topic) == n` is satisfied via the recovered input record.
     loaded = _load("      - ${output.n} == 4")  # baseline true
     res = run_flow(loaded, {})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
 
 
 def test_call_post_assert_reads_input_and_output_false():
@@ -129,7 +129,7 @@ def test_call_post_assert_reads_input_and_output_false():
     res = run_flow(loaded, {})
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
-    assert failed and failed[0].error_type == "NodeAssertFailed"
+    assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
     assert res.locator is not None and res.locator.node == "research/__end__"
 
 
@@ -137,7 +137,7 @@ def test_call_post_assert_reads_input_true():
     # The input ref resolves from the call's canonical growth seed (not None/dropped).
     loaded = _load('      - ${topic} == "ACME" and ${output.n} == 4')
     res = run_flow(loaded, {})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
 
 
 # --- 4. durable: the input record survives interruption/recovery ------------- #
@@ -221,7 +221,7 @@ def test_call_post_assert_survives_recovery_true(tmp_path: Path):
         '      - ${action} == "deploy" and ${output} == "yes"',
         "yes",
     )
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == "yes"
 
 
@@ -234,5 +234,5 @@ def test_call_post_assert_survives_recovery_false(tmp_path: Path):
     )
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
-    assert failed and failed[0].error_type == "NodeAssertFailed"
+    assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
     assert res.locator is not None and res.locator.node == "gate/__end__" and res.locator.kind == "assert"

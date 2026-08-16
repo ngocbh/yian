@@ -370,5 +370,5 @@ def test_seed_24_runs_via_search_path():
     parent = (_SEEDS / "24-uses-external.yaml").read_text()
     loaded = load_flow(parent, search_paths=[_SEEDS])
     res = run_flow(loaded, {"rating": 0.5, "rationale": "rising"})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert "rising" in str(res.output)

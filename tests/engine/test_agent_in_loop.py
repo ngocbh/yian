@@ -92,5 +92,5 @@ def test_tool_calling_agent_in_loop_runs(monkeypatch):
     monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "ping", _FakeTool(lambda a: "pong"))
     loaded = load_flow(FLOW)
     result = run_flow(loaded, {"seed": "s"})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == "s|turn1|turn2"

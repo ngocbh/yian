@@ -41,7 +41,7 @@ def test_compact_code_runs():
     # and the flow output is the node's output (no explicit `output: ${...}` wiring).
     loaded = load_flow(_COMPACT_CODE)
     res = run_flow(loaded, {"topic": "ACME"})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == "ACME"
 
 
@@ -92,7 +92,7 @@ code: tests.engine._compose_codefns:make_plan
 def test_compact_record_output_runs():
     loaded = load_flow(_COMPACT_RECORD)
     res = run_flow(loaded, {"topic": "ACME"})
-    assert res.status == "succeeded", res.error
+    assert res.status == "succeeded", res.failure
     assert res.output == {"rating": "plan for ACME", "score": 0.9}
 
 

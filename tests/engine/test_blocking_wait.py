@@ -219,7 +219,10 @@ def test_host_stop_wakes_wait_and_discards_its_outcome(
     assert not any(
         isinstance(event, NodeSucceeded) and event.node_id == "wait" for event in events
     )
-    assert not any(isinstance(event, NodeFailed) and event.node_id == "wait" for event in events)
+    assert not any(
+        isinstance(event, NodeFailed) and event.failure.node_id == "wait"
+        for event in events
+    )
     assert not any(thread.name.startswith("ac-worker-") for thread in threading.enumerate())
 
 
@@ -248,7 +251,10 @@ def test_observer_failure_wakes_wait_and_preserves_callback_error(
 
     assert caught.value is original
     assert stop_event.is_set()
-    assert not any(isinstance(event, NodeFailed) and event.node_id == "wait" for event in observed)
+    assert not any(
+        isinstance(event, NodeFailed) and event.failure.node_id == "wait"
+        for event in observed
+    )
     assert not any(thread.name.startswith("ac-worker-") for thread in threading.enumerate())
 
 
@@ -263,10 +269,13 @@ def test_sibling_failure_wakes_wait_and_remains_terminal_cause(
     )
 
     assert isinstance(events[-1], RunFailed)
-    assert events[-1].error == "sibling failed"
+    assert events[-1].failure.message == "sibling failed"
     assert stop_event.is_set()
     assert not any(
         isinstance(event, NodeSucceeded) and event.node_id == "wait" for event in events
     )
-    assert not any(isinstance(event, NodeFailed) and event.node_id == "wait" for event in events)
+    assert not any(
+        isinstance(event, NodeFailed) and event.failure.node_id == "wait"
+        for event in events
+    )
     assert not any(thread.name.startswith("ac-worker-") for thread in threading.enumerate())

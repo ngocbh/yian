@@ -53,32 +53,13 @@ class EvaluationFailure:
     """One raw node-evaluation failure for durable dispatcher preparation.
 
     ``failure`` is the sole semantic authority. ``locator`` and ``range`` retain
-    only the schema-1 presentation bridge while durable/public diagnostics remain flat.
+    only the temporary YAML presentation bridge until opaque origins carry the
+    same operation-level precision.
     """
 
     failure: Failure
     locator: SourceSpan | None = None
     range: SourceRange | None = None
-
-    @property
-    def node_id(self) -> str | None:
-        """Return the temporary source-compatible execution identity view."""
-        return self.failure.node_id
-
-    @property
-    def error(self) -> str:
-        """Return the temporary source-compatible message view."""
-        return self.failure.message
-
-    @property
-    def error_type(self) -> str:
-        """Return the temporary source-compatible exception-name view."""
-        return self.failure.cause_type or ""
-
-    @property
-    def traceback(self) -> str | None:
-        """Return the temporary source-compatible traceback view."""
-        return self.failure.traceback
 
 
 def _failure_trace(node, origin: OriginRef | None) -> tuple[OriginRef, ...]:

@@ -111,16 +111,21 @@ def test_raw_failure_is_frozen_slotted_and_preserves_diagnostics():
     result = _raw(node)
 
     assert isinstance(result, EvaluationFailure)
-    assert result.node_id == "work"
-    assert result.error_type == "BindingError"
+    assert result.failure.node_id == "work"
+    assert result.failure.cause_type == "BindingError"
     assert result.locator == SourceSpan("work", "input", "required")
     assert result.range == expected_range
-    assert result.traceback is not None and "BindingError" in result.traceback
+    assert result.failure.traceback is not None
+    assert "BindingError" in result.failure.traceback
     assert [field.name for field in fields(EvaluationFailure)] == [
         "failure",
         "locator",
         "range",
     ]
+    assert not any(
+        hasattr(result, alias)
+        for alias in ("node_id", "error", "error_type", "traceback")
+    )
     assert not hasattr(result, "__dict__")
     with pytest.raises(FrozenInstanceError):
         result.failure = result.failure
@@ -132,10 +137,13 @@ def test_raw_node_raise_and_invalid_grow_are_failures_not_observers():
 
     assert isinstance(raised, EvaluationFailure)
     assert raised.failure.code == "node.execute"
-    assert (raised.error, raised.error_type) == ("boom", "RuntimeError")
+    assert (raised.failure.message, raised.failure.cause_type) == (
+        "boom",
+        "RuntimeError",
+    )
     assert isinstance(invalid_grow, EvaluationFailure)
     assert invalid_grow.failure.code == "contract.node_result"
-    assert "not a spawner" in invalid_grow.error
+    assert "not a spawner" in invalid_grow.failure.message
 
 
 class _RaisingStreamNode(Node):

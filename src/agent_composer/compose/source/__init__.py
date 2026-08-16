@@ -3,10 +3,13 @@
 This package owns one PyYAML construction pass per physical document, the
 source-navigation contracts built over its retained YAML graph, and the
 immutable document-local catalogs that resolve Compose-owned opaque origins by
-replaying physical occurrences. Later Compose phases may populate the
-package-private catalog builder and consume its frozen snapshots, but parser
-objects stay private. Isolated location-free literals may be parsed separately
-without creating a document.
+replaying physical occurrences. The catalog module also owns collision-free
+Compose key encoding: document-local semantic paths and package-private lexical
+``uses:`` scoping that treats a child key as one opaque segment. Exact catalog
+membership reads only the frozen key table. Later Compose phases may populate
+the package-private catalog builder and consume its frozen snapshots, but
+parser objects stay private. Isolated location-free literals may be parsed
+separately without creating a document.
 
 Knows about:   PyYAML and the source-neutral contracts in ``diagnostics``;
                ``SourceRange`` is temporarily re-exported through ``events``.

@@ -1,4 +1,4 @@
-"""`${...}` reference resolution + the `when:` boolean expression evaluator.
+"""`${...}` evaluation plus conservative compile-time type/reference analysis.
 
 Ported from the legacy engine's lark grammar, with one change: variable
 resolution now goes through `VariablePool.resolve`, so it reads typed
@@ -6,9 +6,10 @@ segments (and can traverse into object outputs â€” `${x.output.output.ratio}` â€
 which the old dict-of-str pool could not).
 
 Grammar: comparisons (`==` `!=` `<` `<=` `>` `>=` `in` `not in`) and arithmetic over
-references and literals, combined with `and` / `or` / `not` and parentheses. Conditions
-route through the ONE unified engine (`grammar.parse_expr` + `eval_expr`); a bare
-reference with no comparison operator is a truthiness test (not an error).
+references and literals, combined with `and` / `or` / `not` and parentheses. The same
+parsed tree feeds `eval_expr`, conservative `infer_expr_type`, and the reference walkers.
+Conditions route through the ONE unified engine; a bare reference with no comparison
+operator is a truthiness test (not an error).
 """
 
 import re

@@ -129,6 +129,10 @@ stamp `Parameter.origin`, type values and authored nested record fields
 populate `ContractOrigins`, and packed defaults stamp `default_origin`; START reuses
 those carriers. Scalar alias/list type expressions fall back to the contract root.
 Python/source-free declarations and inferred inline parameters remain source-free.
+`compose/helpers/output_contracts.py` separately owns source-neutral binding-template
+result contracts: exact direct-reference projection/provenance, proven computed types,
+and multi-output record assembly. Node resolution and validation both import this lower
+helper; it never owns YAML navigation or graph-stage policy.
 For authored node outputs, `compose/build` injects a Compose-owned optional reader through
 `BuildContext`; the base descriptor invokes it only when an output-authoring leaf reaches
 its established contract step. This preserves earlier kind-owned validation order while

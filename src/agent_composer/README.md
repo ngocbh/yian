@@ -33,7 +33,7 @@ diagnostics.py semantic failures, resolved presentation, origins/resolver routin
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
 _state.py     shared scheduler-state vocabulary                          [leaf]
-expr/         one ${...} grammar: parse -> AST -> evaluate / ref-walk
+expr/         one ${...} grammar: parse -> AST -> evaluate / infer type / ref-walk
 nodes/        pure Node contract + per-kind implementations; spawners return seeds
               (start, end, agent, code, model, tool, case, call, map,
                loop, human_input, wait)
@@ -308,8 +308,15 @@ so changing or rebasing contract origins does not change flow or expansion ident
 Compose descriptors derive `ValueContract` directly. Builders, child signatures,
 producer maps, and validators retain the carrier; algorithms that only compare or walk
 types project `.type` at their boundary. CALL and LOOP preserve a child's output
-contract, while MAP deliberately derives a new list contract. There is no parallel
-output-Type API: Python-authored nodes pass `output_contract=` explicitly.
+contract, while MAP deliberately derives a new list contract. The child contract is
+resolved through `compose/helpers/output_contracts.py`: a direct output binding keeps
+its exact carrier and origins, while a statically proven computed expression receives a
+source-free contract from `expr.infer_expr_type`. Unsupported computations remain opaque
+instead of inheriting a reference leaf's type. The same helper serves post-build CALL/LOOP
+validation without a `validate -> nodes.resolver` dependency. Strict inline-composite
+input inference is deliberately separate and continues to require literals or direct
+typed references. There is no parallel output-Type API: Python-authored nodes pass
+`output_contract=` explicitly.
 For a physical node `output:` declaration, Compose injects a source-aware reader into the
 descriptor's existing per-kind build position. The shared recursive compiler returns the
 canonical contract with its declaration root and each authored nested record field; this

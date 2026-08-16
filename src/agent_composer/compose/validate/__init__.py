@@ -32,9 +32,10 @@ only opaque origins.
 
 Ladder position: `validate/` MAY import `helpers`/`nodes`/`parse`/`desugar`/
 `edges` and the engine core (`compile.model`, `compile.validation`, `expr`,
-`typesys`). The `validate -> nodes` edge (`nodes.resolver._output_value_contract`)
-and the `validate -> desugar` edge (`desugar.inline_calls.desugar_call_directives`)
-are acknowledged legal later->earlier edges. NOTHING in helpers/nodes/parse/
+`typesys`). Shared output-contract inference lives in `helpers`, so validation
+does not reach through the child resolver for it. The `validate -> desugar` edge
+(`desugar.inline_calls.desugar_call_directives`) is an acknowledged legal
+later->earlier edge. NOTHING in helpers/nodes/parse/
 desugar/edges imports `validate`. Only `build`/`loader` (and the package facade)
 import this back.
 """

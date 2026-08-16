@@ -199,6 +199,12 @@ Hold this model whenever you design anything:
   and generated contracts without an
   authorable type occurrence keep empty origins, while derived child contracts preserve
   their carriers and external alias views use ordinary lexical rebasing.
+- Static expression typing is source-neutral: `expr.infer_expr_type` mirrors only
+  result types the evaluator proves (literal/direct-ref and fixed boolean roots).
+  Compose's `helpers/output_contracts.py` alone adds template shape, reference
+  projection, and provenance. Unsupported computed outputs remain opaque instead
+  of inheriting a reference leaf's type; inline-composite input inference stays
+  strict and separate.
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
   it does not rewrite the graph at runtime.
 

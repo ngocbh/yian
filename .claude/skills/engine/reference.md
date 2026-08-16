@@ -729,7 +729,7 @@ shape; live growth and replay keep using the kind-blind injected `build_grow` pa
 Bindings, conditions, and prompts share ONE expression grammar — the three
 divergent dialects the engine grew (binding coalesce/default, `when:`
 boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipeline
-(parse → AST → evaluate / ref-walk):
+(parse → AST → evaluate / infer type / ref-walk):
 
 - **`grammar.py` — parse only.** `parse_expr` compiles a span into a Lark tree
   (arithmetic `+ - * / % **`, comparisons, `and`/`or`/`not`, `in`/`not in`, list
@@ -737,9 +737,10 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
   `|` coalesce). No evaluation here. The evaluator walks this **restricted AST** —
   there is no Python `eval`; a builtin call resolves only against the
   `TEMPLATE_FNS` whitelist, so a span can compute but cannot reach arbitrary code.
-- **`expressions.py` — evaluate + ref-walk.** `eval_expr` walks the tree over a
-  resolver; `expr_refs` collects the reference paths a span reads (the compile-time
-  companion, for edge inference + scope checks); `evaluate_when` is the `when:`
+- **`expressions.py` — evaluate + static companions.** `eval_expr` walks the tree
+  over a value resolver; `infer_expr_type` conservatively proves fixed result types
+  through an injected reference-type resolver; and `expr_refs` collects the paths a
+  span reads (for edge inference + scope checks). `evaluate_when` is the `when:`
   boolean. `RequiredError` (a `${x:?"msg"}` over an unbound ref) lives here, its
   natural home now that the evaluator raises it.
 - **`template.py` — the string surface.** `scan_template` splits literal text from
@@ -750,6 +751,12 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
 **Three resolve modes** decide what a MISSING reference does, one per context:
 `BINDING_NONE` (a binding → `None`, so `|`/`:-` can coalesce), `CONDITION_FALSY`
 (a `when:` → falsy), `STRICT_RAISE` (a prompt → raise; no silent blank).
+
+Compose's `helpers/output_contracts.py` owns the template and provenance envelope:
+direct refs retain exact `ValueContract`s, proven computed results are source-free,
+and unsupported computations stay opaque. Validation imports this lower helper,
+not the child resolver. Strict inline-composite input inference remains a separate
+surface and does not accept computed whole-value expressions.
 
 **`call(...)` desugar — a flow call is NOT an expression.** A child-flow call is a
 compile-time directive recognized at TWO sites, by ONE whole-value rule (only the

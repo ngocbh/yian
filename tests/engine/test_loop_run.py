@@ -19,6 +19,7 @@ from agent_composer.compile.expand import build_grow
 from agent_composer.compose.loader import load_flow
 from agent_composer.run import run_flow
 from agent_composer.tools import install_ask_user
+from agent_composer.typesys import ValueKind
 from tests.engine._graph_builder import _engine
 
 
@@ -192,6 +193,57 @@ def test_loop_body_blocks_for_each_human_turn():
 
     assert result.status == "succeeded", result.failure
     assert result.output == {"messages": ["hi", "bye"], "exited": True}
+
+
+DIRECT_EXIT_LOOP = """
+id: direct-exit-chat
+name: direct_exit_chat
+input:
+  initial_exited: bool
+defs:
+  chat_turn:
+    input:
+      messages: list[str]
+      exited: bool
+    nodes:
+      ask:
+        kind: human_input
+        prompt: "your message"
+        output: str
+    output:
+      messages: ${input.messages}
+      exited: ${ask.output == "/exit"}
+nodes:
+  loop:
+    kind: loop
+    call: chat_turn
+    input:
+      messages: []
+      exited: ${input.initial_exited}
+    while: not ${exited}
+    max: 10
+output: ${loop.output}
+"""
+
+
+def test_loop_body_can_compute_carried_boolean_in_its_output_binding():
+    """A comparison result is statically bool and satisfies LOOP's type contract."""
+    loaded = load_flow(DIRECT_EXIT_LOOP)
+    prompts: list[str] = []
+
+    def answer(**request):
+        """Record the single authored prompt and return the exit command."""
+        prompts.append(request["question"])
+        return "/exit"
+
+    with install_ask_user(answer):
+        result = run_flow(loaded, {"initial_exited": False})
+
+    body_type = loaded.compiled.nodes["loop"].output_contract.type
+    assert body_type.fields["exited"].kind is ValueKind.BOOLEAN
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"messages": [], "exited": True}
+    assert prompts == ["your message"]
 
 
 # A loop that is NOT the terminal node: its committed record feeds a downstream code node.

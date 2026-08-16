@@ -119,6 +119,11 @@ expression, so a string default must be **quoted** (`${x:-"today"}`; bare `today
 reads a variable). A child-flow call is the whole-value `call(...)` directive
 (see below), never a `${flow(args)}` span.
 
+For child-flow output contracts, a direct ref preserves its exact type, and a
+comparison/membership or `not`/`and`/`or` result is proven `bool`. This permits a
+LOOP body field such as `exited: ${ask.output == "/exit"}` without a CODE fold.
+Other computed result types remain unknown unless an explicit typed node supplies them.
+
 ## Types
 
 Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`,

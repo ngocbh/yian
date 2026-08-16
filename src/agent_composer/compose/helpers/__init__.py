@@ -9,6 +9,9 @@ down into it.
 Modules:
   - `errors`      the document-owned diagnostic factory plus `LoadError`, whose one
                   canonical `Diagnostic` is ready for direct boundary rendering.
+  - `output_contracts` the template-aware output-binding contract resolver: exact
+                  direct-reference provenance plus source-free proven expression
+                  results and multi-output record assembly.
   - `source`      parse-free boundary-input range projection over an existing
                   `SourceCursor`; compatibility metadata, never a YAML parser. Assertion
                   origin/range pairs come from one retained item cursor in the build

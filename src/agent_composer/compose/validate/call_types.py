@@ -8,9 +8,8 @@ C-EQUIV). Its range anchor comes from the call node's transient Compose
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
-analysis), `compose.nodes.resolver` (`_output_value_contract`, the shared contract resolver —
-`resolver` imports no later phase, so this edge is acyclic), and
-`compose.helpers.errors`. Only the loader (and the compose package facade) import this back.
+analysis), and `compose.helpers` (shared output-contract inference and load diagnostics).
+Only the loader (and the compose package facade) import this back.
 """
 
 from __future__ import annotations
@@ -19,8 +18,10 @@ from dataclasses import replace
 from typing import Any, Optional
 
 from agent_composer.compile.validation import types_compatible
-from agent_composer.compose.nodes.resolver import _output_value_contract
 from agent_composer.compose.helpers.errors import LoadDiagnostics
+from agent_composer.compose.helpers.output_contracts import (
+    resolve_output_binding_contract,
+)
 from agent_composer.compose.nodes.base import BuildResult
 from agent_composer.diagnostics import SourceRange
 from agent_composer.expr import binding_co_skips
@@ -72,7 +73,11 @@ def check_ref_map_types(
             if decl is None or decl.contract is None:
                 continue  # `over`/name-caught-in-build/opaque child input -> lenient
             child_type = decl.contract.type
-            source_contract = _output_value_contract(src, producers, flow_inputs)
+            source_contract = resolve_output_binding_contract(
+                src,
+                producers,
+                flow_inputs,
+            )
             if source_contract is None:
                 continue  # ${item}/coalesce/literal/opaque source -> lenient
             source = source_contract.type

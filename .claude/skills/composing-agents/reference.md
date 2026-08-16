@@ -57,6 +57,10 @@ reads a variable). A whole-string `${ref}` resolves to the **typed value**;
 embedded in surrounding text it is **stringified**. A child-flow call is the
 whole-value `call(...)` directive (below), never a `${flow(args)}` span.
 
+Child-flow output typing retains an exact direct-reference contract and proves
+comparisons, membership, and `not`/`and`/`or` as `bool`. Unsupported computed
+results stay unknown rather than inheriting one referenced operand's type.
+
 ## The three expression contexts (one grammar)
 
 One `${...}` grammar; the context decides what happens to the result:

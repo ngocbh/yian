@@ -28,11 +28,11 @@ from agent_composer.compose.nodes.map import MapDescriptor
 from agent_composer.compose.edges.data import infer_data_edges
 from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.nodes.case import _data_edges as case_data_edges
-from agent_composer.compose.nodes.resolver import (
-    _output_value_contract,
-    child_signature,
+from agent_composer.compose.helpers.output_contracts import (
+    resolve_output_binding_contract,
 )
+from agent_composer.compose.nodes.case import _data_edges as case_data_edges
+from agent_composer.compose.nodes.resolver import child_signature
 from agent_composer.compose.validate.call_types import check_ref_map_types
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose import load_flow
@@ -403,33 +403,66 @@ def test_output_contract_resolution_retains_whole_value_identity() -> None:
     source = "${producer.output}"
     producers = {"producer": contract}
 
-    assert _output_value_contract(source, producers, {}) is contract
+    assert resolve_output_binding_contract(source, producers, {}) is contract
     assert (
-        _output_value_contract(Binding(source, _origin("typed-output")), producers, {})
+        resolve_output_binding_contract(
+            Binding(source, _origin("typed-output")),
+            producers,
+            {},
+        )
         is contract
     )
     assert (
-        _output_value_contract(
+        resolve_output_binding_contract(
             Binding(Binding(source, _origin("inner")), _origin("outer")),
             producers,
             {},
         )
         is None
     )
-    assert _output_value_contract("${input.topic}", {}, {"topic": contract}) is contract
+    assert (
+        resolve_output_binding_contract("${input.topic}", {}, {"topic": contract})
+        is contract
+    )
 
-    computed = _output_value_contract(
-        "${producer.output + 1}",
+    computed = resolve_output_binding_contract(
+        '${producer.output == "/exit"}',
         {"producer": contract},
         {},
     )
     assert type(computed) is ValueContract
     assert computed is not contract
-    assert computed.type is contract.type
+    assert computed.type == Type.scalar(ValueKind.BOOLEAN)
     assert computed.origins == ContractOrigins()
 
+    for expression, expression_producers in (
+        ("${false}", {}),
+        ("${true and false}", {}),
+        (
+            "${left.output == right.output}",
+            {"left": contract, "right": contract},
+        ),
+    ):
+        inferred = resolve_output_binding_contract(
+            expression,
+            expression_producers,
+            {},
+        )
+        assert type(inferred) is ValueContract
+        assert inferred.type == Type.scalar(ValueKind.BOOLEAN)
+        assert inferred.origins == ContractOrigins()
+
+    assert (
+        resolve_output_binding_contract(
+            "${producer.output + 1}",
+            {"producer": contract},
+            {},
+        )
+        is None
+    )
+
     with pytest.raises(TypeError, match="flow input contracts.*ValueContract"):
-        _output_value_contract(  # type: ignore[dict-item]
+        resolve_output_binding_contract(  # type: ignore[dict-item]
             "${input.topic}",
             {},
             {"topic": output_type},
@@ -467,7 +500,7 @@ def test_output_contract_resolution_rebases_nested_origins() -> None:
         ),
     )
 
-    projected = _output_value_contract(
+    projected = resolve_output_binding_contract(
         "${producer.output.result}",
         {"producer": contract},
         {},
@@ -490,7 +523,7 @@ def test_output_contract_resolution_rebases_nested_origins() -> None:
             entries=((("result",), _origin("result")),),
         ),
     )
-    leaf = _output_value_contract(
+    leaf = resolve_output_binding_contract(
         "${producer.output.result.answer}",
         {"producer": fallback_contract},
         {},

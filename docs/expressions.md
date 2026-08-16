@@ -5,13 +5,14 @@
 > layer takes a `resolve` callable, never the pool itself. For what you may *write* inside
 > `${...}`, see [Flow syntax → References](syntax.md#references-naming-a-value).
 
-## One grammar, two readers
+## One grammar, three readers
 
 Everywhere a flow wires data — a node input, a `when:` condition, a flow `output:`, an
 agent `prompt:` — the author writes `${...}`. There is **one** grammar, and the same parse
-tree is read two ways:
+tree is read three ways:
 
 - **evaluate** it against a `resolve` callable → a value (at run time), and
+- **infer** a result type when the AST proves one → a `Type` (at load time), and
 - **ref-walk** it → the set of references it reads (at load time, to infer edges).
 
 That single source of truth is why the graph the compiler infers matches exactly what the
@@ -19,8 +20,8 @@ runtime evaluates. Three stacked layers plus a builtin registry:
 
 ```
    grammar.py     PARSE ONLY — one Lark grammar → a parse tree          (parse_expr)
-   expressions.py evaluate a tree via a `resolve` callable              (eval_expr)
-                  + the compile-time ref-walk (expr_refs) + ref-rewriter
+   expressions.py evaluate / infer a tree via injected resolvers        (eval_expr,
+                  infer_expr_type) + ref-walk/rewrite                    (expr_refs)
    template.py    the ${...} scanner: split text into literals + spans  (eval_binding,
                   drive the engine per span; strict prompt rendering     render_template_record)
    builtins.py    TEMPLATE_FNS — the pure formatters a prompt may call
@@ -69,10 +70,13 @@ evaluator serves the pool, a prompt's local record, and the map-body `item` scop
 (no arbitrary callable is reachable). Arithmetic runs on the resolved *values* with Python
 semantics — `str + str` concatenates, `list + list` extends (`${xs + [item]}`).
 
-**Compile-time companions** (never evaluate): `expr_refs(tree)` collects the reference
-paths an expression reads — this is how the compiler infers data edges. `rewrite_expr_refs`
-rewrites only the reference *leaves* by source position — how refs are re-namespaced when a
-child flow is inlined.
+**Compile-time companions** (never evaluate): `infer_expr_type(tree, ref_type_fn)`
+returns a type only for statically fixed results: scalar literals, exact references,
+comparisons/membership, and `not`/`and`/`or`. Other expressions remain unknown rather
+than borrowing an operand's type. `expr_refs(tree)` collects the reference paths an
+expression reads — this is how the compiler infers data edges. `rewrite_expr_refs`
+rewrites only the reference *leaves* by source position — how refs are re-namespaced
+when a child flow is inlined.
 
 **The condition surface** — `when:` / `until:` / `while:` / `asserts:` admit three
 spellings that parse and evaluate identically: bare `a > 5`, mixed `${a} > 5`, whole-span
@@ -90,9 +94,12 @@ expression). `$$` escapes a literal `$`. Evaluation then follows one rule:
 - a span **embedded** in surrounding text is **stringified** into it;
 - text with no span is a plain literal.
 
-Compile-time output typing mirrors this: a lone single-ref span is a typed passthrough; a
-concatenating template (text around spans, or 2+ spans) is always `str`. That is what lets
-a loop body carry a `str` field with a plain `${...}` template — no fold node needed.
+Compile-time output typing mirrors this: a lone direct-reference span is an exact typed
+passthrough (including provenance); a statically proven computed span gets its result type
+(`==`, membership, and `not`/`and`/`or` produce `bool`); and a concatenating template
+(text around spans, or 2+ spans) is always `str`. Unsupported computed expressions remain
+untyped, never the type of one reference leaf. This lets a loop body compute a carried
+boolean directly, for example `exited: ${ask.output == "/exit"}`.
 
 A **prompt** is the strict context: it reads only the node's own declared inputs (bare
 `${name}`), renders in `STRICT_RAISE` mode, and may call a builtin.

@@ -147,6 +147,58 @@ class _SourceSite:
     selector: _SiteSelector
 
 
+def _resolve_registered_site(
+    sites: Mapping[str, _SourceSite],
+    origin: OriginRef,
+) -> DiagnosticFrame | None:
+    """Resolve one registered occurrence without copying or freezing its table.
+
+    Args:
+        sites (`Mapping[str, _SourceSite]`): Current or frozen site mapping.
+        origin (`OriginRef`): Exact document-local identity to resolve.
+
+    Returns:
+        `DiagnosticFrame | None`:
+            Concrete source frame, or ``None`` for an unknown or unavailable site.
+
+    Raises:
+        TypeError: Raised when ``origin`` is not an `OriginRef`.
+        SourceAccessError: Raised when a retained occurrence cannot be replayed.
+    """
+    if not isinstance(origin, OriginRef):
+        raise TypeError("source catalog resolve requires an OriginRef")
+    site = sites.get(origin.key)
+    if site is None:
+        return None
+
+    cursor = site.document._resolve_occurrence(site.occurrence_path)
+    if site.selector == "value":
+        source_range = cursor.range
+    elif site.selector == "key":
+        source_range = cursor.key_range
+    else:
+        scalar_source = cursor.scalar_source
+        line_ranges = (
+            scalar_source.constructed_line_ranges
+            if scalar_source is not None
+            else None
+        )
+        source_range = (
+            line_ranges[site.selector.index]
+            if line_ranges is not None
+            and 0 <= site.selector.index
+            and site.selector.index < len(line_ranges)
+            else None
+        )
+    if source_range is None:
+        return None
+    return DiagnosticFrame(
+        label=site.document.label,
+        text=site.document.text,
+        range=source_range,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SourceCatalog:
     """Immutable Compose resolver from opaque origins to diagnostic frames.
@@ -194,38 +246,7 @@ class SourceCatalog:
             `SourceAccessError`:
                 Raised if the retained occurrence path cannot be replayed.
         """
-        if not isinstance(origin, OriginRef):
-            raise TypeError("source catalog resolve requires an OriginRef")
-        site = self._sites.get(origin.key)
-        if site is None:
-            return None
-
-        cursor = site.document._resolve_occurrence(site.occurrence_path)
-        if site.selector == "value":
-            source_range = cursor.range
-        elif site.selector == "key":
-            source_range = cursor.key_range
-        else:
-            scalar_source = cursor.scalar_source
-            line_ranges = (
-                scalar_source.constructed_line_ranges
-                if scalar_source is not None
-                else None
-            )
-            source_range = (
-                line_ranges[site.selector.index]
-                if line_ranges is not None
-                and 0 <= site.selector.index
-                and site.selector.index < len(line_ranges)
-                else None
-            )
-        if source_range is None:
-            return None
-        return DiagnosticFrame(
-            label=site.document.label,
-            text=site.document.text,
-            range=source_range,
-        )
+        return _resolve_registered_site(self._sites, origin)
 
     def __contains__(self, origin: object) -> bool:
         """Return whether one exact opaque origin belongs to this catalog.
@@ -402,6 +423,26 @@ class _SourceCatalogBuilder:
             selector=_ConstructedLine(index),
         )
         return OriginRef(key)
+
+    def resolve_registered(self, origin: OriginRef) -> DiagnosticFrame | None:
+        """Resolve one currently registered site without freezing the builder.
+
+        This package-private read seam exists for a load failure that must present
+        a site before successful file finalization. It replays the already-parsed
+        document and never copies the mutable table; later registrations remain
+        invisible to an already returned immutable frame.
+
+        Args:
+            origin (`OriginRef`): Exact document-local identity to resolve.
+
+        Returns:
+            `DiagnosticFrame | None`: Current concrete frame, or ``None``.
+
+        Raises:
+            TypeError: Raised when ``origin`` is not an `OriginRef`.
+            SourceAccessError: Raised when a retained occurrence cannot be replayed.
+        """
+        return _resolve_registered_site(self._sites, origin)
 
     @contextmanager
     def transaction(self) -> Iterator[None]:

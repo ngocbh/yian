@@ -1103,6 +1103,7 @@ def _assemble(
         registry=registry,
         resolver=scope.resolve,
         source_file=flow_label,
+        resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
     )
     descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base)

@@ -15,8 +15,7 @@ def test_build_context_defaults():
     ctx = BuildContext(registry={})
     assert ctx.resolver is None
     assert ctx.source_file == "<inline-code>"
-    assert ctx.code_line is None
-    assert ctx.code_field_line is None
+    assert ctx.resolve_origin is None
 
 
 def test_build_result_defaults():

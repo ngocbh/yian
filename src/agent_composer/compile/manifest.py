@@ -126,7 +126,14 @@ _IGNORED_KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
     # _mode/ref are derived from code; _code is a process-local compiled-code cache.
     # CODE origins are diagnostic metadata resolved only by the authoring front end.
     NodeKind.CODE: frozenset(
-        {"_mode", "ref", "_code", "code_origin", "code_line_origins"}
+        {
+            "_mode",
+            "ref",
+            "_code",
+            "_owned_code_objects",
+            "code_origin",
+            "code_line_origins",
+        }
     ),
     NodeKind.MODEL: frozenset(),
     NodeKind.TOOL: frozenset(),
@@ -420,7 +427,7 @@ def _check_node_fields(node: Node, path: str) -> None:
         )
     # Conditional fields (END mode and CODE mode) are allowed to be absent. Every other field
     # is constructor-owned and must be present, or the object is not a complete canonical node.
-    conditional = {"_names", "_n", "ref", "_code"}
+    conditional = {"_names", "_n", "ref", "_code", "_owned_code_objects"}
     missing = sorted((expected - conditional) - actual)
     if missing:
         raise ValueError(f"{path}: missing canonical field(s): {missing}")

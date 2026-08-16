@@ -372,11 +372,30 @@ def test_resolution_does_not_reparse_source(monkeypatch):
     document = SourceDocument.parse("value: present\n")
     builder = _SourceCatalogBuilder()
     origin = builder.register(("value",), document.root.child("value"))
+    current_frame = builder.resolve_registered(origin)
     catalog = builder.freeze()
 
+    assert current_frame == catalog.resolve(origin)
     assert catalog.resolve(origin) is not None
     assert catalog.resolve(origin) is not None
     assert parse_count == 1
+
+
+def test_builder_lookup_reads_current_sites_without_freezing(monkeypatch):
+    document = SourceDocument.parse(
+        "first: one\nsecond: two\n",
+        label="flow.yaml",
+    )
+    builder = _SourceCatalogBuilder()
+    first = builder.register(("first",), document.root.child("first"))
+
+    def unexpected_freeze(_builder):
+        raise AssertionError("registered-site lookup must not freeze")
+
+    monkeypatch.setattr(_SourceCatalogBuilder, "freeze", unexpected_freeze)
+
+    assert builder.resolve_registered(first).range == SourceRange(1, 8, 1, 11)
+    assert builder.resolve_registered(OriginRef("unknown")) is None
 
 
 def test_constructed_line_literal_registers_zero_based_exact_frames():

@@ -10,6 +10,7 @@ from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.source import SourceDocument
+from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceRange
 
@@ -91,16 +92,23 @@ def test_code_build_frames_inline_syntax_error_at_yaml_line():
         "      return (\n"
     )
     reader = _reader_for(text, "broken")
-    desc = CodeDescriptor.parse("broken", reader)
+    builder = _SourceCatalogBuilder()
+    desc = CodeDescriptor.parse("broken", reader).with_source_origins(
+        reader,
+        site_path=("root", "node", "broken"),
+        catalog_builder=builder,
+    )
     with pytest.raises(LoadError) as ei:
         desc.build(
             BuildContext(
                 {},
                 source_file="flow.yaml",
+                resolve_origin=builder.resolve_registered,
                 diagnostics=LoadDiagnostics.from_cursor(reader),
             )
         )
-    # The padded compile frames the slip at its absolute YAML line (8), not body-relative.
+    # Wrapper line 2 selects the first exact constructed CODE line (YAML line 8).
     assert len(ei.value.diagnostic.frames) == 1
     assert ei.value.diagnostic.frames[0].range.start_line == 8
     assert ei.value.diagnostic.frames[0].text == text
+    assert ei.value.diagnostic.message == "node 'broken': '(' was never closed"

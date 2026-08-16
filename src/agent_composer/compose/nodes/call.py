@@ -132,7 +132,6 @@ class CallDescriptor(NodeDescriptor):
                 flow_version=None,
                 child=child.compiled,
                 child_inputs=sig.inputs,
-                child_source=child.source,  # render-only; the CLI nested-error traceback
                 parallel=self.parallel,  # inert; carried for the over case only
                 title=self.node_name,
             )
@@ -158,7 +157,6 @@ class CallDescriptor(NodeDescriptor):
                 flow_version=None,
                 child=child.compiled,
                 child_inputs=sig.inputs,
-                child_source=child.source,  # render-only; the CLI nested-error traceback
                 title=self.node_name,
             )
             node.params = self.sink_params()

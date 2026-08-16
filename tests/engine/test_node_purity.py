@@ -10,10 +10,6 @@ flow-level `outputs:`), never on a `Node`.
 
 No exemptions for *bindable sources*: the MAP re-split retired the last one (the old
 `CallNode.over` discriminator). `MapNode` discriminates by KIND, not an `over` source string.
-The one thing skipped is a `SourceFrame` (`child_source` on a `call`/`map` node): it is
-render-only error-traceback metadata carrying the child's raw YAML `text` (which naturally
-contains `${input.X}` spans), NOT a wiring source — so it is exempt from the scan, the same
-way a `CompiledFlow`'s `wiring`/`outputs` are.
 """
 
 import re
@@ -23,7 +19,6 @@ import pytest
 
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.compose import load_flow
-from agent_composer.compose.loader import SourceFrame
 from agent_composer.nodes.contracts import Binding
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -52,16 +47,13 @@ _SEEDS_TO_SCAN = [
 def _strings(obj, seen):
     """Every string reachable from `obj` (recursing dicts / lists / dataclass-ish __dict__ /
     baked child `CompiledFlow.nodes`), id-cycle-guarded. A `CompiledFlow`'s `wiring`/`outputs`
-    are NOT walked — those are the legitimate homes for sources. A `SourceFrame` is skipped:
-    it is render-only traceback metadata carrying the child's raw YAML, not a wiring source."""
+    are NOT walked — those are the legitimate homes for sources."""
     if isinstance(obj, str):
         yield obj
         return
     if id(obj) in seen:
         return
     seen.add(id(obj))
-    if isinstance(obj, SourceFrame):
-        return  # render-only error-traceback metadata (raw child YAML), not a source
     if isinstance(obj, CompiledFlow):
         for n in obj.nodes.values():
             yield from _strings(n, seen)

@@ -66,7 +66,6 @@ class LoopNode(Node):
         flow_version: Optional[str] = None,
         child: Any = None,
         child_inputs: Optional[list[Parameter]] = None,
-        child_source: Any = None,
         predicate_kind: str = "while",
         predicate: Optional[str] = None,
         times: Optional[int] = None,
@@ -80,7 +79,6 @@ class LoopNode(Node):
         self.flow_version = flow_version
         self.child = child
         self.child_inputs = child_inputs
-        self.child_source = child_source
         self.predicate_kind = predicate_kind
         self.predicate = predicate
         self.times = times
@@ -181,8 +179,8 @@ class LoopNode(Node):
         clone = LoopNode(
             f"{self.origin_id}~{k}", flow_id=self.flow_id, flow_version=self.flow_version,
             child=self.child, child_inputs=self.child_inputs,
-            child_source=self.child_source, predicate_kind=self.predicate_kind,
-            predicate=self.predicate, times=self.times, max_iters=self.max_iters,
+            predicate_kind=self.predicate_kind, predicate=self.predicate,
+            times=self.times, max_iters=self.max_iters,
             title=self.title, iteration=k, origin_id=self.origin_id)
         clone.origin = self.origin
         # Keep only the enclosing ancestry. ``failure_trace()`` appends this driver's

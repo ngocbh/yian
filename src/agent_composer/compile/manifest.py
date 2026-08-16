@@ -141,11 +141,11 @@ _IGNORED_KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
     NodeKind.CASE: frozenset(),
     NodeKind.HUMAN_INPUT: frozenset(),
     NodeKind.WAIT: frozenset(),
-    # child_inputs duplicates the recursive child's START signature; child_source is diagnostic.
-    NodeKind.CALL: frozenset({"child_inputs", "child_source"}),
+    # child_inputs duplicates the recursive child's START signature.
+    NodeKind.CALL: frozenset({"child_inputs"}),
     # parallel is retained by the authoring model but runtime concurrency uses num_workers.
-    NodeKind.MAP: frozenset({"child_inputs", "child_source", "parallel"}),
-    NodeKind.LOOP: frozenset({"child_inputs", "child_source"}),
+    NodeKind.MAP: frozenset({"child_inputs", "parallel"}),
+    NodeKind.LOOP: frozenset({"child_inputs"}),
 }
 _KIND_CLASSES: dict[NodeKind, type[Node]] = {
     NodeKind.START: StartNode,

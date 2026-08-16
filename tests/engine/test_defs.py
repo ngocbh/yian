@@ -443,22 +443,22 @@ def test_single_node_def_runs():
 
 def test_single_node_def_projected_header_and_logic_ranges():
     loaded = load_flow(_SINGLE_NODE_DEF)
-    frame = loaded.compiled.nodes["go"].child_source
+    node = loaded.compiled.nodes["go"].child.nodes["passthru"]
 
-    assert frame.node_ranges["passthru"].start_line == 7
-    assert frame.field_ranges["passthru"][("field", "code")].start_line == 9
+    assert node.range.start_line == 7
+    assert node.field_ranges[("field", "code")].start_line == 9
 
 
 def test_single_node_def_generated_inputs_keep_declaration_ranges():
     loaded = load_flow(_SINGLE_NODE_DEF)
-    ranges = loaded.compiled.nodes["go"].child_source.field_ranges["passthru"]
+    ranges = loaded.compiled.nodes["go"].child.nodes["passthru"].field_ranges
 
     assert ranges[("input", "topic")] == SourceRange(10, 21, 10, 24)
 
 
 def test_single_node_def_generated_output_keeps_authored_output_range():
     loaded = load_flow(_SINGLE_NODE_DEF)
-    ranges = loaded.compiled.nodes["go"].child_source.field_ranges["passthru"]
+    ranges = loaded.compiled.nodes["go"].child.nodes["passthru"].field_ranges
 
     assert ranges[("field", "outputs")] == SourceRange(11, 13, 11, 16)
 

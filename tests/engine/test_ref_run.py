@@ -110,7 +110,7 @@ def test_ref_child_failure_fails_the_run():
     assert result.failure.node_id == "research/emit"
     assert result.failure.trace == (
         call.origin,
-        call.child.nodes["emit"].origin,
+        call.child.nodes["emit"].code_origin,
     )
 
 

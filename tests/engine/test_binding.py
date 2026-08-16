@@ -12,9 +12,15 @@ from collections import namedtuple
 
 import pytest
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.compile.model import START_ID
-from agent_composer.nodes.binding import BindingError, bind_params
-from agent_composer.nodes.contracts import Parameter, ValueContract
+from agent_composer.nodes.binding import BindingError, apply_defaults, bind_params
+from agent_composer.nodes.contracts import (
+    Binding,
+    ContractOrigins,
+    Parameter,
+    ValueContract,
+)
 from agent_composer.typesys import Type, ValueKind
 from agent_composer.typesys.pool import VariablePool
 
@@ -199,6 +205,95 @@ def test_bind_required_omitted_raises():
     # Param `required` is presence-based too: an OMITTED required input (no edge) fails loud.
     with pytest.raises(BindingError):
         bind_inputs([InputBinding(name="t", contract=STRING, required=True)], _pool())
+
+
+def test_binding_errors_carry_stage_code_and_operation_origin() -> None:
+    """Expression/required/default work and supplied contracts stay distinct."""
+    binding_origin = OriginRef("binding:x")
+    parameter_origin = OriginRef("parameter:x")
+    default_origin = OriginRef("default:x")
+    contract_origin = OriginRef("contract:x")
+
+    with pytest.raises(BindingError) as expression:
+        bind_params(
+            [Parameter("x", origin=parameter_origin)],
+            {"x": Binding("${missing.value:?x is required}", binding_origin)},
+            _pool(),
+        )
+    assert (expression.value.failure_code, expression.value.origin) == (
+        "binding.evaluate",
+        binding_origin,
+    )
+
+    with pytest.raises(BindingError) as required:
+        bind_params(
+            [Parameter("x", required=True, origin=parameter_origin)],
+            {},
+            _pool(),
+        )
+    assert (required.value.failure_code, required.value.origin) == (
+        "binding.evaluate",
+        parameter_origin,
+    )
+
+    integer_contract = ValueContract(
+        Type.scalar(ValueKind.INTEGER),
+        ContractOrigins(default=contract_origin),
+    )
+    with pytest.raises(BindingError) as invalid_default:
+        bind_params(
+            [
+                Parameter(
+                    "x",
+                    contract=integer_contract,
+                    has_default=True,
+                    default="bad",
+                    origin=parameter_origin,
+                    default_origin=default_origin,
+                )
+            ],
+            {},
+            _pool(),
+        )
+    assert (invalid_default.value.failure_code, invalid_default.value.origin) == (
+        "binding.evaluate",
+        default_origin,
+    )
+
+    with pytest.raises(BindingError) as contract:
+        bind_params(
+            [
+                Parameter(
+                    "x",
+                    contract=integer_contract,
+                    origin=parameter_origin,
+                )
+            ],
+            {"x": Binding("bad", binding_origin)},
+            _pool(),
+        )
+    assert (contract.value.failure_code, contract.value.origin) == (
+        "contract.input",
+        contract_origin,
+    )
+
+
+def test_apply_defaults_marks_invalid_authored_default_as_binding_evaluation() -> None:
+    """The wrapper's default backstop retains default-site semantics."""
+    default_origin = OriginRef("default:x")
+    parameter = Parameter(
+        "x",
+        contract=INTEGER,
+        has_default=True,
+        default="bad",
+        default_origin=default_origin,
+    )
+
+    with pytest.raises(BindingError) as caught:
+        apply_defaults([parameter], {})
+
+    assert caught.value.failure_code == "binding.evaluate"
+    assert caught.value.origin == default_origin
 
 
 def test_bind_params_rejects_a_raw_declaration_bypass():

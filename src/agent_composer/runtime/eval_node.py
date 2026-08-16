@@ -8,18 +8,18 @@ assert-owning ``run`` wrapper, forwards transient chunks through ``emit_stream``
 returns exactly ``Output | Route | Grow | EvaluationFailure``.  It emits no observer
 notifications; durable observer ordering belongs to the dispatcher.
 
-Every node-side failure path funnels to ``EvaluationFailure``: a node ``raise``, a
-``Grow`` returned by a non-spawner, and a non-``NodeResult`` return.  ``_HostStop`` and
-an injected stream callback exception are deliberate host-side exceptions and propagate
-unchanged.
+Expected rejection is classified where its operation occurs: binding evaluation,
+supplied-input contracts, wrapper assertions, node execution, or node-result validation.
+Host control, stream callback exceptions, unexpected binder faults, and malformed
+compiled/setup state propagate outside ``EvaluationFailure``.
 
 The bind is PURE: it reads the node's sources ONLY from `flow.wiring[node.id]` joined to the
 node's `params` — the node carries no source. Direct-drive tests supply a stub `flow` with
 `wiring` (the test helpers derive it). Layer: runtime imports nodes.* freely.
 
-Accepted bind ordering vs the old per-node `_run` on an unreachable loaded-flow state: a
-`call` that is both unbaked and has a bad `over`/binding surfaces the bind error before the
-not-baked guard; the loader always bakes calls, and either path terminates in `NodeFailed`.
+Binding precedes node-owned setup validation. Thus an unreachable unbaked MAP with bad
+``over``/input wiring reports that binding rejection first; with valid binding, its missing
+compiled child propagates as malformed setup. The loader always bakes valid composites.
 """
 
 from __future__ import annotations
@@ -31,9 +31,20 @@ from collections.abc import Callable, Generator
 from dataclasses import dataclass, replace
 from typing import Any, TypeAlias
 
+from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import SourceRange, SourceSpan, StreamChunk
-from agent_composer.nodes.base import Grow, Output, Route, _HostStop
-from agent_composer.nodes.binding import bind_params
+from agent_composer.nodes.base import (
+    Grow,
+    Node,
+    Output,
+    Route,
+    _AssertionStageError,
+    _BindingStageError,
+    _DeferredBindingFault,
+    _HostStop,
+    _NodeBodyError,
+)
+from agent_composer.nodes.binding import BindingError, bind_params
 from agent_composer.typesys.pool import VariablePool
 
 
@@ -41,22 +52,91 @@ from agent_composer.typesys.pool import VariablePool
 class EvaluationFailure:
     """One raw node-evaluation failure for durable dispatcher preparation.
 
-    ``node_id`` identifies the executing node; ``error`` and ``error_type`` are the
-    stable diagnostic strings; ``locator`` and ``range`` retain symbolic and concrete
-    YAML locations; ``traceback`` is the formatted Python stack captured while the
-    exception is active.  Missing optional diagnostics are ``None``.
+    ``failure`` is the sole semantic authority. ``locator`` and ``range`` retain
+    only the schema-1 presentation bridge while durable/public diagnostics remain flat.
     """
 
-    node_id: str
-    error: str
-    error_type: str = ""
+    failure: Failure
     locator: SourceSpan | None = None
     range: SourceRange | None = None
-    traceback: str | None = None
+
+    @property
+    def node_id(self) -> str | None:
+        """Return the temporary source-compatible execution identity view."""
+        return self.failure.node_id
+
+    @property
+    def error(self) -> str:
+        """Return the temporary source-compatible message view."""
+        return self.failure.message
+
+    @property
+    def error_type(self) -> str:
+        """Return the temporary source-compatible exception-name view."""
+        return self.failure.cause_type or ""
+
+    @property
+    def traceback(self) -> str | None:
+        """Return the temporary source-compatible traceback view."""
+        return self.failure.traceback
+
+
+def _failure_trace(node, origin: OriginRef | None) -> tuple[OriginRef, ...]:
+    """Return the operation origin, or the authored node origin as fallback."""
+    selected = origin if origin is not None else node.origin
+    return () if selected is None else (selected,)
+
+
+def _evaluation_failure(
+    node,
+    code: FailureCode,
+    exception: Exception,
+    *,
+    origin: OriginRef | None = None,
+    traceback_text: str | None = None,
+) -> EvaluationFailure:
+    """Build one semantic failure plus the temporary range presentation bridge."""
+    locator = getattr(exception, "locator", None)
+    if locator is not None and locator.node is None:
+        locator = replace(locator, node=node.id)
+    range_ = getattr(exception, "range", None)
+    if range_ is None and locator is not None:
+        range_ = node.field_ranges.get((locator.kind, locator.key))
+    return EvaluationFailure(
+        failure=Failure(
+            code=code,
+            message=str(exception),
+            node_id=node.id,
+            trace=_failure_trace(node, origin),
+            cause_type=type(exception).__name__,
+            traceback=(traceback_text if traceback_text is not None else _tb.format_exc()),
+        ),
+        locator=locator,
+        range=range_,
+    )
+
+
+def _format_exception(exception: Exception) -> str:
+    """Format one original exception without a private stage-marker tail."""
+    return "".join(
+        _tb.format_exception(
+            type(exception),
+            exception,
+            exception.__traceback__,
+        )
+    )
 
 
 WorkerOutcome: TypeAlias = Output | Route | Grow | EvaluationFailure
 """Closed raw worker result consumed by the append-only dispatcher."""
+
+
+def _result_contract_failure(node, message: str) -> EvaluationFailure:
+    """Create one synthetic result-contract exception with a useful traceback."""
+    try:
+        raise RuntimeError(message)
+    except RuntimeError as exc:
+        return _evaluation_failure(node, "contract.node_result", exc)
 
 
 def _evaluate_node_stream(
@@ -87,101 +167,144 @@ def _evaluate_node_stream(
         `_HostStop`:
             Host-control flow is outside the node failure sum and propagates unchanged.
     """
+    # Host cancellation is control flow outside the node-result sum.
+    if stop_event is not None and stop_event.is_set():
+        raise _HostStop(primary=False)
+
+    # The flow owns every source. A missing trait-declared reserved key is a
+    # malformed compiled graph and deliberately escapes the expected binder catch.
+    if wiring_override is not None:
+        node_wiring = wiring_override
+    else:
+        node_wiring = {} if flow is None else flow.wiring.get(node.id, {})
+
+    per_item = node.binds_per_item
     try:
-        # Host cancellation is control flow outside the node-result sum.
-        if stop_event is not None and stop_event.is_set():
-            raise _HostStop(primary=False)
-        # The flow-owned wiring for this node (the node/flow split): every kind's sources live here
-        # (leaf/WAIT, CALL, CASE). The node holds NO source. A direct-driver must supply a
-        # stub `flow.wiring` with the reserved keys; `flow is None` gives empty wiring, so a timed
-        # WAIT / mapped call driven that way would KeyError on `until`/`over` (caught as NodeFailed).
-        # A `wiring_override` (engine-supplied, per-run) wins over the compiled entry.
-        if wiring_override is not None:
-            node_wiring = wiring_override
-        else:
-            node_wiring = {} if flow is None else flow.wiring.get(node.id, {})
-        # Read boundary (pure): bind the node from its `params` + the flow-owned
-        # wiring — never the node's own `inputs`. A per-item node (MAP) binds per-element via
-        # bind_item, so its record starts empty. (`params or []` covers a no-input node / a
-        # direct-construction test fake; loader-built nodes always carry params.)
-        per_item = node.binds_per_item          # MAP = per-element bind (trait, not a kind read)
         if per_item:
             record = {}
         else:
             params = node.params if node.params is not None else []
             record = bind_params(params, node_wiring, pool)
-        # Reserved-key pre-resolve (node-owned): WAIT `until` -> ISO deadline; mapped-call `over`
-        # -> list (validated in the hook -> NodeFailed). The hook reads its sources from
-        # `node_wiring` (the node/flow split) + `pool`; default `{}` for an ordinary node.
         record.update(node.bind_reserved(node_wiring, pool))
-        # Narrow caps built by the engine — never the pool itself. A mapped call gets
-        # `bind_item`; a cooperative blocker gets `stop_event` below.
-        caps: dict[str, Any] = {}
-        if per_item:
-            # Per-element bind from params + flow.wiring (pure). No system cap — the
-            # cloned children share the one live pool, so `${system.X}` resolves directly.
-            params = node.params if node.params is not None else []
-            caps["bind_item"] = lambda el: bind_params(params, node_wiring, pool, item=el)
-        if node.needs_stop_event:
-            # Engine-driven evaluation always passes its run-owned event. Direct evaluation has
-            # no host owner, so create one only for an opted-in node; ordinary nodes allocate and
-            # receive nothing.
-            if stop_event is None:
-                stop_event = threading.Event()
-            caps["stop_event"] = stop_event
-        # Drive the base `run` WRAPPER (not `_run_impl`): the wrapper owns assert firing.
-        # Kind-specific execution diagnostics, such as CODE's in-process watchdog, stay in
-        # the owning node package rather than timing every engine operation.
-        outcome = node.run(record, **caps)
-        if isinstance(outcome, (Output, Route, Grow)):
-            result = outcome
-        elif inspect.isgenerator(outcome):  # a streaming kind: yields StreamChunk, returns a NodeResult
-            result = yield from node._drain_node_generator(outcome)
-        else:
-            raise RuntimeError(
-                f"node {node.id!r} run() returned {type(outcome).__name__}, not a NodeResult"
-            )
-        if isinstance(result, Grow):
-            # Any non-spawner returning Grow is a clear error. A valid raw Grow is returned
-            # untouched; the dispatcher owns construction, durability, and observer emission.
-            if not node.is_spawner:
-                # `node.kind.value` here is MESSAGE-ONLY (a diagnostic string), not dispatch —
-                # the gate is the kind-blind `is_spawner` trait, so the census stays 0.
-                raise RuntimeError(
-                    f"node {node.id!r} (kind {node.kind.value}) returned a Grow but is "
-                    f"not a spawner (CALL/MAP/LOOP); only spawner kinds may grow the graph"
-                )
-        return result
-    except _HostStop:
-        # A host stop is neither a node failure nor a durable flow outcome.
-        raise
-    except Exception as exc:  # noqa: BLE001 — boundary: any node error -> EvaluationFailure
-        # A failure may carry a `locator` (BindingError stamps a node-less input SourceSpan;
-        # the binding layer has no node identity). Fill the node id here — this funnel is the
-        # single point that knows it.
-        loc = getattr(exc, "locator", None)
-        if loc is not None and loc.node is None:
-            loc = replace(loc, node=node.id)
-        # Dual-path: ALONGSIDE the symbolic locator, resolve a concrete SourceRange. An exception
-        # that already carries its own `range` (any node's own `run` wrapper fires its pre/post
-        # asserts and raises `NodeAssertFailed` with the assert's span — located by position) wins;
-        # otherwise key the node's recorded `field_ranges` on the locator's `(kind, key)` (e.g.
-        # `("input", name)`) — NOT on `node.kind`, and never on the bare key
-        # (which would collide across namespaces). None when neither is present.
-        rng = getattr(exc, "range", None)
-        if rng is None and loc is not None:
-            rng = node.field_ranges.get((loc.kind, loc.key))
-        # Capture the full formatted traceback here, while the exception is live, so the CLI
-        # can surface the raising call's Python stack under `--engine-trace`. The terse
-        # default (message + boxed YAML frame) never shows it.
-        return EvaluationFailure(
-            node.id,
-            error=str(exc),
-            error_type=type(exc).__name__,
-            locator=loc,
-            range=rng,
-            traceback=_tb.format_exc(),
+    except BindingError as exc:
+        return _evaluation_failure(
+            node,
+            exc.failure_code,
+            exc,
+            origin=exc.origin,
         )
+
+    # Build only the node-owned, trait-gated capabilities. Deferred MAP binding
+    # raises the same binder-owned marker from inside its body and is preserved below.
+    caps: dict[str, Any] = {}
+    if per_item:
+        params = node.params if node.params is not None else []
+
+        def bind_item(element):
+            """Preserve only this evaluator-owned deferred binding operation."""
+            try:
+                return bind_params(params, node_wiring, pool, item=element)
+            except BindingError as exc:
+                raise _BindingStageError(exc) from exc
+            except Exception as exc:
+                raise _DeferredBindingFault(exc) from exc
+
+        caps["bind_item"] = bind_item
+    if node.needs_stop_event:
+        if stop_event is None:
+            stop_event = threading.Event()
+        caps["stop_event"] = stop_event
+
+    uses_base_template = type(node).run is Node.run
+    try:
+        outcome = (
+            node._run_for_evaluator(record, **caps)
+            if uses_base_template
+            else node.run(record, **caps)
+        )
+        streamed = inspect.isgenerator(outcome)
+        result = (
+            (yield from node._drain_node_generator(outcome))
+            if streamed
+            else outcome
+        )
+    except _HostStop:
+        raise
+    except _DeferredBindingFault as wrapped:
+        original = wrapped.original
+        raise original.with_traceback(original.__traceback__) from None
+    except _BindingStageError as wrapped:
+        original = wrapped.original
+        if not uses_base_template:
+            return _evaluation_failure(
+                node,
+                "node.execute",
+                original,
+                origin=node.exception_origin(original),
+                traceback_text=_format_exception(original),
+            )
+        return _evaluation_failure(
+            node,
+            original.failure_code,
+            original,
+            origin=original.origin,
+            traceback_text=_format_exception(original),
+        )
+    except _AssertionStageError as wrapped:
+        original = wrapped.original
+        if not uses_base_template:
+            return _evaluation_failure(
+                node,
+                "node.execute",
+                original,
+                origin=node.exception_origin(original),
+                traceback_text=_format_exception(original),
+            )
+        return _evaluation_failure(
+            node,
+            "assertion.failed",
+            original,
+            origin=original.assertion.origin,
+            traceback_text=_format_exception(original),
+        )
+    except _NodeBodyError as wrapped:
+        original = wrapped.original
+        return _evaluation_failure(
+            node,
+            "node.execute",
+            original,
+            origin=node.exception_origin(original),
+            traceback_text=_format_exception(original),
+        )
+    except Exception as exc:
+        if uses_base_template:
+            raise
+        return _evaluation_failure(
+            node,
+            "node.execute",
+            exc,
+            origin=node.exception_origin(exc),
+        )
+
+    if not isinstance(result, (Output, Route, Grow)):
+        if streamed:
+            return _result_contract_failure(
+                node,
+                f"node {node.id!r} generator did not return a NodeResult",
+            )
+        return _result_contract_failure(
+            node,
+            f"node {node.id!r} run() returned {type(result).__name__}, not a NodeResult",
+        )
+    if isinstance(result, Grow) and not node.is_spawner:
+        # `node.kind.value` is message-only; the gate remains the kind-blind trait.
+        kind_value = node.kind.value
+        return _result_contract_failure(
+            node,
+            f"node {node.id!r} (kind {kind_value}) returned a Grow but is not a "
+            "spawner (CALL/MAP/LOOP); only spawner kinds may grow the graph",
+        )
+    return result
 
 
 def eval_node(
@@ -218,11 +341,17 @@ def eval_node(
                 # Host-owned transport/callback boundary: keep this OUTSIDE the evaluator's
                 # exception funnel so callback failures propagate with identity intact.
                 emit_stream(chunk)
-    finally:
+    except BaseException:
         # A callback can abort while the node's streaming generator is suspended at a
         # yield.  Close the shared evaluator explicitly so ``yield from`` propagates
         # GeneratorExit into the node and releases its resources before this boundary
-        # returns the initiating host exception.
+        # returns the initiating exception. Cleanup must not replace that primary error.
+        try:
+            stream.close()
+        except BaseException:
+            pass
+        raise
+    else:
         stream.close()
 
     return result

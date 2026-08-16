@@ -75,9 +75,18 @@ not yet a package-root export.
 The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
 `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
 `contract.growth`, and `graph.terminal_unreachable`. They cover expected
-flow-owned rejection. Producer classification and enforcement of the
-host/compiler boundary remain part of the runtime cutover; the current flattened
-pipeline still behaves as documented below.
+flow-owned rejection. `EvaluationFailure` now owns one `Failure` plus temporary
+legacy locator/range metadata. The evaluator assigns its first five codes by
+operation stage: expression/default/required binding, supplied-input contracts,
+base-wrapper assertions, node execution, and result validation. Its trace is the
+best operation origin, or the authored node origin as fallback. Host control,
+stream callbacks, unexpected binder faults, and malformed compiled/setup state
+escape this expected-failure sum.
+
+`FlowEngine` still projects evaluator failures into schema-1 `NodeFailedRecord`
+fields, so `code` and opaque `trace` are not durable yet. Dispatcher-owned
+output/route/growth rejection, terminal-graph failure, records, observers, and
+public results remain part of the canonical cutover.
 
 ## Semantic IR carriers
 
@@ -305,15 +314,18 @@ of the closed result sum:
 | `Route(handle)` | one named outgoing branch, with sibling skip-flooding |
 | `Grow(seed, prune)` | one canonical deterministic expansion description |
 
-Failure is a `raise`, not another result variant. `eval_node` binds inputs and
-turns the exception into an evaluation failure for the dispatcher to record; the
-source-neutral semantic contract for that pipeline is `diagnostics.Failure`. A
-streaming kind may yield transient `StreamChunk` values and then return one of
-the same three results.
+Failure is a `raise`, not another result variant. `eval_node` structurally turns
+expected binding, assertion, body, and result rejection into
+`EvaluationFailure(Failure)`; host control, stream callbacks, unexpected binder
+faults, and malformed setup escape. The dispatcher currently flattens that
+canonical evaluator value into a schema-1
+`NodeFailedRecord`. A streaming kind may yield transient `StreamChunk` values and
+then return one of the same three results.
 
 The runtime core is **kind-blind**. It dispatches on this result sum and node-owned
-traits (`is_spawner`, `binds_per_item`, `bind_reserved`, `grow_depth_delta`,
-`is_loop`, and `needs_stop_event`), never on `NodeKind`. The closed kind-aware
+traits/hooks (`is_spawner`, `binds_per_item`, `bind_reserved`,
+`validate_execution_setup`, `exception_origin`, `grow_depth_delta`, `is_loop`,
+and `needs_stop_event`), never on `NodeKind`. The closed kind-aware
 growth match lives in `compile.expand.build_grow`, outside runtime. The kind census
 test keeps runtime's `NodeKind`/expansion dispatch count at zero.
 

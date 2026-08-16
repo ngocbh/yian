@@ -346,6 +346,7 @@ def test_case_string_equality_routes():
 
 def test_case_case_without_when_errors():
     g = _branch_graph([Case(handle="is_high")])[0]  # no `when`
-    events = list(_engine(g).run())
-    # the node raises -> the run fails (not a silent misroute)
-    assert type(events[-1]).__name__ == "RunFailed"
+    # A validated compiled CASE always has a string predicate. Missing one is
+    # malformed setup, not expected node execution rejection.
+    with pytest.raises(ValueError, match="has no `when` expression"):
+        list(_engine(g).run())

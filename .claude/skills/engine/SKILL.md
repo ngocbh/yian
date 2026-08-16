@@ -57,9 +57,12 @@ Hold this model whenever you design anything:
   codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
   `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
   `contract.growth`, and `graph.terminal_unreachable`. Exception classes and
-  traceback text must never decide behavior. These codes are reserved for
-  expected flow-owned rejection; classifying producers and enforcing the
-  host/compiler boundary are separate runtime cutover work.
+  traceback text must never decide behavior. The evaluator assigns
+  `binding.evaluate`, `contract.input`, `assertion.failed`, `node.execute`, and
+  `contract.node_result` by operation stage. Host control, stream callbacks,
+  unexpected binder faults, and malformed compiled/setup state escape.
+  Dispatcher output/route/growth and terminal rejection plus durable/public
+  carriers remain cutover work.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;
@@ -203,8 +206,8 @@ Most are just the functional model (above) made enforceable:
   sanctioned kind match lives in `compile.expand.build_grow`. The core dispatches only on the
   closed worker-result and run-record sums and on node-owned traits/hooks
   (`is_spawner`, `binds_per_item`,
-  `bind_reserved`, `reserved_wiring_keys`, `grow_depth_delta`, `is_loop`,
-  `needs_stop_event`). A
+  `bind_reserved`, `reserved_wiring_keys`, `validate_execution_setup`,
+  `exception_origin`, `grow_depth_delta`, `is_loop`, `needs_stop_event`). A
   ratchet test (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion`
   dispatch count at 0. A separate layer ratchet forbids `nodes -> compile` and
   `runtime -> compile.expand`: nodes describe seeds, compile constructs fragments,

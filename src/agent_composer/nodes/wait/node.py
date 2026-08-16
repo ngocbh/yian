@@ -11,6 +11,7 @@ from threading import TIMEOUT_MAX
 from typing import Any
 
 from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
+from agent_composer.nodes.binding import BindingError, _resolve_source, _source_origin
 from agent_composer.nodes.contracts import binding_source
 from agent_composer.typesys.pool import VariablePool
 
@@ -21,21 +22,32 @@ def resolve_until(until_src: Any, pool: VariablePool) -> str:
     Exactly one semantic ``Binding`` layer is removed before a ``${...}``
     expression or literal is evaluated against ``pool``. Typed
     ``date``/``datetime`` values resolve to ISO strings; a raw object exposing
-    ``isoformat()`` is formatted defensively. The WAIT body parses and
-    normalizes the resulting absolute deadline.
+    ``isoformat()`` is formatted defensively. This binding operation validates the
+    absolute ISO deadline; the WAIT body reparses it only to compute the duration.
     """
-    from agent_composer.expr import eval_binding
-    from agent_composer.expr.expressions import resolve_reference
-
-    source = binding_source(until_src)
-    value = eval_binding(source, lambda path: resolve_reference(path, pool))
+    origin = _source_origin(until_src)
+    display_source = binding_source(until_src)
+    value = _resolve_source(until_src, pool)
     if isinstance(value, str):
-        return value
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    raise ValueError(
-        f"wait `until` ({source!r}) did not resolve to a date/datetime: {value!r}"
-    )
+        resolved = value
+    elif hasattr(value, "isoformat"):
+        resolved = value.isoformat()
+    else:
+        raise BindingError(
+            f"wait `until` ({display_source!r}) did not resolve to a date/datetime: "
+            f"{value!r}",
+            failure_code="contract.input",
+            origin=origin,
+        )
+    try:
+        _deadline_utc(resolved)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise BindingError(
+            f"wait `until` is not an ISO date/datetime: {resolved!r}",
+            failure_code="contract.input",
+            origin=origin,
+        ) from exc
+    return resolved
 
 
 def _utc_now() -> datetime:

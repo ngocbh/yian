@@ -15,8 +15,9 @@ from typing import Any
 import pytest
 
 from agent_composer.nodes.base import Node, NodeKind, Output
+from agent_composer.nodes.binding import BindingError
 from agent_composer.nodes.contracts import Assertion, Parameter, ValueContract
-from agent_composer.typesys import Type, TypeCheckError, ValueKind
+from agent_composer.typesys import Type, ValueKind
 
 
 INTEGER = ValueContract(Type.scalar(ValueKind.INTEGER))
@@ -132,9 +133,10 @@ def test_incompatible_stored_default_fails_without_string_coercion():
     )
     node.params = [parameter]
 
-    with pytest.raises(TypeCheckError):
+    with pytest.raises(BindingError) as caught:
         node.run({})
 
+    assert caught.value.failure_code == "binding.evaluate"
     assert parameter.default == "30"
     assert node.seen is None
 

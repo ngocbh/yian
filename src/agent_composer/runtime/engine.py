@@ -259,21 +259,26 @@ class FlowEngine:
         node_id: str,
         outcome: Output | Route | Grow | EvaluationFailure,
     ) -> tuple[Any, ...]:
-        """Prepare node data, append its record, and apply the total reducer plan."""
+        """Prepare node data, append its record, and apply the total reducer plan.
+
+        Evaluator ``Failure`` values are projected into the current schema-1 record
+        fields here; their semantic code and origin trace await the record cutover.
+        """
         if isinstance(outcome, EvaluationFailure):
-            if outcome.node_id != node_id:
+            failure = outcome.failure
+            if failure.node_id != node_id:
                 raise RuntimeError(
                     "raw evaluation failure node identity mismatch: "
-                    f"expected {node_id!r}, found {outcome.node_id!r}"
+                    f"expected {node_id!r}, found {failure.node_id!r}"
                 )
             prepared = prepare_node_failed(
                 self.state,
                 node_id,
-                outcome.error,
-                error_type=outcome.error_type,
+                failure.message,
+                error_type=failure.cause_type or "",
                 locator=outcome.locator,
                 range=outcome.range,
-                traceback=outcome.traceback,
+                traceback=failure.traceback,
             )
             return commit_prepared(self.log, self.state, prepared)
 
@@ -358,7 +363,7 @@ class FlowEngine:
         traceback_text: str | None = None,
         fallback_locator: SourceSpan | None = None,
     ) -> PreparedTransition:
-        """Prepare one durable failure from invalid node-produced transition data."""
+        """Prepare the legacy failure view for dispatcher-side transition rejection."""
         locator = getattr(exception, "locator", None) or fallback_locator
         range_ = getattr(exception, "range", None)
         return prepare_node_failed(

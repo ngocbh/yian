@@ -6,9 +6,10 @@ A node is a **pure function of its bound input record**: it implements
 kind, a generator that yields `StreamChunk` and then *returns* a `NodeResult`.
 The node never receives the pool: the engine's `runtime.eval_node` seam binds its
 inputs (the read boundary) and hands it a record. Narrow effects enter through trait-gated
-capabilities: mapped `call` receives `bind_item`, and a cooperatively blocking node may receive
+capabilities: MAP receives `bind_item`, and a cooperatively blocking node may receive
 `stop_event`. Failure is **not** a variant — a
-failing node `raise`s and the engine boundary turns it into `NodeFailed`. A streaming
+failing node `raise`s; expected evaluator rejection becomes a canonical
+`EvaluationFailure`, temporarily projected into the schema-1 failure record. A streaming
 kind is a generator that yields `StreamChunk` and *returns* its `NodeResult` (drained
 by `_drain_node_generator`).
 
@@ -26,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterator, Optional, U
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
-from agent_composer.nodes.binding import apply_defaults
+from agent_composer.nodes.binding import BindingError, apply_defaults
 from agent_composer.nodes.contracts import (
     Assertion,
     Parameter,
@@ -177,15 +178,62 @@ class NodeAssertFailed(Exception):
     - `locator` (`Optional[SourceSpan]`): the failing assert's locator (`node`, `kind="assert"`,
       `key=<display text>`), or `None`.
     - `range` (`Optional[SourceRange]`): the authored assertion occurrence's YAML range, or `None`.
+    - `assertion` (`Optional[Assertion]`): the exact wrapper-owned assertion carrier, or
+      `None` when the exception was raised outside that wrapper.
 
-    `eval_node` captures it as an `EvaluationFailure`; the dispatcher durably records the
-    corresponding node failure before the reducer derives `RunFailed`.
+    Only the base wrapper's structurally marked instance becomes ``assertion.failed``.
+    The same exception class raised by node code remains ``node.execute``.
     """
 
-    def __init__(self, message: str, *, locator: Any = None, range: Any = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        assertion: Assertion | None = None,
+        locator: Any = None,
+        range: Any = None,
+    ) -> None:
+        """Retain the wrapper-owned assertion plus the legacy presentation bridge."""
         super().__init__(message)
+        self.assertion = assertion
         self.locator = locator
         self.range = range
+
+
+class _NodeBodyError(Exception):
+    """Private stage marker retaining one exception raised by node implementation."""
+
+    def __init__(self, original: Exception) -> None:
+        """Keep the exact body exception and its original traceback identity."""
+        super().__init__(str(original))
+        self.original = original
+
+
+class _BindingStageError(Exception):
+    """Private marker for a failure produced by an evaluator-owned binding stage."""
+
+    def __init__(self, original: BindingError) -> None:
+        """Keep the binder-owned error distinct from arbitrary node-body exceptions."""
+        super().__init__(str(original))
+        self.original = original
+
+
+class _DeferredBindingFault(Exception):
+    """Private carrier for an unexpected deferred-binder exception that must escape."""
+
+    def __init__(self, original: Exception) -> None:
+        """Retain the exact host/setup fault raised by the injected binder."""
+        super().__init__(str(original))
+        self.original = original
+
+
+class _AssertionStageError(Exception):
+    """Private marker for an assertion failure produced by the base run wrapper."""
+
+    def __init__(self, original: NodeAssertFailed) -> None:
+        """Keep the wrapper-owned assertion distinct from node-body exceptions."""
+        super().__init__(str(original))
+        self.original = original
 
 
 class Node(ABC):
@@ -429,7 +477,51 @@ class Node(ABC):
         """
         return ()
 
+    def exception_origin(self, exception: Exception) -> OriginRef | None:
+        """Return the authored operation origin for one node-body exception.
+
+        Kinds with finer source-neutral exception mapping may override this hook.
+        The default is the authored node context; source-free nodes return ``None``.
+        """
+        return self.origin
+
+    def validate_execution_setup(self) -> None:
+        """Reject malformed node-owned execution setup before entering the body stage.
+
+        The base implementation requires a concrete ``_run_impl``. Composite kinds
+        extend this hook for invariants such as requiring their compiled child flow.
+        """
+        if type(self)._run_impl is Node._run_impl:
+            raise NotImplementedError(
+                f"node {self.id!r} ({type(self).__name__}) defines no _run_impl"
+            )
+
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
+        """Run the node's complete pure-execution template.
+
+        Declared defaults are filled first, node-owned setup is validated, pre-asserts
+        run against the bound record, ``_run_impl`` executes, and post-asserts inspect
+        an ``Output`` against the pristine inputs. The method returns exactly
+        ``Output | Route | Grow`` or a streaming generator with one of those terminal
+        values. ``bind_item`` and ``stop_event`` are the only trait-gated capabilities.
+
+        Direct calls preserve the original exception and traceback. The evaluator uses
+        the private companion path to tag wrapper-owned binding, assertion, and body
+        stages before converting expected rejection into ``EvaluationFailure``.
+        """
+        return self._run_template(inputs, classify_body_errors=False, **caps)
+
+    def _run_for_evaluator(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
+        """Run the base template with private structural failure markers enabled."""
+        return self._run_template(inputs, classify_body_errors=True, **caps)
+
+    def _run_template(
+        self,
+        inputs: dict[str, Any],
+        *,
+        classify_body_errors: bool,
+        **caps: Any,
+    ) -> "NodeResult":
         """Template method: fill declared defaults for omitted inputs, fire pre-asserts
         (record-only), run the kind's `_run_impl`, then fire post-asserts (record-only)
         against `{**inputs, output}`.
@@ -451,7 +543,8 @@ class Node(ABC):
         Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
-        A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
+        Expected rejection is a `raise`, not a result variant; the evaluator classifies
+        its structural stage before the dispatcher records the temporary schema-1 view."""
         from agent_composer.events import SourceSpan
 
         params = self.params if self.params is not None else []
@@ -465,7 +558,13 @@ class Node(ABC):
                     f"node {self.id!r} params must contain Parameter values, "
                     f"got {type(parameter).__name__}"
                 )
-        inputs = apply_defaults(params, inputs)
+        try:
+            inputs = apply_defaults(params, inputs)
+        except BindingError as exc:
+            if not classify_body_errors:
+                raise
+            raise _BindingStageError(exc) from exc
+        self.validate_execution_setup()
         # Fire pre-asserts IN ORDER, first-failure-wins, and locate the failure BY POSITION:
         # the failing assert's own `SourceRange` is `pre_assert_ranges[i]`, not a lookup keyed by
         # assertion text — so two identical asserts get distinct carets. The range list is
@@ -477,17 +576,31 @@ class Node(ABC):
         if bad_i is not None:
             bad = self.pre_asserts[bad_i]
             rng = self.pre_assert_ranges[bad_i] if bad_i < len(self.pre_assert_ranges) else None
-            raise NodeAssertFailed(
+            failure = NodeAssertFailed(
                 f"node {self.id!r} pre-assert failed: {bad.display}",
+                assertion=bad,
                 locator=SourceSpan(self.id, "assert", bad.display),
                 range=rng,
             )
+            if classify_body_errors:
+                try:
+                    raise failure
+                except NodeAssertFailed as original:
+                    raise _AssertionStageError(original) from original
+            raise failure
         # Pristine snapshot for the post-asserts, taken BEFORE `_run_impl` runs: a leaf may
         # mutate the dict it receives (a CODE body transforming its input in place), which must
         # not corrupt the post-assert scope — the contract check has to see the inputs as bound,
         # not as the body left them. Only paid when this node declares post-asserts.
         post_input = copy.deepcopy(inputs) if self.post_asserts else None
-        result = self._run_impl(inputs, **caps)
+        try:
+            result = self._run_impl(inputs, **caps)
+        except (_HostStop, _BindingStageError, _DeferredBindingFault, _NodeBodyError):
+            raise
+        except Exception as exc:
+            if not classify_body_errors:
+                raise
+            raise _NodeBodyError(exc) from exc
         # Post-asserts fire ONLY for an `Output` result — never Route/Grow. A spawner's
         # Grow post-asserts are handled in a later step. A generator (streaming) result also
         # falls through the guard untouched — the DORMANT streaming path: the wrapper must not
@@ -502,11 +615,18 @@ class Node(ABC):
             if bad_i is not None:
                 bad = self.post_asserts[bad_i]
                 rng = self.post_assert_ranges[bad_i] if bad_i < len(self.post_assert_ranges) else None
-                raise NodeAssertFailed(
+                failure = NodeAssertFailed(
                     f"node {self.id!r} post-assert failed: {bad.display}",
+                    assertion=bad,
                     locator=SourceSpan(self.id, "assert", bad.display),
                     range=rng,
                 )
+                if classify_body_errors:
+                    try:
+                        raise failure
+                    except NodeAssertFailed as original:
+                        raise _AssertionStageError(original) from original
+                raise failure
         return result
 
     def _run_impl(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
@@ -520,7 +640,7 @@ class Node(ABC):
         Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
-        A failure is a `raise`, not a variant — the engine boundary turns it into `NodeFailed`."""
+        A body exception is classified as ``node.execute`` by the evaluator."""
         raise NotImplementedError(
             f"node {self.id!r} ({type(self).__name__}) defines no _run_impl"
         )
@@ -558,22 +678,35 @@ class Node(ABC):
     @staticmethod
     def _assert_holds(expr: str, record: dict) -> bool:
         """Evaluate a node assert against `record`; a raising assert (ordered/arith over a
-        non-scalar / None `${output}`) is treated as NOT holding (-> a clean NodeFailed)."""
+        non-scalar / None `${output}`) is treated as not holding, which the wrapper marks
+        as ``assertion.failed`` at the evaluator boundary."""
         try:
             return bool(evaluate_when_record(expr, record))
         except ExpressionError:
             return False
 
-    def _drain_node_generator(self, gen: Generator) -> Generator[Any, Any, "NodeResult"]:
-        """Forward a streaming node's yielded `StreamChunk`s and capture its returned
-        `NodeResult`; generators yield only transient chunks before that result."""
+    def _drain_node_generator(self, gen: Generator) -> Generator[Any, Any, Any]:
+        """Forward transient chunks and return the generator's raw terminal value.
+
+        Generator execution belongs to the node-body stage. The evaluator validates
+        the returned value afterward so body exceptions and result-contract rejection
+        cannot collapse into one category.
+        """
         try:
-            event = next(gen)
             while True:
-                yield event  # StreamChunk
-                event = next(gen)
-        except StopIteration as stop:
-            result = stop.value
-            if not isinstance(result, (Output, Route, Grow)):
-                raise RuntimeError(f"node {self.id!r} generator did not return a NodeResult")
-            return result
+                try:
+                    event = next(gen)
+                except StopIteration as stop:
+                    return stop.value
+                except (
+                    _HostStop,
+                    _BindingStageError,
+                    _DeferredBindingFault,
+                    _NodeBodyError,
+                ):
+                    raise
+                except Exception as exc:
+                    raise _NodeBodyError(exc) from exc
+                yield event
+        finally:
+            gen.close()

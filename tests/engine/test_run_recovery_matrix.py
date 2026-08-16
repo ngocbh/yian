@@ -361,6 +361,7 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
             state.effective_llm_by_static_path
         ),
         "result": copy.deepcopy(state.result),
+        "terminal_unreachable_failure": state.terminal_unreachable_failure,
         "next_sequence": state.next_sequence,
         "run_id": state.run_id,
         "flow_fingerprint": state.flow_fingerprint,

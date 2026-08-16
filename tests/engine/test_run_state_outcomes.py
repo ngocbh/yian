@@ -12,7 +12,15 @@ from typing import Any
 import pytest
 
 import agent_composer.runtime.state as state_module
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, NodeState, START_ID
+from agent_composer.compile.model import (
+    CompiledFlow,
+    Edge,
+    END_ID,
+    Flow,
+    NodeState,
+    START_ID,
+)
+from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.events import (
     NodeFailed,
     NodeRouted,
@@ -23,6 +31,8 @@ from agent_composer.events import (
     SourceRange,
     SourceSpan,
 )
+from agent_composer.nodes.base import Grow, Node, NodeKind
+from agent_composer.nodes.code import CodeNode
 from agent_composer.nodes.contracts import ValueContract
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
@@ -40,6 +50,7 @@ from agent_composer.runtime.state import (
     RunStartData,
     RunState,
     commit_prepared,
+    prepare_expanded,
     prepare_node_failed,
     prepare_node_routed,
     prepare_node_started,
@@ -53,6 +64,23 @@ from tests.engine._fakes import FuncNode
 
 _FINGERPRINT = "b" * 64
 _RUN_ID = "outcome-run"
+
+
+def _node_failure(
+    node_id: str,
+    message: str = "boom",
+    *,
+    cause_type: str | None = None,
+    traceback: str | None = None,
+) -> Failure:
+    """Return one canonical node-execution failure for reducer tests."""
+    return Failure(
+        code="node.execute",
+        message=message,
+        node_id=node_id,
+        cause_type=cause_type,
+        traceback=traceback,
+    )
 
 
 def _fanout_flow() -> CompiledFlow:
@@ -816,6 +844,7 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
         "in_flight": tuple(state.in_flight),
         "in_flight_identity": id(state.in_flight),
         "result": state.result,
+        "terminal_unreachable_failure": state.terminal_unreachable_failure,
         "depth": dict(state.depth),
         "wiring_overrides": deepcopy(state.wiring_overrides),
         "run_id": state.run_id,
@@ -1624,65 +1653,74 @@ def _end_only_in_flight() -> tuple[RunState, MemoryRunLog]:
     return state, log
 
 
-def _terminal_skip_route_flow() -> CompiledFlow:
+def _terminal_skip_route_flow(
+    *,
+    router_origin: OriginRef | None = None,
+    sibling: bool = False,
+) -> CompiledFlow:
     """Return a route whose selected control still co-skips two END groups."""
     nodes = {
         START_ID: StartNode(START_ID),
-        "router": FuncNode("router", lambda inputs: inputs),
+        "router": FuncNode(
+            "router",
+            lambda inputs: inputs,
+            origin=router_origin,
+        ),
         "dead-optional": FuncNode("dead-optional", lambda inputs: inputs),
         "dead-z": FuncNode("dead-z", lambda inputs: inputs),
         "dead-a": FuncNode("dead-a", lambda inputs: inputs),
         END_ID: EndNode.record(END_ID, output_names=["zeta", "alpha"]),
     }
-    return CompiledFlow.from_parts(
-        nodes=nodes,
-        edges=[
-            Edge(id="start-router", from_=START_ID, to="router"),
-            Edge(
-                id="router-end",
-                from_="router",
-                to=END_ID,
-                source_handle="go",
-            ),
-            Edge(
-                id="router-dead-optional",
-                from_="router",
-                to="dead-optional",
-                source_handle="skip-optional",
-            ),
-            Edge(
-                id="dead-optional-end",
-                from_="dead-optional",
-                to=END_ID,
-                input_group="optional-first",
-                optional=True,
-            ),
-            Edge(
-                id="router-dead-z",
-                from_="router",
-                to="dead-z",
-                source_handle="skip-z",
-            ),
-            Edge(
-                id="dead-z-end",
-                from_="dead-z",
-                to=END_ID,
-                input_group="zeta",
-            ),
-            Edge(
-                id="router-dead-a",
-                from_="router",
-                to="dead-a",
-                source_handle="skip-a",
-            ),
-            Edge(
-                id="dead-a-end",
-                from_="dead-a",
-                to=END_ID,
-                input_group="alpha",
-            ),
-        ],
-    )
+    edges = [
+        Edge(id="start-router", from_=START_ID, to="router"),
+        Edge(
+            id="router-end",
+            from_="router",
+            to=END_ID,
+            source_handle="go",
+        ),
+        Edge(
+            id="router-dead-optional",
+            from_="router",
+            to="dead-optional",
+            source_handle="skip-optional",
+        ),
+        Edge(
+            id="dead-optional-end",
+            from_="dead-optional",
+            to=END_ID,
+            input_group="optional-first",
+            optional=True,
+        ),
+        Edge(
+            id="router-dead-z",
+            from_="router",
+            to="dead-z",
+            source_handle="skip-z",
+        ),
+        Edge(
+            id="dead-z-end",
+            from_="dead-z",
+            to=END_ID,
+            input_group="zeta",
+        ),
+        Edge(
+            id="router-dead-a",
+            from_="router",
+            to="dead-a",
+            source_handle="skip-a",
+        ),
+        Edge(
+            id="dead-a-end",
+            from_="dead-a",
+            to=END_ID,
+            input_group="alpha",
+        ),
+    ]
+    if sibling:
+        nodes["unrelated"] = FuncNode("unrelated", lambda inputs: inputs)
+        edges.append(Edge(id="start-unrelated", from_=START_ID, to="unrelated"))
+    return CompiledFlow.from_parts(nodes=nodes, edges=edges)
 
 
 def _terminal_skip_router_in_flight() -> tuple[RunState, MemoryRunLog]:
@@ -1691,6 +1729,119 @@ def _terminal_skip_router_in_flight() -> tuple[RunState, MemoryRunLog]:
     _commit_start_success(state, log)
     commit_prepared(log, state, prepare_node_started(state, "router"))
     return state, log
+
+
+def _terminal_skip_with_sibling_in_flight() -> tuple[RunState, MemoryRunLog]:
+    """Return a causal router and unrelated sibling durably in flight."""
+    flow = _terminal_skip_route_flow(
+        router_origin=OriginRef("router-site"),
+        sibling=True,
+    )
+    state, log = _initialized_and_started(flow)
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, "router"))
+    commit_prepared(log, state, prepare_node_started(state, "unrelated"))
+    return state, log
+
+
+class _OutcomeSpawner(Node):
+    """Minimal spawner for chronological terminal-latch pruning coverage."""
+
+    kind = NodeKind.CALL
+    is_spawner = True
+    grow_depth_delta = 0
+
+
+def _terminal_prune_parent_flow() -> CompiledFlow:
+    """Return static creator/pruner work with one required global output."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "creator": _OutcomeSpawner("creator"),
+        "pruner": _OutcomeSpawner("pruner"),
+        END_ID: EndNode.record(END_ID, output_names=["result"]),
+    }
+    return CompiledFlow.from_parts(
+        nodes=nodes,
+        edges=[
+            Edge(id="start-creator", from_=START_ID, to="creator"),
+            Edge(id="start-pruner", from_=START_ID, to="pruner"),
+            Edge(
+                id="creator-end",
+                from_="creator",
+                to=END_ID,
+                input_group="result",
+            ),
+        ],
+        wiring={node_id: {} for node_id in nodes},
+    )
+
+
+def _terminal_router_fragment(spawner_id: str) -> Flow:
+    """Return a dynamic route whose completion skip reaches global END."""
+    start_id = f"{spawner_id}/child/start"
+    router_id = f"{spawner_id}/child/router"
+    dead_id = f"{spawner_id}/child/dead"
+    end_id = f"{spawner_id}/child/end"
+    end = EndNode.record(end_id, output_names=["zeta"])
+    end.commit_as = spawner_id
+    router = CodeNode(router_id, code="return inputs")
+    router.origin = OriginRef("dynamic-router-site")
+    nodes = {
+        start_id: StartNode(start_id),
+        router_id: router,
+        dead_id: CodeNode(dead_id, code="return inputs"),
+        end_id: end,
+    }
+    return Flow(
+        nodes=nodes,
+        edges=[
+            Edge(id=f"{start_id}-router", from_=start_id, to=router_id),
+            Edge(
+                id=f"{router_id}-end",
+                from_=router_id,
+                to=end_id,
+                source_handle="go",
+            ),
+            Edge(
+                id=f"{router_id}-dead",
+                from_=router_id,
+                to=dead_id,
+                source_handle="skip",
+            ),
+            Edge(
+                id=f"{dead_id}-end",
+                from_=dead_id,
+                to=end_id,
+                input_group="zeta",
+            ),
+        ],
+        wiring={node_id: {} for node_id in nodes},
+        start_id=start_id,
+        end_id=end_id,
+    )
+
+
+def _terminal_pruner_fragment(spawner_id: str) -> Flow:
+    """Return a minimal completion fragment for the unrelated pruner."""
+    start_id = f"{spawner_id}/child/start"
+    end_id = f"{spawner_id}/child/end"
+    end = EndNode.record(end_id, output_names=[])
+    end.commit_as = spawner_id
+    nodes = {start_id: StartNode(start_id), end_id: end}
+    return Flow(
+        nodes=nodes,
+        edges=[
+            Edge(
+                id=f"{start_id}-end",
+                from_=start_id,
+                to=end_id,
+                ordering=True,
+            )
+        ],
+        wiring={node_id: {} for node_id in nodes},
+        start_id=start_id,
+        end_id=end_id,
+    )
 
 
 def _replay_outcome_log(
@@ -1796,24 +1947,24 @@ def test_newly_ready_successor_prevents_quiescence():
 
 def test_late_sibling_failure_wins():
     state, log = _end_committed_with_sibling_in_flight()
+    failure = _node_failure(
+        "sibling",
+        "late boom",
+        cause_type="RuntimeError",
+    )
 
     observers = commit_prepared(
         log,
         state,
-        prepare_node_failed(
-            state,
-            "sibling",
-            "late boom",
-            error_type="RuntimeError",
-        ),
+        prepare_node_failed(state, failure),
     )
 
     assert observers == (
-        NodeFailed("sibling", "late boom", "RuntimeError"),
-        RunFailed("late boom", "RuntimeError"),
+        NodeFailed(failure),
+        RunFailed(failure),
     )
     assert state.pool.get(END_ID) == {"terminal": ["stable"]}
-    assert state.result == RunFailed("late boom", "RuntimeError")
+    assert state.result == RunFailed(failure)
 
 
 def test_typed_none_end_membership_succeeds_at_quiescence():
@@ -1842,10 +1993,12 @@ def test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record()
 
     prepared = prepare_node_routed(state, "router", "go")
 
-    expected_terminal = RunFailed(
-        error="terminal output 'zeta' skipped",
-        error_type="TerminalSkipped",
+    expected_failure = Failure(
+        code="graph.terminal_unreachable",
+        message="terminal output 'zeta' skipped",
+        node_id="router",
     )
+    expected_terminal = RunFailed(expected_failure)
     assert prepared.observers == (
         NodeRouted("router", "go"),
         NodeSkipped("dead-optional"),
@@ -1858,10 +2011,224 @@ def test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record()
 
     assert observers == prepared.observers
     assert state.result == expected_terminal
+    assert state.terminal_unreachable_failure == expected_failure
+    assert state.result.failure is state.terminal_unreachable_failure
     assert tuple(state.ready) == ()
     assert tuple(state.in_flight) == ()
     assert [type(envelope.record) for envelope in log][-1:] == [NodeRoutedRecord]
     assert len(tuple(log)) == 5
+
+
+def test_route_latches_causal_terminal_failure_until_sibling_quiescence():
+    state, log = _terminal_skip_with_sibling_in_flight()
+
+    prepared = prepare_node_routed(state, "router", "go")
+    failure = prepared._plan.delta.terminal_unreachable_failure
+
+    assert failure == Failure(
+        code="graph.terminal_unreachable",
+        message="terminal output 'zeta' skipped",
+        node_id="router",
+        trace=(OriginRef("router-site"),),
+    )
+    assert failure.trace == (state.flow.nodes["router"].origin,)
+    assert prepared._plan.terminal is None
+    assert all(not isinstance(event, RunFailed) for event in prepared.observers)
+    assert state.terminal_unreachable_failure is None
+
+    route_observers = commit_prepared(log, state, prepared)
+
+    assert route_observers == prepared.observers
+    assert state.terminal_unreachable_failure is failure
+    assert state.result is None
+
+    final = prepare_node_succeeded(state, "unrelated", {"done": True})
+    assert final._plan.terminal.failure is failure
+    assert final.observers == (
+        NodeSucceeded("unrelated", {"done": True}),
+        RunFailed(failure),
+    )
+
+    observers = commit_prepared(log, state, final)
+
+    assert observers[-1].failure is failure
+    assert state.result.failure is failure
+    assert state.terminal_unreachable_failure is failure
+    assert not any(
+        isinstance(envelope.record, NodeFailedRecord) for envelope in log
+    )
+    assert [type(envelope.record) for envelope in log][-2:] == [
+        NodeRoutedRecord,
+        NodeSucceededRecord,
+    ]
+
+
+def test_explicit_failure_wins_after_terminal_unreachable_is_latched():
+    state, log = _terminal_skip_with_sibling_in_flight()
+    route = prepare_node_routed(state, "router", "go")
+    route_failure = route._plan.delta.terminal_unreachable_failure
+    commit_prepared(log, state, route)
+    explicit = _node_failure(
+        "unrelated",
+        "explicit failure",
+        cause_type="RuntimeError",
+    )
+
+    prepared = prepare_node_failed(state, explicit)
+    failure = prepared.record.failure
+    observers = commit_prepared(log, state, prepared)
+
+    assert observers == (NodeFailed(failure), RunFailed(failure))
+    assert observers[0].failure is failure
+    assert observers[1].failure is failure
+    assert state.result.failure is failure
+    assert failure == explicit
+    assert failure is not route_failure
+    assert state.terminal_unreachable_failure is route_failure
+
+
+def test_terminal_unreachable_latch_is_installed_only_after_route_append():
+    state, prior = _terminal_skip_with_sibling_in_flight()
+    prepared = prepare_node_routed(state, "router", "go")
+    before = _state_snapshot(state)
+    log = _FailingAppendLog(prior)
+
+    with pytest.raises(OSError, match="append failed"):
+        commit_prepared(log, state, prepared)
+
+    assert _state_snapshot(state) == before
+    assert state.terminal_unreachable_failure is None
+    assert log.next_sequence == prior.next_sequence
+
+
+def test_terminal_unreachable_latch_replays_before_and_at_quiescence():
+    live_state, live_log = _terminal_skip_with_sibling_in_flight()
+    commit_prepared(
+        live_log,
+        live_state,
+        prepare_node_routed(live_state, "router", "go"),
+    )
+    replay_flow = _terminal_skip_route_flow(
+        router_origin=OriginRef("router-site"),
+        sibling=True,
+    )
+
+    prefix_state, prefix_log, prefix_observers = _replay_outcome_log(
+        replay_flow,
+        live_log,
+    )
+
+    assert prefix_observers[-1][-1] == NodeSkipped("dead-a")
+    assert prefix_state.result is None
+    assert prefix_state.terminal_unreachable_failure == (
+        live_state.terminal_unreachable_failure
+    )
+    assert _reducer_snapshot(prefix_state) == _reducer_snapshot(live_state)
+    assert tuple(prefix_log) == tuple(live_log)
+
+    live_observers = commit_prepared(
+        live_log,
+        live_state,
+        prepare_node_succeeded(live_state, "unrelated", {"done": True}),
+    )
+    final_state, final_log, final_observers = _replay_outcome_log(
+        _terminal_skip_route_flow(
+            router_origin=OriginRef("router-site"),
+            sibling=True,
+        ),
+        live_log,
+    )
+
+    assert final_observers[-1] == live_observers
+    assert _reducer_snapshot(final_state) == _reducer_snapshot(live_state)
+    assert tuple(final_log) == tuple(live_log)
+    assert final_state.result.failure is final_state.terminal_unreachable_failure
+    assert final_state.result.failure.node_id == "router"
+    assert final_state.result.failure.trace == (OriginRef("router-site"),)
+
+
+def test_terminal_unreachable_latch_survives_pruning_its_dynamic_cause():
+    state, log = _initialized_and_started(_terminal_prune_parent_flow())
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, "creator"))
+    commit_prepared(log, state, prepare_node_started(state, "pruner"))
+    commit_prepared(
+        log,
+        state,
+        prepare_expanded(
+            state,
+            "creator",
+            Grow(seed={}),
+            lambda spawner, _seed: _terminal_router_fragment(spawner.id),
+        ),
+    )
+    router_id = "creator/child/router"
+    commit_prepared(
+        log,
+        state,
+        prepare_node_started(state, "creator/child/start"),
+    )
+    commit_prepared(
+        log,
+        state,
+        prepare_node_succeeded(state, "creator/child/start", {}),
+    )
+    commit_prepared(log, state, prepare_node_started(state, router_id))
+
+    route = prepare_node_routed(state, router_id, "go")
+    failure = route._plan.delta.terminal_unreachable_failure
+    commit_prepared(log, state, route)
+
+    assert failure == Failure(
+        code="graph.terminal_unreachable",
+        message="terminal output 'result' skipped",
+        node_id=router_id,
+        trace=(OriginRef("dynamic-router-site"),),
+    )
+    assert state.result is None
+    assert state.terminal_unreachable_failure is failure
+    assert router_id not in state.initial_static_ids
+
+    commit_prepared(
+        log,
+        state,
+        prepare_expanded(
+            state,
+            "pruner",
+            Grow(seed={}, prune=frozenset({router_id})),
+            lambda spawner, _seed: _terminal_pruner_fragment(spawner.id),
+        ),
+    )
+
+    assert router_id not in state.flow.nodes
+    assert state.terminal_unreachable_failure is failure
+    assert state.result is None
+
+    commit_prepared(
+        log,
+        state,
+        prepare_node_started(state, "pruner/child/start"),
+    )
+    commit_prepared(
+        log,
+        state,
+        prepare_node_succeeded(state, "pruner/child/start", {}),
+    )
+    commit_prepared(
+        log,
+        state,
+        prepare_node_started(state, "pruner/child/end"),
+    )
+    observers = commit_prepared(
+        log,
+        state,
+        prepare_node_succeeded(state, "pruner/child/end", {}),
+    )
+
+    assert observers[-1] == RunFailed(failure)
+    assert observers[-1].failure is failure
+    assert state.result.failure is failure
+    assert state.terminal_unreachable_failure is failure
 
 
 def test_terminal_skip_diagnosis_scans_only_end_beyond_touched_route_joins(
@@ -2045,6 +2412,12 @@ def _failure_in_flight() -> tuple[RunState, MemoryRunLog]:
 
 def test_failure_is_terminal_and_preserves_diagnostics():
     state, log = _failure_in_flight()
+    failure = _node_failure(
+        "failing",
+        "value must be positive",
+        cause_type="NodeAssertFailed",
+        traceback="Traceback (most recent call last):\n  boom",
+    )
     locator = SourceSpan(node="failing", kind="assert", key="${value > 0}")
     source_range = SourceRange(
         start_line=11,
@@ -2059,63 +2432,44 @@ def test_failure_is_terminal_and_preserves_diagnostics():
 
     prepared = prepare_node_failed(
         state,
-        "failing",
-        "value must be positive",
-        error_type="NodeAssertFailed",
+        failure,
         locator=locator,
         range=source_range,
-        traceback="Traceback (most recent call last):\n  boom",
     )
 
     expected_record = NodeFailedRecord(
-        node_id="failing",
-        error="value must be positive",
-        error_type="NodeAssertFailed",
+        failure=failure,
         locator=locator,
         range=source_range,
-        traceback="Traceback (most recent call last):\n  boom",
     )
-    expected_result = RunFailed(
-        error="value must be positive",
-        error_type="NodeAssertFailed",
-        locator=locator,
-        range=source_range,
-        traceback="Traceback (most recent call last):\n  boom",
-    )
+    authority = prepared.record.failure
+    expected_result = RunFailed(authority, locator=locator, range=source_range)
     assert prepared.record == expected_record
+    assert prepared._plan.delta.failure is authority
     assert prepared.observers == (
-        NodeFailed(
-            node_id="failing",
-            error=expected_result.error,
-            error_type=expected_result.error_type,
-            locator=locator,
-            range=source_range,
-            traceback=expected_result.traceback,
-        ),
+        NodeFailed(authority, locator=locator, range=source_range),
         expected_result,
     )
+    assert prepared.observers[0].failure is authority
+    assert prepared.observers[1].failure is authority
     assert state.result is None
     assert state.pool.get(END_ID) == {}
 
-    prepared.observers[0].error = "mutated prepared observer"
-    prepared.observers[1].error = "mutated prepared observer"
+    prepared.observers[0].failure = _node_failure("failing", "mutated")
+    prepared.observers[1].failure = _node_failure("failing", "mutated")
     observers = commit_prepared(log, state, prepared)
 
     assert observers == (
-        NodeFailed(
-            node_id="failing",
-            error="value must be positive",
-            error_type="NodeAssertFailed",
-            locator=locator,
-            range=source_range,
-            traceback="Traceback (most recent call last):\n  boom",
-        ),
+        NodeFailed(authority, locator=locator, range=source_range),
         expected_result,
     )
     assert state.result == expected_result
     assert observers[1] is not state.result
-    observers[1].error = "mutated returned observer"
-    assert state.result.error == "value must be positive"
+    assert observers[0].failure is authority
+    assert observers[1].failure is authority
+    assert state.result.failure is authority
+    observers[1].failure = _node_failure("failing", "mutated returned observer")
+    assert state.result.failure.message == "value must be positive"
     assert state.node_state["failing"] is NodeState.TAKEN
     assert state.node_state["sibling"] is NodeState.UNKNOWN
     assert tuple(state.in_flight) == ("sibling",)
@@ -2133,12 +2487,13 @@ def test_failure_record_replay_reconstructs_identical_state():
         live_state,
         prepare_node_failed(
             live_state,
-            "failing",
-            "boom",
-            error_type="ValueError",
+            _node_failure(
+                "failing",
+                cause_type="ValueError",
+                traceback="trace",
+            ),
             locator=SourceSpan(node="failing", kind="field", key="code"),
             range=SourceRange(4, 3, 5, 1),
-            traceback="trace",
         ),
     )
     records = tuple(envelope.record for envelope in live_log)
@@ -2171,7 +2526,7 @@ def test_failure_record_replay_reconstructs_identical_state():
 
 def test_failure_append_failure_leaves_every_state_coordinate_unchanged():
     state, prior = _failure_in_flight()
-    prepared = prepare_node_failed(state, "failing", "boom")
+    prepared = prepare_node_failed(state, _node_failure("failing"))
     before = _state_snapshot(state)
     log = _FailingAppendLog(prior)
 
@@ -2185,12 +2540,17 @@ def test_failure_append_failure_leaves_every_state_coordinate_unchanged():
 def test_failure_requires_exact_diagnostic_carriers_before_append():
     state, log = _failure_in_flight()
     invalid_calls = (
-        lambda: prepare_node_failed(state, 1, "boom"),
-        lambda: prepare_node_failed(state, "failing", 1),
-        lambda: prepare_node_failed(state, "failing", "boom", error_type=1),
-        lambda: prepare_node_failed(state, "failing", "boom", locator={}),
-        lambda: prepare_node_failed(state, "failing", "boom", range=(1, 1, 1, 2)),
-        lambda: prepare_node_failed(state, "failing", "boom", traceback=[]),
+        lambda: prepare_node_failed(state, 1),
+        lambda: prepare_node_failed(
+            state,
+            Failure("node.execute", "boom", None),
+        ),
+        lambda: prepare_node_failed(state, _node_failure("failing"), locator={}),
+        lambda: prepare_node_failed(
+            state,
+            _node_failure("failing"),
+            range=(1, 1, 1, 2),
+        ),
     )
     before = _state_snapshot(state)
 
@@ -2214,7 +2574,7 @@ def test_failure_requires_an_existing_unknown_in_flight_node(
     before = _state_snapshot(state)
 
     with pytest.raises(ValueError, match=match):
-        prepare_node_failed(state, node_id, "boom")
+        prepare_node_failed(state, _node_failure(node_id))
 
     assert _state_snapshot(state) == before
     assert log.next_sequence == state.next_sequence
@@ -2223,21 +2583,21 @@ def test_failure_requires_an_existing_unknown_in_flight_node(
 def test_failure_requires_initialized_nonterminal_unknown_state():
     pristine = RunState(_failure_flow())
     with pytest.raises(ValueError, match="initialized"):
-        prepare_node_failed(pristine, "failing", "boom")
+        prepare_node_failed(pristine, _node_failure("failing"))
 
     state, log = _failure_in_flight()
     state.node_state["failing"] = NodeState.TAKEN
     before = _state_snapshot(state)
     with pytest.raises(ValueError, match="UNKNOWN disposition"):
-        prepare_node_failed(state, "failing", "boom")
+        prepare_node_failed(state, _node_failure("failing"))
     assert _state_snapshot(state) == before
     assert log.next_sequence == state.next_sequence
 
     state.node_state["failing"] = NodeState.UNKNOWN
-    state.result = RunFailed("already terminal")
+    state.result = RunFailed(_node_failure("failing", "already terminal"))
     before = _state_snapshot(state)
     with pytest.raises(ValueError, match="terminal"):
-        prepare_node_failed(state, "failing", "boom")
+        prepare_node_failed(state, _node_failure("failing"))
     assert _state_snapshot(state) == before
 
 
@@ -2245,8 +2605,7 @@ def test_failure_replay_rejects_noncanonical_diagnostic_carriers():
     state, log = _failure_in_flight()
     before = _state_snapshot(state)
     record = NodeFailedRecord(
-        node_id="failing",
-        error="boom",
+        failure=_node_failure("failing"),
         locator={"node": "failing", "kind": "field", "key": "code"},  # type: ignore[arg-type]
     )
 
@@ -2259,7 +2618,7 @@ def test_failure_replay_rejects_noncanonical_diagnostic_carriers():
 
 def test_competing_failure_plan_rejects_after_another_same_sequence_outcome():
     state, log = _failure_in_flight()
-    failure = prepare_node_failed(state, "failing", "boom")
+    failure = prepare_node_failed(state, _node_failure("failing"))
     sibling_success = prepare_node_succeeded(state, "sibling", {"ok": True})
 
     commit_prepared(log, state, sibling_success)
@@ -2276,12 +2635,8 @@ def test_failure_commit_uses_only_materialized_data_after_append(
     monkeypatch: pytest.MonkeyPatch,
 ):
     state, prior = _failure_in_flight()
-    prepared = prepare_node_failed(
-        state,
-        "failing",
-        "boom",
-        error_type="RuntimeError",
-    )
+    failure = _node_failure("failing", cause_type="RuntimeError")
+    prepared = prepare_node_failed(state, failure)
 
     def unexpected(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("failure commit repeated preparation work")
@@ -2309,7 +2664,7 @@ def test_failure_commit_uses_only_materialized_data_after_append(
     observers = commit_prepared(log, state, prepared)
 
     assert observers == (
-        NodeFailed("failing", "boom", "RuntimeError"),
-        RunFailed("boom", "RuntimeError"),
+        NodeFailed(failure),
+        RunFailed(failure),
     )
-    assert state.result == RunFailed("boom", "RuntimeError")
+    assert state.result == RunFailed(failure)

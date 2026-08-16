@@ -20,7 +20,7 @@ from agent_composer._state import NodeState
 from agent_composer.compile.manifest import expansion_digest
 from agent_composer.compile.model import CompiledFlow, Edge, Flow, GrowthRejected
 from agent_composer.compile.validation import _classify_path
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.events import (
     NodeExpanded,
     NodeFailed,
@@ -152,6 +152,9 @@ class RunState:
             Ordered set of durably started nodes without a durable outcome.
         result (`RunSucceeded | RunFailed | None`):
             Derived terminal result, or ``None`` while the run remains live.
+        terminal_unreachable_failure (`Failure | None`):
+            First route-derived proof that the terminal output is unreachable,
+            retained independently of later frontier and topology changes.
         depth (`dict[str, int]`):
             Reference-growth depth keyed by live dynamic node ID.
         wiring_overrides (`dict[str, dict[str, Any]]`):
@@ -188,6 +191,7 @@ class RunState:
         self.ready: deque[str] = deque()
         self.in_flight: dict[str, None] = {}
         self.result: RunSucceeded | RunFailed | None = None
+        self.terminal_unreachable_failure: Failure | None = None
         self.depth: dict[str, int] = {}
         self.wiring_overrides: dict[str, dict[str, Any]] = {}
         self.run_id: str | None = None
@@ -252,6 +256,7 @@ class _RunStartedApply:
     edge_state: dict[str, NodeState]
     ready: deque[str]
     in_flight: dict[str, None]
+    terminal_unreachable_failure: Failure | None
     depth: dict[str, int]
     wiring_overrides: dict[str, dict[str, Any]]
     run_id: str
@@ -357,6 +362,7 @@ class _RouteDelta:
     edge_updates: tuple[tuple[str, NodeState], ...]
     skipped_node_ids: tuple[str, ...]
     newly_ready_ids: tuple[str, ...]
+    terminal_unreachable_failure: Failure | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,14 +370,13 @@ class _TerminalDelta:
     """Immutable derived terminal authority attached to one causal outcome.
 
     ``output_bytes`` is a canonical tagged typed value for success and ``None``
-    for ``TerminalSkipped`` failure.  ``succeeded`` distinguishes a typed null
-    output from the failure case; ``skipped_output_name`` preserves the legacy
-    ``None`` fallback when no required dead END group can be identified.
+    for failure. ``succeeded`` distinguishes a typed null output from failure;
+    ``failure`` is the one source-neutral authority for an unreachable terminal.
     """
 
     succeeded: bool
     output_bytes: bytes | None
-    skipped_output_name: str | None
+    failure: Failure | None
 
 
 @dataclass(slots=True)
@@ -406,14 +411,11 @@ class _FailurePlan:
 
 @dataclass(frozen=True, slots=True)
 class _FailureDelta:
-    """Canonical diagnostic and touched node for one terminal failure."""
+    """One canonical failure authority plus temporary presentation metadata."""
 
-    node_id: str
-    error: str
-    error_type: str
+    failure: Failure
     locator: SourceSpan | None
     range: SourceRange | None
-    traceback: str | None
 
 
 @dataclass(slots=True)
@@ -907,51 +909,41 @@ def prepare_expanded(
 
 def prepare_node_failed(
     state: RunState,
-    node_id: str,
-    error: str,
+    failure: Failure,
     *,
-    error_type: str = "",
     locator: SourceSpan | None = None,
     range: SourceRange | None = None,
-    traceback: str | None = None,
 ) -> PreparedTransition:
-    """Prepare one terminal node failure with its complete durable diagnostic.
+    """Prepare one terminal node failure with its canonical durable authority.
 
     Args:
         state (`RunState`):
             Initialized nonterminal state with ``node_id`` in ordered in-flight work.
-        node_id (`str`):
-            Exact non-empty ID of the executing node that failed.
-        error (`str`):
-            Human-readable failure detail, including the empty string when intentional.
-        error_type (`str`, *optional*):
-            Stable exception or synthesized diagnostic category.
+        failure (`Failure`):
+            Immutable semantic failure whose non-empty ``node_id`` identifies
+            the executing node.
         locator (`SourceSpan | None`, *optional*):
             Symbolic source location retained alongside the failure.
         range (`SourceRange | None`, *optional*):
             Concrete source range retained alongside the failure.
-        traceback (`str | None`, *optional*):
-            Formatted traceback captured at the node boundary.
-
     Returns:
         `PreparedTransition`:
             Canonical ``NodeFailedRecord`` and detached append-before-apply plan.
 
     Raises:
         `TypeError`:
-            A scalar or diagnostic carrier has the wrong exact type.
+            The failure or a presentation carrier has the wrong exact type.
         `ValueError`:
             State or the executing node is not eligible to fail.
     """
     if type(state) is not RunState:
         raise TypeError("prepare_node_failed expects a RunState")
+    if type(failure) is not Failure:
+        raise TypeError("prepare_node_failed expects a Failure")
     record = NodeFailedRecord(
-        node_id=node_id,
-        error=error,
-        error_type=error_type,
+        failure=failure,
         locator=locator,
         range=range,
-        traceback=traceback,
     )
     _require_initialized_nonterminal(state)
     return _prepare_failure_transition(state, record)
@@ -1126,6 +1118,7 @@ def _prepare_success_transition(
         pending_commit_target=delta.commit_target,
         pending_value_bytes=delta.value_bytes,
         edge_updates={},
+        terminal_unreachable_failure=state.terminal_unreachable_failure,
     )
     run_id = state.run_id
     if not isinstance(run_id, str):  # established by initialized-state validation
@@ -1194,6 +1187,7 @@ def _prepare_route_transition(
         pending_commit_target=None,
         pending_value_bytes=None,
         edge_updates=edge_updates,
+        terminal_unreachable_failure=delta.terminal_unreachable_failure,
     )
     run_id = state.run_id
     if not isinstance(run_id, str):  # established by initialized-state validation
@@ -1661,6 +1655,7 @@ def _commit_route(
         state.node_state[node_id] = NodeState.SKIPPED
     del state.in_flight[delta.node_id]
     state.ready.extend(delta.newly_ready_ids)
+    state.terminal_unreachable_failure = delta.terminal_unreachable_failure
     if apply.terminal is not None:
         state.result = apply.terminal.result
     state.next_sequence = prepared.expected_sequence + 1
@@ -1685,11 +1680,14 @@ def _commit_failure(
     delta = plan.delta
     if prepared.record != _failure_record(delta):
         raise ValueError("failure record and prevalidated delta disagree")
+    node_id = delta.failure.node_id
+    if type(node_id) is not str or not node_id:
+        raise ValueError("failure plan has no executing node")
     apply = _materialize_failure(delta)
 
     _append_and_verify(log, prepared)
-    state.node_state[delta.node_id] = NodeState.TAKEN
-    del state.in_flight[delta.node_id]
+    state.node_state[node_id] = NodeState.TAKEN
+    del state.in_flight[node_id]
     state.result = apply.result
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
@@ -1841,6 +1839,18 @@ def _require_initialized_nonterminal(state: RunState) -> None:
         raise ValueError("run state is not initialized with a valid sequence")
     if type(state.num_workers) is not int or state.num_workers < 0:
         raise ValueError("run state has an invalid worker count")
+    if state.terminal_unreachable_failure is not None:
+        failure = state.terminal_unreachable_failure
+        if type(failure) is not Failure:
+            raise TypeError("terminal-unreachable latch must be a Failure or None")
+        if failure.code != "graph.terminal_unreachable":
+            raise ValueError(
+                "terminal-unreachable latch has the wrong failure code"
+            )
+        if type(failure.node_id) is not str or not failure.node_id:
+            raise ValueError(
+                "terminal-unreachable latch requires a causal node ID"
+            )
     if state.result is not None:
         raise ValueError("terminal run state cannot prepare another transition")
     if state.flow.start_id not in state.flow.nodes:
@@ -2729,19 +2739,18 @@ def _growth_adjacency(
 
 def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
     """Validate exact diagnostic carriers and the executing node for replay."""
-    if type(record.node_id) is not str:
-        raise TypeError("NodeFailedRecord node_id must be a string")
-    if type(record.error) is not str:
-        raise TypeError("NodeFailedRecord error must be a string")
-    if type(record.error_type) is not str:
-        raise TypeError("NodeFailedRecord error_type must be a string")
+    if type(record.failure) is not Failure:
+        raise TypeError("NodeFailedRecord failure must be a Failure")
+    node_id = record.failure.node_id
+    if type(node_id) is not str:
+        raise TypeError("NodeFailedRecord failure node_id must be a string")
+    if not node_id:
+        raise ValueError("NodeFailedRecord failure node_id must be non-empty")
     if record.locator is not None and type(record.locator) is not SourceSpan:
         raise TypeError("NodeFailedRecord locator must be a SourceSpan or None")
     if record.range is not None and type(record.range) is not SourceRange:
         raise TypeError("NodeFailedRecord range must be a SourceRange or None")
-    if record.traceback is not None and type(record.traceback) is not str:
-        raise TypeError("NodeFailedRecord traceback must be a string or None")
-    _require_failing_node(state, record.node_id)
+    _require_failing_node(state, node_id)
 
 
 def _validate_route_record(state: RunState, record: NodeRoutedRecord) -> None:
@@ -2967,6 +2976,17 @@ def _prepare_route_delta(
         for child in reversed(children):
             work.append((child, NodeState.SKIPPED))
 
+    terminal_unreachable_failure = state.terminal_unreachable_failure
+    if (
+        terminal_unreachable_failure is None
+        and state.flow.end_id in skipped_nodes
+    ):
+        terminal_unreachable_failure = _make_terminal_unreachable_failure(
+            state,
+            causal_node_id=record.node_id,
+            edge_updates=edge_updates,
+        )
+
     return (
         _RouteDelta(
             node_id=record.node_id,
@@ -2974,6 +2994,7 @@ def _prepare_route_delta(
             edge_updates=tuple(edge_updates.items()),
             skipped_node_ids=tuple(skipped_node_ids),
             newly_ready_ids=tuple(newly_ready_ids),
+            terminal_unreachable_failure=terminal_unreachable_failure,
         ),
         edge_updates,
     )
@@ -3128,6 +3149,24 @@ def _require_unambiguous_redirect(
         )
 
 
+def _make_terminal_unreachable_failure(
+    state: RunState,
+    *,
+    causal_node_id: str,
+    edge_updates: dict[str, NodeState],
+) -> Failure:
+    """Build the source-neutral failure for one causal terminal skip."""
+    node = state.flow.nodes[causal_node_id]
+    trace = () if node.origin is None else (node.origin,)
+    output_name = _terminal_skipped_output_name(state, edge_updates)
+    return Failure(
+        code="graph.terminal_unreachable",
+        message=f"terminal output {output_name!r} skipped",
+        node_id=causal_node_id,
+        trace=trace,
+    )
+
+
 def _prepare_terminal_delta(
     state: RunState,
     *,
@@ -3136,6 +3175,7 @@ def _prepare_terminal_delta(
     pending_commit_target: str | None,
     pending_value_bytes: bytes | None,
     edge_updates: dict[str, NodeState],
+    terminal_unreachable_failure: Failure | None,
 ) -> _TerminalDelta | None:
     """Derive an optional terminal result from one predicted post-outcome state.
 
@@ -3160,7 +3200,7 @@ def _prepare_terminal_delta(
         return _TerminalDelta(
             succeeded=True,
             output_bytes=pending_value_bytes,
-            skipped_output_name=None,
+            failure=None,
         )
     if end_id in state.pool.store:
         output_bytes = ANY_VALUE_ADAPTER.dump_json(
@@ -3170,12 +3210,18 @@ def _prepare_terminal_delta(
         return _TerminalDelta(
             succeeded=True,
             output_bytes=output_bytes,
-            skipped_output_name=None,
+            failure=None,
+        )
+    if terminal_unreachable_failure is None:
+        terminal_unreachable_failure = _make_terminal_unreachable_failure(
+            state,
+            causal_node_id=completing_node_id,
+            edge_updates=edge_updates,
         )
     return _TerminalDelta(
         succeeded=False,
         output_bytes=None,
-        skipped_output_name=_terminal_skipped_output_name(state, edge_updates),
+        failure=terminal_unreachable_failure,
     )
 
 
@@ -3487,6 +3533,7 @@ def _require_pristine(state: RunState) -> None:
         and not state.ready
         and not state.in_flight
         and state.result is None
+        and state.terminal_unreachable_failure is None
         and not state.depth
         and not state.wiring_overrides
         and state.run_id is None
@@ -3577,6 +3624,7 @@ def _materialize_run_started(
         edge_state=dict(state.edge_state),
         ready=deque((start_id,)),
         in_flight={},
+        terminal_unreachable_failure=None,
         depth={},
         wiring_overrides={start_id: canonical_wiring},
         run_id=envelope.run_id,
@@ -3597,6 +3645,7 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.ready = apply.ready
     state.in_flight = apply.in_flight
     state.result = None
+    state.terminal_unreachable_failure = apply.terminal_unreachable_failure
     state.depth = apply.depth
     state.wiring_overrides = apply.wiring_overrides
     state.run_id = apply.run_id
@@ -3655,6 +3704,8 @@ def _terminal_observer(delta: _TerminalDelta) -> RunSucceeded | RunFailed:
     if delta.succeeded:
         if type(delta.output_bytes) is not bytes:
             raise ValueError("successful terminal delta requires typed output bytes")
+        if delta.failure is not None:
+            raise ValueError("successful terminal delta cannot carry a failure")
         output = ANY_VALUE_ADAPTER.validate_json(
             delta.output_bytes,
             strict=True,
@@ -3662,10 +3713,9 @@ def _terminal_observer(delta: _TerminalDelta) -> RunSucceeded | RunFailed:
         return RunSucceeded(output=output)
     if delta.output_bytes is not None:
         raise ValueError("failed terminal delta cannot carry output bytes")
-    return RunFailed(
-        error=f"terminal output {delta.skipped_output_name!r} skipped",
-        error_type="TerminalSkipped",
-    )
+    if type(delta.failure) is not Failure:
+        raise ValueError("failed terminal delta requires one Failure")
+    return RunFailed(failure=delta.failure)
 
 
 def _materialize_terminal(delta: _TerminalDelta) -> _TerminalApply:
@@ -3677,46 +3727,35 @@ def _materialize_terminal(delta: _TerminalDelta) -> _TerminalApply:
 
 
 def _failure_delta(record: NodeFailedRecord) -> _FailureDelta:
-    """Detach one canonical record into immutable scalar diagnostic authority."""
+    """Retain one canonical Failure and copy temporary presentation metadata."""
     return _FailureDelta(
-        node_id=record.node_id,
-        error=record.error,
-        error_type=record.error_type,
+        failure=record.failure,
         locator=_copy_source_span(record.locator),
         range=_copy_source_range(record.range),
-        traceback=record.traceback,
     )
 
 
 def _failure_record(delta: _FailureDelta) -> NodeFailedRecord:
-    """Construct an independent durable carrier from an immutable failure delta."""
+    """Construct one durable carrier around the same immutable Failure."""
     return NodeFailedRecord(
-        node_id=delta.node_id,
-        error=delta.error,
-        error_type=delta.error_type,
+        failure=delta.failure,
         locator=_copy_source_span(delta.locator),
         range=_copy_source_range(delta.range),
-        traceback=delta.traceback,
     )
 
 
 def _failure_observers(delta: _FailureDelta) -> tuple[Any, ...]:
-    """Construct ordered, independent node- and run-level failure observers."""
+    """Construct ordered observers sharing one immutable Failure authority."""
     return (
         NodeFailed(
-            node_id=delta.node_id,
-            error=delta.error,
-            error_type=delta.error_type,
+            failure=delta.failure,
             locator=_copy_source_span(delta.locator),
             range=_copy_source_range(delta.range),
-            traceback=delta.traceback,
         ),
         RunFailed(
-            error=delta.error,
-            error_type=delta.error_type,
+            failure=delta.failure,
             locator=_copy_source_span(delta.locator),
             range=_copy_source_range(delta.range),
-            traceback=delta.traceback,
         ),
     )
 
@@ -3725,11 +3764,9 @@ def _materialize_failure(delta: _FailureDelta) -> _FailureApply:
     """Materialize detached state and callback values before durable append."""
     return _FailureApply(
         result=RunFailed(
-            error=delta.error,
-            error_type=delta.error_type,
+            failure=delta.failure,
             locator=_copy_source_span(delta.locator),
             range=_copy_source_range(delta.range),
-            traceback=delta.traceback,
         ),
         observers=_failure_observers(delta),
     )

@@ -15,6 +15,7 @@ import pytest
 
 import agent_composer.runtime.state as state_module
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, NodeState, START_ID
+from agent_composer.diagnostics import Failure
 from agent_composer.events import NodeStarted, RunFailed, RunResumed
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
@@ -25,6 +26,7 @@ from agent_composer.runtime.log import (
     RecordEnvelope,
     RunResumedRecord,
     RunStartedRecord,
+    SCHEMA_VERSION,
 )
 from agent_composer.runtime.state import (
     RunStartData,
@@ -113,6 +115,7 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
         "in_flight": tuple(state.in_flight),
         "in_flight_identity": id(state.in_flight),
         "result": state.result,
+        "terminal_unreachable_failure": state.terminal_unreachable_failure,
         "depth": dict(state.depth),
         "depth_identity": id(state.depth),
         "wiring_overrides": deepcopy(state.wiring_overrides),
@@ -488,7 +491,9 @@ def test_dispatch_and_resume_require_initialized_nonterminal_state():
         prepare_run_resumed(pristine, num_workers=1)
 
     state, _, _ = _initialized()
-    state.result = RunFailed(error="done")
+    state.result = RunFailed(
+        failure=Failure("node.execute", "done", "first")
+    )
     with pytest.raises(ValueError, match="terminal"):
         prepare_node_started(state, START_ID)
     with pytest.raises(ValueError, match="terminal"):
@@ -722,7 +727,7 @@ class _ReturningLog:
 
     def append(self, record):
         return RecordEnvelope(
-            schema=1,
+            schema=SCHEMA_VERSION,
             run_id=self.run_id,
             seq=self.next_sequence + 1,
             record=self._record,

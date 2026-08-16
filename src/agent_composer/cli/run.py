@@ -44,12 +44,13 @@ from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow, top_frame_ranges
 from agent_composer.compose.parse.file import parse_source_document
+from agent_composer.diagnostics import Diagnostic, DiagnosticFrame, SourceRange
 from agent_composer.run import (
     RunResult,
     _resume_flow_controlled,
     _run_flow_controlled,
 )
-from agent_composer.events import Diagnostic, NodeFailed, SourceRange, SourceSpan
+from agent_composer.events import NodeFailed, SourceSpan
 from agent_composer.nodes.base import _HostStop
 from agent_composer.tools import install_ask_user
 from agent_composer.typesys import canonical_type_label
@@ -224,8 +225,14 @@ def _render_load_error(err: LoadError, flow: Path, text: str) -> None:
     if err.range is not None:
         # Span-aware path (Step 8): the loader resolved a precise `SourceRange`, so box it
         # directly instead of re-deriving a line. The `.notes` "why" legend still follows.
-        render_diagnostic(Diagnostic("error", str(err), err.range), text, flow.name)
-        _render_notes(err)
+        render_diagnostic(
+            Diagnostic(
+                code="compose.load",
+                message=str(err),
+                frames=(DiagnosticFrame(flow.name, text, err.range),),
+                notes=tuple(err.notes or ()),
+            )
+        )
         return
     _render_source_frame(text, marks, flow.name, str(err))
     _render_notes(err)
@@ -377,26 +384,29 @@ def _render_frame_stack(frames, message: str) -> None:
     err_console.print(Text(message, style="red"))
 
 
-def render_diagnostic(diag: Diagnostic, source_text: str, title: str = "") -> None:
-    """Render a `Diagnostic` as the CLI's one located error frame (the Step-8 funnel).
+def render_diagnostic(diag: Diagnostic) -> None:
+    """Render one presentation-ready diagnostic without consulting engine state.
 
-    Boxes `diag.primary` — the lines it COVERS highlighted in `source_text` — and prints
-    `diag.message` below in red, the same boxed frame a compile/run error used to get, now fed
-    by a resolved `SourceRange` rather than a line lookup. The range is half-open, so which
-    lines it covers is the range's own business (`SourceRange.covered_lines`) — reading
-    `end_line` here would highlight one line too many for a block construct, whose end mark
-    lands on the next token's line. When `diag.notes` is non-empty (the outer call-traceback
-    frames of a nested `call`/`map` failure, innermost last) they render as a stacked "call
-    traceback" header ABOVE the primary, mirroring a Python traceback. Falls back to a plain
-    `title: message` line when there is no primary range (or it falls outside the source).
-    Writes to `err_console`; `title` labels the primary box (the flow filename)."""
-    if diag.notes:
-        err_console.print(Text("call traceback (most recent call last):", style="red bold"))
-        for note in diag.notes:
-            err_console.print(Text(f"  {note}", style="dim"))
-    primary = diag.primary
-    marks = primary.covered_lines(source_text) if primary else []
-    _render_source_frame(source_text, marks, title, diag.message)
+    Frames are rendered in their supplied outermost-to-innermost order. Each frame
+    owns its source label, complete text, and half-open range, whose
+    :meth:`SourceRange.covered_lines` method decides the highlighted lines. Frame
+    notes remain adjacent to their frame; diagnostic notes follow the message. A
+    diagnostic without frames prints its message without inventing source context.
+
+    Args:
+        diag (`Diagnostic`): Fully resolved presentation data to write to stderr.
+    """
+    if len(diag.frames) > 1:
+        err_console.print(Text("source context (outermost first):", style="red bold"))
+    for frame in diag.frames:
+        marks = frame.range.covered_lines(frame.text)
+        if not _render_frame_box(frame.text, marks, frame.label):
+            err_console.print(Text(frame.label, style="red bold"))
+        if frame.note is not None:
+            err_console.print(Text(f"  ↳ {frame.note}", style="yellow"))
+    err_console.print(Text(diag.message, style="red"))
+    for note in diag.notes:
+        err_console.print(Text(f"  ↳ {note}", style="yellow"))
 
 
 def _render_traceback(tb: str) -> None:
@@ -472,7 +482,17 @@ def _render_run_error(
     if rng is None:
         err_console.print(f"[red]run {result.status}: {message}[/red]")
     else:
-        render_diagnostic(Diagnostic("error", message, rng), text, flow.name)
+        code = failure.code if failure is not None else "node.execute"
+        render_diagnostic(
+            Diagnostic(
+                code=code,
+                message=message,
+                frames=(DiagnosticFrame(flow.name, text, rng),),
+                node_id=node_id,
+                cause_type=failure.cause_type if failure is not None else None,
+                traceback=tb,
+            )
+        )
     if engine_trace and tb:
         _render_traceback(tb)
 

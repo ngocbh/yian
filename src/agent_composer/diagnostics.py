@@ -168,6 +168,30 @@ class DiagnosticFrame:
     note: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class Diagnostic:
+    """One immutable presentation-ready diagnostic.
+
+    Attributes:
+        code (`str`): Stable semantic or load-time category.
+        message (`str`): Human-readable failure detail.
+        frames (`tuple[DiagnosticFrame, ...]`): Resolved source context ordered
+            outermost to innermost.
+        notes (`tuple[str, ...]`): Presentation context not tied to one frame.
+        node_id (`str | None`): Optional runtime execution identity.
+        cause_type (`str | None`): Optional exception class name for debugging.
+        traceback (`str | None`): Optional opaque Python traceback text.
+    """
+
+    code: str
+    message: str
+    frames: tuple[DiagnosticFrame, ...] = ()
+    notes: tuple[str, ...] = ()
+    node_id: str | None = None
+    cause_type: str | None = None
+    traceback: str | None = None
+
+
 class OriginResolver(Protocol):
     """Authoring-format-neutral seam from opaque origins to source frames."""
 
@@ -381,6 +405,7 @@ class ResolverTable:
 
 
 __all__ = [
+    "Diagnostic",
     "DiagnosticFrame",
     "FAILURE_CODES",
     "Failure",

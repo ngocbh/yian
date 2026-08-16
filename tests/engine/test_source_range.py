@@ -1,7 +1,7 @@
 from dataclasses import FrozenInstanceError
 import pytest
 from agent_composer.diagnostics import SourceRange
-from agent_composer.events import Diagnostic, SourceRange as EventSourceRange
+from agent_composer.events import SourceRange as EventSourceRange
 
 
 def test_source_range_is_frozen_1based():
@@ -13,12 +13,6 @@ def test_source_range_is_frozen_1based():
 
 def test_events_temporarily_reexports_the_same_source_range_class():
     assert EventSourceRange is SourceRange
-
-
-def test_diagnostic_holds_primary_and_notes():
-    pr = SourceRange(1, 1, 1, 4)
-    d = Diagnostic(severity="error", message="boom", primary=pr, notes=())
-    assert d.severity == "error" and d.primary is pr and d.notes == ()
 
 
 # --------------------------------------------------------------------------- #

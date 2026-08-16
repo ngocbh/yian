@@ -41,6 +41,8 @@ jobs:
           MERMAID_TOOLS: ${{ runner.temp }}/mermaid-tools
         run: |
           output_root="$RUNNER_TEMP/mermaid-output"
+          puppeteer_config="$RUNNER_TEMP/puppeteer.json"
+          printf '%s\n' '{"args":["--no-sandbox"]}' >"$puppeteer_config"
           diagram_documents=0
           while IFS= read -r -d '' path; do
             if grep -Eq '^[[:space:]]*(`{3,}|~{3,})[[:space:]]*mermaid([[:space:]]|$)' "$path"; then
@@ -49,6 +51,7 @@ jobs:
               mkdir -p "$(dirname "$output")"
               "$MERMAID_TOOLS/node_modules/.bin/mmdc" \
                 --quiet \
+                --puppeteerConfigFile "$puppeteer_config" \
                 --input "$path" \
                 --output "$output"
             fi
@@ -104,7 +107,10 @@ jobs:
 
           const require = createRequire(path.join(process.env.MERMAID_TOOLS, "package.json"))
           const puppeteer = require("puppeteer")
-          const browser = await puppeteer.launch({ headless: true })
+          const browser = await puppeteer.launch({
+            headless: true,
+            args: ["--no-sandbox"]
+          })
           try {
             const page = await browser.newPage()
             await page.setViewport({ width: 1440, height: 900 })

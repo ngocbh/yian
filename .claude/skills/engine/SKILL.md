@@ -59,10 +59,15 @@ Hold this model whenever you design anything:
   `contract.growth`, and `graph.terminal_unreachable`. Exception classes and
   traceback text must never decide behavior. The evaluator assigns
   `binding.evaluate`, `contract.input`, `assertion.failed`, `node.execute`, and
-  `contract.node_result` by operation stage. Host control, stream callbacks,
-  unexpected binder faults, and malformed compiled/setup state escape.
-  Dispatcher output/route/growth and terminal rejection plus durable/public
-  carriers remain cutover work.
+  `contract.node_result` by operation stage. The dispatcher assigns
+  `contract.output`, `contract.route`, and `contract.growth` from the closed
+  `Output`, `Route`, and `Grow` arms, never from an exception class. Output uses
+  the effective target contract's root origin when available and otherwise the
+  executing node origin; route and growth use the executing node origin. Both
+  paths share one schema-1 projector. Host control, stream callbacks, unexpected
+  binder faults, malformed compiled/setup state, unsupported growth kinds, and
+  arbitrary builder/compiler/spawner-or-fragment-copy/digest/materialization/reducer/log faults
+  escape. Durable/public/terminal cutover remains tracked by #182.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;

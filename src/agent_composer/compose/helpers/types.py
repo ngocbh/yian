@@ -58,6 +58,11 @@ def _read_record_type(
     fields: dict[str, Type] = {}
     sites: list[tuple[ValuePath, SourceCursor]] = []
     for key, value, child_cursor in entries:
+        if child_cursor is not None and (type(key) is not str or not key):
+            raise diagnostics.error(
+                "record field names must be non-empty strings",
+                range=child_cursor.key_range or child_cursor.range,
+            )
         child_path = (*path, key)
         if child_cursor is not None:
             sites.append((child_path, child_cursor))
@@ -281,7 +286,7 @@ def _read_flow_parameter(
             ),
         )
 
-    if isinstance(value, (dict, list)):
+    if isinstance(value, dict):
         contract = read_contract(value)
         return Parameter(
             name=name,
@@ -292,7 +297,7 @@ def _read_flow_parameter(
         )
 
     raise diagnostics.error(
-        f"input {name!r}: declaration must be a type string or a record map/list, "
+        f"input {name!r}: declaration must be a type string or a record map, "
         f"got {type(value).__name__}"
     )
 
@@ -306,12 +311,11 @@ def read_flow_inputs(
 ) -> list[Parameter]:
     """Read Compose ``inputs:`` directly into canonical semantic parameters.
 
-    A `str` value is the `TYPE [= default]` / `Optional[X]` form; a mapping or
-    list-of-single-key-maps is a record type (resolved via `read_type`, no
-    default — the `{type:, default:}` escape-hatch map is intentionally not
-    supported). Authored defaults must already satisfy their declared type;
-    only supplied boundary strings are coercible. This source-free entry point
-    deliberately emits no origins.
+    A `str` value is the `TYPE [= default]` / `Optional[X]` form; a mapping is a
+    record type (resolved via `read_type`, no default — the `{type:, default:}`
+    escape-hatch map is intentionally not supported). Authored defaults must
+    already satisfy their declared type; only supplied boundary strings are
+    coercible. This source-free entry point deliberately emits no origins.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     parameters: list[Parameter] = []

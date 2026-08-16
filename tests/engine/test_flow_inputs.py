@@ -95,6 +95,7 @@ def test_number_default_retains_compatible_integer_payload():
     [
         ("list[", "bad type expression"),
         ({"field": 3}, "cannot read type"),
+        ([{"field": "int"}], "declaration must be a type string or a record map"),
         (3, "declaration must be a type string or a record map"),
     ],
 )

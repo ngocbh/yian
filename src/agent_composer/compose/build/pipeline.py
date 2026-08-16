@@ -842,7 +842,7 @@ def _assemble(
     if inputs_section is not None:
         if inputs_cursor is not None:
             inputs = read_source_flow_inputs(
-                inputs_cursor,
+                inputs_cursor.with_value(inputs_section),
                 registry,
                 site_path=owner,
                 catalog_builder=catalog_builder,

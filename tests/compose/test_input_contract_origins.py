@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from agent_composer.compile.model import START_ID
-from agent_composer.compose import load_flow
+from agent_composer.compose import LoadError, load_flow
 from agent_composer.compose.source import SourceCursor, SourceDocument
 from agent_composer.diagnostics import OriginRef, OriginResolver
 from agent_composer.nodes.contracts import ContractOrigins, Parameter, ValueContract
@@ -21,9 +23,9 @@ input:
       age: int
       nickname: Optional[str]
   flags:
-    - enabled: bool
-    - limits:
-        - count: int
+    enabled: bool
+    limits:
+      count: int
 nodes:
   echo:
     kind: code
@@ -144,17 +146,17 @@ def test_root_inputs_compile_parameter_contract_default_and_nested_origins():
     _assert_site(
         loaded.origin_resolver,
         flags_entries[("enabled",)],
-        flags_cursor.child(0).child("enabled"),
+        flags_cursor.child("enabled"),
     )
     _assert_site(
         loaded.origin_resolver,
         flags_entries[("limits",)],
-        flags_cursor.child(1).child("limits"),
+        flags_cursor.child("limits"),
     )
     _assert_site(
         loaded.origin_resolver,
         flags_entries[("limits", "count")],
-        flags_cursor.child(1).child("limits").child(0).child("count"),
+        flags_cursor.child("limits").child("count"),
     )
 
 
@@ -208,6 +210,66 @@ def test_nested_flow_input_failure_selects_the_exact_contract_field():
         document.root.child("input").child("payload").child("profile").child("age")
     )
     assert diagnostic.frames[-1].range == expected.range
+
+
+def test_scalar_flow_input_failure_selects_the_contract_root():
+    """A root mismatch resolves to the declaration value, not the parameter key."""
+    document = SourceDocument.parse(_ROOT_FLOW, label="scalar.yaml")
+    loaded = load_flow(_ROOT_FLOW, source_label="scalar.yaml")
+    window = _parameter(loaded.input, "window")
+    contract_origin = _contract(window).origins.default
+
+    result = run_flow(
+        loaded,
+        {
+            "topic": "hello",
+            "window": "not-an-int",
+            "payload": {"profile": {"age": 7}},
+            "flags": {"enabled": True, "limits": {"count": 1}},
+        },
+    )
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "contract.input"
+    assert result.failure.trace[-1] == contract_origin
+    diagnostic = loaded.diagnose(result.failure)
+    expected = document.root.child("input").child("window")
+    assert diagnostic.frames[-1].range == expected.range
+
+
+def test_non_string_record_field_is_a_located_load_error():
+    """Invalid YAML record keys never escape the Compose error boundary."""
+    text = """\
+id: invalid-record-field
+name: invalid-record-field
+input:
+  payload:
+    true: int
+nodes: {}
+"""
+    document = SourceDocument.parse(text)
+
+    with pytest.raises(LoadError, match="record field names") as caught:
+        load_flow(text)
+
+    expected = document.root.child("input").child("payload").child(True)
+    assert caught.value.diagnostic.frames[-1].range == expected.key_range
+
+
+@pytest.mark.parametrize("empty", ["null", "[]", "false", "0", "''"])
+def test_falsy_definition_input_keeps_existing_empty_normalization(empty: str):
+    """Located compilation preserves the loader's established empty-def shorthand."""
+    load_flow(
+        f"""id: empty-definition-input
+name: empty-definition-input
+defs:
+  child:
+    input: {empty}
+    nodes: {{}}
+nodes: {{}}
+"""
+    )
 
 
 def test_compact_root_and_both_definition_forms_retain_input_contract_sites():

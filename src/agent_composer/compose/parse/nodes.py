@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.nodes import KINDS
 from agent_composer.compose.source import SourceAccessError, SourceCursor
 
@@ -39,6 +39,7 @@ def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
     projections, or virtual for a programmatic/test mapping. Returns descriptors
     in source order with ranges whenever an authored source exists.
     """
+    diagnostics = LoadDiagnostics.from_cursor(nodes_cursor)
     out: dict[str, Any] = {}
     try:
         nodes = nodes_cursor._value_view()
@@ -55,15 +56,16 @@ def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
                 desc = dataclasses.replace(desc, range=header)
             out[node_id] = desc
     except SourceAccessError as exc:
-        raise LoadError(str(exc), range=exc.range) from exc
+        raise diagnostics.error(str(exc), range=exc.range) from exc
     return out
 
 
 def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
     """Read one keyed-map node body into its typed per-kind descriptor (located)."""
+    diagnostics = LoadDiagnostics.from_cursor(cursor)
     body = cursor._value_view()
     if not isinstance(body, Mapping):
-        raise LoadError(
+        raise diagnostics.error(
             f"node {node_id!r}: body must be a mapping, got {type(body).__name__}",
             range=cursor.range,
         )
@@ -72,10 +74,13 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
 
     kind = cursor.get("kind")
     if kind is None:
-        raise LoadError(f"node {node_id!r}: missing `kind`", range=cursor.range)
+        raise diagnostics.error(
+            f"node {node_id!r}: missing `kind`",
+            range=cursor.range,
+        )
     cls = KINDS.get(kind)
     if cls is None:
-        raise LoadError(
+        raise diagnostics.error(
             f"node {node_id!r}: unknown kind {kind!r} "
             f"(allowed: {', '.join(sorted(KINDS))})",
             range=cursor.range_of("kind"),
@@ -96,8 +101,10 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
     field_ranges = getattr(desc, "field_ranges", None)
     if isinstance(field_ranges, dict):
         field_ranges.update(
-            {("input", name): rng
-             for name, rng in cursor.mapping_value_ranges("inputs").items()}
+            {
+                ("input", name): rng
+                for name, rng in cursor.mapping_value_ranges("inputs").items()
+            }
         )
     assert_ranges = getattr(desc, "assert_ranges", None)
     if isinstance(assert_ranges, list):
@@ -111,15 +118,16 @@ def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:
     Mirrors the legacy `parser._parse_node` head guards; anchors each error at the node
     body's `SourceRange` (the closest located anchor for a bad node key).
     """
+    diagnostics = LoadDiagnostics.from_cursor(cursor)
     rng = cursor.range
     if "#" in node_id or "/" in node_id:
-        raise LoadError(
+        raise diagnostics.error(
             f"node id {node_id!r} uses a reserved separator ('#'/'/' are reserved for "
             f"runtime graph expansion)",
             range=rng,
         )
     if node_id in (START_ID, END_ID):
-        raise LoadError(
+        raise diagnostics.error(
             f"node id {node_id!r} is reserved for the synthesized START_ID/END_ID boundary"
             f"; authors write `input:`/`output:`, not a boundary node",
             range=rng,
@@ -127,13 +135,13 @@ def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:
     # Reserve the four singular head literals so the node-first ref `${<node>.output.k}` is
     # unambiguous, and the plural forms as migration typo-catchers.
     if node_id in ("input", "output", "system", "item"):
-        raise LoadError(
+        raise diagnostics.error(
             f"node id {node_id!r} is reserved (used as `${{{node_id}.X}}` as a "
             f"resolver head — pick a different node id)",
             range=rng,
         )
     if node_id in ("inputs", "outputs"):
-        raise LoadError(
+        raise diagnostics.error(
             f"node id {node_id!r} is reserved (the plural head is retired — "
             f"rename to `{node_id[:-1]}` or pick a different node id)",
             range=rng,

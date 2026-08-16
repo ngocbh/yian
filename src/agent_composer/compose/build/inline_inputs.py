@@ -19,7 +19,7 @@ from typing import Any
 
 from lark import Token, Tree
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.events import SourceRange
 from agent_composer.expr.expressions import ExpressionError
 from agent_composer.expr.template import Span, scan_template
@@ -55,6 +55,7 @@ def infer_inline_binding_type(
     item_type: ItemType | None = None,
     binding_label: str,
     binding_range: SourceRange | None = None,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> Type:
     """Infer one generated child parameter's strict structural type.
 
@@ -100,6 +101,7 @@ def infer_inline_binding_type(
         `LoadError`:
             The value has no statically proven type under the inline-body rules.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     value = binding_source(value)
     if isinstance(value, str):
         inferred = _infer_binding_string(
@@ -109,6 +111,7 @@ def infer_inline_binding_type(
             item_type=item_type,
             binding_label=binding_label,
             binding_range=binding_range,
+            diagnostics=diagnostics,
         )
     else:
         inferred = _infer_literal(
@@ -117,11 +120,13 @@ def infer_inline_binding_type(
             binding_range=binding_range,
             path=binding_label,
             active_containers=set(),
+            diagnostics=diagnostics,
         )
     return require_proven_type(
         inferred,
         binding_label=binding_label,
         binding_range=binding_range,
+        diagnostics=diagnostics,
     )
 
 
@@ -130,6 +135,7 @@ def require_proven_type(
     *,
     binding_label: str,
     binding_range: SourceRange | None = None,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> Type:
     """Require every structural refinement in ``typ`` to be statically proven.
 
@@ -154,6 +160,7 @@ def require_proven_type(
         `LoadError`:
             A record or list refinement is incomplete or internally invalid.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     if typ.fields is not None:
         required = typ.required or frozenset()
         missing = required - typ.fields.keys()
@@ -162,6 +169,7 @@ def require_proven_type(
                 binding_label,
                 binding_range,
                 f"record requires unknown fields {sorted(missing)!r}",
+                diagnostics,
             )
         for name, field_type in typ.fields.items():
             if name not in required and not field_type.nullable:
@@ -169,11 +177,13 @@ def require_proven_type(
                     binding_label,
                     binding_range,
                     f"record field {name!r} is neither required nor nullable",
+                    diagnostics,
                 )
             require_proven_type(
                 field_type,
                 binding_label=binding_label,
                 binding_range=binding_range,
+                diagnostics=diagnostics,
             )
 
     if typ.kind.is_list():
@@ -182,11 +192,13 @@ def require_proven_type(
                 binding_label,
                 binding_range,
                 f"list type {typ.kind.value!r} has no proven element type",
+                diagnostics,
             )
         require_proven_type(
             typ.element,
             binding_label=binding_label,
             binding_range=binding_range,
+            diagnostics=diagnostics,
         )
 
     return typ
@@ -219,20 +231,10 @@ def canonicalize_inline_type(typ: Type) -> Type:
             for name in sorted(typ.fields)
         }
         source_required = typ.required or frozenset()
-        required = frozenset(
-            name for name in fields if name in source_required
-        )
+        required = frozenset(name for name in fields if name in source_required)
 
-    tags = (
-        None
-        if typ.tags is None
-        else frozenset(tag for tag in sorted(typ.tags))
-    )
-    element = (
-        None
-        if typ.element is None
-        else canonicalize_inline_type(typ.element)
-    )
+    tags = None if typ.tags is None else frozenset(tag for tag in sorted(typ.tags))
+    element = None if typ.element is None else canonicalize_inline_type(typ.element)
     return Type(
         kind=typ.kind,
         fields=fields,
@@ -251,6 +253,7 @@ def _infer_binding_string(
     item_type: ItemType | None,
     binding_label: str,
     binding_range: SourceRange | None,
+    diagnostics: LoadDiagnostics,
 ) -> Type:
     """Infer a top-level string using binding-template semantics."""
     try:
@@ -260,6 +263,7 @@ def _infer_binding_string(
             binding_label,
             binding_range,
             f"invalid binding template: {exc}",
+            diagnostics,
         ) from exc
 
     if len(segments) != 1 or not isinstance(segments[0], Span):
@@ -275,6 +279,7 @@ def _infer_binding_string(
             item_type=item_type,
             binding_label=binding_label,
             binding_range=binding_range,
+            diagnostics=diagnostics,
         )
 
     if not isinstance(expression, Token):
@@ -282,6 +287,7 @@ def _infer_binding_string(
             binding_label,
             binding_range,
             "a whole-value expression has no supported static scalar type",
+            diagnostics,
         )
 
     token_kind = str(expression.type)
@@ -295,6 +301,7 @@ def _infer_binding_string(
         binding_label,
         binding_range,
         "a whole-value expression has no supported static scalar type",
+        diagnostics,
     )
 
 
@@ -333,6 +340,7 @@ def _infer_direct_reference(
     item_type: ItemType | None,
     binding_label: str,
     binding_range: SourceRange | None,
+    diagnostics: LoadDiagnostics,
 ) -> Type:
     """Resolve one direct reference root, then apply the shared strict field walk."""
     path = ".".join(parts)
@@ -344,6 +352,7 @@ def _infer_direct_reference(
                 binding_label,
                 binding_range,
                 f"reference ${{{path}}} must be input.<name>[.field]",
+                diagnostics,
             )
         input_name = parts[1]
         if input_name not in parent_input_types:
@@ -351,6 +360,7 @@ def _infer_direct_reference(
                 binding_label,
                 binding_range,
                 f"reference ${{{path}}} points to unknown parent input {input_name!r}",
+                diagnostics,
             )
         root = parent_input_types[input_name]
         fields = parts[2:]
@@ -360,6 +370,7 @@ def _infer_direct_reference(
                 binding_label,
                 binding_range,
                 f"reference ${{{path}}} is only typed inside an outer MAP input",
+                diagnostics,
             )
         root = item_type(binding_label, binding_range)
         fields = parts[1:]
@@ -368,12 +379,14 @@ def _infer_direct_reference(
             binding_label,
             binding_range,
             f"reference ${{{path}}} uses retired plural head {head!r}",
+            diagnostics,
         )
     elif head == "system":
         raise _inference_error(
             binding_label,
             binding_range,
             f"reference ${{{path}}} has no statically proven system type",
+            diagnostics,
         )
     else:
         if len(parts) < 2 or parts[1] != "output":
@@ -381,6 +394,7 @@ def _infer_direct_reference(
                 binding_label,
                 binding_range,
                 f"reference ${{{path}}} must select {head}.output[.field]",
+                diagnostics,
             )
         root = producer_type(head, binding_label, binding_range)
         fields = parts[2:]
@@ -389,6 +403,7 @@ def _infer_direct_reference(
         root,
         binding_label=binding_label,
         binding_range=binding_range,
+        diagnostics=diagnostics,
     )
     return _walk_record_type(
         proven_root,
@@ -396,6 +411,7 @@ def _infer_direct_reference(
         path=path,
         binding_label=binding_label,
         binding_range=binding_range,
+        diagnostics=diagnostics,
     )
 
 
@@ -406,6 +422,7 @@ def _walk_record_type(
     path: str,
     binding_label: str,
     binding_range: SourceRange | None,
+    diagnostics: LoadDiagnostics,
 ) -> Type:
     """Walk proven record fields and return a fresh result with path nullability."""
     current = root
@@ -416,12 +433,14 @@ def _walk_record_type(
                 binding_label,
                 binding_range,
                 f"reference ${{{path}}} traverses {field!r} without proven record fields",
+                diagnostics,
             )
         if field not in current.fields:
             raise _inference_error(
                 binding_label,
                 binding_range,
                 f"reference ${{{path}}} reads unknown record field {field!r}",
+                diagnostics,
             )
         current = current.fields[field]
         path_nullable = path_nullable or current.nullable
@@ -436,6 +455,7 @@ def _infer_literal(
     binding_range: SourceRange | None,
     path: str,
     active_containers: set[int],
+    diagnostics: LoadDiagnostics,
 ) -> Type:
     """Infer a recursive literal; nested strings never enter the template parser."""
     if value is None:
@@ -456,6 +476,7 @@ def _infer_literal(
             binding_range=binding_range,
             path=path,
             active_containers=active_containers,
+            diagnostics=diagnostics,
         )
     if isinstance(value, list):
         return _infer_list(
@@ -464,12 +485,14 @@ def _infer_literal(
             binding_range=binding_range,
             path=path,
             active_containers=active_containers,
+            diagnostics=diagnostics,
         )
 
     raise _inference_error(
         binding_label,
         binding_range,
         f"literal at {path} has unsupported type {type(value).__name__!r}",
+        diagnostics,
     )
 
 
@@ -480,6 +503,7 @@ def _infer_mapping(
     binding_range: SourceRange | None,
     path: str,
     active_containers: set[int],
+    diagnostics: LoadDiagnostics,
 ) -> Type:
     """Infer a sorted closed record from one literal mapping."""
     container_id = _enter_container(
@@ -488,6 +512,7 @@ def _infer_mapping(
         binding_range=binding_range,
         path=path,
         active_containers=active_containers,
+        diagnostics=diagnostics,
     )
     try:
         for key in value:
@@ -496,6 +521,7 @@ def _infer_mapping(
                     binding_label,
                     binding_range,
                     f"literal mapping at {path} requires string keys, got {key!r}",
+                    diagnostics,
                 )
 
         fields = {
@@ -505,6 +531,7 @@ def _infer_mapping(
                 binding_range=binding_range,
                 path=f"{path}[{key!r}]",
                 active_containers=active_containers,
+                diagnostics=diagnostics,
             )
             for key in sorted(value)
         }
@@ -524,6 +551,7 @@ def _infer_list(
     binding_range: SourceRange | None,
     path: str,
     active_containers: set[int],
+    diagnostics: LoadDiagnostics,
 ) -> Type:
     """Infer one homogeneous structural list, widening only int/float scalars."""
     container_id = _enter_container(
@@ -532,6 +560,7 @@ def _infer_list(
         binding_range=binding_range,
         path=path,
         active_containers=active_containers,
+        diagnostics=diagnostics,
     )
     try:
         if not value:
@@ -539,6 +568,7 @@ def _infer_list(
                 binding_label,
                 binding_range,
                 f"empty literal list at {path} has no provable element type",
+                diagnostics,
             )
 
         element_types = [
@@ -548,6 +578,7 @@ def _infer_list(
                 binding_range=binding_range,
                 path=f"{path}[{index}]",
                 active_containers=active_containers,
+                diagnostics=diagnostics,
             )
             for index, item in enumerate(value)
         ]
@@ -556,6 +587,7 @@ def _infer_list(
             binding_label=binding_label,
             binding_range=binding_range,
             path=path,
+            diagnostics=diagnostics,
         )
         return Type(
             kind=_LIST_KINDS.get(element.kind, ValueKind.LIST_ANY),
@@ -571,6 +603,7 @@ def _common_element_type(
     binding_label: str,
     binding_range: SourceRange | None,
     path: str,
+    diagnostics: LoadDiagnostics,
 ) -> Type:
     """Return the exact common type, or the scalar numeric widening, for a list."""
     first = element_types[0]
@@ -586,6 +619,7 @@ def _common_element_type(
         binding_label,
         binding_range,
         f"literal list at {path} has heterogeneous element types",
+        diagnostics,
     )
 
 
@@ -596,6 +630,7 @@ def _enter_container(
     binding_range: SourceRange | None,
     path: str,
     active_containers: set[int],
+    diagnostics: LoadDiagnostics,
 ) -> int:
     """Add one container to the active recursion path and reject true cycles."""
     container_id = id(value)
@@ -604,6 +639,7 @@ def _enter_container(
             binding_label,
             binding_range,
             f"cyclic literal container encountered at {path}",
+            diagnostics,
         )
     active_containers.add(container_id)
     return container_id
@@ -613,9 +649,10 @@ def _inference_error(
     binding_label: str,
     binding_range: SourceRange | None,
     reason: str,
+    diagnostics: LoadDiagnostics,
 ) -> LoadError:
     """Create the one located error shape used by strict inline inference."""
-    return LoadError(
+    return diagnostics.error(
         f"cannot infer type for inline binding {binding_label!r}: "
         f"{reason}; {_EXPLICIT_TYPE_HINT}",
         range=binding_range,

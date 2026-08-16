@@ -15,6 +15,7 @@ import pytest
 
 from agent_composer.compose import LoadError, desugar_inline_calls, load_flow
 from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.parse.file import CodeDescriptor
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.contracts import Assertion
@@ -33,7 +34,9 @@ def _code(nid, inputs):
 
 
 def test_whole_value_call_directive_recognized():
-    descriptors = {"use": _code("use", {"topic": "call(summarize, messages=${messages})"})}
+    descriptors = {
+        "use": _code("use", {"topic": "call(summarize, messages=${messages})"})
+    }
     new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
     assert new_descriptors["use"].inputs["topic"] == "${__call_0.output}"
     synth = new_descriptors["__call_0"]
@@ -118,9 +121,8 @@ output: ${{use.output}}
         for number, source_line in enumerate(text.splitlines(), start=1)
         if private_name in source_line
     )
-    assert caught.value.range is not None
-    assert caught.value.range.start_line == expected_line
-    assert caught.value.line == expected_line
+    assert caught.value.diagnostic.frames[0].range.start_line == expected_line
+    assert caught.value.diagnostic.frames[0].text == text
     assert INLINE_FLOW_PREFIX in str(caught.value)
     assert private_name not in str(caught.value)
     assert resolved == []
@@ -155,9 +157,8 @@ output: ${{use.output}}
         for number, source_line in enumerate(text.splitlines(), start=1)
         if private_name in source_line
     )
-    assert caught.value.range is not None
-    assert caught.value.range.start_line == expected_line
-    assert caught.value.line == expected_line
+    assert caught.value.diagnostic.frames[0].range.start_line == expected_line
+    assert caught.value.diagnostic.frames[0].text == text
     assert INLINE_FLOW_PREFIX in str(caught.value)
     assert private_name not in str(caught.value)
     assert resolved == []
@@ -179,11 +180,20 @@ def test_private_callee_in_flow_section_preserves_section_line(section, expected
         }
     )
 
+    diagnostics = LoadDiagnostics(
+        label="flow.yaml",
+        text=(" " * 80 + "\n") * 30,
+    )
     with pytest.raises(LoadError) as caught:
-        desugar_inline_calls({}, next_id=_ids(), **kwargs)
+        desugar_inline_calls(
+            {},
+            next_id=_ids(),
+            diagnostics=diagnostics,
+            **kwargs,
+        )
 
-    assert caught.value.range is None
-    assert caught.value.line == expected_line
+    assert caught.value.diagnostic.frames[0].range.start_line == expected_line
+    assert caught.value.diagnostic.frames[0].label == "flow.yaml"
     assert INLINE_FLOW_PREFIX in str(caught.value)
     assert private_name not in str(caught.value)
 
@@ -192,9 +202,7 @@ def test_private_callee_in_flow_section_preserves_section_line(section, expected
 def test_private_callee_guard_matches_only_the_exact_prefix(callee):
     descriptors = {"use": _code("use", {"topic": f"call({callee})"})}
 
-    new_descriptors, _, _ = desugar_inline_calls(
-        descriptors, None, next_id=_ids()
-    )
+    new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
 
     assert new_descriptors["__call_0"].call == callee
 
@@ -232,7 +240,9 @@ def test_no_arg_directive_recognized():
 
 def test_keyword_literal_values_coerce_like_named_form():
     # a bare literal kwarg binds its typed value (int/bool/null), a quoted scalar unwraps.
-    descriptors = {"use": _code("use", {"topic": 'call(f, n=30, flag=true, z=null, s="hi")'})}
+    descriptors = {
+        "use": _code("use", {"topic": 'call(f, n=30, flag=true, z=null, s="hi")'})
+    }
     new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
     synth = new_descriptors["__call_0"]
     assert synth.inputs == {"n": 30, "flag": True, "z": None, "s": "hi"}

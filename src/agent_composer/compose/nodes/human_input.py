@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.events import SourceRange
 from agent_composer.expr.template import prompt_refs
@@ -71,6 +71,7 @@ class HumanInputDescriptor(NodeDescriptor):
         kwargs: dict[str, Any],
         ranges: dict[str, SourceRange],
         own_range: Optional[SourceRange],
+        diagnostics: LoadDiagnostics,
     ) -> None:
         """Enforce the one-of-three question-surface legality, on top of the default checks.
 
@@ -89,27 +90,27 @@ class HumanInputDescriptor(NodeDescriptor):
         has_q = kwargs.get("questions") is not None
         auto = kwargs.get("adaptive_questions")
         if kwargs.get("prompt") is None and not has_q and auto is None:
-            raise LoadError(
+            raise diagnostics.error(
                 f"node {node_id!r} (kind=human_input): needs `prompt:`, "
                 f"`questions:`, or `adaptive_questions:`",
                 range=own_range,
             )
         if has_q and auto is not None:
-            raise LoadError(
+            raise diagnostics.error(
                 f"node {node_id!r} (kind=human_input): `questions:` and "
                 f"`adaptive_questions:` are mutually exclusive",
                 range=ranges.get(("field", "adaptive_questions")),
             )
         if auto is not None:
             if not isinstance(auto, dict) or not auto.get("prompt"):
-                raise LoadError(
+                raise diagnostics.error(
                     f"node {node_id!r} (kind=human_input): `adaptive_questions:` "
                     f"requires a `prompt:` (the LLM brief)",
                     range=ranges.get(("field", "adaptive_questions")),
                 )
-        super()._validate_fields(node_id, kwargs, ranges, own_range)
+        super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
-    def _build_gate(self) -> HumanInputNode:
+    def _build_gate(self, diagnostics: LoadDiagnostics) -> HumanInputNode:
         """Build a `human_input` gate, carrying its `questions:` config in one of three forms.
 
         - `self.questions` is a **list** (static/literal form): carried verbatim as
@@ -124,19 +125,26 @@ class HumanInputDescriptor(NodeDescriptor):
         questions = self.questions
         if isinstance(questions, list):
             return HumanInputNode(
-                self.id, prompt=self.prompt or "", questions=questions,
-                questions_input=None, title=self.node_name,
+                self.id,
+                prompt=self.prompt or "",
+                questions=questions,
+                questions_input=None,
+                title=self.node_name,
             )
         if isinstance(questions, str):
             refs = prompt_refs(questions)
             if len(refs) != 1 or "." in refs[0]:
-                raise LoadError(
+                raise diagnostics.error(
                     f"node {self.id!r}: questions ref must be a single bare input name "
-                    f"(e.g. ${{qs}}), got {questions!r}"
+                    f"(e.g. ${{qs}}), got {questions!r}",
+                    range=(self.field_ranges.get(("field", "questions")) or self.range),
                 )
             return HumanInputNode(
-                self.id, prompt=self.prompt or "", questions=None,
-                questions_input=refs[0], title=self.node_name,
+                self.id,
+                prompt=self.prompt or "",
+                questions=None,
+                questions_input=refs[0],
+                title=self.node_name,
             )
         return HumanInputNode(self.id, prompt=self.prompt or "", title=self.node_name)
 
@@ -150,8 +158,8 @@ class HumanInputDescriptor(NodeDescriptor):
         `.field_ranges` via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is
         unused (leaf kind) and the inline-CODE anchors on `ctx` are read only by the CODE build.
         """
-        node = self._build_gate()
-        node.output_contract = self.output_contract(ctx.registry)
+        node = self._build_gate(ctx.diagnostics)
+        node.output_contract = self.output_contract(ctx.registry, ctx.diagnostics)
         # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT (the host
         # returns a free-form answer record). Legacy gates derive their schema from the (possibly
         # absent) declared output type.
@@ -159,7 +167,9 @@ class HumanInputDescriptor(NodeDescriptor):
             node.questions is not None or node.questions_input is not None
         ):
             node.output_contract = ValueContract(Type.scalar(ValueKind.OBJECT))
-        output_type = None if node.output_contract is None else node.output_contract.type
+        output_type = (
+            None if node.output_contract is None else node.output_contract.type
+        )
         node.answer_schema = _answer_schema(output_type)
         node.params = self.sink_params()
         wiring = self.sink_wiring()
@@ -170,7 +180,9 @@ def _field_schema(name: str, typ: Type, required: bool) -> dict[str, Any]:
     entry: dict[str, Any] = {"name": name, "type": typ.kind.value, "required": required}
     if typ.tags:  # a Literal[...] enum -> the allowed values
         entry["enum"] = sorted(typ.tags)
-    elif typ.element is not None and typ.element.tags:  # list[Literal[...]] -> element enum
+    elif (
+        typ.element is not None and typ.element.tags
+    ):  # list[Literal[...]] -> element enum
         entry["enum"] = sorted(typ.element.tags)
     if typ.kind == ValueKind.OBJECT and typ.fields:  # nested record -> sub-fields
         req = typ.required or frozenset()

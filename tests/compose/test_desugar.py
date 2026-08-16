@@ -17,8 +17,12 @@ from agent_composer.compose.desugar.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
 )
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parse.file import CaseDescriptor, CodeDescriptor, MapDescriptor
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
+from agent_composer.compose.parse.file import (
+    CaseDescriptor,
+    CodeDescriptor,
+    MapDescriptor,
+)
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceDocument
 from agent_composer.events import SourceRange
@@ -28,6 +32,17 @@ def _nodes_reader(text):
     """Return the physical cursor over a flow document's ``nodes:`` mapping."""
 
     return SourceDocument.parse(text).root.child("nodes")
+
+
+def _diagnostics() -> LoadDiagnostics:
+    """Return source ownership for direct range-only desugar tests."""
+
+    return LoadDiagnostics(label="flow.yaml", text=(" " * 100 + "\n") * 200)
+
+
+def _only_frame(error: LoadError):
+    assert len(error.diagnostic.frames) == 1
+    return error.diagnostic.frames[0]
 
 
 def test_desugar_inline_calls_locate_at_their_binding_site():
@@ -41,7 +56,8 @@ def test_desugar_inline_calls_locate_at_their_binding_site():
         "    input:\n      x: call(helper, n=3)\n    output: str\n"
         "output: ${writer.output}\n"
     )
-    descriptors = parse_nodes(_nodes_reader(text))
+    nodes_cursor = _nodes_reader(text)
+    descriptors = parse_nodes(nodes_cursor)
     host = descriptors["writer"]
     new_descriptors, _outputs, _asserts = desugar_inline_calls(
         descriptors, None, next_id=_synth_id_gen()
@@ -50,9 +66,11 @@ def test_desugar_inline_calls_locate_at_their_binding_site():
     assert len(synth) == 1
     call_desc = synth[0]
     assert call_desc.call == "helper"
-    assert call_desc.range == host.field_ranges[("input", "x")]  # the `x:` binding, not the header
-    assert call_desc.range != host.range                         # ... which is strictly the header
-    assert call_desc.field_ranges == {}                          # owns no authored fields
+    assert (
+        call_desc.range == host.field_ranges[("input", "x")]
+    )  # the `x:` binding, not the header
+    assert call_desc.range != host.range  # ... which is strictly the header
+    assert call_desc.field_ranges == {}  # owns no authored fields
 
 
 def test_inline_call_error_uses_binding_range_and_retains_legacy_line():
@@ -61,7 +79,8 @@ def test_inline_call_error_uses_binding_range_and_retains_legacy_line():
         "  writer:\n    kind: code\n    code: m:f\n"
         "    input:\n      x: ${helper(topic=${input.topic})}\n    output: str\n"
     )
-    descriptors = parse_nodes(_nodes_reader(text))
+    nodes_cursor = _nodes_reader(text)
+    descriptors = parse_nodes(nodes_cursor)
     binding_range = descriptors["writer"].field_ranges[("input", "x")]
 
     with pytest.raises(LoadError) as caught:
@@ -69,10 +88,12 @@ def test_inline_call_error_uses_binding_range_and_retains_legacy_line():
             descriptors,
             None,
             next_id=_synth_id_gen(),
+            diagnostics=LoadDiagnostics.from_cursor(nodes_cursor),
         )
 
-    assert caught.value.range == binding_range
-    assert caught.value.line == binding_range.start_line
+    frame = _only_frame(caught.value)
+    assert frame.range == binding_range
+    assert frame.text == text
 
 
 def test_inline_output_error_prefers_range_over_legacy_line():
@@ -85,10 +106,10 @@ def test_inline_output_error_prefers_range_over_legacy_line():
             outputs_range=output_range,
             outputs_line=117,
             next_id=_synth_id_gen(),
+            diagnostics=_diagnostics(),
         )
 
-    assert caught.value.range == output_range
-    assert caught.value.line == output_range.start_line
+    assert _only_frame(caught.value).range == output_range
 
 
 def test_inline_assert_error_prefers_positional_range_over_legacy_line():
@@ -105,10 +126,10 @@ def test_inline_assert_error_prefers_positional_range_over_legacy_line():
             asserts_line=119,
             assertion_range_at=assertion_ranges.__getitem__,
             next_id=_synth_id_gen(),
+            diagnostics=_diagnostics(),
         )
 
-    assert caught.value.range == assertion_ranges[1]
-    assert caught.value.line == assertion_ranges[1].start_line
+    assert _only_frame(caught.value).range == assertion_ranges[1]
 
 
 def test_duplicate_inline_assertions_keep_positional_ranges():
@@ -144,10 +165,13 @@ def test_inline_map_scalar_over_does_not_use_input_named_over_range():
     )
 
     with pytest.raises(LoadError) as caught:
-        desugar_inline_calls({"mapped": descriptor}, None)
+        desugar_inline_calls(
+            {"mapped": descriptor},
+            None,
+            diagnostics=_diagnostics(),
+        )
 
-    assert caught.value.range == scalar_range
-    assert caught.value.line == scalar_range.start_line
+    assert _only_frame(caught.value).range == scalar_range
 
 
 def test_desugar_adaptive_questions_preserves_ranges():
@@ -186,9 +210,11 @@ def test_desugar_case_call_targets_locate_at_their_target_line():
     assert len(synth) == 1
     call_desc = synth[0]
     assert call_desc.call == "helper"
-    assert call_desc.range == host.then_ranges[0]  # the `then:` line, not the case header
+    assert (
+        call_desc.range == host.then_ranges[0]
+    )  # the `then:` line, not the case header
     assert call_desc.range != host.range
-    assert call_desc.field_ranges == {}            # owns no authored fields
+    assert call_desc.field_ranges == {}  # owns no authored fields
 
 
 def _case_gate() -> CaseDescriptor:
@@ -216,10 +242,10 @@ def test_case_binding_error_prefers_binding_range_over_legacy_line():
             None,
             [],
             node_lines={"consumer": 133},
+            diagnostics=_diagnostics(),
         )
 
-    assert caught.value.range == binding_range
-    assert caught.value.line == binding_range.start_line
+    assert _only_frame(caught.value).range == binding_range
 
 
 def test_case_output_error_prefers_section_range_over_legacy_line():
@@ -233,10 +259,10 @@ def test_case_output_error_prefers_section_range_over_legacy_line():
             [],
             outputs_range=output_range,
             outputs_line=140,
+            diagnostics=_diagnostics(),
         )
 
-    assert caught.value.range == output_range
-    assert caught.value.line == output_range.start_line
+    assert _only_frame(caught.value).range == output_range
 
 
 @pytest.mark.parametrize("condition_kind", ["on", "when"])
@@ -260,10 +286,14 @@ def test_case_condition_error_uses_exact_condition_range(condition_kind):
         )
 
     with pytest.raises(LoadError) as caught:
-        expand_case_outputs({"gate": _case_gate(), "other": other}, None, [])
+        expand_case_outputs(
+            {"gate": _case_gate(), "other": other},
+            None,
+            [],
+            diagnostics=_diagnostics(),
+        )
 
-    assert caught.value.range == condition_range
-    assert caught.value.line == condition_range.start_line
+    assert _only_frame(caught.value).range == condition_range
 
 
 def test_case_assert_error_prefers_positional_range_over_legacy_line():
@@ -279,10 +309,10 @@ def test_case_assert_error_prefers_positional_range_over_legacy_line():
             ["true", "${gate.output} == 1"],
             asserts_line=160,
             assertion_range_at=assertion_ranges.__getitem__,
+            diagnostics=_diagnostics(),
         )
 
-    assert caught.value.range == assertion_ranges[1]
-    assert caught.value.line == assertion_ranges[1].start_line
+    assert _only_frame(caught.value).range == assertion_ranges[1]
 
 
 def test_case_map_scalar_over_does_not_use_input_named_over_range():
@@ -304,7 +334,7 @@ def test_case_map_scalar_over_does_not_use_input_named_over_range():
             {"gate": _case_gate(), "mapped": descriptor},
             None,
             [],
+            diagnostics=_diagnostics(),
         )
 
-    assert caught.value.range == scalar_range
-    assert caught.value.line == scalar_range.start_line
+    assert _only_frame(caught.value).range == scalar_range

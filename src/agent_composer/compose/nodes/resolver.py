@@ -30,7 +30,8 @@ from agent_composer.nodes.contracts import (
     binding_source,
 )
 from agent_composer.typesys.values import Type, ValueKind
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
+from agent_composer.diagnostics import SourceRange
 
 
 @dataclass(frozen=True)
@@ -70,9 +71,9 @@ def _project_output_contract(
             return None
     prefix = tuple(fields)
     entries = tuple(
-        (path[len(prefix):], origin)
+        (path[len(prefix) :], origin)
         for path, origin in contract.origins.entries
-        if len(path) > len(prefix) and path[:len(prefix)] == prefix
+        if len(path) > len(prefix) and path[: len(prefix)] == prefix
     )
     return ValueContract(
         type=typ,
@@ -105,12 +106,9 @@ def _output_value_contract(
     if len(refs) != 1:
         return None
     tree = segments[0].tree
-    is_direct_reference = (
-        getattr(tree, "data", None) == "refcall"
-        and not any(
-            getattr(child, "data", None) == "call_suffix"
-            for child in getattr(tree, "children", ())
-        )
+    is_direct_reference = getattr(tree, "data", None) == "refcall" and not any(
+        getattr(child, "data", None) == "call_suffix"
+        for child in getattr(tree, "children", ())
     )
     parts = refs[0].split(".")
     head = parts[0]
@@ -144,8 +142,7 @@ def _origin_path_sort_key(
 ) -> tuple[tuple[int, str | int], ...]:
     """Return the same total path ordering required by `ContractOrigins`."""
     return tuple(
-        (0, segment) if type(segment) is str else (1, segment)
-        for segment in entry[0]
+        (0, segment) if type(segment) is str else (1, segment) for segment in entry[0]
     )
 
 
@@ -160,8 +157,7 @@ def _record_output_contract(
         if contract.origins.default is not None:
             origins.append(((name,), contract.origins.default))
         origins.extend(
-            ((name, *path), origin)
-            for path, origin in contract.origins.entries
+            ((name, *path), origin) for path, origin in contract.origins.entries
         )
     origins.sort(key=_origin_path_sort_key)
     return ValueContract(
@@ -225,14 +221,19 @@ def _resolve_child(
     flow_id: str,
     resolver: ChildResolver,
     child_label: str | None = None,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
+    range: SourceRange | None = None,
 ) -> Any:
     """Resolve a callable to its `ComposedFlow` via the resolver, loud on failure."""
+    diagnostics = diagnostics or LoadDiagnostics()
     try:
         return resolver(flow_id, None)
     except LoadError:
         raise
     except Exception as exc:  # any resolver failure -> the callable is unknown
-        raise LoadError(
+        raise diagnostics.error(
             f"call node {node_id!r}: could not resolve "
-            f"{_callable_display(flow_id, child_label)}: {exc}"
+            f"{_callable_display(flow_id, child_label)}: {exc}",
+            range=range,
         ) from exc

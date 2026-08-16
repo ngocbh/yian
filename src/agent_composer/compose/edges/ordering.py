@@ -18,13 +18,15 @@ Imports flow down/peer only: `compile.model` (Edge), `compose.parse.file` (NodeD
 from __future__ import annotations
 
 from agent_composer.compile.model import Edge
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.parse.file import NodeDescriptor
 
 
 def infer_ordering_edges(
     descriptors: dict[str, NodeDescriptor],
     node_ids: "set[str]",
+    *,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> list[Edge]:
     """Run-ordering edges from `depends_on:` (co-skip) and `runs_after:` (pure order).
 
@@ -35,6 +37,7 @@ def infer_ordering_edges(
     edges join the `reject_cycles` set). Distinct `~>` ids keep an ordering edge from
     colliding with a data edge on the same pair.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     edges: list[Edge] = []
     counts: dict[tuple[str, str], int] = {}
     for node_id, desc in descriptors.items():
@@ -44,7 +47,7 @@ def infer_ordering_edges(
         ):
             for src in sources:
                 if src not in node_ids:
-                    raise LoadError(
+                    raise diagnostics.error(
                         f"node {node_id!r}: `{key}` references unknown node {src!r}",
                         range=getattr(desc, "range", None),
                     )

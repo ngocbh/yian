@@ -53,7 +53,7 @@ from agent_composer.expr import (
 from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.case import DEFAULT_HANDLE, Case, CaseNode
 from agent_composer.nodes.contracts import binding_source
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.source import SourceCursor
 
@@ -134,8 +134,12 @@ class CaseDescriptor(NodeDescriptor):
     # ref) or a `then:/else: call(...)` target can locate at its own line, not the node header.
     # Render-only, out of equality (like `field_ranges`); `cases[N].when/then` has no unique text
     # key, so position — not text — is the identity.
-    when_ranges: list[Optional[SourceRange]] = field(default_factory=list, compare=False)
-    then_ranges: list[Optional[SourceRange]] = field(default_factory=list, compare=False)
+    when_ranges: list[Optional[SourceRange]] = field(
+        default_factory=list, compare=False
+    )
+    then_ranges: list[Optional[SourceRange]] = field(
+        default_factory=list, compare=False
+    )
 
     @classmethod
     def parse(
@@ -185,9 +189,19 @@ class CaseDescriptor(NodeDescriptor):
         unused (a case resolves nothing and reads no typedefs); it rides the shared contract.
         """
         if self.on is not None:
-            case_node, wiring, data_edges, control_edges, param_ranges, param_labels = _desugar_on(self)
+            case_node, wiring, data_edges, control_edges, param_ranges, param_labels = (
+                _desugar_on(
+                    self,
+                    ctx.diagnostics,
+                )
+            )
         else:
-            case_node, wiring, data_edges, control_edges, param_ranges, param_labels = _desugar_searched(self)
+            case_node, wiring, data_edges, control_edges, param_ranges, param_labels = (
+                _desugar_searched(
+                    self,
+                    ctx.diagnostics,
+                )
+            )
         result = self._finish(
             case_node, wiring, edges=tuple(data_edges) + tuple(control_edges)
         )
@@ -223,7 +237,12 @@ def _refs_in(expr: str) -> list[str]:
     return out
 
 
-def _quote(value: str) -> str:
+def _quote(
+    value: str,
+    diagnostics: LoadDiagnostics | None = None,
+    *,
+    range: SourceRange | None = None,
+) -> str:
     """A `when:` match value quoted as a string literal for `${__on} == "<v>"`.
 
     The `when:`/`asserts:` grammar's STRING terminal is `/"[^"]*"/ | /'[^']*'/` with
@@ -233,14 +252,16 @@ def _quote(value: str) -> str:
     unrepresentable in this grammar → a loud, located load error rather than a
     route-time crash. (Backslashes pass through `[^"]*` fine — no escaping needed.)
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     s = str(value)
     if '"' not in s:
         return f'"{s}"'
     if "'" not in s:
         return f"'{s}'"
-    raise LoadError(
+    raise diagnostics.error(
         f"case `on:` match value {s!r} contains both ' and \" — unrepresentable in a "
-        f"`when:` string literal (no escape support); rename the matched value"
+        f"`when:` string literal (no escape support); rename the matched value",
+        range=range,
     )
 
 
@@ -308,21 +329,39 @@ def _control_edges(node_id: str, handle_targets: list[tuple[str, str]]) -> list[
 
 def _desugar_on(
     desc: CaseDescriptor,
+    diagnostics: LoadDiagnostics,
 ) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
     """`on: ${ref}` form -> one `__on` param + a `${__on} == "<value>"` per case.
 
     Returns `(node, wiring, data_edges, control_edges, param_ranges, param_labels)` — the last
-    two locate the synth `__on` param at the `on:` line and label it `on:` (not `__on`)."""
+    two locate the synth `__on` param at the `on:` line and label it `on:` (not `__on`).
+    """
     cases: list[Case] = []
     handle_targets: list[tuple[str, str]] = []
-    for c in desc.cases:
+    for index, c in enumerate(desc.cases):
         value = c.get("when")
         then = c.get("then")
         if value is None or then is None:
-            raise LoadError(
-                f"case node {desc.id!r}: each on:-form case needs a `when:` value and a `then:`"
+            missing_range = (
+                desc.when_ranges[index]
+                if value is None and index < len(desc.when_ranges)
+                else (
+                    desc.then_ranges[index] if index < len(desc.then_ranges) else None
+                )
             )
-        cases.append(Case(handle=then, when=f'${{__on}} == {_quote(value)}'))
+            raise diagnostics.error(
+                f"case node {desc.id!r}: each on:-form case needs a `when:` value and a `then:`",
+                range=missing_range
+                or desc.field_ranges.get(("field", "cases"))
+                or desc.range,
+            )
+        when_range = desc.when_ranges[index] if index < len(desc.when_ranges) else None
+        cases.append(
+            Case(
+                handle=then,
+                when=f"${{__on}} == {_quote(value, diagnostics, range=when_range or desc.range)}",
+            )
+        )
         handle_targets.append((then, then))
     if desc.else_ is not None:
         handle_targets.append((DEFAULT_HANDLE, desc.else_))
@@ -343,6 +382,7 @@ def _desugar_on(
 
 def _desugar_searched(
     desc: CaseDescriptor,
+    diagnostics: LoadDiagnostics,
 ) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
     """Searched form -> one `__rN` input per distinct `${...}` ref; `when:` rewritten.
 
@@ -356,14 +396,24 @@ def _desugar_searched(
     for ci, c in enumerate(desc.cases):
         when = c.get("when")
         if not isinstance(when, str):
-            raise LoadError(
-                f"case node {desc.id!r}: each searched case needs a string `when:` expression"
+            raise diagnostics.error(
+                f"case node {desc.id!r}: each searched case needs a string `when:` expression",
+                range=(
+                    desc.when_ranges[ci]
+                    if ci < len(desc.when_ranges)
+                    else desc.field_ranges.get(("field", "cases")) or desc.range
+                ),
             )
         try:
             refs = _refs_in(when)
         except ExpressionError as exc:
-            raise LoadError(
-                f"case node {desc.id!r}: `when:` {when!r} is not a valid boolean expression: {exc}"
+            raise diagnostics.error(
+                f"case node {desc.id!r}: `when:` {when!r} is not a valid boolean expression: {exc}",
+                range=(
+                    desc.when_ranges[ci]
+                    if ci < len(desc.when_ranges)
+                    else desc.field_ranges.get(("field", "cases")) or desc.range
+                ),
             ) from exc
         for ref in refs:
             if ref not in ref_to_local:
@@ -375,11 +425,18 @@ def _desugar_searched(
 
     cases: list[Case] = []
     handle_targets: list[tuple[str, str]] = []
-    for c in desc.cases:
+    for index, c in enumerate(desc.cases):
         when = c["when"]
         then = c.get("then")
         if then is None:
-            raise LoadError(f"case node {desc.id!r}: each searched case needs a `then:`")
+            raise diagnostics.error(
+                f"case node {desc.id!r}: each searched case needs a `then:`",
+                range=(
+                    desc.then_ranges[index]
+                    if index < len(desc.then_ranges)
+                    else desc.field_ranges.get(("field", "cases")) or desc.range
+                ),
+            )
         rewritten = _rewrite_when(when, ref_to_local)
         cases.append(Case(handle=then, when=rewritten))
         handle_targets.append((then, then))

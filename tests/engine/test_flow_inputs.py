@@ -7,6 +7,7 @@ from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.typesys.values import ValueKind
 from agent_composer.nodes.binding import apply_defaults, coerce_inputs
 from agent_composer.compose import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.helpers.types import read_flow_inputs
 
 
@@ -54,9 +55,9 @@ def test_optional_nullable():
 
 def test_nullable_null_default_is_distinct_from_no_default():
     absent = _by_name(read_flow_inputs({"value": "Optional[int]"}, {}))["value"]
-    explicit_null = _by_name(
-        read_flow_inputs({"value": "Optional[int] = null"}, {})
-    )["value"]
+    explicit_null = _by_name(read_flow_inputs({"value": "Optional[int] = null"}, {}))[
+        "value"
+    ]
 
     assert absent.has_default is False
     assert explicit_null.has_default is True
@@ -99,15 +100,19 @@ def test_number_default_retains_compatible_integer_payload():
 )
 def test_input_declaration_errors_retain_their_source_range(declaration, message):
     source_range = SourceRange(4, 10, 4, 18)
+    diagnostics = LoadDiagnostics(label="flow.yaml", text=(" " * 40 + "\n") * 5)
 
     with pytest.raises(LoadError, match=message) as caught:
         read_flow_inputs(
             {"value": declaration},
             {},
             {"value": source_range},
+            diagnostics=diagnostics,
         )
 
-    assert caught.value.range is source_range
+    assert len(caught.value.diagnostic.frames) == 1
+    assert caught.value.diagnostic.frames[0].range is source_range
+    assert caught.value.diagnostic.frames[0].label == "flow.yaml"
 
 
 def test_float_default():
@@ -135,7 +140,12 @@ def test_bare_word_string_default():
 def test_record_typed_dict_value():
     d = _by_name(
         read_flow_inputs(
-            {"config": {"regroup": "bool", "bands": {"lower": "float", "upper": "float"}}},
+            {
+                "config": {
+                    "regroup": "bool",
+                    "bands": {"lower": "float", "upper": "float"},
+                }
+            },
             {},
         )
     )["config"]
@@ -164,7 +174,7 @@ def test_reader_returns_only_exact_parameter_carriers():
 
 def test_bool_coercion_truthy_and_falsy():
     decls = read_flow_inputs({"flag": "bool"}, {})
-    assert coerce_inputs(decls, {"flag": "yes"})["flag"] is True   # truthy set
+    assert coerce_inputs(decls, {"flag": "yes"})["flag"] is True  # truthy set
     assert coerce_inputs(decls, {"flag": "off"})["flag"] is False  # outside the set
 
 

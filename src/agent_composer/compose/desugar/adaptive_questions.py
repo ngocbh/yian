@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.parse.file import (
     AgentDescriptor,
     HumanInputDescriptor,
@@ -47,6 +47,8 @@ QPARAM = "__questions"
 
 def desugar_adaptive_questions(
     descriptors: dict[str, NodeDescriptor],
+    *,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> dict[str, NodeDescriptor]:
     """Lower each `adaptive_questions:` human_input into a synth agent + rewritten gate.
 
@@ -68,22 +70,26 @@ def desugar_adaptive_questions(
             Raised for a synthesized node-id collision or an authored reserved
             `__questions` input on an adaptive gate.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     new_descriptors: dict[str, NodeDescriptor] = {}
     for gid, desc in descriptors.items():
-        if not (isinstance(desc, HumanInputDescriptor) and desc.adaptive_questions is not None):
+        if not (
+            isinstance(desc, HumanInputDescriptor)
+            and desc.adaptive_questions is not None
+        ):
             new_descriptors[gid] = desc
             continue
 
         auto = desc.adaptive_questions
         synth_id = f"{gid}__compose"
         if synth_id in descriptors:
-            raise LoadError(
+            raise diagnostics.error(
                 f"node {gid!r} (kind=human_input): synthesized composer id "
                 f"{synth_id!r} collides with an existing node id",
                 range=desc.range,
             )
         if QPARAM in desc.inputs:
-            raise LoadError(
+            raise diagnostics.error(
                 f"node {gid!r} (kind=human_input): input {QPARAM!r} is reserved "
                 "for adaptive_questions",
                 range=desc.field_ranges.get(("input", QPARAM), desc.range),
@@ -96,7 +102,9 @@ def desugar_adaptive_questions(
         agent_kwargs = {
             "id": synth_id,
             "prompt": auto["prompt"],
-            "inputs": dict(desc.inputs),  # carry the gate's context inputs to the composer
+            "inputs": dict(
+                desc.inputs
+            ),  # carry the gate's context inputs to the composer
             "output_contract_override": ValueContract(question_list_type()),
             "outputs": None,
             "mode": auto.get("mode", "plain"),

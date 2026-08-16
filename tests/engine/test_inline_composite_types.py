@@ -12,10 +12,19 @@ from agent_composer.compose.build.inline_inputs import (
     infer_inline_binding_type,
     require_proven_type,
 )
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.events import SourceRange
 from agent_composer.typesys import canonical_type_label
 from agent_composer.typesys.values import Type, ValueKind
+
+
+def _diagnostics() -> LoadDiagnostics:
+    return LoadDiagnostics(label="flow.yaml", text=(" " * 100 + "\n") * 100)
+
+
+def _only_frame(error: LoadError):
+    assert len(error.diagnostic.frames) == 1
+    return error.diagnostic.frames[0]
 
 
 def _unused_producer_type(
@@ -584,6 +593,7 @@ def test_zero_step_direct_walk_always_returns_a_fresh_type():
 )
 def test_unproven_direct_reference_is_a_located_named_def_error(source):
     source_range = SourceRange(51, 4, 51, 28)
+    diagnostics = _diagnostics()
     inputs = {
         "opaque": Type.scalar(ValueKind.OBJECT),
         "record": Type(
@@ -600,11 +610,11 @@ def test_unproven_direct_reference_is_a_located_named_def_error(source):
             producer_type=_unused_producer_type,
             binding_label="call.input.payload",
             binding_range=source_range,
+            diagnostics=diagnostics,
         )
 
     error = caught.value
-    assert error.range == source_range
-    assert error.line == 51
+    assert _only_frame(error).range == source_range
     assert "call.input.payload" in str(error)
     assert "explicitly typed named `defs:` body" in str(error)
 
@@ -612,7 +622,8 @@ def test_unproven_direct_reference_is_a_located_named_def_error(source):
 @pytest.mark.parametrize("provider", ["producer", "item"])
 def test_provider_load_error_propagates_unchanged(provider):
     source_range = SourceRange(64, 3, 64, 22)
-    expected = LoadError("provider could not prove a type", range=source_range)
+    diagnostics = _diagnostics()
+    expected = diagnostics.error("provider could not prove a type", range=source_range)
     calls = []
 
     def producer_type(node_id, binding_label, binding_range):
@@ -632,6 +643,7 @@ def test_provider_load_error_propagates_unchanged(provider):
             item_type=item_type,
             binding_label="each.input.payload",
             binding_range=source_range,
+            diagnostics=diagnostics,
         )
 
     assert caught.value is expected
@@ -651,11 +663,11 @@ def test_inference_error_preserves_binding_range_line_and_hint():
             producer_type=_unused_producer_type,
             binding_label="each.input.items",
             binding_range=source_range,
+            diagnostics=_diagnostics(),
         )
 
     error = caught.value
-    assert error.range == source_range
-    assert error.line == 17
+    assert _only_frame(error).range == source_range
     assert "each.input.items" in str(error)
     assert "explicitly typed named `defs:` body" in str(error)
 
@@ -670,11 +682,11 @@ def test_template_scan_error_preserves_binding_range_and_line():
             producer_type=_unused_producer_type,
             binding_label="call.input.query",
             binding_range=source_range,
+            diagnostics=_diagnostics(),
         )
 
     error = caught.value
-    assert error.range == source_range
-    assert error.line == 23
+    assert _only_frame(error).range == source_range
     assert "call.input.query" in str(error)
     assert "unbalanced" in str(error)
     assert "explicitly typed named `defs:` body" in str(error)
@@ -745,10 +757,13 @@ def test_unrefined_object_is_proven_whole_but_not_dottable():
     opaque = Type.scalar(ValueKind.OBJECT)
 
     assert require_proven_type(opaque, binding_label="call.input.payload") is opaque
-    assert _infer(
-        "${input.payload}",
-        parent_input_types={"payload": opaque},
-    ) == opaque
+    assert (
+        _infer(
+            "${input.payload}",
+            parent_input_types={"payload": opaque},
+        )
+        == opaque
+    )
 
     with pytest.raises(LoadError, match="without proven record fields"):
         _infer(
@@ -846,11 +861,11 @@ def test_structural_proof_error_preserves_source_range_line_and_hint():
             Type(kind=ValueKind.LIST_OBJECT),
             binding_label="each.input.rows",
             binding_range=source_range,
+            diagnostics=_diagnostics(),
         )
 
     error = caught.value
-    assert error.range == source_range
-    assert error.line == 73
+    assert _only_frame(error).range == source_range
     assert "each.input.rows" in str(error)
     assert "explicitly typed named `defs:` body" in str(error)
 
@@ -951,9 +966,7 @@ def test_canonical_record_label_sorts_and_json_quotes_adversarial_keys():
         required=frozenset({"é", 'quote"key', "a: int, b"}),
     )
 
-    assert canonical_type_label(typ) == (
-        '{"a: int, b":int,"quote\\"key":str,"é":bool}'
-    )
+    assert canonical_type_label(typ) == ('{"a: int, b":int,"quote\\"key":str,"é":bool}')
 
 
 def test_nullable_wrapper_is_outermost_for_a_structural_record_label():

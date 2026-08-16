@@ -24,6 +24,7 @@ from agent_composer.llm_clients import LLMConfig
 from agent_composer.typesys.values import ValueKind
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.parse.file import parse_file
 from agent_composer.compose.parse.nodes import parse_nodes
@@ -32,12 +33,18 @@ from agent_composer.compose.source import SourceCursor, SourceDocument
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
 
-def _build(desc, registry=None):
+def _build(desc, registry=None, diagnostics=None):
     """Build a leaf descriptor and return the legacy `(node, wiring)` pair.
 
     Wraps `desc.build(BuildContext(registry))` (which returns a `BuildResult`) so these unit
-    tests read the node/wiring the way they did against the old `build_leaf_node` tuple."""
-    result = desc.build(BuildContext(registry if registry is not None else {}))
+    tests read the node/wiring the way they did against the old `build_leaf_node` tuple.
+    """
+    result = desc.build(
+        BuildContext(
+            registry if registry is not None else {},
+            diagnostics=diagnostics or LoadDiagnostics(),
+        )
+    )
     return result.node, result.wiring
 
 
@@ -84,17 +91,17 @@ def test_agent_unknown_mode_is_loud_loaderror():
     text = (
         "id: bad-mode\nname: bad\ninput:\n  topic: str\n"
         "nodes:\n  note:\n    kind: agent\n    inputs:\n      topic: ${input.topic}\n"
-        "    output: str\n    prompt: \"hi ${topic}\"\n    mode: react\n"
+        '    output: str\n    prompt: "hi ${topic}"\n    mode: react\n'
         "output: ${note.output}\n"
     )
     document = SourceDocument.parse(text)
     parse_file(document)
     desc = parse_nodes(document.root.child("nodes"))["note"]
     with pytest.raises(LoadError, match="unknown mode") as caught:
-        _build(desc)
+        _build(desc, diagnostics=LoadDiagnostics.from_document(document))
     expected = desc.field_ranges[("field", "mode")]
-    assert caught.value.range == expected
-    assert caught.value.line == expected.start_line
+    assert caught.value.diagnostic.frames[0].range == expected
+    assert caught.value.diagnostic.frames[0].text == text
 
 
 def test_agent_invalid_llm_config_uses_the_config_field_range():
@@ -110,11 +117,11 @@ def test_agent_invalid_llm_config_uses_the_config_field_range():
     desc = parse_nodes(document.root.child("nodes"))["note"]
 
     with pytest.raises(LoadError, match="llm_config") as caught:
-        _build(desc)
+        _build(desc, diagnostics=LoadDiagnostics.from_document(document))
 
     expected = desc.field_ranges[("field", "llm_config")]
-    assert caught.value.range == expected
-    assert caught.value.line == expected.start_line
+    assert caught.value.diagnostic.frames[0].range == expected
+    assert caught.value.diagnostic.frames[0].text == text
 
 
 @pytest.mark.parametrize("value", ["bogus", "1", "false", "[bogus]"])
@@ -131,11 +138,11 @@ def test_agent_non_mapping_llm_config_is_a_ranged_load_error(value):
     desc = parse_nodes(document.root.child("nodes"))["note"]
 
     with pytest.raises(LoadError, match="must be a mapping") as caught:
-        _build(desc)
+        _build(desc, diagnostics=LoadDiagnostics.from_document(document))
 
     expected = desc.field_ranges[("field", "llm_config")]
-    assert caught.value.range == expected
-    assert caught.value.line == expected.start_line
+    assert caught.value.diagnostic.frames[0].range == expected
+    assert caught.value.diagnostic.frames[0].text == text
 
 
 def test_agent_non_string_mode_is_a_ranged_load_error():
@@ -151,11 +158,11 @@ def test_agent_non_string_mode_is_a_ranged_load_error():
     desc = parse_nodes(document.root.child("nodes"))["note"]
 
     with pytest.raises(LoadError, match="must be a string") as caught:
-        _build(desc)
+        _build(desc, diagnostics=LoadDiagnostics.from_document(document))
 
     expected = desc.field_ranges[("field", "mode")]
-    assert caught.value.range == expected
-    assert caught.value.line == expected.start_line
+    assert caught.value.diagnostic.frames[0].range == expected
+    assert caught.value.diagnostic.frames[0].text == text
 
 
 def test_agent_bad_mode_loaderror_is_located_via_load_flow():
@@ -165,8 +172,8 @@ def test_agent_bad_mode_loaderror_is_located_via_load_flow():
 
     bad_mode = (
         "id: f\nname: f\n"
-        "nodes:\n"          # line 3
-        "  a:\n"            # line 4 — the node
+        "nodes:\n"  # line 3
+        "  a:\n"  # line 4 — the node
         "    kind: agent\n"
         "    prompt: hi\n"
         "    mode: not_a_real_mode\n"
@@ -174,9 +181,8 @@ def test_agent_bad_mode_loaderror_is_located_via_load_flow():
     )
     with pytest.raises(LoadError, match="unknown mode") as ei:
         load_flow(bad_mode, search_paths=["."])
-    assert ei.value.range is not None
-    assert ei.value.range.start_line == 7
-    assert ei.value.line == 7
+    assert ei.value.diagnostic.frames[0].range.start_line == 7
+    assert ei.value.diagnostic.frames[0].text == bad_mode
 
 
 def test_agent_node_knobs():
@@ -285,7 +291,11 @@ def test_call_loop_descriptors_need_a_resolver():
     # `ctx.resolver`. A leaf-only `BuildContext` (resolver=None, the default) can't resolve
     # the callable, so building one is loud — a `LoadError` naming the unresolvable callable,
     # not a bare `TypeError` leaking from the `None(...)` resolver call.
-    from agent_composer.compose.parse.file import CallDescriptor, MapDescriptor, LoopDescriptor
+    from agent_composer.compose.parse.file import (
+        CallDescriptor,
+        MapDescriptor,
+        LoopDescriptor,
+    )
 
     for desc in (
         CallDescriptor(id="c", call="child"),

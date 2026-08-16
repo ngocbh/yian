@@ -20,11 +20,11 @@ cursor, copy its semantic value into a strict Pydantic model, and raise
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.source import (
     SourceAccessError,
     SourceCursor,
@@ -54,7 +54,12 @@ from agent_composer.compose.nodes.loop import LoopDescriptor  # noqa: F401
 _STRICT = ConfigDict(extra="forbid")
 
 
-def _normalize_section_keys(body: Any) -> Any:
+def _normalize_section_keys(
+    body: Any,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
+    range_for_key: Callable[[str], SourceRange | None] | None = None,
+) -> Any:
     """Reject legacy `inputs:`/`outputs:` section keywords AT THE TOP LEVEL.
 
     Post-alias-delete: the dual-arm normalizer is a REJECTOR. A top-level flow with a
@@ -69,13 +74,15 @@ def _normalize_section_keys(body: Any) -> Any:
     flow author writes `inputs:` at any depth, the top-level rejector catches it via
     parse_file before _parse_node sees it.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     if not isinstance(body, dict):
         return body
     for legacy, new in (("inputs", "input"), ("outputs", "output")):
         if legacy in body:
-            raise LoadError(
+            raise diagnostics.error(
                 f"unknown top-level key {legacy!r} — flows use `{new}:` "
-                f"(rename the section)"
+                f"(rename the section)",
+                range=(range_for_key(legacy) if range_for_key is not None else None),
             )
     return body
 
@@ -92,9 +99,13 @@ def _back_map_to_plural(body: Any) -> Any:
     if "output" in out:
         out["outputs"] = out.pop("output")
     if isinstance(out.get("nodes"), dict):
-        out["nodes"] = {nid: _back_map_to_plural(nb) for nid, nb in out["nodes"].items()}
+        out["nodes"] = {
+            nid: _back_map_to_plural(nb) for nid, nb in out["nodes"].items()
+        }
     if isinstance(out.get("defs"), dict):
-        out["defs"] = {dname: _back_map_to_plural(db) for dname, db in out["defs"].items()}
+        out["defs"] = {
+            dname: _back_map_to_plural(db) for dname, db in out["defs"].items()
+        }
     return out
 
 
@@ -117,7 +128,9 @@ class ComposeFile(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
-    version: Optional[str] = None  # opaque version tag (v1, 1.2.0, ...); None = unversioned
+    version: Optional[str] = (
+        None  # opaque version tag (v1, 1.2.0, ...); None = unversioned
+    )
     inputs: dict[str, Any] = Field(default_factory=dict)
     nodes: dict[str, Any]
     outputs: Any = None
@@ -145,7 +158,8 @@ class ComposeFile(BaseModel):
 
         The dataclass fields are still named `inputs`/`outputs` plural, so after
         normalization we map BACK to the plural names (`_back_map_to_plural`).
-        The validator rejects the legacy plural section keywords with a bespoke message."""
+        The validator rejects the legacy plural section keywords with a bespoke message.
+        """
         if not isinstance(data, dict):
             return data
         normalized = _normalize_section_keys(data)
@@ -183,9 +197,10 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
     `ComposeFile` schema then validates unchanged. Raises `LoadError` on a non-leaf
     kind or a missing flow `id:`.
     """
+    diagnostics = LoadDiagnostics.from_cursor(root)
     kind = body["kind"]
     if kind not in _COMPACT_KINDS:
-        raise LoadError(
+        raise diagnostics.error(
             f"compact (single-node) flow: kind {kind!r} is not allowed inline "
             f"(allowed: {', '.join(sorted(_COMPACT_KINDS))}); case/call/map reference "
             f"other nodes a one-node flow has none of — write a full `nodes:` map instead",
@@ -193,14 +208,14 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
         )
     flow_id = body.get("id")
     if not isinstance(flow_id, str) or not flow_id:
-        raise LoadError(
+        raise diagnostics.error(
             "compact (single-node) flow: a top-level `id:` is required — it names the "
             "single node",
             range=root.range_of("id") if root.has("id") else root.range,
         )
     params = body.get("input") or {}
     if not isinstance(params, dict):
-        raise LoadError(
+        raise diagnostics.error(
             "compact (single-node) flow: `input:` must be a param map (name: TYPE)",
             range=root.range_of("input"),
         )
@@ -209,7 +224,8 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
     # or the special input:/output: keys). Auto-wire the flow inputs by name; carry the
     # flow `output:` through as the node's output TYPE.
     node_body = {
-        k: v for k, v in body.items()
+        k: v
+        for k, v in body.items()
         if k not in _COMPACT_FLOW_KEYS and k not in ("input", "output")
     }
     node_body["input"] = {p: f"${{input.{p}}}" for p in params}
@@ -272,7 +288,10 @@ def parse_source_document(text: str, label: str) -> SourceDocument:
     try:
         return SourceDocument.parse(text, label)
     except SourceSyntaxError as exc:
-        raise LoadError(f"invalid YAML: {exc}", range=exc.range) from exc
+        raise LoadDiagnostics(label=label, text=text).error(
+            f"invalid YAML: {exc}",
+            range=exc.range,
+        ) from exc
 
 
 def flow_nodes_cursor(
@@ -316,20 +335,23 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     top-level key (after stripping `x-*`), or any schema violation.
     """
     document = (
-        parse_source_document(source, "<flow>")
-        if isinstance(source, str)
-        else source
+        parse_source_document(source, "<flow>") if isinstance(source, str) else source
     )
     root = document.root
+    diagnostics = LoadDiagnostics.from_document(document)
     raw = root._value_view()
     if not isinstance(raw, Mapping):
-        raise LoadError("a flow must be a YAML mapping at the top level", range=root.range)
+        raise diagnostics.error(
+            "a flow must be a YAML mapping at the top level",
+            range=root.range,
+        )
 
-    body = {
-        key: root.get(key)
-        for key in raw
-        if not str(key).startswith("x-")
-    }
+    body = {key: root.get(key) for key in raw if not str(key).startswith("x-")}
+    _normalize_section_keys(
+        body,
+        diagnostics=diagnostics,
+        range_for_key=root.key_range_of,
+    )
 
     # Compact (single-node) flow: a top-level node `kind:` with no `nodes:` map. Desugar
     # to the canonical one-node form BEFORE the strict-schema checks below, since `nodes:`
@@ -344,7 +366,7 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     allowed_top = set(ComposeFile.model_fields) | {"input", "output"}
     for key in body:
         if key not in allowed_top:
-            raise LoadError(
+            raise diagnostics.error(
                 f"unknown top-level key {key!r} "
                 f"(allowed: {', '.join(sorted(set(ComposeFile.model_fields)))})",
                 range=root.key_range_of(key),
@@ -355,9 +377,12 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     except LoadError:
         raise
     except ValidationError as exc:
-        raise LoadError(str(exc), range=_validation_error_range(exc, root)) from exc
+        raise diagnostics.error(
+            str(exc),
+            range=_validation_error_range(exc, root),
+        ) from exc
     except Exception as exc:
-        raise LoadError(str(exc)) from exc
+        raise diagnostics.error(str(exc)) from exc
 
 
 # ---------- per-kind node descriptors ----------

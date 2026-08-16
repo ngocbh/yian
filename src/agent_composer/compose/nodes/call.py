@@ -18,7 +18,6 @@ from agent_composer.nodes.contracts import ContractOrigins, Parameter, ValueCont
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import Type, ValueKind
-from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.resolver import (
     ChildSignature,
@@ -107,15 +106,18 @@ class CallDescriptor(NodeDescriptor):
         if is_map and "over" in (self.inputs or {}):
             # Reserved-name guard: a MAP's `over` is the iteration source, carried under
             # the reserved wiring key — an `inputs:` param named `over` would collide.
-            raise LoadError(
+            raise ctx.diagnostics.error(
                 f"map node {self.id!r}: input name 'over' is reserved (the iteration "
-                f"source); rename the `inputs:` entry"
+                f"source); rename the `inputs:` entry",
+                range=self.field_ranges.get(("input", "over")) or self.range,
             )
         child = _resolve_child(
             self.id,
             self.call,
             resolver,
             self.child_label,
+            diagnostics=ctx.diagnostics,
+            range=self.field_ranges.get(("field", "call")) or self.range,
         )
         sig = child_signature(child)
         child_display = _callable_display(self.call, self.child_label)
@@ -130,12 +132,15 @@ class CallDescriptor(NodeDescriptor):
                 flow_version=None,
                 child=child.compiled,
                 child_inputs=sig.inputs,
-                child_source=child.source,        # render-only; the CLI nested-error traceback
-                parallel=self.parallel,           # inert; carried for the over case only
+                child_source=child.source,  # render-only; the CLI nested-error traceback
+                parallel=self.parallel,  # inert; carried for the over case only
                 title=self.node_name,
             )
             node.params = self.sink_params()
-            wiring = {"over": self.over, **self.sink_wiring()}   # over FIRST (edge order)
+            wiring = {
+                "over": self.over,
+                **self.sink_wiring(),
+            }  # over FIRST (edge order)
             if sig.output is None:
                 errors.append(
                     f"map node {self.id!r}: {child_display} must declare exactly one "
@@ -153,7 +158,7 @@ class CallDescriptor(NodeDescriptor):
                 flow_version=None,
                 child=child.compiled,
                 child_inputs=sig.inputs,
-                child_source=child.source,        # render-only; the CLI nested-error traceback
+                child_source=child.source,  # render-only; the CLI nested-error traceback
                 title=self.node_name,
             )
             node.params = self.sink_params()
@@ -168,13 +173,14 @@ class CallDescriptor(NodeDescriptor):
             self.child_label,
         )
         if errors:
-            raise LoadError("\n  ".join(errors))
+            raise ctx.diagnostics.error("\n  ".join(errors), range=self.range)
         return self._finish(node, wiring)
 
 
 def _list_of(element: Type) -> Type:
     """`element` -> a `list[element]` Type (the MAP codomain). Mirrors `resolve_type`'s
-    list-seg rule: a record/variant element -> LIST_OBJECT/LIST_STRING; else by scalar."""
+    list-seg rule: a record/variant element -> LIST_OBJECT/LIST_STRING; else by scalar.
+    """
     if element.tags is not None:
         list_seg = ValueKind.LIST_STRING
     elif element.fields is not None:

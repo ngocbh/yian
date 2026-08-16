@@ -62,3 +62,67 @@ output: ${run.output}
 
     assert caught.value.range == expected
     assert caught.value.line == expected.start_line
+
+
+def test_mapped_root_output_legacy_line_derives_from_retained_range() -> None:
+    """A mapped output never pairs its key line with its value-block range."""
+    text = """id: mapped-output-range
+name: mapped_output_range
+nodes:
+  emit:
+    kind: code
+    code: |
+      return 1
+    output: int
+output:
+  result: ${missing.output}
+"""
+    document = SourceDocument.parse(text)
+    expected = document.root.child("output").range
+
+    with pytest.raises(LoadError, match="unresolved references") as caught:
+        load_flow(text)
+
+    assert caught.value.range == expected
+    assert caught.value.line == expected.start_line
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        """    nodes:
+      invoke:
+        kind: call
+        call: external
+    output: ${invoke.output}
+""",
+        """    kind: call
+    call: external
+""",
+    ],
+)
+def test_definition_wrapper_does_not_mix_an_inner_line_with_its_fallback_range(
+    definition: str,
+) -> None:
+    """A def wrapper adds its coarse range only when the inner error is unlocated."""
+    text = f"""id: def-inner-line
+name: def_inner_line
+uses:
+  external: child.yaml
+defs:
+  local:
+{definition}nodes:
+  invoke:
+    kind: call
+    call: local
+output: ${{invoke.output}}
+"""
+
+    def fail_resolver(_path: str, _version: str | None = None):
+        raise LoadError("external failure", line=999)
+
+    with pytest.raises(LoadError, match="defs entry 'local'") as caught:
+        load_flow(text, child_resolver=fail_resolver)
+
+    assert caught.value.line == 999
+    assert caught.value.range is None

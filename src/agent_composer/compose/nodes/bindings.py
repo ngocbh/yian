@@ -33,19 +33,29 @@ def _descriptor_kind(desc: Any) -> str:
 
 
 def map_binding_strings(
-    desc: Any, mapper: Callable[[str, str], Any], *, binding_fields: dict = BINDING_FIELDS
+    desc: Any,
+    mapper: Callable[[str, str, str], Any],
+    *,
+    binding_fields: dict = BINDING_FIELDS,
 ) -> Any:
-    """Apply `mapper(key, value)` to each STRING binding in `desc`'s kind-declared binding fields.
+    """Apply `mapper(field, key, value)` to each declared string binding.
 
     The fields are `binding_fields[kind]` (from each kind's `binding_fields`): a dict field
-    (e.g. `inputs`) applies `mapper(binding_name, value)` to each string VALUE; a scalar field
-    (e.g. a mapped call's `over`) applies `mapper(field_name, value)` when it is a string. The
-    `key` lets a caller locate what it rewrote (the inline-call desugar reads it to anchor a
-    synth node at that binding's own source line); a caller that only needs the value wraps its
-    function with `keyless`. Non-string values (literals / native YAML) are left as-is; a
-    descriptor whose kind lists no binding fields (case/wait/loop/human_input) passes through
-    unchanged. Returns a new frozen descriptor when anything changed, else `desc` itself.
-    `mapper` may raise."""
+    (e.g. `inputs`) supplies `("inputs", binding_name, value)`; a scalar field (e.g.
+    MAP's `over`) supplies `("over", "over", value)`. Keeping the owning field separate
+    from the binding key disambiguates `input: {over: ...}` from scalar `over:`.
+
+    Args:
+        desc (`Any`): Descriptor whose class declares a registered binding surface.
+        mapper (`Callable[[str, str, str], Any]`): Owning field, binding key, and value
+            transformer. It may raise.
+        binding_fields (`dict`, *optional*): Kind-to-field registry; defaults to the
+            package registry and is injectable for tests.
+
+    Returns:
+        `Any`: Replaced frozen descriptor when a field was visited, otherwise the
+        original descriptor.
+    """
     kind = _descriptor_kind(desc)
     fields = binding_fields.get(kind, ())
     if not fields:
@@ -56,16 +66,23 @@ def map_binding_strings(
         current = getattr(desc, name)
         if isinstance(current, dict):
             updates[name] = {
-                k: (mapper(k, v) if isinstance(v, str) else v) for k, v in current.items()
+                k: (mapper(name, k, v) if isinstance(v, str) else v)
+                for k, v in current.items()
             }
         elif isinstance(current, str):
-            updates[name] = mapper(name, current)
+            updates[name] = mapper(name, name, current)
         # None / non-string scalar: nothing to rewrite.
 
     return replace(desc, **updates) if updates else desc
 
 
-def keyless(fn: Callable[[str], Any]) -> Callable[[str, str], Any]:
-    """Adapt a value-only binding mapper to `map_binding_strings`' `(key, value)` contract,
-    dropping the key — for a caller that rewrites a binding purely from its value."""
-    return lambda _key, value: fn(value)
+def keyless(fn: Callable[[str], Any]) -> Callable[[str, str, str], Any]:
+    """Adapt a value-only mapper to the binding-site callback contract.
+
+    Args:
+        fn (`Callable[[str], Any]`): String-value transformer.
+
+    Returns:
+        `Callable[[str, str, str], Any]`: Mapper that ignores field and key.
+    """
+    return lambda _field, _key, value: fn(value)

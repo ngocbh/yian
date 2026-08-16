@@ -18,7 +18,7 @@ from agent_composer.compose.desugar.inline_calls import (
     desugar_inline_calls,
 )
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.parse.file import CaseDescriptor, CodeDescriptor
+from agent_composer.compose.parse.file import CaseDescriptor, CodeDescriptor, MapDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceDocument
 from agent_composer.events import SourceRange
@@ -127,6 +127,27 @@ def test_duplicate_inline_assertions_keep_positional_ranges():
 
     assert descriptors["__call_0"].range == assertion_ranges[0]
     assert descriptors["__call_1"].range == assertion_ranges[1]
+
+
+def test_inline_map_scalar_over_does_not_use_input_named_over_range():
+    input_range = SourceRange(71, 9, 71, 25)
+    scalar_range = SourceRange(72, 9, 72, 36)
+    descriptor = MapDescriptor(
+        id="mapped",
+        call="child",
+        inputs={"over": "${input.seed}"},
+        over="${helper(topic=${item})}",
+        field_ranges={
+            ("input", "over"): input_range,
+            ("field", "over"): scalar_range,
+        },
+    )
+
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls({"mapped": descriptor}, None)
+
+    assert caught.value.range == scalar_range
+    assert caught.value.line == scalar_range.start_line
 
 
 def test_desugar_adaptive_questions_preserves_ranges():
@@ -262,3 +283,28 @@ def test_case_assert_error_prefers_positional_range_over_legacy_line():
 
     assert caught.value.range == assertion_ranges[1]
     assert caught.value.line == assertion_ranges[1].start_line
+
+
+def test_case_map_scalar_over_does_not_use_input_named_over_range():
+    input_range = SourceRange(81, 9, 81, 25)
+    scalar_range = SourceRange(82, 9, 82, 45)
+    descriptor = MapDescriptor(
+        id="mapped",
+        call="child",
+        inputs={"over": "${input.seed}"},
+        over="${gate.output | fallback.output}",
+        field_ranges={
+            ("input", "over"): input_range,
+            ("field", "over"): scalar_range,
+        },
+    )
+
+    with pytest.raises(LoadError) as caught:
+        expand_case_outputs(
+            {"gate": _case_gate(), "mapped": descriptor},
+            None,
+            [],
+        )
+
+    assert caught.value.range == scalar_range
+    assert caught.value.line == scalar_range.start_line

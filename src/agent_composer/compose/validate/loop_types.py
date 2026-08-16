@@ -86,6 +86,6 @@ def check_loop_type_contract(
                     f"loop node {nid!r}: carried field {field_name!r} — body output is "
                     f"{body_field.kind.value!r}, carried source is "
                     f"{source.kind.value!r} (the body must return the same 'a it reads)",
-                    line=lines.get(nid),
+                    line=None if rng is not None else lines.get(nid),
                     range=rng,
                 )

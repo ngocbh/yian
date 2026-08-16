@@ -194,16 +194,21 @@ def map_outputs_strings(outputs: Any, fn: Callable[[str], Any]) -> Any:
 
 
 def _binding_origin(
-    key: str, field_ranges: Optional[dict], host_range: Optional[SourceRange]
+    field: str,
+    key: str,
+    field_ranges: Optional[dict],
+    host_range: Optional[SourceRange],
 ) -> Optional[SourceRange]:
     """The source range a synth node desugared from binding `key` should locate at.
 
-    Prefers the binding's OWN entry — `("input", key)` for a dict binding (an `input:` param),
-    `("field", key)` for a scalar binding field (a map's `over:`) — i.e. the line the
+    Prefers the binding's OWN entry — `("input", key)` for the `inputs` mapping,
+    `("field", field)` for a scalar binding field (a map's `over:`) — i.e. the line the
     `call(...)` directive was written on. Falls back to the host node's range when there is no
     stamped entry (a spanless flow, or a binding shape with no per-entry range)."""
     fr = field_ranges or {}
-    return fr.get(("input", key)) or fr.get(("field", key)) or host_range
+    if field == "inputs":
+        return fr.get(("input", key)) or fr.get(("field", "inputs")) or host_range
+    return fr.get(("field", field)) or host_range
 
 
 def _desugar_descriptor(
@@ -223,8 +228,8 @@ def _desugar_descriptor(
     calls: list = []
     origins: dict[str, Optional[SourceRange]] = {}
 
-    def mapper(key: str, value: str) -> str:
-        origin = _binding_origin(key, field_ranges, range)
+    def mapper(field: str, key: str, value: str) -> str:
+        origin = _binding_origin(field, key, field_ranges, range)
         before = len(calls)
         new_value = _desugar_value(value, mint, calls, host, range=origin)
         for c in calls[before:]:

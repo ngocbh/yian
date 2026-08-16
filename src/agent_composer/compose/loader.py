@@ -1102,16 +1102,20 @@ def _load_def(
         # Don't re-prefix an already-named nested-def error; keep the innermost name.
         if str(exc).startswith("defs entry "):
             raise
+        error_range = exc.range
+        if (
+            error_range is None
+            and exc.line is None
+            and not exc.lines
+            and def_cursor is not None
+        ):
+            error_range = def_cursor.range
         raise LoadError(
             f"defs entry {name!r}: {exc}",
             line=exc.line,
             lines=exc.lines,
             notes=exc.notes,
-            range=(
-                exc.range
-                if exc.range is not None
-                else (def_cursor.range if def_cursor is not None else None)
-            ),
+            range=error_range,
         ) from exc
 
 
@@ -1179,14 +1183,18 @@ def _load_single_node_def(
     except LoadError as exc:
         if str(exc).startswith("defs entry "):
             raise
+        error_range = exc.range
+        if (
+            error_range is None
+            and exc.line is None
+            and not exc.lines
+            and def_cursor is not None
+        ):
+            error_range = def_cursor.range
         raise LoadError(
             f"defs entry {name!r}: {exc}",
             line=exc.line,
             lines=exc.lines,
             notes=exc.notes,
-            range=(
-                exc.range
-                if exc.range is not None
-                else (def_cursor.range if def_cursor is not None else None)
-            ),
+            range=error_range,
         ) from exc

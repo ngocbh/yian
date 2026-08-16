@@ -91,6 +91,6 @@ def check_ref_map_types(
                 raise LoadError(
                     f"call node {nid!r}: binding {param!r} — child expects "
                     f"{child_type.kind.value!r}, source is {source.kind.value!r}",
-                    line=lines.get(nid),
+                    line=None if rng is not None else lines.get(nid),
                     range=rng,
                 )

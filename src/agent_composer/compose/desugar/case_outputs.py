@@ -70,8 +70,15 @@ def expand_case_outputs(
 
     new_descriptors = {}
     for nid, descriptor in descriptors.items():
-        def expand_binding(key: str, value: str, *, _descriptor=descriptor, _nid=nid) -> str:
-            binding_range = _binding_range(_descriptor, key)
+        def expand_binding(
+            field: str,
+            key: str,
+            value: str,
+            *,
+            _descriptor=descriptor,
+            _nid=nid,
+        ) -> str:
+            binding_range = _binding_range(_descriptor, field, key)
             return _expander(
                 case_ids,
                 targets,
@@ -129,14 +136,20 @@ def expand_case_outputs(
     return new_descriptors, new_outputs
 
 
-def _binding_range(descriptor: Any, key: str) -> Optional[SourceRange]:
+def _binding_range(
+    descriptor: Any,
+    field: str,
+    key: str,
+) -> Optional[SourceRange]:
     """Return the narrowest available range for a descriptor binding."""
     field_ranges = getattr(descriptor, "field_ranges", None) or {}
-    return (
-        field_ranges.get(("input", key))
-        or field_ranges.get(("field", key))
-        or getattr(descriptor, "range", None)
-    )
+    if field == "inputs":
+        return (
+            field_ranges.get(("input", key))
+            or field_ranges.get(("field", "inputs"))
+            or getattr(descriptor, "range", None)
+        )
+    return field_ranges.get(("field", field)) or getattr(descriptor, "range", None)
 
 
 def _field_range(descriptor: Any, name: str) -> Optional[SourceRange]:

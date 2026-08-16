@@ -69,8 +69,16 @@ def validate_human_questions(
                     rng,
                 ))
     if errors:
-        first_line = next((ln for _, ln, _ in errors if ln is not None), None)
-        first_range = next((r for _, _, r in errors if r is not None), None)
+        first_line, first_range = next(
+            (
+                (line, error_range)
+                for _, line, error_range in errors
+                if line is not None or error_range is not None
+            ),
+            (None, None),
+        )
+        if first_range is not None:
+            first_line = None
         raise LoadError(
             "flow has invalid human_input questions:\n  "
             + "\n  ".join(msg for msg, _, _ in errors),

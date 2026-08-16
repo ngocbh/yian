@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.code import CodeDescriptor
@@ -498,3 +499,217 @@ output: ${ask.output}
 
     assert _node_contract(nodes["ask__compose"]).origins == ContractOrigins()
     assert _node_contract(nodes["ask"]).origins == ContractOrigins()
+
+
+def test_formatting_only_relocation_preserves_output_origins_and_fingerprint():
+    """Semantic contract keys stay stable while their resolved ranges move."""
+    relocated_text = """\
+id: nested-output-contract
+name: nested-output-contract
+
+# Formatting alone moves the declaration.
+nodes:
+  emit:
+    kind: code
+    code: |-
+      return {"profile": {"age": "bad", "name": "Ada"}, "ok": True}
+    # This comment moves the whole contract again.
+    output:
+      profile:
+        # Nested fields move independently too.
+        age: int
+        name: str
+      ok: bool
+output: ${emit.output}
+"""
+    baseline_document = SourceDocument.parse(
+        _NESTED_OUTPUT_FLOW,
+        label="relocated.yaml",
+    )
+    relocated_document = SourceDocument.parse(
+        relocated_text,
+        label="relocated.yaml",
+    )
+    baseline = load_flow(_NESTED_OUTPUT_FLOW, source_label="relocated.yaml")
+    relocated = load_flow(relocated_text, source_label="relocated.yaml")
+    baseline_contract = _contract(baseline)
+    relocated_contract = _contract(relocated)
+    baseline_output = (
+        baseline_document.root.child("nodes").child("emit").child("output")
+    )
+    relocated_output = (
+        relocated_document.root.child("nodes").child("emit").child("output")
+    )
+
+    assert relocated_contract.origins == baseline_contract.origins
+    assert flow_fingerprint(relocated.compiled) == flow_fingerprint(baseline.compiled)
+    _assert_profile_contract_sites(
+        baseline.origin_resolver,
+        baseline_contract,
+        baseline_output,
+    )
+    _assert_profile_contract_sites(
+        relocated.origin_resolver,
+        relocated_contract,
+        relocated_output,
+    )
+    assert baseline_output.range != relocated_output.range
+    assert baseline_output.child("profile").child("age").range != (
+        relocated_output.child("profile").child("age").range
+    )
+
+
+def test_non_string_nested_output_key_reports_the_key_site():
+    """An invalid nested record name is rejected at its authored key token."""
+    text = """\
+id: invalid-output-key
+name: invalid-output-key
+nodes:
+  emit:
+    kind: code
+    code: 'return {"profile": {}}'
+    output:
+      profile:
+        7: int
+output: ${emit.output}
+"""
+    document = SourceDocument.parse(text, label="invalid-key.yaml")
+    invalid_key = (
+        document.root.child("nodes")
+        .child("emit")
+        .child("output")
+        .child("profile")
+        .child(7)
+    )
+
+    with pytest.raises(
+        LoadError,
+        match="record field names must be non-empty strings",
+    ) as caught:
+        load_flow(text, source_label="invalid-key.yaml")
+
+    frame = caught.value.diagnostic.frames[-1]
+    assert frame.text == document.text
+    assert frame.range == invalid_key.key_range
+
+
+def test_scalar_list_output_failure_falls_back_to_the_contract_root():
+    """A nested failure inside one scalar type expression uses its root site."""
+    text = """\
+id: scalar-list-output
+name: scalar-list-output
+typedefs:
+  Profile:
+    age: int
+nodes:
+  emit:
+    kind: code
+    code: |-
+      return [{"age": "bad"}]
+    output: list[Profile]
+output: ${emit.output}
+"""
+    document = SourceDocument.parse(text, label="scalar-list.yaml")
+    loaded = load_flow(text, source_label="scalar-list.yaml")
+    contract = _contract(loaded)
+
+    assert contract.origins.entries == ()
+    result = run_flow(loaded, {})
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "contract.output"
+    assert result.failure.trace == (contract.origins.default,)
+    diagnostic = loaded.diagnose(result.failure)
+    expected = document.root.child("nodes").child("emit").child("output")
+    assert diagnostic.frames[-1].range == expected.range
+
+
+def test_all_authorable_leaf_kinds_receive_output_root_origins_on_load():
+    """Loading each output-authoring leaf stamps provenance without running it."""
+    text = """\
+id: output-origin-leaves
+name: output-origin-leaves
+nodes:
+  agent_leaf:
+    kind: agent
+    prompt: hi
+    output: str
+  code_leaf:
+    kind: code
+    code: return "ok"
+    output: str
+  model_leaf:
+    kind: model
+    model_id: test-model
+    output: str
+  human_leaf:
+    kind: human_input
+    prompt: continue?
+    output: str
+output: ${code_leaf.output}
+"""
+    document = SourceDocument.parse(text, label="leaves.yaml")
+    loaded = load_flow(text, source_label="leaves.yaml")
+    nodes_cursor = document.root.child("nodes")
+
+    for node_id in ("agent_leaf", "code_leaf", "model_leaf", "human_leaf"):
+        contract = _contract(loaded, node_id)
+        assert contract.origins.entries == ()
+        _assert_site(
+            loaded.origin_resolver,
+            contract.origins.default,
+            nodes_cursor.child(node_id).child("output"),
+        )
+
+
+def test_named_call_output_failure_keeps_call_ancestry_and_exact_child_field():
+    """A named child contract failure resolves through CALL to its leaf field."""
+    text = """\
+id: named-call-output-failure
+name: named-call-output-failure
+defs:
+  child:
+    nodes:
+      emit:
+        kind: code
+        code: |-
+          return {"profile": {"age": "bad"}}
+        output:
+          profile:
+            age: int
+    output: ${emit.output}
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: ${invoke.output}
+"""
+    document = SourceDocument.parse(text, label="named-call.yaml")
+    loaded = load_flow(text, source_label="named-call.yaml")
+    invoke = loaded.compiled.nodes["invoke"]
+    emit = invoke.child.nodes["emit"]
+    age_origin = dict(_node_contract(emit).origins.entries)[("profile", "age")]
+
+    result = run_flow(loaded, {})
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "contract.output"
+    assert result.failure.node_id == "invoke/emit"
+    assert result.failure.trace == (invoke.origin, age_origin)
+    diagnostic = loaded.diagnose(result.failure)
+    invoke_cursor = document.root.child("nodes").child("invoke")
+    age_cursor = (
+        document.root.child("defs")
+        .child("child")
+        .child("nodes")
+        .child("emit")
+        .child("output")
+        .child("profile")
+        .child("age")
+    )
+    assert tuple(frame.range for frame in diagnostic.frames) == (
+        invoke_cursor.key_range,
+        age_cursor.range,
+    )

@@ -12,10 +12,15 @@ The LAST compose phase before the loader. Three modules:
   flow `outputs:` parser. It stamps authored node-header origins, source-backed ordinary
   `input:` keys and values, and source-backed reserved MAP/WAIT wiring values through the
   file-owned catalog builder. Only ordinary input keys stamp `Parameter` origins; each of
-  those retained wiring values stamps its canonical `Binding`. It associates retained
-  inline bodies with their final descriptors, registers lazy builders through the
-  loader-owned callable-scope seam, and uses one success-only descriptor cache for
-  on-demand signature dependencies.
+  those retained wiring values stamps its canonical `Binding`. After output rewrites it
+  stamps source-backed bare/mapped root, multi-node-definition, and inline-child output
+  values on the final `FlowOutput.binding`; boundary synthesis reuses that exact binding,
+  and output mapping keys stay origin-free. Generated compact-root and single-node-definition
+  reexports remain origin-free because their authored output declaration is a contract site,
+  not a retained binding occurrence; contract-origin stamping remains deferred. The conductor
+  also associates retained inline bodies with their final descriptors, registers lazy
+  builders through the loader-owned callable-scope seam, and uses one success-only
+  descriptor cache for on-demand signature dependencies.
   `ComposedFlow._local_catalog` is a frozen document-local staging snapshot, not a
   complete resolver for embedded external flows.
 - `inline_inputs.py` — strict structural type inference for parameters of generated

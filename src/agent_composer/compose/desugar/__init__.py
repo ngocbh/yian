@@ -7,7 +7,9 @@ passes:
 
 - `inline_bodies` — occurrence-local located overlays isolate YAML aliases and
   merged mappings, then retain and mask inline CALL/MAP/LOOP child bodies without
-  editing authored anchors or values. It assigns each retained child a stable
+  editing authored anchors or values. The retained child output keeps its source cursor so
+  final assembly can stamp the post-rewrite `FlowOutput.binding` value, never its mapping
+  key. It assigns each retained child a stable
   reserved identity from its complete lexical owner path; authored private-prefix
   targets are rejected before registration.
 - `inline_calls` — whole-value `call(<flow-id>, kw=...)` directives in any binding

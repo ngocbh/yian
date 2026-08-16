@@ -5,7 +5,9 @@ the REF/MAP pair re-split out of the unified CALL node — `kind: map` builds a 
 builds REF's `CallNode` (`nodes.call`). The two are distinct typed drivers; `MapNode`
 discriminates by KIND (`NodeKind.MAP`), carries NO `over` attribute, and the iteration SOURCE rides
 `flow.wiring[id]["over"]`. `run` returns a seed-first `Grow`; the compile-owned builder constructs
-the N element clones and list-mode END fan-in for the engine to splice.
+the N element clones and list-mode END fan-in for the engine to splice. It also owns origin
+traversal for its cached child signature and exposes its baked child through the source-neutral
+node hook.
 
 Knows about: nodes.base, expr, and peer node modules.
 Never imports: compile, compose, runtime, the run boundary, CLI, or provider SDKs.

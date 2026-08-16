@@ -38,7 +38,12 @@ Hold this model whenever you design anything:
   *binds* them under `(node_id, key)` like `let`-bindings — never a mutation.
 - Source-neutral semantic operations live in `nodes/contracts.py`: `Binding`,
   `Parameter`, `Assertion`, and `ValueContract` carry optional opaque origins;
-  `typesys.Type` remains provenance-free.
+  `iter_origins()` and `map_origins()` touch only declared provenance slots, and
+  `typesys.Type` remains provenance-free while arbitrary payloads stay opaque.
+- Nodes own local origin enumeration/rewrite and expose static children through
+  `origin_children()`. `compile.origins` combines those hooks with flow wiring
+  and outputs, using identity guards and replacement memos so shared or cyclic
+  graphs remain safe without a `NodeKind` branch.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;
@@ -188,6 +193,9 @@ Most are just the functional model (above) made enforceable:
   dispatch count at 0. A separate layer ratchet forbids `nodes -> compile` and
   `runtime -> compile.expand`: nodes describe seeds, compile constructs fragments,
   and runtime receives the constructor as an injected callable.
+  Compile-side origin traversal follows the separate node-owned
+  `iter_local_origins`, `rewrite_local_origins`, and `origin_children` hooks; these
+  are not runtime capabilities.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
   only a node's own `_run_impl()` interprets known keys (e.g. AGENT's `max_tool_iterations`). It is the
@@ -228,6 +236,11 @@ runtime. This is an instance of that framework.
 The package-root `run.py` sits above compose and runtime and wires cross-layer
 capabilities: notably it owns log lifecycle/recovery and injects compile's
 `build_grow` into the kind-blind runtime.
+
+`compile/origins.py` owns the representation-neutral whole-graph walk. It visits
+flow-owned wiring and outputs, delegates node-local slots and children to node
+hooks, and deep-copies before rewriting. Nodes never import this higher layer;
+binding sources, defaults, environments, and render metadata remain opaque.
 
 Compose source ownership is one-way too. `compose/source/` alone owns PyYAML and
 the private retained document graph. Root text is constructed once as a

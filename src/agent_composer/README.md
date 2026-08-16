@@ -37,8 +37,8 @@ expr/         one ${...} grammar: parse -> AST -> evaluate / ref-walk
 nodes/        pure Node contract + per-kind implementations; spawners return seeds
               (start, end, agent, code, model, tool, case, call, map,
                loop, human_input, wait)
-compile/      compiled IR + validation; growth builder; stable identity;
-              effective static-path LLM configuration maps
+compile/      compiled IR + validation; identity-safe origin traversal;
+              growth builder; stable identity; static-path LLM config maps
 compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML
               construction/navigation and opaque-origin resolution; later phases
               lower file-private children
@@ -80,7 +80,8 @@ one responsibility:
 All origins are optional, so Python-authored values default to source-free and
 may supply an opaque origin explicitly. The carriers are frozen only at their
 fields: arbitrary binding/default payloads are retained by identity.
-`map_origins()` performs pure lexical rebasing without copying semantic payloads.
+`iter_origins()` visits only declared provenance slots, while `map_origins()`
+transforms those slots without inspecting or copying semantic payloads.
 `Flow` construction is the single binding boundary:
 every direct `flow.wiring[node_id][parameter]` value and every
 `FlowOutput.binding` is canonical `Binding`, while raw Python-authored values are
@@ -151,6 +152,24 @@ types project `.type` at their boundary. CALL and LOOP preserve a child's output
 contract, while MAP deliberately derives a new list contract. There is no parallel
 output-Type API: Python-authored nodes pass `output_contract=` explicitly.
 The authored `output:` / `outputs:` YAML syntax is unchanged.
+
+### Compiled origin traversal
+
+Nodes own their provenance layout. The base `Node` enumerates and rewrites its
+node origin, output contract, parameters, and assertions; CALL/MAP/LOOP also own
+their cached `child_inputs` origins and expose the baked child through
+`origin_children()`. These hooks remain source-neutral and never import
+`compile`.
+
+`compile.origins` joins those hooks with flow-owned wiring and declared outputs.
+`iter_flow_origins()` walks wiring, outputs, nodes, and static children in stable
+order, guarding flow, node, and frozen-carrier identity so shared or cyclic
+graphs terminate. `rewrite_flow_origins()` deep-copies the root once, then uses
+identity memos for carrier and output replacements; aliases and deliberate
+cycles survive while the authored graph remains unchanged. Binding sources,
+parameter defaults, node environments, and render metadata are opaque even when
+they contain an `OriginRef`. Origins remain excluded from manifests,
+fingerprints, and expansion digests.
 
 ## One-pass source ownership
 

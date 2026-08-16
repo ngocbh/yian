@@ -81,6 +81,20 @@ run-record/log codecs, append-before-apply reducer, and dispatcher, while the
 package-root `run.py` owns log lifecycle and recovery. Placing the shared state
 vocabulary in a neutral leaf keeps both consumers from owning the other's contract.
 
+## Ownership example: compiled origin traversal
+
+Origin-bearing semantic carriers live in `nodes/contracts.py`; each enumerates
+and maps only its declared provenance slots. The base `Node` owns common local
+origins, and CALL/MAP/LOOP additionally own cached child-signature origins and
+expose their baked child through `origin_children()`.
+
+`compile/origins.py` owns the graph-wide operation because `compile` already owns
+`Flow` wiring and `CompiledFlow.outputs`. It combines the node hooks with
+identity guards, one root deep copy, and frozen-carrier/output replacement memos.
+This preserves aliases and cycles without a `nodes -> compile` back-edge,
+reflection, or `NodeKind` dispatch. Semantic payloads remain opaque, and origin
+changes do not affect manifests or fingerprints.
+
 ## Compose front-end ownership: source once, project thereafter
 
 The Compose front end is an adapter above the representation-neutral compiler:
@@ -138,9 +152,10 @@ The loader owns two intentionally separate caches:
   external-file resolution. A failed callable attempt removes every private builder,
   nested cache entry, and catalog site added by that attempt before it can be retried.
 
-`compile` owns representation-neutral flow contracts, and `runtime` executes
-compiled flows. Neither layer imports Compose source contracts, knows that YAML
-was the authoring format, or interprets loader-private names.
+`compile` owns representation-neutral flow contracts and origin traversal, while
+`runtime` executes compiled flows. Neither layer imports Compose source
+contracts, knows that YAML was the authoring format, or interprets loader-private
+names.
 
 ## Front-end ownership example: inline composite children
 

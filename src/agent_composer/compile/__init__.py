@@ -5,7 +5,7 @@ fragments through ``expand.build_grow``.  It also owns canonical manifests and
 fingerprints, identity-safe opaque-origin traversal, and the complete static-path
 LLM configuration map used for replay.
 
-Knows about:   nodes, expr, typesys, and the LLM configuration merge primitive.
+Knows about:   diagnostics, nodes, expr, typesys, and the LLM configuration merge primitive.
 Never imports: compose, runtime, the package-root run boundary, CLI, or provider SDKs.
 """
 

@@ -90,6 +90,11 @@ runtime.
 When you add a package, name what it sits *above* and what it sits *below*, and
 record that in its charter's "Knows / Never imports".
 
+Compiled-origin traversal follows the same direction. Semantic carriers and
+nodes own their local origin slots and static-child hooks; `compile/origins.py`
+owns flow wiring, outputs, identity guards, copying, and recursion. Nodes never
+import that walker, and the walker never inspects arbitrary payloads.
+
 The Compose front end has its own ownership ladder:
 
 ```
@@ -169,6 +174,11 @@ Ask, in order:
 4. **Is it a pure stateless helper** (no shared state, just a function over its
    args)? Put it in `utils.py`.
 5. **None of the above / it's a new responsibility?** It's a new package — go to §4.
+
+A whole-graph operation over the compiled IR belongs with `compile`, not in one
+node kind or in runtime. Origin traversal is the concrete example: nodes expose
+their own fields and children, while the compile walker joins those views without
+reflection or `NodeKind` dispatch.
 
 `common.py` vs `utils.py` is a real distinction, not a synonym: `common` = shared
 **types/contract**; `utils` = shared **helper functions**. A package may have

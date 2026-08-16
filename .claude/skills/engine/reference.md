@@ -75,6 +75,10 @@ base `Node`; a kind overrides only what it needs.
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
 
+These are runtime execution capabilities. The source-neutral
+`iter_local_origins`, `rewrite_local_origins`, and `origin_children` hooks are
+consumed by `compile.origins`, not by the engine core.
+
 The rest of the splice (add subgraph, enforce `MAX_TOTAL_NODES`, mint one uniform `NodeExpandedRecord`,
 finish/mark the spawner, apply the origin `commit_as` to the derived terminal, schedule the
 subgraph's `start_id`) is
@@ -258,14 +262,20 @@ owning node packages. The scheduling-state vocabulary sits in the internal
 append-before-apply reducer state, and dispatch; the package-root run boundary owns
 fresh-log creation, locked prefix recovery, and log closure.
 
+The same direction governs provenance: nodes describe their local origin slots
+and static children, while `compile.origins` owns flow wiring, declared outputs,
+identity guards, copying, and recursion. No node imports the compile walker.
+
 ### Source-neutral semantic carriers
 
 `nodes/contracts.py` is the dependency-low semantic IR vocabulary. `Binding`
 owns one input source, `Parameter` owns one formal/default policy, `Assertion`
 owns executable and display text, and `ValueContract` pairs a provenance-free
-`Type` with `ContractOrigins`. Origins are optional and rewrite only through each
-carrier's pure `map_origins()` method. Do not put origin fields into `Type`, or
-recreate them in parallel maps. Stored flow-owned bindings have completed their
+`Type` with `ContractOrigins`. Origins are optional and exposed through each
+carrier's `iter_origins()` / pure `map_origins()` methods. Those operations visit
+declared origin slots only; sources, defaults, and other payload values remain
+opaque. Do not put origin fields into `Type`, or recreate them in parallel maps.
+Stored flow-owned bindings have completed their
 cutover: `Flow.__init__`, `CompiledFlow.from_parts`, and `add_subgraph` normalize
 every direct wiring value exactly once, and `FlowOutput.binding` is canonical.
 Raw Python values remain accepted only at those construction boundaries;
@@ -318,6 +328,28 @@ Whole direct references preserve contract identity; nested references rebase the
 origin paths. Python-authored nodes pass `output_contract=`; there is no
 parallel output-Type compatibility API. The authored `output:` / `outputs:` YAML
 surface is unchanged.
+
+### Compiled origin graph operations
+
+The base `Node` visits its node origin, output contract, parameters, and ordered
+assertions through `iter_local_origins()`. `rewrite_local_origins()` mutates only
+a compile-owned copied node and shares a frozen-carrier replacement memo across
+the graph. CALL/MAP/LOOP extend those hooks with their cached `child_inputs` and
+return a non-`None` baked child from `origin_children()`; ordinary nodes return no
+children. CASE and CODE currently need only the common hook.
+
+`compile.origins.iter_flow_origins(flow)` visits wiring, `CompiledFlow.outputs`,
+nodes, and their static children in deterministic structural order. Identity
+sets for flows, nodes, and frozen carriers make aliases and deliberate child
+cycles finite. `rewrite_flow_origins(flow, mapper)` performs one root
+`deepcopy`, then uses carrier and `FlowOutput` identity memos while rewriting the
+copy. The input graph stays unchanged, shared carriers and children remain
+shared, and invalid mapper results fail loudly. Equal origins stored in distinct
+carriers remain distinct occurrences. Neither operation inspects binding
+sources, parameter defaults, node environments, or render metadata.
+
+Origin changes remain manifest-, fingerprint-, and expansion-digest-neutral.
+This seam performs no origin resolution and defines no source-key policy.
 
 ## Compose source ownership
 

@@ -147,10 +147,9 @@ the single note `Source presentation was unavailable.` rather than exposing a
 partial source stack or replacing the semantic failure.
 
 `Diagnostic` is defined in `agent_composer.diagnostics`; it is not currently a
-package-root `agent_composer` export. The CLI still renders runtime failures
-through the temporary `RunResult.locator` / `range` and `SourceFrame` bridge, so
-library callers should use `loaded.diagnose(...)` directly when they want the
-canonical origin-based presentation value.
+package-root `agent_composer` export. The CLI also calls
+`loaded.diagnose(result.failure)` and sends that value to the shared renderer;
+library callers use the same method when they need presentation-ready frames.
 
 ## Authoritative run logs
 

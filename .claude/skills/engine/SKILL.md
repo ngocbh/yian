@@ -120,9 +120,10 @@ Hold this model whenever you design anything:
   omitting only an absent local suffix and preserving order/duplicates. The
   evaluator, dispatcher, and terminal-unreachable producer use that node-owned
   rule without a kind branch. Durable records preserve the complete trace, and
-  replay restores it even when current origins were rebased. Keep the temporary
-  runtime locator/range and CLI `SourceFrame` graph-walk bridges accurate until
-  their later cutover; do not route new origin resolution around `diagnose()`.
+  replay restores it even when current origins were rebased. Runtime CLI failures
+  must call `ComposedFlow.diagnose()` and pass its result to the shared diagnostic
+  renderer; never infer source from runtime ids, graph topology, locator/range, or
+  `SourceFrame`. The now-unused presentation carriers remain only for deletion.
 - **Compose load boundary:** `LoadError` carries exactly one already-resolved
   `Diagnostic`. Compose owns the source label/text/range and builds every frame
   before raising; definition/import context is prepended immutably. A load-error
@@ -454,7 +455,8 @@ Inline extraction intentionally takes one graph-wide nodes snapshot before
 projection so unchanged aliases retain sharing; field navigation uses cursors or
 their package-private read-only view.
 `SourceFrame` is persistent render-only text/range metadata on `ComposedFlow.source`
-and composite nodes' `child_source`; it does not own parsing or the source graph.
+and composite nodes' `child_source`. Runtime diagnosis no longer reads it; it is
+unused migration residue and does not own parsing or the source graph.
 
 Inline composite implementation stays wholly in `compose`: `desugar/` retains
 and masks located bodies, the loader owns the file-private callable table/cache,

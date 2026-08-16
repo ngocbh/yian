@@ -181,8 +181,10 @@ to that context; it omits only an absent local suffix and preserves order and
 duplicates. Evaluator, dispatcher, and terminal-unreachable failure producers
 all use this node-owned rule without a kind branch. Durable replay restores the
 recorded complete trace even when the current graph carries rebased origins.
-Runtime results retain temporary locator/range fields, and the CLI retains its
-`SourceFrame` bridge until the remaining source-diagnostic cutover.
+Runtime results retain temporary locator/range fields for the remaining cleanup,
+but the CLI ignores them: it renders `loaded.diagnose(result.failure)` through the
+same `render_diagnostic` path used for load failures. Failed presentation remains
+unlocated rather than triggering runtime-id or graph inference.
 
 Every execution uses one `RunLog`. `MemoryRunLog` gives a process-local run the same
 ordering semantics; `JsonlRunLog` holds a nonblocking exclusive lock and fsyncs each
@@ -241,7 +243,8 @@ Inline CODE implements `exception_origin(exc)` by retaining its recursive compil
 code-object tree and selecting the deepest traceback frame owned by identity (`is`).
 The wrapped line chooses an exact literal-line origin, then the whole `code:` scalar
 and node fallback. Filenames and structurally equal code objects never establish
-ownership; reference-mode CODE keeps the base node-origin behavior.
+ownership; reference-mode CODE uses the whole authored `code:` origin as its
+invocation site, then the base node fallback.
 
 CASE implements the same hook for ordered predicates. Each compiled `Case` carries
 the origin of its exact `cases[N].when` occurrence. The hook identifies this node's

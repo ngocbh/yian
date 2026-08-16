@@ -155,15 +155,11 @@ ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
   edges that close the loop) titled `file:line`, with the message below — instead of an
   engine traceback; `--engine-trace` adds the Python traceback for debugging the engine
   itself.
-- A **runtime** failure boxes the `.yaml` at the line it originated from. When the failing
-  node is inside a *called child flow* (a `defs:` callable or an external `uses:` file), the
-  CLI prints a **call traceback** — a stack of boxed frames most-recent-call-last, like a
-  Python traceback: the top-level `call` node, then each child it descends into (an in-file
-  `<file> defs:<name>` frame, or a frame titled by the external file's name), down to the
-  actual node that failed. The exact operation range is placed on the deepest current frame
-  whose node owns that source site, including an offending child `input:` binding or an
-  intermediate caller assertion. Otherwise the walk uses current kind and node-header
-  fallbacks instead of applying an unowned coordinate to child text.
+- A **runtime** failure resolves its opaque origin trace through the loaded flow and uses
+  the same diagnostic renderer as load failures. Nested `defs:`, external `uses:`, CALL,
+  MAP, and LOOP failures show source-owned frames in outermost-to-innermost order, down to
+  the exact operation origin. If source presentation is missing or broken, the original
+  failure remains unlocated instead of the CLI inferring a range from runtime ids or graphs.
 
 ### Choosing a provider/model
 
@@ -259,10 +255,9 @@ Library callers can resolve that opaque trace with
 `loaded.diagnose(result.failure)`, which returns the canonical presentation-only
 `Diagnostic` defined in `agent_composer.diagnostics` (it is not a package-root
 export). The method copies `code`, `message`, `node_id`, `cause_type`, and
-`traceback`, then resolves the complete trace atomically. Runtime failures still
-use their temporary locator/range and `SourceFrame` rendering bridge during the
-remaining diagnostics migration; load failures already cross the boundary as a
-fully owned `Diagnostic`.
+`traceback`, then resolves the complete trace atomically. The CLI uses this same
+method for runtime failures before passing the result to the shared diagnostic
+renderer; it does not resolve runtime ids or graph topology itself.
 
 `loaded.origin_resolver` is the source-neutral authority for every origin reachable
 from the compiled Compose graph. It is `None` only when that graph is source-free;

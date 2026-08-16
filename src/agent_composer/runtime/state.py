@@ -81,6 +81,9 @@ def _node_output_type(node: Node) -> Type | None:
             "node output_contract must be an exact ValueContract or None, "
             f"got {type(contract).__name__}"
         )
+    if not isinstance(contract.type, Type):
+        raise TypeError("node output contract type must be a Type")
+    contract.type.validate_shape()
     return contract.type
 
 
@@ -846,10 +849,15 @@ def prepare_expanded(
             Canonical ``NodeExpandedRecord`` and detached append-before-apply plan.
 
     Raises:
+        `GrowthRejected`:
+            The node-produced prune set or seed, returned fragment constraints,
+            growth budget/depth ceiling, or requested prune policy is invalid.
         `TypeError`:
-            A carrier, prune member, builder, or built fragment has the wrong type.
+            A host/setup carrier or builder has the wrong type, or the builder does
+            not return a `Flow`.
         `ValueError`:
-            The spawner, fragment, budget, depth, or prune set violates growth safety.
+            The live state, spawner, topology, trait, or replay-independent host
+            invariant is invalid.
     """
     if type(state) is not RunState:
         raise TypeError("prepare_expanded expects a RunState")
@@ -1313,7 +1321,8 @@ def _prepare_growth_record(
             validated_fragment=validated_fragment,
         )
     except GrowthRejected as exc:
-        raise exc.original from exc
+        original = exc.original
+        raise original.with_traceback(original.__traceback__) from None
 
 
 def _prepare_growth_transition(
@@ -2107,6 +2116,11 @@ def _validate_growth_fragment(
     fragment: Flow,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Validate live topology first, then the node-produced fragment constraints."""
+    _reject_growth_cycle(
+        set(state.flow.nodes),
+        state.flow.edges,
+        as_growth_rejection=False,
+    )
     static_producer_types = {
         node_id: _node_output_type(node)
         for node_id, node in state.flow.nodes.items()
@@ -2128,8 +2142,8 @@ def _validate_growth_fragment_data(
     """Require a collision-free, self-contained, acyclic fragment.
 
     ``static_producer_types`` is the already validated live-topology projection.
-    Direct callers may omit it; unlike the node-data wrapper, this function then
-    reports malformed live contracts as host invariant errors.
+    When omitted, it is derived after the fragment's basic carrier checks; live
+    contract invariant errors still remain outside ``GrowthRejected``.
     """
     if type(fragment.nodes) is not dict:
         _raise_growth_rejected(TypeError("growth fragment nodes must be a dict"))
@@ -2210,7 +2224,15 @@ def _validate_growth_fragment_data(
                     f"got {type(contract).__name__}"
                 )
             )
-        fragment_producer_types[node_id] = _node_output_type(node)
+        if not isinstance(contract.type, Type):
+            _raise_growth_rejected(
+                TypeError("node output contract type must be a Type")
+            )
+        try:
+            contract.type.validate_shape()
+        except (TypeError, ValueError) as exc:
+            _raise_growth_rejected(exc)
+        fragment_producer_types[node_id] = contract.type
     producer_types = dict(static_producer_types)
     producer_types.update(fragment_producer_types)
     for node_id, node in fragment.nodes.items():
@@ -2443,8 +2465,13 @@ def _validate_growth_wiring_refs(
                 )
 
 
-def _reject_growth_cycle(node_ids: set[str], edges: list[Edge]) -> None:
-    """Reject a directed cycle in the predicted combined topology."""
+def _reject_growth_cycle(
+    node_ids: set[str],
+    edges: list[Edge],
+    *,
+    as_growth_rejection: bool = True,
+) -> None:
+    """Reject a cycle as fragment data or as a pre-existing host invariant."""
     adjacency: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
     in_degree = {node_id: 0 for node_id in node_ids}
     for edge in edges:
@@ -2463,9 +2490,15 @@ def _reject_growth_cycle(node_ids: set[str], edges: list[Edge]) -> None:
                 ready.append(successor)
     if visited != len(node_ids):
         stuck = sorted(node_id for node_id, degree in in_degree.items() if degree)
-        _raise_growth_rejected(
-            ValueError(f"growth fragment creates a cycle involving {stuck!r}")
+        message = (
+            f"growth fragment creates a cycle involving {stuck!r}"
+            if as_growth_rejection
+            else f"live topology contains a cycle involving {stuck!r}"
         )
+        error = ValueError(message)
+        if as_growth_rejection:
+            _raise_growth_rejected(error)
+        raise error
 
 
 def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
@@ -2983,6 +3016,20 @@ def _route_outgoing(
 ) -> tuple[Edge, ...]:
     """Return one node's validated outgoing adjacency in stored order."""
     outgoing = state.flow.outgoing(node_id)
+    if type(outgoing) is not list or type(state.flow.edges) is not list:
+        raise TypeError("compiled flow edge storage and adjacency must be lists")
+    authoritative: list[Edge] = []
+    for edge in state.flow.edges:
+        if not isinstance(edge, Edge):
+            raise ValueError("compiled flow contains an invalid edge")
+        if edge.from_ == node_id:
+            authoritative.append(edge)
+    if len(outgoing) != len(authoritative) or any(
+        indexed is not stored for indexed, stored in zip(outgoing, authoritative)
+    ):
+        raise ValueError(
+            f"route node {node_id!r} has an invalid outgoing adjacency"
+        )
     seen: set[str] = set()
     validated: list[Edge] = []
     for edge in outgoing:
@@ -2992,6 +3039,8 @@ def _route_outgoing(
             raise TypeError(
                 f"route edge {edge.id!r} source_handle must be a string or None"
             )
+        if edge.source_handle == "":
+            raise ValueError(f"route edge {edge.id!r} source_handle must be non-empty")
         if type(edge.id) is not str or not edge.id or edge.id in seen:
             raise ValueError(f"route node {node_id!r} has invalid outgoing edge IDs")
         seen.add(edge.id)

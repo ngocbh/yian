@@ -321,6 +321,66 @@ def test_growth_seed_rejection_retains_the_original_exception(monkeypatch):
     assert caught.value.original is original
 
 
+@pytest.mark.parametrize(
+    "seed",
+    [
+        {True: "call"},
+        [{True: "map"}],
+        ({True: "loop"}, 0),
+    ],
+    ids=("call", "map", "loop"),
+)
+def test_growth_rejects_non_string_record_keys_before_builder(seed: Any):
+    state, _ = _initialized_spawner()
+    builder_called = False
+
+    def builder(spawner: Node, canonical_seed: Any) -> Flow:
+        nonlocal builder_called
+        builder_called = True
+        return _fragment(spawner.id)
+
+    with pytest.raises(GrowthRejected, match="keys must be strings") as caught:
+        prepare_expanded(state, "spawn", Grow(seed=seed), builder)
+
+    assert type(caught.value.original) is ValueError
+    assert builder_called is False
+
+
+def test_growth_rejects_a_cyclic_seed_before_builder():
+    state, _ = _initialized_spawner()
+    seed: list[Any] = []
+    seed.append(seed)
+
+    with pytest.raises(GrowthRejected, match="cyclic container") as caught:
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed=seed),
+            lambda spawner, _seed: _fragment(spawner.id),
+        )
+
+    assert type(caught.value.original) is ValueError
+
+
+def test_growth_rejects_an_excessively_nested_seed_before_builder():
+    state, _ = _initialized_spawner()
+    seed: Any = "leaf"
+    for _ in range(1_200):
+        seed = [seed]
+    builder_called = False
+
+    def builder(_spawner: Node, _seed: Any) -> Flow:
+        nonlocal builder_called
+        builder_called = True
+        return _fragment("spawn")
+
+    with pytest.raises(GrowthRejected, match="nesting exceeds") as caught:
+        prepare_expanded(state, "spawn", Grow(seed=seed), builder)
+
+    assert type(caught.value.original) is ValueError
+    assert builder_called is False
+
+
 def test_growth_builder_receives_a_detached_spawner_and_failure_is_pure():
     state, _ = _initialized_spawner()
     live_spawner = state.flow.nodes["spawn"]
@@ -575,6 +635,7 @@ def test_growth_replay_unwraps_shared_growth_rejection_identity(monkeypatch):
 
     assert caught.value is original
     assert not isinstance(caught.value, GrowthRejected)
+    assert caught.value.__cause__ is None
 
 
 def test_growth_live_and_record_replay_produce_equal_state():
@@ -1118,6 +1179,31 @@ def test_growth_rejects_malformed_static_contract_as_a_host_invariant():
     assert not isinstance(caught.value, GrowthRejected)
     assert _snapshot(state) == before
     assert log.next_sequence == sequence
+
+
+def test_growth_rejects_a_static_cycle_as_a_host_invariant():
+    """A corrupt live graph must not become node-owned fragment rejection."""
+    state, log = _initialized_spawner()
+    state.flow.edges.append(
+        Edge(
+            id="corrupt-static-cycle",
+            from_=state.flow.end_id,
+            to=state.flow.start_id,
+        )
+    )
+    before = _snapshot(state)
+
+    with pytest.raises(ValueError, match="cycle") as caught:
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda spawner, _seed: _fragment(spawner.id),
+        )
+
+    assert not isinstance(caught.value, GrowthRejected)
+    assert _snapshot(state) == before
+    assert log.next_sequence == 4
 
 
 def test_growth_enforces_peak_node_budget_before_same_transition_pruning(monkeypatch):

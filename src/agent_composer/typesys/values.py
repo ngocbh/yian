@@ -282,6 +282,8 @@ class Type:
       - record:  kind=OBJECT,   fields={name: Type}, required={names}
       - variant: kind=STRING,   tags={labels}
       - list:    kind=LIST_*,   element=<element Type>
+    A refined specialized list uses the element's matching storage tag;
+    `LIST_ANY` is the generic carrier and may refine any element type.
     A plain scalar / flat list uses only `kind` (see `Type.scalar`).
     """
 
@@ -296,6 +298,141 @@ class Type:
     def scalar(cls, seg: ValueKind) -> "Type":
         """Build a plain `Type` carrying only a storage tag (no field/tag/element refinement)."""
         return cls(kind=seg)
+
+    def validate_shape(self) -> None:
+        """Require recursively well-formed structural type metadata.
+
+        This is an execution-boundary invariant check, not value validation. It
+        catches a corrupted or manually assembled type before value rejection is
+        classified against that contract.
+
+        Raises:
+            `TypeError`:
+                A type field or nested carrier has the wrong runtime type.
+            `ValueError`:
+                Refinements conflict, cannot be canonicalized, name an absent
+                record field, use incompatible storage, or form a cycle.
+        """
+        _validate_type_shape(self, active=set(), validated=set())
+
+
+def _validate_type_shape(
+    typ: Type,
+    *,
+    active: set[int],
+    validated: set[int],
+) -> None:
+    """Validate one recursive type graph while permitting shared child objects."""
+    if not isinstance(typ, Type):
+        raise TypeError("nested type must be a Type")
+    identity = id(typ)
+    if identity in active:
+        raise ValueError("type refinements must form an acyclic graph")
+    if identity in validated:
+        return
+    if not isinstance(typ.kind, ValueKind):
+        raise TypeError("type kind must be a ValueKind")
+    if type(typ.nullable) is not bool:
+        raise TypeError("type nullable must be a bool")
+
+    active.add(identity)
+    try:
+        fields = typ.fields
+        if fields is not None:
+            if type(fields) is not dict:
+                raise TypeError("type fields must be a dict or None")
+            if typ.kind is not ValueKind.OBJECT:
+                raise ValueError("only object types may declare record fields")
+            for name, field_type in fields.items():
+                if type(name) is not str or not name:
+                    raise TypeError("type field names must be non-empty strings")
+                _validate_type_metadata_string(name)
+                _validate_type_shape(
+                    field_type,
+                    active=active,
+                    validated=validated,
+                )
+
+        required = typ.required
+        if required is not None:
+            if type(required) is not frozenset or any(
+                type(name) is not str or not name for name in required
+            ):
+                raise TypeError(
+                    "type required fields must be a frozenset of non-empty strings or None"
+                )
+            for name in required:
+                _validate_type_metadata_string(name)
+            if fields is None:
+                raise ValueError("type required fields need a record field mapping")
+            unknown = required - fields.keys()
+            if unknown:
+                raise ValueError(
+                    f"type requires unknown record fields: {sorted(unknown)!r}"
+                )
+
+        tags = typ.tags
+        if tags is not None:
+            if type(tags) is not frozenset or any(
+                type(tag) is not str or not tag for tag in tags
+            ):
+                raise TypeError(
+                    "type tags must be a frozenset of non-empty strings or None"
+                )
+            for tag in tags:
+                _validate_type_metadata_string(tag)
+            if typ.kind is not ValueKind.STRING:
+                raise ValueError("only string types may declare variant tags")
+
+        element = typ.element
+        if element is not None:
+            if not typ.kind.is_list():
+                raise ValueError("only list types may declare an element type")
+            _validate_type_shape(
+                element,
+                active=active,
+                validated=validated,
+            )
+            expected_kind = _list_kind_for_element(element)
+            if typ.kind is not ValueKind.LIST_ANY and typ.kind is not expected_kind:
+                raise ValueError(
+                    f"list storage kind {typ.kind.value!r} does not match "
+                    f"element type; expected {expected_kind.value!r}"
+                )
+
+        refinements = sum(
+            value is not None for value in (fields, tags, element)
+        )
+        if refinements > 1:
+            raise ValueError("a type may declare only one structural refinement")
+    finally:
+        active.remove(identity)
+    validated.add(identity)
+
+
+def _validate_type_metadata_string(value: str) -> None:
+    """Require a type-owned name to be representable in canonical JSON."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("type metadata contains a Unicode surrogate") from exc
+
+
+def _list_kind_for_element(element: Type) -> ValueKind:
+    """Return the storage tag selected by the public type resolver for an element."""
+    semantic_kind = element.kind
+    if element.tags is not None:
+        semantic_kind = ValueKind.STRING
+    elif element.fields is not None:
+        semantic_kind = ValueKind.OBJECT
+    return next(
+        (
+            list_kind
+            for list_kind, element_kind in _LIST_ELEMENT_KIND.items()
+            if element_kind is semantic_kind
+        ),
+        ValueKind.LIST_ANY,
+    )
 
 
 # --------------------------------------------------------------------------- #

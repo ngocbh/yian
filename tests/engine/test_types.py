@@ -126,6 +126,7 @@ def test_is_shadow_guard():
 from agent_composer.typesys.values import (  # noqa: E402
     ListObjectValue,
     ObjectValue,
+    Type,
     TypeCheckError,
     ValueKind,
     build_value_as,
@@ -189,6 +190,136 @@ def test_recursive_record_rejected():
     bad = {"Node": RecordDef(fields={"child": "Node"})}
     with pytest.raises(TypeCheckError):
         type_for("Node", bad)
+
+
+def test_runtime_type_shape_accepts_resolved_and_shared_graphs():
+    shared = type_for("Rating", REG)
+    Type(
+        kind=ValueKind.OBJECT,
+        fields={"first": shared, "second": shared},
+        required=frozenset({"first", "second"}),
+    ).validate_shape()
+    Type(
+        kind=ValueKind.LIST_ANY,
+        element=Type.scalar(ValueKind.STRING),
+    ).validate_shape()
+    for expression in (
+        "str",
+        "Optional[str]",
+        "Action",
+        "Rating",
+        "List[Action]",
+        "List[Rating]",
+        "List[date]",
+        "List[List[int]]",
+    ):
+        type_for(expression, REG).validate_shape()
+
+
+@pytest.mark.parametrize(
+    ("typ", "error_type", "match"),
+    [
+        (Type(kind="str"), TypeError, "kind"),
+        (Type(kind=ValueKind.STRING, nullable=1), TypeError, "nullable"),
+        (Type(kind=ValueKind.OBJECT, fields=[]), TypeError, "fields"),
+        (
+            Type(kind=ValueKind.OBJECT, fields={}, required=set()),
+            TypeError,
+            "required fields",
+        ),
+        (Type(kind=ValueKind.STRING, tags={"yes"}), TypeError, "tags"),
+        (Type(kind=ValueKind.LIST_STRING, element="str"), TypeError, "nested type"),
+        (
+            Type(kind=ValueKind.STRING, fields={}),
+            ValueError,
+            "only object types",
+        ),
+        (
+            Type(kind=ValueKind.OBJECT, required=frozenset()),
+            ValueError,
+            "need a record field mapping",
+        ),
+        (
+            Type(
+                kind=ValueKind.OBJECT,
+                fields={},
+                required=frozenset({"missing"}),
+            ),
+            ValueError,
+            "unknown record fields",
+        ),
+        (
+            Type(kind=ValueKind.OBJECT, tags=frozenset({"yes"})),
+            ValueError,
+            "only string types",
+        ),
+        (
+            Type(kind=ValueKind.STRING, element=Type.scalar(ValueKind.STRING)),
+            ValueError,
+            "only list types",
+        ),
+        (
+            Type(
+                kind=ValueKind.OBJECT,
+                fields={},
+                tags=frozenset({"yes"}),
+            ),
+            ValueError,
+            "structural refinement|only string types",
+        ),
+    ],
+)
+def test_runtime_type_shape_rejects_malformed_carriers(
+    typ: Type,
+    error_type: type[Exception],
+    match: str,
+):
+    with pytest.raises(error_type, match=match):
+        typ.validate_shape()
+
+
+@pytest.mark.parametrize(
+    "typ",
+    [
+        Type(
+            kind=ValueKind.LIST_INTEGER,
+            element=Type.scalar(ValueKind.STRING),
+        ),
+        Type(
+            kind=ValueKind.LIST_STRING,
+            element=Type.scalar(ValueKind.DATE),
+        ),
+        Type(
+            kind=ValueKind.LIST_OBJECT,
+            element=Type(kind=ValueKind.STRING, tags=frozenset({"yes"})),
+        ),
+    ],
+)
+def test_runtime_type_shape_rejects_mismatched_list_storage(typ: Type):
+    with pytest.raises(ValueError, match="list storage kind"):
+        typ.validate_shape()
+
+
+@pytest.mark.parametrize("metadata", ["bad\ud800"])
+def test_runtime_type_shape_rejects_noncanonical_metadata(metadata: str):
+    for typ in (
+        Type(
+            kind=ValueKind.OBJECT,
+            fields={metadata: Type.scalar(ValueKind.STRING)},
+            required=frozenset({metadata}),
+        ),
+        Type(kind=ValueKind.STRING, tags=frozenset({metadata})),
+    ):
+        with pytest.raises(ValueError, match="Unicode surrogate"):
+            typ.validate_shape()
+
+
+def test_runtime_type_shape_rejects_cycles():
+    cyclic = Type(kind=ValueKind.OBJECT, fields={})
+    object.__setattr__(cyclic, "fields", {"self": cyclic})
+
+    with pytest.raises(ValueError, match="acyclic"):
+        cyclic.validate_shape()
 
 
 def test_end_to_end_write_boundary():

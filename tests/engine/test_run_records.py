@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError, dataclass
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
 
@@ -379,6 +379,17 @@ def test_canonical_json_rejects_lone_unicode_surrogates_as_value_errors():
         )
 
 
+def test_canonical_data_rejects_excessive_nesting_as_a_value_error():
+    value: Any = "leaf"
+    for _ in range(1_200):
+        value = [value]
+
+    with pytest.raises(ValueError, match="nesting exceeds"):
+        canonical_seed(value)
+    with pytest.raises(ValueError, match="nesting exceeds"):
+        canonical_typed(value, None)
+
+
 def test_typed_output_canonicalizes_tuple_date_and_file_ref():
     value = {
         "items": (1, 2),
@@ -433,6 +444,21 @@ def test_canonical_helpers_reject_unordered_containers():
         canonical_seed(Box({"alpha", "beta"}))
     with pytest.raises(ValueError, match="unordered container"):
         canonical_typed({"values": {"alpha", "beta"}}, ValueKind.OBJECT)
+
+
+def test_canonical_seed_rejects_keys_before_json_stringification():
+    with pytest.raises(ValueError, match="keys must be strings"):
+        canonical_seed({True: "would become true"})
+
+
+def test_canonical_helpers_reject_cyclic_node_data():
+    cyclic: list[Any] = []
+    cyclic.append(cyclic)
+
+    with pytest.raises(ValueError, match="cyclic container"):
+        canonical_seed(cyclic)
+    with pytest.raises(ValueError, match="cyclic container"):
+        canonical_typed(cyclic, None)
 
 
 def test_pool_codec_is_canonical_and_lossless_for_typed_values():

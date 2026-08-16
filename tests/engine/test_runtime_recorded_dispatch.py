@@ -611,6 +611,96 @@ def test_malformed_compiled_output_contract_remains_a_host_failure():
 
 
 @pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
+def test_malformed_nested_output_type_remains_a_host_failure(num_workers: int):
+    """Corrupt contract metadata must not masquerade as rejected node output."""
+    nested_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"value": Type.scalar(ValueKind.INTEGER)},
+        required=frozenset({"value"}),
+    )
+    output_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"nested": nested_type},
+        required=frozenset({"nested"}),
+    )
+    object.__setattr__(nested_type, "required", [1, "value"])
+    state, log = _initialized(
+        _flow(
+            [
+                _ActionNode(
+                    "work",
+                    lambda: {"nested": {}},
+                    output_contract=ValueContract(output_type),
+                )
+            ]
+        ),
+        num_workers=num_workers,
+    )
+
+    with pytest.raises(TypeError, match="required fields") as caught:
+        list(_dispatcher(state, log, num_workers=num_workers).run())
+
+    assert not isinstance(caught.value, state_module._NodeDataError)
+    assert tuple(state.in_flight) == ("work",)
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
+
+
+@pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
+def test_noncanonical_output_type_metadata_remains_a_host_failure(num_workers: int):
+    """A contract-owned surrogate must fail before output data is classified."""
+    field = "bad\ud800"
+    output_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={field: Type.scalar(ValueKind.STRING)},
+        required=frozenset({field}),
+    )
+    state, log = _initialized(
+        _flow(
+            [
+                _ActionNode(
+                    "work",
+                    lambda: {field: "value"},
+                    output_contract=ValueContract(output_type),
+                )
+            ]
+        ),
+        num_workers=num_workers,
+    )
+
+    with pytest.raises(ValueError, match="Unicode surrogate") as caught:
+        list(_dispatcher(state, log, num_workers=num_workers).run())
+
+    assert not isinstance(caught.value, state_module._NodeDataError)
+    assert tuple(state.in_flight) == ("work",)
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
+
+
+@pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
+def test_excessively_nested_output_constructs_contract_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    num_workers: int,
+):
+    value: Any = "leaf"
+    for _ in range(1_200):
+        value = [value]
+    state, log = _initialized(
+        _flow([_ActionNode("work", lambda: value)]),
+        num_workers=num_workers,
+    )
+    failures = _capture_semantic_failures(monkeypatch)
+
+    events = list(_dispatcher(state, log, num_workers=num_workers).run())
+
+    assert len(failures) == 1
+    assert failures[0].code == "contract.output"
+    assert failures[0].cause_type == "ValueError"
+    assert "nesting exceeds" in failures[0].message
+    assert isinstance(events[-2], NodeFailed)
+    assert isinstance(events[-1], RunFailed)
+    assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
+
+
+@pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
 def test_invalid_output_metadata_constructs_contract_failure_with_node_origin(
     monkeypatch: pytest.MonkeyPatch,
     num_workers: int,

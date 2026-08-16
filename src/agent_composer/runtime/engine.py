@@ -254,8 +254,9 @@ class FlowEngine:
     ) -> tuple[Any, ...]:
         """Prepare node data, append its record, and apply the total reducer plan.
 
-        Evaluator ``Failure`` values are projected into the current schema-1 record
-        fields here; their semantic code and origin trace await the record cutover.
+        Evaluator and dispatcher ``Failure`` values are projected into the current
+        schema-1 record fields here; their semantic code and origin trace await the
+        record cutover.
         """
         if isinstance(outcome, EvaluationFailure):
             failure = outcome.failure

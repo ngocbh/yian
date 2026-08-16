@@ -28,8 +28,8 @@ from agent_composer.events import SourceRange
 def reject_cycles(
     edges: list[Edge],
     node_ids: "set[str]",
-    node_ranges: "dict[str, SourceRange] | None" = None,
     *,
+    node_ranges: "dict[str, SourceRange] | None" = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Raise a `LoadError` if the inferred (real-node) graph has a directed cycle.

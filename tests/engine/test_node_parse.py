@@ -2,7 +2,7 @@
 
 Each `nodes:` entry (map key = node id, no `id:` field) carries a `kind:` plus
 flat kind-fields; `parse_nodes` reads it into a typed per-kind descriptor and is
-loud (a `LoadError` at the node's `.yaml` line) on a field illegal for the kind
+loud (a `LoadError` at the node's `.yaml` range) on a field illegal for the kind
 or an unknown kind. These are DESCRIPTORS (validated parsed shape) — runtime
 `Node`s are built later.
 """
@@ -31,7 +31,7 @@ def _nodes(yaml_text: str):
     """Parse a bare `nodes:`-body mapping (the test inlines node maps directly).
 
     Source-aware: the document is built over the source text so parse errors carry a
-    `SourceRange` (and, derived from it, a legacy `.line`).
+    canonical diagnostic frame over a `SourceRange`.
     """
     return parse_nodes(SourceDocument.parse(yaml_text).root)
 

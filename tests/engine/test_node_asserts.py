@@ -65,6 +65,12 @@ def test_node_asserts_classify_pre_and_post():
     assert _assertion_text(x.pre_asserts) == [("${n} >= 0", "${n} >= 0")]
 
 
+def test_assertion_site_lookup_is_keyword_only() -> None:
+    """A retired third positional argument cannot silently bind as a site lookup."""
+    with pytest.raises(TypeError):
+        validate_node_asserts({}, {}, lambda _node_id, _index: None)  # type: ignore[call-arg]
+
+
 def test_node_assert_field_walk_uses_the_canonical_output_contract():
     """Node-local validation projects the type without replacing provenance."""
     contract_type = Type(

@@ -6,9 +6,8 @@ three seed fixtures pin that contract end-to-end:
 
 - **e01** — a dangling flow-output ref (`${scor.output}` typo) -> located at the
   `outputs:` line (the offending line).
-- **e02** — a cyclic data graph (`a -> b -> a`) -> located at the first stuck node's
-  line (a cycle spans nodes, so the coarser first-member anchor is the documented
-  choice; the message names every stuck node).
+- **e02** — a cyclic data graph (`a -> b -> a`) -> one frame for each actual cycle
+  member, in authored source order; the message names both nodes.
 - **e03** — a dotted-field miss on an ANONYMOUS producer record
   (`${score.output.confidence}` on `{rating, rationale}`) -> located at the
   `outputs:` line (C-ANON-CHECK: anon records are field-checked).
@@ -65,7 +64,7 @@ def test_e01_dangling_ref_located():
 
 
 # --------------------------------------------------------------------------- #
-# e02 — cycle, located at the first stuck node's line (coarse: a cycle spans nodes)
+# e02 — cycle, located at every actual cycle member
 # --------------------------------------------------------------------------- #
 
 
@@ -74,8 +73,8 @@ def test_e02_cycle_located():
     msg = str(err)
     assert "cycle" in msg
     assert "'a'" in msg and "'b'" in msg  # names the stuck nodes
-    # node `a` (the first stuck node) is at line 12 — the documented coarse anchor.
-    assert _error_ranges(err)[0].start_line == 12
+    # Nodes `a` and `b` begin at lines 12 and 18, in authored source order.
+    assert tuple(range_.start_line for range_ in _error_ranges(err)) == (12, 18)
 
 
 # --------------------------------------------------------------------------- #

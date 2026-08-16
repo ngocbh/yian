@@ -199,10 +199,9 @@ def validate_references(
             scan(src, f"node {node_id!r} {node.wiring_ref_label(param)} from",
                  franges.get(("input", param)) or input_rng)
 
-    # Flow outputs (the codomain): each binding `from:` checked like a node input —
-    # located at the `outputs:` section line (dangling-head/dotted-field errors point here).
-    # No built node owns the flow `outputs:` block. A retained child body can supply its
-    # output value/block range; other callers keep the section-line fallback.
+    # Flow outputs (the codomain): each binding `from:` is checked like a node input and
+    # located at its retained value or block range. No built node owns this source site;
+    # source-free callers deliberately remain unlocated.
     for value in _output_bindings(outputs):
         scan(value, "flow output from", outputs_range)
 

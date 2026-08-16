@@ -5,7 +5,7 @@
 # useful source line for this validation failure.
 #
 # The descriptor passes that range into the load-time validation boundary. The
-# resulting LoadError must keep it instead of relying on the node-header line map.
+# resulting LoadError must keep it instead of falling back to the node-header range.
 #
 # This fixture therefore covers a build-time error raised below the generic
 # descriptor conductor while still preserving its precise authored field site.

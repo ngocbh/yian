@@ -12,6 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.diagnostics import Diagnostic
+
 
 _ROOT = Path(__file__).resolve().parents[2]
 _PRODUCTION_PATHS = (
@@ -25,8 +28,6 @@ _RETIRED_LOCATION_NAMES = (
     "n_lines",
     "s_lines",
     "_section_lines",
-    "LoadError.line",
-    "LoadError.lines",
 )
 _RETIRED_LOCATION_PATTERNS = {
     name: re.compile(rf"(?<!\w){re.escape(name)}(?!\w)")
@@ -60,6 +61,15 @@ def test_lines_api_not_reexported_from_compose():
         from agent_composer.compose import node_lines  # noqa: F401
     with pytest.raises(ImportError):
         from agent_composer.compose import section_lines  # noqa: F401
+
+
+def test_load_error_has_no_line_aliases() -> None:
+    """The canonical diagnostic is the exception's only location interface."""
+    error = LoadError(Diagnostic(code="compose.load", message="bad flow"))
+
+    for name in ("line", "lines"):
+        assert name not in LoadError.__dict__
+        assert not hasattr(error, name)
 
 
 def test_lines_producers_gone_from_parser():

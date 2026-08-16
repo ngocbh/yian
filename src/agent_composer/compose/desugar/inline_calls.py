@@ -39,7 +39,7 @@ sections have no descriptor, so their inline calls use a supplied section/item r
 
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
 kind-blind binding-field walk) + `compose.helpers.errors` (peers), `expr` (the ref-walk + the
-span flow-call detector), `events` (SourceRange). Only the loader imports this back.
+span flow-call detector), `diagnostics` (SourceRange). Only the loader imports this back.
 """
 
 from __future__ import annotations
@@ -49,9 +49,7 @@ import re
 from dataclasses import replace
 from typing import Any, Callable, Optional
 
-from agent_composer.diagnostics import OriginRef
-from agent_composer.events import SourceRange
-from agent_composer.nodes.base import FieldRanges
+from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.contracts import Assertion
 from agent_composer.expr import (
     ExpressionError,
@@ -488,7 +486,7 @@ def _to_call_descriptor(
         inputs=dict(call.args),
         over=None,
         range=range,
-        field_ranges=FieldRanges(),
+        field_ranges={},
     )
 
 

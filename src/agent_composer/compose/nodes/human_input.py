@@ -4,8 +4,9 @@ One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input`
 frozen `HumanInputDescriptor`. It inherits the template `parse` from `NodeDescriptor` (which
 records each field's `SourceRange`), overriding only the `_validate_fields` hook to enforce the
 one-of-three question-surface legality, and overriding `build` (which constructs the runtime
-`HumanInputNode`, derives the answer schema, and stamps span metadata). Registered into
-`KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
+`HumanInputNode` and derives the answer schema). `_finish` stamps only the descriptor's opaque
+origin onto that node and keeps concrete ranges on the Compose-owned `BuildResult`. Registered
+into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 
 The `adaptive_questions:` EXPANSION (LLM-authored questions -> a synthesized agent feeding a
 plain questions gate) is a cross-node desugar and stays a graph stage; this handle only
@@ -19,7 +20,7 @@ from typing import Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 from agent_composer.expr.template import prompt_refs
 from agent_composer.nodes.contracts import ValueContract
 from agent_composer.nodes.human_input import HumanInputNode
@@ -38,8 +39,8 @@ class HumanInputDescriptor(NodeDescriptor):
     - `prompt`: the legacy free-text approve/answer surface.
     Legality (exactly-one, adaptive needs its own `prompt:`) is enforced in `_validate_fields`.
 
-    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
-    `range`/`field_ranges` parse metadata), the `inputs:`/`outputs:` signature surface, and the
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
+    the Compose-only `range`/`field_ranges` parse metadata), the `inputs:`/`outputs:` signature surface, and the
     template `parse` from `NodeDescriptor`. It overrides ONLY the `_validate_fields` hook (the
     one-of-three legality, calling `super()` first for the default asserts-list check); only the
     human_input-specific fields are declared here.
@@ -154,9 +155,10 @@ class HumanInputDescriptor(NodeDescriptor):
         Builds the human_input leaf: build the gate (one of three
         question forms), derive `output_contract` from `outputs:` (a questions gate with none
         defaults to a bare open OBJECT — the host returns a free-form answer record), compute the
-        `answer_schema`, and wire node-side `params` + flow-owned `inputs`. Stamps `.range`/
-        `.field_ranges` via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is
-        unused (leaf kind) and the inline-CODE anchors on `ctx` are read only by the CODE build.
+        `answer_schema`, and wire node-side `params` + flow-owned `inputs`. `_finish` stamps the
+        descriptor origin on the node and keeps its ranges on the Compose-owned `BuildResult`.
+        `ctx.resolver` is unused (leaf kind), and the inline-CODE anchors on `ctx` are read only
+        by the CODE build.
         """
         node = self._build_gate(ctx.diagnostics)
         node.output_contract = self.output_contract(ctx)

@@ -3,12 +3,13 @@
 A loader post-build pass over the built node map. A LITERAL `questions:` list is structurally
 checked via `parse_questions` (rejects bad count/shape/duplicate headers); a ref-form
 `questions_input` must name one of the node's declared inputs (mirrors the AGENT prompt-scope
-rule). It relocates `validate.validate_human_questions` verbatim, adding a `.range` anchor off
-the built gate's `field_ranges[("field", "questions")]` (the coarse `questions:` span,
-else the node's own range).
+rule). Its range anchor comes from the gate's transient Compose
+`BuildResult.field_ranges[("field", "questions")]` (the coarse `questions:` span,
+else the authored node range).
 
-Imports flow down only: `nodes` (HumanInputNode + its questions parser), `compose.helpers.errors`,
-`events` (SourceRange). Only the loader (and the compose package facade) import this back.
+Imports flow down only: `nodes` (HumanInputNode + its questions parser),
+`compose.helpers.errors`/`compose.nodes`, and `diagnostics`. Only the loader (and the compose
+package facade) imports this back.
 """
 
 from __future__ import annotations
@@ -16,12 +17,12 @@ from __future__ import annotations
 from typing import Optional
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.events import SourceRange
-from agent_composer.nodes.base import Node
+from agent_composer.compose.nodes.base import BuildResult
+from agent_composer.diagnostics import SourceRange
 
 
 def validate_human_questions(
-    nodes: dict[str, Node],
+    build_results: dict[str, BuildResult],
     *,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
@@ -32,7 +33,7 @@ def validate_human_questions(
     - A ref-form questions_input -> the name MUST be one of the node's declared inputs
       (mirrors the AGENT prompt-scope rule); otherwise LoadError with a hint.
     Gates without questions pass through. Each error anchors on the gate's `questions:`
-    field range (`field_ranges[("field", "questions")]`, else the node's own range).
+    field range (else the Compose-owned node range).
     Accumulates all errors into one LoadError.
     """
     diagnostics = diagnostics or LoadDiagnostics()
@@ -43,10 +44,14 @@ def validate_human_questions(
     )
 
     errors: list[tuple[str, Optional[SourceRange]]] = []
-    for node_id, node in nodes.items():
+    for node_id, result in build_results.items():
+        node = result.node
         if not isinstance(node, HumanInputNode):
             continue
-        rng = node.field_ranges.get(("field", "questions")) or node.range
+        rng = (
+            result.field_ranges.get(("field", "questions"))
+            or result.node_range
+        )
         if node.questions is not None:
             # A literal list baked into the node: structurally check it at LOAD,
             # so a bad count/shape/duplicate header fails here rather than at run.

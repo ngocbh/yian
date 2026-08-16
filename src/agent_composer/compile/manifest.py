@@ -70,11 +70,7 @@ _IGNORED_NODE_FIELDS = frozenset(
     {
         "origin",
         "origin_context",
-        "range",
-        "field_ranges",
         "wiring_labels",
-        "pre_assert_ranges",
-        "post_assert_ranges",
     }
 )
 

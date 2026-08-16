@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Callable, Optional
 
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.parse.file import CaseDescriptor
 from agent_composer.compose.desugar.inline_calls import (

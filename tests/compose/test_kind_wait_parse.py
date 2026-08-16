@@ -3,7 +3,7 @@
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.wait import WaitDescriptor
 from agent_composer.compose.source import SourceDocument
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 _FLOW = """\
@@ -39,4 +39,4 @@ def test_wait_build_returns_blocking_node_with_reserved_until_wiring():
     # The `until` source rides the reserved wiring key; the node carries no author params.
     assert node.params == []
     assert wiring == {"until": "${input.deadline}"}
-    assert node.range == desc.range
+    assert result.node_range == desc.range

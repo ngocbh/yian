@@ -4,7 +4,7 @@ returns a runtime ModelNode with an output contract, wiring, and stamped ranges.
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.model import ModelDescriptor
 from agent_composer.compose.source import SourceDocument
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 _FLOW = """\
@@ -37,7 +37,7 @@ def test_model_parse_matches_descriptor_and_records_ranges():
     assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
 
 
-def test_model_build_returns_model_node_and_stamps_ranges():
+def test_model_build_returns_model_node_and_retains_compose_ranges():
     reader = _reader_for(_FLOW, "infer")
     desc = ModelDescriptor.parse("infer", reader)
     result = desc.build(BuildContext({}))
@@ -48,5 +48,5 @@ def test_model_build_returns_model_node_and_stamps_ranges():
     assert isinstance(node, ModelNode)
     assert node.model_id == "sentiment-v2"
     assert node.output_contract is not None
-    assert node.range == desc.range
+    assert result.node_range == desc.range
     assert wiring == {"text": "${input.text}"}

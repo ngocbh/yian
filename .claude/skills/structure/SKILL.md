@@ -115,8 +115,10 @@ and exact membership does not replay source. No other compose package may import
 PyYAML, inspect private graph slots, or reconstruct source by dumping and
 reparsing it.
 Source-aware parsing and inline extraction consume documents/cursors through that
-public interface; descriptors and nodes carry derived ranges and source-neutral
-kind-owned origins afterward.
+public interface. Descriptors retain derived ranges inside Compose, and
+`NodeDescriptor._finish()` copies node/field locations to the Compose-owned
+`BuildResult` for validation. Semantic nodes receive only source-neutral origins;
+no YAML range crosses assembly.
 Text-accepting parse conveniences delegate construction to `SourceDocument` before
 doing semantic work; they do not own a second parser.
 
@@ -145,9 +147,10 @@ additional kind-owned sites while the cursor is available; CODE uses it for the 
 Compose. After those registrations, CODE may resolve one load-time syntax site through the
 builder's package-private read-only lookup. That lookup replays the retained document without
 copying, freezing, or reparsing and never installs a resolver. Assembly also registers each authored
-flow/node assertion by source-order index; the same retained item cursor supplies both its
-`Assertion.origin` and aligned temporary range, so equal text at different positions stays
-distinct. Full roots and multi-node definitions retain flow assertion cursors and reuse
+flow/node assertion by source-order index; the retained item cursor supplies its
+`Assertion.origin`, so equal text at different positions stays distinct. Validation may use
+the cursor's concrete range inside Compose, but no aligned range enters the semantic node.
+Full roots and multi-node definitions retain flow assertion cursors and reuse
 the lowered carriers on START/END. Compact roots and flat single-node definitions project
 their assertions onto the synthesized node instead. Flow-input declaration keys and ordinary
 node-input keys belong to `Parameter`; ordinary node-input, reserved, and flow-output bound

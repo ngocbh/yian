@@ -24,6 +24,8 @@ import pytest
 
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.compose.helpers.errors import LoadDiagnostics
+from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceDocument
 from agent_composer.diagnostics import SourceRange
 from agent_composer.run import run_flow
 
@@ -390,7 +392,8 @@ def test_input_named_like_a_field_does_not_collide():
     #
     # Asserts CORRECT behavior — the regression pin for the part of #88 that IS fixed.
     text = (_ERRORS / "e33-input-named-like-field.yaml").read_text()
-    fr = load_flow(text.replace("${nope.output}", '"lit"')).compiled.nodes["calc"].field_ranges
+    document = SourceDocument.parse(text.replace("${nope.output}", '"lit"'))
+    fr = parse_nodes(document.root.child("nodes"))["calc"].field_ranges
     assert fr[("field", "env")].start_line == 32  # the `env:` field's VALUE
     assert fr[("input", "env")].start_line == 35  # the input NAMED `env`
     assert fr[("field", "env")] != fr[("input", "env")]  # the collision #88 reported

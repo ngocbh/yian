@@ -129,8 +129,9 @@ Hold this model whenever you design anything:
   before raising; definition/import context is prepended immutably. A load-error
   renderer consumes only `error.diagnostic` and never receives YAML text or a
   path separately. Retained `SourceRange` values are the only Compose location
-  authority; do not introduce line-map fallbacks. This is distinct from runtime
-  `Failure.trace`, which resolves through `ComposedFlow.diagnose()`.
+  authority; Compose imports them directly from `diagnostics`, and `events` does
+  not re-export them. Do not introduce line-map fallbacks. This is distinct from
+  runtime `Failure.trace`, which resolves through `ComposedFlow.diagnose()`.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;
@@ -155,13 +156,13 @@ Hold this model whenever you design anything:
   onto the synthesized leaf and owns its contract origins.
 - Compiled node assertions also have one shape: ordered `Assertion` carriers.
   Compose creates one carrier per authored flow/node list position and derives
-  its `.origin` (`OriginRef`) plus the temporary positional range from the same retained item
-  cursor; duplicate text therefore remains occurrence-distinct. Evaluate
+  its `.origin` (`OriginRef`) from the retained item cursor; duplicate text
+  therefore remains occurrence-distinct. Evaluate
   `.expression`, report `.display`, and preserve `.origin`: inline-call and
   flow/CALL lowering replace only the expression, while child cloning and LOOP
   respawn retain the carrier fields. START/END reuse the lowered flow carriers.
-  Do not add another assertion text/origin map; the existing positional range
-  lists are a temporary compatibility bridge, not the provenance authority.
+  `Node.run` diagnoses a failed assertion through that exact carrier's origin.
+  Do not add another assertion text/origin map or positional range list.
 - Compiled `Node.params` has one shape: ordered exact `Parameter` carriers. The
   flow owns their `Binding` sources; parameter contracts/default presence/
   coercion policy stay source-neutral, and rewrites preserve all origins.
@@ -391,8 +392,11 @@ Defensive value snapshots are iterative and preserve shared/recursive aliases.
 Source-aware parsing and inline extraction navigate `SourceCursor`s: physical
 cursors combine definition ranges with occurrence paths (and mapping-key ranges),
 virtual cursors are defensive source-free snapshots, and projected cursors retain
-explicitly selected physical child sources while changing a view. Descriptors and
-nodes carry derived ranges thereafter. Never reparse a source slice or mutate
+explicitly selected physical child sources while changing a view. Descriptors
+retain derived ranges; `NodeDescriptor._finish()` copies them to Compose-only
+`BuildResult.node_range` / `field_ranges` for post-build validation. Assembly
+discards both before `CompiledFlow`, so semantic nodes have no YAML range or
+aligned assertion-range fields. Never reparse a source slice or mutate
 anchors/aliases/merges.
 An unchanged source-backed string cursor exposes `ScalarSource`: its whole range and,
 for literal `|` blocks, exact zero-based constructed-line ranges captured from the
@@ -423,8 +427,8 @@ Assembly separately stamps authored node headers, ordinary node-input keys and b
 values, source-backed reserved
 MAP/WAIT wiring values, source-backed flow-output values, and authored flow/node
 assertions directly on their canonical carriers. Assertion sites are indexed by source
-order; one retained item cursor supplies both `Assertion.origin` and its aligned temporary
-range. Full root flows and multi-node definitions retain a flow assertion cursor and reuse
+order; one retained item cursor supplies `Assertion.origin`. Full root flows and
+multi-node definitions retain a flow assertion cursor and reuse
 the lowered carriers on START/END. Compact roots and flat single-node definitions project
 their assertions onto the synthesized node, where they remain node-local. Flow-output
 values are stamped after rewrites on `FlowOutput.binding`; END reuses that binding and

@@ -13,7 +13,7 @@ job: system/clock/run_id. Hidden from authors: a reserved __-prefixed id, never 
 
 from typing import Optional
 
-from agent_composer.nodes.base import FieldRanges, Node, NodeKind, Output
+from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.contracts import Parameter
 
 
@@ -30,9 +30,6 @@ class StartNode(Node):
             The node's id (`ID` at top level; deep-namespaced in a child).
         params (`list[Parameter]`, *optional*, defaults to `None`):
             The flow's canonical semantic input signature.
-        field_ranges (`dict`, *optional*, defaults to `None`):
-            Legacy Compose-owned input declaration ranges. Runtime diagnosis uses
-            parameter origins. `None` for a spanless flow.
         title (`str`, *optional*, defaults to `None`):
             Display title.
     """
@@ -51,7 +48,6 @@ class StartNode(Node):
         node_id: str,
         *,
         params: Optional[list[Parameter]] = None,
-        field_ranges: Optional[dict] = None,
         title: Optional[str] = None,
     ) -> None:
         super().__init__(node_id, title=title)
@@ -67,11 +63,7 @@ class StartNode(Node):
                     f"got {type(parameter).__name__}"
                 )
         self.params = parameters
-        # Legacy Compose-owned per-boundary-field ranges, keyed `("input", name)`.
-        # Runtime diagnosis resolves the matching Parameter origin and never reads this map.
-        # Rewrapped as `FieldRanges` while the compatibility metadata remains.
-        if field_ranges:
-            self.field_ranges = FieldRanges(field_ranges)
+
     def _run_impl(self, inputs: dict) -> Output:
         """Return the record already bound by the generic node input seam."""
         return Output(value=inputs)

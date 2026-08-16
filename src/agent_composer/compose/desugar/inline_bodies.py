@@ -15,7 +15,7 @@ from typing import Any
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.source import SourceCursor
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 INLINE_FLOW_PREFIX = "__inline_flow_"

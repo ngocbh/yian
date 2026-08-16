@@ -4,9 +4,8 @@ A loader post-build pass (run after the flow's leaves + child signatures are ass
 Each binding's SOURCE contract is resolved from its `${<id>.output}`/`${input.X}` ref over
 the PARENT producer + flow-input contracts, then its `Type` is projected and checked for
 structural compatibility with the CHILD input's declared `Type` (`types_compatible`,
-C-EQUIV). It carries
-a range anchor off the built call node's `field_ranges[("field", "inputs")]` (the coarse
-`input:` mapping span).
+C-EQUIV). Its range anchor comes from the call node's transient Compose
+`BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
 analysis), `compose.nodes.resolver` (`_output_value_contract`, the shared contract resolver —
@@ -22,13 +21,14 @@ from typing import Any, Optional
 from agent_composer.compile.validation import types_compatible
 from agent_composer.compose.nodes.resolver import _output_value_contract
 from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.events import SourceRange
+from agent_composer.compose.nodes.base import BuildResult
+from agent_composer.diagnostics import SourceRange
 from agent_composer.expr import binding_co_skips
 from agent_composer.nodes.contracts import ValueContract, binding_source
 
 
 def check_ref_map_types(
-    nodes: dict,
+    build_results: dict[str, BuildResult],
     producers: dict[str, ValueContract],
     flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
@@ -42,7 +42,7 @@ def check_ref_map_types(
     structurally compatible with the CHILD input's declared `Type` (`types_compatible`,
     C-EQUIV). A `${item}`/coalesce/literal/opaque source — or an opaque/absent child input
     (incl. the reserved `over` key) — stays lenient (skipped). Loud + located at the
-    node's `input:` mapping range (`field_ranges[("field", "inputs")]`, else the node's own range).
+    node's Compose-owned `input:` mapping range, else its authored node range.
     Iterates the WIRING (not the params)
     so a mis-named binding still surfaces here when its child decl is absent rather than
     being silently skipped."""
@@ -57,7 +57,8 @@ def check_ref_map_types(
                     f"{label} contracts must be exact ValueContract values, "
                     f"got {type(contract).__name__} for {name!r}"
                 )
-    for nid, node in nodes.items():
+    for nid, result in build_results.items():
+        node = result.node
         # CALL/MAP carry `child_inputs` to type-check against; a LOOP also carries a child but
         # its `'a -> 'a` contract is checked by check_loop_type_contract/carried_types instead.
         # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy) -> skip
@@ -88,7 +89,10 @@ def check_ref_map_types(
             ):
                 source = replace(source, nullable=False)
             if not types_compatible(source, child_type):
-                rng: Optional[SourceRange] = node.field_ranges.get(("field", "inputs")) or node.range
+                rng: Optional[SourceRange] = (
+                    result.field_ranges.get(("field", "inputs"))
+                    or result.node_range
+                )
                 raise diagnostics.error(
                     f"call node {nid!r}: binding {param!r} — child expects "
                     f"{child_type.kind.value!r}, source is {source.kind.value!r}",

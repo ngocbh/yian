@@ -10,24 +10,27 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from agent_composer.nodes.base import FieldRanges
 from agent_composer.compose.source import SourceAccessError, SourceCursor
+from agent_composer.diagnostics import SourceRange
 
 
-def _boundary_field_ranges(root: SourceCursor) -> FieldRanges:
-    """The flow-boundary source map stamped onto the top-level StartNode's `field_ranges`.
+def _boundary_field_ranges(
+    root: SourceCursor,
+) -> dict[tuple[str, str], SourceRange]:
+    """Return Compose-owned ranges for authored flow input declarations.
 
     Keys: each top-level `input:`/`inputs:` declaration name, tagged
-    `("input", name)` -> its declaration value `SourceRange`. This is legacy
-    Compose metadata retained on the synthesized boundary; runtime diagnosis uses
-    each parameter's opaque origin instead. Flow-level `asserts:` are not here:
-    assembly derives their ranges and origins from the retained assertion cursor.
-    Empty for a spanless/in-memory flow. This compatibility projection never raises."""
+    `("input", name)` -> its declaration value `SourceRange`. Assembly uses the
+    map while compiling flow parameters and discards it before semantic graph
+    construction. Flow-level `asserts:` are not here: assembly derives their
+    ranges and origins from the retained assertion cursor. Empty for a
+    spanless/in-memory flow. This projection never raises.
+    """
     try:
         value = root._value_view()
         if not isinstance(value, Mapping):
-            return FieldRanges()
-        out: FieldRanges = FieldRanges()
+            return {}
+        out: dict[tuple[str, str], SourceRange] = {}
         for key in ("input", "inputs"):
             if isinstance(value.get(key), Mapping):
                 out.update(
@@ -38,4 +41,4 @@ def _boundary_field_ranges(root: SourceCursor) -> FieldRanges:
                 )
         return out
     except SourceAccessError:
-        return FieldRanges()
+        return {}

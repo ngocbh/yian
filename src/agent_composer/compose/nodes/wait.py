@@ -3,8 +3,9 @@
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `wait` node's frozen
 `WaitDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`), and overriding `build` (which constructs the runtime `WaitNode` + the
-reserved `until` wiring and stamps span metadata onto it). Registered into `KINDS`/
-`BINDING_FIELDS` at import so the shared dispatch routes here.
+reserved `until` wiring). `_finish` stamps only the descriptor's opaque origin onto that node
+and retains concrete ranges on the Compose-owned `BuildResult`. Registered into
+`KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 """
 
 from __future__ import annotations
@@ -19,8 +20,8 @@ from agent_composer.nodes.wait import WaitNode
 class WaitDescriptor(NodeDescriptor):
     """kind=wait — block until an absolute date/datetime; produces ``None``.
 
-    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
-    `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
+    the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
     custom parse hook — a wait authors no `asserts`, so the default asserts check is a no-op).
     Only `until` is declared here; a wait never populates `inputs`/`outputs`.
 
@@ -40,9 +41,10 @@ class WaitDescriptor(NodeDescriptor):
         """Construct the runtime `WaitNode` (+ wiring) for this `WaitDescriptor`.
 
         Builds the wait leaf: its required `until` SOURCE rides the reserved wiring key
-        (`{"until": self.until}`), never a node-side param. Stamps `.range`/`.field_ranges`
-        via `_finish` (which wraps them in a `BuildResult`). `ctx.resolver` is unused (leaf kind)
-        and the inline-CODE anchors on `ctx` are read only by the CODE build.
+        (`{"until": self.until}`), never a node-side param. `_finish` stamps the descriptor
+        origin on the node and keeps its ranges on the Compose-owned `BuildResult`.
+        `ctx.resolver` is unused (leaf kind), and the inline-CODE anchors on `ctx` are read only
+        by the CODE build.
         """
         node = WaitNode(self.id, title=self.node_name)
         node.params = []

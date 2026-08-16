@@ -20,7 +20,7 @@ from typing import Any
 from lark import Token, Tree
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 from agent_composer.expr.expressions import ExpressionError
 from agent_composer.expr.template import Span, scan_template
 from agent_composer.nodes.contracts import binding_source

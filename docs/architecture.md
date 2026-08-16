@@ -88,8 +88,9 @@ Compose-owned origin reachable from an originful graph has one exact diagnostic-
 the complete trace through that authority into presentation-only `Diagnostic` data.
 
 The loader owns one `SourceDocument` for each flow source document. Source-aware parsing
-and inline extraction reuse cursors into it; later passes use descriptors and nodes that
-carry derived ranges. Physical cursors retain definition ranges and occurrence paths;
+and inline extraction reuse cursors into it; descriptors retain derived ranges and copy
+node/field locations to Compose-owned `BuildResult` values for validation. Semantic nodes
+receive only opaque origins, never YAML ranges. Physical cursors retain definition ranges and occurrence paths;
 this distinguishes two alias or flattened-merge occurrences even when they share the
 same anchored value definition. Virtual cursors represent generated, location-free
 values, while projected cursors rewrite a view and retain explicitly aligned authored

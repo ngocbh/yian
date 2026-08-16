@@ -24,7 +24,7 @@ from agent_composer.compose.source.common import (
     _read_only,
     _snapshot_safe_value,
 )
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 if TYPE_CHECKING:
     from agent_composer.compose.source.document import SourceDocument

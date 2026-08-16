@@ -1,8 +1,8 @@
 """The validate phase: cross-node checks over the assembled flow.
 
 Ordered AFTER edges in the loader pipeline (`helpers <- nodes <- parse <-
-desugar <- edges <- validate <- build <- loader`). Given the built node map,
-the derived edges, and the flow-owned wiring, this package runs the passes that
+desugar <- edges <- validate <- build <- loader`). Given the Compose-owned build
+results, the derived edges, and the flow-owned wiring, this package runs the passes that
 reject an ill-formed flow before it is compiled:
 
 - `references.py` — `validate_references`: every `${...}` ref resolves to a real
@@ -24,6 +24,11 @@ reject an ill-formed flow before it is compiled:
   it never navigates Compose cursors itself.
 - `handles.py` — `check_case_handles`: a `CaseNode`'s handles align with its
   outgoing control edges.
+
+Post-build passes may consult `BuildResult.node_range` / `field_ranges`, and assertion
+validation may receive a temporary descriptor/callback range. Those coordinates stay in
+Compose and are discarded before `CompiledFlow`; semantic nodes and assertion carriers keep
+only opaque origins.
 
 Ladder position: `validate/` MAY import `helpers`/`nodes`/`parse`/`desugar`/
 `edges` and the engine core (`compile.model`, `compile.validation`, `expr`,

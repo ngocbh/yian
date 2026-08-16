@@ -200,12 +200,11 @@ def test_all_lowered_strings_parse():
         condition_refs(src)
 
 
-# ---- Ranges (render-only) -------------------------------------------------------
+# ---- Ranges stay in Compose validation ------------------------------------------
 
-def test_ranges_are_positional():
-    # `assert_ranges` is a POSITIONAL list aligned 1:1 with the asserts; `pre_ranges`/`post_ranges`
-    # come out aligned with `start_pre`/`end_post`. Distinct ranges prove the alignment (no text key).
-    from agent_composer.events import SourceRange
+def test_ranges_are_not_carried_by_lowered_product():
+    """Positional validation ranges do not cross into the lowered semantic product."""
+    from agent_composer.diagnostics import SourceRange
 
     rng_pre = SourceRange(start_line=3, start_col=1, end_line=3, end_col=20)
     rng_post = SourceRange(start_line=4, start_col=1, end_line=4, end_col=20)
@@ -213,16 +212,17 @@ def test_ranges_are_positional():
         ["${input.age} >= 18", "emit.output.n >= 1"],  # [0] PRE, [1] POST
         assert_ranges=[rng_pre, rng_post],
     )
-    assert r.pre_ranges == [rng_pre]     # aligned with start_pre
-    assert r.post_ranges == [rng_post]   # aligned with end_post
+    assert len(r.start_pre) == 1
+    assert len(r.end_post) == 1
+    assert not hasattr(r, "pre_ranges")
+    assert not hasattr(r, "post_ranges")
 
 
-def test_no_ranges_gives_none_padded_lists():
-    # No `assert_ranges` supplied -> one None PER assert, so the lists stay aligned with start_pre /
-    # end_post (never shorter). A single PRE assert -> pre_ranges == [None], post_ranges == [].
+def test_lowering_without_ranges_needs_no_padding():
+    """A source-free assert lowers without synthetic location state."""
     r = _lower(["${input.age} >= 18"])
-    assert r.pre_ranges == [None]
-    assert r.post_ranges == []
+    assert len(r.start_pre) == 1
+    assert r.end_post == []
 
 
 def test_lowering_changes_only_expression_and_preserves_occurrence_metadata():

@@ -6,8 +6,8 @@ producers/flow inputs assembled LATER. This pass resolves each carried field's c
 bound seed source (`${<id>.output}`/`${input.X}` over the parent producer + flow-input
 contracts, via `_output_value_contract`), projects its Type, and checks it is structurally
 compatible (`types_compatible`, C-EQUIV) with the body OUTPUT's same-named field Type. It
-carries a `.range` anchor off the built loop
-node's `field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
+carries a range anchor from the loop's transient Compose
+`BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `compose.nodes.resolver`
 (`_output_value_contract`, the shared contract resolver — `resolver` imports no later phase, so
@@ -22,12 +22,13 @@ from typing import Any, Optional
 from agent_composer.compile.validation import types_compatible
 from agent_composer.compose.nodes.resolver import _output_value_contract
 from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.events import SourceRange
+from agent_composer.compose.nodes.base import BuildResult
+from agent_composer.diagnostics import SourceRange
 from agent_composer.nodes.contracts import ValueContract
 
 
 def check_loop_type_contract(
-    nodes: dict,
+    build_results: dict[str, BuildResult],
     producers: dict[str, ValueContract],
     flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
@@ -45,7 +46,7 @@ def check_loop_type_contract(
     OUTPUT's same-named field Type (the body `output_contract.type`). A
     literal/coalesce/opaque seed source, or an opaque body output field, stays lenient
     (skipped). Loud + located at the loop node's `input:` mapping range
-    (`field_ranges[("field", "inputs")]`, else the node's own range) on a
+    (else the Compose-owned node range) on a
     same-names/different-TYPES mismatch."""
     diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
@@ -58,7 +59,8 @@ def check_loop_type_contract(
                     f"{label} contracts must be exact ValueContract values, "
                     f"got {type(contract).__name__} for {name!r}"
                 )
-    for nid, node in nodes.items():
+    for nid, result in build_results.items():
+        node = result.node
         if not node.is_loop:
             continue
         body_contract = node.output_contract
@@ -81,7 +83,10 @@ def check_loop_type_contract(
                 continue  # literal/coalesce/opaque seed source -> lenient
             source = source_contract.type
             if not types_compatible(source, body_field):
-                rng: Optional[SourceRange] = node.field_ranges.get(("field", "inputs")) or node.range
+                rng: Optional[SourceRange] = (
+                    result.field_ranges.get(("field", "inputs"))
+                    or result.node_range
+                )
                 raise diagnostics.error(
                     f"loop node {nid!r}: carried field {field_name!r} — body output is "
                     f"{body_field.kind.value!r}, carried source is "

@@ -3,8 +3,9 @@
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `tool` node's frozen
 `ToolDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`), and overriding `build` (which constructs the runtime `ToolNode` +
-wiring and stamps span metadata onto it). Registered into `KINDS`/`BINDING_FIELDS` at import
-so the shared dispatch routes here.
+wiring). `_finish` stamps only the descriptor's opaque origin onto that node and retains
+concrete ranges on the Compose-owned `BuildResult`. Registered into
+`KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 """
 
 from __future__ import annotations
@@ -19,8 +20,8 @@ from agent_composer.nodes.tool import ToolNode
 class ToolDescriptor(NodeDescriptor):
     """kind=tool — a direct, deterministic call into TOOL_REGISTRY (untyped inputs).
 
-    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
-    `range`/`field_ranges` parse metadata), the node-signature `inputs` binding map, and the
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
+    the Compose-only `range`/`field_ranges` parse metadata), the node-signature `inputs` binding map, and the
     template `parse` from `NodeDescriptor` (no custom parse hook — tool's field legality is the
     default allowed/required key check + the asserts-list check). Only the tool-specific fields
     (`tool_id`, `asserts`) are declared here; a tool's sink surface is the base's `inputs` map,
@@ -43,9 +44,10 @@ class ToolDescriptor(NodeDescriptor):
         """Construct the runtime `ToolNode` (+ wiring) for this `ToolDescriptor`.
 
         Node-side `params` (the sink NAMES) + flow-owned `inputs` wiring; a tool declares no
-        `outputs:`, so `output_contract` stays unset. Stamps `.range`/`.field_ranges` from the
-        descriptor via `_finish` (which wraps them in a `BuildResult`). The sink surface is the
-        base's `inputs` map, so it uses the inherited `self.sink_params()`/`self.sink_wiring()`.
+        `outputs:`, so `output_contract` stays unset. `_finish` stamps the descriptor origin on
+        the node and keeps its ranges on the Compose-owned `BuildResult`. The sink surface is
+        the base's `inputs` map, so it uses the inherited
+        `self.sink_params()`/`self.sink_wiring()`.
         `ctx.resolver` is unused (leaf kind) and the inline-CODE anchors on `ctx` are read only
         by the CODE build.
         """

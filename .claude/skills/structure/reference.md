@@ -125,14 +125,16 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 | Source-free and cursor-aware recursive type/contract compilation | `compose/helpers/types.py` | cursor/catalog/YAML concepts below Compose or a duplicated type-shape traversal |
 | Semantic descriptors and flow sections | `compose/nodes` and `compose/parse` consuming a document/cursor | another YAML construction pass or retained parser object |
 | Source-preserving inline extraction | `compose/desugar` projecting cursors | PyYAML and loader state |
-| Compiled-flow assembly and per-occurrence carrier stamping | `compose/build` consuming descriptors and retained cursor sources | PyYAML and concrete loader implementation |
+| Compiled-flow assembly, per-occurrence carrier stamping, and temporary post-build location metadata | `compose/build` consuming descriptors and retained cursor sources | PyYAML, concrete loader implementation, or leaking `SourceRange` into semantic nodes / `CompiledFlow` |
 | Resolved-file reuse, cycles, and one file's callable namespace | `compose/loader` | `compile` and `runtime` |
 
 Only modules under `compose/source` may import PyYAML or traverse the retained
 parser graph. A text-accepting convenience in `compose/parse` must delegate the
 single construction to `SourceDocument`. Source-aware parsing and inline extraction
-navigate its cursors; descriptors and nodes carry derived ranges and source-neutral
-kind-owned origins afterward. No phase
+navigate its cursors; descriptors and Compose-only `BuildResult.node_range` /
+`field_ranges` carry derived locations, while semantic nodes carry only
+source-neutral origins. Post-build validators consume the build-result metadata and
+assembly drops it before `CompiledFlow`. No phase
 copies, renders, or reparses YAML to reconstruct source.
 
 The loader creates one package-private catalog builder per physical document and
@@ -159,11 +161,12 @@ exact literal constructed lines without retaining a cursor below Compose. A CODE
 failure may resolve one already-registered site through the builder's read-only lookup; this
 replays the retained document without copying, freezing, reparsing, or installing a resolver.
 The conductor registers flow and node assertion sites by authored source-order index,
-deriving each carrier origin and
-temporary positional range from the same retained item cursor. Duplicate text therefore
+deriving each carrier origin from the retained item cursor. Duplicate text therefore
 remains occurrence-distinct; full roots and multi-node definitions retain flow assertion
 cursors and reuse their lowered carriers on START/END, while compact roots and flat
-single-node definitions project assertions onto their synthesized node. It also stamps
+single-node definitions project assertions onto their synthesized node. Runtime assertion
+diagnosis uses the failed `Assertion.origin`; semantic nodes retain no positional range
+lists. The conductor also stamps
 source-backed bare/mapped root, multi-node-definition, and inline-child output values on the
 final `FlowOutput.binding` after rewrites; END reuses that binding, and output mapping keys
 stay origin-free. Flow-input declaration keys and ordinary node-input keys belong to

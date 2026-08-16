@@ -109,16 +109,23 @@ def test_node_asserts_classify_same_across_spellings(pre, post):
 
 
 def test_duplicate_node_asserts_are_distinct_ordered_occurrences():
-    """Equal authored text must not collapse occurrence identity or positional ranges."""
+    """Equal authored text must not collapse occurrence identity or provenance."""
     text = "${n} >= 0"
-    x = load_flow(_flow([text, text])).compiled.nodes["x"]
+    loaded = load_flow(_flow([text, text]))
+    x = loaded.compiled.nodes["x"]
 
     assert _assertion_text(x.pre_asserts) == [(text, text), (text, text)]
     assert x.pre_asserts[0] is not x.pre_asserts[1]
     assert x.pre_asserts[0].origin is not None
     assert x.pre_asserts[1].origin is not None
     assert x.pre_asserts[0].origin != x.pre_asserts[1].origin
-    assert len(x.pre_assert_ranges) == 2
+    assert loaded.origin_resolver is not None
+    frames = [
+        loaded.origin_resolver.resolve(assertion.origin)
+        for assertion in x.pre_asserts
+    ]
+    assert all(frame is not None for frame in frames)
+    assert frames[0].range != frames[1].range
 
 
 @pytest.mark.parametrize("bad", ["nope > 0", "${nope} > 0", "${nope > 0}"])

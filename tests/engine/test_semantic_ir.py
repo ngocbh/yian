@@ -21,7 +21,7 @@ from agent_composer.compile.model import (
 )
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
 from agent_composer.compose.build.inline_inputs import infer_inline_binding_type
-from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.nodes.base import BuildContext, BuildResult
 from agent_composer.compose.nodes.call import CallDescriptor
 from agent_composer.compose.nodes.loop import LoopDescriptor
 from agent_composer.compose.nodes.map import MapDescriptor
@@ -365,10 +365,11 @@ def test_boundary_reads_wrapped_output_but_preserves_it_in_end_wiring() -> None:
 def test_reference_validation_checks_a_wrapped_flow_output() -> None:
     """A carrier cannot hide unknown node or output namespaces from validation."""
     bad = Binding("${missing.output}", _origin("bad-reference"))
+    sink = BuildResult(node=Node("sink"), wiring={})
 
     with pytest.raises(LoadError, match="unknown namespace"):
         validate_references(
-            {"sink": Node("sink")},
+            {"sink": sink},
             set(),
             {},
             None,
@@ -384,7 +385,7 @@ def test_reference_validation_checks_a_wrapped_flow_output() -> None:
         )
 
     validate_references(
-        {"sink": Node("sink")},
+        {"sink": sink},
         set(),
         {},
         None,
@@ -602,9 +603,8 @@ def test_call_type_error_is_identical_for_raw_and_wrapped_sources() -> None:
     node = SimpleNamespace(
         is_loop=False,
         child_inputs=[child_input],
-        field_ranges={},
-        range=None,
     )
+    result = BuildResult(node=node, wiring={})
 
     source = "${input.x}"
 
@@ -612,7 +612,7 @@ def test_call_type_error_is_identical_for_raw_and_wrapped_sources() -> None:
     for value in (source, Binding(source, _origin("call-topic"))):
         with pytest.raises(LoadError) as caught:
             check_ref_map_types(
-                {"call": node},
+                {"call": result},
                 {},
                 {"x": ValueContract(nullable_parent)},
                 {"call": {"topic": value}},

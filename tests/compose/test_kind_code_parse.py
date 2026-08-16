@@ -11,7 +11,7 @@ from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.diagnostics import OriginRef
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 _FLOW = """\
@@ -48,7 +48,7 @@ def test_code_parse_matches_descriptor_and_records_body_range():
     assert isinstance(desc.field_ranges[("field", "inputs")], SourceRange)
 
 
-def test_code_build_returns_code_node_and_stamps_ranges():
+def test_code_build_returns_code_node_and_retains_compose_ranges():
     reader = _reader_for(_FLOW, "verdict")
     desc = CodeDescriptor.parse("verdict", reader)
     result = desc.build(BuildContext({}, source_file="flow.yaml"))
@@ -58,7 +58,7 @@ def test_code_build_returns_code_node_and_stamps_ranges():
 
     assert isinstance(node, CodeNode)
     assert node.output_contract is not None
-    assert node.range is desc.range or node.range == desc.range
+    assert result.node_range is desc.range or result.node_range == desc.range
     assert wiring == {"rating": "${input.rating}"}
 
 

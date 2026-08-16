@@ -22,7 +22,7 @@ from abc import ABC
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterator, Optional, Union
+from typing import Any, Callable, ClassVar, Iterator, Optional, Union
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError
@@ -37,55 +37,6 @@ from agent_composer.nodes.contracts import (
     _rewrite_origin_carrier,
     _validate_optional_origin,
 )
-
-if TYPE_CHECKING:
-    from agent_composer.events import SourceRange
-
-
-class FieldRanges(dict):
-    """Legacy Compose `(kind, key) -> SourceRange` metadata with guarded keys.
-
-    A plain dict whose `get` REFUSES a bare key. The map is keyed by the location's
-    `(kind, key)` tuple, so a bare-string lookup can never match — it would
-    silently return `None`, and Compose validators often fall back (`or node.range`),
-    turning a typo into a caret that points at the wrong line rather than an error. That silence is what
-    let two dead lookups survive both review and a green test suite when the map moved from
-    string keys to tuples. Refusing the wrong shape makes the mistake loud at the first call.
-
-    Keys: `("input", name)` a node or flow-boundary input · `("field", name)` a kind
-    field (`code`/`over`/`until`/`inputs`/`env`/...).
-    Asserts are deliberately absent because their text is not a unique identity.
-
-    NOTE the type must survive Compose-side copies: copying it into a plain `dict`
-    would silently drop the guard exactly where validation lookups happen.
-
-    Only the SILENT misses are guarded (`get`, `in`) plus `copy` (which would launder the type).
-    `fr[key]` needs no guard: a bare key already raises `KeyError` loudly.
-    """
-
-    @staticmethod
-    def _check(key) -> None:
-        """Reject a non-tuple key, naming the tagged forms that would work."""
-        if not isinstance(key, tuple):
-            raise TypeError(
-                f"field_ranges is keyed by a (kind, key) tuple — got the bare key {key!r}. "
-                f"Use ({'field'!r}, {key!r}) / ({'input'!r}, {key!r})."
-            )
-
-    def get(self, key, default=None):  # type: ignore[override]
-        self._check(key)
-        return super().get(key, default)
-
-    def __contains__(self, key) -> bool:
-        # `("field", name) in fields` is a real lookup shape (the CLI's kind fallback), so a
-        # bare key here is the same silent-miss bug as `get` — it would just answer False.
-        self._check(key)
-        return super().__contains__(key)
-
-    def copy(self) -> "FieldRanges":
-        # `dict.copy` returns a PLAIN dict, which would silently launder the guard away.
-        return FieldRanges(self)
-
 
 class NodeKind(str, Enum):
     """Closed vocabulary. Dispatch is an explicit `match`, never a registry."""
@@ -369,33 +320,12 @@ class Node(ABC):
         # (e.g. AGENT reads `max_tool_iterations`); unknown keys are carried but ignored. `{}`
         # for a node that declares no `env:` and inherits no flow default.
         self.env: dict[str, Any] = {}
-        # Legacy Compose source-location metadata, populated by the front end and never
-        # serialized. Compose validators still read the named ranges while building; runtime
-        # failure production and presentation use only opaque origins and never read them.
-        # `self.range`: this node's own `SourceRange` in the flow YAML (the whole node block); None
-        #   for a fake / directly-constructed node with no known source.
-        # `self.field_ranges`: `FieldRanges[(kind, key) -> SourceRange]` for the node's individual
-        #   authored NAMED sites — a bad input binding (`("input", name)`), a flow input decl
-        #   input, or a kind field (`("field", name)`). Keyed by the location's
-        #   `(kind, key)` so keys across namespaces never collide; a bare-key lookup
-        #   raises rather than missing silently (see `FieldRanges`). Asserts are NOT here (their
-        #   text is not a unique identity) — they are located by position, below. Empty when no
-        #   per-field spans are recorded.
-        self.range: Optional["SourceRange"] = None
-        self.field_ranges: FieldRanges = FieldRanges()
         # `self.wiring_labels`: wiring param -> author-facing phrase for a reference error, for a
         #   SYNTHESIZED param the author never wrote (a CASE `__rN` from a `when:` ref, `__on` from
         #   `on:`) — e.g. `"cases[1].when"` / `"on:"`. Render-only and absent from run records;
         #   populated by the desugar that mints the param. Empty for every authored param (the
         #   default label below reproduces the plain `input '<param>'` text).
         self.wiring_labels: dict[str, str] = {}
-        # Legacy positional assert-range lists, aligned 1:1 with `pre_asserts` /
-        # `post_asserts`. The loader and expansion paths still preserve them, but the run
-        # wrapper uses each Assertion.origin and never reads these ranges. `[]` for a node
-        # with no asserts.
-        self.pre_assert_ranges: list[Optional["SourceRange"]] = []
-        self.post_assert_ranges: list[Optional["SourceRange"]] = []
-
     def failure_trace(
         self,
         operation_origin: OriginRef | None = None,

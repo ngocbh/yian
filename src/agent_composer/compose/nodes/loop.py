@@ -3,8 +3,9 @@
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `loop` node's frozen
 `LoopDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`), and overriding the resolve-and-bake `build` (predicate-slice legality +
-the `'a -> 'a` field-name contract). Registered into `KINDS`/`BINDING_FIELDS` at import so the
-shared dispatch routes here.
+the `'a -> 'a` field-name contract). `_finish` keeps concrete ranges on the Compose-owned
+`BuildResult` and stamps only the descriptor's opaque origin onto the runtime node. Registered
+into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 """
 
 from __future__ import annotations
@@ -32,8 +33,8 @@ class LoopDescriptor(NodeDescriptor):
     `while_`/`until_`/`times` carries the predicate; `max` is the runaway guard (required for
     while/until). `while`/`until` are Python keywords, so they land here as `while_`/`until_`.
 
-    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
-    `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
+    the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
     custom parse hook — loop's field legality is the default allowed/required key check + the
     asserts-list check; all its deeper legality lives in `build`). Only the loop-specific fields
     are declared here; `inputs` comes from the base, and a loop never populates `outputs`.
@@ -67,7 +68,7 @@ class LoopDescriptor(NodeDescriptor):
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `LoopNode` (+ wiring) for this `LoopDescriptor` — a
-        `('a -> 'a) -> 'a -> 'a` driver — resolve-and-bake, then stamp `.range`/`.field_ranges`
+        `('a -> 'a) -> 'a -> 'a` driver — resolve-and-bake, then retain Compose-only ranges
         via `_finish`.
 
         `loop` is a higher-order driver: the body subflow (`call:`) reads a subset of the

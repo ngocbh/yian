@@ -57,6 +57,8 @@ source-neutral leaf; `events` imports it, and nodes may combine it with the
 independent `typesys` and `expr` leaves before `compile <- compose`. Runtime
 consumes the event/state leaves plus compile's topology, identity, and validation
 contracts, but never imports `compile.expand` or `compose`.
+Compose imports `SourceRange` directly from `diagnostics`; `events` does not
+re-export that front-end presentation coordinate.
 The package facade lazy-loads its declared root exports, so importing a leaf
 submodule does not bootstrap those higher layers.
 Package-root `run.py` sits above `compose`, `compile.expand`, and `runtime`: it
@@ -184,8 +186,10 @@ loader/desugar-synthesized nodes remain so. Clones preserve an existing origin.
 ancestry for nested failure traces; it is empty on direct/static nodes and is
 neither enumerated nor rewritten as local authored provenance. Both fields are
 diagnostic-only and excluded from manifests, fingerprints, and expansion
-digests. Legacy node `range` fields remain temporary compatibility metadata;
-runtime presentation no longer reads them.
+digests. A semantic `Node` carries no YAML `range`, `field_ranges`, or aligned
+assertion-range lists. Compose retains concrete locations on cursors,
+descriptors, and `BuildResult` only until its validators finish, then discards
+them before constructing `CompiledFlow`.
 
 CODE also owns two source-neutral diagnostic slots for its authored executable
 field. `code_origin` is the whole-`code:` fallback, while
@@ -231,17 +235,17 @@ unchanged.
 `Node.pre_asserts` and `Node.post_asserts` are ordered `Assertion` lists. Parsed
 YAML remains raw text until the inline-call pass crosses each flow assertion into
 one carrier; node-local validation creates one fresh carrier per authored
-occurrence. Compose indexes those occurrences by source order and derives both
-the carrier's opaque `OriginRef` and its legacy aligned `SourceRange` from the
-same retained item cursor, so equal assertion text at two positions remains two
-distinct sites. Flow carrierization preserves an explicit programmatic origin
+occurrence. Compose indexes those occurrences by source order and derives the
+carrier's opaque `OriginRef` from the retained item cursor, so equal assertion
+text at two positions remains two distinct sites. Flow carrierization preserves
+an explicit programmatic origin
 instead of replacing it. Inline-call desugaring and flow/CALL lowering replace only
 `.expression`; child cloning and LOOP respawn retain every carrier field. Thus
 `.display` and `.origin` survive every rewrite. Synthesized START/END nodes reuse
 the lowered flow carriers.
-`Node.run` evaluates the expression and reports the display text. Manifests
-include expression, display, order, and duplicate count, while excluding origin
-and the legacy aligned range metadata, which runtime ignores.
+`Node.run` evaluates the expression, reports the display text, and diagnoses a
+failure through that exact `Assertion.origin`. Manifests include expression,
+display, order, and duplicate count while excluding origin.
 
 `Node.params` has one compiled shape too: an ordered list of exact `Parameter`
 carriers (or `None` for a directly constructed no-input node). The flow still owns each
@@ -364,9 +368,14 @@ A physical cursor combines a definition range with an occurrence path (and a
 mapping-key range when applicable); a virtual cursor is a defensive, source-free
 value snapshot; a projected cursor replaces or renames values while explicitly
 retaining the physical sources of selected children. While the cursor is still
-available, a descriptor may attach opaque origins for kind-owned semantic sites;
-descriptors and nodes carry those origins plus derived ranges afterward. No phase
-reparses text or touches parser objects.
+available, a descriptor may attach opaque origins for kind-owned semantic sites.
+Cursors and descriptors retain concrete ranges through parsing and desugaring;
+`NodeDescriptor._finish()` copies the descriptor's header and field locations
+for the built node to Compose-only `BuildResult.node_range` / `field_ranges`.
+Post-build validators
+consume that metadata, and assembly drops it before `CompiledFlow`; the semantic
+node receives only the opaque origins. No phase reparses text or touches parser
+objects.
 For an unchanged source-backed string, `SourceCursor.scalar_source` returns immutable
 `ScalarSource` metadata: the whole scalar range and exact zero-based constructed-line
 ranges when the scalar is a literal `|` block. The document derives those ranges from
@@ -412,8 +421,9 @@ CASE predicate/`on:` sites, assertions, and source-backed flow-output values dir
 on their canonical semantic carriers; it does not build a parallel location map. An
 ordinary node input's key
 belongs to its sink `Parameter`, while its value belongs to `Binding`. An assertion's semantic
-path includes its authored list index, and that item's cursor supplies both
-`Assertion.origin` and the aligned temporary range. Full root flows and
+path includes its authored list index, and that item's cursor supplies
+`Assertion.origin`. Runtime assertion failure diagnosis uses that carrier origin;
+no positional assertion range crosses into the semantic node. Full root flows and
 multi-node definitions retain a flow assertion cursor; their lowered carriers
 are reused by START/END. Compact roots and flat single-node definitions instead
 project their `asserts:` into the synthesized node, so those sites are
@@ -604,7 +614,7 @@ resident at a time.
 Compile also owns stable identity for the static program. `flow_manifest`
 canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and
 assertion identity includes executable and display text in list order while
-remaining origin/range-neutral. `expansion_digest` applies the same projection to
+remaining origin-neutral. `expansion_digest` applies the same projection to
 dynamic fragments. CODE identity includes its executable `code` text but excludes
 `code_origin`, `code_line_origins`, and the retained compiled/owned-code caches,
 while CASE identity includes predicate handle/expression semantics but excludes

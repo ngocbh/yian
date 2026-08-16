@@ -10,7 +10,7 @@ from agent_composer.compose.parse.file import (
     parse_file,
     parse_source_document,
 )
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 

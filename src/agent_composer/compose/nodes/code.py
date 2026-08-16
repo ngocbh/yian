@@ -5,8 +5,9 @@ One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `code` node's
 field's `SourceRange`, incl. the `code:` body's own range), and overriding `build` (which
 constructs the runtime `CodeNode` + wiring and resolves load-time syntax origins through the
 already-registered Compose catalog). Its source-origin hook registers the whole `code:` scalar
-and exact literal constructed lines without retaining YAML objects. Registered into
-`KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
+and exact literal constructed lines without retaining YAML objects. `_finish` keeps concrete
+node/field ranges on the Compose-owned `BuildResult`; the runtime node receives only opaque
+origins. Registered into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 """
 
 from __future__ import annotations
@@ -26,8 +27,8 @@ if TYPE_CHECKING:
 class CodeDescriptor(NodeDescriptor):
     """kind=code — deterministic code (a `module:function` ref or a source snippet).
 
-    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
-    `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `inputs:`
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
+    the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `inputs:`
     call-arg map and the template `parse` (no custom parse hook — code's field legality is the
     default allowed/required key check + the asserts-list check). The code-specific semantic
     fields (`code`, `asserts`) and diagnostic origin carriers (`code_origin`,

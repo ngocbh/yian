@@ -11,17 +11,13 @@ or ``RunResumed``. ``RunSucceeded`` is derived at successful quiescence;
 ``RunFailed`` is derived from a durable node failure or from a reduced transition
 that makes the terminal output unreachable. Plain dataclasses keep this
 low-level observer module separate from the serialized record vocabulary in
-``runtime.log``; source-neutral location values come from ``diagnostics``.
+``runtime.log``; canonical semantic failures come from ``diagnostics``.
 """
 
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from agent_composer.diagnostics import Failure, SourceRange as _SourceRange
-
-# Compose still imports this source-neutral value through the observer module while
-# semantic-node source metadata is being moved fully behind the front-end boundary.
-SourceRange = _SourceRange
+from agent_composer.diagnostics import Failure
 
 
 # --------------------------------------------------------------------------- #

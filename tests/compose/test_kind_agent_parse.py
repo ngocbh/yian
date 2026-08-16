@@ -5,7 +5,7 @@ import pytest
 from agent_composer.compose import LoadError
 from agent_composer.compose.nodes.agent import AgentDescriptor
 from agent_composer.compose.source import SourceDocument
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 _FLOW = """\

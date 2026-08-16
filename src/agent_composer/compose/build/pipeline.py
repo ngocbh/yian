@@ -11,7 +11,8 @@ callable:
   -> attach authored assertion/flow-output binding origins -> synthesize the START_ID/END_ID
   boundary over ALL edges -> reject cycles + check if/else handles ->
   CompiledFlow.from_parts. One retained assertion item cursor supplies its carrier
-  origin and the legacy aligned range; rewrites preserve both fields.
+  origin and Compose-only validation range; only the origin crosses into the
+  semantic assertion.
 
 Holds `ComposedFlow` (the compiled+validated flow the engine runs) plus the flow
 `outputs:` parser and source-origin attachment. Ladder position: the LAST phase
@@ -32,8 +33,8 @@ from agent_composer.diagnostics import (
     Failure,
     OriginRef,
     OriginResolver,
+    SourceRange,
 )
-from agent_composer.events import SourceRange
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import Parameter, ValueContract, as_binding
 from agent_composer.typesys.values import Type
@@ -748,9 +749,10 @@ def _assemble(
     `read_typedefs(...)`. Retained ranges and `nodes_cursor` own diagnostic locations; after
     the common header stamp each descriptor may immutably attach kind-owned opaque origins.
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
-    children. `boundary_field_ranges` locates synthesized boundary-input behavior;
-    `asserts_cursor` is the single authority for each flow assertion's opaque origin and
-    legacy aligned range. `outputs_range` is the retained authored codomain range when one exists,
+    children. `boundary_field_ranges` locates authored flow-input declarations during
+    Compose type compilation; `asserts_cursor` is the single authority for each flow
+    assertion's opaque origin and Compose-only validation range. `outputs_range` is the
+    retained authored codomain range when one exists,
     while `outputs_cursor` retains each physically authored output binding occurrence.
     `scope.catalog_builder` is the one registry shared by every assembly originating
     from this physical document, so root, definitions, and inline bodies mint
@@ -1180,7 +1182,7 @@ def _assemble(
     # cross-flow type check: each `call` binding's source type vs the callable
     # input type (needs producers, so it runs after all nodes are built).
     check_ref_map_types(
-        nodes_built,
+        build_results,
         producers,
         flow_input_contracts,
         flow_wiring,
@@ -1190,7 +1192,7 @@ def _assemble(
     # body output's same-named field Type (needs producers, so it runs alongside the
     # cross-flow call/map type check above).
     check_loop_type_contract(
-        nodes_built,
+        build_results,
         producers,
         flow_input_contracts,
         flow_wiring,
@@ -1210,7 +1212,7 @@ def _assemble(
     # flow.wiring/params key parity over EVERY node (catches an orphan/
     # missing source or a node absent from the wiring). Runs once the wiring is complete.
     check_wiring_parity(
-        nodes,
+        build_results,
         flow_wiring,
         diagnostics=diagnostics,
     )
@@ -1224,7 +1226,7 @@ def _assemble(
     # at the node's line (a bad node-input ref) or the `outputs:` section line (a
     # dangling flow-output ref).
     validate_references(
-        nodes,
+        build_results,
         flow_inputs,
         producers,
         outputs_section,
@@ -1235,7 +1237,7 @@ def _assemble(
     # human_input gates: structurally check a literal `questions:` list at load, and
     # pin a ref-form `questions: ${name}` to a declared input (the prompt-scope rule).
     validate_human_questions(
-        nodes,
+        build_results,
         diagnostics=diagnostics,
     )
     # Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post +
@@ -1283,7 +1285,11 @@ def _assemble(
     )
     structural = reconciled + ordering_edges
     boundary_nodes, boundary_edges, boundary_wiring = synthesize_boundary_graph(
-        inputs, flow_outputs, node_ids, structural, boundary_field_ranges, lowered=lowered
+        inputs,
+        flow_outputs,
+        node_ids,
+        structural,
+        lowered=lowered,
     )
     nodes.update(boundary_nodes)
     flow_wiring.update(boundary_wiring)

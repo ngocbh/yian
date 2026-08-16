@@ -3,8 +3,9 @@
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `agent` node's frozen
 `AgentDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
 field's `SourceRange`), and overriding `build` (which constructs the runtime `AgentNode` +
-wiring and stamps span metadata onto it). Registered into `KINDS`/`BINDING_FIELDS` at import
-so the shared dispatch routes here.
+wiring). `_finish` stamps only the descriptor's opaque origin onto that node and retains
+concrete node/field ranges on the Compose-owned `BuildResult`. Registered into
+`KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 """
 
 from __future__ import annotations
@@ -74,8 +75,8 @@ def _validate_llm_config(
 class AgentDescriptor(NodeDescriptor):
     """kind=agent — an LLM reasoner (prompt + mode + optional tools/llm).
 
-    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
-    `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `inputs:`/
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
+    the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `inputs:`/
     `outputs:` node-signature surface and the template `parse` (no custom parse hook — agent's
     field legality is the default allowed/required key check + the asserts-list check). Only the
     agent-specific fields are declared here; `inputs`/`outputs` come from the base.
@@ -115,9 +116,9 @@ class AgentDescriptor(NodeDescriptor):
         """Construct the runtime `AgentNode` (+ wiring) for this `AgentDescriptor`.
 
         Builds the agent leaf (LLM-config validation, node-side
-        `params` + flow-owned `inputs` wiring, `output_contract` from `outputs:`/override) and
-        additionally stamps `.range`/`.field_ranges` from the descriptor via `_finish` (which
-        wraps them in a `BuildResult`). `ctx.resolver` is unused (leaf kind) and the inline-CODE
+        `params` + flow-owned `inputs` wiring, `output_contract` from `outputs:`/override).
+        `_finish` stamps the descriptor origin on the node and keeps its ranges on the
+        Compose-owned `BuildResult`. `ctx.resolver` is unused (leaf kind), and the inline-CODE
         anchors on `ctx` are read only by the CODE build.
         """
         llm_config_range = self.field_ranges.get(("field", "llm_config")) or self.range

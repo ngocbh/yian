@@ -58,8 +58,8 @@ from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDes
 from agent_composer.compose.source import SourceCursor
 
 if TYPE_CHECKING:
+    from agent_composer.diagnostics import SourceRange
     from agent_composer.compose.source.catalog import _SourceCatalogBuilder
-    from agent_composer.events import SourceRange
 
 # YAML 1.1 (PyYAML `safe_load`) coerces the bare key `on:` to the boolean `True` (likewise
 # `off`/`yes`/`no`). The case-node surface key `on:` is the only such key in any node body, so
@@ -146,7 +146,7 @@ class CaseDescriptor(NodeDescriptor):
     then_ranges: list[Optional[SourceRange]] = field(
         default_factory=list, compare=False
     )
-    # Source-neutral sites follow the same positional identity as the legacy ranges.
+    # Source-neutral sites follow the same positional identity as the Compose-only ranges.
     # An empty tuple means direct/source-free construction; otherwise it aligns 1:1
     # with `cases`. `on_origin` belongs to the generated `__on` binding, not a Case.
     when_origins: tuple[OriginRef | None, ...] = field(default=(), compare=False)
@@ -294,11 +294,13 @@ class CaseDescriptor(NodeDescriptor):
         )
         # A synth CASE param (`__rN` hoisted from a `when:` ref, `__on` from `on:`) owns no
         # authored field, so the ref-scan would fall back to the node header and print the
-        # synthetic name. Stamp its own source range and author-facing label here so the caret
-        # lands on the `cases[N].when` / `on:` line and the message names it, not `__rN`.
-        result.node.field_ranges.update(param_ranges)
+        # synthetic name. Retain its range in the Compose-only build product so the caret lands
+        # on the `cases[N].when` / `on:` line and the message names it, not `__rN`.
         result.node.wiring_labels = param_labels
-        return result
+        return replace(
+            result,
+            field_ranges={**result.field_ranges, **param_ranges},
+        )
 
 
 def _outputs_producer(ref: str) -> Optional[str]:

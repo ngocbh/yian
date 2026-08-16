@@ -4,8 +4,9 @@ One of the two-axis `compose/nodes/<kind>.py` modules. `call` and `map` share th
 `build` (which branches on `isinstance(self, MapDescriptor)`: a `map` -> `MapNode`, else `CallNode`);
 `map.py`'s `MapDescriptor` subclasses `CallDescriptor`, adding only the map field surface
 (`over`/`parallel`) and the `kind="map"` class attr. Both inherit the template `parse` from
-`NodeDescriptor`. Registered into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes
-here.
+`NodeDescriptor`; `_finish` retains concrete ranges on the Compose-owned `BuildResult` and
+stamps only the descriptor's opaque origin onto the runtime node. Registered into
+`KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 """
 
 from __future__ import annotations
@@ -55,8 +56,8 @@ class CallDescriptor(NodeDescriptor):
     no longer an instance field. The two SYNTH paths (inline-call + case desugar) mint plain
     `CallDescriptor`s (REF, `over=None`).
 
-    Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
-    `range`/`field_ranges` parse metadata) and `inputs` from `NodeDescriptor`; only the
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
+    the Compose-only `range`/`field_ranges` parse metadata) and `inputs` from `NodeDescriptor`; only the
     call/map-specific fields are declared here. `over`/`parallel` are fields on the shared base
     class (a plain `call` leaves them at `None`/`False`); only `map` lists them in its `allowed`.
     `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
@@ -82,7 +83,7 @@ class CallDescriptor(NodeDescriptor):
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `CallNode`/`MapNode` (+ wiring) for this descriptor —
         REF's `CallNode` (single application) or MAP's `MapNode` (`kind: map` + `over:`, mapped
-        iteration) — resolve-and-bake, then stamp `.range`/`.field_ranges` via `_finish`.
+        iteration) — resolve-and-bake, then retain Compose-only ranges via `_finish`.
 
         Returns a `BuildResult` (the split): the node carries `params`; the flow owns the sources
         in `wiring`. A MAP's reserved `over:` iteration source rides the wiring under the `"over"`

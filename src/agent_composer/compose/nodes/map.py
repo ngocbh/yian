@@ -7,7 +7,8 @@ run-level workers control concurrency.
 SURFACE (`over`/`parallel` join call's `call`/`inputs`) via `allowed`/`required`; it inherits the
 template `parse`, the resolve-and-bake `build` (which builds a `MapNode` because the descriptor is
 a `MapDescriptor`), and every field (`over`/`parallel` live on the shared base class). Registered
-into `KINDS`/`BINDING_FIELDS` at import.
+into `KINDS`/`BINDING_FIELDS` at import. The inherited `_finish` retains concrete ranges on the
+Compose-owned `BuildResult`; the runtime node receives only the descriptor's opaque origin.
 """
 
 from __future__ import annotations

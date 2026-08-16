@@ -25,7 +25,7 @@ import pytest
 
 from agent_composer.compile.expand import _SYNTH_PREFIX, call_subgraph
 from agent_composer.compose import load_flow
-from agent_composer.diagnostics import OriginRef, SourceRange
+from agent_composer.diagnostics import OriginRef
 from agent_composer.events import RunFailed
 from agent_composer.nodes.base import _HostStop
 from agent_composer.nodes.contracts import Assertion
@@ -298,7 +298,6 @@ def _cloned_child_end(loaded):
         callsite="callee",
         record={"v": "${input.v}"},
         post_asserts=callee.post_asserts,
-        post_assert_ranges=callee.post_assert_ranges,
         input_names={p.name for p in (callee.params or [])},
     )
     return flow.nodes[flow.end_id], flow
@@ -325,12 +324,11 @@ def test_collision_free_cloned_end_has_no_duplicate_params_or_edges():
     assert len(synths) == 2, f"expected two distinct v-synth params, got {synths}"
 
 
-def test_spawner_lowering_preserves_presentation_origin_and_range():
-    """CALL expansion rewrites only executable text and keeps occurrence diagnostics aligned."""
+def test_spawner_lowering_preserves_presentation_origin():
+    """CALL expansion rewrites only executable text and keeps semantic provenance."""
     loaded = _load_output(5)
     callee = loaded.compiled.nodes["callee"]
     origin = OriginRef("nodes/callee/asserts/0")
-    assertion_range = SourceRange(8, 7, 8, 38)
     assertion = Assertion(
         "${v} >= 0 and ${output} > 0",
         "callee input and output must be positive",
@@ -342,7 +340,6 @@ def test_spawner_lowering_preserves_presentation_origin_and_range():
         callsite="callee",
         record={"v": 5},
         post_asserts=[assertion],
-        post_assert_ranges=[assertion_range],
         input_names={"v"},
     )
     lowered = flow.nodes[flow.end_id]
@@ -350,7 +347,6 @@ def test_spawner_lowering_preserves_presentation_origin_and_range():
     assert lowered.post_asserts[-1].expression.startswith("${__assert_input_v}")
     assert lowered.post_asserts[-1].display == assertion.display
     assert lowered.post_asserts[-1].origin is origin
-    assert lowered.post_assert_ranges[-1] == assertion_range
 
 
 def test_collision_case_run_satisfying_succeeds():

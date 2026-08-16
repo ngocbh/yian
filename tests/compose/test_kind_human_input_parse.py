@@ -8,7 +8,7 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.human_input import HumanInputDescriptor
 from agent_composer.compose.source import SourceDocument
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 _FLOW = """\
@@ -60,7 +60,7 @@ def test_human_input_build_returns_gate_and_wires_inputs():
     assert isinstance(node, HumanInputNode)
     assert node.prompt == "Approve this?"
     assert wiring == {"ctx": "${input.ctx}"}
-    assert node.range == desc.range
+    assert result.node_range == desc.range
 
 
 def test_human_input_build_questions_gate_defaults_to_open_object():

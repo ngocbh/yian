@@ -42,7 +42,6 @@ def synthesize_boundary_graph(
     outputs: list[FlowOutput],
     node_ids: "set[str]",
     body_edges: list[Edge],
-    start_field_ranges: "Optional[dict]" = None,
     lowered: "Optional[LoweredAsserts]" = None,
 ) -> tuple[dict[str, Node], list[Edge], dict[str, dict[str, Any]]]:
     """Synthesize the `START_ID`/`END_ID` boundary nodes + their edges + wiring.
@@ -66,11 +65,6 @@ def synthesize_boundary_graph(
     The START_ID-side `${input.X}`-producer DATA edges + the demote-input-reader-from-root
     rule live here too (every input read resolves through the START_ID namespace).
 
-    `start_field_ranges` (optional) is the legacy flow-boundary input-declaration
-    source map stamped onto StartNode (`("input", name) -> SourceRange`). Runtime
-    diagnosis resolves Parameter origins instead. Assertion ranges travel in the
-    positional lists on `lowered`. `None` for a spanless flow (compact / in-memory / def).
-
     `lowered` (optional) is the flow's `asserts:` lowered into node-local `LoweredAsserts`.
     When given, its PRE (boundary) asserts are stamped on START's ordinary
     `post_asserts` (they read `${output.X}` — START's coerced output), its POST asserts on END
@@ -79,11 +73,7 @@ def synthesize_boundary_graph(
     dependency is STRUCTURAL (a real END input) and survives child cloning. `None` leaves the
     boundary nodes assert-free (a def / in-memory flow with no flow-level asserts).
     """
-    start = StartNode(
-        START_ID,
-        params=input_parameters,
-        field_ranges=start_field_ranges,
-    )
+    start = StartNode(START_ID, params=input_parameters)
     end = EndNode.record(END_ID, output_names=[o.name for o in outputs])
     boundary_nodes: dict[str, Node] = {START_ID: start, END_ID: end}
 
@@ -113,10 +103,6 @@ def synthesize_boundary_graph(
         # post-assert is not clobbered.
         start.post_asserts = list(start.post_asserts) + list(lowered.start_pre)
         end.post_asserts = list(lowered.end_post)
-        # Legacy positional ranges remain aligned 1:1 with lowered assertions while the
-        # compatibility fields exist. Runtime diagnosis resolves each Assertion.origin instead.
-        start.post_assert_ranges = list(start.post_assert_ranges) + list(lowered.pre_ranges)
-        end.post_assert_ranges = list(lowered.post_ranges)
         # Each synthesized END input is an extra param + a wiring source + a producer edge, so
         # the value the post-assert reads is present in END's record when eval_node fires it.
         # EndNode.run() reads only its declared output names, so extra params are inert there.

@@ -7,6 +7,7 @@ retired line-map vocabulary out of production code and the public package surfac
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,10 @@ _RETIRED_LOCATION_NAMES = (
     "LoadError.line",
     "LoadError.lines",
 )
+_RETIRED_LOCATION_PATTERNS = {
+    name: re.compile(rf"(?<!\w){re.escape(name)}(?!\w)")
+    for name in _RETIRED_LOCATION_NAMES
+}
 
 
 def test_retired_line_map_names_are_absent_from_production() -> None:
@@ -39,8 +44,8 @@ def test_retired_line_map_names_are_absent_from_production() -> None:
         )
         for path in paths:
             text = path.read_text()
-            for name in _RETIRED_LOCATION_NAMES:
-                if name in text:
+            for name, pattern in _RETIRED_LOCATION_PATTERNS.items():
+                if pattern.search(text):
                     offenders.append(f"{path.relative_to(_ROOT)}: {name}")
 
     assert offenders == []

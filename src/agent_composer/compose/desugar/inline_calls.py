@@ -35,8 +35,8 @@ Located parse metadata: each parsed host descriptor carries its own `range`/`fie
 binding's own line (looked up in the host `field_ranges` by the binding key), not the host
 node header — and owns an empty `field_ranges`, so a bad ref inside the directive carets the
 directive rather than a host input that shares its param name. The flow `outputs:`/`asserts:`
-sections have no descriptor, so their inline calls locate at the section source line
-(`outputs_line`/`asserts_line`).
+sections have no descriptor, so their inline calls use a supplied section/item range. Legacy
+section lines remain the fallback while callers migrate.
 
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
 kind-blind binding-field walk) + `compose.helpers.errors` (peers), `expr` (the ref-walk + the
@@ -92,6 +92,8 @@ def desugar_inline_calls(
     asserts_section: Optional[list] = None,
     outputs_line: Optional[int] = None,
     asserts_line: Optional[int] = None,
+    outputs_range: Optional[SourceRange] = None,
+    assertion_range_at: Optional[Callable[[int], Optional[SourceRange]]] = None,
     assertion_origin_at: Optional[Callable[[int], OriginRef | None]] = None,
     next_id: Optional[Callable[[], str]] = None,
 ) -> tuple:
@@ -107,10 +109,11 @@ def desugar_inline_calls(
     (`${ f(...) } == x`) lifts to a synth node so the assert reads its output.
 
     Each synth node from a node host locates at the range of the binding it was found in (its
-    own `call(...)` directive line); a synth node from the flow `outputs:`/`asserts:` section
-    locates at `outputs_line`/`asserts_line`. Raises `LoadError` on a malformed inline call, a
-    `${item}` capture, or a reserved-prefix collision — located at the host node / `outputs:` /
-    `asserts:`."""
+    own `call(...)` directive line). A synth from flow `outputs:` uses ``outputs_range``; one
+    from `asserts:` uses the authored item returned by ``assertion_range_at``. Legacy section
+    lines remain the fallback when no range exists. Raises `LoadError` on a malformed inline call,
+    a `${item}` capture, or a reserved-prefix collision — located at the host node / `outputs:`
+    / `asserts:`."""
     mint = next_id or _synth_id_gen()
 
     # Reserve the synth namespace: a user node id must not use the prefix (else it
@@ -139,18 +142,35 @@ def desugar_inline_calls(
                 call, host=f"node {nid!r}", range=origins.get(call.id, rng)
             )
 
-    new_outputs, out_calls = _desugar_outputs(outputs_section, mint, outputs_line)
+    new_outputs, out_calls = _desugar_outputs(
+        outputs_section,
+        mint,
+        outputs_line,
+        range=outputs_range,
+    )
     for call in out_calls:
-        synth[call.id] = _to_call_descriptor(call, host="flow outputs", line=outputs_line)
+        synth[call.id] = _to_call_descriptor(
+            call,
+            host="flow outputs",
+            range=outputs_range,
+            line=None if outputs_range is not None else outputs_line,
+        )
 
-    new_asserts, assert_calls = _desugar_asserts(
+    new_asserts, assert_calls, assert_ranges = _desugar_asserts(
         asserts_section,
         mint,
         asserts_line,
+        assertion_range_at=assertion_range_at,
         assertion_origin_at=assertion_origin_at,
     )
     for call in assert_calls:
-        synth[call.id] = _to_call_descriptor(call, host="assert", line=asserts_line)
+        assert_range = assert_ranges.get(call.id)
+        synth[call.id] = _to_call_descriptor(
+            call,
+            host="assert",
+            range=assert_range,
+            line=None if assert_range is not None else asserts_line,
+        )
 
     new_descriptors.update(synth)
     return new_descriptors, new_outputs, new_asserts
@@ -174,16 +194,21 @@ def map_outputs_strings(outputs: Any, fn: Callable[[str], Any]) -> Any:
 
 
 def _binding_origin(
-    key: str, field_ranges: Optional[dict], host_range: Optional[SourceRange]
+    field: str,
+    key: str,
+    field_ranges: Optional[dict],
+    host_range: Optional[SourceRange],
 ) -> Optional[SourceRange]:
     """The source range a synth node desugared from binding `key` should locate at.
 
-    Prefers the binding's OWN entry — `("input", key)` for a dict binding (an `input:` param),
-    `("field", key)` for a scalar binding field (a map's `over:`) — i.e. the line the
+    Prefers the binding's OWN entry — `("input", key)` for the `inputs` mapping,
+    `("field", field)` for a scalar binding field (a map's `over:`) — i.e. the line the
     `call(...)` directive was written on. Falls back to the host node's range when there is no
     stamped entry (a spanless flow, or a binding shape with no per-entry range)."""
     fr = field_ranges or {}
-    return fr.get(("input", key)) or fr.get(("field", key)) or host_range
+    if field == "inputs":
+        return fr.get(("input", key)) or fr.get(("field", "inputs")) or host_range
+    return fr.get(("field", field)) or host_range
 
 
 def _desugar_descriptor(
@@ -203,10 +228,10 @@ def _desugar_descriptor(
     calls: list = []
     origins: dict[str, Optional[SourceRange]] = {}
 
-    def mapper(key: str, value: str) -> str:
-        origin = _binding_origin(key, field_ranges, range)
+    def mapper(field: str, key: str, value: str) -> str:
+        origin = _binding_origin(field, key, field_ranges, range)
         before = len(calls)
-        new_value = _desugar_value(value, mint, calls, host, range=range)
+        new_value = _desugar_value(value, mint, calls, host, range=origin)
         for c in calls[before:]:
             origins[c.id] = origin
         return new_value
@@ -238,14 +263,18 @@ def _desugar_value(
             return new_value
         flow_callees = flow_call_callees_in_spans(value)
     except ExpressionError as exc:
-        raise LoadError(f"{host}: {exc}", range=range, line=line) from exc
+        raise LoadError(
+            f"{host}: {exc}",
+            range=range,
+            line=None if range is not None else line,
+        ) from exc
     if flow_callees:
         callee = flow_callees[0]
         raise LoadError(
             f"{host}: a flow call {callee!r} inside ${{...}} is not supported — write it "
             f"as the whole value with the call(...) directive: call({callee}, ...)",
             range=range,
-            line=line,
+            line=None if range is not None else line,
         )
     return value
 
@@ -319,13 +348,27 @@ def _match_directive(value: str) -> Optional[tuple]:
     return first, remaining
 
 
-def _desugar_outputs(outputs: Any, mint: Callable[[], str], line: Optional[int]) -> tuple:
+def _desugar_outputs(
+    outputs: Any,
+    mint: Callable[[], str],
+    line: Optional[int],
+    *,
+    range: Optional[SourceRange] = None,
+) -> tuple:
     """Desugar the flow `outputs:` section, returning `(new_outputs, inline_calls)`.
-    `line` is the `outputs:` section source line, so a malformed inline call there
-    locates like a node host."""
+    ``range`` is the `outputs:` section source range. ``line`` remains a fallback for
+    callers that have not migrated."""
     calls: list = []
     new_outputs = map_outputs_strings(
-        outputs, lambda value: _desugar_value(value, mint, calls, "flow outputs", line=line)
+        outputs,
+        lambda value: _desugar_value(
+            value,
+            mint,
+            calls,
+            "flow outputs",
+            range=range,
+            line=None if range is not None else line,
+        ),
     )
     return new_outputs, calls
 
@@ -335,6 +378,7 @@ def _desugar_asserts(
     mint: Callable[[], str],
     line: Optional[int],
     *,
+    assertion_range_at: Optional[Callable[[int], Optional[SourceRange]]] = None,
     assertion_origin_at: Optional[Callable[[int], OriginRef | None]] = None,
 ) -> tuple:
     """Cross raw flow asserts into semantic carriers and desugar inline calls.
@@ -342,14 +386,19 @@ def _desugar_asserts(
     Parsed YAML supplies strings. An existing carrier is accepted for source-neutral
     programmatic composition and retains its display/origin. ``assertion_origin_at``
     supplies an optional source-neutral origin by authored list index; an existing origin
-    wins. Rewriting changes only the executable expression, so generated node ids never
-    replace authored presentation. `None`/empty returns unchanged.
+    wins. ``assertion_range_at`` supplies a source range by authored list index, keeping
+    duplicate assertion text distinct. Rewriting changes only the executable expression,
+    so generated node ids never replace authored presentation. `None`/empty returns unchanged.
     """
     if not asserts:
-        return asserts, []
+        return asserts, [], {}
     calls: list = []
+    call_ranges: dict[str, Optional[SourceRange]] = {}
     new_asserts: list[Assertion] = []
     for index, value in enumerate(asserts):
+        assertion_range = (
+            assertion_range_at(index) if assertion_range_at is not None else None
+        )
         if isinstance(value, Assertion):
             assertion = value
             if assertion.origin is None and assertion_origin_at is not None:
@@ -372,9 +421,19 @@ def _desugar_asserts(
                 "flow assertions must be strings or Assertion carriers, "
                 f"got {type(value).__name__}"
             )
-        expression = _desugar_value(assertion.expression, mint, calls, "assert", line=line)
+        before = len(calls)
+        expression = _desugar_value(
+            assertion.expression,
+            mint,
+            calls,
+            "assert",
+            range=assertion_range,
+            line=None if assertion_range is not None else line,
+        )
+        for call in calls[before:]:
+            call_ranges[call.id] = assertion_range
         new_asserts.append(replace(assertion, expression=expression))
-    return new_asserts, calls
+    return new_asserts, calls, call_ranges
 
 
 def _to_call_descriptor(
@@ -397,7 +456,7 @@ def _to_call_descriptor(
             f"{host}: call targets beginning with {INLINE_FLOW_PREFIX!r} are reserved "
             "for compiler-generated inline child flows",
             range=range,
-            line=line,
+            line=None if range is not None else line,
         )
     for name, value in call.args.items():
         if _captures_item(value):
@@ -407,7 +466,7 @@ def _to_call_descriptor(
                 f"map-element scope; use a named `call` node (whose per-element "
                 f"`inputs:` may read `${{item}}`)",
                 range=range,
-                line=line,
+                line=None if range is not None else line,
             )
     return CallDescriptor(
         id=call.id,

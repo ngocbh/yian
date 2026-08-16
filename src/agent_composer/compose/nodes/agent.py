@@ -9,20 +9,24 @@ so the shared dispatch routes here.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from agent_composer.diagnostics import SourceRange
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.contracts import ValueContract
 
 
 def _validate_llm_config(
-    cfg: dict[str, Any] | None, node_id: str
+    cfg: Mapping[str, Any] | None,
+    node_id: str,
+    source_range: SourceRange | None = None,
 ) -> tuple[dict[str, Any], bool]:
-    """Validate a raw llm_config dict at LOAD time and split off the reserved `inherit` key.
+    """Validate a raw llm_config mapping at LOAD time and split off `inherit`.
 
     `inherit` (whole-node cascade opt-out, default True) is NOT an `LLMConfig` field, so it
     must be popped before the `extra="forbid"` round-trip that fires on typo'd keys (e.g.
@@ -31,15 +35,36 @@ def _validate_llm_config(
 
     Module-local to `agent.py`: agent is the only kind with an `llm_config:` field (model has
     none), so the validator lives next to its sole caller rather than in shared machinery.
+
+    Args:
+        cfg (`Mapping[str, Any] | None`): Authored config, or `None` for defaults.
+        node_id (`str`): Node id included in load-error messages.
+        source_range (`SourceRange | None`): Authored config location, when retained.
+
+    Returns:
+        `tuple[dict[str, Any], bool]`: Config without `inherit`, then its boolean value.
+
+    Raises:
+        `LoadError`: The config is not a mapping or violates `LLMConfig`.
     """
+    if cfg is None:
+        return {}, True
+    if not isinstance(cfg, Mapping):
+        raise LoadError(
+            f"node {node_id!r}: llm_config must be a mapping",
+            range=source_range,
+        )
+    cfg = dict(cfg)
     if not cfg:
         return {}, True
-    cfg = dict(cfg)
     inherit = bool(cfg.pop("inherit", True))
     try:
         LLMConfig(**cfg)
     except Exception as exc:
-        raise LoadError(f"node {node_id!r}: llm_config: {exc}") from exc
+        raise LoadError(
+            f"node {node_id!r}: llm_config: {exc}",
+            range=source_range,
+        ) from exc
     return cfg, inherit
 
 
@@ -86,7 +111,20 @@ class AgentDescriptor(NodeDescriptor):
         wraps them in a `BuildResult`). `ctx.resolver` is unused (leaf kind) and the inline-CODE
         anchors on `ctx` are read only by the CODE build.
         """
-        own_cfg, inherit = _validate_llm_config(self.llm_config, self.id)
+        llm_config_range = (
+            self.field_ranges.get(("field", "llm_config")) or self.range
+        )
+        own_cfg, inherit = _validate_llm_config(
+            self.llm_config,
+            self.id,
+            llm_config_range,
+        )
+        mode_range = self.field_ranges.get(("field", "mode")) or self.range
+        if not isinstance(self.mode, str):
+            raise LoadError(
+                f"node {self.id!r}: mode must be a string",
+                range=mode_range,
+            )
         try:
             node = AgentNode(
                 self.id,
@@ -101,7 +139,10 @@ class AgentDescriptor(NodeDescriptor):
         except ValueError as exc:
             # AgentNode validates the mode registry; surface a rejection as
             # the loader's one error type (loud), not a bare ValueError.
-            raise LoadError(f"node {self.id!r}: {exc}") from exc
+            raise LoadError(
+                f"node {self.id!r}: {exc}",
+                range=mode_range,
+            ) from exc
 
         override = self.output_contract_override
         node.output_contract = (

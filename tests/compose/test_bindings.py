@@ -16,7 +16,7 @@ from agent_composer.compose.nodes.tool import ToolDescriptor
 from agent_composer.compose.nodes.wait import WaitDescriptor
 
 
-def _up(_key, value):
+def _up(_field, _key, value):
     return value.upper()
 
 
@@ -49,6 +49,27 @@ def test_map_kind_inputs_and_over_rewritten():
     out = map_binding_strings(desc, _up)
     assert out.inputs == {"seed": "${S}"}
     assert out.over == "${XS}"
+
+
+def test_mapper_distinguishes_input_key_from_scalar_field():
+    desc = MapDescriptor(
+        id="m",
+        call="sub",
+        inputs={"over": "${input_value}"},
+        over="${items}",
+    )
+    sites = []
+
+    def record(field, key, value):
+        sites.append((field, key, value))
+        return value
+
+    map_binding_strings(desc, record)
+
+    assert sites == [
+        ("inputs", "over", "${input_value}"),
+        ("over", "over", "${items}"),
+    ]
 
 
 def test_call_over_none_left_untouched():

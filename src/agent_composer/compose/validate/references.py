@@ -17,7 +17,7 @@ Two subtleties mirror the legacy collector:
 Located parse metadata: each error anchors on the referencing field's `SourceRange`, read
 off the built node's `field_ranges` (the coarse per-field span — e.g. the node's `input:`
 mapping for an input-binding ref, its `prompt:` for a prompt ref). The transitional
-`node_lines`/`outputs_line` line-maps still feed `LoadError.line` for the line-based CLI
+`node_lines`/`outputs_line` provide compatibility fallbacks when no retained range exists
 renderer; a later renderer collapse retires them for the range.
 
 Imports flow down only: `compile.validation` (the leaf ref checker), `expr` (the binding
@@ -89,9 +89,9 @@ def validate_references(
     `field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
     binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
     / `("field", "prompt")`), else the node header. The transitional `node_lines` (node id ->
-    source line) + `outputs_line` (the `outputs:` section line) still feed `LoadError.line`
-    for the line-based renderer. `outputs_range` is the authored output value/block range
-    when the caller retains it; otherwise output errors fall back to `outputs_line`.
+    source line) + `outputs_line` (the `outputs:` section line) feed `LoadError.line`
+    only when no retained range exists. `outputs_range` is the authored output value/block
+    range when the caller retains it; otherwise output errors fall back to `outputs_line`.
     The aggregate `LoadError` carries the first error with either location, preserving that
     error's line/range pair rather than mixing locations from separate messages.
 
@@ -227,6 +227,8 @@ def validate_references(
             ),
             (None, None),
         )
+        if first_range is not None:
+            first_line = None
         raise LoadError(
             "flow has unresolved references:\n  "
             + "\n  ".join(msg for msg, _, _ in errors),

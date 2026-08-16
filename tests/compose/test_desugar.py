@@ -8,14 +8,20 @@ synth composer genuinely SHARES the gate's inputs verbatim and so correctly inhe
 gate's `.range`/`field_ranges`.
 """
 
+import pytest
+
 from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
+from agent_composer.compose.desugar.case_outputs import expand_case_outputs
 from agent_composer.compose.desugar.case_targets import desugar_case_call_targets
 from agent_composer.compose.desugar.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
 )
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.parse.file import CaseDescriptor, CodeDescriptor, MapDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceDocument
+from agent_composer.events import SourceRange
 
 
 def _nodes_reader(text):
@@ -47,6 +53,101 @@ def test_desugar_inline_calls_locate_at_their_binding_site():
     assert call_desc.range == host.field_ranges[("input", "x")]  # the `x:` binding, not the header
     assert call_desc.range != host.range                         # ... which is strictly the header
     assert call_desc.field_ranges == {}                          # owns no authored fields
+
+
+def test_inline_call_error_uses_binding_range_and_retains_legacy_line():
+    text = (
+        "id: f\nname: f\nnodes:\n"
+        "  writer:\n    kind: code\n    code: m:f\n"
+        "    input:\n      x: ${helper(topic=${input.topic})}\n    output: str\n"
+    )
+    descriptors = parse_nodes(_nodes_reader(text))
+    binding_range = descriptors["writer"].field_ranges[("input", "x")]
+
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls(
+            descriptors,
+            None,
+            next_id=_synth_id_gen(),
+        )
+
+    assert caught.value.range == binding_range
+    assert caught.value.line == binding_range.start_line
+
+
+def test_inline_output_error_prefers_range_over_legacy_line():
+    output_range = SourceRange(17, 9, 17, 28)
+
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls(
+            {},
+            "call(helper, topic=${item})",
+            outputs_range=output_range,
+            outputs_line=117,
+            next_id=_synth_id_gen(),
+        )
+
+    assert caught.value.range == output_range
+    assert caught.value.line == output_range.start_line
+
+
+def test_inline_assert_error_prefers_positional_range_over_legacy_line():
+    assertion_ranges = [
+        SourceRange(18, 7, 18, 11),
+        SourceRange(19, 7, 19, 25),
+    ]
+
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls(
+            {},
+            None,
+            asserts_section=["true", "${helper(topic=1)}"],
+            asserts_line=119,
+            assertion_range_at=assertion_ranges.__getitem__,
+            next_id=_synth_id_gen(),
+        )
+
+    assert caught.value.range == assertion_ranges[1]
+    assert caught.value.line == assertion_ranges[1].start_line
+
+
+def test_duplicate_inline_assertions_keep_positional_ranges():
+    assertion_ranges = [
+        SourceRange(21, 7, 21, 19),
+        SourceRange(22, 7, 22, 19),
+    ]
+
+    descriptors, _outputs, _asserts = desugar_inline_calls(
+        {},
+        None,
+        asserts_section=["call(helper)", "call(helper)"],
+        assertion_range_at=assertion_ranges.__getitem__,
+        next_id=_synth_id_gen(),
+    )
+
+    assert descriptors["__call_0"].range == assertion_ranges[0]
+    assert descriptors["__call_1"].range == assertion_ranges[1]
+
+
+def test_inline_map_scalar_over_does_not_use_input_named_over_range():
+    input_range = SourceRange(71, 9, 71, 25)
+    scalar_range = SourceRange(72, 9, 72, 36)
+    descriptor = MapDescriptor(
+        id="mapped",
+        call="child",
+        inputs={"over": "${input.seed}"},
+        over="${helper(topic=${item})}",
+        field_ranges={
+            ("input", "over"): input_range,
+            ("field", "over"): scalar_range,
+        },
+    )
+
+    with pytest.raises(LoadError) as caught:
+        desugar_inline_calls({"mapped": descriptor}, None)
+
+    assert caught.value.range == scalar_range
+    assert caught.value.line == scalar_range.start_line
 
 
 def test_desugar_adaptive_questions_preserves_ranges():
@@ -88,3 +189,122 @@ def test_desugar_case_call_targets_locate_at_their_target_line():
     assert call_desc.range == host.then_ranges[0]  # the `then:` line, not the case header
     assert call_desc.range != host.range
     assert call_desc.field_ranges == {}            # owns no authored fields
+
+
+def _case_gate() -> CaseDescriptor:
+    return CaseDescriptor(
+        id="gate",
+        cases=[{"when": "yes", "then": "left"}],
+        else_="right",
+    )
+
+
+def test_case_binding_error_prefers_binding_range_over_legacy_line():
+    host_range = SourceRange(30, 3, 35, 1)
+    binding_range = SourceRange(33, 10, 33, 44)
+    consumer = CodeDescriptor(
+        id="consumer",
+        code="m:f",
+        inputs={"value": "${gate.output | fallback.output}"},
+        range=host_range,
+        field_ranges={("input", "value"): binding_range},
+    )
+
+    with pytest.raises(LoadError) as caught:
+        expand_case_outputs(
+            {"gate": _case_gate(), "consumer": consumer},
+            None,
+            [],
+            node_lines={"consumer": 133},
+        )
+
+    assert caught.value.range == binding_range
+    assert caught.value.line == binding_range.start_line
+
+
+def test_case_output_error_prefers_section_range_over_legacy_line():
+    output_range = SourceRange(40, 9, 40, 23)
+    empty_gate = CaseDescriptor(id="gate", cases=[{"when": "yes"}])
+
+    with pytest.raises(LoadError) as caught:
+        expand_case_outputs(
+            {"gate": empty_gate},
+            "${gate.output}",
+            [],
+            outputs_range=output_range,
+            outputs_line=140,
+        )
+
+    assert caught.value.range == output_range
+    assert caught.value.line == output_range.start_line
+
+
+@pytest.mark.parametrize("condition_kind", ["on", "when"])
+def test_case_condition_error_uses_exact_condition_range(condition_kind):
+    condition_range = SourceRange(51, 11, 51, 25)
+    host_range = SourceRange(48, 3, 55, 1)
+    if condition_kind == "on":
+        other = CaseDescriptor(
+            id="other",
+            on="${gate.output}",
+            cases=[{"when": "yes", "then": "done"}],
+            range=host_range,
+            field_ranges={("field", "on"): condition_range},
+        )
+    else:
+        other = CaseDescriptor(
+            id="other",
+            cases=[{"when": "${gate.output}", "then": "done"}],
+            range=host_range,
+            when_ranges=[condition_range],
+        )
+
+    with pytest.raises(LoadError) as caught:
+        expand_case_outputs({"gate": _case_gate(), "other": other}, None, [])
+
+    assert caught.value.range == condition_range
+    assert caught.value.line == condition_range.start_line
+
+
+def test_case_assert_error_prefers_positional_range_over_legacy_line():
+    assertion_ranges = [
+        SourceRange(61, 7, 61, 20),
+        SourceRange(62, 7, 62, 30),
+    ]
+
+    with pytest.raises(LoadError) as caught:
+        expand_case_outputs(
+            {"gate": _case_gate()},
+            None,
+            ["true", "${gate.output} == 1"],
+            asserts_line=160,
+            assertion_range_at=assertion_ranges.__getitem__,
+        )
+
+    assert caught.value.range == assertion_ranges[1]
+    assert caught.value.line == assertion_ranges[1].start_line
+
+
+def test_case_map_scalar_over_does_not_use_input_named_over_range():
+    input_range = SourceRange(81, 9, 81, 25)
+    scalar_range = SourceRange(82, 9, 82, 45)
+    descriptor = MapDescriptor(
+        id="mapped",
+        call="child",
+        inputs={"over": "${input.seed}"},
+        over="${gate.output | fallback.output}",
+        field_ranges={
+            ("input", "over"): input_range,
+            ("field", "over"): scalar_range,
+        },
+    )
+
+    with pytest.raises(LoadError) as caught:
+        expand_case_outputs(
+            {"gate": _case_gate(), "mapped": descriptor},
+            None,
+            [],
+        )
+
+    assert caught.value.range == scalar_range
+    assert caught.value.line == scalar_range.start_line

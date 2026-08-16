@@ -32,12 +32,12 @@ def check_case_exhaustive(
     node_lines=None,
 ):
     """Enum-exhaustiveness over every `case` descriptor's on:-form. Raises LoadError
-    (line-stamped at the case node) on a non-exhaustive enum with no else:.
+    (range-stamped at the case node) on a non-exhaustive enum with no else:.
 
     `descriptors` is the flow's `{node_id -> NodeDescriptor}`; `producers` maps producer-node
     id -> its exact `ValueContract` (whose semantic type drives the dotted-field walk).
-    `node_lines` (`{node_id -> 1-based header line}`) line-stamps an unlocated coverage error
-    at the case node.
+    The descriptor's own range is authoritative; `node_lines` remains only as the
+    source-free compatibility fallback.
     """
     for producer_id, contract in producers.items():
         if type(contract) is not ValueContract:
@@ -130,5 +130,6 @@ def _check_exhaustive(
     if missing:
         raise LoadError(
             f"case node {desc.id!r} on {desc.on}: non-exhaustive — enum tag(s) "
-            f"{missing} not covered by a case `when:` or an `else:`"
+            f"{missing} not covered by a case `when:` or an `else:`",
+            range=desc.range,
         )

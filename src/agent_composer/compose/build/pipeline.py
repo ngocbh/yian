@@ -158,8 +158,14 @@ class _DescriptorBuildCache:
             try:
                 result = self._descriptors[node_id].build(self._context)
             except LoadError as exc:
+                if exc.range is None and exc.line is None:
+                    exc.range = getattr(self._descriptors[node_id], "range", None)
                 if exc.line is None:
-                    exc.line = self._node_lines.get(node_id)
+                    exc.line = (
+                        exc.range.start_line
+                        if exc.range is not None
+                        else self._node_lines.get(node_id)
+                    )
                 raise
             self._built[node_id] = result
             return result
@@ -747,6 +753,9 @@ def _assemble(
             "_assemble requires exactly one of inputs_section or input_parameters"
         )
 
+    if outputs_range is None and outputs_cursor is not None:
+        outputs_range = outputs_cursor.range
+
     # Inline-body extraction masks child-only fields for descriptor parsing. Assertion
     # provenance still belongs to the unmodified authored occurrence tree.
     authored_nodes_cursor = nodes_cursor
@@ -772,6 +781,10 @@ def _assemble(
             (*owner, "assert", index),
             catalog_builder,
         )
+
+    def flow_assertion_range_at(index: int) -> SourceRange | None:
+        """Return one authored flow assertion's retained positional range."""
+        return flow_assertion_ranges[index]
 
     def node_assertion_site_at(
         node_id: str,
@@ -897,6 +910,8 @@ def _assemble(
         asserts_section=asserts_section,
         outputs_line=s_lines.get("output") or s_lines.get("outputs"),
         asserts_line=s_lines.get("asserts"),
+        outputs_range=outputs_range,
+        assertion_range_at=flow_assertion_range_at,
         assertion_origin_at=flow_assertion_origin_at,
         next_id=mint,
     )
@@ -922,6 +937,8 @@ def _assemble(
         node_lines=n_lines,
         outputs_line=s_lines.get("output") or s_lines.get("outputs"),
         asserts_line=s_lines.get("asserts"),
+        outputs_range=outputs_range,
+        assertion_range_at=flow_assertion_range_at,
     )
 
     descriptor_cache: _DescriptorBuildCache | None = None

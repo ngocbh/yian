@@ -6,6 +6,7 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.parse.file import parse_file
 from agent_composer.compose.helpers.uses import UsesRef, parse_uses_ref
+from agent_composer.compose.source import SourceDocument
 
 
 # A minimal valid single-node flow; each test appends its own `uses:`/`system:` sections.
@@ -204,8 +205,11 @@ def test_uncalled_missing_alias_is_loud():
     def reject(flow_id, version=None):
         raise LoadError(f"no such flow {flow_id!r}")
     text = _BASE + "uses:\n  dead: nope\n"
-    with pytest.raises(LoadError):
+    expected = SourceDocument.parse(text).root.child("uses").child("dead").range
+    with pytest.raises(LoadError) as caught:
         load_flow(text, child_resolver=reject)
+    assert caught.value.range == expected
+    assert caught.value.line == expected.start_line
 
 
 def test_inline_call_routes_through_uses_arm():

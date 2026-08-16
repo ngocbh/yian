@@ -186,7 +186,9 @@ def test_originful_custom_child_requires_a_complete_resolver(replacement):
         )
 
     assert "alias 'child_view'" in str(caught.value)
-    assert caught.value.line == 8
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == 9
+    assert caught.value.line == 9
 
 
 def test_custom_child_resolver_failure_is_wrapped_at_the_uses_boundary():
@@ -203,7 +205,9 @@ def test_custom_child_resolver_failure_is_wrapped_at_the_uses_boundary():
         )
 
     assert "alias 'child_view'" in str(caught.value)
-    assert caught.value.line == 8
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == 9
+    assert caught.value.line == 9
 
 
 def test_custom_child_resolver_descriptor_failure_is_wrapped_at_the_uses_boundary():
@@ -221,7 +225,9 @@ def test_custom_child_resolver_descriptor_failure_is_wrapped_at_the_uses_boundar
         )
 
     assert "alias 'child_view'" in str(caught.value)
-    assert caught.value.line == 8
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == 9
+    assert caught.value.line == 9
 
 
 def test_custom_child_origin_hook_failure_is_wrapped_at_the_uses_boundary():
@@ -242,7 +248,9 @@ def test_custom_child_origin_hook_failure_is_wrapped_at_the_uses_boundary():
         )
 
     assert "alias 'child_view'" in str(caught.value)
-    assert caught.value.line == 8
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == 9
+    assert caught.value.line == 9
 
 
 def test_custom_child_validation_preserves_exact_origin_subclasses():
@@ -287,7 +295,9 @@ def test_external_resolver_must_return_a_composed_flow():
         )
 
     assert "alias 'child_view'" in str(caught.value)
-    assert caught.value.line == 8
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == 9
+    assert caught.value.line == 9
 
 
 def test_source_free_custom_child_rejects_an_origin_resolver():
@@ -303,7 +313,9 @@ def test_source_free_custom_child_rejects_an_origin_resolver():
         )
 
     assert "alias 'child_view'" in str(caught.value)
-    assert caught.value.line == 8
+    assert caught.value.range is not None
+    assert caught.value.range.start_line == 9
+    assert caught.value.line == 9
 
 
 def test_source_free_custom_child_remains_source_free_when_embedded():

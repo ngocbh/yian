@@ -9,9 +9,9 @@ passing the fully-assembled edge set is fine.
 
 Located parse metadata: the caller passes `node_ranges` (node id -> `SourceRange`); the
 cycle error anchors its `range` on the first (sorted) stuck node that has one. Transitionally
-it also passes `node_lines` (node id -> 1-based key line) so the still-line-based CLI renderer
-can highlight *every* stuck node (`flow.yaml:4,9`) via `LoadError.lines`; a later renderer
-collapse to the single `range` will retire that map. The error also carries a "why"
+it also passes `node_lines` (node id -> 1-based key line) so the CLI can highlight *every*
+stuck node (`flow.yaml:4,9`) via `LoadError.lines`; the compatibility `.line` still derives
+from the authoritative range. The error also carries a "why"
 legend (`LoadError.notes`): one line per dependency edge inside the loop, so the author sees
 which `${...}` reference closes the cycle.
 
@@ -45,9 +45,10 @@ def reject_cycles(
 
     `node_ranges` (node id -> `SourceRange`) lets the error anchor on a node in the loop:
     the error's `.range` is the first (sorted) stuck node's range. Absent it, `.range` is
-    None. `node_lines` (node id -> 1-based key line) is the transitional line-map the
-    line-based CLI renderer still reads: every stuck node's line lands in `LoadError.lines`
-    so the frame highlights the whole loop. A later renderer collapse retires `node_lines` for `range`.
+    None. `node_lines` (node id -> 1-based key line) is the transitional line map used to
+    put every stuck node in `LoadError.lines`, so the frame highlights the whole loop. When
+    a primary range exists, the compatibility `.line` follows that range rather than the
+    smallest secondary line.
 
     The error also carries a "why" legend (`LoadError.notes`): one line per dependency edge
     *inside* the loop — "<consumer> depends on <producer> (<consumer>.input.<group>)" — so the
@@ -65,7 +66,11 @@ def reject_cycles(
         )
         notes = _cycle_notes(edges, set(stuck))
         raise LoadError(
-            str(exc), lines=(lines or None), range=rng, notes=notes or None
+            str(exc),
+            line=rng.start_line if rng is not None else None,
+            lines=(lines or None),
+            range=rng,
+            notes=notes or None,
         ) from exc
 
 

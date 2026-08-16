@@ -22,15 +22,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.helpers.source import _section_lines
 from agent_composer.compose.source import (
+    SourceAccessError,
     SourceCursor,
     SourceDocument,
     SourceSyntaxError,
 )
+from agent_composer.diagnostics import SourceRange
 
 # `AgentDescriptor`/`CodeDescriptor`/`ModelDescriptor`/`ToolDescriptor`/`WaitDescriptor`
 # now live with their parse/build handles in `nodes/<kind>.py`; re-export them here so
@@ -163,7 +164,7 @@ _COMPACT_FLOW_KEYS = frozenset({"id", "name", "description", "version", "typedef
 _COMPACT_KINDS = frozenset({"agent", "code", "model", "tool", "human_input"})
 
 
-def _desugar_compact(body: dict, lines: dict[str, int]) -> dict:
+def _desugar_compact(body: dict, root: SourceCursor) -> dict:
     """Desugar a compact single-node flow into the canonical one-node form.
 
     A compact flow carries a node `kind:` at the top level and NO `nodes:` map — the
@@ -188,20 +189,20 @@ def _desugar_compact(body: dict, lines: dict[str, int]) -> dict:
             f"compact (single-node) flow: kind {kind!r} is not allowed inline "
             f"(allowed: {', '.join(sorted(_COMPACT_KINDS))}); case/call/map reference "
             f"other nodes a one-node flow has none of — write a full `nodes:` map instead",
-            line=lines.get("kind"),
+            range=root.range_of("kind"),
         )
     flow_id = body.get("id")
     if not isinstance(flow_id, str) or not flow_id:
         raise LoadError(
             "compact (single-node) flow: a top-level `id:` is required — it names the "
             "single node",
-            line=lines.get("id"),
+            range=root.range_of("id") if root.has("id") else root.range,
         )
     params = body.get("input") or {}
     if not isinstance(params, dict):
         raise LoadError(
             "compact (single-node) flow: `input:` must be a param map (name: TYPE)",
-            line=lines.get("input"),
+            range=root.range_of("input"),
         )
 
     # The node body = the kind + its logic fields (everything that is not flow metadata
@@ -220,6 +221,49 @@ def _desugar_compact(body: dict, lines: dict[str, int]) -> dict:
     canonical["nodes"] = {flow_id: node_body}
     canonical["output"] = f"${{{flow_id}.output}}"  # re-export the single node's output
     return canonical
+
+
+_MODEL_TO_SOURCE_SECTION = {"inputs": "input", "outputs": "output"}
+
+
+def _validation_error_range(
+    exc: ValidationError,
+    root: SourceCursor,
+) -> SourceRange | None:
+    """Locate the first Pydantic error path that replays through ``root``.
+
+    Args:
+        exc (`ValidationError`): Schema failure whose ordered locations are tested.
+        root (`SourceCursor`): Retained physical root used to replay each location.
+
+    Returns:
+        `SourceRange | None`: First replayable range, otherwise the root range.
+    """
+
+    for detail in exc.errors():
+        if not isinstance(detail, Mapping):
+            continue
+        loc = detail.get("loc")
+        if not isinstance(loc, (list, tuple)) or not loc:
+            continue
+
+        cursor = root
+        for index, segment in enumerate(loc):
+            if segment == "[key]" and index == len(loc) - 1:
+                if cursor.key_range is not None:
+                    return cursor.key_range
+                break
+            if index == 0:
+                segment = _MODEL_TO_SOURCE_SECTION.get(segment, segment)
+            try:
+                cursor = cursor.child(segment)
+            except SourceAccessError:
+                break
+        else:
+            if cursor.range is not None:
+                return cursor.range
+
+    return root.range
 
 
 def parse_source_document(text: str, label: str) -> SourceDocument:
@@ -281,7 +325,6 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     if not isinstance(raw, Mapping):
         raise LoadError("a flow must be a YAML mapping at the top level", range=root.range)
 
-    lines = _section_lines(root)
     body = {
         key: root.get(key)
         for key in raw
@@ -292,7 +335,7 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     # to the canonical one-node form BEFORE the strict-schema checks below, since `nodes:`
     # is required and `extra="forbid"` would otherwise reject the inline node fields.
     if "kind" in body and "nodes" not in body:
-        body = _desugar_compact(body, lines)
+        body = _desugar_compact(body, root)
 
     # ComposeFile's model_validator(mode='before') normalizes section
     # keywords (input:↔inputs:, output:↔outputs:) at top + nested + defs bodies.
@@ -304,14 +347,16 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
             raise LoadError(
                 f"unknown top-level key {key!r} "
                 f"(allowed: {', '.join(sorted(set(ComposeFile.model_fields)))})",
-                line=lines.get(key),
+                range=root.key_range_of(key),
             )
 
     try:
         return ComposeFile.model_validate(body)
     except LoadError:
         raise
-    except Exception as exc:  # pydantic ValidationError -> LoadError
+    except ValidationError as exc:
+        raise LoadError(str(exc), range=_validation_error_range(exc, root)) from exc
+    except Exception as exc:
         raise LoadError(str(exc)) from exc
 
 

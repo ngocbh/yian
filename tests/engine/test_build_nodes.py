@@ -90,14 +90,77 @@ def test_agent_unknown_mode_is_loud_loaderror():
     document = SourceDocument.parse(text)
     parse_file(document)
     desc = parse_nodes(document.root.child("nodes"))["note"]
-    with pytest.raises(LoadError, match="unknown mode"):
+    with pytest.raises(LoadError, match="unknown mode") as caught:
         _build(desc)
+    expected = desc.field_ranges[("field", "mode")]
+    assert caught.value.range == expected
+    assert caught.value.line == expected.start_line
+
+
+def test_agent_invalid_llm_config_uses_the_config_field_range():
+    text = (
+        "id: bad-config\nname: bad\n"
+        "nodes:\n  note:\n    kind: agent\n"
+        "    llm_config:\n      provider: bogus_provider\n"
+        "    prompt: hi\n"
+        "output: ${note.output}\n"
+    )
+    document = SourceDocument.parse(text)
+    parse_file(document)
+    desc = parse_nodes(document.root.child("nodes"))["note"]
+
+    with pytest.raises(LoadError, match="llm_config") as caught:
+        _build(desc)
+
+    expected = desc.field_ranges[("field", "llm_config")]
+    assert caught.value.range == expected
+    assert caught.value.line == expected.start_line
+
+
+@pytest.mark.parametrize("value", ["bogus", "1", "false", "[bogus]"])
+def test_agent_non_mapping_llm_config_is_a_ranged_load_error(value):
+    text = (
+        "id: bad-config\nname: bad\n"
+        "nodes:\n  note:\n    kind: agent\n"
+        f"    llm_config: {value}\n"
+        "    prompt: hi\n"
+        "output: ${note.output}\n"
+    )
+    document = SourceDocument.parse(text)
+    parse_file(document)
+    desc = parse_nodes(document.root.child("nodes"))["note"]
+
+    with pytest.raises(LoadError, match="must be a mapping") as caught:
+        _build(desc)
+
+    expected = desc.field_ranges[("field", "llm_config")]
+    assert caught.value.range == expected
+    assert caught.value.line == expected.start_line
+
+
+def test_agent_non_string_mode_is_a_ranged_load_error():
+    text = (
+        "id: bad-mode\nname: bad\n"
+        "nodes:\n  note:\n    kind: agent\n"
+        "    mode: [plain]\n"
+        "    prompt: hi\n"
+        "output: ${note.output}\n"
+    )
+    document = SourceDocument.parse(text)
+    parse_file(document)
+    desc = parse_nodes(document.root.child("nodes"))["note"]
+
+    with pytest.raises(LoadError, match="must be a string") as caught:
+        _build(desc)
+
+    expected = desc.field_ranges[("field", "mode")]
+    assert caught.value.range == expected
+    assert caught.value.line == expected.start_line
 
 
 def test_agent_bad_mode_loaderror_is_located_via_load_flow():
-    # Through the full load path the loader stamps the node's source line onto the
-    # build-time LoadError (`desc.build(ctx)` raises it line-less; the loader's conductor
-    # loop locates it), so an invalid mode points the author at the offending node.
+    # The descriptor owns the precise `mode:` range, so the build-time LoadError points
+    # directly at that field rather than relying on the conductor's node-header line.
     from agent_composer.compose.loader import load_flow
 
     bad_mode = (
@@ -111,7 +174,10 @@ def test_agent_bad_mode_loaderror_is_located_via_load_flow():
     )
     with pytest.raises(LoadError, match="unknown mode") as ei:
         load_flow(bad_mode, search_paths=["."])
-    assert ei.value.line == 4
+    assert ei.value.range is not None
+    assert ei.value.range.start_line == 7
+    assert ei.value.line == 7
+
 
 def test_agent_node_knobs():
     # seed 14 — mode / tools / llm_config carried onto the AgentNode.

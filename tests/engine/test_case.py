@@ -35,6 +35,7 @@ from agent_composer.compose.parse.file import CaseDescriptor, parse_file
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.validate.case_exhaustive import check_case_exhaustive
+from agent_composer.diagnostics import SourceRange
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -305,15 +306,19 @@ def test_exhaustiveness_dotted_missing_tag_raises():
         },
         required=frozenset({"stance"}),
     )
+    descriptor_range = SourceRange(17, 3, 17, 8)
     desc = CaseDescriptor(
         id="route",
         on="${synth.output.stance}",
         cases=[{"when": "positive", "then": "pro_note"}, {"when": "negative", "then": "con_note"}],
         else_=None,
+        range=descriptor_range,
     )
     with pytest.raises(LoadError) as exc:
         check_case_exhaustive({desc.id: desc}, {"synth": ValueContract(view)})
     assert "neutral" in str(exc.value)
+    assert exc.value.range == descriptor_range
+    assert exc.value.line == descriptor_range.start_line
 
 
 def test_exhaustiveness_rejects_noncanonical_producer_contract():

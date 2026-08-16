@@ -41,6 +41,6 @@ def check_wiring_parity(
             raise LoadError(
                 f"node {nid!r}: flow.wiring keys {sorted(actual)} != declared params + reserved "
                 f"{sorted(expected)} (wiring/params key parity)",
-                line=lines.get(nid),
+                line=None if rng is not None else lines.get(nid),
                 range=rng,
             )

@@ -64,12 +64,20 @@ def test_reject_cycles_diag_has_range():
         Edge(id="a->b", from_="a", to="b", input_group="x"),
         Edge(id="b->a", from_="b", to="a", input_group="y"),
     ]
-    ra = SourceRange(start_line=2, start_col=3, end_line=2, end_col=8)
-    rb = SourceRange(start_line=5, start_col=3, end_line=5, end_col=8)
+    ra = SourceRange(start_line=9, start_col=3, end_line=9, end_col=8)
+    rb = SourceRange(start_line=3, start_col=3, end_line=3, end_col=8)
     with pytest.raises(LoadError) as exc:
-        reject_cycles(edges, {"a", "b"}, node_ranges={"a": ra, "b": rb})
-    # `a` sorts first among the stuck nodes, so its range is the anchor.
+        reject_cycles(
+            edges,
+            {"a", "b"},
+            node_lines={"a": 9, "b": 3},
+            node_ranges={"a": ra, "b": rb},
+        )
+    # `a` sorts first among the stuck nodes, so its range is the anchor even though
+    # `b` appears earlier in the source. The compatibility line follows that range.
     assert exc.value.range == ra
+    assert exc.value.line == ra.start_line
+    assert exc.value.lines == [9, 3]
     # The "why" legend still spells out the loop's dependency edges.
     assert exc.value.notes is not None
 
@@ -193,9 +201,9 @@ def test_validate_references_diag_case_then_call_locates_at_then_line():
 
 def test_check_ref_map_types_moved():
     # A `call` binding whose SOURCE Type mismatches the child input's declared Type is loud.
-    # The check lives in `validate.call_types`; the LoadError carries `.line` (additive) AND
-    # anchors its `.range` on the call node's `input:` mapping span (`field_ranges["inputs"]`,
-    # the coarsest available binding-site span).
+    # The check lives in `validate.call_types`; the LoadError anchors on the call node's
+    # `input:` mapping span (`field_ranges["inputs"]`, the coarsest available binding-site
+    # span), and its compatibility line derives from that range.
     from agent_composer.compose.validate.call_types import check_ref_map_types
     from agent_composer.nodes.call import CallNode
     from agent_composer.nodes.contracts import Parameter, ValueContract
@@ -220,17 +228,17 @@ def test_check_ref_map_types_moved():
     }  # source is a string
     wiring = {"c": {"n": "${src.output}"}}  # bound to the int-expecting child input
     with pytest.raises(LoadError) as exc:
-        check_ref_map_types({"c": node}, producers, {}, wiring, {"c": 7})
+        check_ref_map_types({"c": node}, producers, {}, wiring, {"c": 99})
     assert "child expects" in str(exc.value)
-    assert exc.value.line == 7  # additive: node_lines still feeds `.line`
     assert exc.value.range == rng
+    assert exc.value.line == rng.start_line
 
 
 def test_check_loop_type_contract_moved():
     # A `loop` whose carried field is SEEDED from a source Type that mismatches the body
     # output's same-named field Type is loud. The check lives in `validate.loop_types`; the
-    # LoadError carries `.line` (additive) AND anchors its `.range` on the loop node's
-    # `input:` mapping span (`field_ranges["inputs"]`).
+    # LoadError anchors on the loop node's `input:` mapping span
+    # (`field_ranges["inputs"]`); its compatibility line derives from that range.
     from agent_composer.compose.validate.loop_types import check_loop_type_contract
     from agent_composer.nodes.contracts import ValueContract
     from agent_composer.nodes.loop import LoopNode
@@ -248,10 +256,10 @@ def test_check_loop_type_contract_moved():
     }  # seed source is a string
     wiring = {"lp": {"n": "${src.output}"}}  # carried `n` seeded from the string
     with pytest.raises(LoadError) as exc:
-        check_loop_type_contract({"lp": node}, producers, {}, wiring, {"lp": 4})
+        check_loop_type_contract({"lp": node}, producers, {}, wiring, {"lp": 99})
     assert "carried field" in str(exc.value)
-    assert exc.value.line == 4  # additive: node_lines still feeds `.line`
     assert exc.value.range == rng
+    assert exc.value.line == rng.start_line
 
 
 def test_type_validators_reject_noncanonical_contract_maps_before_walking():
@@ -269,8 +277,8 @@ def test_type_validators_reject_noncanonical_contract_maps_before_walking():
 
 def test_check_wiring_parity_moved():
     # A node whose `flow.wiring` keys don't match its declared params is loud. The check lives
-    # in `validate.wiring_parity`; the LoadError carries `.line` (additive) AND anchors its
-    # `.range` on the node's `input:` mapping span (else node.range).
+    # in `validate.wiring_parity`; the LoadError anchors on the node's `input:` mapping
+    # span (else node.range), and its compatibility line derives from that range.
     from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 
     node, wiring = _node_wiring(CodeDescriptor(id="n", code="m:f", inputs={"x": "${input.x}"}))
@@ -278,16 +286,20 @@ def test_check_wiring_parity_moved():
     node.field_ranges = {("field", "inputs"): rng}
     with pytest.raises(LoadError) as exc:
         # orphan wiring key with no matching param -> parity failure
-        check_wiring_parity({"n": node}, {"n": {**wiring, "orphan": "${input.y}"}}, {"n": 3})
+        check_wiring_parity(
+            {"n": node},
+            {"n": {**wiring, "orphan": "${input.y}"}},
+            {"n": 99},
+        )
     assert "key parity" in str(exc.value)
-    assert exc.value.line == 3  # additive: node_lines still feeds `.line`
     assert exc.value.range == rng
+    assert exc.value.line == rng.start_line
 
 
 def test_validate_human_questions_diag_has_range():
     # A human_input gate with a structurally-invalid literal `questions:` list is loud. The
-    # check lives in `validate.human_questions`; the LoadError carries `.line` (additive) AND
-    # anchors its `.range` on the gate's `questions:` field span.
+    # check lives in `validate.human_questions`; the LoadError anchors on the gate's
+    # `questions:` field span and derives its compatibility line from that range.
     from agent_composer.compose.validate.human_questions import (
         validate_human_questions,
     )
@@ -297,10 +309,10 @@ def test_validate_human_questions_diag_has_range():
     rng = SourceRange(start_line=5, start_col=5, end_line=6, end_col=20)
     node.field_ranges = {("field", "questions"): rng}
     with pytest.raises(LoadError) as exc:
-        validate_human_questions({"ask": node}, node_lines={"ask": 5})
+        validate_human_questions({"ask": node}, node_lines={"ask": 99})
     assert "questions" in str(exc.value)
-    assert exc.value.line == 5  # additive: node_lines still feeds `.line`
     assert exc.value.range == rng
+    assert exc.value.line == rng.start_line
 
 
 _ASSERT_FLOW = """\

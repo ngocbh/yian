@@ -80,7 +80,6 @@ def test_reject_cycles_diag_has_range():
         reject_cycles(
             edges,
             {"a", "b"},
-            node_lines={"a": 9, "b": 3},
             node_ranges={"a": ra, "b": rb},
             diagnostics=_range_diagnostics(),
         )
@@ -94,6 +93,12 @@ def test_reject_cycles_no_ranges_leaves_range_none():
     with pytest.raises(LoadError) as exc:
         reject_cycles(edges, {"a", "b"})
     assert exc.value.diagnostic.frames == ()
+
+
+def test_reject_cycles_range_map_is_keyword_only() -> None:
+    """A retired third positional argument cannot silently bind as a range map."""
+    with pytest.raises(TypeError):
+        reject_cycles([], set(), {})  # type: ignore[call-arg]
 
 
 def test_reject_cycles_excludes_nodes_only_blocked_downstream() -> None:
@@ -277,7 +282,7 @@ def test_check_ref_map_types_moved():
     # A `call` binding whose SOURCE Type mismatches the child input's declared Type is loud.
     # The check lives in `validate.call_types`; the LoadError anchors on the call node's
     # `input:` mapping span (`field_ranges["inputs"]`, the coarsest available binding-site
-    # span), and its compatibility line derives from that range.
+    # span), and the canonical frame carries that range.
     from agent_composer.compose.validate.call_types import check_ref_map_types
     from agent_composer.nodes.call import CallNode
     from agent_composer.nodes.contracts import Parameter, ValueContract
@@ -307,7 +312,6 @@ def test_check_ref_map_types_moved():
             producers,
             {},
             wiring,
-            {"c": 99},
             diagnostics=_range_diagnostics(),
         )
     assert "child expects" in str(exc.value)
@@ -318,7 +322,7 @@ def test_check_loop_type_contract_moved():
     # A `loop` whose carried field is SEEDED from a source Type that mismatches the body
     # output's same-named field Type is loud. The check lives in `validate.loop_types`; the
     # LoadError anchors on the loop node's `input:` mapping span
-    # (`field_ranges["inputs"]`); its compatibility line derives from that range.
+    # (`field_ranges["inputs"]`); the canonical frame carries that range.
     from agent_composer.compose.validate.loop_types import check_loop_type_contract
     from agent_composer.nodes.contracts import ValueContract
     from agent_composer.nodes.loop import LoopNode
@@ -341,7 +345,6 @@ def test_check_loop_type_contract_moved():
             producers,
             {},
             wiring,
-            {"lp": 99},
             diagnostics=_range_diagnostics(),
         )
     assert "carried field" in str(exc.value)
@@ -364,7 +367,7 @@ def test_type_validators_reject_noncanonical_contract_maps_before_walking():
 def test_check_wiring_parity_moved():
     # A node whose `flow.wiring` keys don't match its declared params is loud. The check lives
     # in `validate.wiring_parity`; the LoadError anchors on the node's `input:` mapping
-    # span (else node.range), and its compatibility line derives from that range.
+    # span (else node.range), and the canonical frame carries that range.
     from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 
     node, wiring = _node_wiring(CodeDescriptor(id="n", code="m:f", inputs={"x": "${input.x}"}))
@@ -375,7 +378,6 @@ def test_check_wiring_parity_moved():
         check_wiring_parity(
             {"n": node},
             {"n": {**wiring, "orphan": "${input.y}"}},
-            {"n": 99},
             diagnostics=_range_diagnostics(),
         )
     assert "key parity" in str(exc.value)
@@ -385,7 +387,7 @@ def test_check_wiring_parity_moved():
 def test_validate_human_questions_diag_has_range():
     # A human_input gate with a structurally-invalid literal `questions:` list is loud. The
     # check lives in `validate.human_questions`; the LoadError anchors on the gate's
-    # `questions:` field span and derives its compatibility line from that range.
+    # `questions:` field span, which the canonical frame carries directly.
     from agent_composer.compose.validate.human_questions import (
         validate_human_questions,
     )
@@ -397,7 +399,6 @@ def test_validate_human_questions_diag_has_range():
     with pytest.raises(LoadError) as exc:
         validate_human_questions(
             {"ask": node},
-            node_lines={"ask": 99},
             diagnostics=_range_diagnostics(),
         )
     assert "questions" in str(exc.value)

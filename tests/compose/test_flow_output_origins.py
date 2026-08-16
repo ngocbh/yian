@@ -340,8 +340,6 @@ def test_virtual_outputs_do_not_mint_or_erase_programmatic_origins():
         registry={},
         scope=_CallableScope({}, {}, None, {}),
         owner=("root",),
-        n_lines={},
-        s_lines={},
     )
 
     virtual = _output(loaded.compiled, "virtual")
@@ -377,8 +375,6 @@ def test_physical_output_does_not_replace_an_explicit_programmatic_origin():
         registry={},
         scope=_CallableScope({}, {}, None, {}),
         owner=("root",),
-        n_lines={},
-        s_lines={},
     )
 
     output = _output(loaded.compiled, "result")

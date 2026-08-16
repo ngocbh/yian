@@ -1,13 +1,55 @@
-"""The Step-8 cutover removed the `*_lines` line-map API — locations ride `SourceRange` now.
+"""Compose diagnostics have one range-native location path.
 
-The single-pass span parser records a `SourceRange` on every node/field, and the CLI renders
-via `render_diagnostic` fed by those ranges. The legacy secondary-parse `*_lines` producers
-(and their public re-exports) are gone; this pins that they cannot be imported again.
+The source document records `SourceRange` values, Compose resolves them into canonical
+diagnostic frames, and the CLI renders those frames directly. These ratchets keep the
+retired line-map vocabulary out of production code and the public package surface.
 """
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
+
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.diagnostics import Diagnostic
+
+
+_ROOT = Path(__file__).resolve().parents[2]
+_PRODUCTION_PATHS = (
+    _ROOT / "src" / "agent_composer" / "compose",
+    _ROOT / "src" / "agent_composer" / "cli" / "run.py",
+)
+_RETIRED_LOCATION_NAMES = (
+    "node_lines",
+    "outputs_line",
+    "asserts_line",
+    "n_lines",
+    "s_lines",
+    "_section_lines",
+)
+_RETIRED_LOCATION_PATTERNS = {
+    name: re.compile(rf"(?<!\w){re.escape(name)}(?!\w)")
+    for name in _RETIRED_LOCATION_NAMES
+}
+
+
+def test_retired_line_map_names_are_absent_from_production() -> None:
+    offenders: list[str] = []
+    for production_path in _PRODUCTION_PATHS:
+        paths = (
+            production_path.rglob("*.py")
+            if production_path.is_dir()
+            else (production_path,)
+        )
+        for path in paths:
+            text = path.read_text()
+            for name, pattern in _RETIRED_LOCATION_PATTERNS.items():
+                if pattern.search(text):
+                    offenders.append(f"{path.relative_to(_ROOT)}: {name}")
+
+    assert offenders == []
 
 
 def test_lines_api_not_reexported_from_compose():
@@ -19,6 +61,15 @@ def test_lines_api_not_reexported_from_compose():
         from agent_composer.compose import node_lines  # noqa: F401
     with pytest.raises(ImportError):
         from agent_composer.compose import section_lines  # noqa: F401
+
+
+def test_load_error_has_no_line_aliases() -> None:
+    """The canonical diagnostic is the exception's only location interface."""
+    error = LoadError(Diagnostic(code="compose.load", message="bad flow"))
+
+    for name in ("line", "lines"):
+        assert name not in LoadError.__dict__
+        assert not hasattr(error, name)
 
 
 def test_lines_producers_gone_from_parser():

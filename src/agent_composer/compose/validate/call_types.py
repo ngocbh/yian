@@ -32,7 +32,6 @@ def check_ref_map_types(
     producers: dict[str, ValueContract],
     flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
-    node_lines: Optional[dict] = None,
     *,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
@@ -44,7 +43,6 @@ def check_ref_map_types(
     C-EQUIV). A `${item}`/coalesce/literal/opaque source — or an opaque/absent child input
     (incl. the reserved `over` key) — stays lenient (skipped). Loud + located at the
     node's `input:` mapping range (`field_ranges[("field", "inputs")]`, else the node's own range).
-    `node_lines` is accepted for transitional caller compatibility but is not location authority.
     Iterates the WIRING (not the params)
     so a mis-named binding still surfaces here when its child decl is absent rather than
     being silently skipped."""

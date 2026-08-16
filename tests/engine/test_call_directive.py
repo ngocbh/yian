@@ -17,7 +17,7 @@ from agent_composer.compose import LoadError, desugar_inline_calls, load_flow
 from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.parse.file import CodeDescriptor
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.contracts import Assertion
 
 
@@ -170,13 +170,14 @@ output: ${{use.output}}
 )
 def test_private_callee_in_flow_section_preserves_section_line(section, expected_line):
     private_name = INLINE_FLOW_PREFIX + "b" * 64
+    expected_range = SourceRange(expected_line, 1, expected_line, 1)
     kwargs = (
-        {"outputs_section": f"call({private_name})", "outputs_line": expected_line}
+        {"outputs_section": f"call({private_name})", "outputs_range": expected_range}
         if section == "output"
         else {
             "outputs_section": None,
             "asserts_section": [f"call({private_name})"],
-            "asserts_line": expected_line,
+            "assertion_range_at": lambda _index: expected_range,
         }
     )
 

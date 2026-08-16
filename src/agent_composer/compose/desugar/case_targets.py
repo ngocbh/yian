@@ -18,7 +18,7 @@ case sees the rewritten (synth-id) targets.
 Located parse metadata: a synth branch-target call node locates at the `then:`/`else:` it was
 lifted from — the case descriptor's positional `then_ranges[N]` for a `then:`, the `("field",
 "else")` range for the `else:` — with an empty `field_ranges`, falling back to the case node's
-own range when a span is unavailable. No `node_lines` map.
+own range when a span is unavailable.
 
 Imports flow down/peer only: `compose.parse.file` (CaseDescriptor), `compose.desugar.inline_calls`
 (the shared `call(...)` recognizer + synth-node factory), `compose.helpers.errors`. Only the loader

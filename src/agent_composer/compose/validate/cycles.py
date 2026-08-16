@@ -28,9 +28,8 @@ from agent_composer.events import SourceRange
 def reject_cycles(
     edges: list[Edge],
     node_ids: "set[str]",
-    node_lines: "dict[str, int] | None" = None,
-    node_ranges: "dict[str, SourceRange] | None" = None,
     *,
+    node_ranges: "dict[str, SourceRange] | None" = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Raise a `LoadError` if the inferred (real-node) graph has a directed cycle.
@@ -41,8 +40,7 @@ def reject_cycles(
     `__start__`/`__end__` edges cannot close a cycle.
 
     `node_ranges` (node id -> `SourceRange`) gives every located node in the loop its own
-    frame, ordered by authored line and column. `node_lines` remains only for transitional
-    caller compatibility and is not location authority.
+    frame, ordered by authored line and column.
 
     The error also carries a "why" legend (`Diagnostic.notes`): one line per dependency edge
     *inside* the loop — "<consumer> depends on <producer> (<consumer>.input.<group>)" — so the

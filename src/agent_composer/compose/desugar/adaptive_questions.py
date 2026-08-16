@@ -24,7 +24,7 @@ gate's questions input. Authors do not write it.
 
 Located parse metadata: the synth composer agent inherits the gate descriptor's
 `range`/`field_ranges` (so its downstream errors locate at the gate); the rewritten
-gate keeps its own ranges (via `replace`). No `node_lines` map.
+gate keeps its own ranges via `replace`.
 """
 
 from __future__ import annotations

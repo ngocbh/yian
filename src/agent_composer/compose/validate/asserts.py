@@ -263,12 +263,11 @@ _POOL_HEADS = frozenset({"input", "system", "item"})
 def validate_node_asserts(
     nodes: dict[str, Node],
     descriptors: dict,
-    node_lines: "dict[str, int] | None" = None,
+    *,
     assertion_site_at: Callable[
         [str, int],
         tuple[OriginRef | None, SourceRange | None] | None,
     ] | None = None,
-    *,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Validate + classify + stamp each node's `asserts:` — the per-node contract.

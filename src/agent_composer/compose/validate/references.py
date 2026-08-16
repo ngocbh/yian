@@ -6,7 +6,7 @@ directly — supplying the `valid_targets`/`flow_inputs` sets and a semantic-Typ
 projection of the producer contracts — only reimplementing the per-node walk glue.
 Every located problem accumulates; one `LoadError` is raised carrying them all.
 
-Two subtleties mirror the legacy collector:
+Two subtleties mirror the representation-neutral collector:
 
 - **Prompt scope**: an AGENT prompt may interpolate ONLY this node's declared inputs as
   bare `${name}`; a `${<id>.output}`/`${input.X}`/`${system.X}` in a prompt is a located error.
@@ -68,8 +68,6 @@ def validate_references(
     outputs: Any,
     flow_wiring: dict[str, dict[str, Any]],
     *,
-    node_lines: "dict[str, int] | None" = None,
-    outputs_line: "int | None" = None,
     outputs_range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
@@ -88,8 +86,7 @@ def validate_references(
     `field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
     binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
     / `("field", "prompt")`), else the node header. `outputs_range` is the authored output
-    value/block range when the caller retains it. `node_lines` and `outputs_line` remain only
-    for transitional caller compatibility. The aggregate carries the first retained range.
+    value/block range when the caller retains it. The aggregate carries the first retained range.
 
     Accumulates ALL located errors and raises a single `LoadError`; passes silently
     on a clean flow. Reuses `_classify_path` (head-resolution + dotted walk)
@@ -202,10 +199,9 @@ def validate_references(
             scan(src, f"node {node_id!r} {node.wiring_ref_label(param)} from",
                  franges.get(("input", param)) or input_rng)
 
-    # Flow outputs (the codomain): each binding `from:` checked like a node input —
-    # located at the `outputs:` section line (dangling-head/dotted-field errors point here).
-    # No built node owns the flow `outputs:` block. A retained child body can supply its
-    # output value/block range; other callers keep the section-line fallback.
+    # Flow outputs (the codomain): each binding `from:` is checked like a node input and
+    # located at its retained value or block range. No built node owns this source site;
+    # source-free callers deliberately remain unlocated.
     for value in _output_bindings(outputs):
         scan(value, "flow output from", outputs_range)
 

@@ -97,8 +97,9 @@ Hold this model whenever you design anything:
   `Diagnostic`. Compose owns the source label/text/range and builds every frame
   before raising; definition/import context is prepended immutably. A load-error
   renderer consumes only `error.diagnostic` and never receives YAML text or a
-  path separately. This is distinct from runtime `Failure.trace`, which resolves
-  through `ComposedFlow.diagnose()`.
+  path separately. Retained `SourceRange` values are the only Compose location
+  authority; do not introduce line-map fallbacks. This is distinct from runtime
+  `Failure.trace`, which resolves through `ComposedFlow.diagnose()`.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;

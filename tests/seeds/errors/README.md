@@ -14,7 +14,8 @@ expected failure modes — both compile-time and runtime — that the engine can
 detect.** Concretely:
 
 - **Compile-time** failures load via `load_flow` and must raise `LoadError`; where the slice
-  tracks a position, assert the located `.line` (the offending `.yaml` line, not the IR).
+  tracks a position, assert the diagnostic frame's `SourceRange` against the offending
+  `.yaml` site, not the IR.
 - **Runtime** failures run via `run_flow` and must come back as
   `RunResult.status == "failed"` with the expected substring in
   `RunResult.failure.message` — never an uncaught crash.
@@ -53,7 +54,7 @@ just what can.
 | `e33-input-named-like-field.yaml` | an input named exactly like a flat field (`env`) | #88 case 2: `(kind,key)` keeps the field's range distinct from the like-named input's |
 | `e37-synth-node-inherits-host-ranges.yaml` | a bad ref in an inline `call(...)` — the synth node is handed the HOST's `field_ranges` | ⚠ **known-wrong caret** (#88 reopened): cross-node collision the `(kind,key)` tuple can't fix |
 | `e38-case-when-ref-locates-node-header.yaml` | a bad ref inside a `case`'s `when:` — desugared to a synthetic `__r1` input | ⚠ **known-wrong caret** (#88 reopened): a locator naming something the author never wrote |
-| `e39-llm-config-no-range.yaml` | a bad `llm_config:` entry (`provider: bogus_provider`) | ⚠ **no range at all**: the message names `provider`, then attaches `range=None`; frame via the legacy line-map |
+| `e39-llm-config-no-range.yaml` | a bad `llm_config:` entry (`provider: bogus_provider`) | retained `llm_config` value range, beginning at the invalid `provider:` entry |
 | `e40-agent-controls-no-range.yaml` | retired AGENT `controls:` field | field value (L14) |
 | `e30-inline-syntax-error.yaml` | a malformed inline `code:` body (`return (`) | inline syntax gate → located `LoadError` (padded to the real line) |
 | `e31-inline-no-return.yaml` | an inline `code:` body with no `return` | has-`return` load gate → located `LoadError` |

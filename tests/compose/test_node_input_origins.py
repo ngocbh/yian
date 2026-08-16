@@ -295,8 +295,6 @@ def test_virtual_input_entries_remain_originless():
         registry={},
         scope=_CallableScope({}, {}, None, {}),
         owner=("root",),
-        n_lines={},
-        s_lines={},
     )
 
     node = loaded.compiled.nodes["worker"]
@@ -660,8 +658,6 @@ output: ${worker.output}
         registry={},
         scope=_CallableScope({}, {}, resolve_child, {"echo": "echo"}),
         owner=("root",),
-        n_lines={},
-        s_lines={},
     )
 
     mapping = loaded.compiled.nodes["mapping"]

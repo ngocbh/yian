@@ -62,7 +62,6 @@ from agent_composer.compose.helpers.uses import parse_uses_ref
 from agent_composer.compose.helpers.source import (
     SourceFrame,
     _boundary_field_ranges,
-    _section_lines,
 )
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.parse.file import (
@@ -742,8 +741,6 @@ def _load_flow(
         registry=registry,
         scope=callable_scope,
         owner=("root",),
-        n_lines={},
-        s_lines=_section_lines(root),
         uses_aliases=set(f.uses),
         version=f.version,
         name=f.name,
@@ -1142,8 +1139,6 @@ def _load_def(
             registry=registry,
             scope=scope,
             owner=("def", name),
-            n_lines={},
-            s_lines={},
             flow_llm_config=body.get("llm_config") or {},
             flow_env=body.get("env") or {},
             source=source,
@@ -1222,12 +1217,6 @@ def _load_single_node_def(
             registry=registry,
             scope=scope,
             owner=("def", name),
-            n_lines={},
-            s_lines=(
-                {"output": output_range.start_line}
-                if output_range is not None
-                else {}
-            ),
             source=source,
             boundary_field_ranges=(
                 _boundary_field_ranges(def_cursor)

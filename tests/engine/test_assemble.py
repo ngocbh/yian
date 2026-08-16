@@ -86,7 +86,7 @@ def test_descriptor_build_cache_reuses_forward_builds_in_source_order():
         "b": _FakeBuildDescriptor("b", calls),
     }
     ctx = BuildContext(registry={})
-    cache = _DescriptorBuildCache(descriptors, ctx, {"a": 11, "b": 12})
+    cache = _DescriptorBuildCache(descriptors, ctx)
 
     built = cache.build_in_source_order()
 
@@ -117,7 +117,6 @@ def test_descriptor_build_cache_reports_only_mutual_cycle_with_closing_range():
     cache = _DescriptorBuildCache(
         descriptors,
         BuildContext(registry={}, diagnostics=_range_diagnostics()),
-        {},
     )
 
     with pytest.raises(LoadError) as caught:
@@ -146,7 +145,6 @@ def test_descriptor_build_cycle_falls_back_to_first_cycle_edge_range():
     cache = _DescriptorBuildCache(
         descriptors,
         BuildContext(registry={}, diagnostics=_range_diagnostics()),
-        {},
     )
 
     with pytest.raises(LoadError) as caught:
@@ -167,7 +165,7 @@ def test_descriptor_build_cycle_uses_node_ids_when_an_edge_has_no_label():
             "b", calls, lambda: cache.build_one("a")
         ),
     }
-    cache = _DescriptorBuildCache(descriptors, BuildContext(registry={}), {})
+    cache = _DescriptorBuildCache(descriptors, BuildContext(registry={}))
 
     with pytest.raises(LoadError) as caught:
         cache.build_in_source_order()
@@ -188,9 +186,7 @@ def test_descriptor_build_cache_does_not_cache_unlocated_failure():
         ),
         "broken": _FakeBuildDescriptor("broken", calls, fail),
     }
-    cache = _DescriptorBuildCache(
-        descriptors, BuildContext(registry={}), {"outer": 9, "broken": 42}
-    )
+    cache = _DescriptorBuildCache(descriptors, BuildContext(registry={}))
 
     for _ in range(2):
         with pytest.raises(LoadError, match="broken descriptor") as caught:
@@ -205,7 +201,7 @@ def test_descriptor_build_cache_does_not_cache_unlocated_failure():
     ]
 
 
-def test_descriptor_build_cache_prefers_descriptor_range_over_line_map():
+def test_descriptor_build_cache_attaches_descriptor_range_to_unlocated_failure():
     calls = []
     source_range = SourceRange(27, 7, 27, 31)
 
@@ -221,7 +217,6 @@ def test_descriptor_build_cache_prefers_descriptor_range_over_line_map():
     cache = _DescriptorBuildCache(
         {"broken": descriptor},
         BuildContext(registry={}, diagnostics=_range_diagnostics()),
-        {"broken": 24},
     )
 
     with pytest.raises(LoadError, match="broken descriptor") as caught:
@@ -240,8 +235,6 @@ def _assemble_resolved_parameters(parameters):
         registry={},
         scope=_InertCallableScope(),
         owner=("test",),
-        n_lines={},
-        s_lines={},
     )
 
 
@@ -282,8 +275,6 @@ def test_resolved_parameters_reject_both_input_representations():
             registry={},
             scope=_InertCallableScope(),
             owner=("test",),
-            n_lines={},
-            s_lines={},
         )
 
 
@@ -296,8 +287,6 @@ def test_resolved_parameters_reject_missing_input_representation():
             registry={},
             scope=_InertCallableScope(),
             owner=("test",),
-            n_lines={},
-            s_lines={},
         )
 
 
@@ -317,8 +306,6 @@ def test_resolved_parameters_accept_zero_args_and_wire_empty_start():
         registry={},
         scope=_InertCallableScope(),
         owner=("test",),
-        n_lines={},
-        s_lines={},
     )
     assert raw_flow.input == []
     assert raw_flow.compiled.wiring[START_ID] == {}

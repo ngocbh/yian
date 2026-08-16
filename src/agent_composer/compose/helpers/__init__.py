@@ -9,7 +9,7 @@ down into it.
 Modules:
   - `errors`      the document-owned diagnostic factory plus `LoadError`, whose one
                   canonical `Diagnostic` is ready for direct boundary rendering.
-  - `source`      `SourceFrame` + parse-free location helpers over an existing
+  - `source`      `SourceFrame` + parse-free range helpers over an existing
                   `SourceCursor`; render-only metadata, never a YAML parser. Its boundary
                   field map covers inputs only—assertion origin/range pairs come from one
                   retained item cursor in the build conductor, not a helper-side map.

@@ -21,7 +21,7 @@ def _nodes_reader(text):
 
 def test_infer_ordering_edges_unknown_target_is_located():
     # A `depends_on:`/`runs_after:` that names an unknown node is a LoadError located at the
-    # DECLARING node descriptor's range (no `node_lines` map).
+    # DECLARING node descriptor's range.
     text = (
         "id: f\nname: f\nnodes:\n"
         "  a:\n    kind: code\n    code: m:f\n    depends_on: [ghost]\n    output: str\n"

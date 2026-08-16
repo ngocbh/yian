@@ -147,8 +147,6 @@ def test_aggregate_location_uses_first_available_range():
             {},
             "${missing_output.output}",
             flow_wiring,
-            node_lines={"broken": 5},
-            outputs_line=20,
             outputs_range=later_output_range,
             diagnostics=LoadDiagnostics(
                 label="flow.yaml",

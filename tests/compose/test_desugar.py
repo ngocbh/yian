@@ -73,7 +73,7 @@ def test_desugar_inline_calls_locate_at_their_binding_site():
     assert call_desc.field_ranges == {}  # owns no authored fields
 
 
-def test_inline_call_error_uses_binding_range_and_retains_legacy_line():
+def test_inline_call_error_uses_binding_range():
     text = (
         "id: f\nname: f\nnodes:\n"
         "  writer:\n    kind: code\n    code: m:f\n"
@@ -96,7 +96,7 @@ def test_inline_call_error_uses_binding_range_and_retains_legacy_line():
     assert frame.text == text
 
 
-def test_inline_output_error_prefers_range_over_legacy_line():
+def test_inline_output_error_uses_section_range():
     output_range = SourceRange(17, 9, 17, 28)
 
     with pytest.raises(LoadError) as caught:
@@ -104,7 +104,6 @@ def test_inline_output_error_prefers_range_over_legacy_line():
             {},
             "call(helper, topic=${item})",
             outputs_range=output_range,
-            outputs_line=117,
             next_id=_synth_id_gen(),
             diagnostics=_diagnostics(),
         )
@@ -112,7 +111,7 @@ def test_inline_output_error_prefers_range_over_legacy_line():
     assert _only_frame(caught.value).range == output_range
 
 
-def test_inline_assert_error_prefers_positional_range_over_legacy_line():
+def test_inline_assert_error_uses_positional_range():
     assertion_ranges = [
         SourceRange(18, 7, 18, 11),
         SourceRange(19, 7, 19, 25),
@@ -123,7 +122,6 @@ def test_inline_assert_error_prefers_positional_range_over_legacy_line():
             {},
             None,
             asserts_section=["true", "${helper(topic=1)}"],
-            asserts_line=119,
             assertion_range_at=assertion_ranges.__getitem__,
             next_id=_synth_id_gen(),
             diagnostics=_diagnostics(),
@@ -176,7 +174,7 @@ def test_inline_map_scalar_over_does_not_use_input_named_over_range():
 
 def test_desugar_adaptive_questions_preserves_ranges():
     # An adaptive human_input gate lifts a synth composer agent (`<gate>__compose`).
-    # The synth agent must inherit the gate node's range/field_ranges (no node_lines map).
+    # The synth agent must inherit the gate node's range/field_ranges.
     text = (
         "id: f\nname: f\nnodes:\n"
         "  ask:\n    kind: human_input\n"
@@ -225,7 +223,7 @@ def _case_gate() -> CaseDescriptor:
     )
 
 
-def test_case_binding_error_prefers_binding_range_over_legacy_line():
+def test_case_binding_error_uses_binding_range():
     host_range = SourceRange(30, 3, 35, 1)
     binding_range = SourceRange(33, 10, 33, 44)
     consumer = CodeDescriptor(
@@ -241,14 +239,13 @@ def test_case_binding_error_prefers_binding_range_over_legacy_line():
             {"gate": _case_gate(), "consumer": consumer},
             None,
             [],
-            node_lines={"consumer": 133},
             diagnostics=_diagnostics(),
         )
 
     assert _only_frame(caught.value).range == binding_range
 
 
-def test_case_output_error_prefers_section_range_over_legacy_line():
+def test_case_output_error_uses_section_range():
     output_range = SourceRange(40, 9, 40, 23)
     empty_gate = CaseDescriptor(id="gate", cases=[{"when": "yes"}])
 
@@ -258,7 +255,6 @@ def test_case_output_error_prefers_section_range_over_legacy_line():
             "${gate.output}",
             [],
             outputs_range=output_range,
-            outputs_line=140,
             diagnostics=_diagnostics(),
         )
 
@@ -296,7 +292,7 @@ def test_case_condition_error_uses_exact_condition_range(condition_kind):
     assert _only_frame(caught.value).range == condition_range
 
 
-def test_case_assert_error_prefers_positional_range_over_legacy_line():
+def test_case_assert_error_uses_positional_range():
     assertion_ranges = [
         SourceRange(61, 7, 61, 20),
         SourceRange(62, 7, 62, 30),
@@ -307,7 +303,6 @@ def test_case_assert_error_prefers_positional_range_over_legacy_line():
             {"gate": _case_gate()},
             None,
             ["true", "${gate.output} == 1"],
-            asserts_line=160,
             assertion_range_at=assertion_ranges.__getitem__,
             diagnostics=_diagnostics(),
         )

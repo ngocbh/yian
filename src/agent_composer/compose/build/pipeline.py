@@ -104,7 +104,6 @@ class _DescriptorBuildCache:
         self,
         descriptors: dict[str, NodeDescriptor],
         context: BuildContext,
-        node_lines: dict[str, int],
     ) -> None:
         self._descriptors = descriptors
         self._context = context
@@ -718,8 +717,6 @@ def _assemble(
     registry,
     scope: _CallableScopeLike,
     owner: tuple[str, ...],
-    n_lines: dict,
-    s_lines: dict,
     uses_aliases: set = frozenset(),
     version: Optional[str] = None,
     name: Optional[str] = None,
@@ -745,10 +742,9 @@ def _assemble(
     mapping that still needs parsing, while `input_parameters` carries parameters already
     resolved by an earlier compiler pass. `scope` owns composite call resolution
     (defs-first) and private child registration; `registry` is the file's
-    `read_typedefs(...)`. `n_lines`/`s_lines` are accepted only for transitional caller
-    compatibility; retained ranges and `nodes_cursor` own diagnostic locations.
-    `owner` is this flow's complete lexical path and seeds stable identities for anonymous
-    children. `boundary_field_ranges` locates synthesized boundary-input behavior;
+    `read_typedefs(...)`. Retained ranges and `nodes_cursor` own diagnostic locations.
+    `owner` is this flow's complete lexical path and seeds stable identities for
+    anonymous children. `boundary_field_ranges` locates synthesized boundary-input behavior;
     `asserts_cursor` is the single authority for each flow assertion's temporary range and
     durable origin. `outputs_range` is the retained authored codomain range when one exists,
     while `outputs_cursor` retains each physically authored output binding occurrence.
@@ -1071,8 +1067,6 @@ def _assemble(
             registry=registry,
             scope=scope,
             owner=body.owner,
-            n_lines={},
-            s_lines={},
             flow_llm_config={},
             flow_env={},
             source=child_source,
@@ -1103,7 +1097,7 @@ def _assemble(
         source_file=flow_label,
         diagnostics=diagnostics,
     )
-    descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base, {})
+    descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base)
     build_results = descriptor_cache.build_in_source_order()
     nodes_built: dict[str, Node] = {
         nid: result.node for nid, result in build_results.items()
@@ -1259,9 +1253,9 @@ def _assemble(
     flow_wiring.update(boundary_wiring)
     edges: list[Edge] = structural + boundary_edges
 
-    # A cycle spans nodes; anchor the error on the first stuck node's range and highlight every
-    # stuck node's line. START_ID/END_ID are acyclic by construction (START_ID has no incoming,
-    # END_ID no outgoing).
+    # A cycle spans nodes; every actual member contributes its authored range.
+    # START_ID/END_ID are acyclic by construction (START_ID has no incoming,
+    # END_ID has no outgoing).
     node_ranges = {
         nid: d.range for nid, d in descriptors.items() if getattr(d, "range", None)
     }

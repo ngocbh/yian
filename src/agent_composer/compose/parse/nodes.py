@@ -50,7 +50,7 @@ def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
             # Anchor the descriptor's node-level `.range` on the node's HEADER line (its
             # `key:` token), not its body/value block. The header is the node-level
             # diagnostic anchor a cycle, an unresolved ref, or a namespaced runtime failure
-            # boxes — matching the old `node_lines` map.
+            # boxes.
             header = nodes_cursor.key_range_of(node_id)
             if header is not None and getattr(desc, "range", None) is not None:
                 desc = dataclasses.replace(desc, range=header)

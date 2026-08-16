@@ -16,7 +16,12 @@ from agent_composer.nodes.base import (
     NodeKind,
     Output,
     Route,
+    _AssertionStageError,
+    _BindingStageError,
 )
+from agent_composer.nodes.binding import BindingError
+from agent_composer.nodes.call import CallNode
+from agent_composer.nodes.case import Case, CaseNode
 from agent_composer.nodes.contracts import (
     Assertion,
     Binding,
@@ -24,6 +29,7 @@ from agent_composer.nodes.contracts import (
     Parameter,
     ValueContract,
 )
+from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.map import MapNode
 from agent_composer.nodes.wait import WaitNode
 from agent_composer.runtime.eval_node import EvaluationFailure
@@ -199,6 +205,15 @@ def test_non_spawner_grow_returns_clear_evaluation_failure():
     assert "Grow" in result.error and "spawner" in result.error
 
 
+def test_malformed_result_context_is_an_ir_fault() -> None:
+    """Formatting an expected rejection must not absorb malformed node metadata."""
+    node = _NonSpawnerGrowNode("n")
+    node.kind = None  # type: ignore[assignment]
+
+    with pytest.raises(AttributeError):
+        drive(node)
+
+
 def test_bad_return_type_returns_clear_evaluation_failure():
     result = drive(_BadReturnNode("n"))
 
@@ -234,7 +249,24 @@ def test_wrapper_assertion_failure_uses_assertion_stage_and_origin() -> None:
     assert result.failure.code == "assertion.failed"
     assert result.failure.trace == (assertion_origin,)
     assert result.failure.cause_type == "NodeAssertFailed"
-    assert result.failure.traceback is not None
+    assert "Traceback (most recent call last)" in (result.failure.traceback or "")
+    assert "_AssertionStageError" not in (result.failure.traceback or "")
+
+
+def test_wrapper_post_assertion_uses_assertion_stage_and_origin() -> None:
+    """Post-asserts retain the same wrapper-owned classification as pre-asserts."""
+    assertion_origin = OriginRef("assert:n:post:0")
+    node = FuncNode("n", lambda _inputs: "value", origin=OriginRef("node:n"))
+    node.post_asserts = [
+        Assertion("${output} == 'other'", "output must match", origin=assertion_origin)
+    ]
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "assertion.failed"
+    assert result.failure.trace == (assertion_origin,)
+    assert result.failure.cause_type == "NodeAssertFailed"
 
 
 class _BodyRaisesAssertion(Node):
@@ -244,6 +276,76 @@ class _BodyRaisesAssertion(Node):
 
     def _run_impl(self, inputs):
         raise NodeAssertFailed("body chose this exception type")
+
+
+class _BodyRaisesBinding(Node):
+    """Raise the binder's exception type from ordinary node code."""
+
+    kind = NodeKind.CODE
+
+    def _run_impl(self, inputs):
+        raise BindingError(
+            "body chose this exception type",
+            failure_code="contract.input",
+            origin=OriginRef("spoofed-binding-origin"),
+        )
+
+
+class _GeneratorRaisesBinding(Node):
+    """Raise the binder's exception type while advancing a node generator."""
+
+    kind = NodeKind.CODE
+
+    def _run_impl(self, inputs):
+        if False:
+            yield None
+        raise BindingError(
+            "generator chose this exception type",
+            failure_code="binding.evaluate",
+            origin=OriginRef("spoofed-generator-origin"),
+        )
+
+
+class _OperationOriginNode(Node):
+    """Raise in the body while supplying a finer operation origin hook."""
+
+    kind = NodeKind.CODE
+
+    def __init__(self, node_id: str, operation_origin: OriginRef | None) -> None:
+        super().__init__(node_id, origin=OriginRef(f"node:{node_id}"))
+        self.operation_origin = operation_origin
+
+    def _run_impl(self, inputs):
+        raise RuntimeError("operation failed")
+
+    def exception_origin(self, exception: Exception) -> OriginRef | None:
+        return self.operation_origin
+
+
+class _OverrideRaisesStageShaped(Node):
+    """Bypass the base wrapper and raise an exception resembling a stage marker."""
+
+    kind = NodeKind.CODE
+
+    def __init__(self, node_id: str, failure: Exception) -> None:
+        super().__init__(node_id, origin=OriginRef(f"node:{node_id}"))
+        self.failure = failure
+
+    def _run_impl(self, inputs):
+        return Output("unused")
+
+    def run(self, inputs, **caps):
+        raise self.failure
+
+
+class _DeepcopyBomb:
+    """Raise one prebuilt fault when a deferred binder copies an item value."""
+
+    def __init__(self, failure: Exception) -> None:
+        self.failure = failure
+
+    def __deepcopy__(self, memo):
+        raise self.failure
 
 
 def test_body_raised_assertion_exception_remains_node_execution() -> None:
@@ -256,6 +358,118 @@ def test_body_raised_assertion_exception_remains_node_execution() -> None:
     assert result.failure.code == "node.execute"
     assert result.failure.trace == (node.origin,)
     assert result.failure.cause_type == "NodeAssertFailed"
+
+
+@pytest.mark.parametrize("node", [_BodyRaisesBinding("body"), _GeneratorRaisesBinding("gen")])
+def test_body_raised_binding_exception_remains_node_execution(node: Node) -> None:
+    """Only evaluator-owned binding operations may retain binder classification."""
+    node.origin = OriginRef(f"node:{node.id}")
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "node.execute"
+    assert result.failure.trace == (node.origin,)
+    assert result.failure.cause_type == "BindingError"
+
+
+@pytest.mark.parametrize(
+    ("operation_origin", "expected_key"),
+    [(OriginRef("operation:n"), "operation:n"), (None, "node:n")],
+)
+def test_node_execution_prefers_operation_origin_then_node_fallback(
+    operation_origin: OriginRef | None,
+    expected_key: str,
+) -> None:
+    """Body diagnostics use one operation origin, falling back to node context."""
+    result = drive(_OperationOriginNode("n", operation_origin))
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.trace == (OriginRef(expected_key),)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_cause_type"),
+    [
+        (RuntimeError("ordinary override failure"), "RuntimeError"),
+        (BindingError("spoofed", failure_code="binding.evaluate"), "BindingError"),
+        (
+            NodeAssertFailed(
+                "spoofed",
+                assertion=Assertion("true", "true", origin=OriginRef("spoofed")),
+            ),
+            "NodeAssertFailed",
+        ),
+        (
+            _BindingStageError(
+                BindingError("wrapped", failure_code="binding.evaluate")
+            ),
+            "BindingError",
+        ),
+        (
+            _AssertionStageError(
+                NodeAssertFailed(
+                    "wrapped",
+                    assertion=Assertion("true", "true"),
+                )
+            ),
+            "NodeAssertFailed",
+        ),
+    ],
+)
+def test_run_override_exception_is_node_execution(
+    failure: Exception,
+    expected_cause_type: str,
+) -> None:
+    """A custom run override is one undivided node-body stage."""
+    node = _OverrideRaisesStageShaped("n", failure)
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "node.execute"
+    assert result.failure.trace == (node.origin,)
+    assert result.failure.cause_type == expected_cause_type
+    assert "_BindingStageError" not in (result.failure.traceback or "")
+    assert "_AssertionStageError" not in (result.failure.traceback or "")
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        CallNode("call", flow_id="child"),
+        MapNode("map", flow_id="child"),
+        LoopNode("loop", flow_id="child", predicate="true", max_iters=1),
+    ],
+)
+def test_unbaked_composite_is_a_setup_fault(node: Node) -> None:
+    """A missing compiled child is malformed setup, not expected node rejection."""
+    if isinstance(node, MapNode):
+        node._wiring_src = {"over": []}
+    node.pre_asserts = [Assertion("false", "must not mask malformed setup")]
+
+    with pytest.raises(RuntimeError, match="baked"):
+        drive(node)
+
+
+def test_missing_node_implementation_is_a_setup_fault() -> None:
+    """The base placeholder body is malformed executable setup."""
+    with pytest.raises(NotImplementedError, match="defines no _run_impl"):
+        drive(Node("n"))
+
+
+def test_case_without_predicate_is_a_setup_fault() -> None:
+    """A compiled CASE branch must have its validated predicate."""
+    with pytest.raises(ValueError, match="has no `when` expression"):
+        drive(CaseNode("case", [Case("branch")]))
+
+
+def test_case_with_non_string_predicate_is_a_setup_fault() -> None:
+    """Malformed Python-authored CASE state must not look like node execution."""
+    malformed = Case("branch", when=42)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="`when` must be a string"):
+        drive(CaseNode("case", [malformed]))
 
 
 def test_malformed_assertion_carrier_is_an_ir_fault() -> None:
@@ -308,6 +522,61 @@ def test_map_deferred_item_binding_keeps_input_contract_stage() -> None:
     assert isinstance(result, EvaluationFailure)
     assert result.failure.code == "contract.input"
     assert result.failure.trace == (contract_origin,)
+
+
+def test_map_deferred_expression_keeps_binding_stage() -> None:
+    """A per-item expression failure remains evaluator-owned binding work."""
+    binding_origin = OriginRef("map:x:binding")
+    node = MapNode("m", flow_id="child", child=object())
+    node.params = [Parameter("x")]
+    node._wiring_src = {
+        "over": [{}],
+        "x": Binding('${item.missing :? "x is required"}', binding_origin),
+    }
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "binding.evaluate"
+    assert result.failure.trace == (binding_origin,)
+
+
+def test_map_deferred_unexpected_binder_fault_escapes() -> None:
+    """Deferred binding preserves the ordinary binder's host/setup boundary."""
+    failure = RuntimeError("copy implementation failed")
+    node = MapNode("m", flow_id="child", child=object())
+    node.params = [Parameter("x")]
+    node._wiring_src = {
+        "over": [_DeepcopyBomb(failure)],
+        "x": "${item}",
+    }
+
+    with pytest.raises(RuntimeError) as caught:
+        drive(node)
+
+    assert caught.value is failure
+
+
+def test_per_item_wrapper_default_keeps_binding_stage() -> None:
+    """The base wrapper's per-item default backstop retains default provenance."""
+    default_origin = OriginRef("map:x:default")
+    node = MapNode("m", flow_id="child", child=object())
+    node.params = [
+        Parameter(
+            "x",
+            contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
+            has_default=True,
+            default="bad",
+            default_origin=default_origin,
+        )
+    ]
+    node._wiring_src = {"over": []}
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "binding.evaluate"
+    assert result.failure.trace == (default_origin,)
 
 
 @pytest.mark.parametrize(

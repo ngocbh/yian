@@ -12,6 +12,7 @@ from typing import Any
 
 from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
 from agent_composer.nodes.binding import BindingError, _resolve_source, _source_origin
+from agent_composer.nodes.contracts import binding_source
 from agent_composer.typesys.pool import VariablePool
 
 
@@ -21,10 +22,11 @@ def resolve_until(until_src: Any, pool: VariablePool) -> str:
     Exactly one semantic ``Binding`` layer is removed before a ``${...}``
     expression or literal is evaluated against ``pool``. Typed
     ``date``/``datetime`` values resolve to ISO strings; a raw object exposing
-    ``isoformat()`` is formatted defensively. The WAIT body parses and
-    normalizes the resulting absolute deadline.
+    ``isoformat()`` is formatted defensively. This binding operation validates the
+    absolute ISO deadline; the WAIT body reparses it only to compute the duration.
     """
     origin = _source_origin(until_src)
+    display_source = binding_source(until_src)
     value = _resolve_source(until_src, pool)
     if isinstance(value, str):
         resolved = value
@@ -32,7 +34,8 @@ def resolve_until(until_src: Any, pool: VariablePool) -> str:
         resolved = value.isoformat()
     else:
         raise BindingError(
-            f"wait `until` did not resolve to a date/datetime: {value!r}",
+            f"wait `until` ({display_source!r}) did not resolve to a date/datetime: "
+            f"{value!r}",
             failure_code="contract.input",
             origin=origin,
         )

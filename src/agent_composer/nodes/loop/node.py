@@ -119,6 +119,12 @@ class LoopNode(Node):
         """Return the baked body flow, or no child for an unbaked LOOP."""
         return () if self.child is None else (self.child,)
 
+    def validate_execution_setup(self) -> None:
+        """Require the body flow that Compose must bake before execution."""
+        super().validate_execution_setup()
+        if self.child is None:
+            raise RuntimeError(f"loop node {self.id!r} was not baked with a body child")
+
     def _run_impl(self, inputs: dict[str, Any], **caps: Any):
         """Own the WHOLE loop policy (no engine `_loop_step`): decide continue-vs-stop on the
         carried record, and on continue emit a self-respawning `Grow` (body_k + a fresh `L~(k+1)`
@@ -132,8 +138,6 @@ class LoopNode(Node):
         On STOP: `Output(carried, commit_as=self.origin_id)` — generic commit-and-advance under `L`.
         On CONTINUE: runaway guard (while/until raise `LoopMaxExceeded` if `should_stop(k+1)`),
         then a `Grow` splicing body_k + `respawn(k+1)`, pruning body_{k-1} + self (except origin)."""
-        if self.child is None:
-            raise RuntimeError(f"loop node {self.id!r} was not baked with a body child")
         carried = dict(inputs)
         k = self.iteration
         if self._should_stop_now(carried, k):

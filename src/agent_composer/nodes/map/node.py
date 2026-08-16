@@ -106,12 +106,18 @@ class MapNode(Node):
         """Return the baked child flow, or no child for an unbaked MAP."""
         return () if self.child is None else (self.child,)
 
+    def validate_execution_setup(self) -> None:
+        """Require the child flow that Compose must bake before execution."""
+        super().validate_execution_setup()
+        if self.child is None:
+            raise RuntimeError(f"MAP node {self.id!r}: child flow {self.flow_id!r} not baked")
+
     def bind_reserved(self, node_wiring: dict, pool) -> dict:
         """Pre-resolve the MAP `over` source into the list `run` maps over.
 
         Returns `{"over": <list>}`: the `over` source rides `node_wiring["over"]`, evaluated
-        against `pool`. A source that resolves to `None`/non-list is a loud `RuntimeError`
-        (surfaced as a NodeFailed by the read seam)."""
+        against `pool`. A source that resolves to `None`/non-list raises a binder-owned
+        ``BindingError`` classified as ``contract.input`` by the read seam."""
         over_src = node_wiring["over"]
         items = _resolve_source(over_src, pool)
         if items is None or not isinstance(items, list):
@@ -128,8 +134,6 @@ class MapNode(Node):
         return {"over"}
 
     def _run_impl(self, inputs: dict, *, bind_item: Optional[Callable[[Any], dict]] = None):
-        if self.child is None:
-            raise RuntimeError(f"MAP node {self.id!r}: child flow {self.flow_id!r} not baked")
         # Per-element call-args RAW (no driver pre-default): the spliced child START_ID fills omitted
         # inputs from its params' declared defaults. The node describes growth with only the
         # per-element records; the compile-owned injected builder constructs the MAP fan-in.

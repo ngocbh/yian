@@ -60,13 +60,24 @@ class CaseNode(Node):
         super().__init__(node_id, title=title)
         self.cases = cases
 
+    def validate_execution_setup(self) -> None:
+        """Require every compiled branch to carry its predicate expression."""
+        super().validate_execution_setup()
+        for case in self.cases:
+            if case.when is None:
+                raise ValueError(
+                    f"node {self.id!r} case {case.handle!r} has no `when` expression"
+                )
+            if not isinstance(case.when, str):
+                raise TypeError(
+                    f"node {self.id!r} case {case.handle!r} `when` must be a string"
+                )
+
     def _run_impl(self, inputs: dict) -> Route:
         # Strict CASE: route on the bound input record only — each `when:`
         # interpolates this node's declared inputs as bare `${name}`, not the pool.
         # Routing-only: returns a Route carrying the chosen case handle (no value).
         for case in self.cases:
-            if case.when is None:
-                raise ValueError(f"node {self.id!r} case {case.handle!r} has no `when` expression")
             if evaluate_when_record(case.when, inputs):
                 return Route(case.handle)
         return Route(DEFAULT_HANDLE)

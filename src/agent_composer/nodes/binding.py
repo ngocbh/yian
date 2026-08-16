@@ -216,7 +216,8 @@ def bind_params(
         `dict[str, Any]`: The bound `{name: value}` record handed to the node instead of the pool.
 
     Raises:
-        BindingError: On a missing-required input or a type mismatch.
+        BindingError: On expression/default/required evaluation failure or supplied
+            input contract rejection; ``failure_code`` identifies the stage.
     """
     _validate_parameters(params)
     record: dict[str, Any] = {}

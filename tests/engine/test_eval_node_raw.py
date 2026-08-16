@@ -67,6 +67,20 @@ class _RaisesHostStop(Node):
         raise _HostStop("stop-now")
 
 
+class _GeneratorRaisesHostStop(Node):
+    """Yield once, then propagate one exact host-control signal while draining."""
+
+    kind = NodeKind.CODE
+
+    def __init__(self, node_id: str, expected: _HostStop) -> None:
+        super().__init__(node_id)
+        self.expected = expected
+
+    def _run_impl(self, inputs):
+        yield StreamChunk(self.id, "output", "before-stop")
+        raise self.expected
+
+
 def test_raw_evaluation_returns_closed_success_route_and_grow_values():
     output = _raw(FuncNode("work", lambda _: "done"))
     routed = _raw(BranchNode("branch", "chosen"))
@@ -140,8 +154,7 @@ class _InvalidStreamReturnNode(Node):
     kind = NodeKind.CODE
 
     def _run_impl(self, inputs):
-        if False:
-            yield StreamChunk(self.id, "output", "never")
+        yield StreamChunk(self.id, "output", "before-invalid-return")
         return "invalid"
 
 
@@ -150,9 +163,10 @@ def test_stream_body_exception_and_invalid_return_use_distinct_stages() -> None:
     body = _RaisingStreamNode("body", origin=OriginRef("node:body"))
     invalid = _InvalidStreamReturnNode("invalid", origin=OriginRef("node:invalid"))
     chunks = []
+    invalid_chunks = []
 
     body_failure = _raw(body, emit_stream=chunks.append)
-    result_failure = _raw(invalid)
+    result_failure = _raw(invalid, emit_stream=invalid_chunks.append)
 
     assert [chunk.chunk for chunk in chunks] == ["first"]
     assert isinstance(body_failure, EvaluationFailure)
@@ -161,6 +175,7 @@ def test_stream_body_exception_and_invalid_return_use_distinct_stages() -> None:
     assert body_failure.failure.cause_type == "ValueError"
     assert "ValueError: stream body failed" in (body_failure.failure.traceback or "")
     assert isinstance(result_failure, EvaluationFailure)
+    assert [chunk.chunk for chunk in invalid_chunks] == ["before-invalid-return"]
     assert result_failure.failure.code == "contract.node_result"
     assert result_failure.failure.trace == (invalid.origin,)
     assert result_failure.failure.cause_type == "RuntimeError"
@@ -207,6 +222,30 @@ def test_raw_stream_callback_failure_closes_the_node_generator_before_returning(
     assert closed == ["resource"]
 
 
+@pytest.mark.filterwarnings("error::pytest.PytestUnraisableExceptionWarning")
+def test_raw_stream_cleanup_failure_does_not_replace_callback_failure():
+    class CleanupFailsNode(Node):
+        """Raise during generator close after yielding one callback-bound chunk."""
+
+        kind = NodeKind.CODE
+
+        def _run_impl(self, inputs):
+            try:
+                yield StreamChunk(self.id, "output", "first")
+            finally:
+                raise ValueError("cleanup failed")
+
+    expected = RuntimeError("callback failed")
+
+    def reject(_chunk):
+        raise expected
+
+    with pytest.raises(RuntimeError) as caught:
+        _raw(CleanupFailsNode("resource"), emit_stream=reject)
+
+    assert caught.value is expected
+
+
 def test_raw_host_stop_propagates_from_node_and_preset_event():
     with pytest.raises(_HostStop) as raised:
         _raw(_RaisesHostStop("work"))
@@ -217,3 +256,14 @@ def test_raw_host_stop_propagates_from_node_and_preset_event():
     with pytest.raises(_HostStop) as preset:
         _raw(FuncNode("never", lambda _: "unexpected"), stop_event=stop_event)
     assert preset.value.primary is False
+
+
+def test_raw_generator_host_stop_propagates_by_identity() -> None:
+    expected = _HostStop("stream-stop")
+    chunks = []
+
+    with pytest.raises(_HostStop) as caught:
+        _raw(_GeneratorRaisesHostStop("stream", expected), emit_stream=chunks.append)
+
+    assert caught.value is expected
+    assert [chunk.chunk for chunk in chunks] == ["before-stop"]

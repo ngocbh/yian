@@ -7,6 +7,7 @@ an ordinary node reserves nothing and binds up front.
 """
 
 from agent_composer.nodes.base import Node, NodeKind
+from agent_composer.nodes.binding import BindingError
 from agent_composer.nodes.map import MapNode
 from agent_composer.nodes.wait.node import WaitNode
 from agent_composer.typesys.pool import VariablePool
@@ -39,16 +40,17 @@ def test_map_binds_per_item_and_resolves_over():
 
 
 def test_map_over_not_a_list_raises():
-    # A non-list `over` source is a loud RuntimeError (surfaced as NodeFailed by the read seam).
+    # A non-list `over` source is an expected input-contract rejection at the read seam.
     pool = VariablePool()
     pool.set("scalar", 7)
     node = MapNode("m", flow_id="child")
     try:
         node.bind_reserved({"over": "${scalar.output}"}, pool)
-    except RuntimeError as exc:
+    except BindingError as exc:
         assert "did not resolve to a list" in str(exc)
+        assert exc.failure_code == "contract.input"
     else:  # pragma: no cover
-        raise AssertionError("expected RuntimeError for a non-list `over`")
+        raise AssertionError("expected BindingError for a non-list `over`")
 
 
 def test_plain_node_defaults():

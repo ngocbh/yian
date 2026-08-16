@@ -13,14 +13,19 @@ points (`parse/nodes.py`, the loader's conductor loop, `nodes/bindings.py`) disp
 `KINDS` kind-blind — there is no per-kind isinstance ladder. `source/` owns the one-pass
 YAML document, located cursors, and immutable occurrence-backed origin catalogs;
 assembly stamps authored node headers, ordinary node-input keys and values, and
-source-backed reserved MAP/WAIT wiring values on their canonical carriers. It also stamps
-source-backed bare/mapped root, multi-node-definition, and inline-child output values on
-the final `FlowOutput.binding` after rewrites; END reuses that binding, while output mapping
-keys stay origin-free. Generated compact-root and single-node-definition reexports have no
-authored binding occurrence and remain origin-free; their output declaration is reserved
-for contract-origin work. Assembly retains a private document-local catalog snapshot on each
-`ComposedFlow`. Without a retained occurrence, Compose mints no origin and preserves any
-explicit programmatic origin. The snapshot is not yet a complete cross-file resolver;
+source-backed reserved MAP/WAIT wiring values on their canonical carriers. It creates one
+`Assertion` per authored flow/node list position, deriving the carrier origin and temporary
+range from the same retained item cursor; source-order indexing keeps duplicate text
+distinct. Full roots and multi-node definitions retain flow assertion cursors and reuse the
+lowered carriers on START/END. Compact roots and flat single-node definitions project their
+assertions onto the synthesized node. Assembly also stamps source-backed bare/mapped root,
+multi-node-definition, and inline-child output values on the final `FlowOutput.binding`
+after rewrites; END reuses that binding, while output mapping keys stay origin-free.
+Generated compact-root and single-node-definition reexports have no authored binding
+occurrence and remain origin-free; their output declaration is reserved for contract-origin
+work. Assembly retains a private document-local catalog snapshot on each `ComposedFlow`.
+Without a retained occurrence, Compose mints no origin and preserves any explicit
+programmatic origin. The snapshot is not yet a complete cross-file resolver;
 `parse/file.py` consumes the document (`parse_file`).
 The loader also owns each file's callable scope:
 authored `defs:`/`uses:` plus a resolver-private, lazy cache for inline CALL/MAP/LOOP

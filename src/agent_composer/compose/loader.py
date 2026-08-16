@@ -3,10 +3,12 @@
 The file-I/O front door: own one source document, build the typedefs registry, compose the
 call resolver, load every `defs:` callable, and hand the parsed sections to the
 post-parse conductor (`build.pipeline._assemble`, imported back here) which returns
-the `ComposedFlow`. This module owns root/def source projections,
-frame ranges, the resolver composition (`make_file_resolver`/
-`_CallableScope`), and the defs loaders (`_load_def`/`_load_single_node_def`) —
-not the assembly pipeline itself.
+the `ComposedFlow`. This module owns root/def source projections, including routing the
+physical flow-assertion cursor for a full root or multi-node def. Compact roots and flat
+single-node defs instead project their `asserts:` onto the synthesized node, so they do not
+invent a parallel flow-assertion site. It also owns frame ranges, the resolver composition
+(`make_file_resolver`/`_CallableScope`), and the defs loaders
+(`_load_def`/`_load_single_node_def`) — not the assembly pipeline itself.
 
 `call` resolution is **defs-first**: a `call:` names an in-file `defs:` callable (built
 in-loader by the same `_assemble`) or a `uses:` alias resolved through the injected
@@ -44,7 +46,6 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.uses import parse_uses_ref
 from agent_composer.compose.helpers.source import (
     SourceFrame,
-    _boundary_assert_ranges,
     _boundary_field_ranges,
     _section_lines,
 )
@@ -514,7 +515,11 @@ def _load_flow(
         flow_env=f.env,
         source=source,
         boundary_field_ranges=_boundary_field_ranges(root),
-        boundary_assert_ranges=_boundary_assert_ranges(root),
+        asserts_cursor=(
+            root.child("asserts")
+            if root.has("nodes") and root.has("asserts")
+            else None
+        ),
         outputs_cursor=(
             root.child("output")
             if root.has("nodes") and root.has("output")
@@ -824,6 +829,7 @@ def _load_def(
                 if def_cursor is not None
                 else None
             ),
+            asserts_cursor=_source_child(def_cursor, "asserts"),
             outputs_cursor=(
                 _source_child(def_cursor, "output")
                 or _source_child(def_cursor, "outputs")

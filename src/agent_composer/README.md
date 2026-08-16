@@ -100,10 +100,17 @@ origin resolution.
 `Node.pre_asserts` and `Node.post_asserts` are ordered `Assertion` lists. Parsed
 YAML remains raw text until the inline-call pass crosses each flow assertion into
 one carrier; node-local validation creates one fresh carrier per authored
-occurrence. Lowering and CALL expansion replace only `.expression`, preserving
-`.display` and `.origin`. `Node.run` evaluates the expression and reports the
-display text. Manifests include expression, display, order, and duplicate count,
-while excluding origin and the temporary positional range bridge.
+occurrence. Compose indexes those occurrences by source order and derives both
+the carrier's opaque `OriginRef` and its temporary positional `SourceRange` from the
+same retained item cursor, so equal assertion text at two positions remains two
+distinct sites. Flow carrierization preserves an explicit programmatic origin
+instead of replacing it. Inline-call desugaring and flow/CALL lowering replace only
+`.expression`; child cloning and LOOP respawn retain every carrier field. Thus
+`.display` and `.origin` survive every rewrite. Synthesized START/END nodes reuse
+the lowered flow carriers.
+`Node.run` evaluates the expression and reports the display text. Manifests
+include expression, display, order, and duplicate count, while excluding origin
+and the temporary positional range bridge.
 
 `Node.params` has one compiled shape too: an ordered list of exact `Parameter`
 carriers (or `None` for a directly constructed no-input node). The flow still owns each
@@ -122,9 +129,9 @@ wiring carries only the value origin on its canonical `Binding`: MAP `over:` and
 `until:` have no corresponding `Parameter`. A desugar may change `Binding.source`
 without moving that value origin. When no source occurrence is retained, Compose
 mints no origin and preserves any explicit programmatic origin; source-backed
-projections inherit their backing site. CASE wiring,
-synthesized flow-boundary parameters, assertions, contracts, external rebasing, and
-runtime diagnostic consumption remain outside this migration step. Source-backed bare and
+projections inherit their backing site. CASE wiring, synthesized flow-boundary
+parameters, contracts, external rebasing, and runtime diagnostic consumption
+remain outside this migration step. Source-backed bare and
 mapped flow-output values on root flows, multi-node definitions, and inline children stamp
 the final `FlowOutput.binding` after desugaring rewrites; the synthesized END boundary
 reuses that exact binding. Output mapping keys carry no origin. Compact-root and
@@ -174,13 +181,18 @@ map. Virtual or unanchored cursors produce no origin. One builder is shared by
 the root flow, its `defs:`, and its inline bodies, and each assembled
 `ComposedFlow` retains a frozen document-local snapshot as `_local_catalog`.
 Final assembly registers authored node headers, ordinary node-input keys and values,
-source-backed reserved MAP/WAIT wiring values, and source-backed flow-output values directly
-on their canonical semantic carriers; it does not build a parallel location map. Flow
-outputs are stamped after rewrites on `FlowOutput.binding`, and END reuses that binding;
-mapping keys are not origin sites. For sites without retained occurrences, Compose mints
-no origin and preserves any explicit programmatic origin. Generated compact-root and
-single-node-definition reexports are such source-free sites; the authored output type is a
-contract site whose origin remains deferred.
+source-backed reserved MAP/WAIT wiring values, assertions, and source-backed flow-output
+values directly on their canonical semantic carriers; it does not build a parallel
+location map. An assertion's semantic path includes its authored list index, and that
+item's cursor supplies both `Assertion.origin` and the aligned temporary range. Full root
+flows and multi-node definitions retain a flow assertion cursor; their lowered carriers
+are reused by START/END. Compact roots and flat single-node definitions instead project
+their `asserts:` into the synthesized node, so those sites are node-local. Flow outputs
+are stamped after rewrites on `FlowOutput.binding`, and END reuses that binding; mapping
+keys are not origin sites. For sites without retained occurrences, Compose mints no origin
+and preserves any explicit programmatic origin. Generated compact-root and
+single-node-definition reexports are such source-free output sites; the authored output
+type is a contract site whose origin remains deferred.
 That field is intentionally private: external child origins still require
 lexical rebasing before the returned flow can expose one complete resolver.
 

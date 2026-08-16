@@ -20,6 +20,11 @@ its output). NOT `when:`/`on:` (the case condition grammar) and NOT a node-local
 `asserts:` (those stay node-local — no inline call). A `case` descriptor carries no walked
 bindings, so it is untouched.
 
+This is also the flow-assert carrier boundary. Raw entries become one ordered
+`Assertion` per source position; assembly injects an origin lookup by authored index.
+Desugaring replaces only the executable expression, preserving display and any existing
+or injected origin for later START/END lowering.
+
 Three guards (loud): an inline call cannot target the compiler-private
 `__inline_flow_` namespace or capture `${item}` (the synth node is a top-level node
 with no map-element scope — use a named `call` node with `over:`), and a user node id
@@ -45,6 +50,7 @@ import re
 from dataclasses import replace
 from typing import Any, Callable, Optional
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges
 from agent_composer.nodes.contracts import Assertion
@@ -86,6 +92,7 @@ def desugar_inline_calls(
     asserts_section: Optional[list] = None,
     outputs_line: Optional[int] = None,
     asserts_line: Optional[int] = None,
+    assertion_origin_at: Optional[Callable[[int], OriginRef | None]] = None,
     next_id: Optional[Callable[[], str]] = None,
 ) -> tuple:
     """Desugar every inline call in a flow's binding sites into synth `call` nodes.
@@ -93,8 +100,10 @@ def desugar_inline_calls(
     Returns `(new_descriptors, new_outputs, new_asserts)`: the descriptor map augmented with
     one synth `CallDescriptor` per inline call (the host binding rewritten to
     `${<synth>.output}`), the flow `outputs:` section, and ordered semantic `Assertion`
-    carriers. An assertion's inline calls rewrite only its executable expression; display/origin
-    stay stable. A span-wrapped inline `${ f(...) }` in an assert expression
+    carriers. ``assertion_origin_at`` supplies an optional origin by authored list index
+    exactly when raw text crosses into its carrier. Existing origins take precedence. An
+    assertion's inline calls rewrite only its executable expression; display/origin stay
+    stable. A span-wrapped inline `${ f(...) }` in an assert expression
     (`${ f(...) } == x`) lifts to a synth node so the assert reads its output.
 
     Each synth node from a node host locates at the range of the binding it was found in (its
@@ -134,7 +143,12 @@ def desugar_inline_calls(
     for call in out_calls:
         synth[call.id] = _to_call_descriptor(call, host="flow outputs", line=outputs_line)
 
-    new_asserts, assert_calls = _desugar_asserts(asserts_section, mint, asserts_line)
+    new_asserts, assert_calls = _desugar_asserts(
+        asserts_section,
+        mint,
+        asserts_line,
+        assertion_origin_at=assertion_origin_at,
+    )
     for call in assert_calls:
         synth[call.id] = _to_call_descriptor(call, host="assert", line=asserts_line)
 
@@ -316,23 +330,43 @@ def _desugar_outputs(outputs: Any, mint: Callable[[], str], line: Optional[int])
     return new_outputs, calls
 
 
-def _desugar_asserts(asserts: Optional[list], mint: Callable[[], str], line: Optional[int]) -> tuple:
+def _desugar_asserts(
+    asserts: Optional[list],
+    mint: Callable[[], str],
+    line: Optional[int],
+    *,
+    assertion_origin_at: Optional[Callable[[int], OriginRef | None]] = None,
+) -> tuple:
     """Cross raw flow asserts into semantic carriers and desugar inline calls.
 
     Parsed YAML supplies strings. An existing carrier is accepted for source-neutral
-    programmatic composition and retains its display/origin. Rewriting changes only the
-    executable expression, so generated node ids never replace authored presentation.
-    `None`/empty returns unchanged.
+    programmatic composition and retains its display/origin. ``assertion_origin_at``
+    supplies an optional source-neutral origin by authored list index; an existing origin
+    wins. Rewriting changes only the executable expression, so generated node ids never
+    replace authored presentation. `None`/empty returns unchanged.
     """
     if not asserts:
         return asserts, []
     calls: list = []
     new_asserts: list[Assertion] = []
-    for value in asserts:
+    for index, value in enumerate(asserts):
         if isinstance(value, Assertion):
             assertion = value
+            if assertion.origin is None and assertion_origin_at is not None:
+                assertion = replace(
+                    assertion,
+                    origin=assertion_origin_at(index),
+                )
         elif isinstance(value, str):
-            assertion = Assertion(expression=value, display=value)
+            assertion = Assertion(
+                expression=value,
+                display=value,
+                origin=(
+                    assertion_origin_at(index)
+                    if assertion_origin_at is not None
+                    else None
+                ),
+            )
         else:
             raise TypeError(
                 "flow assertions must be strings or Assertion carriers, "

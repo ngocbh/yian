@@ -10,7 +10,9 @@ Modules:
   - `errors`      the `LoadError` carried by every load-path failure (message + optional
                   `SourceRange`), the one exception type the CLI boxes as a diagnostic.
   - `source`      `SourceFrame` + parse-free location helpers over an existing
-                  `SourceCursor`; render-only metadata, never a YAML parser.
+                  `SourceCursor`; render-only metadata, never a YAML parser. Its boundary
+                  field map covers inputs only—assertion origin/range pairs come from one
+                  retained item cursor in the build conductor, not a helper-side map.
   - `types`       `read_type` / `read_flow_inputs`: the `outputs:`/`inputs:` source
                   side read into recursive `Type` / `Parameter` values.
   - `uses`        `UsesRef` / `parse_uses_ref`: the `uses:` child-flow reference parser.

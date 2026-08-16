@@ -14,6 +14,9 @@ passes:
   targets are rejected before registration.
 - `inline_calls` — whole-value `call(<flow-id>, kw=...)` directives in any binding
   position mint a synth `call` node and rewrite the binding to `${<synth>.output}`.
+  The same pass crosses raw flow assertions into ordered `Assertion` carriers; an
+  injected source-neutral callback stamps each source-order occurrence, and a rewrite
+  changes only `.expression` while preserving `.display` and `.origin`.
 - `adaptive_questions` — a `human_input` `adaptive_questions:` block lowers to a
   synth composer agent + a rewritten gate.
 - `case_targets` — a `case` then:/else: whole-value `call(...)` route target mints a

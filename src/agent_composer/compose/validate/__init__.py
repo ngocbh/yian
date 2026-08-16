@@ -17,8 +17,11 @@ reject an ill-formed flow before it is compiled:
 - `loop_types.py` — `check_loop_type_contract`: a `loop`'s carried record obeys
   the `'a -> 'a` type contract.
 - `asserts.py` — `LoweredAsserts` + `lower_flow_asserts` (flow-level `asserts:`,
-  lowered onto the synthesized START/END boundary nodes) and
-  `validate_node_asserts` + `_POOL_HEADS` (the per-node `asserts:` contract).
+  lowered onto the synthesized START/END boundary nodes without replacing the
+  originated carriers) and `validate_node_asserts` + `_POOL_HEADS` (the per-node
+  `asserts:` contract). Node validation accepts a source-neutral callback that returns
+  each authored occurrence's origin and temporary range together by source-order index;
+  it never navigates Compose cursors itself.
 - `handles.py` — `check_case_handles`: a `CaseNode`'s handles align with its
   outgoing control edges.
 

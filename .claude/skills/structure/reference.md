@@ -96,7 +96,7 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 | Immutable document-local origin resolution by retained occurrence | public `SourceCatalog` plus its package-private builder in `compose/source` | parallel range maps, another YAML parse, or a premature cross-file resolver |
 | Semantic descriptors and flow sections | `compose/parse` consuming a document/cursor | another YAML construction pass |
 | Source-preserving inline extraction | `compose/desugar` projecting cursors | PyYAML and loader state |
-| Compiled-flow assembly | `compose/build` consuming descriptors and retained cursor sources | PyYAML and concrete loader implementation |
+| Compiled-flow assembly and per-occurrence carrier stamping | `compose/build` consuming descriptors and retained cursor sources | PyYAML and concrete loader implementation |
 | Resolved-file reuse, cycles, and one file's callable namespace | `compose/loader` | `compile` and `runtime` |
 
 Only modules under `compose/source` may import PyYAML or traverse the retained
@@ -108,7 +108,12 @@ copies, renders, or reparses YAML to reconstruct source.
 The loader creates one package-private catalog builder per physical document and
 threads it through root, definition, and inline-body assembly. The conductor stamps
 authored node-header origins, ordinary node-input keys and values, and source-backed
-reserved MAP/WAIT wiring values directly on their canonical carriers. It also stamps
+reserved MAP/WAIT wiring values directly on their canonical carriers. It registers flow
+and node assertion sites by authored source-order index, deriving each carrier origin and
+temporary positional range from the same retained item cursor. Duplicate text therefore
+remains occurrence-distinct; full roots and multi-node definitions retain flow assertion
+cursors and reuse their lowered carriers on START/END, while compact roots and flat
+single-node definitions project assertions onto their synthesized node. It also stamps
 source-backed bare/mapped root, multi-node-definition, and inline-child output values on the
 final `FlowOutput.binding` after rewrites; END reuses that binding, and output mapping keys
 stay origin-free. Only ordinary input keys belong to `Parameter`; ordinary, reserved, and

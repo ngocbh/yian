@@ -52,8 +52,14 @@ Hold this model whenever you design anything:
   Generated compact-root and single-node-definition reexports remain origin-free because
   their authored output declaration is reserved for contract-origin work.
 - Compiled node assertions also have one shape: ordered `Assertion` carriers.
-  Evaluate `.expression`, report `.display`, and preserve `.origin` whenever a
-  compile/growth rewrite creates a new carrier. Do not add parallel text maps.
+  Compose creates one carrier per authored flow/node list position and derives
+  its `.origin` (`OriginRef`) plus the temporary positional range from the same retained item
+  cursor; duplicate text therefore remains occurrence-distinct. Evaluate
+  `.expression`, report `.display`, and preserve `.origin`: inline-call and
+  flow/CALL lowering replace only the expression, while child cloning and LOOP
+  respawn retain the carrier fields. START/END reuse the lowered flow carriers.
+  Do not add another assertion text/origin map; the existing positional range
+  lists are a temporary compatibility bridge, not the provenance authority.
 - Compiled `Node.params` has one shape: ordered exact `Parameter` carriers. The
   flow owns their `Binding` sources; parameter contracts/default presence/
   coercion policy stay source-neutral, and rewrites preserve all origins. Final
@@ -244,9 +250,14 @@ key/value anchors. Resolution replays an occurrence without reparsing or adding 
 parallel range map; virtual or unanchored cursors produce no origin. One builder is
 shared by a physical document's root, definitions, and inline bodies. Assembly stamps
 authored node headers, ordinary node-input keys and values, source-backed reserved
-MAP/WAIT wiring values, and source-backed flow-output values directly on their canonical
-carriers. Flow-output values are stamped after rewrites on `FlowOutput.binding`; END reuses
-that binding and output mapping keys remain origin-free. Generated compact-root and
+MAP/WAIT wiring values, source-backed flow-output values, and authored flow/node
+assertions directly on their canonical carriers. Assertion sites are indexed by source
+order; one retained item cursor supplies both `Assertion.origin` and its aligned temporary
+range. Full root flows and multi-node definitions retain a flow assertion cursor and reuse
+the lowered carriers on START/END. Compact roots and flat single-node definitions project
+their assertions onto the synthesized node, where they remain node-local. Flow-output
+values are stamped after rewrites on `FlowOutput.binding`; END reuses that binding and
+output mapping keys remain origin-free. Generated compact-root and
 single-node-definition reexports have no authored binding occurrence and stay origin-free;
 their output declaration is reserved for contract-origin work. Assembly then freezes a
 document-local snapshot on

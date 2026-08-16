@@ -5,7 +5,8 @@ The parse-independent slice of the loader's render-only source mapping: the
 They never parse or call `parse_nodes`/`parse_file`. Kept at the bottom
 of the ladder (`helpers <- parse`) so `parse/` can depend on it without a cycle; the
 frame-range helpers that DO call the parser (`_frame_ranges`, `top_frame_ranges`) stay in
-`loader.py`, which sits above `parse`.
+`loader.py`, which sits above `parse`. Assertion origins and temporary ranges are
+deliberately absent: the build conductor derives both from one retained item cursor.
 """
 
 from __future__ import annotations
@@ -24,9 +25,9 @@ def _boundary_field_ranges(root: SourceCursor) -> FieldRanges:
     Keys: each top-level `input:`/`inputs:` decl name, tagged `("input", name)` -> its
     declaration value `SourceRange`. (The boundary input-coercion failure carries a
     `SourceSpan(kind="input", key=name)` locator, so the runtime funnel resolves the caret by
-    that `(kind, key)`.) Flow-level `asserts:` are NOT here — they are located by position (see
-    `_boundary_assert_ranges`, threaded into the lowered START/END assert-range lists). Empty for a
-    spanless / in-memory flow — best-effort, boundary errors there fall back to the node range.
+    that `(kind, key)`.) Flow-level `asserts:` are NOT here: assembly derives their ranges
+    and origins from the retained assertion cursor. Empty for a spanless / in-memory flow —
+    best-effort, boundary errors there fall back to the node range.
     Mirrors `_frame_ranges`: render metadata, never raises."""
     try:
         value = root._value_view()
@@ -44,22 +45,6 @@ def _boundary_field_ranges(root: SourceCursor) -> FieldRanges:
         return out
     except SourceAccessError:
         return FieldRanges()
-
-
-def _boundary_assert_ranges(root: SourceCursor) -> list[SourceRange | None]:
-    """The POSITIONAL ranges of the flow-level `asserts:` list, aligned 1:1 with it in author order.
-
-    The flow-boundary twin of the node-local `assert_ranges`: `lower_flow_asserts` consumes this to
-    stamp each lowered START/END assert's own `SourceRange` (a false boundary assert then carets its
-    own line), and to caret a bad-ref `LoadError` at the offending assert. Positional — NOT keyed by
-    text — so two identical flow asserts get distinct carets. `[]` for a spanless / uncomposable
-    flow; render metadata, never raises (mirrors `_boundary_field_ranges`)."""
-    try:
-        if not isinstance(root._value_view(), Mapping):
-            return []
-        return root.item_range_list("asserts")
-    except SourceAccessError:
-        return []
 
 
 def _section_lines(root: SourceCursor) -> dict[str, int]:

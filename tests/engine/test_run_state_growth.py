@@ -10,7 +10,15 @@ import pytest
 import agent_composer.runtime.state as state_module
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.manifest import expansion_digest
-from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, NodeState, START_ID
+from agent_composer.compile.model import (
+    CompiledFlow,
+    Edge,
+    END_ID,
+    Flow,
+    GrowthRejected,
+    NodeState,
+    START_ID,
+)
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import NodeExpanded
 from agent_composer.nodes.base import Grow, Node, NodeKind
@@ -293,19 +301,41 @@ def test_growth_canonicalizes_seed_and_isolates_builder_record_and_observers():
     assert state.next_sequence == 5
 
 
+def test_growth_seed_rejection_retains_the_original_exception(monkeypatch):
+    state, _ = _initialized_spawner()
+    original = ValueError("seed codec rejected node data")
+
+    def reject_seed(_seed: Any) -> tuple[Any, Any]:
+        raise original
+
+    monkeypatch.setattr(state_module, "canonical_seed", reject_seed)
+
+    with pytest.raises(GrowthRejected) as caught:
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda spawner, _seed: _fragment(spawner.id),
+        )
+
+    assert caught.value.original is original
+
+
 def test_growth_builder_receives_a_detached_spawner_and_failure_is_pure():
     state, _ = _initialized_spawner()
     live_spawner = state.flow.nodes["spawn"]
     live_spawner.title = "live"
     before = _snapshot(state)
 
+    original = RuntimeError("builder failed")
+
     def mutating_failing_builder(spawner: Node, seed: Any) -> Flow:
         assert spawner is not live_spawner
         spawner.title = "builder-mutated"
         spawner.env["builder"] = seed
-        raise RuntimeError("builder failed")
+        raise original
 
-    with pytest.raises(RuntimeError, match="builder failed"):
+    with pytest.raises(RuntimeError, match="builder failed") as caught:
         prepare_expanded(
             state,
             "spawn",
@@ -313,9 +343,77 @@ def test_growth_builder_receives_a_detached_spawner_and_failure_is_pure():
             mutating_failing_builder,
         )
 
+    assert caught.value is original
     assert _snapshot(state) == before
     assert live_spawner.title == "live"
     assert live_spawner.env == {}
+
+
+@pytest.mark.parametrize(
+    "helper_name",
+    ["_validate_growth_fragment_data", "expansion_digest", "_growth_adjacency"],
+)
+def test_growth_host_helper_faults_propagate_with_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    helper_name: str,
+):
+    state, _ = _initialized_spawner()
+    original = ValueError(f"{helper_name} fault")
+
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise original
+
+    monkeypatch.setattr(state_module, helper_name, fail)
+
+    with pytest.raises(ValueError) as caught:
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda spawner, _seed: _fragment(spawner.id),
+        )
+
+    assert caught.value is original
+    assert not isinstance(caught.value, GrowthRejected)
+
+
+@pytest.mark.parametrize("stage", ["spawner", "fragment"])
+def test_growth_detachment_faults_propagate_with_identity(stage: str):
+    original = TypeError(f"{stage} detachment failed")
+
+    class FailingSpawner(_Spawner):
+        def __deepcopy__(self, _memo: dict[int, Any]) -> Node:
+            raise original
+
+    class FailingFlow(Flow):
+        def __deepcopy__(self, _memo: dict[int, Any]) -> Flow:
+            raise original
+
+    spawner: Node = FailingSpawner("spawn") if stage == "spawner" else _Spawner("spawn")
+    state, _ = _initialized_spawner(_parent_flow(spawner))
+    base = _fragment("spawn")
+    built: Flow = (
+        FailingFlow(
+            nodes=base.nodes,
+            edges=base.edges,
+            wiring=base.wiring,
+            start_id=base.start_id,
+            end_id=base.end_id,
+        )
+        if stage == "fragment"
+        else base
+    )
+
+    with pytest.raises(TypeError) as caught:
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda _spawner, _seed: built,
+        )
+
+    assert caught.value is original
+    assert not isinstance(caught.value, GrowthRejected)
 
 
 @pytest.mark.parametrize("attribute", ["commit_as", "origin_id"])
@@ -340,13 +438,15 @@ def test_growth_rejects_invalid_node_owned_topology_targets(
         setattr(fragment.nodes[fragment.end_id], attribute, target)
         return fragment
 
-    with pytest.raises(error, match=match):
+    with pytest.raises(GrowthRejected, match=match) as caught:
         prepare_expanded(
             state,
             "spawn",
             Grow(seed={}),
             invalid_target_builder,
         )
+
+    assert type(caught.value.original) is error
 
 
 @pytest.mark.parametrize(
@@ -383,13 +483,15 @@ def test_growth_rejects_invalid_edge_field_types(
         fragment.edges[0] = Edge(**fields)
         return fragment
 
-    with pytest.raises(error, match=attribute):
+    with pytest.raises(GrowthRejected, match=attribute) as caught:
         prepare_expanded(
             state,
             "spawn",
             Grow(seed={}),
             invalid_edge_builder,
         )
+
+    assert type(caught.value.original) is error
 
 
 class _FailingLog(MemoryRunLog):
@@ -442,6 +544,37 @@ def test_growth_replay_rejects_a_changed_but_valid_builder_digest():
         )
 
     assert "spawn/changed/start" not in replay.flow.nodes
+
+
+def test_growth_replay_unwraps_shared_growth_rejection_identity(monkeypatch):
+    live, _ = _initialized_spawner()
+    prepared = prepare_expanded(
+        live,
+        "spawn",
+        Grow(seed={}),
+        lambda spawner, _seed: _fragment(spawner.id),
+    )
+    replay, _ = _initialized_spawner()
+    original = ValueError("recorded fragment is inconsistent")
+
+    def reject_fragment(*_args: Any, **_kwargs: Any) -> Any:
+        raise GrowthRejected(original)
+
+    monkeypatch.setattr(
+        state_module,
+        "_validate_growth_fragment_data",
+        reject_fragment,
+    )
+
+    with pytest.raises(ValueError) as caught:
+        prepare_record(
+            replay,
+            prepared.record,
+            grow_builder=lambda spawner, _seed: _fragment(spawner.id),
+        )
+
+    assert caught.value is original
+    assert not isinstance(caught.value, GrowthRejected)
 
 
 def test_growth_live_and_record_replay_produce_equal_state():
@@ -817,7 +950,6 @@ def _invalid_fragment(case: str) -> Any:
 @pytest.mark.parametrize(
     "case",
     [
-        "not-flow",
         "missing-start",
         "missing-end",
         "key-id-mismatch",
@@ -847,7 +979,7 @@ def test_growth_rejects_invalid_fragments_atomically(case: str):
     state, log = _initialized_spawner()
     before = _snapshot(state)
 
-    with pytest.raises((TypeError, ValueError)) as caught:
+    with pytest.raises(GrowthRejected) as caught:
         prepare_expanded(
             state,
             "spawn",
@@ -855,9 +987,23 @@ def test_growth_rejects_invalid_fragments_atomically(case: str):
             lambda spawner, seed: _invalid_fragment(case),
         )
 
-    assert isinstance(caught.value, state_module._NodeDataError)
+    assert type(caught.value.original) in (TypeError, ValueError)
     assert _snapshot(state) == before
     assert log.next_sequence == 4
+
+
+def test_growth_builder_non_flow_return_is_a_raw_host_fault():
+    state, _ = _initialized_spawner()
+
+    with pytest.raises(TypeError, match="grow_builder must return a Flow") as caught:
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            lambda _spawner, _seed: object(),
+        )
+
+    assert not isinstance(caught.value, GrowthRejected)
 
 
 def test_growth_reference_validation_reads_a_binding_source(
@@ -898,7 +1044,7 @@ def test_growth_rejects_a_binding_wrapped_unknown_reference_before_digesting():
     )
     before = _snapshot(state)
 
-    with pytest.raises(state_module._NodeDataError, match="unknown namespace"):
+    with pytest.raises(GrowthRejected, match="unknown namespace") as caught:
         prepare_expanded(
             state,
             "spawn",
@@ -906,46 +1052,50 @@ def test_growth_rejects_a_binding_wrapped_unknown_reference_before_digesting():
             lambda _spawner, _seed: fragment,
         )
 
+    assert type(caught.value.original) is ValueError
     assert _snapshot(state) == before
     assert log.next_sequence == 4
 
 
 @pytest.mark.parametrize(
-    ("grow", "builder", "error", "node_data"),
+    ("grow", "builder", "error", "original_type"),
     [
         (
             Grow(seed={}, prune={"old"}),
             lambda spawner, seed: _fragment(spawner.id),
+            GrowthRejected,
             TypeError,
-            True,
         ),
         (
             Grow(seed={}, prune=frozenset({""})),
             lambda spawner, seed: _fragment(spawner.id),
+            GrowthRejected,
             ValueError,
-            True,
         ),
         (
             Grow(seed={"bad": {1, 2}}),
             lambda spawner, seed: _fragment(spawner.id),
+            GrowthRejected,
             ValueError,
-            True,
         ),
-        (Grow(seed={}), None, TypeError, False),
+        (Grow(seed={}), None, TypeError, None),
     ],
 )
 def test_growth_requires_exact_live_carriers(
     grow: Grow,
     builder: Any,
     error: type[Exception],
-    node_data: bool,
+    original_type: type[Exception] | None,
 ):
     state, _ = _initialized_spawner()
 
     with pytest.raises(error) as caught:
         prepare_expanded(state, "spawn", grow, builder)
 
-    assert isinstance(caught.value, state_module._NodeDataError) is node_data
+    if original_type is None:
+        assert not isinstance(caught.value, GrowthRejected)
+    else:
+        assert type(caught.value.original) is original_type
 
 
 def test_growth_rejects_malformed_static_contract_as_a_host_invariant():
@@ -965,7 +1115,7 @@ def test_growth_rejects_malformed_static_contract_as_a_host_invariant():
             lambda spawner, seed: _fragment(spawner.id),
         )
 
-    assert not isinstance(caught.value, state_module._NodeDataError)
+    assert not isinstance(caught.value, GrowthRejected)
     assert _snapshot(state) == before
     assert log.next_sequence == sequence
 
@@ -980,7 +1130,7 @@ def test_growth_enforces_peak_node_budget_before_same_transition_pruning(monkeyp
     monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", peak_count - 1)
     before = _snapshot(state)
 
-    with pytest.raises(ValueError, match="node budget"):
+    with pytest.raises(GrowthRejected, match="node budget") as caught:
         prepare_expanded(
             state,
             "spawn",
@@ -988,6 +1138,7 @@ def test_growth_enforces_peak_node_budget_before_same_transition_pruning(monkeyp
             lambda spawner, seed: _fragment(spawner.id),
         )
 
+    assert type(caught.value.original) is ValueError
     assert _snapshot(state) == before
 
 
@@ -1031,7 +1182,7 @@ def test_growth_rejects_invalid_exact_depth_deltas(delta: Any):
             lambda node, seed: _fragment(node.id),
         )
 
-    assert not isinstance(caught.value, state_module._NodeDataError)
+    assert not isinstance(caught.value, GrowthRejected)
     assert _snapshot(state) == before
 
 
@@ -1048,21 +1199,21 @@ def test_growth_treats_corrupt_stored_depth_as_a_host_invariant_error():
             lambda node, seed: _fragment(node.id),
         )
 
-    assert not isinstance(caught.value, state_module._NodeDataError)
+    assert not isinstance(caught.value, GrowthRejected)
     assert _snapshot(state) == before
 
 
 def test_growth_enforces_positive_reference_depth_and_stamps_the_boundary():
     rejected, _ = _initialized_spawner()
     rejected.depth["spawn"] = state_module.MAX_REF_DEPTH
-    with pytest.raises(ValueError, match="MAX_REF_DEPTH") as caught:
+    with pytest.raises(GrowthRejected, match="MAX_REF_DEPTH") as caught:
         prepare_expanded(
             rejected,
             "spawn",
             Grow(seed={}),
             lambda node, seed: _fragment(node.id),
         )
-    assert isinstance(caught.value, state_module._NodeDataError)
+    assert type(caught.value.original) is ValueError
 
     accepted, log = _initialized_spawner()
     accepted.depth["spawn"] = state_module.MAX_REF_DEPTH - 1
@@ -1154,7 +1305,7 @@ def test_growth_rejects_live_node_collision_even_when_the_id_is_pruned():
     state.node_state[colliding_id] = NodeState.TAKEN
     before = _snapshot(state)
 
-    with pytest.raises(ValueError, match="collides"):
+    with pytest.raises(GrowthRejected, match="collides") as caught:
         prepare_expanded(
             state,
             "spawn",
@@ -1162,6 +1313,7 @@ def test_growth_rejects_live_node_collision_even_when_the_id_is_pruned():
             lambda node, seed: _fragment(node.id),
         )
 
+    assert type(caught.value.original) is ValueError
     assert _snapshot(state) == before
 
 
@@ -1275,7 +1427,7 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
         prune_ids = frozenset({old_id})
 
     before = _snapshot(state)
-    with pytest.raises(ValueError):
+    with pytest.raises(GrowthRejected) as caught:
         prepare_expanded(
             state,
             executing,
@@ -1283,6 +1435,7 @@ def test_growth_rejects_unsafe_pruning_matrix_atomically(case: str):
             lambda node, seed: _fragment(node.id),
         )
 
+    assert type(caught.value.original) is ValueError
     assert _snapshot(state) == before
     assert log.next_sequence == 4
 
@@ -1299,7 +1452,10 @@ def test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node():
     }
     before = _snapshot(state)
 
-    with pytest.raises(ValueError, match="wiring depends on pruned node"):
+    with pytest.raises(
+        GrowthRejected,
+        match="wiring depends on pruned node",
+    ) as caught:
         prepare_expanded(
             state,
             "spawn",
@@ -1307,8 +1463,34 @@ def test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node():
             lambda node, _seed: _fragment(node.id),
         )
 
+    assert type(caught.value.original) is ValueError
     assert _snapshot(state) == before
     assert log.next_sequence == 4
+
+
+def test_growth_prune_scan_rejects_malformed_surviving_wiring_as_raw_invariant(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state, _ = _initialized_spawner()
+    old_id = _install_settled_overlay(state)[0]
+    state.flow.wiring[END_ID] = {"value": Binding("${malformed}")}
+    parse_error = state_module.ExpressionError("malformed surviving wiring")
+
+    def fail_scan(_source: str) -> list[str]:
+        raise parse_error
+
+    monkeypatch.setattr(state_module, "expr_refs_of", fail_scan)
+
+    with pytest.raises(ValueError, match="invalid wiring") as caught:
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}, prune=frozenset({old_id})),
+            lambda node, _seed: _fragment(node.id),
+        )
+
+    assert not isinstance(caught.value, GrowthRejected)
+    assert caught.value.__cause__ is parse_error
 
 
 def test_loop_clone_record_uses_actual_id_self_prunes_and_inherits_depth_zero():

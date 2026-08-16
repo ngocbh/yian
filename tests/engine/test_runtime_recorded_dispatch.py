@@ -112,6 +112,13 @@ class _GrowNode(Node):
         return Grow(seed={"canonical": (1, 2)})
 
 
+class _MalformedSeedGrowNode(_GrowNode):
+    """Return a malformed seed while retaining one legal spawner kind."""
+
+    def _run_impl(self, inputs: dict[str, Any]) -> Grow:
+        return Grow(seed=[])
+
+
 class _StopAwareNode(Node):
     """Block until cooperative drain wakes this worker."""
 
@@ -748,22 +755,28 @@ def test_invalid_live_grow_depth_trait_remains_a_host_failure():
     assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
 
 
-def test_growth_digest_runtime_error_remains_exact_host_failure(monkeypatch):
-    expected = RuntimeError("digest programming fault")
-    state, log = _initialized(_flow([_GrowNode("spawn")]), num_workers=0)
+@pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
+@pytest.mark.parametrize("error_type", [RuntimeError, TypeError, ValueError])
+def test_growth_digest_fault_remains_exact_host_failure(
+    monkeypatch,
+    num_workers: int,
+    error_type: type[Exception],
+):
+    expected = error_type("digest programming fault")
+    state, log = _initialized(_flow([_GrowNode("spawn")]), num_workers=num_workers)
 
     def broken_digest(_fragment):
         raise expected
 
     monkeypatch.setattr(state_module, "expansion_digest", broken_digest)
 
-    with pytest.raises(RuntimeError) as caught:
+    with pytest.raises(error_type) as caught:
         list(
             FlowEngine(
                 state,
                 log,
                 grow_builder=lambda node, _seed: _growth_fragment(node.id),
-                num_workers=0,
+                num_workers=num_workers,
             ).run()
         )
 
@@ -772,55 +785,160 @@ def test_growth_digest_runtime_error_remains_exact_host_failure(monkeypatch):
     assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
 
 
-def test_injected_grow_builder_runtime_error_is_a_durable_node_failure():
-    expected = RuntimeError("builder rejected seed")
-    state, log = _initialized(_flow([_GrowNode("spawn")]), num_workers=0)
+@pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
+@pytest.mark.parametrize("error_type", [RuntimeError, TypeError, ValueError])
+def test_injected_grow_builder_fault_remains_exact_host_failure(
+    num_workers: int,
+    error_type: type[Exception],
+):
+    expected = error_type("builder programming fault")
+    state, log = _initialized(
+        _flow([_GrowNode("spawn")]),
+        num_workers=num_workers,
+    )
 
     def reject_builder(_spawner, _seed):
         raise expected
 
+    with pytest.raises(error_type) as caught:
+        list(
+            FlowEngine(
+                state,
+                log,
+                grow_builder=reject_builder,
+                num_workers=num_workers,
+            ).run()
+        )
+
+    assert caught.value is expected
+    assert tuple(state.in_flight) == ("spawn",)
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
+
+
+@pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
+def test_invalid_grow_builder_return_remains_a_host_failure(num_workers: int):
+    state, log = _initialized(
+        _flow([_GrowNode("spawn")]),
+        num_workers=num_workers,
+    )
+
+    with pytest.raises(TypeError, match="grow_builder must return a Flow") as caught:
+        list(
+            FlowEngine(
+                state,
+                log,
+                grow_builder=lambda _spawner, _seed: object(),
+                num_workers=num_workers,
+            ).run()
+        )
+
+    assert type(caught.value) is TypeError
+    assert tuple(state.in_flight) == ("spawn",)
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
+
+
+@pytest.mark.parametrize(
+    ("origin", "expected_trace"),
+    [
+        (OriginRef("nodes/spawn"), (OriginRef("nodes/spawn"),)),
+        (None, ()),
+    ],
+    ids=("authored", "source-free"),
+)
+def test_legal_kind_malformed_seed_constructs_contract_growth_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    origin: OriginRef | None,
+    expected_trace: tuple[OriginRef, ...],
+):
+    from agent_composer.compile.expand import build_grow
+
+    state, log = _initialized(
+        _flow([_MalformedSeedGrowNode("spawn", origin=origin)]),
+        num_workers=0,
+    )
+    failures = _capture_semantic_failures(monkeypatch)
+
     events = list(
         FlowEngine(
             state,
             log,
-            grow_builder=reject_builder,
+            grow_builder=build_grow,
             num_workers=0,
         ).run()
     )
 
+    assert len(failures) == 1
+    assert failures[0].code == "contract.growth"
+    assert failures[0].node_id == "spawn"
+    assert failures[0].trace == expected_trace
+    assert failures[0].cause_type == "TypeError"
     assert isinstance(events[-2], NodeFailed)
-    assert events[-2].node_id == "spawn"
-    assert (events[-2].error, events[-2].error_type) == (
-        "builder rejected seed",
-        "RuntimeError",
-    )
     assert isinstance(events[-1], RunFailed)
-    failure = tuple(log)[-1].record
-    assert isinstance(failure, NodeFailedRecord)
-    assert failure.traceback is not None
-    assert failure.traceback.rstrip().endswith(
-        "RuntimeError: builder rejected seed"
+
+
+@pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
+def test_growth_materialization_fault_remains_exact_host_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    num_workers: int,
+):
+    expected = RuntimeError("growth materialization fault")
+    state, log = _initialized(
+        _flow([_GrowNode("spawn")]),
+        num_workers=num_workers,
     )
 
+    def broken_materialization(_plan):
+        raise expected
 
-def test_invalid_grow_builder_return_is_a_durable_node_failure():
-    state, log = _initialized(_flow([_GrowNode("spawn")]), num_workers=0)
+    monkeypatch.setattr(state_module, "_materialize_growth", broken_materialization)
 
-    events = list(
-        FlowEngine(
-            state,
-            log,
-            grow_builder=lambda _spawner, _seed: object(),
-            num_workers=0,
-        ).run()
+    with pytest.raises(RuntimeError) as caught:
+        list(
+            FlowEngine(
+                state,
+                log,
+                grow_builder=lambda node, _seed: _growth_fragment(node.id),
+                num_workers=num_workers,
+            ).run()
+        )
+
+    assert caught.value is expected
+    assert tuple(state.in_flight) == ("spawn",)
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
+
+
+def test_grow_builder_fault_drains_pooled_sibling_and_preserves_identity():
+    entered = threading.Event()
+    released = threading.Event()
+    expected = RuntimeError("builder programming fault")
+    state, log = _initialized(
+        _flow(
+            [
+                _GrowNode("spawn"),
+                _StopAwareNode("blocked", entered, released),
+            ]
+        ),
+        num_workers=2,
     )
 
-    assert isinstance(events[-2], NodeFailed)
-    assert events[-2].node_id == "spawn"
-    assert events[-2].error_type == "TypeError"
-    assert events[-2].error == "grow_builder must return a Flow"
-    assert isinstance(events[-1], RunFailed)
-    assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
+    def reject_builder(_spawner, _seed):
+        assert entered.wait(2)
+        raise expected
+
+    with pytest.raises(RuntimeError) as caught:
+        list(
+            FlowEngine(
+                state,
+                log,
+                grow_builder=reject_builder,
+                num_workers=2,
+            ).run()
+        )
+
+    assert caught.value is expected
+    assert released.is_set()
+    assert tuple(state.in_flight) == ("spawn", "blocked")
+    assert not any(isinstance(envelope.record, NodeFailedRecord) for envelope in log)
 
 
 def test_positive_worker_count_never_exceeds_the_submission_bound():

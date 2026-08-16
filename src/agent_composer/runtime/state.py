@@ -18,7 +18,7 @@ from typing import Any, NoReturn
 
 from agent_composer._state import NodeState
 from agent_composer.compile.manifest import expansion_digest
-from agent_composer.compile.model import CompiledFlow, Edge, Flow
+from agent_composer.compile.model import CompiledFlow, Edge, Flow, GrowthRejected
 from agent_composer.compile.validation import _classify_path
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import (
@@ -117,6 +117,11 @@ def _raise_node_data(
     if isinstance(original, ValueError):
         raise _NodeDataValueError(original, origin=origin) from original
     raise _NodeDataError(original, origin=origin) from original
+
+
+def _raise_growth_rejected(original: TypeError | ValueError) -> NoReturn:
+    """Mark one explicit live node-produced growth rejection."""
+    raise GrowthRejected(original) from original
 
 
 class RunState:
@@ -857,28 +862,27 @@ def prepare_expanded(
     if not callable(grow_builder):
         raise TypeError("grow_builder must be callable")
     if type(grow.prune) is not frozenset:
-        _raise_node_data(TypeError("Grow.prune must be a frozenset of node IDs"))
+        _raise_growth_rejected(
+            TypeError("Grow.prune must be a frozenset of node IDs")
+        )
     if any(type(prune_id) is not str for prune_id in grow.prune):
-        _raise_node_data(TypeError("Grow.prune must contain only strings"))
+        _raise_growth_rejected(TypeError("Grow.prune must contain only strings"))
     if any(not prune_id for prune_id in grow.prune):
-        _raise_node_data(ValueError("Grow.prune node IDs must be non-empty"))
+        _raise_growth_rejected(ValueError("Grow.prune node IDs must be non-empty"))
     _require_initialized_nonterminal(state)
     _require_expanding_node(state, node_id)
 
     try:
         seed_wire, builder_seed = canonical_seed(grow.seed)
     except (TypeError, ValueError) as exc:
-        _raise_node_data(exc)
+        _raise_growth_rejected(exc)
     fragment = _build_growth_fragment(
         state.flow.nodes[node_id],
         builder_seed,
         grow_builder,
     )
     validated_fragment = _validate_growth_fragment(state, fragment)
-    try:
-        digest = expansion_digest(fragment)
-    except (TypeError, ValueError) as exc:
-        _raise_node_data(exc)
+    digest = expansion_digest(fragment)
     return _prepare_growth_transition(
         state,
         NodeExpandedRecord(
@@ -1285,28 +1289,31 @@ def _prepare_growth_record(
 ) -> PreparedTransition:
     """Rebuild and verify one historical expansion through the live builder path."""
     _validate_growth_record(state, record)
-    seed_wire, builder_seed = canonical_seed(record.seed)
-    if seed_wire != record.seed:
-        raise ValueError("NodeExpandedRecord seed is not in canonical wire form")
-    fragment = _build_growth_fragment(
-        state.flow.nodes[record.spawner_id],
-        builder_seed,
-        grow_builder,
-    )
-    validated_fragment = _validate_growth_fragment(state, fragment)
-    actual_digest = expansion_digest(fragment)
-    if actual_digest != record.topology_digest:
-        raise ValueError(
-            "NodeExpandedRecord topology digest mismatch: "
-            f"recorded {record.topology_digest!r}, rebuilt {actual_digest!r}"
+    try:
+        seed_wire, builder_seed = canonical_seed(record.seed)
+        if seed_wire != record.seed:
+            raise ValueError("NodeExpandedRecord seed is not in canonical wire form")
+        fragment = _build_growth_fragment(
+            state.flow.nodes[record.spawner_id],
+            builder_seed,
+            grow_builder,
         )
-    return _prepare_growth_transition(
-        state,
-        record,
-        fragment,
-        actual_digest=actual_digest,
-        validated_fragment=validated_fragment,
-    )
+        validated_fragment = _validate_growth_fragment(state, fragment)
+        actual_digest = expansion_digest(fragment)
+        if actual_digest != record.topology_digest:
+            raise ValueError(
+                "NodeExpandedRecord topology digest mismatch: "
+                f"recorded {record.topology_digest!r}, rebuilt {actual_digest!r}"
+            )
+        return _prepare_growth_transition(
+            state,
+            record,
+            fragment,
+            actual_digest=actual_digest,
+            validated_fragment=validated_fragment,
+        )
+    except GrowthRejected as exc:
+        raise exc.original from exc
 
 
 def _prepare_growth_transition(
@@ -1972,15 +1979,10 @@ def _build_growth_fragment(
         raise TypeError("growth spawner deepcopy must remain a Node")
     built = grow_builder(builder_spawner, builder_seed)
     if not isinstance(built, Flow):
-        _raise_node_data(TypeError("grow_builder must return a Flow"))
-    try:
-        fragment = copy.deepcopy(built)
-    except Exception as exc:  # noqa: BLE001 - builder-owned fragment detachment
-        _raise_node_data(exc)
+        raise TypeError("grow_builder must return a Flow")
+    fragment = copy.deepcopy(built)
     if not isinstance(fragment, Flow):  # defensive against a hostile deepcopy hook
-        _raise_node_data(
-            TypeError("grow_builder fragment deepcopy must remain a Flow")
-        )
+        raise TypeError("grow_builder fragment deepcopy must remain a Flow")
     return fragment
 
 
@@ -1994,7 +1996,7 @@ def _prepare_growth_topology(
     """Validate growth and materialize every final topology/state container."""
     new_node_ids, new_edge_ids = validated_fragment
     if len(state.flow.nodes) + len(new_node_ids) > MAX_TOTAL_NODES:
-        _raise_node_data(
+        _raise_growth_rejected(
             ValueError(
                 f"expansion exceeded node budget ({MAX_TOTAL_NODES}) at spawner "
                 f"{record.spawner_id!r}"
@@ -2104,22 +2106,17 @@ def _validate_growth_fragment(
     state: RunState,
     fragment: Flow,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Mark only fragment-shape rejections as node-owned transition data."""
+    """Validate live topology first, then the node-produced fragment constraints."""
     static_producer_types = {
         node_id: _node_output_type(node)
         for node_id, node in state.flow.nodes.items()
         if node.output_contract is not None
     }
-    try:
-        return _validate_growth_fragment_data(
-            state,
-            fragment,
-            static_producer_types=static_producer_types,
-        )
-    except _NodeDataError:
-        raise
-    except (TypeError, ValueError) as exc:
-        _raise_node_data(exc)
+    return _validate_growth_fragment_data(
+        state,
+        fragment,
+        static_producer_types=static_producer_types,
+    )
 
 
 def _validate_growth_fragment_data(
@@ -2135,41 +2132,63 @@ def _validate_growth_fragment_data(
     reports malformed live contracts as host invariant errors.
     """
     if type(fragment.nodes) is not dict:
-        raise TypeError("growth fragment nodes must be a dict")
+        _raise_growth_rejected(TypeError("growth fragment nodes must be a dict"))
     if type(fragment.edges) is not list:
-        raise TypeError("growth fragment edges must be a list")
+        _raise_growth_rejected(TypeError("growth fragment edges must be a list"))
     if type(fragment.wiring) is not dict:
-        raise TypeError("growth fragment wiring must be a dict")
+        _raise_growth_rejected(TypeError("growth fragment wiring must be a dict"))
     if type(fragment.start_id) is not str or not fragment.start_id:
-        raise ValueError("growth fragment start_id must be a non-empty string")
+        _raise_growth_rejected(
+            ValueError("growth fragment start_id must be a non-empty string")
+        )
     if type(fragment.end_id) is not str or not fragment.end_id:
-        raise ValueError("growth fragment end_id must be a non-empty string")
+        _raise_growth_rejected(
+            ValueError("growth fragment end_id must be a non-empty string")
+        )
     if fragment.start_id not in fragment.nodes:
-        raise ValueError("growth fragment start_id is missing from its nodes")
+        _raise_growth_rejected(
+            ValueError("growth fragment start_id is missing from its nodes")
+        )
     if fragment.end_id not in fragment.nodes:
-        raise ValueError("growth fragment end_id is missing from its nodes")
+        _raise_growth_rejected(
+            ValueError("growth fragment end_id is missing from its nodes")
+        )
 
     new_node_ids: list[str] = []
     for node_id, node in fragment.nodes.items():
         if type(node_id) is not str:
-            raise TypeError("growth fragment node IDs must be strings")
+            _raise_growth_rejected(
+                TypeError("growth fragment node IDs must be strings")
+            )
         if not node_id:
-            raise ValueError("growth fragment node IDs must be non-empty")
+            _raise_growth_rejected(
+                ValueError("growth fragment node IDs must be non-empty")
+            )
         if not isinstance(node, Node):
-            raise TypeError(f"growth fragment node {node_id!r} must be a Node")
+            _raise_growth_rejected(
+                TypeError(f"growth fragment node {node_id!r} must be a Node")
+            )
         if node.id != node_id:
-            raise ValueError(
-                f"growth fragment node key {node_id!r} does not equal node.id "
-                f"{node.id!r}"
+            _raise_growth_rejected(
+                ValueError(
+                    f"growth fragment node key {node_id!r} does not equal node.id "
+                    f"{node.id!r}"
+                )
             )
         if node_id in state.flow.nodes:
-            raise ValueError(
-                f"growth fragment node {node_id!r} collides with live topology"
+            _raise_growth_rejected(
+                ValueError(
+                    f"growth fragment node {node_id!r} collides with live topology"
+                )
             )
         new_node_ids.append(node_id)
 
     if set(fragment.wiring) != set(fragment.nodes):
-        raise ValueError("growth fragment wiring keys must exactly equal fragment nodes")
+        _raise_growth_rejected(
+            ValueError(
+                "growth fragment wiring keys must exactly equal fragment nodes"
+            )
+        )
     combined_nodes = dict(state.flow.nodes)
     combined_nodes.update(fragment.nodes)
     combined_node_ids = set(combined_nodes)
@@ -2179,62 +2198,89 @@ def _validate_growth_fragment_data(
             for node_id, node in state.flow.nodes.items()
             if node.output_contract is not None
         }
+    fragment_producer_types: dict[str, Type | None] = {}
+    for node_id, node in fragment.nodes.items():
+        contract = node.output_contract
+        if contract is None:
+            continue
+        if type(contract) is not ValueContract:
+            _raise_growth_rejected(
+                TypeError(
+                    "node output_contract must be an exact ValueContract or None, "
+                    f"got {type(contract).__name__}"
+                )
+            )
+        fragment_producer_types[node_id] = _node_output_type(node)
     producer_types = dict(static_producer_types)
-    producer_types.update(
-        {
-            node_id: _node_output_type(node)
-            for node_id, node in fragment.nodes.items()
-            if node.output_contract is not None
-        }
-    )
+    producer_types.update(fragment_producer_types)
     for node_id, node in fragment.nodes.items():
         for attribute in ("commit_as", "origin_id"):
             target = getattr(node, attribute)
             if target is not None and type(target) is not str:
-                raise TypeError(
-                    f"growth fragment node {node_id!r} {attribute} must be a "
-                    "string or None"
+                _raise_growth_rejected(
+                    TypeError(
+                        f"growth fragment node {node_id!r} {attribute} must be a "
+                        "string or None"
+                    )
                 )
             if target == "":
-                raise ValueError(
-                    f"growth fragment node {node_id!r} {attribute} must be non-empty"
+                _raise_growth_rejected(
+                    ValueError(
+                        f"growth fragment node {node_id!r} {attribute} must be non-empty"
+                    )
                 )
             if target is not None and target not in combined_node_ids:
-                raise ValueError(
-                    f"growth fragment node {node_id!r} {attribute} target "
-                    f"{target!r} does not exist"
+                _raise_growth_rejected(
+                    ValueError(
+                        f"growth fragment node {node_id!r} {attribute} target "
+                        f"{target!r} does not exist"
+                    )
                 )
         wiring = fragment.wiring[node_id]
         if type(wiring) is not dict or any(type(key) is not str for key in wiring):
-            raise TypeError(
-                f"growth fragment wiring for {node_id!r} must be a string-keyed dict"
+            _raise_growth_rejected(
+                TypeError(
+                    f"growth fragment wiring for {node_id!r} must be a string-keyed dict"
+                )
             )
         params = node.params if node.params is not None else []
         if type(params) is not list:
-            raise TypeError(f"growth fragment node {node_id!r} params must be a list")
+            _raise_growth_rejected(
+                TypeError(
+                    f"growth fragment node {node_id!r} params must be a list"
+                )
+            )
         declared: dict[str, bool] = {}
         for param in params:
             if type(param) is not Parameter:
-                raise TypeError(
-                    f"growth fragment node {node_id!r} params must contain Parameter values, "
-                    f"got {type(param).__name__}"
+                _raise_growth_rejected(
+                    TypeError(
+                        f"growth fragment node {node_id!r} params must contain "
+                        f"Parameter values, got {type(param).__name__}"
+                    )
                 )
             if type(param.name) is not str or not param.name:
-                raise ValueError(
-                    f"growth fragment node {node_id!r} has an invalid param name"
+                _raise_growth_rejected(
+                    ValueError(
+                        f"growth fragment node {node_id!r} has an invalid param name"
+                    )
                 )
             if param.name in declared:
-                raise ValueError(
-                    f"growth fragment node {node_id!r} has duplicate param "
-                    f"{param.name!r}"
+                _raise_growth_rejected(
+                    ValueError(
+                        f"growth fragment node {node_id!r} has duplicate param "
+                        f"{param.name!r}"
+                    )
                 )
             declared[param.name] = bool(param.required)
         reserved = node.reserved_wiring_keys()
         if type(reserved) is not set or any(
             type(key) is not str or not key for key in reserved
         ):
-            raise TypeError(
-                f"growth fragment node {node_id!r} reserved wiring keys are invalid"
+            _raise_growth_rejected(
+                TypeError(
+                    f"growth fragment node {node_id!r} reserved wiring keys are invalid"
+                )
             )
         actual = set(wiring)
         allowed = set(declared) | reserved
@@ -2244,10 +2290,13 @@ def _validate_growth_fragment_data(
             name for name, required in declared.items() if required and name not in actual
         }
         if extras or missing_reserved or missing_required:
-            raise ValueError(
-                f"growth fragment node {node_id!r} wiring parity failed: "
-                f"extra={sorted(extras)!r}, missing_reserved={sorted(missing_reserved)!r}, "
-                f"missing_required={sorted(missing_required)!r}"
+            _raise_growth_rejected(
+                ValueError(
+                    f"growth fragment node {node_id!r} wiring parity failed: "
+                    f"extra={sorted(extras)!r}, "
+                    f"missing_reserved={sorted(missing_reserved)!r}, "
+                    f"missing_required={sorted(missing_required)!r}"
+                )
             )
         _validate_growth_wiring_refs(
             node_id,
@@ -2263,39 +2312,57 @@ def _validate_growth_fragment_data(
     seen_edge_ids: set[str] = set()
     for edge in fragment.edges:
         if type(edge) is not Edge:
-            raise TypeError("growth fragment edges must contain only Edge values")
+            _raise_growth_rejected(
+                TypeError("growth fragment edges must contain only Edge values")
+            )
         if type(edge.id) is not str or not edge.id:
-            raise ValueError("growth fragment edge IDs must be non-empty strings")
+            _raise_growth_rejected(
+                ValueError("growth fragment edge IDs must be non-empty strings")
+            )
         if edge.id in seen_edge_ids:
-            raise ValueError(f"growth fragment edge ID {edge.id!r} is duplicated")
+            _raise_growth_rejected(
+                ValueError(f"growth fragment edge ID {edge.id!r} is duplicated")
+            )
         if edge.id in live_edge_ids:
-            raise ValueError(
-                f"growth fragment edge {edge.id!r} collides with live topology"
+            _raise_growth_rejected(
+                ValueError(
+                    f"growth fragment edge {edge.id!r} collides with live topology"
+                )
             )
         for attribute in ("source_handle", "input_group"):
             value = getattr(edge, attribute)
             if value is not None and type(value) is not str:
-                raise TypeError(
-                    f"growth fragment edge {edge.id!r} {attribute} must be a "
-                    "string or None"
+                _raise_growth_rejected(
+                    TypeError(
+                        f"growth fragment edge {edge.id!r} {attribute} must be a "
+                        "string or None"
+                    )
                 )
             if value == "":
-                raise ValueError(
-                    f"growth fragment edge {edge.id!r} {attribute} must be non-empty"
+                _raise_growth_rejected(
+                    ValueError(
+                        f"growth fragment edge {edge.id!r} {attribute} must be non-empty"
+                    )
                 )
         for attribute in ("optional", "ordering"):
             if type(getattr(edge, attribute)) is not bool:
-                raise TypeError(
-                    f"growth fragment edge {edge.id!r} {attribute} must be a bool"
+                _raise_growth_rejected(
+                    TypeError(
+                        f"growth fragment edge {edge.id!r} {attribute} must be a bool"
+                    )
                 )
         if type(edge.from_) is not str or edge.from_ not in combined_node_ids:
-            raise ValueError(
-                f"growth fragment edge {edge.id!r} has unknown source {edge.from_!r}"
+            _raise_growth_rejected(
+                ValueError(
+                    f"growth fragment edge {edge.id!r} has unknown source {edge.from_!r}"
+                )
             )
         if type(edge.to) is not str or edge.to not in fragment.nodes:
-            raise ValueError(
-                f"growth fragment edge {edge.id!r} must target a fragment node, "
-                f"found {edge.to!r}"
+            _raise_growth_rejected(
+                ValueError(
+                    f"growth fragment edge {edge.id!r} must target a fragment node, "
+                    f"found {edge.to!r}"
+                )
             )
         seen_edge_ids.add(edge.id)
         new_edge_ids.append(edge.id)
@@ -2326,8 +2393,11 @@ def _validate_growth_reachability(fragment: Flow) -> None:
         pending.extend(adjacency[node_id])
     unreachable = sorted(set(fragment.nodes) - reachable)
     if unreachable:
-        raise ValueError(
-            f"growth fragment nodes are unreachable from its start: {unreachable!r}"
+        _raise_growth_rejected(
+            ValueError(
+                "growth fragment nodes are unreachable from its start: "
+                f"{unreachable!r}"
+            )
         )
 
 
@@ -2347,9 +2417,10 @@ def _validate_growth_wiring_refs(
         try:
             paths = expr_refs_of(source)
         except ExpressionError as exc:
-            raise ValueError(
+            error = ValueError(
                 f"growth fragment node {node_id!r} wiring {param!r} is invalid: {exc}"
-            ) from exc
+            )
+            raise GrowthRejected(error) from exc
         for path in paths:
             extra_heads = (
                 ("item",)
@@ -2364,8 +2435,11 @@ def _validate_growth_wiring_refs(
                 producer_types,
             )
             if error is not None:
-                raise ValueError(
-                    f"growth fragment node {node_id!r} wiring {param!r}: {error}"
+                _raise_growth_rejected(
+                    ValueError(
+                        f"growth fragment node {node_id!r} wiring {param!r}: "
+                        f"{error}"
+                    )
                 )
 
 
@@ -2389,7 +2463,9 @@ def _reject_growth_cycle(node_ids: set[str], edges: list[Edge]) -> None:
                 ready.append(successor)
     if visited != len(node_ids):
         stuck = sorted(node_id for node_id, degree in in_degree.items() if degree)
-        raise ValueError(f"growth fragment creates a cycle involving {stuck!r}")
+        _raise_growth_rejected(
+            ValueError(f"growth fragment creates a cycle involving {stuck!r}")
+        )
 
 
 def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
@@ -2407,7 +2483,7 @@ def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
         raise ValueError(f"spawner {spawner_id!r} has an invalid parent depth")
     depth = parent_depth + delta
     if delta > 0 and depth > MAX_REF_DEPTH:
-        _raise_node_data(
+        _raise_growth_rejected(
             ValueError(
                 f"expansion exceeded MAX_REF_DEPTH ({MAX_REF_DEPTH}) at "
                 f"{spawner_id!r}"
@@ -2422,18 +2498,13 @@ def _validate_growth_prune(
     prune_ids: frozenset[str],
     new_node_ids: frozenset[str],
 ) -> None:
-    """Mark only unsafe node-requested prunes as outcome-data errors."""
-    try:
-        _validate_growth_prune_data(
-            state,
-            spawner_id,
-            prune_ids,
-            new_node_ids,
-        )
-    except _NodeDataError:
-        raise
-    except (TypeError, ValueError) as exc:
-        _raise_node_data(exc)
+    """Validate explicit node-requested prune safety constraints."""
+    _validate_growth_prune_data(
+        state,
+        spawner_id,
+        prune_ids,
+        new_node_ids,
+    )
 
 
 def _validate_growth_prune_data(
@@ -2447,19 +2518,32 @@ def _validate_growth_prune_data(
     spawner = state.flow.nodes[spawner_id]
     for node_id in prune_ids:
         if node_id not in state.flow.nodes:
-            raise ValueError(f"growth prune node {node_id!r} does not exist")
+            _raise_growth_rejected(
+                ValueError(f"growth prune node {node_id!r} does not exist")
+            )
         if node_id in (state.flow.start_id, state.flow.end_id):
-            raise ValueError(f"growth cannot prune top-level boundary {node_id!r}")
+            _raise_growth_rejected(
+                ValueError(f"growth cannot prune top-level boundary {node_id!r}")
+            )
         if node_id in new_node_ids:
-            raise ValueError(f"growth cannot prune new fragment node {node_id!r}")
+            _raise_growth_rejected(
+                ValueError(f"growth cannot prune new fragment node {node_id!r}")
+            )
         if node_id in state.initial_static_ids:
-            raise ValueError(f"growth cannot prune initial static node {node_id!r}")
+            _raise_growth_rejected(
+                ValueError(f"growth cannot prune initial static node {node_id!r}")
+            )
         if node_id in ready_ids:
-            raise ValueError(f"growth cannot prune ready node {node_id!r}")
+            _raise_growth_rejected(
+                ValueError(f"growth cannot prune ready node {node_id!r}")
+            )
         if node_id in state.in_flight:
             if node_id != spawner_id:
-                raise ValueError(
-                    f"growth cannot prune unrelated in-flight node {node_id!r}"
+                _raise_growth_rejected(
+                    ValueError(
+                        "growth cannot prune unrelated in-flight node "
+                        f"{node_id!r}"
+                    )
                 )
             origin_id = spawner.origin_id
             if not (
@@ -2470,8 +2554,11 @@ def _validate_growth_prune_data(
                 and origin_id in state.flow.nodes
                 and origin_id not in prune_ids
             ):
-                raise ValueError(
-                    f"growth spawner {spawner_id!r} is not a self-prunable LOOP clone"
+                _raise_growth_rejected(
+                    ValueError(
+                        f"growth spawner {spawner_id!r} is not a "
+                        "self-prunable LOOP clone"
+                    )
                 )
             continue
         if state.node_state.get(node_id) not in (
@@ -2479,8 +2566,10 @@ def _validate_growth_prune_data(
             NodeState.SKIPPED,
             NodeState.EXPANDED,
         ):
-            raise ValueError(
-                f"growth prune node {node_id!r} must be settled dynamic overlay"
+            _raise_growth_rejected(
+                ValueError(
+                    f"growth prune node {node_id!r} must be settled dynamic overlay"
+                )
             )
 
 
@@ -2489,13 +2578,8 @@ def _validate_prune_dependencies(
     fragment: Flow,
     prune_ids: frozenset[str],
 ) -> None:
-    """Mark node-requested prune dependency conflicts as outcome-data errors."""
-    try:
-        _validate_prune_dependencies_data(state, fragment, prune_ids)
-    except _NodeDataError:
-        raise
-    except (TypeError, ValueError) as exc:
-        _raise_node_data(exc)
+    """Validate explicit node-requested prune dependency constraints."""
+    _validate_prune_dependencies_data(state, fragment, prune_ids)
 
 
 def _validate_prune_dependencies_data(
@@ -2518,19 +2602,27 @@ def _validate_prune_dependencies_data(
     combined_wiring.update(fragment.wiring)
     for edge in [*state.flow.edges, *fragment.edges]:
         if edge.from_ in prune_ids and edge.to in dependent_ids:
-            raise ValueError(
-                f"surviving node {edge.to!r} depends on pruned edge source "
-                f"{edge.from_!r}"
+            _raise_growth_rejected(
+                ValueError(
+                    f"surviving node {edge.to!r} depends on pruned edge source "
+                    f"{edge.from_!r}"
+                )
             )
     for node_id in dependent_ids:
         node = combined_nodes[node_id]
         if node.commit_as in prune_ids:
-            raise ValueError(
-                f"surviving node {node_id!r} commits to pruned node {node.commit_as!r}"
+            _raise_growth_rejected(
+                ValueError(
+                    f"surviving node {node_id!r} commits to pruned node "
+                    f"{node.commit_as!r}"
+                )
             )
         if node.origin_id in prune_ids:
-            raise ValueError(
-                f"surviving node {node_id!r} has pruned origin {node.origin_id!r}"
+            _raise_growth_rejected(
+                ValueError(
+                    f"surviving node {node_id!r} has pruned origin "
+                    f"{node.origin_id!r}"
+                )
             )
         for source in combined_wiring.get(node_id, {}).values():
             source = binding_source(source)
@@ -2544,8 +2636,11 @@ def _validate_prune_dependencies_data(
                 ) from exc
             for path in paths:
                 if path.split(".", 1)[0] in prune_ids:
-                    raise ValueError(
-                        f"surviving node {node_id!r} wiring depends on pruned node"
+                    _raise_growth_rejected(
+                        ValueError(
+                            f"surviving node {node_id!r} wiring depends on "
+                            "pruned node"
+                        )
                     )
 
 

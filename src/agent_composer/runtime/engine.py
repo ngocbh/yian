@@ -17,7 +17,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
-from agent_composer.compile.model import Flow
+from agent_composer.compile.model import GrowthRejected
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import RunFailed, SourceRange, SourceSpan, StreamChunk
 from agent_composer.nodes.base import Grow, Output, Route, _HostStop
@@ -53,14 +53,6 @@ class _RecordedCompletion:
 
     node_id: str
     future: Future
-
-
-class _GrowBuilderError(Exception):
-    """Keep an injected builder exception distinct from reducer programming errors."""
-
-    def __init__(self, original: Exception) -> None:
-        super().__init__(str(original))
-        self.original = original
 
 
 class FlowEngine:
@@ -327,30 +319,16 @@ class FlowEngine:
                     self.state,
                     node_id,
                     outcome,
-                    self._build_growth,
+                    self.grow_builder,
                 )
-            except _GrowBuilderError as wrapped:
-                prepared = self._prepare_data_failure(
+            except GrowthRejected as wrapped:
+                prepared = self._prepare_contract_failure(
                     node_id,
-                    wrapped.original,
-                    traceback_text=self._format_exception(wrapped.original),
-                )
-            except _NodeDataError as wrapped:
-                prepared = self._prepare_data_failure(
-                    node_id,
+                    "contract.growth",
                     wrapped.original,
                     traceback_text=self._format_exception(wrapped.original),
                 )
         return commit_prepared(self.log, self.state, prepared)
-
-    def _build_growth(self, spawner: Any, seed: Any) -> Flow:
-        """Call only the injected growth seam under a distinct failure boundary."""
-        try:
-            return self.grow_builder(spawner, seed)
-        except _HostStop:
-            raise
-        except Exception as exc:  # noqa: BLE001 - injected node-data builder boundary
-            raise _GrowBuilderError(exc) from exc
 
     def _prepare_failure(
         self,
@@ -406,29 +384,6 @@ class FlowEngine:
             failure,
             locator=locator,
             range=range_,
-        )
-
-    def _prepare_data_failure(
-        self,
-        node_id: str,
-        exception: Exception,
-        *,
-        traceback_text: str | None = None,
-        fallback_locator: SourceSpan | None = None,
-    ) -> PreparedTransition:
-        """Prepare the legacy view for growth rejection pending its classification."""
-        locator = getattr(exception, "locator", None) or fallback_locator
-        range_ = getattr(exception, "range", None)
-        return prepare_node_failed(
-            self.state,
-            node_id,
-            str(exception),
-            error_type=type(exception).__name__,
-            locator=locator,
-            range=range_,
-            traceback=(
-                traceback_text if traceback_text is not None else _tb.format_exc()
-            ),
         )
 
     @staticmethod

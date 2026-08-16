@@ -431,12 +431,16 @@ def validate_node_asserts(
         node.pre_assert_ranges = pre_r
         node.post_assert_ranges = post_r
     if errors:
-        first_range = next((rng for _, _, rng in errors if rng is not None), None)
-        first_line = (
-            None
-            if first_range is not None
-            else next((ln for _, ln, _ in errors if ln is not None), None)
+        first_line, first_range = next(
+            (
+                (line, error_range)
+                for _, line, error_range in errors
+                if line is not None or error_range is not None
+            ),
+            (None, None),
         )
+        if first_range is not None:
+            first_line = None
         raise LoadError(
             "flow has invalid node asserts:\n  "
             + "\n  ".join(msg for msg, _, _ in errors),

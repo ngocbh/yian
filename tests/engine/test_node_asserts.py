@@ -173,6 +173,36 @@ def test_node_assert_error_falls_back_to_the_descriptor_range():
     assert caught.value.line == node_range.start_line
 
 
+def test_node_assert_aggregate_location_belongs_to_its_first_error():
+    """A later range never replaces the first message's line-only location."""
+    later_range = SourceRange(20, 3, 20, 19)
+    descriptors = {
+        "first": SimpleNamespace(
+            asserts=["${missing_first} > 0"],
+            assert_ranges=[],
+            field_ranges={},
+            range=None,
+        ),
+        "later": SimpleNamespace(
+            asserts=["${missing_later} > 0"],
+            assert_ranges=[later_range],
+            field_ranges={},
+            range=later_range,
+        ),
+    }
+    nodes = {"first": Node("first"), "later": Node("later")}
+
+    with pytest.raises(LoadError, match="missing_first") as caught:
+        validate_node_asserts(
+            nodes,
+            descriptors,
+            node_lines={"first": 4, "later": 20},
+        )
+
+    assert caught.value.line == 4
+    assert caught.value.range is None
+
+
 def test_reject_pool_head_ref():
     with pytest.raises(LoadError, match="node-local"):
         load_flow(_flow(["${input.v} > 0"]))

@@ -135,7 +135,9 @@ def test_existing_explicit_log_is_rejected_before_input_or_provider_side_effects
     path = tmp_path / "existing.jsonl"
     path.write_text("keep")
     calls: list[str] = []
-    monkeypatch.setattr(run_cli, "_prompt_missing", _fail_if_called("input", calls))
+    monkeypatch.setattr(
+        run_cli, "_gather_missing_inputs", _fail_if_called("input", calls)
+    )
     monkeypatch.setattr(
         run_cli,
         "_ensure_provider_keys",
@@ -159,7 +161,9 @@ def test_dangling_explicit_log_symlink_is_rejected_before_side_effects(
     path = tmp_path / "dangling.jsonl"
     path.symlink_to(tmp_path / "missing-target.jsonl")
     calls: list[str] = []
-    monkeypatch.setattr(run_cli, "_prompt_missing", _fail_if_called("input", calls))
+    monkeypatch.setattr(
+        run_cli, "_gather_missing_inputs", _fail_if_called("input", calls)
+    )
     monkeypatch.setattr(
         run_cli,
         "_ensure_provider_keys",
@@ -197,7 +201,9 @@ def test_resume_rejects_fresh_options_before_input_or_provider_side_effects(
     (tmp_path / "inputs.json").write_text('{"topic": "new"}')
     calls: list[str] = []
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(run_cli, "_prompt_missing", _fail_if_called("input", calls))
+    monkeypatch.setattr(
+        run_cli, "_gather_missing_inputs", _fail_if_called("input", calls)
+    )
     monkeypatch.setattr(
         run_cli,
         "_ensure_provider_keys",
@@ -223,7 +229,9 @@ def test_missing_resume_log_is_rejected_before_command_side_effects(
     """Typer rejects a missing recovery authority before entering the command."""
     flow = _write_flow(tmp_path)
     calls: list[str] = []
-    monkeypatch.setattr(run_cli, "_prompt_missing", _fail_if_called("input", calls))
+    monkeypatch.setattr(
+        run_cli, "_gather_missing_inputs", _fail_if_called("input", calls)
+    )
     monkeypatch.setattr(
         run_cli,
         "_ensure_provider_keys",
@@ -251,7 +259,9 @@ def test_terminal_resume_is_read_only_and_skips_fresh_side_effects(
     run_flow(loaded, {"topic": "mountains"}, log=log, run_id="terminal-run")
     before = log.read_bytes()
     calls: list[str] = []
-    monkeypatch.setattr(run_cli, "_prompt_missing", _fail_if_called("input", calls))
+    monkeypatch.setattr(
+        run_cli, "_gather_missing_inputs", _fail_if_called("input", calls)
+    )
     monkeypatch.setattr(
         run_cli,
         "_ensure_provider_keys",
@@ -286,7 +296,9 @@ def test_corrupt_resume_is_a_clean_cli_error(
     log = tmp_path / "corrupt.jsonl"
     log.write_text("not-json\n")
     calls: list[str] = []
-    monkeypatch.setattr(run_cli, "_prompt_missing", _fail_if_called("input", calls))
+    monkeypatch.setattr(
+        run_cli, "_gather_missing_inputs", _fail_if_called("input", calls)
+    )
     monkeypatch.setattr(
         run_cli,
         "_ensure_provider_keys",
@@ -359,7 +371,9 @@ def test_unfinished_resume_preserves_or_overrides_only_future_workers(
         )
 
     calls: list[str] = []
-    monkeypatch.setattr(run_cli, "_prompt_missing", _fail_if_called("input", calls))
+    monkeypatch.setattr(
+        run_cli, "_gather_missing_inputs", _fail_if_called("input", calls)
+    )
     monkeypatch.setattr(
         run_cli,
         "_ensure_provider_keys",

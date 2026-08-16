@@ -5,7 +5,7 @@ recovers them from a durable log, drives the flow to a terminal state, and
 prints the output.
 
 ```console
-ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--log PATH] [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
+ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
 ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
 ```
 
@@ -47,14 +47,16 @@ transcript, that restart gets a separate log rather than reusing the failed run.
 
 ## Supplying inputs
 
-A fresh flow declares typed `input:` fields. You can supply them three ways, and
-they layer in this order (later overrides earlier):
+A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
+(later overrides earlier):
 
 1. **`--inputs file.json`** — a JSON object of `{ "key": value, ... }`.
 2. **`--input k=v`** — one input, repeatable. Values arrive as strings and are
    coerced, where supported, against each input's declared type at the run boundary.
    A default applied by START was already validated at load and is not string-coerced.
-3. **Interactive prompt** — each declared input not already supplied is prompted for.
+
+When stdin is an interactive TTY, `ac` then prompts for each declaration still
+missing.
 
 ```console
 # all from flags
@@ -63,7 +65,7 @@ ac run examples/decision-brief.yaml --input question="Adopt a monorepo?" --input
 # from a JSON file, with one override
 ac run flow.yaml --inputs base.json --input audience="execs"
 
-# supply nothing — get prompted for each missing input
+# in an interactive terminal, supply nothing and get prompted for each missing input
 ac run examples/hello.yaml
 ```
 
@@ -85,8 +87,8 @@ A flow with no `name`/`description`/`version` prints no banner.
 
 ### The interactive prompt
 
-When a declared input is missing, `ac` prompts for it. The widget follows its
-resolved type:
+When stdin is an interactive TTY, `ac` prompts for each declared input still
+missing. The widget follows its resolved type:
 
 - a required `bool` → a yes/no confirm,
 - an optional/defaulted `bool` → a select containing `↩ Omit input` or
@@ -114,18 +116,22 @@ null, whitespace-only strings, or structured list/object values, use `--inputs`
 JSON. Cancelling a prompt cancels the run.
 
 !!! note
-    The prompt needs a real terminal (TTY). In a non-interactive context
-    (a CI job, a piped command, `srun` without a pty), supply every declared input
-    via `--input` / `--inputs`; otherwise `ac` still attempts to prompt for a
-    missing optional/defaulted field.
+    Initial input prompts need a real terminal (TTY). In a non-interactive context
+    (a CI job, a piped command, `srun` without a pty), missing optional/defaulted
+    declarations stay absent so START applies defaults or retains optional absence.
+    If required declarations are missing, `ac` reports all of them and exits with
+    code `2` before provider or run-log setup; supply them through `--input` or
+    `--inputs`.
 
 ## Blocking interactions
 
 `human_input` and an agent's authored `ask_user` tool are blocking interactions
-inside live node calls. `ac` runs the flow behind a main-thread terminal broker:
-the node's worker waits, the broker collects the answer, and the answer returns
-into that same live node call. A `human_input` always asks; an agent calls
-`ask_user` only when its model chooses to.
+inside live node calls. They are separate from initial input gathering and are
+unchanged by its non-TTY omission policy. `ac` runs the flow behind a main-thread
+terminal broker: the node's worker waits, the broker reads the answer from the
+host input stream, and the answer returns into that same live node call. A
+`human_input` always asks; an agent calls `ask_user` only when its model chooses
+to.
 
 ```console
 ac run examples/human-approval.yaml --input task="Plan a team offsite"
@@ -196,7 +202,7 @@ log before publishing the progress event that the CLI renders.
 | Flow failed to compile (bad YAML) | `1` (located error printed to stderr) |
 | Run-log creation or recovery failed | `1` (concise error printed to stderr) |
 | Run cancelled at the input prompt | `1` |
-| Invalid option or forbidden resume combination | `2` |
+| Invalid CLI input (including a forbidden resume combination or required inputs missing without a TTY) | `2` |
 | Run interrupted with Ctrl-C during execution | `130` |
 
 ## Compile errors

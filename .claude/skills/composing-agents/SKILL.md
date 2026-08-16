@@ -429,11 +429,18 @@ agent `entry:`/`controls:` field or event-mode WAIT.
 ## Validate & run
 - **Quick validate** (loads + compiles, no model): `ac run <flow>.yaml` will load
   first; or from Python `load_flow(text, search_paths=[flow_dir])`.
-- **Run:** `ac run <flow>.yaml --input k=v [--inputs file.json]`. Every missing
-  declared input is prompted; optional/defaulted prompts can be omitted so START
-  applies an exact authored default when present or retains optional absence.
-  `human_input` and `ask_user` requests are served by the host while the run remains
-  live. WAIT also remains in the live run.
+- **Run:** `ac run <flow>.yaml [--inputs file.json] [--input k=v]...`. JSON inputs
+  load first; repeatable `--input` flags override individual keys. With an
+  interactive stdin (TTY), every declaration still missing is prompted; an omitted
+  optional/defaulted prompt stays absent so START owns its default or optional
+  absence. Without a TTY, missing optional/defaulted declarations stay absent, while
+  missing required declarations are rejected together as invalid CLI input (exit
+  code `2`) before provider or run-log setup and must be supplied through
+  `--input`/`--inputs`.
+  `human_input` and `ask_user` are separate live-run interactions, unchanged by
+  the initial-input omission policy. The host broker reads their answers from its
+  input stream while the run remains live. WAIT does not prompt and also remains
+  in the live run.
 - A flow with only `code`/`tool` nodes runs with **no provider**; any `agent` node
   needs a provider/model configured (see `docs/installation.md`).
 

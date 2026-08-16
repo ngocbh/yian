@@ -299,8 +299,8 @@ def test_run_error_uses_loaded_canonical_diagnosis(monkeypatch):
 
 
 def test_run_error_boxes_failing_node(monkeypatch):
-    # e07 omits `as_of` -> the `report` node's `:?` fails at bind time. RunResult carries
-    # its canonical Failure plus an input locator, so the box points at the binding.
+    # e07 omits `as_of` -> the canonical failure trace points at the failing
+    # `:?` binding.
     flow = _ERRORS / "e07-required-missing.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
@@ -314,9 +314,9 @@ def test_run_error_boxes_failing_node(monkeypatch):
     assert "as_of is required for the report" in out
 
 
-def test_run_error_kind_fallback_for_code_raise(monkeypatch):
-    # e20's code callable raises with no precise locator -> the result's node id falls
-    # back to the node-kind best sub-line: a code node's `code:` field (not the header, not plain).
+def test_run_error_uses_reference_code_origin(monkeypatch):
+    # A referenced CODE failure carries its authored `code:` scalar in the canonical
+    # origin trace; no CLI kind fallback is involved.
     flow = _ERRORS / "e20-code-raises.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
@@ -325,12 +325,13 @@ def test_run_error_kind_fallback_for_code_raise(monkeypatch):
     buf = _sink(monkeypatch)
     _render_run_error(result, loaded)
     out = buf.getvalue()
-    assert "╭" in out and "code:" in out           # boxed at the `code:` field
+    assert "e20-code-raises.yaml:12" in out
+    assert "╭" in out
 
 
 def test_run_error_boxes_boundary_assert_line(monkeypatch):
-    # e18's boundary assert fails before any node runs; in phase 2 the RunFailed carries a
-    # flow-level assert locator -> the failure is now BOXED at the `asserts:` line (was plain).
+    # e18's boundary assert fails before any node runs; its authored origin points
+    # at the exact `asserts:` expression.
     flow = _ERRORS / "e18-false-boundary-assert.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
@@ -345,8 +346,7 @@ def test_run_error_boxes_boundary_assert_line(monkeypatch):
 
 def test_run_error_boxes_code_wrong_type_output(monkeypatch):
     # e21's code node returns a value that fails its declared `output: int` -> the typed write
-    # boundary rejects it. The RunResult carries a `field` locator -> BOXED at the
-    # node's `output:` declaration (not a plain message, not the node header).
+    # boundary rejects it and attributes the failure to the `output:` declaration.
     flow = _ERRORS / "e21-code-wrong-type.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
@@ -360,8 +360,7 @@ def test_run_error_boxes_code_wrong_type_output(monkeypatch):
 
 
 def test_run_error_boxes_flow_input_line(monkeypatch):
-    # e08's `window` cannot coerce to int, so its generic input locator selects the
-    # `window:` declaration line.
+    # e08's `window` cannot coerce to int, so its origin selects the declaration.
     flow = _ERRORS / "e08-input-type-mismatch.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
@@ -375,8 +374,7 @@ def test_run_error_boxes_flow_input_line(monkeypatch):
 
 
 def test_run_error_plain_when_unlocatable(monkeypatch):
-    # A failure with no node id and no locator has nowhere
-    # to point -> the plain `run <status>: <message>` line, no frame.
+    # A failure with no authored origin remains a semantic message with no frame.
     flow = _ERRORS / "e18-false-boundary-assert.yaml"
     text = flow.read_text()
     result = RunResult(
@@ -396,10 +394,9 @@ def test_run_error_plain_when_unlocatable(monkeypatch):
     assert "╭" not in out                          # no boxed frame
 
 
-def test_run_error_boxes_namespaced_failure_at_owning_call(monkeypatch):
-    # e24's code node raises INSIDE a called child, so Failure.node_id is runtime-namespaced
-    # (`run/boom`) — a line the parser never indexes. The renderer must fall back to the OWNING
-    # top-level call node (`run`) and still box a real source frame, not degrade to a bare line.
+def test_run_error_renders_namespaced_failure_origin_trace(monkeypatch):
+    # The failure trace carries the owning CALL site despite the runtime-namespaced
+    # node id (`run/boom`).
     flow = _ERRORS / "e24-nested-code-raise.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
@@ -413,10 +410,8 @@ def test_run_error_boxes_namespaced_failure_at_owning_call(monkeypatch):
 
 
 def test_run_error_boxes_loop_max_exceeded_at_loop_node(monkeypatch):
-    # The loop runaway guard raises `LoopMaxExceeded` from a driver CLONE whose id carries a
-    # `~<k>` suffix (`polish~5`) — a line the parser never indexes and which has no locator. The
-    # renderer must strip the clone suffix, resolve to the authored `polish:` loop node, and box a
-    # real source frame instead of degrading to a bare `run failed:` line.
+    # The LOOP origin remains stable even when the runtime driver id carries a
+    # respawn suffix (`polish~5`).
     flow = _SEEDS / "28-refine-loop.yaml"
     text = flow.read_text()
     loaded = load_flow(text, source_label=flow.name)
@@ -466,11 +461,10 @@ def test_run_error_traceback_only_under_engine_trace(monkeypatch):
     assert "intentional CODE failure" in out         # the originating Python exception
 
 
-# --- _render_run_error: a MULTI-FRAME call traceback into the called child(ren) ----- #
+# --- _render_run_error: ordered canonical frames across child flows ----------------- #
 def test_run_error_multi_frame_stack_into_def(monkeypatch):
-    # e24's code raises inside a called `defs:` child (`run/boom`). With the loaded IR the
-    # renderer descends ONE level: a stack of two boxed frames — the top-level `run:` call
-    # node in this file, then the failing `boom` node's `code:` line in `defs:inner`.
+    # e24's trace resolves the top-level CALL site followed by the failing CODE
+    # origin inside `defs:inner`.
     flow = _ERRORS / "e24-nested-code-raise.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)

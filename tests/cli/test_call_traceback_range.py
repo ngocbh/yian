@@ -238,7 +238,8 @@ def test_caller_assert_range_is_not_attached_to_external_child(monkeypatch):
     assert "echo_child.yaml:" not in out
 
 
-def test_stale_child_range_falls_back_to_current_child_source(monkeypatch):
+def test_diagnosis_reresolves_origins_against_current_source(monkeypatch):
+    """Rendering uses current source origins, not the old runtime coordinate."""
     old_loaded = load_flow(_CALL_INPUT_FAILURE, source_label="nested.yaml")
     result = run_flow(old_loaded, {})
     assert result.range is not None and result.range.start_line == 12

@@ -1458,7 +1458,7 @@ def run(
         else:
             console.print(out)
     else:
-        # A node failure points at WHERE in the `.yaml` it raised (boxed frame), mirroring a
-        # compile error; a node-less failure (assert/input-coercion) prints the plain message.
+        # The loaded front end projects authored origins to source frames; failures
+        # without presentable origins retain their semantic message.
         _render_run_error(result, loaded, engine_trace=engine_trace)
         raise typer.Exit(code=1)

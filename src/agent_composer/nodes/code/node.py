@@ -295,7 +295,7 @@ class CodeNode(Node):
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
-        """Return the deepest authored line owned by this inline compilation.
+        """Return the most precise authored CODE origin for this failure.
 
         Traceback filenames and code-object equality are deliberately ignored:
         separately compiled code can share both. Reference mode attributes the
@@ -309,7 +309,11 @@ class CodeNode(Node):
             `OriginRef | None`: Exact line, whole CODE scalar, node, or ``None``.
         """
         if self._mode == "reference":
-            return self.code_origin or super().exception_origin(exception)
+            return (
+                self.code_origin
+                if self.code_origin is not None
+                else super().exception_origin(exception)
+            )
 
         owned_lineno: int | None = None
         traceback = exception.__traceback__

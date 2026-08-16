@@ -36,6 +36,20 @@ def _failure_origin(node: CodeNode, inputs: dict) -> OriginRef | None:
     raise AssertionError("CODE node unexpectedly succeeded")
 
 
+class _FalseyOriginRef(OriginRef):
+    """Valid origin whose truth value must not affect attribution."""
+
+    def __bool__(self):
+        return False
+
+
+class _RaisingTruthOriginRef(OriginRef):
+    """Valid origin that exposes accidental truth-value inspection."""
+
+    def __bool__(self):
+        raise AssertionError("origin truthiness must not be inspected")
+
+
 # --- classification --------------------------------------------------------------------- #
 
 
@@ -249,6 +263,21 @@ def test_reference_failure_uses_code_then_node_fallback():
     assert _failure_origin(reference, {}) is code_origin
     assert _failure_origin(without_code_origin, {}) is without_code_origin.origin
     assert _failure_origin(source_free, {}) is None
+
+
+@pytest.mark.parametrize(
+    "code_origin",
+    (_FalseyOriginRef("falsey"), _RaisingTruthOriginRef("raising")),
+)
+def test_reference_failure_does_not_inspect_origin_truthiness(code_origin):
+    node = CodeNode(
+        "reference",
+        code="tests.engine._compose_codefns:boom",
+        code_origin=code_origin,
+    )
+    node.origin = OriginRef("node:reference")
+
+    assert _failure_origin(node, {}) is code_origin
 
 
 # --- deep serialize-once check (fails AT the node) -------------------------------------- #

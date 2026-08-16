@@ -47,6 +47,41 @@ def _path_sort_key(path: ValuePath) -> tuple[tuple[int, str | int], ...]:
     )
 
 
+def _read_record_type(
+    entries: list[tuple[Any, Any, SourceCursor | None]],
+    registry: TypeRegistry,
+    *,
+    path: ValuePath,
+    diagnostics: LoadDiagnostics,
+) -> tuple[Type, list[tuple[ValuePath, SourceCursor]]]:
+    """Read normalized ``(field, value, cursor)`` entries into one record type."""
+    fields: dict[str, Type] = {}
+    sites: list[tuple[ValuePath, SourceCursor]] = []
+    for key, value, child_cursor in entries:
+        child_path = (*path, key)
+        if child_cursor is not None:
+            sites.append((child_path, child_cursor))
+        field_type, child_sites = _read_type_and_sites(
+            value,
+            registry,
+            cursor=child_cursor,
+            path=child_path,
+            diagnostics=diagnostics,
+        )
+        fields[key] = field_type
+        sites.extend(child_sites)
+    return (
+        Type(
+            kind=ValueKind.OBJECT,
+            fields=fields,
+            required=frozenset(
+                key for key, field_type in fields.items() if not field_type.nullable
+            ),
+        ),
+        sites,
+    )
+
+
 def _read_type_and_sites(
     node: Any,
     registry: TypeRegistry,
@@ -63,31 +98,18 @@ def _read_type_and_sites(
             raise diagnostics.error(f"bad type expression {node!r}: {exc}") from exc
 
     if isinstance(node, dict):
-        fields: dict[str, Type] = {}
-        sites: list[tuple[ValuePath, SourceCursor]] = []
-        for key, value in node.items():
-            child_path = (*path, key)
-            child_cursor = cursor.child(key) if cursor is not None else None
-            if child_cursor is not None:
-                sites.append((child_path, child_cursor))
-            field_type, child_sites = _read_type_and_sites(
-                value,
-                registry,
-                cursor=child_cursor,
-                path=child_path,
-                diagnostics=diagnostics,
-            )
-            fields[key] = field_type
-            sites.extend(child_sites)
-        return (
-            Type(
-                kind=ValueKind.OBJECT,
-                fields=fields,
-                required=frozenset(
-                    key for key, field_type in fields.items() if not field_type.nullable
-                ),
-            ),
-            sites,
+        return _read_record_type(
+            [
+                (
+                    key,
+                    value,
+                    cursor.child(key) if cursor is not None else None,
+                )
+                for key, value in node.items()
+            ],
+            registry,
+            path=path,
+            diagnostics=diagnostics,
         )
 
     if isinstance(node, list):
@@ -105,30 +127,14 @@ def _read_type_and_sites(
             child_cursor = item_cursor.child(key) if item_cursor is not None else None
             merged[key] = (value, child_cursor)
 
-        fields: dict[str, Type] = {}
-        sites: list[tuple[ValuePath, SourceCursor]] = []
-        for key, (value, child_cursor) in merged.items():
-            child_path = (*path, key)
-            if child_cursor is not None:
-                sites.append((child_path, child_cursor))
-            field_type, child_sites = _read_type_and_sites(
-                value,
-                registry,
-                cursor=child_cursor,
-                path=child_path,
-                diagnostics=diagnostics,
-            )
-            fields[key] = field_type
-            sites.extend(child_sites)
-        return (
-            Type(
-                kind=ValueKind.OBJECT,
-                fields=fields,
-                required=frozenset(
-                    key for key, field_type in fields.items() if not field_type.nullable
-                ),
-            ),
-            sites,
+        return _read_record_type(
+            [
+                (key, value, child_cursor)
+                for key, (value, child_cursor) in merged.items()
+            ],
+            registry,
+            path=path,
+            diagnostics=diagnostics,
         )
 
     raise diagnostics.error(

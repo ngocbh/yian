@@ -338,6 +338,29 @@ def test_gather_non_tty_reports_all_missing_required_inputs_in_order(monkeypatch
     assert captured.value.param_hint == ("--input", "--inputs")
 
 
+def test_gather_non_tty_filters_required_inputs_by_exact_key_membership(monkeypatch):
+    parameters = [
+        _parameter(
+            "none",
+            Type(kind=ValueKind.STRING, nullable=True),
+            required=True,
+        ),
+        _parameter("false", Type.scalar(ValueKind.BOOLEAN), required=True),
+        _parameter("blank", Type.scalar(ValueKind.STRING), required=True),
+        _parameter("missing", Type.scalar(ValueKind.INTEGER), required=True),
+    ]
+    monkeypatch.setitem(sys.modules, "questionary", None)
+
+    with pytest.raises(typer.BadParameter) as captured:
+        _gather_missing_inputs(
+            parameters,
+            {"none": None, "false": False, "blank": ""},
+            prompt_available=False,
+        )
+
+    assert captured.value.message == "missing required flow input: missing"
+
+
 def test_prompt_accepting_omission_preserves_start_owned_defaults(monkeypatch):
     loaded = load_flow(
         """

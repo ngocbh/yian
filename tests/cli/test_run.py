@@ -9,12 +9,14 @@ run's non-zero exit, and the `k=v` parse error.
 from __future__ import annotations
 
 from ast import literal_eval
+from io import BytesIO
 import json
 from pathlib import Path
 import re
 import sys
 
 import pytest
+import typer.testing as typer_testing
 from typer.testing import CliRunner
 
 import agent_composer.cli.run as run_cli
@@ -23,6 +25,14 @@ from agent_composer.cli import app
 runner = CliRunner()
 
 _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class _TTYBytesIO(BytesIO):
+    """Byte input stream that makes Click expose an interactive stdin."""
+
+    def isatty(self) -> bool:
+        """Report that the synthetic input stream is attached to a terminal."""
+        return True
 
 
 def _write_flow(dir_: Path, body: str) -> Path:
@@ -253,6 +263,37 @@ def test_non_tty_run_reports_all_missing_required_inputs_before_setup(
     assert "Aborted" not in output
     assert "Run log:" not in output
     assert calls == []
+
+
+def test_run_forwards_tty_prompt_availability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The command passes its actual stdin capability to input gathering."""
+    flow = _write_flow(tmp_path, ECHO_FLOW)
+    log = tmp_path / "run.jsonl"
+    prompt_availability: list[bool] = []
+
+    def gather_inputs(_decls, _have, *, prompt_available):
+        prompt_availability.append(prompt_available)
+        return {"topic": "clouds"}
+
+    def tty_input_stream(_input_value, _charset):
+        return _TTYBytesIO()
+
+    monkeypatch.setattr(run_cli, "_gather_missing_inputs", gather_inputs)
+    monkeypatch.setattr(typer_testing, "make_input_stream", tty_input_stream)
+
+    result = runner.invoke(
+        app,
+        ["run", str(flow), "--log", str(log), "--quiet"],
+        input=b"",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert prompt_availability == [True]
+    assert log.is_file()
+    assert "clouds" in result.stdout
 
 
 def test_missing_flow_file_errors(tmp_path: Path):

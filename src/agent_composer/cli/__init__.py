@@ -3,7 +3,8 @@
 `ac run FLOW.yaml` loads a Compose flow, gathers fresh inputs from flags and an
 available interactive prompt, selects and reports a durable run-log path, and drives
 it to a terminal. Without an interactive stdin, optional/defaulted declarations stay
-absent for START to resolve and missing required declarations fail before host setup.
+absent for START to resolve and missing required declarations fail before provider or
+run-log setup.
 ``--resume`` instead recovers an existing path without gathering fresh inputs or
 model configuration. The main thread owns terminal prompts/renders while a
 controller drives the flow;

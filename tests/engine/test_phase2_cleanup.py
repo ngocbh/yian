@@ -179,8 +179,6 @@ def test_final_log_only_runtime_and_public_surface():
         "log",
         "output",
         "failure",
-        "locator",
-        "range",
         "events",
     ]
 

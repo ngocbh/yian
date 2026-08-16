@@ -19,7 +19,7 @@ from typing import Any
 
 from agent_composer.compile.model import GrowthRejected
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
-from agent_composer.events import RunFailed, SourceRange, SourceSpan, StreamChunk
+from agent_composer.events import RunFailed, StreamChunk
 from agent_composer.nodes.base import Grow, Output, Route, _HostStop
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.runtime.log import RunLog
@@ -255,16 +255,11 @@ class FlowEngine:
         """Prepare node data, append its record, and apply the total reducer plan.
 
         Evaluator and dispatcher rejection paths both hand one canonical
-        ``Failure`` to the schema-2 reducer boundary.
+        ``Failure`` to the schema-3 reducer boundary.
         """
         if isinstance(outcome, EvaluationFailure):
             failure = outcome.failure
-            prepared = self._prepare_failure(
-                node_id,
-                failure,
-                locator=outcome.locator,
-                range=outcome.range,
-            )
+            prepared = self._prepare_failure(node_id, failure)
             return commit_prepared(self.log, self.state, prepared)
 
         if not isinstance(outcome, (Output, Route, Grow)):
@@ -281,22 +276,12 @@ class FlowEngine:
                     commit_as=outcome.commit_as,
                 )
             except _NodeDataError as wrapped:
-                target = outcome.commit_as
-                if target is None:
-                    target = self.state.flow.nodes[node_id].commit_as
-                if type(target) is not str or not target:
-                    target = node_id
                 prepared = self._prepare_contract_failure(
                     node_id,
                     "contract.output",
                     wrapped.original,
                     origin=wrapped.origin,
                     traceback_text=self._format_exception(wrapped.original),
-                    fallback_locator=SourceSpan(
-                        node=target,
-                        kind="field",
-                        key="output",
-                    ),
                 )
         elif isinstance(outcome, Route):
             try:
@@ -334,9 +319,6 @@ class FlowEngine:
         self,
         node_id: str,
         failure: Failure,
-        *,
-        locator: SourceSpan | None = None,
-        range: SourceRange | None = None,
     ) -> PreparedTransition:
         """Prepare one canonical failure without flattening its semantic fields."""
         if failure.node_id != node_id:
@@ -344,12 +326,7 @@ class FlowEngine:
                 "raw evaluation failure node identity mismatch: "
                 f"expected {node_id!r}, found {failure.node_id!r}"
             )
-        return prepare_node_failed(
-            self.state,
-            failure,
-            locator=locator,
-            range=range,
-        )
+        return prepare_node_failed(self.state, failure)
 
     def _prepare_contract_failure(
         self,
@@ -359,7 +336,6 @@ class FlowEngine:
         *,
         origin: OriginRef | None = None,
         traceback_text: str | None = None,
-        fallback_locator: SourceSpan | None = None,
     ) -> PreparedTransition:
         """Construct and project one expected dispatcher contract rejection."""
         node = self.state.flow.nodes[node_id]
@@ -373,14 +349,7 @@ class FlowEngine:
                 traceback_text if traceback_text is not None else _tb.format_exc()
             ),
         )
-        locator = getattr(exception, "locator", None) or fallback_locator
-        range_ = getattr(exception, "range", None)
-        return self._prepare_failure(
-            node_id,
-            failure,
-            locator=locator,
-            range=range_,
-        )
+        return self._prepare_failure(node_id, failure)
 
     @staticmethod
     def _format_exception(exception: Exception) -> str:

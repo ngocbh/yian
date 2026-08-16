@@ -23,7 +23,6 @@ import copy
 from typing import Any, Literal, TypeAlias
 
 from agent_composer.diagnostics import OriginRef
-from agent_composer.events import SourceSpan
 from agent_composer.expr import (
     ExpressionError,
     RequiredError,
@@ -43,8 +42,7 @@ class BindingError(ValueError):
 
     ``failure_code`` distinguishes expression/default/required evaluation from a
     supplied value violating its input contract. ``origin`` is the most precise
-    available authored operation. ``locator`` remains temporary compatibility
-    metadata; canonical presentation resolves the failure's origin trace.
+    available authored operation and feeds the canonical failure trace.
     """
 
     def __init__(
@@ -53,7 +51,6 @@ class BindingError(ValueError):
         *,
         failure_code: BindingFailureCode,
         origin: OriginRef | None = None,
-        locator: SourceSpan | None = None,
     ) -> None:
         """Retain one validated binder-owned semantic classification."""
         super().__init__(message)
@@ -65,7 +62,6 @@ class BindingError(ValueError):
             OriginRef(origin.key)
         self.failure_code = failure_code
         self.origin = origin
-        self.locator = locator
 
 
 def _source_origin(source: Any) -> OriginRef | None:
@@ -149,7 +145,6 @@ def apply_defaults(
                     str(exc),
                     failure_code="binding.evaluate",
                     origin=parameter.default_origin or parameter.origin,
-                    locator=SourceSpan(None, "input", parameter.name),
                 ) from exc
         output[parameter.name] = parameter.default
     return output
@@ -272,10 +267,6 @@ def bind_params(
                     value = checked.to_object()
             record[p.name] = copy.deepcopy(value)
         except BindingError as exc:
-            # Name the failing input for precise error framing; node id is stamped by
-            # eval_node's funnel (binding has no node identity here).
-            if exc.locator is None:
-                exc.locator = SourceSpan(node=None, kind="input", key=p.name)
             if exc.origin is None:
                 exc.origin = p.origin
             raise

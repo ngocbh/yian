@@ -11,7 +11,6 @@ from typing import Any, Iterator
 import pytest
 
 from agent_composer.diagnostics import Failure, OriginRef
-from agent_composer.events import SourceRange, SourceSpan
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
     NodeExpandedRecord,
@@ -74,8 +73,6 @@ def _records():
                 cause_type="ValueError",
                 traceback="Traceback (most recent call last): ...",
             ),
-            locator=SourceSpan(node="broken", kind="field", key="code"),
-            range=SourceRange(start_line=8, start_col=3, end_line=8, end_col=12),
         ),
     ]
 
@@ -110,7 +107,7 @@ def test_record_encoding_is_canonical_newline_free_and_byte_stable():
 
     assert encoded == (
         b'{"kind":"node_started","payload":{"node_id":"work"},'
-        b'"run_id":"run-canonical","schema":2,"seq":0}'
+        b'"run_id":"run-canonical","schema":3,"seq":0}'
     )
     assert not encoded.endswith(b"\n")
     assert encode_record(decode_record(encoded)) == encoded
@@ -130,14 +127,13 @@ def test_node_failure_encoding_nests_one_canonical_failure():
                 cause_type="TypeCheckError",
                 traceback=None,
             ),
-            locator=SourceSpan(node="__start__", kind="input", key="window"),
         ),
     )
 
     encoded = encode_record(envelope)
 
     assert json.loads(encoded) == {
-        "schema": 2,
+        "schema": 3,
         "run_id": "run-failure",
         "seq": 7,
         "kind": "node_failed",
@@ -153,8 +149,6 @@ def test_node_failure_encoding_nests_one_canonical_failure():
                 "cause_type": "TypeCheckError",
                 "traceback": None,
             },
-            "locator": {"node": "__start__", "kind": "input", "key": "window"},
-            "range": None,
         },
     }
     assert decode_record(encoded) == envelope
@@ -242,42 +236,42 @@ def _json_bytes(value: object) -> bytes:
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 2.0,
+            "schema": 3.0,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "run",
             "seq": -1,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "run",
             "seq": True,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "run",
             "seq": 0,
             "kind": "not_a_record",
             "payload": {},
         },
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -285,7 +279,7 @@ def _json_bytes(value: object) -> bytes:
             "unexpected": True,
         },
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -301,28 +295,28 @@ def test_decode_rejects_invalid_envelopes(wire):
     "wire",
     [
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work", "unexpected": True},
         },
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {},
         },
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": 7},
         },
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "run",
             "seq": 0,
             "kind": "node_succeeded",
@@ -333,7 +327,7 @@ def test_decode_rejects_invalid_envelopes(wire):
             },
         },
         {
-            "schema": 2,
+            "schema": 3,
             "run_id": "run",
             "seq": 0,
             "kind": "node_failed",
@@ -346,12 +340,7 @@ def test_decode_rejects_invalid_envelopes(wire):
                     "cause_type": "ValueError",
                     "traceback": None,
                 },
-                "locator": {
-                    "node": "work",
-                    "kind": "not_a_locator_kind",
-                    "key": "code",
-                },
-                "range": None,
+                "locator": None,
             },
         },
     ],
@@ -362,9 +351,9 @@ def test_decode_rejects_unknown_missing_and_wrong_payload_fields(wire):
 
 
 def _node_failure_wire() -> dict[str, Any]:
-    """Return one independently mutable valid schema-2 node-failure object."""
+    """Return one independently mutable valid schema-3 node-failure object."""
     return {
-        "schema": 2,
+        "schema": 3,
         "run_id": "run",
         "seq": 0,
         "kind": "node_failed",
@@ -377,8 +366,6 @@ def _node_failure_wire() -> dict[str, Any]:
                 "cause_type": "ValueError",
                 "traceback": "trace",
             },
-            "locator": None,
-            "range": None,
         },
     }
 
@@ -473,15 +460,26 @@ def test_decode_rejects_malformed_nested_failures(case, mutate):
         decode_record(_json_bytes(wire))
 
 
-def test_decode_rejects_schema_1_even_with_a_nested_failure():
+@pytest.mark.parametrize("field", ["locator", "range"])
+def test_schema_3_node_failure_rejects_legacy_location_fields(field):
+    """The schema-3 failure payload has one exact authority: `failure`."""
     wire = _node_failure_wire()
-    wire["schema"] = 1
+    wire["payload"][field] = None
 
     with pytest.raises(ValueError):
         decode_record(_json_bytes(wire))
 
 
-def test_decode_rejects_schema_2_flattened_failure_aliases():
+@pytest.mark.parametrize("schema", [1, 2])
+def test_decode_rejects_old_schemas_even_with_a_nested_failure(schema):
+    wire = _node_failure_wire()
+    wire["schema"] = schema
+
+    with pytest.raises(ValueError):
+        decode_record(_json_bytes(wire))
+
+
+def test_decode_rejects_flattened_failure_aliases():
     wire = _node_failure_wire()
     wire["payload"] = {
         "node_id": "work",
@@ -498,7 +496,7 @@ def test_decode_rejects_schema_2_flattened_failure_aliases():
 
 def test_decode_requires_explicit_route_terminal_failure_field():
     wire = {
-        "schema": 2,
+        "schema": 3,
         "run_id": "run",
         "seq": 0,
         "kind": "node_routed",
@@ -511,7 +509,7 @@ def test_decode_requires_explicit_route_terminal_failure_field():
 
 def test_decode_rejects_extra_nested_route_terminal_failure_field():
     wire = {
-        "schema": 2,
+        "schema": 3,
         "run_id": "run",
         "seq": 0,
         "kind": "node_routed",
@@ -536,7 +534,7 @@ def test_decode_rejects_extra_nested_route_terminal_failure_field():
 
 def test_decode_rejects_duplicate_keys_at_any_object_depth():
     duplicate_payload_key = (
-        b'{"schema":2,"run_id":"run","seq":0,"kind":"node_started",'
+        b'{"schema":3,"run_id":"run","seq":0,"kind":"node_started",'
         b'"payload":{"node_id":"first","node_id":"second"}}'
     )
 
@@ -544,10 +542,10 @@ def test_decode_rejects_duplicate_keys_at_any_object_depth():
         decode_record(duplicate_payload_key)
 
     duplicate_origin_key = (
-        b'{"schema":2,"run_id":"run","seq":0,"kind":"node_failed",'
+        b'{"schema":3,"run_id":"run","seq":0,"kind":"node_failed",'
         b'"payload":{"failure":{"code":"node.execute","message":"boom",'
         b'"node_id":"work","trace":[{"key":"one","key":"two"}],'
-        b'"cause_type":null,"traceback":null},"locator":null,"range":null}}'
+        b'"cause_type":null,"traceback":null}}}'
     )
 
     with pytest.raises(ValueError, match="duplicate JSON object key"):
@@ -642,7 +640,7 @@ def test_canonical_json_rejects_lone_unicode_surrogates_as_value_errors():
         )
     with pytest.raises(ValueError, match="Unicode surrogate"):
         decode_record(
-            '{"schema":2,"run_id":"run","seq":0,"kind":"node_started",'
+            '{"schema":3,"run_id":"run","seq":0,"kind":"node_started",'
             '"payload":{"node_id":"\\ud800"}}'
         )
 

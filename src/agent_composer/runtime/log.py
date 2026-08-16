@@ -30,7 +30,6 @@ from typing import (
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
-from agent_composer.events import SourceRange, SourceSpan
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import (
     ANY_VALUE_ADAPTER,
@@ -42,7 +41,7 @@ from agent_composer.typesys.values import (
 )
 
 
-SCHEMA_VERSION: Final = 2
+SCHEMA_VERSION: Final = 3
 """The one run-record wire schema understood by this release."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -118,11 +117,9 @@ class NodeExpandedRecord:
 
 @dataclass(frozen=True, slots=True)
 class NodeFailedRecord:
-    """Make a run terminal-failed with the captured node diagnostic."""
+    """Make a run terminal-failed with the captured semantic failure."""
 
     failure: Failure
-    locator: SourceSpan | None = None
-    range: SourceRange | None = None
 
 
 RunRecord: TypeAlias = (
@@ -602,29 +599,10 @@ class _NodeExpandedPayload(_StrictModel):
         return value
 
 
-class _SourceSpanPayload(_StrictModel):
-    """Strict JSON form of a symbolic source locator."""
-
-    node: str | None
-    kind: Literal["input", "assert", "field"]
-    key: str
-
-
-class _SourceRangePayload(_StrictModel):
-    """Strict JSON form of a concrete 1-based source range."""
-
-    start_line: int = Field(ge=1)
-    start_col: int = Field(ge=1)
-    end_line: int = Field(ge=1)
-    end_col: int = Field(ge=1)
-
-
 class _NodeFailedPayload(_StrictModel):
     """Strict wire payload for :class:`NodeFailedRecord`."""
 
     failure: _FailurePayload
-    locator: _SourceSpanPayload | None
-    range: _SourceRangePayload | None
 
 
 _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
@@ -929,8 +907,6 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                 record.failure,
                 carrier="NodeFailedRecord",
             ),
-            "locator": asdict(record.locator) if record.locator is not None else None,
-            "range": asdict(record.range) if record.range is not None else None,
         }
     else:  # protected by _kind_for_record; retained for exhaustive local reasoning
         raise TypeError(f"unsupported run record: {type(record).__name__}")
@@ -992,20 +968,8 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
         )
     if kind == "node_failed":
         failure_payload = values["failure"]
-        locator_payload = values["locator"]
-        range_payload = values["range"]
         return NodeFailedRecord(
             failure=_failure_from_payload(failure_payload),
-            locator=(
-                SourceSpan(**locator_payload)
-                if locator_payload is not None
-                else None
-            ),
-            range=(
-                SourceRange(**range_payload)
-                if range_payload is not None
-                else None
-            ),
         )
     raise ValueError(f"unknown run-record kind: {kind!r}")
 

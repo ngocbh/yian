@@ -297,15 +297,9 @@ def _capture_semantic_failures(
     captured: list[Failure] = []
     project = FlowEngine._prepare_failure
 
-    def capture(self, node_id, failure, *, locator=None, range=None):
+    def capture(self, node_id, failure):
         captured.append(failure)
-        return project(
-            self,
-            node_id,
-            failure,
-            locator=locator,
-            range=range,
-        )
+        return project(self, node_id, failure)
 
     monkeypatch.setattr(FlowEngine, "_prepare_failure", capture)
     return captured
@@ -818,11 +812,6 @@ def test_invalid_output_metadata_constructs_contract_failure_with_node_origin(
     assert events[-2].failure.node_id == "work"
     assert events[-2].failure.message == "commit_as must be a string or None"
     assert events[-2].failure.cause_type == "TypeError"
-    assert events[-2].locator == engine_module.SourceSpan(
-        node="work",
-        kind="field",
-        key="output",
-    )
     assert isinstance(events[-1], RunFailed)
     assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
 

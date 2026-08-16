@@ -62,9 +62,8 @@ children lowered by `desugar/` and assembled by `build/`.
 Load errors cross the package boundary only as `LoadError(Diagnostic)`: Compose
 resolves each retained cursor/range against its owning document before raising,
 and definition/import context becomes ordered outer frames. The CLI receives no
-separate YAML text or coordinates for load failures. Runtime failure locator/range
-fields remain temporary compatibility metadata, but CLI diagnosis reads only the
-source-neutral origin trace and the installed resolver.
+separate YAML text or coordinates for load failures. Runtime diagnosis reads only
+the source-neutral origin trace and the installed resolver.
 
 Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes`; nothing
 in the engine imports `compose`.

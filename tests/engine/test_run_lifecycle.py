@@ -26,7 +26,7 @@ import agent_composer.nodes.wait.node as wait_module
 import agent_composer.run as run_module
 from agent_composer.compile.llm_cascade import resolve_llm_cascade
 from agent_composer.compile.manifest import flow_fingerprint
-from agent_composer.compile.model import START_ID
+from agent_composer.compile.model import CompiledFlow, Edge, END_ID, START_ID
 from agent_composer.compile.origins import rebase_flow_origins
 from agent_composer.compose import ComposedFlow, load_flow
 from agent_composer.diagnostics import OriginRef
@@ -40,6 +40,9 @@ from agent_composer.events import (
     RunSucceeded,
 )
 from agent_composer.nodes.base import _HostStop
+from agent_composer.nodes.code import CodeNode
+from agent_composer.nodes.end import EndNode
+from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.log import (
     JsonlRunLog,
     MemoryRunLog,
@@ -215,6 +218,24 @@ nodes:
     output: str
 output: ${selected.output}
 """
+
+
+def _source_free_failure_flow() -> ComposedFlow:
+    """Build one programmatic flow whose failure has no authored origins."""
+    nodes = {
+        START_ID: StartNode(START_ID),
+        "fail": CodeNode("fail", code="tests.engine._compose_codefns:boom"),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    compiled = CompiledFlow.from_parts(
+        nodes,
+        [
+            Edge("start-fail", START_ID, "fail"),
+            Edge("fail-end", "fail", END_ID),
+        ],
+        wiring={},
+    )
+    return ComposedFlow(compiled=compiled)
 
 _ACTION_FLOW = """
 id: lifecycle-action
@@ -455,8 +476,6 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
         "log",
         "output",
         "failure",
-        "locator",
-        "range",
         "events",
     ]
 
@@ -624,11 +643,12 @@ def test_terminal_resume_is_read_only_silent_and_unlocks(
     _durable_records(path)
 
 
-def test_terminal_resume_preserves_located_failure_diagnostics(tmp_path: Path) -> None:
-    """Replay symbolic and concrete failure locations without diagnostic drift."""
+def test_terminal_resume_preserves_compose_failure_and_diagnosis(tmp_path: Path) -> None:
+    """Replay preserves the canonical Failure that Compose resolves after execution."""
     path = tmp_path / "terminal-located-failure.jsonl"
+    fresh_flow = load_flow(_LOCATED_FAILURE_FLOW)
     fresh = run_module.run_flow(
-        load_flow(_LOCATED_FAILURE_FLOW),
+        fresh_flow,
         {"window": "soon"},
         log=path,
         run_id=_RUN_ID,
@@ -637,22 +657,43 @@ def test_terminal_resume_preserves_located_failure_diagnostics(tmp_path: Path) -
 
     assert fresh.status == "failed"
     assert fresh.failure is not None
-    assert fresh.locator is not None
-    assert fresh.range is not None
+    fresh_diagnostic = fresh_flow.diagnose(fresh.failure)
+    assert fresh_diagnostic.frames
 
+    resumed_flow = load_flow(_LOCATED_FAILURE_FLOW)
     resumed = run_module.resume_flow(
-        load_flow(_LOCATED_FAILURE_FLOW),
+        resumed_flow,
         log=path,
     )
 
     assert resumed.status == "failed"
     assert resumed.input == fresh.input == {"window": "soon"}
     assert resumed.failure == fresh.failure
-    assert resumed.locator == fresh.locator
-    assert resumed.range == fresh.range
+    assert resumed_flow.diagnose(resumed.failure) == fresh_diagnostic
     assert resumed.events == []
     assert path.read_bytes() == before
     _durable_records(path)
+
+
+def test_terminal_resume_preserves_source_free_failure(tmp_path: Path) -> None:
+    """A programmatic flow replays the same semantic failure with an empty trace."""
+    path = tmp_path / "terminal-source-free-failure.jsonl"
+    fresh_flow = _source_free_failure_flow()
+    fresh = run_module.run_flow(fresh_flow, {}, log=path, run_id=_RUN_ID)
+    before = path.read_bytes()
+
+    assert fresh.status == "failed"
+    assert fresh.failure is not None
+    assert fresh.failure.trace == ()
+    assert fresh_flow.diagnose(fresh.failure).frames == ()
+
+    resumed_flow = _source_free_failure_flow()
+    resumed = run_module.resume_flow(resumed_flow, log=path)
+
+    assert resumed.failure == fresh.failure
+    assert resumed_flow.diagnose(resumed.failure) == fresh_flow.diagnose(fresh.failure)
+    assert resumed.events == []
+    assert path.read_bytes() == before
 
 
 def test_terminal_resume_preserves_recorded_trace_across_origin_rebase(

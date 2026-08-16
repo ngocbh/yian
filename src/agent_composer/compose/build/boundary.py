@@ -66,10 +66,10 @@ def synthesize_boundary_graph(
     The START_ID-side `${input.X}`-producer DATA edges + the demote-input-reader-from-root
     rule live here too (every input read resolves through the START_ID namespace).
 
-    `start_field_ranges` (optional) is the flow-boundary input-declaration source map stamped
-    onto the StartNode (`("input", name) -> SourceRange`) so a boundary input-type failure
-    resolves a precise caret. Assertion ranges travel in the positional lists on `lowered`.
-    `None` for a spanless flow (compact / in-memory / def).
+    `start_field_ranges` (optional) is the legacy flow-boundary input-declaration
+    source map stamped onto StartNode (`("input", name) -> SourceRange`). Runtime
+    diagnosis resolves Parameter origins instead. Assertion ranges travel in the
+    positional lists on `lowered`. `None` for a spanless flow (compact / in-memory / def).
 
     `lowered` (optional) is the flow's `asserts:` lowered into node-local `LoweredAsserts`.
     When given, its PRE (boundary) asserts are stamped on START's ordinary
@@ -113,10 +113,8 @@ def synthesize_boundary_graph(
         # post-assert is not clobbered.
         start.post_asserts = list(start.post_asserts) + list(lowered.start_pre)
         end.post_asserts = list(lowered.end_post)
-        # Positional assert ranges ride ALONGSIDE the lowered asserts (aligned 1:1): the boundary PRE
-        # asserts ride START's `post_asserts`, so their ranges extend START's `post_assert_ranges`;
-        # END's POST asserts become its `post_assert_ranges`. A false boundary assert then carets its
-        # OWN line by index, and two identical flow asserts get distinct carets — never keyed by text.
+        # Legacy positional ranges remain aligned 1:1 with lowered assertions while the
+        # compatibility fields exist. Runtime diagnosis resolves each Assertion.origin instead.
         start.post_assert_ranges = list(start.post_assert_ranges) + list(lowered.pre_ranges)
         end.post_assert_ranges = list(lowered.post_ranges)
         # Each synthesized END input is an extra param + a wiring source + a producer edge, so

@@ -450,9 +450,8 @@ output: ${report.output}
 
 def test_per_input_param_carries_ranges():
     # Each input binding maps to its OWN SourceRange under its param NAME in the descriptor's
-    # field_ranges — the key eval_node's binding-failure funnel resolves (`loc.key` == param
-    # name). Recorded kind-blind in the parse choke point alongside the coarse `inputs:` span
-    # (still present under the field name).
+    # legacy field_ranges. Recorded in the parse choke point alongside the coarse `inputs:`
+    # span (still present under the field name); runtime diagnosis uses Binding origins.
     descriptors = parse_nodes(_nodes_reader(_INPUT_FLOW))
     fr = descriptors["report"].field_ranges
     assert fr[("input", "topic")].start_line == 8

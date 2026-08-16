@@ -120,8 +120,7 @@ immutable `result.failure`; a successful flow returns `status="succeeded"` with
 `failure=None`. Inspect `failure.code` for program logic and `failure.message` for
 display. `failure.node_id`, `failure.trace`, `failure.cause_type`, and
 `failure.traceback` retain execution, authored-source, and debugging context.
-Temporary `result.locator` / `result.range` fields remain compatibility metadata;
-canonical presentation resolves `failure.trace` through `ComposedFlow.diagnose()`.
+Canonical presentation resolves `failure.trace` through `ComposedFlow.diagnose()`.
 There are no `error`, `error_type`, or standalone `traceback` aliases.
 Host-control, callback, log I/O, and internal reducer errors propagate after the
 engine has drained active workers and released the boundary-owned log.
@@ -154,15 +153,15 @@ library callers use the same method when they need presentation-ready frames.
 
 ## Authoritative run logs
 
-Every execution is reduced from one ordered schema-2 `RunLog`, including
+Every execution is reduced from one ordered schema-3 `RunLog`, including
 process-local runs. The closed durable record vocabulary is `RunStartedRecord`,
 `RunResumedRecord`, `NodeStartedRecord`, `NodeSucceededRecord`,
 `NodeRoutedRecord`, `NodeExpandedRecord`, and `NodeFailedRecord`. Terminal
 success or failure is derived from those node transitions. `NodeFailedRecord`
 stores the nested `Failure` directly. A causal `NodeRoutedRecord` stores the
 optional derived terminal-unreachable `Failure` that replay revalidates before
-restoring; no separate terminal record exists. Schema-1 logs are deliberately
-rejected.
+restoring; no separate terminal record exists. Earlier schemas are deliberately
+rejected rather than migrated.
 
 For each transition, the dispatcher follows one authority order:
 
@@ -305,8 +304,6 @@ The terminal outcome of a fresh or recovered run has exactly these fields:
 | `log` | durable JSONL `Path`, or `None` for a process-local fresh run |
 | `output` | terminal flow value on success; otherwise `None` |
 | `failure` | canonical `Failure` on failure; otherwise `None` |
-| `locator` | temporary symbolic failure location retained for compatibility |
-| `range` | temporary concrete failure range retained for compatibility |
 | `events` | post-durable observer events published during this call only |
 
 ## Next

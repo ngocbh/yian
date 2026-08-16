@@ -269,11 +269,11 @@ Lower-level Python graph builders and tooling can import the source-neutral
 `ValuePath` vocabulary from `agent_composer.nodes`. Origins are optional; these
 definitions are being adopted by engine consumers incrementally.
 
-Pass `log="run.jsonl"` to create an authoritative append-only schema-2 JSONL history for
+Pass `log="run.jsonl"` to create an authoritative append-only schema-3 JSONL history for
 the run. If the process is interrupted, load the same flow in a later process and
 recover the durable prefix with `resume_flow(loaded, log="run.jsonl")` from
 `agent_composer.run`. A fresh durable run never overwrites an existing path.
-Schema-1 logs are not migrated. Run logs retain canonical inputs, node outputs
+Earlier schemas are not migrated. Run logs retain canonical inputs, node outputs
 (including human/tool/model data), resolved model configuration, and failure
 tracebacks. Treat them as sensitive:
 choose an access-controlled path and do not commit or publish them.

@@ -9,7 +9,7 @@ END id (e.g. `research/__end__`), not the spawner. Before this branch they fired
 redirect-commit site (naming the spawner); before an earlier fix they were silently dropped.
 
 These pin: a true call post-assert passes, a false one fails the run LOUDLY (RunFailed,
-failure cause type "NodeAssertFailed", a non-null locator at the assert on the child END), a post-assert
+failure cause type "NodeAssertFailed", with the assertion origin on the child END), a post-assert
 reading BOTH a declared call input AND `${output}` fires correctly (the input mapped onto the
 cloned child START's coerced output), and (durability) the lowered assert survives authoritative
 log recovery — the injected builder re-lowers it onto the replayed child END.
@@ -96,19 +96,15 @@ def test_call_post_assert_true_passes():
 
 
 def test_call_post_assert_false_fails_loudly():
-    # a false `${output}` post-assert -> RunFailed, cause_type NodeAssertFailed, a non-null
-    # locator pinned at the assert on the CLONED CHILD END (`research/__end__`), where the
-    # lowered assert now rides. (Before this branch it named the spawner `research`; before an
-    # earlier fix this passed SILENTLY.)
+    # A false `${output}` post-assert fails on the CLONED CHILD END
+    # (`research/__end__`), where the lowered assertion now rides.
     loaded = _load("      - ${output.n} == 999")
     res = run_flow(loaded, {})
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
     assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
-    loc = res.locator
-    assert loc is not None
-    assert loc.node == "research/__end__" and loc.kind == "assert"
-    assert loc.key == "${output.n} == 999"
+    assert res.failure.node_id == "research/__end__"
+    assert loaded.diagnose(res.failure).frames
 
 
 # --- 3. live, input + output ref -------------------------------------------- #
@@ -130,7 +126,7 @@ def test_call_post_assert_reads_input_and_output_false():
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
     assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
-    assert res.locator is not None and res.locator.node == "research/__end__"
+    assert res.failure.node_id == "research/__end__"
 
 
 def test_call_post_assert_reads_input_true():
@@ -235,4 +231,4 @@ def test_call_post_assert_survives_recovery_false(tmp_path: Path):
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
     assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
-    assert res.locator is not None and res.locator.node == "gate/__end__" and res.locator.kind == "assert"
+    assert res.failure.node_id == "gate/__end__"

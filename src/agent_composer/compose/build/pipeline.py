@@ -10,9 +10,8 @@ callable:
   edges + append each case's own edges -> validate references + classify asserts
   -> attach authored assertion/flow-output binding origins -> synthesize the START_ID/END_ID
   boundary over ALL edges -> reject cycles + check if/else handles ->
-  CompiledFlow.from_parts. One retained assertion item cursor supplies both its
-  carrier origin and aligned temporary range; rewrites preserve the carrier fields
-  while the range remains positionally aligned.
+  CompiledFlow.from_parts. One retained assertion item cursor supplies its carrier
+  origin and the legacy aligned range; rewrites preserve both fields.
 
 Holds `ComposedFlow` (the compiled+validated flow the engine runs) plus the flow
 `outputs:` parser and source-origin attachment. Ladder position: the LAST phase
@@ -750,8 +749,8 @@ def _assemble(
     the common header stamp each descriptor may immutably attach kind-owned opaque origins.
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
     children. `boundary_field_ranges` locates synthesized boundary-input behavior;
-    `asserts_cursor` is the single authority for each flow assertion's temporary range and
-    durable origin. `outputs_range` is the retained authored codomain range when one exists,
+    `asserts_cursor` is the single authority for each flow assertion's opaque origin and
+    legacy aligned range. `outputs_range` is the retained authored codomain range when one exists,
     while `outputs_cursor` retains each physically authored output binding occurrence.
     `scope.catalog_builder` is the one registry shared by every assembly originating
     from this physical document, so root, definitions, and inline bodies mint

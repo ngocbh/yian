@@ -383,7 +383,6 @@ def test_run_error_plain_when_unlocatable(monkeypatch):
         run_id="cli-test",
         log=None,
         failure=Failure("graph.terminal_unreachable", "boom", None),
-        locator=None,
         events=[],
     )
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
@@ -429,7 +428,6 @@ def test_run_error_boxes_loop_max_exceeded_at_loop_node(monkeypatch):
             trace=(loop_origin,),
             cause_type="LoopMaxExceeded",
         ),
-        locator=None,
         events=[],
     )
     buf = _sink(monkeypatch)

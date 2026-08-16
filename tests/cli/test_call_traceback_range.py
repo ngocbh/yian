@@ -206,9 +206,6 @@ def test_nested_call_input_failure_uses_resolved_child_range(monkeypatch):
 
     assert result.failure is not None
     assert result.failure.node_id == "invoke/leaf"
-    assert result.locator is not None
-    assert (result.locator.kind, result.locator.key) == ("input", "bad")
-    assert result.range is not None and result.range.start_line == 12
     assert "nested.yaml:17" in out
     assert "nested.yaml:12" in out
     assert "nested.yaml:14" not in out
@@ -219,9 +216,6 @@ def test_nested_map_input_failure_uses_resolved_child_range(monkeypatch):
 
     assert result.failure is not None
     assert result.failure.node_id == "invoke#0/leaf"
-    assert result.locator is not None
-    assert (result.locator.kind, result.locator.key) == ("input", "bad")
-    assert result.range is not None and result.range.start_line == 12
     assert "nested.yaml:17" in out
     assert "nested.yaml:12" in out
     assert "nested.yaml:14" not in out
@@ -239,18 +233,16 @@ def test_caller_assert_range_is_not_attached_to_external_child(monkeypatch):
     assert result.status == "failed"
     assert result.failure is not None
     assert result.failure.node_id == "callee/__end__"
-    assert result.locator is not None
-    assert (result.locator.kind, result.locator.key) == (
-        "assert",
-        "${output} < 100",
-    )
-    assert result.range is not None
+    diagnostic = loaded.diagnose(result.failure)
+    assert diagnostic.frames
+    assert {frame.label for frame in diagnostic.frames} == {"parent.yaml"}
+    assert_line = diagnostic.frames[-1].range.start_line
 
     buf = _sink(monkeypatch)
     _render_run_error(result, loaded)
     out = buf.getvalue()
 
-    assert f"parent.yaml:{result.range.start_line}" in out
+    assert f"parent.yaml:{assert_line}" in out
     assert "echo_child.yaml:" not in out
 
 
@@ -258,7 +250,7 @@ def test_diagnosis_reresolves_origins_against_current_source(monkeypatch):
     """Rendering uses current source origins, not the old runtime coordinate."""
     old_loaded = load_flow(_CALL_INPUT_FAILURE, source_label="nested.yaml")
     result = run_flow(old_loaded, {})
-    assert result.range is not None and result.range.start_line == 12
+    assert old_loaded.diagnose(result.failure).frames[-1].range.start_line == 12
 
     shifted_source = "\n" + _CALL_INPUT_FAILURE
     shifted_loaded = load_flow(shifted_source, source_label="nested.yaml")
@@ -279,10 +271,8 @@ def test_nested_caller_assert_range_stays_with_owning_call_frame(monkeypatch):
     assert result.status == "failed"
     assert result.failure is not None
     assert result.failure.node_id == "outer/via/__end__"
-    assert result.range is not None
     diagnostic = loaded.diagnose(result.failure)
     assert_line = diagnostic.frames[-1].range.start_line
-    assert result.range.start_line == assert_line
 
     buf = _sink(monkeypatch)
     _render_run_error(result, loaded)

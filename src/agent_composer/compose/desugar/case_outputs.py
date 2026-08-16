@@ -41,26 +41,11 @@ _CASE_OUTPUT_INTERIOR = re.compile(
 )
 
 
-def _range_or_line(
-    range: SourceRange | None,
-    line: int | None,
-) -> SourceRange | None:
-    """Prefer a retained span, otherwise convert a legacy line into a point range."""
-    if range is not None:
-        return range
-    if line is None:
-        return None
-    return SourceRange(line, 1, line, 1)
-
-
 def expand_case_outputs(
     descriptors: dict,
     outputs_section: Any,
     asserts_section: list[Assertion],
     *,
-    node_lines: "dict[str, int] | None" = None,
-    outputs_line: "int | None" = None,
-    asserts_line: "int | None" = None,
     outputs_range: Optional[SourceRange] = None,
     assertion_range_at: Optional[Callable[[int], Optional[SourceRange]]] = None,
     diagnostics: LoadDiagnostics | None = None,
@@ -72,14 +57,13 @@ def expand_case_outputs(
     the flow `outputs:` bindings; rewrites a clean whole-span case-output ref to the
     branch coalesce. Rejects (located `LoadError`) a case-value ref in a non-clean
     binding position, or in a `case` condition (`on:`/`when:`) or an `assert` — those are
-    not bindings. Descriptor field/item ranges are preferred; ``outputs_range`` and
-    ``assertion_range_at`` locate section-owned sites. Legacy lines are used only when no
-    range exists. A flow with no `case` node returns its inputs unchanged."""
+    not bindings. Descriptor field/item ranges locate node-owned sites;
+    ``outputs_range`` and ``assertion_range_at`` locate section-owned sites. A flow with
+    no `case` node returns its inputs unchanged."""
     diagnostics = diagnostics or LoadDiagnostics()
     case_ids = {nid for nid, d in descriptors.items() if isinstance(d, CaseDescriptor)}
     if not case_ids:
         return descriptors, outputs_section  # fast path
-    lines = node_lines or {}
     targets = _case_leaf_targets(descriptors, case_ids)
 
     new_descriptors = {}
@@ -98,7 +82,6 @@ def expand_case_outputs(
                 case_ids,
                 targets,
                 f"node {_nid!r}",
-                None if binding_range is not None else lines.get(_nid),
                 range=binding_range,
                 diagnostics=diagnostics,
             )(value)
@@ -111,7 +94,6 @@ def expand_case_outputs(
             case_ids,
             targets,
             "flow outputs",
-            None if outputs_range is not None else outputs_line,
             range=outputs_range,
             diagnostics=diagnostics,
         ),
@@ -126,7 +108,6 @@ def expand_case_outputs(
                     [d.on],
                     case_ids,
                     f"case node {nid!r} condition",
-                    None if condition_range is not None else lines.get(nid),
                     range=condition_range,
                     diagnostics=diagnostics,
                 )
@@ -136,7 +117,6 @@ def expand_case_outputs(
                     [case.get("when")],
                     case_ids,
                     f"case node {nid!r} condition",
-                    None if condition_range is not None else lines.get(nid),
                     range=condition_range,
                     diagnostics=diagnostics,
                 )
@@ -148,7 +128,6 @@ def expand_case_outputs(
             [assertion],
             case_ids,
             "assert",
-            None if assertion_range is not None else asserts_line,
             range=assertion_range,
             diagnostics=diagnostics,
         )
@@ -190,7 +169,6 @@ def _expander(
     case_ids: set,
     targets: dict,
     host: str,
-    line: Optional[int],
     *,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics,
@@ -223,7 +201,6 @@ def _expander(
                         case_ids,
                         targets,
                         host,
-                        None if range is not None else line,
                         range=range,
                         diagnostics=diagnostics,
                     )
@@ -242,7 +219,6 @@ def _expand_span(
     case_ids: set,
     targets: dict,
     host: str,
-    line: Optional[int],
     *,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics,
@@ -267,7 +243,7 @@ def _expand_span(
                 raise diagnostics.error(
                     f"{host}: ${{{cid}.output}} — case {cid!r} has no resolvable branch value "
                     f"(a case needs a `then:` or `else:`, and its targets must not form a cycle)",
-                    range=_range_or_line(range, line),
+                    range=range,
                 )
             # Emit the NEW node-first branch coalesce.
             return "${" + " | ".join(f"{t}.output{suffix}" for t in leaves) + "}"
@@ -275,7 +251,6 @@ def _expand_span(
         ["${" + interior + "}"],
         case_ids,
         host,
-        None if range is not None else line,
         range=range,
         diagnostics=diagnostics,
     )  # non-clean read -> loud
@@ -307,7 +282,6 @@ def _reject_case_refs(
     strings,
     case_ids: set,
     where: str,
-    line: Optional[int],
     *,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics,
@@ -334,7 +308,7 @@ def _reject_case_refs(
                     f"{where}: ${{{case_id}.output}} (a case value) is only supported as a "
                     f"whole single reference in a binding — not in a coalesce / default / "
                     f"condition / assert (only the `then:/else: call(...)` value form is supported)",
-                    range=_range_or_line(range, line),
+                    range=range,
                 )
 
 

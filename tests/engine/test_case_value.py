@@ -22,6 +22,7 @@ from agent_composer.compose import LoadError, expand_case_outputs, load_flow
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.run import run_flow
 from agent_composer.compose.parse.file import CaseDescriptor, CodeDescriptor
+from agent_composer.diagnostics import SourceRange
 
 
 # --------------------------------------------------------------------------- #
@@ -175,12 +176,13 @@ def test_case_ref_in_assert_is_located():
     # the assert-position rejection locates at the asserts: line, not the outputs: line.
     descs = {"gate": _gate()}
     diagnostics = LoadDiagnostics(label="flow.yaml", text=(" " * 80 + "\n") * 50)
+    assertion_range = SourceRange(42, 1, 42, 1)
     with pytest.raises(LoadError) as exc:
         expand_case_outputs(
             descs,
             None,
             ['${gate.output} != ""'],
-            asserts_line=42,
+            assertion_range_at=lambda _index: assertion_range,
             diagnostics=diagnostics,
         )
     assert exc.value.diagnostic.frames[0].range.start_line == 42

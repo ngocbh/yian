@@ -110,12 +110,14 @@ hook if skipping the node should advance the same logical boundary.
 
 The hook returns an existing logical target and derives only from execution
 state represented in the flow manifest. A redirect is exclusive ownership, not
-an OR join or multi-writer rule: exactly one physical node may redirect to a
-target, and that target must be an inert anchor—an expanded spawner or an unknown
-placeholder with no incoming work, never ready, in flight, or already committed.
+an OR join or multi-writer rule: exactly one unfinished physical node may
+redirect to a target, and that target must be an inert anchor—an expanded
+spawner or an unknown placeholder with no incoming work, never ready, in flight,
+or already committed.
 All of the anchor's outgoing edges must still be unknown. The reducer validates
 those rules before mutation, marks the physical node skipped, deduplicates
-logical targets, and skip-floods the target's outgoing edges.
+logical targets, and skip-floods the target's outgoing edges. Settled expansion
+residue is inert and no longer owns a future logical output.
 
 ## Growth: a node that is really a subflow
 

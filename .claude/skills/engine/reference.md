@@ -41,13 +41,14 @@ skipped, so it affects success only unless the node's
 output. The hook is pure and deterministic, derives only from manifest-backed
 execution state, and returns an existing node id.
 
-A redirect is an exclusive single-owner contract, not an OR join: one physical
-node may redirect to a logical target, and the target must be inert—an expanded
-spawner or an unknown placeholder with no incoming work, never ready, in flight,
-or already committed; all of its outgoing edges must still be unknown. The
+A redirect is an exclusive single-owner contract, not an OR join: one unfinished
+physical node may redirect to a logical target, and the target must be inert—an
+expanded spawner or an unknown placeholder with no incoming work, never ready,
+in flight, or already committed; all of its outgoing edges must still be unknown. The
 reducer validates this topology before mutation, marks the physical node
 skipped, deduplicates logical targets, and traverses the logical target's
-outgoing adjacency.
+outgoing adjacency. Settled expansion residue is inert and no longer owns a
+future output.
 
 A streaming kind is a generator that yields `StreamChunk` and *returns* a
 `NodeResult`. **Failure is not a variant** — a node `raise`s and the engine

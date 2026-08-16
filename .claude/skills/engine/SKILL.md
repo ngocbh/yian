@@ -219,7 +219,7 @@ Most are just the functional model (above) made enforceable:
   topology authority derived only from manifest-backed node state. Its base
   behavior is baked `commit_as` or the physical id; LOOP returns its origin to
   mirror dynamic `Output.commit_as`, which otherwise affects success only. A
-  redirected target must have one physical owner and be an inert expanded
+  redirected target must have one unfinished physical owner and be an inert expanded
   spawner or no-incoming placeholder, never executable or already committed;
   every target out-edge must still be unknown. A
   ratchet test (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion`

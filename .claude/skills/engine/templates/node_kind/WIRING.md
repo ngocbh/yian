@@ -35,8 +35,8 @@ inherit baked `commit_as` or their own id. A result-carried `Output.commit_as`
 redirects success only. If absence must cross that same boundary, override the
 hook using only execution state represented in the flow manifest, as LOOP does
 with `origin_id`; return an existing node id. The redirect must have exactly one
-physical owner and an inert target—an expanded spawner or an unknown placeholder
-with no incoming work, never ready, in flight, or already committed, and with
+unfinished physical owner and an inert target—an expanded spawner or an unknown
+placeholder with no incoming work, never ready, in flight, or already committed, and with
 every outgoing edge still unknown. Do not model an OR join or multiple writers
 with this hook.
 Programmatic assertions are ordered `Assertion(expression, display, origin)`

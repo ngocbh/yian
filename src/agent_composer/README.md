@@ -330,8 +330,8 @@ carriers. Success resolves an explicit `Output.commit_as`, then the baked
 `Node.skipped_output_target()` hook, which may consult only manifest-backed node
 state. The base hook returns baked `commit_as` or the node id; LOOP returns its
 manifest-backed `origin_id` to mirror its dynamic success redirect. A redirected
-target has exactly one physical owner and must be an inert logical anchor: an
-expanded spawner or an unknown placeholder with no incoming work, never a
+target has exactly one unfinished physical owner and must be an inert logical
+anchor: an expanded spawner or an unknown placeholder with no incoming work, never a
 ready, in-flight, or already-committed node; all of its outgoing edges must still
 be unknown. The reducer marks the physical node skipped, deduplicates logical
 targets, and floods the target's outgoing edges.

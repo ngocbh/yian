@@ -139,8 +139,8 @@ branching on kind.
 | `skipped_output_target()` | base; loop overrides | logical target whose out-edges receive this physical node's absence |
 
 A redirected target is an exclusive, inert logical anchor: it has exactly one
-physical redirect owner and is either an expanded spawner or an unknown
-placeholder with no incoming work. It cannot also be ready, in flight, or
+unfinished physical redirect owner and is either an expanded spawner or an
+unknown placeholder with no incoming work. It cannot also be ready, in flight, or
 already committed, and all of its outgoing edges must still be unknown;
 supporting several possible producers would require a separate
 OR-join/multi-writer contract.

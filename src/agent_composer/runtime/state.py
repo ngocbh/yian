@@ -3028,8 +3028,9 @@ def _validate_final_redirect_owners(
 
 
 def _skipped_output_owners(state: RunState) -> dict[str, tuple[str, ...]]:
-    """Index every explicit logical-output redirect in stable node order.
+    """Index unfinished logical-output redirects in stable node order.
 
+    Settled dynamic residue cannot produce another value and is ignored.
     Ordinary nodes target themselves and are not redirect owners.  The scan is
     paid only when a route actually skips a redirected completion; it keeps the
     common sparse skip path unchanged while rejecting ambiguous multi-writer
@@ -3053,7 +3054,7 @@ def _require_unambiguous_redirect(
     target: str,
     owners: tuple[str, ...],
 ) -> None:
-    """Require one inert logical anchor to have exactly one redirect owner.
+    """Require one inert logical anchor to have one unfinished redirect owner.
 
     Skip means the logical output is absent.  That conclusion is sound only
     when no sibling physical completion or executable anchor can still produce

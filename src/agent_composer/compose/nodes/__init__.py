@@ -18,7 +18,9 @@ per-kind isinstance ladder, now dissolved):
   (+ wiring, + any edges a `case` owns), stamping the descriptor's optional `.origin`
   plus its legacy `.range`/`.field_ranges` onto it. The assembly conductor, not a
   per-kind parser, assigns authored node-header origins and invokes the source hook
-  before build.
+  before build. CODE alone also consumes the context's opaque Python filename and
+  optional registered-origin presentation callable for load-time syntax errors; YAML
+  objects never cross into the runtime node.
 
 `parse`/`build` ride on the descriptor class itself, so `KINDS` maps the surface `kind:`
 string straight to the descriptor class — no bundling wrapper. The shared dispatch sites

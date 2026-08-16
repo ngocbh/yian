@@ -237,6 +237,12 @@ before the run boundary releases the log.
 That is the complete list — a small set of traits/hooks plus the run/body pair. No `NodeKind` is
 visible to the engine.
 
+Inline CODE implements `exception_origin(exc)` by retaining its recursive compiled
+code-object tree and selecting the deepest traceback frame owned by identity (`is`).
+The wrapped line chooses an exact literal-line origin, then the whole `code:` scalar
+and node fallback. Filenames and structurally equal code objects never establish
+ownership; reference-mode CODE keeps the base node-origin behavior.
+
 ## Why a closed match, on the right axis
 
 An earlier engine branched on node *kind* in many places. That dispatch is now fully

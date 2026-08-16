@@ -9,9 +9,11 @@ catalog sites retain semantic line indices rather than coordinates. The catalog
 module also owns collision-free Compose key encoding: document-local semantic paths and
 package-private lexical ``uses:`` scoping that treats a child key as one opaque
 segment. Exact catalog membership reads only the frozen key table. Later Compose
-phases may populate the package-private catalog builder and consume its frozen
-snapshots, but parser objects stay private. Isolated location-free literals may
-be parsed separately without creating a document.
+phases populate the package-private catalog builder; a package-private lookup may
+resolve an already-registered site for a load failure without copying or freezing
+the table. The loader alone consumes the final frozen snapshot, and parser objects
+stay private. Isolated location-free literals may be parsed separately without
+creating a document.
 
 Knows about:   PyYAML and the source-neutral contracts in ``diagnostics``;
                ``SourceRange`` is temporarily re-exported through ``events``.

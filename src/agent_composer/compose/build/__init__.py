@@ -12,7 +12,10 @@ The LAST compose phase before the loader. Three modules:
   flow `outputs:` parser. It stamps authored node-header origins, then invokes each
   descriptor's immutable source-origin hook while its located cursor is available. CODE uses
   that hook for its whole `code:` value and ordered exact literal-line sites; other descriptors
-  currently keep the no-op default. It also stamps source-backed ordinary `input:` keys and
+  currently keep the no-op default. After attachment, the shared `BuildContext` exposes the
+  builder's read-only registered-site lookup so a CODE syntax error can resolve the same
+  source-neutral line selector used at runtime. This neither reparses the document nor freezes
+  the still-growing catalog. It also stamps source-backed ordinary `input:` keys and
   values, and source-backed reserved MAP/WAIT wiring values through the file-owned catalog
   builder. Only ordinary input keys stamp `Parameter` origins; each of
   those retained wiring values stamps its canonical `Binding`. It aligns retained assertion

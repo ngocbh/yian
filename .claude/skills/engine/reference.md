@@ -38,6 +38,32 @@ evaluation boundary returns `EvaluationFailure`; the dispatcher turns that into 
 `NodeFailedRecord`, and the reducer derives `NodeFailed`/`RunFailed` observers.
 `Node.on_failure` is a dormant future seam, not currently driven by `eval_node`.
 
+The dependency-free `diagnostics` leaf defines the canonical semantic value for
+that pipeline:
+
+```python
+@dataclass(frozen=True, slots=True)
+class Failure:
+    code: FailureCode
+    message: str
+    node_id: str | None
+    trace: tuple[OriginRef, ...] = ()
+    cause_type: str | None = None
+    traceback: str | None = None
+```
+
+The trace is authored identity ordered outermost to innermost; its final item is
+the most precise available operation, while `node_id` remains runtime execution
+identity. The closed plain-string codes are `binding.evaluate`,
+`contract.input`, `assertion.failed`, `node.execute`, `contract.node_result`,
+`contract.output`, `contract.route`, `contract.growth`, and
+`graph.terminal_unreachable`. Exception names and traceback text are debug data,
+not semantic categories. The contract reserves these codes for expected
+flow-owned rejection; producer classification and the host/compiler fault
+boundary are runtime cutover work. This foundation does not yet change the
+flattened evaluator, record, observer, or result carriers; their coordinated
+cutover follows separately.
+
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine
 records it, and the reducer performs the write). Nodes stay pure; the dispatcher
@@ -247,10 +273,11 @@ _state + compile runtime contracts <── runtime
 compose + compile.expand + runtime <── package-root run.py
 ```
 
-`diagnostics.py` owns source-neutral `SourceRange`, opaque `OriginRef`, resolved
-`DiagnosticFrame`, the `OriginResolver` protocol, and immutable exact-route
-`ResolverTable`. It imports only the standard library. `events.py` imports this
-leaf and temporarily re-exports `SourceRange` while existing consumers migrate.
+`diagnostics.py` owns source-neutral `Failure`, `SourceRange`, opaque `OriginRef`,
+resolved `DiagnosticFrame`, the `OriginResolver` protocol, and immutable
+exact-route `ResolverTable`. It imports only the standard library. `events.py`
+imports this leaf and temporarily re-exports `SourceRange` while existing
+consumers migrate.
 
 Arrows never reverse: a package imports only lower-level or peer packages. See the
 `structure` skill. An upward import means the code is in the wrong package (extract

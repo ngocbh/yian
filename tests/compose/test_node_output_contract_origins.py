@@ -622,6 +622,35 @@ output: ${emit.output}
     assert caught.value.diagnostic.frames[-1].range == expected.range
 
 
+def test_unsupported_nested_output_type_reports_the_exact_value_site():
+    """An unsupported nested type value retains its recursive source cursor."""
+    text = """\
+id: unsupported-nested-output-type
+name: unsupported-nested-output-type
+nodes:
+  emit:
+    kind: code
+    code: 'return {"profile": {"age": 7}}'
+    output:
+      profile:
+        age: 7
+output: ${emit.output}
+"""
+    document = SourceDocument.parse(text, label="unsupported-type.yaml")
+    expected = (
+        document.root.child("nodes")
+        .child("emit")
+        .child("output")
+        .child("profile")
+        .child("age")
+    )
+
+    with pytest.raises(LoadError, match="cannot read type") as caught:
+        load_flow(text, source_label="unsupported-type.yaml")
+
+    assert caught.value.diagnostic.frames[-1].range == expected.range
+
+
 def test_invalid_output_list_item_reports_the_exact_item_site():
     """A malformed list-form record item retains its positional source cursor."""
     text = """\

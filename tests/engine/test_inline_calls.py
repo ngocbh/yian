@@ -316,7 +316,7 @@ output: ${{use.output}}
     with pytest.raises(LoadError) as exc:
         load_flow(text)
     assert "keyword" in str(exc.value)
-    assert exc.value.line is not None  # located at the host node
+    assert exc.value.diagnostic.frames[-1].range.start_line is not None
 
 
 def test_inline_call_seed_21_loads():
@@ -380,7 +380,7 @@ output: call(enrich, 30)
     with pytest.raises(LoadError) as exc:
         load_flow(text)
     assert "keyword" in str(exc.value)
-    assert exc.value.line is not None  # located at the `outputs:` section line
+    assert exc.value.diagnostic.frames[-1].range.start_line is not None
 
 
 def test_inline_call_in_tool_inputs_desugars():

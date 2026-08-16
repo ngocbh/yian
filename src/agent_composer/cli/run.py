@@ -471,17 +471,6 @@ def _render_run_error(
         _render_traceback(tb)
 
 
-def _render_notes(err: LoadError) -> None:
-    """Print the error's "why" legend (`LoadError.notes`) under the message, if any.
-
-    Each note is an explanatory line the source frame can't show — e.g. the dependency
-    edges that close a cycle — rendered indented and dim so it reads as context, not a
-    second error.
-    """
-    for note in err.notes or []:
-        err_console.print(Text(f"  ↳ {note}", style="yellow"))
-
-
 class _ProgressReporter:
     """Render per-node progress for `ac run` as the engine streams node events.
 

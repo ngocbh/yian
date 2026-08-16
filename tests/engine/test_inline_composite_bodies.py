@@ -17,7 +17,7 @@ from agent_composer.compose.desugar.inline_bodies import (
     extract_inline_bodies,
     inline_flow_id,
 )
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
@@ -513,7 +513,7 @@ def test_extract_rejects_authored_private_call_target_without_mutating_source():
 
     assert "reserved" in str(caught.value).lower()
     assert INLINE_FLOW_PREFIX in str(caught.value)
-    assert caught.value.range == attacker.range_of("call")
+    assert caught.value.diagnostic.frames[-1].range == attacker.range_of("call")
     assert attacker.value == original_value
     assert _mapping_snapshot(attacker) == original_pairs
     assert document.root.value == original_document_value
@@ -533,7 +533,7 @@ output: unused
     with pytest.raises(LoadError, match="recursive alias") as caught:
         load_flow(source)
 
-    assert caught.value.range is not None
+    assert caught.value.diagnostic.frames[-1].range is not None
 
 
 @pytest.mark.parametrize("attacker_first", [True, False], ids=["before", "after"])
@@ -582,7 +582,10 @@ def test_extract_rejects_sibling_private_id_attack_before_masking_any_body(
     assert "reserved" in str(caught.value).lower()
     assert INLINE_FLOW_PREFIX in str(caught.value)
     assert victim_target not in str(caught.value)
-    assert caught.value.range == attacker_cursor.range_of("call")
+    assert (
+        caught.value.diagnostic.frames[-1].range
+        == attacker_cursor.range_of("call")
+    )
     assert mask_calls == []
     assert attacker_cursor.value == original_attacker
     assert victim_cursor.value == original_victim
@@ -705,7 +708,7 @@ def test_inline_body_shape_errors_are_located_without_private_ids(
 
     assert message in str(caught.value)
     assert INLINE_FLOW_PREFIX not in str(caught.value)
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 @pytest.mark.parametrize(
@@ -736,7 +739,7 @@ def test_inline_body_shape_matrix_flows_through_loader(
 
     assert message in str(caught.value)
     assert INLINE_FLOW_PREFIX not in str(caught.value)
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_loader_rejects_actual_sibling_private_digest_without_exposing_it():
@@ -768,7 +771,7 @@ nodes:
     assert "reserved" in message.lower()
     assert INLINE_FLOW_PREFIX in message
     assert victim_id not in message
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_register_inline_bodies_associates_call_map_loop_and_stays_lazy():
@@ -837,7 +840,7 @@ def test_child_label_is_not_authorable(kind: str, body: str):
 
     assert "child_label" in str(caught.value)
     assert "not allowed" in str(caught.value)
-    assert caught.value.range == node.range_of("child_label")
+    assert caught.value.diagnostic.frames[-1].range == node.range_of("child_label")
 
 
 @pytest.mark.parametrize("failure", ["missing", "wrong-kind", "wrong-target"])
@@ -869,7 +872,7 @@ def test_register_inline_body_rejects_bad_association_located_and_redacted(
     assert "inline body of node 'call_node'" in message
     assert body.flow_id not in message
     assert INLINE_FLOW_PREFIX not in message
-    assert caught.value.range == body.nodes_cursor.range
+    assert caught.value.diagnostic.frames[-1].range == body.nodes_cursor.range
     assert registrar.registrations == []
 
 
@@ -888,7 +891,10 @@ def test_register_inline_bodies_preflights_all_before_first_registration():
         )
 
     assert "inline body of node 'loop_node'" in str(caught.value)
-    assert caught.value.range == bodies["loop_node"].nodes_cursor.range
+    assert (
+        caught.value.diagnostic.frames[-1].range
+        == bodies["loop_node"].nodes_cursor.range
+    )
     assert registrar.registrations == []
 
 
@@ -1170,8 +1176,8 @@ output: ${first.output}
     message = str(caught.value)
     assert message.endswith("first.input.value -> first")
     assert INLINE_FLOW_PREFIX not in message
-    assert caught.value.range == expected_range
-    assert caught.value.line == expected_range.start_line
+    assert caught.value.diagnostic.frames[-1].range == expected_range
+    assert caught.value.diagnostic.frames[-1].range.start_line == expected_range.start_line
     assert not isinstance(caught.value, RecursionError)
 
 
@@ -1219,8 +1225,8 @@ output: ${left.output}
         "left.input.from_right -> right.input.from_left -> left"
     )
     assert INLINE_FLOW_PREFIX not in message
-    assert caught.value.range == expected_range
-    assert caught.value.line == expected_range.start_line
+    assert caught.value.diagnostic.frames[-1].range == expected_range
+    assert caught.value.diagnostic.frames[-1].range.start_line == expected_range.start_line
     assert not isinstance(caught.value, RecursionError)
 
 
@@ -1256,7 +1262,7 @@ output: ${consumer.output}
     assert "producer 'missing' has no available static type" in message
     assert "explicitly typed named `defs:` body" in message
     assert INLINE_FLOW_PREFIX not in message
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_inline_signature_producer_without_output_is_located_and_strict():
@@ -1296,7 +1302,7 @@ output: ${consumer.output}
     assert "producer 'producer' has no available static type" in message
     assert "explicitly typed named `defs:` body" in message
     assert INLINE_FLOW_PREFIX not in message
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_inline_alias_and_merge_occurrences_run_as_distinct_private_children():
@@ -1571,7 +1577,7 @@ def test_inline_child_scope_is_closed_and_redacts_private_identity(
     message = str(caught.value)
     assert f"unknown namespace {namespace!r}" in message
     assert INLINE_FLOW_PREFIX not in message
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_eager_def_inline_call_uses_raw_ranges_and_shared_scope(monkeypatch):
@@ -1815,8 +1821,8 @@ output: ${{each.output}}
     assert "each.input.row" in message
     assert "explicitly typed named `defs:` body" in message
     assert "only typed inside an outer MAP input" not in message
-    assert caught.value.range == expected_range
-    assert caught.value.range != over_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
+    assert caught.value.diagnostic.frames[-1].range != over_range
     assert INLINE_FLOW_PREFIX not in message
 
 
@@ -2041,7 +2047,7 @@ output: ${each.output}
     monkeypatch.setattr(
         compose_pipeline,
         "read_flow_inputs",
-        lambda _mapping, _registry, _ranges: [
+        lambda _mapping, _registry, _ranges, *, diagnostics=None: [
             _parameter("items", Type(kind=ValueKind.LIST_ANY))
         ],
     )
@@ -2051,7 +2057,7 @@ output: ${each.output}
 
     assert "each.input.value" in str(caught.value)
     assert "no proven element type" in str(caught.value)
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_inline_map_nullable_root_and_intermediate_infer_optional_and_intermediate_runs_none():
@@ -2329,7 +2335,7 @@ output: ${each.output}
     message = str(caught.value)
     assert "unknown namespace 'item'" in message
     assert INLINE_FLOW_PREFIX not in message
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_basic_inline_loop_times_bakes_private_child_signature_and_runs():
@@ -2795,7 +2801,7 @@ output: ${broken.output}
         load_flow(source)
 
     assert "unknown namespace 'missing'" in str(caught.value)
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_inline_child_start_uses_outer_input_binding_ranges():
@@ -2857,7 +2863,7 @@ output: ${wrapper.output}
         load_flow(source)
 
     assert "unknown namespace 'missing'" in str(caught.value)
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_eager_def_inline_child_bad_output_preserves_absolute_range():
@@ -2894,7 +2900,7 @@ output: ${invoke.output}
 
     assert str(caught.value).startswith("defs entry 'outer':")
     assert "unknown namespace 'missing'" in str(caught.value)
-    assert caught.value.range == expected_range
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_inline_call_resolver_failure_uses_friendly_child_label(monkeypatch):
@@ -3107,7 +3113,7 @@ def test_callable_scope_retries_failed_private_builder_and_caches_success():
         nonlocal attempts
         attempts += 1
         if attempts == 1:
-            raise LoadError("temporary child build failure")
+            raise LoadDiagnostics().error("temporary child build failure")
         return child
 
     scope = compose_loader._CallableScope({}, object(), None, {})

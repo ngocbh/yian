@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.nodes.base import NodeDescriptor
 from agent_composer.compose.source import SourceCursor
 
@@ -40,7 +40,7 @@ def test_validate_fields_default_rejects_bad_asserts():
         kind = "d"
 
     with pytest.raises(LoadError):
-        D._validate_fields("n", {"asserts": [1, 2]}, {}, None)
+        D._validate_fields("n", {"asserts": [1, 2]}, {}, None, LoadDiagnostics())
 
 
 def test_validate_fields_default_skips_absent_asserts():
@@ -48,7 +48,7 @@ def test_validate_fields_default_skips_absent_asserts():
     class D(NodeDescriptor):
         kind = "d"
 
-    D._validate_fields("n", {}, {}, None)  # no raise
+    D._validate_fields("n", {}, {}, None, LoadDiagnostics())  # no raise
 
 
 def test_normalize_cursor_default_noop():

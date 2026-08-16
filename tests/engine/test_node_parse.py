@@ -197,7 +197,7 @@ news:
 """
         )
     assert "not allowed" in str(exc.value)
-    assert exc.value.line is not None
+    assert exc.value.diagnostic.frames[-1].range.start_line is not None
 
 
 # ---------- case / call ----------
@@ -410,7 +410,7 @@ n:
 """
         )
     assert "prompt" in str(exc.value)
-    assert exc.value.line is not None  # located at the node's .yaml line
+    assert exc.value.diagnostic.frames[-1].range.start_line is not None
 
 
 def test_tool_id_illegal_on_agent_is_loud():
@@ -437,7 +437,7 @@ n:
 """
         )
     assert "wizard" in str(exc.value)
-    assert exc.value.line is not None
+    assert exc.value.diagnostic.frames[-1].range.start_line is not None
 
 
 def test_missing_kind_is_loud():

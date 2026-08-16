@@ -180,7 +180,7 @@ def test_descriptor_build_cache_does_not_cache_unlocated_failure():
     cache = None
 
     def fail():
-        raise LoadError("broken descriptor")
+        raise LoadDiagnostics().error("broken descriptor")
 
     descriptors = {
         "outer": _FakeBuildDescriptor(
@@ -210,7 +210,7 @@ def test_descriptor_build_cache_prefers_descriptor_range_over_line_map():
     source_range = SourceRange(27, 7, 27, 31)
 
     def fail():
-        raise LoadError("broken descriptor")
+        raise LoadDiagnostics().error("broken descriptor")
 
     descriptor = _FakeBuildDescriptor(
         "broken",

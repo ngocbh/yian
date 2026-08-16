@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Iterable, Optional, TYPE_CHECKING
+from typing import Iterable, TYPE_CHECKING
 
 from agent_composer.diagnostics import Diagnostic, DiagnosticFrame, SourceRange
 
@@ -221,44 +221,9 @@ class LoadDiagnostics:
 class LoadError(ValueError):
     """A Compose flow cannot be loaded, expressed as one canonical diagnostic."""
 
-    def __init__(
-        self,
-        diagnostic: Diagnostic | str,
-        line: Optional[int] = None,
-        lines: Optional[list[int]] = None,
-        notes: Optional[list[str]] = None,
-        range: Optional[SourceRange] = None,
-    ):
-        """Retain canonical diagnostics while old construction sites are migrated."""
-        if isinstance(diagnostic, Diagnostic):
-            self.diagnostic = diagnostic
-            frames = diagnostic.frames
-            self.range = frames[-1].range if frames else None
-            self.lines = (
-                [frame.range.start_line for frame in frames]
-                if len(frames) > 1
-                else None
-            )
-            self.line = self.range.start_line if self.range is not None else None
-            self.notes = list(diagnostic.notes) or None
-            super().__init__(diagnostic.message)
-            return
-
-        message = diagnostic
-        super().__init__(message)
-        self.lines = lines
-        if line is not None:
-            self.line = line
-        elif lines:
-            self.line = min(lines)
-        elif range is not None:
-            self.line = range.start_line
-        else:
-            self.line = None
-        self.notes = notes
-        self.range = range
-        self.diagnostic = Diagnostic(
-            code="compose.load",
-            message=message,
-            notes=tuple(notes or ()),
-        )
+    def __init__(self, diagnostic: Diagnostic):
+        """Retain the immutable diagnostic as the exception's only payload."""
+        if not isinstance(diagnostic, Diagnostic):
+            raise TypeError("LoadError requires a Diagnostic")
+        self.diagnostic = diagnostic
+        super().__init__(diagnostic.message)

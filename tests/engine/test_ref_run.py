@@ -7,6 +7,7 @@ child's single value. These drive real CODE-only children through `run_flow` (no
 """
 
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.run import run_flow
 
 # A CODE-only child: topic -> {report, n}.
@@ -87,7 +88,7 @@ def _resolver(**children):
         try:
             return loaded[flow_id]
         except KeyError as exc:
-            raise LoadError(f"unknown child {flow_id!r}") from exc
+            raise LoadDiagnostics().error(f"unknown child {flow_id!r}") from exc
 
     return resolve
 

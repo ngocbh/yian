@@ -86,7 +86,7 @@ def test_human_input_parse_requires_a_question_surface():
         HumanInputDescriptor.parse("ask", reader)
     # The absent-question-surface error anchors on the node body range (no question field
     # exists to carry one) — a regression guard: it must not silently lose its location.
-    assert isinstance(exc.value.range, SourceRange)
+    assert isinstance(exc.value.diagnostic.frames[-1].range, SourceRange)
 
 
 def test_human_input_parse_questions_and_adaptive_are_mutually_exclusive():

@@ -311,9 +311,8 @@ output: ${{gate.output}}
         for number, source_line in enumerate(text.splitlines(), start=1)
         if private_name in source_line
     )
-    assert caught.value.range is not None
-    assert caught.value.range.start_line == expected_line
-    assert caught.value.line == expected_line
+    assert caught.value.diagnostic.frames[-1].range is not None
+    assert caught.value.diagnostic.frames[-1].range.start_line == expected_line
     assert INLINE_FLOW_PREFIX in str(caught.value)
     assert private_name not in str(caught.value)
     assert resolved == []

@@ -124,7 +124,7 @@ def test_unknown_depends_on_target_is_located_load_error():
         load_flow(_UNKNOWN_DEP)
     msg = str(exc.value)
     assert "depends_on" in msg and "nope" in msg
-    assert exc.value.line is not None  # located at the `fetch` node line
+    assert exc.value.diagnostic.frames[-1].range.start_line is not None
 
 
 def test_ordering_cycle_is_loud():

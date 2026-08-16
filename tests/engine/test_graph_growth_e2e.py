@@ -30,6 +30,7 @@ import pytest
 
 from agent_composer.compile.expand import build_grow
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.run import run_flow
 from agent_composer.nodes.base import NodeKind
 from agent_composer.typesys.pool import VariablePool
@@ -86,7 +87,7 @@ def _resolver(**children):
         try:
             return loaded[flow_id]
         except KeyError as exc:
-            raise LoadError(f"unknown child {flow_id!r}") from exc
+            raise LoadDiagnostics().error(f"unknown child {flow_id!r}") from exc
 
     return resolve
 

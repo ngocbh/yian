@@ -1,5 +1,7 @@
 """Canonical diagnostic construction at the Compose load boundary."""
 
+import pytest
+
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.source import SourceDocument
 from agent_composer.diagnostics import Diagnostic, DiagnosticFrame
@@ -12,6 +14,22 @@ def test_load_error_preserves_one_canonical_diagnostic() -> None:
 
     assert error.diagnostic is diagnostic
     assert str(error) == "broken"
+    assert all(
+        not hasattr(error, name)
+        for name in ("line", "lines", "range", "notes")
+    )
+
+
+def test_load_error_rejects_non_diagnostic_payloads() -> None:
+    with pytest.raises(TypeError, match="requires a Diagnostic"):
+        LoadError("broken")  # type: ignore[arg-type]
+
+
+def test_load_error_rejects_legacy_location_keywords() -> None:
+    diagnostic = Diagnostic(code="compose.load", message="broken")
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        LoadError(diagnostic, line=7)  # type: ignore[call-arg]
 
 
 def test_document_factory_owns_the_frame_source() -> None:

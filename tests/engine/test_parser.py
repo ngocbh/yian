@@ -50,8 +50,8 @@ def test_unknown_top_level_key_is_loud():
     with pytest.raises(LoadError) as exc:
         parse_file(text)
     assert "bogus" in str(exc.value)
-    assert exc.value.range == SourceRange(4, 1, 4, 6)
-    assert exc.value.line == 4
+    assert exc.value.diagnostic.frames[-1].range == SourceRange(4, 1, 4, 6)
+    assert exc.value.diagnostic.frames[-1].range.start_line == 4
 
 
 @pytest.mark.parametrize(
@@ -75,8 +75,8 @@ def test_schema_error_replays_pydantic_location(text, expected):
     with pytest.raises(LoadError) as exc:
         parse_file(text)
 
-    assert exc.value.range == expected
-    assert exc.value.line == expected.start_line
+    assert exc.value.diagnostic.frames[-1].range == expected
+    assert exc.value.diagnostic.frames[-1].range.start_line == expected.start_line
 
 
 def test_schema_error_uses_first_location_that_replays():
@@ -85,8 +85,8 @@ def test_schema_error_uses_first_location_that_replays():
     with pytest.raises(LoadError) as exc:
         parse_file(document)
 
-    assert exc.value.range == SourceRange(1, 7, 1, 12)
-    assert exc.value.line == 1
+    assert exc.value.diagnostic.frames[-1].range == SourceRange(1, 7, 1, 12)
+    assert exc.value.diagnostic.frames[-1].range.start_line == 1
 
 
 def test_missing_schema_field_falls_back_to_root_range():
@@ -95,8 +95,11 @@ def test_missing_schema_field_falls_back_to_root_range():
     with pytest.raises(LoadError) as exc:
         parse_file(document)
 
-    assert exc.value.range == document.root.range
-    assert exc.value.line == document.root.range.start_line
+    assert exc.value.diagnostic.frames[-1].range == document.root.range
+    assert (
+        exc.value.diagnostic.frames[-1].range.start_line
+        == document.root.range.start_line
+    )
 
 
 def test_x_keys_ignored():

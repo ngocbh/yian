@@ -154,7 +154,7 @@ def test_body_output_fieldset_must_equal_carried():
     with pytest.raises(LoadError) as e:
         load_flow(BAD_FIELDSET)
     assert "output" in str(e.value).lower()
-    assert e.value.line is not None
+    assert e.value.diagnostic.frames[-1].range.start_line is not None
 
 
 # A loop whose body builds a carried `str` field from a MULTI-SEGMENT template binding
@@ -204,7 +204,7 @@ def test_body_output_types_must_equal_carried():
         load_flow(BAD_TYPES)
     # pin the failure to the TYPE pass (check_loop_type_contract), not any LoadError.
     assert "carried field" in str(e.value)
-    assert e.value.line is not None
+    assert e.value.diagnostic.frames[-1].range.start_line is not None
 
 
 def test_multi_segment_template_output_types_as_str():
@@ -277,7 +277,7 @@ def test_while_predicate_unknown_name_is_rejected():
         load_flow(BAD_PREDICATE_NAME)
     assert "while" in str(e.value).lower()
     assert "exted" in str(e.value)
-    assert e.value.line is not None
+    assert e.value.diagnostic.frames[-1].range.start_line is not None
 
 
 # The predicate's carried-name heads are extracted by PARSING the whole `while:` value

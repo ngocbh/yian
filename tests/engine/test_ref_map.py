@@ -26,6 +26,7 @@ from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.nodes.map import MapNode
 from agent_composer.typesys.values import ValueKind
 from agent_composer.compose import ComposedFlow, LoadError, load_flow
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.nodes.resolver import ChildSignature, child_signature
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -45,7 +46,9 @@ def _make_resolver():
         try:
             return children[flow_id]
         except KeyError as exc:
-            raise LoadError(f"unknown child flow {flow_id!r}") from exc
+            raise LoadDiagnostics().error(
+                f"unknown child flow {flow_id!r}"
+            ) from exc
 
     return resolver
 

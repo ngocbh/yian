@@ -28,6 +28,12 @@ programmatic origin. Private assembly keeps the resolver unset while the shared 
 grows. At the physical-file boundary the loader rebases external alias views, filters exact
 reachable routes, and installs `ComposedFlow.origin_resolver`; source-free graphs use
 `None`. `parse/file.py` consumes the document (`parse_file`).
+`ComposedFlow.diagnose(failure)` is this front end's presentation boundary: it
+copies `code`, `message`, `node_id`, `cause_type`, and `traceback` into a
+canonical `diagnostics.Diagnostic` and resolves every opaque trace origin in
+order through that installed authority.
+Resolution is all-or-nothing, so unavailable source presentation never replaces
+or partially decorates the original failure.
 The loader also owns each file's callable scope:
 authored `defs:`/`uses:` plus a resolver-private, lazy cache for inline CALL/MAP/LOOP
 children lowered by `desugar/` and assembled by `build/`.

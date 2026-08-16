@@ -163,6 +163,15 @@ traceback aliases. The single-key wire canonicalizes any valid front-end
 The `Node.on_failure` method remains reserved for a future
 error-strategy seam and is not driven today.
 
+For a Compose-authored graph, `ComposedFlow.diagnose(failure)` converts that
+source-neutral value into the canonical presentation-only
+`diagnostics.Diagnostic`. It copies `code`, `message`, `node_id`, `cause_type`,
+and `traceback`, then resolves the complete ordered origin trace atomically
+through the flow's resolver. Runtime traces currently carry zero or one origin;
+nested outer call context is not yet propagated. Runtime results retain temporary
+locator/range fields, and the CLI
+retains its `SourceFrame` bridge until the remaining source-diagnostic cutover.
+
 Every execution uses one `RunLog`. `MemoryRunLog` gives a process-local run the same
 ordering semantics; `JsonlRunLog` holds a nonblocking exclusive lock and fsyncs each
 canonical JSONL append. The closed record vocabulary is:

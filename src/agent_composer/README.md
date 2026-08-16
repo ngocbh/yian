@@ -29,7 +29,7 @@ shape of it:
 ## Layout
 
 ```
-diagnostics.py semantic failures, ranges, opaque origins, exact resolver routing [leaf]
+diagnostics.py semantic failures, resolved presentation, origins/resolver routing [leaf]
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
 _state.py     shared scheduler-state vocabulary                          [leaf]
@@ -71,6 +71,25 @@ only as diagnostic data; consumers must branch on the closed semantic code,
 never on `cause_type` or traceback text. `Failure` is imported from the leaf
 module inside lower layers and is lazy-exported from the package root for public
 result consumers.
+
+`diagnostics.Diagnostic` is the frozen, resolved presentation product:
+`code`, `message`, ordered `DiagnosticFrame` values, free-standing `notes`, and
+the optional `node_id`, `cause_type`, and `traceback` copied from a failure. It
+has no execution meaning and owns no source-resolution behavior. For a
+Compose-authored graph, `ComposedFlow.diagnose(failure)` is the sole front-end
+seam that turns a `Failure` into this value. It reads only the failure and the
+flow's `OriginResolver`, resolves the complete trace in its existing
+outermost-to-innermost order, and preserves duplicate origins. Resolution is
+atomic: an empty trace yields an ordinary unlocated diagnostic, while any
+missing, incomplete, malformed, or raising resolver for a non-empty trace yields
+no frames and exactly the generic note `Source presentation was unavailable.`;
+semantic and debug fields remain unchanged.
+
+Runtime currently emits zero or one trace origin, so nested outer call context
+is not yet present in these diagnostics. Runtime results still retain their
+temporary `SourceSpan` locator and concrete range, while the CLI retains its
+`SourceFrame` graph walk until the remaining source-diagnostic cutover lands.
+Those bridges are not an alternative origin-resolution API.
 
 The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
 `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,

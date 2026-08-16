@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
 from agent_composer.nodes.agent.modes import MODES, AgentRunContext
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
+from agent_composer.nodes.agent.structured import _structured_validation_path
 from agent_composer.nodes.base import Node, NodeKind, Output
 
 DEFAULT_MODE = "plain"
@@ -83,6 +85,21 @@ class AgentNode(Node):
             max_tool_iterations=self._max_tool_iterations(),
             stop_event=stop_event,
         )
+
+    def exception_origin(self, exception: Exception) -> OriginRef | None:
+        """Select a generated structured-output contract origin when proven.
+
+        Unrelated Pydantic errors, non-validation failures, and contracts without
+        authored provenance retain the common node-origin fallback.
+        """
+        contract = self.output_contract
+        if contract is None:
+            return super().exception_origin(exception)
+        path = _structured_validation_path(exception, contract.type)
+        if path is None:
+            return super().exception_origin(exception)
+        origin = contract.origins.at(path)
+        return origin if origin is not None else super().exception_origin(exception)
 
     def _run_impl(self, inputs: dict, *, stop_event=None) -> Output:
         """Render declared inputs and run the selected local mode to completion."""

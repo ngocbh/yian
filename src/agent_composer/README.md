@@ -218,6 +218,19 @@ the active `Case` by identity. Failures outside predicate evaluation fall back
 to `Node.origin`. These origins participate in ordinary traversal and rebasing,
 but remain diagnostic-only and manifest-neutral.
 
+AGENT adds no provenance carrier for structured output: it reuses the existing
+`ValueContract.origins` on `Node.output_contract`. After structured-generation
+retries are exhausted, `AgentNode.exception_origin()` accepts a Pydantic error
+or its directly wrapped native-parser cause only when tracebacks prove both the
+exact native/fallback generator and the exact generated schema validation. It
+does not traverse deeper cause chains. It normalizes the first error location by
+leaving record fields unchanged and removing only the generated scalar `value`
+or list `items` wrapper, validates that path against the expected `Type`, and
+selects `ContractOrigins.at()` (exact, nearest ancestor, then contract root).
+Unrelated tool/provider validation, non-validation errors, and source-free
+contracts keep the node fallback. Retry behavior and the original exception are
+unchanged.
+
 `Node.pre_asserts` and `Node.post_asserts` are ordered `Assertion` lists. Parsed
 YAML remains raw text until the inline-call pass crosses each flow assertion into
 one carrier; node-local validation creates one fresh carrier per authored

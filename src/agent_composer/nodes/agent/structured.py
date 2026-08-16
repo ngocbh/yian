@@ -22,7 +22,7 @@ import json
 from typing import Any, Callable, List, Literal, Optional
 
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, ValidationError, create_model
 
 from agent_composer.nodes.base import _HostStop
 from agent_composer.typesys.values import Type, ValueKind
@@ -264,3 +264,111 @@ def _generate_fallback(
         else:
             return value
     raise last_err  # type: ignore[misc]
+
+
+def _is_contract_path(path: tuple[str | int, ...], typ: Type) -> bool:
+    """Whether one normalized Pydantic location is valid for ``typ``."""
+    if not path:
+        return True
+    head, tail = path[0], path[1:]
+    if typ.kind == ValueKind.OBJECT and typ.fields:
+        if type(head) is not str or head not in typ.fields:
+            return False
+        return _is_contract_path(tail, typ.fields[head])
+    if typ.kind == ValueKind.LIST_ANY or typ.kind.is_list():
+        if type(head) is not int or head < 0:
+            return False
+        if typ.element is None:
+            return not tail
+        return _is_contract_path(tail, typ.element)
+    return False
+
+
+def _validated_by_schema(exception: ValidationError, schema: type[BaseModel]) -> bool:
+    """Whether traceback frames prove exact generated-schema validation."""
+    validation_codes = (
+        BaseModel.model_validate.__func__.__code__,
+        BaseModel.model_validate_json.__func__.__code__,
+        BaseModel.model_validate_strings.__func__.__code__,
+    )
+    traceback = exception.__traceback__
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if any(frame.f_code is code for code in validation_codes):
+            if frame.f_locals.get("cls") is schema:
+                return True
+        elif frame.f_code is BaseModel.__init__.__code__:
+            instance = frame.f_locals.get("self")
+            if instance is not None and type(instance) is schema:
+                return True
+        traceback = traceback.tb_next
+    return False
+
+
+def _structured_validation_path(
+    exception: Exception,
+    expected_type: Type,
+) -> tuple[str | int, ...] | None:
+    """Project an owned structured-output error to a contract-relative path.
+
+    A Pydantic error can also come from AGENT tool arguments or provider internals.
+    Ownership requires the exhausted error's exact native/fallback frame, the same
+    semantic type object, the frame's final-error identity, and an exact Pydantic
+    validation frame for the generated schema. A native parser may preserve that
+    validation error as the exhausted error's direct cause; deeper cause chains are not
+    followed. Record locations already match contract paths; scalar/list wrapper fields
+    are removed. ``()`` identifies the output-contract root, while ``None`` means the
+    exception is not generated structured output.
+    """
+    validation_error = (
+        exception
+        if isinstance(exception, ValidationError)
+        else exception.__cause__
+        if isinstance(exception.__cause__, ValidationError)
+        else None
+    )
+    if validation_error is None:
+        return None
+
+    traceback = exception.__traceback__
+    schema: type[BaseModel] | None = None
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if (
+            (
+                frame.f_code is _generate_native.__code__
+                or frame.f_code is _generate_fallback.__code__
+            )
+            and frame.f_locals.get("typ") is expected_type
+            and frame.f_locals.get("last_err") is exception
+        ):
+            candidate = frame.f_locals.get("schema")
+            if (
+                isinstance(candidate, type)
+                and issubclass(candidate, BaseModel)
+                and candidate.__name__ == validation_error.title
+            ):
+                schema = candidate
+                break
+        traceback = traceback.tb_next
+    if schema is None or not _validated_by_schema(validation_error, schema):
+        return None
+
+    is_record = expected_type.kind == ValueKind.OBJECT and bool(expected_type.fields)
+    is_list = expected_type.kind == ValueKind.LIST_ANY or expected_type.kind.is_list()
+    wrapper = None if is_record else "items" if is_list else "value"
+    details = validation_error.errors()
+    if not details:
+        return None
+    location = details[0].get("loc")
+    if type(location) is not tuple or any(
+        type(segment) not in (str, int) for segment in location
+    ):
+        return None
+    if not location or wrapper is None:
+        normalized = location
+    elif location[0] == wrapper:
+        normalized = location[1:]
+    else:
+        return None
+    return normalized if _is_contract_path(normalized, expected_type) else None

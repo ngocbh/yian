@@ -180,7 +180,7 @@ Runtime and compile validation read these node members instead of branching on
 | `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → `wait` `{"until": ts}`, `map` `{"over": [...]}` |
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
 | `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `_run_impl` → baked child on call/map/loop; complete predicates on case |
-| `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate |
+| `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate, AGENT generated-schema path |
 | `failure_trace(operation_origin=None)` | evaluator, dispatcher, and terminal-unreachable producers: combine generated ancestry with the best local origin | `origin_context + (operation origin or node origin)`; omit only an absent local suffix |
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
 | `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
@@ -360,6 +360,13 @@ model made enforceable.
   (success-record preparation runs `canonical_typed` against the effective target's
   declared type on both ordinary and `commit_as` paths), **retry-catches** (a deviation
   is fed back and re-asked). A bare `str`/`Literal[...]` keeps the text path.
+  If retries exhaust with a Pydantic error, or a native parser wraps one directly,
+  AGENT attributes it only when exact generator and generated-schema validation
+  frames prove ownership. It does not traverse deeper cause chains. It normalizes
+  only the first location (record unchanged; remove scalar `value` / list `items`),
+  validates the result against the expected `Type`, and asks the existing output
+  contract for exact/ancestor/root provenance. Retry and exception identity stay
+  unchanged; unrelated tool/provider validation keeps the node fallback.
 
 ## Layer ladder (where code goes)
 
@@ -434,6 +441,14 @@ own `_run_impl` traceback frame and `Case` identity; other failures use the node
 fallback. Generated searched bindings inherit the first predicate occurrence that
 introduced their reference, while `on:` owns the generated `__on` binding. All of
 these carriers are diagnostic-only and manifest-neutral.
+
+`AgentNode` adds no local origin slot for structured output. Its
+`exception_origin` accepts only a retry-exhausted Pydantic error, or its immediate
+native-parser cause, when the outer traceback contains the exact
+`_generate_native`/`_generate_fallback` frame and the validation traceback contains
+an exact `BaseModel.model_validate*`/constructor frame for that generated schema.
+Deeper cause chains are not followed. The normalized first path selects the existing
+`ValueContract.origins`; absent or unowned paths use the node fallback.
 
 `Node.pre_asserts` / `post_asserts` are likewise canonical ordered `Assertion`
 lists. Compose crosses raw YAML text into one carrier per authored flow/node list
@@ -766,9 +781,10 @@ never a text heuristic.
   `assertion.failed`; the same class raised by node code remains `node.execute`.
   Body exceptions become `node.execute`, using the node's `exception_origin`
   projection: CODE selects its deepest owned wrapped line, while CASE selects the
-  exact active predicate by frame/node/`Case` identity. Invalid ordinary/generator
-  terminal
-  values and a non-spawner `Grow` become `contract.node_result`. Every producer
+  exact active predicate by frame/node/`Case` identity, and AGENT selects a proven
+  generated-schema path through its output contract. Invalid terminal values from
+  ordinary or generator bodies and a non-spawner `Grow` become
+  `contract.node_result`. Every producer
   calls `Node.failure_trace(best_operation_origin)`, which retains generated
   outer context and uses the node origin only when no operation origin is
   available. `eval_node` fills a temporary locator's missing node id via

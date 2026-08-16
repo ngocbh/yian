@@ -254,9 +254,8 @@ class FlowEngine:
     ) -> tuple[Any, ...]:
         """Prepare node data, append its record, and apply the total reducer plan.
 
-        Evaluator and dispatcher ``Failure`` values are projected into the current
-        schema-1 record fields here; their semantic code and origin trace await the
-        record cutover.
+        Evaluator and dispatcher rejection paths both hand one canonical
+        ``Failure`` to the schema-2 reducer boundary.
         """
         if isinstance(outcome, EvaluationFailure):
             failure = outcome.failure
@@ -339,7 +338,7 @@ class FlowEngine:
         locator: SourceSpan | None = None,
         range: SourceRange | None = None,
     ) -> PreparedTransition:
-        """Project one canonical failure into the temporary schema-1 record."""
+        """Prepare one canonical failure without flattening its semantic fields."""
         if failure.node_id != node_id:
             raise RuntimeError(
                 "raw evaluation failure node identity mismatch: "
@@ -347,12 +346,9 @@ class FlowEngine:
             )
         return prepare_node_failed(
             self.state,
-            node_id,
-            failure.message,
-            error_type=failure.cause_type or "",
+            failure,
             locator=locator,
             range=range,
-            traceback=failure.traceback,
         )
 
     def _prepare_contract_failure(

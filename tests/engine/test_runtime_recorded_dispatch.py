@@ -556,7 +556,7 @@ def test_invalid_raw_output_constructs_contract_failure_with_operation_origin(
     assert failures[0].traceback is not None
     assert isinstance(events[-2], NodeFailed)
     assert isinstance(events[-1], RunFailed)
-    assert events[-1].error_type == "TypeCheckError"
+    assert events[-1].failure.cause_type == "TypeCheckError"
     assert isinstance(state.result, RunFailed)
     assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
 
@@ -720,9 +720,9 @@ def test_invalid_output_metadata_constructs_contract_failure_with_node_origin(
     assert failures[0].trace == (node_origin,)
     assert failures[0].cause_type == "TypeError"
     assert isinstance(events[-2], NodeFailed)
-    assert events[-2].node_id == "work"
-    assert events[-2].error == "commit_as must be a string or None"
-    assert events[-2].error_type == "TypeError"
+    assert events[-2].failure.node_id == "work"
+    assert events[-2].failure.message == "commit_as must be a string or None"
+    assert events[-2].failure.cause_type == "TypeError"
     assert events[-2].locator == engine_module.SourceSpan(
         node="work",
         kind="field",
@@ -781,9 +781,9 @@ def test_invalid_route_constructs_contract_failure_with_node_origin(
     assert failures[0].trace == (node_origin,)
     assert failures[0].cause_type == "ValueError"
     assert isinstance(events[-2], NodeFailed)
-    assert events[-2].node_id == "route"
-    assert events[-2].error_type == "ValueError"
-    assert "matches no outgoing edge" in events[-2].error
+    assert events[-2].failure.node_id == "route"
+    assert events[-2].failure.cause_type == "ValueError"
+    assert "matches no outgoing edge" in events[-2].failure.message
     assert isinstance(events[-1], RunFailed)
     assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
 
@@ -1270,7 +1270,7 @@ def test_node_failure_drains_sibling_and_discards_late_stream_chunks():
 
     assert [chunk.chunk for chunk in chunks] == ["early"]
     assert isinstance(events[-2], NodeFailed)
-    assert events[-2].node_id == "fail"
+    assert events[-2].failure.node_id == "fail"
     assert isinstance(events[-1], RunFailed)
     assert tuple(state.in_flight) == ("stream",)
     assert not any(

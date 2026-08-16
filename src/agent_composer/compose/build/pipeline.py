@@ -282,11 +282,51 @@ class ComposedFlow:
         for origin in failure.trace:
             try:
                 frame = resolver.resolve(origin)
+                if not isinstance(frame, DiagnosticFrame):
+                    return unavailable
+
+                label = frame.label
+                text = frame.text
+                source_range = frame.range
+                note = frame.note
+                if (
+                    type(label) is not str
+                    or type(text) is not str
+                    or (note is not None and type(note) is not str)
+                    or not isinstance(source_range, SourceRange)
+                ):
+                    return unavailable
+
+                coordinates = (
+                    source_range.start_line,
+                    source_range.start_col,
+                    source_range.end_line,
+                    source_range.end_col,
+                )
+                if any(
+                    type(coordinate) is not int or coordinate <= 0
+                    for coordinate in coordinates
+                ):
+                    return unavailable
+                start_line, start_col, end_line, end_col = coordinates
+                if (end_line, end_col) < (start_line, start_col):
+                    return unavailable
+
+                frames.append(
+                    DiagnosticFrame(
+                        label=label,
+                        text=text,
+                        range=SourceRange(
+                            start_line,
+                            start_col,
+                            end_line,
+                            end_col,
+                        ),
+                        note=note,
+                    )
+                )
             except Exception:
                 return unavailable
-            if not isinstance(frame, DiagnosticFrame):
-                return unavailable
-            frames.append(frame)
 
         return replace(diagnostic, frames=tuple(frames))
 

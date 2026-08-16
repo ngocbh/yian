@@ -182,6 +182,149 @@ def test_diagnose_malformed_resolver_result_degrades_unlocated() -> None:
     assert diagnostic.notes == _UNAVAILABLE_NOTE
 
 
+def test_diagnose_malformed_base_frame_field_degrades_unlocated() -> None:
+    """A nominal frame cannot carry an invalid range into the renderer."""
+    malformed = DiagnosticFrame(
+        label="flow.yaml",
+        text="value\n",
+        range=cast(SourceRange, object()),
+    )
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return malformed
+
+    diagnostic = _composed_flow(Resolver()).diagnose(_failure(OriginRef("bad")))
+
+    assert diagnostic.frames == ()
+    assert diagnostic.notes == _UNAVAILABLE_NOTE
+
+
+def test_diagnose_throwing_frame_subclass_degrades_unlocated() -> None:
+    """Ordinary field-access faults cannot mask the semantic failure."""
+
+    class ThrowingFrame(DiagnosticFrame):
+        def __getattribute__(self, name: str) -> object:
+            if name == "text":
+                raise RuntimeError("secret frame detail")
+            return super().__getattribute__(name)
+
+    frame = ThrowingFrame(
+        label="flow.yaml",
+        text="value\n",
+        range=SourceRange(1, 1, 1, 6),
+    )
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return frame
+
+    diagnostic = _composed_flow(Resolver()).diagnose(_failure(OriginRef("bad")))
+
+    assert diagnostic.frames == ()
+    assert diagnostic.notes == _UNAVAILABLE_NOTE
+    assert "secret" not in " ".join(diagnostic.notes)
+
+
+def test_diagnose_valid_frame_subclasses_are_canonicalized() -> None:
+    """Presentation snapshots contain exact base values without subclass behavior."""
+
+    class DerivedRange(SourceRange):
+        pass
+
+    class DerivedFrame(DiagnosticFrame):
+        pass
+
+    derived = DerivedFrame(
+        label="flow.yaml",
+        text="value\n",
+        range=DerivedRange(1, 1, 1, 6),
+        note="context",
+    )
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return derived
+
+    diagnostic = _composed_flow(Resolver()).diagnose(_failure(OriginRef("valid")))
+
+    assert diagnostic.frames == (
+        DiagnosticFrame(
+            label="flow.yaml",
+            text="value\n",
+            range=SourceRange(1, 1, 1, 6),
+            note="context",
+        ),
+    )
+    assert type(diagnostic.frames[0]) is DiagnosticFrame
+    assert type(diagnostic.frames[0].range) is SourceRange
+
+
+@pytest.mark.parametrize(
+    "coordinates",
+    [
+        (True, 1, 1, 1),
+        (1, True, 1, 1),
+        (1, 1, True, 1),
+        (1, 1, 1, True),
+        (0, 1, 1, 1),
+        (1, 0, 1, 1),
+        (1, 1, 0, 1),
+        (1, 1, 1, 0),
+        (2, 1, 1, 1),
+        (2, 3, 2, 2),
+    ],
+)
+def test_diagnose_invalid_frame_coordinates_discard_partial_prefix(
+    coordinates: tuple[int, int, int, int],
+) -> None:
+    """Every coordinate is exact and positive, and the half-open end follows start."""
+    first = OriginRef("first")
+    invalid = OriginRef("invalid")
+    good_frame = DiagnosticFrame(
+        label="outer.yaml",
+        text="outer\n",
+        range=SourceRange(1, 1, 1, 6),
+    )
+    invalid_frame = DiagnosticFrame(
+        label="inner.yaml",
+        text="inner\n",
+        range=SourceRange(*coordinates),
+    )
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return good_frame if origin == first else invalid_frame
+
+    diagnostic = _composed_flow(Resolver()).diagnose(_failure(first, invalid))
+
+    assert diagnostic.frames == ()
+    assert diagnostic.notes == _UNAVAILABLE_NOTE
+
+
+def test_diagnose_frame_control_exception_propagates() -> None:
+    """Presentation fallback catches ordinary faults, not process control."""
+
+    class InterruptingFrame(DiagnosticFrame):
+        def __getattribute__(self, name: str) -> object:
+            if name == "label":
+                raise KeyboardInterrupt
+            return super().__getattribute__(name)
+
+    frame = InterruptingFrame(
+        label="flow.yaml",
+        text="value\n",
+        range=SourceRange(1, 1, 1, 6),
+    )
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return frame
+
+    with pytest.raises(KeyboardInterrupt):
+        _composed_flow(Resolver()).diagnose(_failure(OriginRef("interrupt")))
+
+
 def test_diagnose_reads_only_failure_and_resolver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

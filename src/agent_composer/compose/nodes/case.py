@@ -1,11 +1,11 @@
 """kind=case — the branch-routing node's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `case` node's frozen
-`CaseDescriptor`. It inherits the template `parse` from `NodeDescriptor` (which records each
-field's `SourceRange`), overriding only the `_normalize_cursor` hook — case is the sole kind
-whose surface carries a key YAML 1.1 coerces (`on:`->`True`), so it undoes that coercion before
-the template's key-legality check runs. Registered into `KINDS`/`BINDING_FIELDS` at import so the
-shared dispatch routes here.
+`CaseDescriptor`. Its `parse` wraps the `NodeDescriptor` template to retain positional
+`cases[N].when`/`then` ranges, while `_normalize_cursor` handles the sole author key that
+YAML 1.1 coerces (`on:` -> `True`). Its immutable source-origin hook registers each indexed
+predicate and optional `on:` site before lowering. Registered into `KINDS`/`BINDING_FIELDS`
+at import so the shared dispatch routes here.
 
 Unlike the leaf kinds, a `case` LOWERS in its own `.build()`: pattern-match compilation (the
 OCaml analogue of lowering `match e with | p -> e1 | _ -> e2` to nested conditionals). A `case`
@@ -106,10 +106,12 @@ class CaseDescriptor(NodeDescriptor):
     inputs-bearing `CaseNode`). `else_` is the `else:` fallback.
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
-    `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor`.
-    It overrides ONLY the `_normalize_cursor` hook (to undo the `on:`->`True` YAML coercion
-    before key legality runs); its field legality is otherwise the default allowed/required key
-    check plus the default asserts-list check. Only the case-specific fields are declared here.
+    `range`/`field_ranges` parse metadata) and delegates common parsing to `NodeDescriptor`.
+    Its `parse` wrapper captures positional predicate/target ranges; `_normalize_cursor`
+    undoes the `on:`->`True` YAML coercion before key legality runs; and
+    `with_source_origins` attaches indexed predicate and optional `on:` origins. Field
+    legality otherwise uses the default allowed/required-key and asserts-list checks.
+    Only the case-specific fields are declared here.
 
     Class attrs: `kind="case"`; `allowed` adds `cases`/`else`/`on` to the commons; `required`
     is `{"cases"}`; `binding_fields=()` — a `case` carries CONDITIONS (`on:` + each `when:`),

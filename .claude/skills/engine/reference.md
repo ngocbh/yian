@@ -180,7 +180,7 @@ Runtime and compile validation read these node members instead of branching on
 | `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → `wait` `{"until": ts}`, `map` `{"over": [...]}` |
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
 | `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `_run_impl` → baked child on call/map/loop; complete predicates on case |
-| `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin |
+| `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate |
 | `failure_trace(operation_origin=None)` | evaluator, dispatcher, and terminal-unreachable producers: combine generated ancestry with the best local origin | `origin_context + (operation origin or node origin)`; omit only an absent local suffix |
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
 | `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
@@ -338,7 +338,8 @@ model made enforceable.
   `failure_trace` project node/carrier origins and generated `origin_context`,
   which remain identity-neutral alongside render-only ranges, comments, and
   object identity. CODE's executable `code` text affects identity, while its
-  whole-source and exact-line origins are diagnostic-only and do not.
+  whole-source and exact-line origins are diagnostic-only and do not. CASE handles
+  and predicate expressions affect identity, while ordered predicate origins do not.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
   core dispatches on worker-result/run-record variants and consults node-owned
   execution-semantic traits/hooks plus diagnostic projections, never `node.kind`
@@ -426,6 +427,14 @@ membership, and filenames are intentionally irrelevant. Wrapper line `n` maps to
 constructed slot `n - 2`, then falls back to the whole scalar and node. Failures after
 the authored body (such as serialization) use the whole scalar; reference mode keeps
 the base node fallback. Compose reuses the same selector for `SyntaxError.lineno`.
+`CaseNode` carries one optional origin on every ordered `Case`. Compose registers
+the exact indexed `cases[N].when` occurrences before lowering, so duplicate text
+remains distinct. `exception_origin` selects the active predicate from this node's
+own `_run_impl` traceback frame and `Case` identity; other failures use the node
+fallback. Generated searched bindings inherit the first predicate occurrence that
+introduced their reference, while `on:` owns the generated `__on` binding. All of
+these carriers are diagnostic-only and manifest-neutral.
+
 `Node.pre_asserts` / `post_asserts` are likewise canonical ordered `Assertion`
 lists. Compose crosses raw YAML text into one carrier per authored flow/node list
 position. That item's retained cursor supplies both the carrier origin and the
@@ -457,7 +466,10 @@ from ordinary source-backed node inputs: final assembly stamps their selecting k
 on the sink `Parameter.origin` and their value on the corresponding `Binding.origin`.
 Source-backed reserved MAP `over:` and WAIT `until:`
 wiring receives a `Binding.origin` only; neither field is a formal `Parameter`.
-Desugaring may replace `Binding.source` but retains that value origin. Without a retained
+CASE lowering gives each generated searched binding the origin of the first predicate
+that introduced its reference, or gives `__on` the separate `on:` origin; generated
+CASE parameters remain source-free. Desugaring may replace `Binding.source` but
+retains that value origin. Without a retained
 source occurrence, Compose mints no origin and preserves any explicit programmatic origin;
 source-backed projections inherit their backing site.
 Source-backed bare/mapped root, multi-node-definition, and inline-child
@@ -513,7 +525,8 @@ a compile-owned copied node and shares a frozen-carrier identity guard across
 the graph. CALL/MAP/LOOP extend those hooks with their cached `child_inputs` and
 return a non-`None` baked child from `origin_children()`; ordinary nodes return no
 children. CODE extends the local hooks with its whole-source fallback followed by
-its ordered exact-line origins. CASE currently needs only the common hook.
+its ordered exact-line origins. CASE extends them with its ordered predicate origins,
+using the shared carrier identity guard so deliberate aliases are visited once.
 
 `compile.origins.iter_flow_origins(flow)` visits wiring, `CompiledFlow.outputs`,
 nodes, and their static children in deterministic structural order. Identity
@@ -599,6 +612,11 @@ references to `CodeNode`. Quoted and folded scalars keep only the whole-value
 fallback. Source-free descriptors mint no new Compose origins and preserve explicit
 programmatic carriers. The hook never retains a cursor, coordinates, or a parallel
 source map.
+CASE registers each indexed `cases[N].when` and optional `on:` value through the
+same hook. Lowering preserves each predicate origin on its ordered `Case`, assigns
+the first owning predicate origin to a searched generated `Binding`, and assigns the
+`on:` origin to `__on`; synthesized `Parameter` carriers remain source-free.
+
 `compose/helpers/types.py` owns the sole source-aware recursive type compiler. For
 retained root/definition flow inputs, declaration keys stamp `Parameter.origin`, type
 values and authored nested record fields populate `ContractOrigins`, and packed
@@ -746,7 +764,10 @@ never a text heuristic.
   `contract.input`, the best operation origin, and a temporary node-less `input`
   span. Base-wrapper `NodeAssertFailed` carries its exact `Assertion` and becomes
   `assertion.failed`; the same class raised by node code remains `node.execute`.
-  Body exceptions become `node.execute`; invalid ordinary/generator terminal
+  Body exceptions become `node.execute`, using the node's `exception_origin`
+  projection: CODE selects its deepest owned wrapped line, while CASE selects the
+  exact active predicate by frame/node/`Case` identity. Invalid ordinary/generator
+  terminal
   values and a non-spawner `Grow` become `contract.node_result`. Every producer
   calls `Node.failure_trace(best_operation_origin)`, which retains generated
   outer context and uses the node origin only when no operation origin is

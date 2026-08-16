@@ -21,6 +21,7 @@ These names are exported from the top-level `agent_composer` package:
 |------|------------|
 | `load_flow` | parse + compile + validate Compose-YAML into a `ComposedFlow` |
 | `run_flow` | drive a `ComposedFlow` to a terminal, returning a `RunResult` |
+| `Failure` | immutable semantic failure (`code`, message, node, origin trace, debug cause) |
 | `ComposedFlow` | a compiled, validated flow plus its optional complete `origin_resolver` |
 | `CompiledFlow` | the compiled flow IR (`loaded.compiled`) |
 | `VariablePool` | the typed value pool |
@@ -89,18 +90,27 @@ terminal. Stored defaults are not coerced.
 - `llm_config` — the outer authored layer of the per-agent configuration cascade.
   The resolved map and process defaults are captured at initialization.
 
-A node or flow-assert failure returns `RunResult(status="failed")`; a successful
-flow returns `status="succeeded"`. Host-control, callback, log I/O, and internal
-reducer errors propagate after the engine has drained active workers and released
-the boundary-owned log.
+A node or flow-assert failure returns `RunResult(status="failed")` with one
+immutable `result.failure`; a successful flow returns `status="succeeded"` with
+`failure=None`. Inspect `failure.code` for program logic and `failure.message` for
+display. `failure.node_id`, `failure.trace`, `failure.cause_type`, and
+`failure.traceback` retain execution, authored-source, and debugging context.
+Temporary `result.locator` / `result.range` fields preserve precise YAML framing;
+there are no `error`, `error_type`, or standalone `traceback` aliases.
+Host-control, callback, log I/O, and internal reducer errors propagate after the
+engine has drained active workers and released the boundary-owned log.
 
 ## Authoritative run logs
 
-Every execution is reduced from one ordered `RunLog`, including process-local
-runs. The closed durable record vocabulary is `RunStartedRecord`,
+Every execution is reduced from one ordered schema-2 `RunLog`, including
+process-local runs. The closed durable record vocabulary is `RunStartedRecord`,
 `RunResumedRecord`, `NodeStartedRecord`, `NodeSucceededRecord`,
 `NodeRoutedRecord`, `NodeExpandedRecord`, and `NodeFailedRecord`. Terminal
-success or failure is derived from those node transitions.
+success or failure is derived from those node transitions. `NodeFailedRecord`
+stores the nested `Failure` directly. A causal `NodeRoutedRecord` stores the
+optional derived terminal-unreachable `Failure` that replay revalidates before
+restoring; no separate terminal record exists. Schema-1 logs are deliberately
+rejected.
 
 For each transition, the dispatcher follows one authority order:
 
@@ -237,10 +247,9 @@ The terminal outcome of a fresh or recovered run has exactly these fields:
 | `run_id` | durable identity shared by the state and log |
 | `log` | durable JSONL `Path`, or `None` for a process-local fresh run |
 | `output` | terminal flow value on success; otherwise `None` |
-| `error` | human-readable failure detail on failure; otherwise `None` |
+| `failure` | canonical `Failure` on failure; otherwise `None` |
 | `locator` | symbolic source location for a failed flow, when available |
 | `range` | resolved source range for a failed flow, when available |
-| `traceback` | captured node traceback for exception-backed failures, when available |
 | `events` | post-durable observer events published during this call only |
 
 ## Next

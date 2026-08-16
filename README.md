@@ -235,6 +235,11 @@ result = run_flow(loaded, {"name": "Ada"})
 print(result.status, result.output)
 ```
 
+Failed runs return `result.failure`, an immutable `Failure` also exported from
+`agent_composer`. Use its stable `code` for control flow and `message` for
+display; node identity, opaque origin trace, and optional debugging cause stay
+on that same value rather than parallel error fields.
+
 `loaded.origin_resolver` is the source-neutral authority for every origin reachable
 from the compiled Compose graph. It is `None` only when that graph is source-free;
 otherwise it resolves local, nested, and external-file origins to diagnostic frames.
@@ -245,12 +250,13 @@ Lower-level Python graph builders and tooling can import the source-neutral
 `ValuePath` vocabulary from `agent_composer.nodes`. Origins are optional; these
 definitions are being adopted by engine consumers incrementally.
 
-Pass `log="run.jsonl"` to create an authoritative append-only JSONL history for
+Pass `log="run.jsonl"` to create an authoritative append-only schema-2 JSONL history for
 the run. If the process is interrupted, load the same flow in a later process and
 recover the durable prefix with `resume_flow(loaded, log="run.jsonl")` from
 `agent_composer.run`. A fresh durable run never overwrites an existing path.
-Run logs retain canonical inputs, node outputs (including human/tool/model data),
-resolved model configuration, and failure tracebacks. Treat them as sensitive:
+Schema-1 logs are not migrated. Run logs retain canonical inputs, node outputs
+(including human/tool/model data), resolved model configuration, and failure
+tracebacks. Treat them as sensitive:
 choose an access-controlled path and do not commit or publish them.
 
 ## Develop & test

@@ -260,7 +260,8 @@ def test_compile_error_gallery(filename, substr, line):
 )
 def test_runtime_error_gallery(filename, inputs, substr):
     result = run_flow(load_flow((_ERRORS / filename).read_text()), inputs)
-    assert result.status != "succeeded"          # a failed/aborted run, not a crash
+    assert result.status == "failed"
+    assert result.failure is not None
     assert substr in result.failure.message
 
 

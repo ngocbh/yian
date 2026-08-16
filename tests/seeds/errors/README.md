@@ -15,8 +15,9 @@ detect.** Concretely:
 
 - **Compile-time** failures load via `load_flow` and must raise `LoadError`; where the slice
   tracks a position, assert the located `.line` (the offending `.yaml` line, not the IR).
-- **Runtime** failures run via `run_flow` and must come back as `RunResult.status == "failed"`
-  (or `"aborted"`) with a `.error` substring — never an uncaught crash.
+- **Runtime** failures run via `run_flow` and must come back as
+  `RunResult.status == "failed"` with the expected substring in
+  `RunResult.failure.message` — never an uncaught crash.
 - Each fixture isolates **one** failure, states compile-vs-runtime + the expected diagnostic in
   its header, and gets a matching assertion in `tests/engine/test_errors.py`.
 - A failure mode whose check isn't built yet goes under `_future/errors/` with its milestone —

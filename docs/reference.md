@@ -11,6 +11,8 @@ These are exported from `agent_composer`.
 
 ::: agent_composer.run_flow
 
+::: agent_composer.Failure
+
 ::: agent_composer.ComposedFlow
 
 ::: agent_composer.CompiledFlow

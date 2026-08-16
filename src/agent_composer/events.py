@@ -29,8 +29,8 @@ class SourceSpan:
     """A pointer to a sub-location in a flow's YAML, for precise error framing.
 
     Produced at the site a runtime failure originates from (binding knows the input
-    key; an assert carries its author-facing display) and carried on `NodeFailed`/`RunFailed`; the
-    CLI resolves it to a 1-based source line via the parser's sub-line maps.
+    key; an assert carries its author-facing display) and retained beside the
+    canonical `Failure`; the CLI resolves it through the authored source maps.
 
     Attributes:
         node (`str | None`):
@@ -123,15 +123,9 @@ class NodeFailed:
     """A node failed with one canonical semantic diagnostic."""
 
     failure: Failure
-    # The precise YAML sub-location the failure originates from (an input binding,
-    # an assertion display); None when no sub-line is determinable (a code raise) -> the
-    # CLI falls back to the node's best sub-line / header.
+    # Temporary YAML presentation bridge; None for source-free failures.
     locator: Optional[SourceSpan] = None
-    # The concrete source span the funnel resolves ALONGSIDE the symbolic locator, by looking
-    # up the node's recorded `field_ranges[(locator.kind, locator.key)]` (kind-blind — keyed on
-    # the LOCATOR, never on `node.kind`; the kind tag is what keeps a field from colliding with
-    # a like-named input). None when the node records no range for that (kind, key). The CLI
-    # prefers this over resolving the symbolic `locator`. Additive/coexistent with `locator`.
+    # Concrete range resolved at the failure site when available.
     range: Optional[SourceRange] = None
 
 
@@ -177,13 +171,7 @@ class RunFailed:
     """The run ended on a node failure or an unreachable terminal output."""
 
     failure: Failure
-    # Flow-level precise location (a boundary assertion display, a failed input decl);
-    # None when not determinable -> the CLI falls back to a plain message.
+    # Same temporary presentation bridge as the originating NodeFailedRecord.
     locator: Optional[SourceSpan] = None
-    # The concrete source span resolved ALONGSIDE the symbolic locator (the flow-boundary twin
-    # of NodeFailed.range). A failing input decl's declaration line is looked up on the
-    # StartNode's `field_ranges[("input", name)]`; a false boundary assert instead carries
-    # its own range, resolved BY POSITION off `pre_assert_ranges`/`post_assert_ranges` (assert
-    # text is not a unique identity, so asserts are deliberately not in `field_ranges`). None
-    # when neither is recorded. The CLI prefers this over resolving the locator.
+    # Concrete authored range, or None when only an opaque origin is known.
     range: Optional[SourceRange] = None

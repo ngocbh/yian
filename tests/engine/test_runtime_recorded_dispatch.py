@@ -282,7 +282,7 @@ def _dispatcher(
 def _capture_semantic_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[Failure]:
-    """Spy on the one canonical-to-schema-1 projection without replacing it."""
+    """Spy on the canonical failure-record preparation without replacing it."""
     captured: list[Failure] = []
     project = FlowEngine._prepare_failure
 

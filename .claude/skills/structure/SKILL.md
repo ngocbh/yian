@@ -162,6 +162,8 @@ preserves any explicit programmatic origin. Private assembly leaves the resolver
 its shared catalog grows. The loader validates and lexically rebases external children per alias, performs the
 only successful-load catalog freeze at the physical-file boundary, and installs the exact
 `ComposedFlow.origin_resolver`; source-free graphs use `None`.
+`ComposedFlow` retains no parallel source text, labels, or range maps: runtime
+presentation reaches authored documents only through that resolver.
 
 `compose/loader` owns the state whose lifetime is a load graph or one authored
 file. Its resolved-path context guards cycles and caches only successfully

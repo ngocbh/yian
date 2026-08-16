@@ -111,8 +111,8 @@ results still retain their temporary `SourceSpan` locator and concrete range, bu
 the CLI no longer reads that bridge: runtime and load failures both reach the same
 `render_diagnostic()` through `ComposedFlow.diagnose()`. Missing or broken source
 resolution therefore stays unlocated instead of falling through to runtime-id or
-graph inference. The unused range and `SourceFrame` carriers remain only for the
-following deletion steps; they are not an alternative origin-resolution API.
+graph inference. Temporary runtime locator/range values remain compatibility
+metadata only; they are not an alternative origin-resolution API.
 
 The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
 `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
@@ -187,8 +187,8 @@ loader/desugar-synthesized nodes remain so. Clones preserve an existing origin.
 ancestry for nested failure traces; it is empty on direct/static nodes and is
 neither enumerated nor rewritten as local authored provenance. Both fields are
 diagnostic-only and excluded from manifests, fingerprints, and expansion
-digests. The legacy `range` fields remain the active render bridge while
-diagnostics migrate to origin resolution.
+digests. Legacy node `range` fields remain temporary compatibility metadata;
+runtime presentation no longer reads them.
 
 CODE also owns two source-neutral diagnostic slots for its authored executable
 field. `code_origin` is the whole-`code:` fallback, while
@@ -436,11 +436,9 @@ origin set and installs one immutable `ResolverTable` as
 `ComposedFlow.origin_resolver`; a source-free graph carries `None`. Repeated calls through
 one alias reuse its view, while distinct aliases and diamond branches remain disjoint.
 
-`SourceFrame` is persistent render-only diagnostic metadata on
-`ComposedFlow.source` and composite nodes' `child_source`. It carries source text
-and derived node/field range maps, but the CLI no longer reads it; it remains only
-as deletion-ready migration residue. It neither owns parsing nor exposes the private
-document graph.
+`ComposedFlow` stores no source-text or range snapshot. Its optional
+`origin_resolver` is the sole presentation authority for runtime failures, while
+load diagnostics are resolved before they leave Compose.
 
 ## Inline composite lowering
 
@@ -536,7 +534,7 @@ NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord
 ```
 
 The exact wire version is schema 2. `NodeFailedRecord` contains one nested
-`Failure` plus the temporary locator/range bridge; schema 1 is rejected rather
+`Failure` plus temporary locator/range compatibility metadata; schema 1 is rejected rather
 than migrated. Terminal success remains derived from the END value. The first
 route whose skip closure reaches END persists its causal `Failure` on that
 `NodeRoutedRecord`; replay revalidates the route before restoring it, and no

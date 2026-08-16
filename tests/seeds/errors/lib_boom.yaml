@@ -1,9 +1,9 @@
 # lib_boom — a tiny EXTERNAL flow whose CODE node always raises.
 #
-# Imported by e25-external-raise.yaml via `uses:`. The inner `kaboom` node raises at
-# runtime, so its failure surfaces with a runtime-namespaced id (`call/kaboom`) whose
-# leaf line lives in THIS file — the CLI call-traceback must box a frame labelled with
-# this filename pointing at the `code:` line here. CODE-only -> runs locally, no model.
+# Imported by e25-external-raise.yaml via `uses:`. The inner `kaboom` node's
+# `code:` origin resolves through this document's catalog, so the canonical frame
+# uses this filename. CODE-only -> runs locally, no model.
+# The parent composes this catalog through its external alias resolver.
 
 id: lib_boom
 name: lib_boom

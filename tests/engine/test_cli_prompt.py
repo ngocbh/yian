@@ -480,9 +480,8 @@ def test_run_error_multi_frame_stack_into_def(monkeypatch):
 
 
 def test_run_error_multi_frame_stack_into_external(monkeypatch):
-    # e25's code raises inside an EXTERNAL `uses:` flow (`go/kaboom`). The descent crosses the
-    # file boundary: frame 0 the `go:` call node in this file, frame 1 the failing node boxed
-    # in lib_boom.yaml (the frame label is THAT external filename, not this seed's).
+    # e25's ordered origins cross the file boundary: the outer CALL site is in
+    # this file and the failing CODE origin is in lib_boom.yaml.
     flow = _ERRORS / "e25-external-raise.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
@@ -497,8 +496,7 @@ def test_run_error_multi_frame_stack_into_external(monkeypatch):
 
 
 def test_run_error_multi_frame_three_levels(monkeypatch):
-    # e26 raises THREE levels deep (`outer/via/boom`): call -> def `middle` -> def `deep`.
-    # The stack must box all three frames, most-recent-call-last.
+    # e26's origin trace resolves all three levels outermost-to-innermost.
     flow = _ERRORS / "e26-three-level-raise.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
@@ -515,9 +513,8 @@ def test_run_error_multi_frame_three_levels(monkeypatch):
 
 def test_run_error_multi_frame_on_nested_human_input_failure(monkeypatch):
     # Seed 25 blocks on a HUMAN_INPUT inside a called `defs:` child (`gate/approve`). A host
-    # INVALID answer fails the typed write boundary with a `field` locator. The traceback
-    # descends into the def and points at the `output:` line (precise field locator), not the
-    # node header — frame 0 the `gate:` call, frame 1 `defs:review` `output:`.
+    # INVALID answer fails the typed write boundary. The origin trace points first
+    # at the `gate:` CALL and then the precise child `output:` declaration.
     flow = _SEEDS / "25-nested-suspension.yaml"
     text = flow.read_text()
     loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)

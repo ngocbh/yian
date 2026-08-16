@@ -1,8 +1,7 @@
-"""`SourceSpan` locator + the optional `locator` carried beside `Failure`.
+"""Temporary `SourceSpan` compatibility metadata carried beside `Failure`.
 
-A runtime failure points the CLI at the EXACT YAML sub-location it originates from
-(an input binding, an assert expression, a flow parameter). The failure site produces a
-`SourceSpan`; `NodeFailed`/`RunFailed` carry it; the CLI resolves it to a line.
+Failure sites still produce a locator for run-log compatibility, but canonical
+presentation resolves `Failure.trace`; the CLI does not inspect this carrier.
 """
 
 from dataclasses import fields

@@ -1,9 +1,9 @@
 # e25 — a CODE callable that raises INSIDE an EXTERNAL `uses:` flow (a different .yaml).
 #
-# RUNTIME: the inner `kaboom` node (in lib_boom.yaml) fails with a runtime-namespaced id
-# (`go/kaboom`). The CLI call-traceback must descend across the file boundary: frame 0 the
-# top-level `go:` call node in THIS file, frame 1 the failing `kaboom` node boxed in
-# lib_boom.yaml (the frame label is that external filename, not this one). CODE-only -> no model.
+# RUNTIME: the inner `kaboom` node fails with runtime id `go/kaboom`. The composed
+# origin resolver presents the outer CALL site in this file followed by the failing
+# `code:` scalar in lib_boom.yaml. CODE-only -> no model.
+# No child source snapshot or CLI graph walk participates.
 #
 # Run it with the file resolver pointed at this dir:
 #   load_flow(text, search_paths=[<errors dir>]); run_flow(loaded, {...})

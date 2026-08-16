@@ -52,9 +52,8 @@ from agent_composer.typesys.pool import VariablePool
 class EvaluationFailure:
     """One raw node-evaluation failure for durable dispatcher preparation.
 
-    ``failure`` is the sole semantic authority. ``locator`` and ``range`` retain
-    only the temporary YAML presentation bridge until opaque origins carry the
-    same operation-level precision.
+    ``failure`` is the sole semantic and presentation authority. ``locator`` and
+    ``range`` retain temporary compatibility metadata pending removal.
     """
 
     failure: Failure
@@ -70,7 +69,7 @@ def _evaluation_failure(
     origin: OriginRef | None = None,
     traceback_text: str | None = None,
 ) -> EvaluationFailure:
-    """Build one semantic failure plus the temporary range presentation bridge."""
+    """Build one semantic failure plus temporary compatibility metadata."""
     locator = getattr(exception, "locator", None)
     if locator is not None and locator.node is None:
         locator = replace(locator, node=node.id)

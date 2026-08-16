@@ -65,7 +65,7 @@ stages: **parse → desugar → wire → check → freeze.**
   │  reject_cycles         the static graph must be a DAG
   │  check_case_handles    every branch has a home
   ▼
- CompiledFlow  (wrapped, with parameters + asserts + source frame, as a ComposedFlow)
+ CompiledFlow  (wrapped with parameters + exact origin resolver as a ComposedFlow)
 ```
 
 Two ideas make this phase tractable:
@@ -81,9 +81,9 @@ its `build()`. Cross-node graph passes live in the ordered phase packages
 compose/build/`. The engine core sees none of it.
 
 The output is a **`ComposedFlow`**: a `CompiledFlow` (the static topology) plus the
-canonical typed `input:` parameters, the `asserts`, a render-only *source frame*, and
-an optional complete `origin_resolver`. Source-free graphs use `None`; every Compose-
-owned origin reachable from an originful graph has one exact diagnostic-frame route.
+canonical typed `input:` parameter view and an optional complete `origin_resolver`.
+It carries no source-text or range snapshot. Source-free graphs use `None`; every
+Compose-owned origin reachable from an originful graph has one exact diagnostic-frame route.
 `ComposedFlow.diagnose(failure)` is the authoring-front-end boundary that resolves
 the complete trace through that authority into presentation-only `Diagnostic` data.
 

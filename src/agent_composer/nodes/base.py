@@ -193,7 +193,7 @@ class NodeAssertFailed(Exception):
         locator: Any = None,
         range: Any = None,
     ) -> None:
-        """Retain the wrapper-owned assertion plus the legacy presentation bridge."""
+        """Retain the assertion plus legacy locator/range compatibility fields."""
         super().__init__(message)
         self.assertion = assertion
         self.locator = locator

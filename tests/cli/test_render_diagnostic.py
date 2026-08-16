@@ -111,7 +111,7 @@ def test_render_diagnostic_multi_line_block_keeps_its_content_lines() -> None:
 
 def test_render_diagnostic_renders_ordered_frames_and_context_notes() -> None:
     """Resolved frames retain tuple order and both note channels stay visible."""
-    child_source = "nodes:\n  leaf:\n    kind: code\n"
+    child_text = "nodes:\n  leaf:\n    kind: code\n"
     diag = Diagnostic(
         code="node.execute",
         message="leaf failed",
@@ -124,7 +124,7 @@ def test_render_diagnostic_renders_ordered_frames_and_context_notes() -> None:
             ),
             DiagnosticFrame(
                 label="child.yaml",
-                text=child_source,
+                text=child_text,
                 range=SourceRange(2, 3, 2, 8),
                 note="inside leaf",
             ),

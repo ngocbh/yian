@@ -34,7 +34,9 @@ evaluates `.expression` and reports/locates `.display`. `_run_impl` returns ONE 
 
 A streaming kind is a generator that yields `StreamChunk` and *returns* a
 `NodeResult`. **Failure is not a variant** — a node `raise`s and the engine
-evaluation boundary returns `EvaluationFailure`; the dispatcher turns that into a
+evaluation boundary returns `EvaluationFailure(Failure)` for expected rejection;
+host control, stream callbacks, unexpected binder faults, and malformed setup
+escape. The dispatcher currently projects that value into a schema-1
 `NodeFailedRecord`, and the reducer derives `NodeFailed`/`RunFailed` observers.
 `Node.on_failure` is a dormant future seam, not currently driven by `eval_node`.
 
@@ -59,10 +61,13 @@ identity. The closed plain-string codes are `binding.evaluate`,
 `contract.output`, `contract.route`, `contract.growth`, and
 `graph.terminal_unreachable`. Exception names and traceback text are debug data,
 not semantic categories. The contract reserves these codes for expected
-flow-owned rejection; producer classification and the host/compiler fault
-boundary are runtime cutover work. This foundation does not yet change the
-flattened evaluator, record, observer, or result carriers; their coordinated
-cutover follows separately.
+flow-owned rejection. The evaluator structurally assigns `binding.evaluate`,
+`contract.input`, `assertion.failed`, `node.execute`, and
+`contract.node_result`; it never classifies by exception type. `EvaluationFailure`
+owns that single `Failure` plus temporary locator/range metadata. `FlowEngine`
+still projects it into flattened schema-1 fields, dropping semantic `code` and
+opaque `trace`; dispatcher, observer, and public-result cutover follows
+separately.
 
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine
@@ -97,6 +102,8 @@ base `Node`; a kind overrides only what it needs.
 | `binds_per_item: bool` | read boundary (`eval_node`): bind PER ELEMENT via a `bind_item` cap vs bind `params` once | `False` → `True` on `map` |
 | `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → `wait` `{"until": ts}`, `map` `{"over": [...]}` |
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
+| `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `_run_impl` → baked child on call/map/loop; complete predicates on case |
+| `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin |
 | `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
@@ -545,11 +552,12 @@ preserving, for the `case` desugar): `rewrite_expr_refs` / `rewrite_template_ref
 (span walkers) and `rewrite_condition_refs` (whole-expression). Callers pass
 source strings + a resolver; they never touch the grammar or AST.
 
-## Located errors (precise source lines)
+## Located errors (when source provenance is available)
 
-A runtime failure points at the **exact YAML line** it originates from, not just the
-node header. The mechanism is a structured locator produced at the failure site and
-resolved to a line at the CLI boundary — never a text heuristic.
+A runtime failure with resolvable origin/range data can point at the **exact YAML
+line** it originates from, not just the node header. Source-free Python graphs and
+generated operations may have no location. Resolution uses structured provenance,
+never a text heuristic.
 
 - **`SourceSpan(node, kind, key)`** (in the low-level `events` observer module) —
   `kind ∈ {input, assert, field}`; `key` is the input name, assertion display, or
@@ -557,13 +565,15 @@ resolved to a line at the CLI boundary — never a text heuristic.
   funnel supplies the id; a genuinely flow-level location may remain `None`.
 - **Carriers:** `NodeFailed.locator` (node-level) and `RunFailed.locator` /
   `RunResult.locator` (flow-level). All default `None`.
-- **Producers:** the generic `bind_params` path stamps a node-less `input` span on
-  `BindingError` because the binder knows the parameter name, not the node. This
-  covers missing and invalid inputs for START and every ordinary node; START has no
-  kind-specific input-error path. The node's `run` wrapper raises
-  `NodeAssertFailed` carrying an `assert` span when a pre/post assert fails
-  (including boundary asserts lowered onto START/END), and `eval_node`'s funnel
-  fills any missing node id via `replace(loc, node=node.id)`;
+- **Evaluator producers:** `BindingError` carries `binding.evaluate` or
+  `contract.input`, the best operation origin, and a temporary node-less `input`
+  span. Base-wrapper `NodeAssertFailed` carries its exact `Assertion` and becomes
+  `assertion.failed`; the same class raised by node code remains `node.execute`.
+  Body exceptions become `node.execute`; invalid ordinary/generator terminal
+  values and a non-spawner `Grow` become `contract.node_result`. The current
+  `Failure.trace` contains one operation origin, or the node origin as fallback.
+  `eval_node` fills a legacy locator's missing node id via
+  `replace(loc, node=node.id)`;
   success-transition preparation validates the raw `Output` against the effective
   target's declared type; invalid node-produced data becomes a durable `NodeFailedRecord`
   with the original error type and a fallback `field` span (`key="output"`).
@@ -589,7 +599,11 @@ resolved to a line at the CLI boundary — never a text heuristic.
   Output-type failures occur after evaluation, so their durable failure may carry only the
   symbolic `field` locator; the CLI resolves it from the supplied flow when no concrete range
   was recorded.
-- **Migration boundary:** authored nodes and assertions now carry opaque origins, and every
+- **Migration boundary:** evaluator failures now carry one canonical `Failure`,
+  while `FlowEngine` projects only its message/cause/traceback into schema-1
+  records and retains locator/range beside it. Durable records and CLI rendering
+  therefore still consume the legacy projection. Authored nodes and assertions
+  carry opaque origins, and every
   flow returned by `load_flow` carries one complete source-neutral resolver (or `None` when
   source-free). Runtime and CLI failure rendering still use the legacy locator/range path
   above. For assertions, Compose derives that temporary positional range and

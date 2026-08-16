@@ -170,7 +170,7 @@ class CodeDescriptor(NodeDescriptor):
                 )
             raise error from exc
 
-        node.output_contract = self.output_contract(ctx.registry, ctx.diagnostics)
+        node.output_contract = self.output_contract(ctx)
         node.params = self.sink_params()
         wiring = self.sink_wiring()
         return self._finish(node, wiring)

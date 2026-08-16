@@ -23,7 +23,7 @@ from here. It imports NOTHING from `loader.py` (that would be a back-edge).
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Callable, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
 from agent_composer.diagnostics import (
@@ -75,6 +75,7 @@ from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.compose.helpers.types import (
     read_flow_inputs,
     read_source_flow_inputs,
+    read_value_contract,
 )
 from agent_composer.compose.validate.handles import check_case_handles
 from agent_composer.compose.validate.asserts import validate_node_asserts
@@ -836,6 +837,41 @@ def _assemble(
             cursor.range,
         )
 
+    def read_authored_node_output(
+        node_id: str,
+        output_spec: Any,
+    ) -> ValueContract | None:
+        """Compile one physical node-output declaration at its build position.
+
+        Args:
+            node_id (`str`): Node whose normalized declaration should be selected.
+            output_spec (`Any`): Semantic type shape already retained by its descriptor.
+
+        Returns:
+            `ValueContract | None`: Located contract, or ``None`` for a virtual site.
+
+        Raises:
+            `LoadError`: Raised when source traversal or type compilation fails.
+        """
+        try:
+            if not nodes_cursor.has(node_id):
+                return None
+            node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
+            if not node_cursor.has("outputs"):
+                return None
+            output_cursor = node_cursor.child("outputs")
+            if output_cursor.range is None:
+                return None
+            return read_value_contract(
+                output_cursor.with_value(output_spec),
+                registry,
+                site_path=(*owner, "node", node_id, "output", "contract"),
+                catalog_builder=catalog_builder,
+                diagnostics=diagnostics,
+            )
+        except SourceAccessError as exc:
+            raise diagnostics.error(str(exc), range=exc.range) from exc
+
     # Inline CODE retains the flow label only as an opaque Python traceback filename;
     # authored locations come from semantic origins. Inert for reference-mode CODE.
     flow_label = source.label if source is not None else "<inline-code>"
@@ -1124,6 +1160,7 @@ def _assemble(
         source_file=flow_label,
         resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
+        output_contract_reader=read_authored_node_output,
     )
     descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base)
     build_results = descriptor_cache.build_in_source_order()

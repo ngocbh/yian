@@ -159,7 +159,7 @@ class HumanInputDescriptor(NodeDescriptor):
         unused (leaf kind) and the inline-CODE anchors on `ctx` are read only by the CODE build.
         """
         node = self._build_gate(ctx.diagnostics)
-        node.output_contract = self.output_contract(ctx.registry, ctx.diagnostics)
+        node.output_contract = self.output_contract(ctx)
         # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT (the host
         # returns a free-form answer record). Legacy gates derive their schema from the (possibly
         # absent) declared output type.

@@ -49,16 +49,18 @@ if TYPE_CHECKING:
 class BuildContext:
     """The immutable inputs a node `.build()` reads.
 
-    ``resolver`` resolves child flows for composites. ``resolve_origin`` is the
-    optional Compose-only presentation seam for an origin registered before file
-    finalization; source-free and direct programmatic builds leave it unset.
+    ``resolver`` resolves child flows for composites. ``output_contract_reader``
+    optionally compiles one authored node-output declaration at its established
+    build position. ``resolve_origin`` presents an origin registered before file
+    finalization. Source-free and direct programmatic builds leave both seams unset.
     """
 
-    registry: Any  # TypeRegistry (flow's read_typedefs map)
+    registry: TypeRegistry  # flow's read_typedefs map
     resolver: Any = None  # ChildResolver | None (None for leaves)
     source_file: str = "<inline-code>"  # opaque filename for Python tracebacks
     resolve_origin: Callable[[OriginRef], DiagnosticFrame | None] | None = None
     diagnostics: LoadDiagnostics = field(default_factory=LoadDiagnostics)
+    output_contract_reader: Callable[[str, Any], ValueContract | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -159,16 +161,43 @@ class NodeDescriptor:
 
     def output_contract(
         self,
-        registry: TypeRegistry,
-        diagnostics: LoadDiagnostics | None = None,
+        ctx: BuildContext,
     ) -> Optional[ValueContract]:
-        """Return the declared `outputs:` as one canonical contract, or `None`."""
+        """Return the declared ``outputs:`` as one canonical contract.
+
+        The optional Compose reader runs at this existing build position so
+        source compilation cannot move ahead of kind-owned validation. Direct
+        descriptor builds omit it and retain the source-free type reader.
+
+        Args:
+            ctx (`BuildContext`):
+                Registry, diagnostics, and optional authored-contract reader.
+
+        Returns:
+            `ValueContract | None`:
+                Canonical declared contract, or ``None`` when no output exists.
+
+        Raises:
+            `LoadError`:
+                Raised when the declaration is not a valid type expression.
+            `TypeError`:
+                Raised when the injected reader violates its return contract.
+        """
         if self.outputs is None:
             return None
-        diagnostics = diagnostics or LoadDiagnostics()
+        diagnostics = ctx.diagnostics
         try:
+            if ctx.output_contract_reader is not None:
+                contract = ctx.output_contract_reader(self.id, self.outputs)
+                if contract is not None:
+                    if type(contract) is not ValueContract:
+                        raise TypeError(
+                            "output contract reader must return an exact "
+                            "ValueContract or None"
+                        )
+                    return contract
             return ValueContract(
-                read_type(self.outputs, registry, diagnostics=diagnostics)
+                read_type(self.outputs, ctx.registry, diagnostics=diagnostics)
             )
         except LoadError as exc:
             if exc.diagnostic.frames:

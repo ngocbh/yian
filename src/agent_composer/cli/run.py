@@ -257,6 +257,49 @@ def _last_segment(node_id: Optional[str]) -> Optional[str]:
     return _strip_clone_suffix(node_id.split("/")[-1])
 
 
+def _node_owns_resolved_range(
+    node: Any,
+    span: Optional[SourceSpan],
+    resolved_range: Optional[SourceRange],
+) -> bool:
+    """Return whether a concrete range belongs to this node's current source frame.
+
+    Nested execution can relocate caller assertions onto a child boundary, and durable
+    results can outlive whitespace-only source edits. A bare `SourceRange` has no source
+    identity, so the CLI may place it in a child frame only when the current baked node owns
+    the exact locator site. This is an ownership check, not a second range resolver.
+
+    Args:
+        node:
+            Current baked node for the final runtime-id segment, or `None`.
+        span (`SourceSpan | None`): Symbolic operation site retained with the failure.
+        resolved_range (`SourceRange | None`): Evaluator-resolved concrete range.
+
+    Returns:
+        `bool`:
+            `True` when the current node carries the exact field/input or aligned assertion
+            range; otherwise `False`.
+    """
+    if node is None or span is None or resolved_range is None:
+        return False
+    if span.kind in {"input", "field"}:
+        return node.field_ranges.get((span.kind, span.key)) == resolved_range
+    if span.kind == "assert":
+        for assertions, ranges in (
+            (node.pre_asserts, node.pre_assert_ranges),
+            (node.post_asserts, node.post_assert_ranges),
+        ):
+            if any(
+                assertion.display == span.key and range_ == resolved_range
+                for assertion, range_ in zip(assertions, ranges)
+            ):
+                return True
+    span_leaf = _last_segment(span.node)
+    if span_leaf == _strip_clone_suffix(node.id):
+        return node.range == resolved_range
+    return False
+
+
 def _walk_call_frames(
     loaded,
     node_id: str,
@@ -280,12 +323,14 @@ def _walk_call_frames(
     live in that file. A segment with NO recorded range (a synthetic `__start__`/`__end__`/`__ask…`
     runtime segment, or a collapsed compact single-node def) is SKIPPED — its frame is dropped, the
     frames collected so far kept. Descent stops at the first segment that is not a call/map
-    with a baked child (the leaf), or when a segment can't be resolved. For the LAST segment,
-    the evaluator's already-resolved range is preferred regardless of locator kind. Without
-    one, a `kind=field` locator (e.g. an `output:` coercion) is tried, then the node's kind
-    fallback field (e.g. a code node's `code:`), then its body range (the node header). Never
-    raises — the caller treats any failure as "no multi-frame stack" and falls back to the
-    single-frame path.
+    with a baked child (the leaf), or when a segment can't be resolved. The evaluator's
+    already-resolved range replaces the fallback on the deepest traversed node that owns the
+    exact locator site. This prevents a caller-owned relocated assertion or a stale durable
+    range from being interpreted against unrelated child text. Without an owned concrete
+    range, the LAST segment tries a `kind=field` locator (e.g. an `output:` coercion), then
+    the node's kind fallback field (e.g. a code node's `code:`), then its body range (the node
+    header). Never raises — the caller treats any failure as "no multi-frame stack" and falls
+    back to the single-frame path.
 
     Args:
         loaded:
@@ -295,8 +340,8 @@ def _walk_call_frames(
         top_label (`str`): Display label for the root source.
         span (`SourceSpan | None`): Symbolic fallback location, when retained.
         resolved_range (`SourceRange | None`, *optional*, defaults to `None`):
-            Concrete failing-operation range already resolved by evaluation. Its coordinates
-            belong to the final node's retained source frame.
+            Concrete failing-operation range already resolved by evaluation. The walk uses it
+            only where current baked node metadata proves which source frame owns it.
 
     Returns:
         `list[tuple[str, str, SourceRange]]`:
@@ -313,17 +358,15 @@ def _walk_call_frames(
     field_ranges: dict = dict(top_src.field_ranges) if top_src is not None else {}
     text, label = top_text, top_label
     current_file = top_label  # the display filename of the file the current frame lives in
-    frames: list[tuple[str, str, SourceRange]] = []
+    frame_candidates: list[tuple[str, str, Optional[SourceRange], bool]] = []
     span_leaf = _last_segment(span.node) if span is not None else None
 
     for i, seg in enumerate(segments):
         is_last = i == len(segments) - 1
+        node = nodes.get(seg)
         rng: Optional[SourceRange] = None
         fields = field_ranges.get(seg, {})
         if is_last:
-            # The evaluator resolves every locator kind once. Preserve that precision in the
-            # innermost child frame instead of re-deriving only selected locator kinds here.
-            rng = resolved_range
             if rng is None and span is not None and span.kind == "field" and span_leaf == seg:
                 rng = _field_range(fields, span.key)
             if rng is None:  # else the node's kind fallback (e.g. a code node's `code:`)
@@ -333,11 +376,16 @@ def _walk_call_frames(
                         break
         if rng is None:
             rng = node_ranges.get(seg)  # the node body range (None -> synthetic/unauthored: skip)
-        if rng is not None:
-            frames.append((label, text, rng))
+        frame_candidates.append(
+            (
+                label,
+                text,
+                rng,
+                _node_owns_resolved_range(node, span, resolved_range),
+            )
+        )
 
         # Descend into the child this segment calls, if any (else the leaf is reached).
-        node = nodes.get(seg)
         if node is None:
             break
         child = getattr(node, "child", None)
@@ -355,6 +403,22 @@ def _walk_call_frames(
         else:
             current_file = src.label
             label = src.label
+
+    resolved_owner_index = next(
+        (
+            index
+            for index in range(len(frame_candidates) - 1, -1, -1)
+            if frame_candidates[index][3]
+        ),
+        None,
+    )
+    frames: list[tuple[str, str, SourceRange]] = []
+    for index, (candidate_label, candidate_text, fallback, _) in enumerate(
+        frame_candidates
+    ):
+        rng = resolved_range if index == resolved_owner_index else fallback
+        if rng is not None:
+            frames.append((candidate_label, candidate_text, rng))
     return frames
 
 
@@ -365,7 +429,7 @@ def _render_frame_stack(frames, message: str) -> None:
     (outermost `call` first, the failing leaf last), then the error message in red. Each
     frame carries a `SourceRange`; the box anchors on its `start_line` (one line per frame,
     like a Python traceback), which for a call-chain node is its header line and for the failing
-    leaf its resolved operation range or best available fallback."""
+    failing operation its source-owned resolved range or best available fallback."""
     err_console.print(Text("call traceback (most recent call last):", style="red bold"))
     for label, ftext, rng in frames:
         _render_frame_box(ftext, [rng.start_line], label)
@@ -420,15 +484,16 @@ def _render_run_error(
     The result's `SourceSpan` locator names exactly where the run broke — an input
     binding, an assert expression, or a field such as `output:`. Semantic
     message, node identity, and traceback data come only from `RunResult.failure`,
-    so terminal recovery renders identically without invocation-local events.
+    so terminal recovery needs no invocation-local events.
 
     When the failing node id is RUNTIME-NAMESPACED (a node inside a called child, e.g.
     `gate/approve`) and the loaded IR is available, the error renders a **call traceback**: a
     boxed frame per descended level — the top-level `call` node, then each child (`defs:` or
     external `uses:` file) — down to the failing leaf, most-recent-call-last
-    (`_walk_call_frames`). The final child frame first uses the evaluator-resolved
-    `RunResult.range`, then locator and node fallbacks. With fewer than two frames it falls
-    back to the single-frame box, whose `SourceRange` is resolved by, in order:
+    (`_walk_call_frames`). The deepest call-chain node whose current metadata owns the
+    evaluator-resolved `RunResult.range` uses it; other frames retain current locator, kind,
+    or header fallbacks. With fewer than two frames the renderer falls back to the
+    single-frame box, whose `SourceRange` is resolved by, in order:
 
     1. the flow-level `RunResult.range` retained by the temporary presentation bridge;
     2. else `_resolve_range`: a `kind=field` locator's field range, else the node's own range

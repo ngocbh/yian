@@ -620,7 +620,7 @@ def test_call_type_error_is_identical_for_raw_and_wrapped_sources() -> None:
         errors.append(str(caught.value))
 
     assert errors[0] == errors[1]
-    assert "child expects 'str', source is 'str'" in errors[0]
+    assert "child expects 'str', source is 'Optional[str]'" in errors[0]
 
 
 def test_case_edge_inference_reads_wrapped_lowered_wiring() -> None:

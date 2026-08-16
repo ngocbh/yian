@@ -814,8 +814,14 @@ output: ${go.output}
 
 def test_nullable_list_element_source_to_strict_child_is_rejected():
     """Element nullability is rejected at load, before an actual null can run."""
-    with pytest.raises(LoadError, match="call node 'go'.*binding 'items'"):
+    with pytest.raises(LoadError) as caught:
         load_flow(_NULLABLE_LIST_TO_STRICT_CHILD)
+
+    assert "call node 'go': binding 'items'" in str(caught.value)
+    assert (
+        "child expects 'list[int]', source is 'list[Optional[int]]'"
+        in str(caught.value)
+    )
 
 
 _NULLABLE_WITH_LITERAL_ESCAPE = """

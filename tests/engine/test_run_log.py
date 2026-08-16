@@ -15,6 +15,7 @@ import pytest
 
 import agent_composer.runtime.log as log_module
 from agent_composer.runtime.log import (
+    SCHEMA_VERSION,
     JsonlRunLog,
     MemoryRunLog,
     NodeExpandedRecord,
@@ -67,7 +68,7 @@ def _wire_line(
     *,
     run_id: str = "run",
     seq: int = 0,
-    schema: int = 1,
+    schema: int = SCHEMA_VERSION,
     node_id: str = "work",
 ) -> bytes:
     """Return one complete JSONL record with independently editable identity."""
@@ -370,7 +371,7 @@ def test_jsonl_never_exposes_its_retained_mutable_payload(tmp_path: Path):
         b'{"partial":',
         encode_record(
             RecordEnvelope(
-                schema=1,
+                schema=SCHEMA_VERSION,
                 run_id="run",
                 seq=1,
                 record=NodeStartedRecord(node_id="valid-but-incomplete"),
@@ -438,7 +439,7 @@ def test_jsonl_resume_rejects_a_corrupt_complete_line_and_releases_lock(
 @pytest.mark.parametrize(
     "contents",
     [
-        _wire_line(schema=2),
+        _wire_line(schema=1),
         _wire_line(seq=1),
         _wire_line(run_id="first", seq=0)
         + _wire_line(run_id="second", seq=1, node_id="other"),

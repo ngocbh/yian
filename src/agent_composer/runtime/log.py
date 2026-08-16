@@ -29,6 +29,7 @@ from typing import (
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
+from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import SourceRange, SourceSpan
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import (
@@ -41,7 +42,7 @@ from agent_composer.typesys.values import (
 )
 
 
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
 """The one run-record wire schema understood by this release."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -118,12 +119,9 @@ class NodeExpandedRecord:
 class NodeFailedRecord:
     """Make a run terminal-failed with the captured node diagnostic."""
 
-    node_id: str
-    error: str
-    error_type: str = ""
+    failure: Failure
     locator: SourceSpan | None = None
     range: SourceRange | None = None
-    traceback: str | None = None
 
 
 RunRecord: TypeAlias = (
@@ -512,7 +510,7 @@ class _EnvelopeWire(_StrictModel):
     @field_validator("schema_version", mode="before")
     @classmethod
     def _exact_integer_schema(cls, value: Any) -> Any:
-        """Reject bools and integral floats before ``Literal[1]`` can coerce them."""
+        """Reject bools and integral floats before the schema literal can coerce them."""
         if type(value) is not int:
             raise ValueError("run-record schema must be an integer")
         return value
@@ -602,15 +600,29 @@ class _SourceRangePayload(_StrictModel):
     end_col: int = Field(ge=1)
 
 
+class _OriginRefPayload(_StrictModel):
+    """Strict single-key JSON form of one opaque authored origin."""
+
+    key: str = Field(min_length=1)
+
+
+class _FailurePayload(_StrictModel):
+    """Strict nested JSON form of one canonical semantic failure."""
+
+    code: FailureCode
+    message: str
+    node_id: str = Field(min_length=1)
+    trace: list[_OriginRefPayload]
+    cause_type: str | None
+    traceback: str | None
+
+
 class _NodeFailedPayload(_StrictModel):
     """Strict wire payload for :class:`NodeFailedRecord`."""
 
-    node_id: str = Field(min_length=1)
-    error: str
-    error_type: str
+    failure: _FailurePayload
     locator: _SourceSpanPayload | None
     range: _SourceRangePayload | None
-    traceback: str | None
 
 
 _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
@@ -814,8 +826,7 @@ def decode_record(data: bytes | str) -> RecordEnvelope:
     model_type = _KIND_TO_MODEL.get(envelope.kind)
     if model_type is None:
         raise ValueError(f"unknown run-record kind: {envelope.kind!r}")
-    payload_wire = _migrate_legacy_input_locator(envelope.kind, envelope.payload)
-    payload = model_type.model_validate(payload_wire)
+    payload = model_type.model_validate(envelope.payload)
     record = _record_from_payload(envelope.kind, payload)
     return RecordEnvelope(
         schema=envelope.schema_version,
@@ -823,26 +834,6 @@ def decode_record(data: bytes | str) -> RecordEnvelope:
         seq=envelope.seq,
         record=record,
     )
-
-
-def _migrate_legacy_input_locator(kind: str, payload: Any) -> Any:
-    """Map schema-1 START's retired ``input_decl`` locator to generic ``input``.
-
-    Encoding remains strict and emits only the current vocabulary. This decode-only
-    normalization keeps already-written schema-1 failed runs readable without
-    retaining a second semantic locator kind in the runtime model.
-    """
-    if kind != "node_failed" or not isinstance(payload, dict):
-        return payload
-    locator = payload.get("locator")
-    if not isinstance(locator, dict) or locator.get("kind") != "input_decl":
-        return payload
-    migrated = dict(payload)
-    migrated_locator = dict(locator)
-    migrated_locator["kind"] = "input"
-    migrated["locator"] = migrated_locator
-    return migrated
-
 
 def _kind_for_record(record: RunRecord) -> str:
     """Map one closed record variant to its stable wire discriminator."""
@@ -894,7 +885,21 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             "topology_digest": record.topology_digest,
         }
     elif isinstance(record, NodeFailedRecord):
-        raw = asdict(record)
+        failure = record.failure
+        if type(failure) is not Failure:
+            raise TypeError("NodeFailedRecord failure must be a Failure")
+        raw = {
+            "failure": {
+                "code": failure.code,
+                "message": failure.message,
+                "node_id": failure.node_id,
+                "trace": [{"key": origin.key} for origin in failure.trace],
+                "cause_type": failure.cause_type,
+                "traceback": failure.traceback,
+            },
+            "locator": asdict(record.locator) if record.locator is not None else None,
+            "range": asdict(record.range) if record.range is not None else None,
+        }
     else:  # protected by _kind_for_record; retained for exhaustive local reasoning
         raise TypeError(f"unsupported run record: {type(record).__name__}")
 
@@ -945,12 +950,21 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             topology_digest=values["topology_digest"],
         )
     if kind == "node_failed":
+        failure_payload = values["failure"]
         locator_payload = values["locator"]
         range_payload = values["range"]
         return NodeFailedRecord(
-            node_id=values["node_id"],
-            error=values["error"],
-            error_type=values["error_type"],
+            failure=Failure(
+                code=failure_payload["code"],
+                message=failure_payload["message"],
+                node_id=failure_payload["node_id"],
+                trace=tuple(
+                    OriginRef(origin_payload["key"])
+                    for origin_payload in failure_payload["trace"]
+                ),
+                cause_type=failure_payload["cause_type"],
+                traceback=failure_payload["traceback"],
+            ),
             locator=(
                 SourceSpan(**locator_payload)
                 if locator_payload is not None
@@ -961,7 +975,6 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
                 if range_payload is not None
                 else None
             ),
-            traceback=values["traceback"],
         )
     raise ValueError(f"unknown run-record kind: {kind!r}")
 

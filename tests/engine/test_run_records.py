@@ -10,6 +10,7 @@ from typing import Any, Iterator
 
 import pytest
 
+from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.events import SourceRange, SourceSpan
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
@@ -65,12 +66,16 @@ def _records():
             topology_digest=_TOPOLOGY_DIGEST,
         ),
         NodeFailedRecord(
-            node_id="broken",
-            error="boom",
-            error_type="ValueError",
+            failure=Failure(
+                code="node.execute",
+                message="boom",
+                node_id="broken",
+                trace=(OriginRef("root/nodes/broken/code"),),
+                cause_type="ValueError",
+                traceback="Traceback (most recent call last): ...",
+            ),
             locator=SourceSpan(node="broken", kind="field", key="code"),
             range=SourceRange(start_line=8, start_col=3, end_line=8, end_col=12),
-            traceback="Traceback (most recent call last): ...",
         ),
     ]
 
@@ -105,45 +110,61 @@ def test_record_encoding_is_canonical_newline_free_and_byte_stable():
 
     assert encoded == (
         b'{"kind":"node_started","payload":{"node_id":"work"},'
-        b'"run_id":"run-canonical","schema":1,"seq":0}'
+        b'"run_id":"run-canonical","schema":2,"seq":0}'
     )
     assert not encoded.endswith(b"\n")
     assert encode_record(decode_record(encoded)) == encoded
 
 
-def test_decode_maps_legacy_input_declaration_locator_to_generic_input():
-    wire = {
-        "schema": 1,
-        "run_id": "run-legacy-input-locator",
-        "seq": 0,
+def test_node_failure_encoding_nests_one_canonical_failure():
+    envelope = RecordEnvelope(
+        schema=SCHEMA_VERSION,
+        run_id="run-failure",
+        seq=7,
+        record=NodeFailedRecord(
+            failure=Failure(
+                code="contract.input",
+                message="bad input",
+                node_id="__start__",
+                trace=(OriginRef("root/input/window"), OriginRef("root/type/window")),
+                cause_type="TypeCheckError",
+                traceback=None,
+            ),
+            locator=SourceSpan(node="__start__", kind="input", key="window"),
+        ),
+    )
+
+    encoded = encode_record(envelope)
+
+    assert json.loads(encoded) == {
+        "schema": 2,
+        "run_id": "run-failure",
+        "seq": 7,
         "kind": "node_failed",
         "payload": {
-            "node_id": "__start__",
-            "error": "bad input",
-            "error_type": "TypeCheckError",
-            "locator": {
-                "node": "__start__",
-                "kind": "input_decl",
-                "key": "window",
+            "failure": {
+                "code": "contract.input",
+                "message": "bad input",
+                "node_id": "__start__",
+                "trace": [
+                    {"key": "root/input/window"},
+                    {"key": "root/type/window"},
+                ],
+                "cause_type": "TypeCheckError",
+                "traceback": None,
             },
+            "locator": {"node": "__start__", "kind": "input", "key": "window"},
             "range": None,
-            "traceback": None,
         },
     }
-
-    decoded = decode_record(_json_bytes(wire))
-
-    assert decoded.record.locator == SourceSpan(
-        node="__start__",
-        kind="input",
-        key="window",
-    )
-    assert b'"kind":"input"' in encode_record(decoded)
+    assert decode_record(encoded) == envelope
 
 
 def test_records_and_envelopes_are_frozen():
     record = NodeStartedRecord(node_id="work")
-    envelope = RecordEnvelope(schema=1, run_id="run", seq=0, record=record)
+    envelope = RecordEnvelope(
+        schema=SCHEMA_VERSION, run_id="run", seq=0, record=record
+    )
 
     with pytest.raises(FrozenInstanceError):
         record.node_id = "changed"  # type: ignore[misc]
@@ -159,7 +180,7 @@ def _json_bytes(value: object) -> bytes:
     "wire",
     [
         {
-            "schema": 2,
+            "schema": 1,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -173,42 +194,42 @@ def _json_bytes(value: object) -> bytes:
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 1.0,
+            "schema": 2.0,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "run",
             "seq": -1,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "run",
             "seq": True,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "run",
             "seq": 0,
             "kind": "not_a_record",
             "payload": {},
         },
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -216,7 +237,7 @@ def _json_bytes(value: object) -> bytes:
             "unexpected": True,
         },
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -232,28 +253,28 @@ def test_decode_rejects_invalid_envelopes(wire):
     "wire",
     [
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work", "unexpected": True},
         },
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {},
         },
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": 7},
         },
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "run",
             "seq": 0,
             "kind": "node_succeeded",
@@ -264,21 +285,25 @@ def test_decode_rejects_invalid_envelopes(wire):
             },
         },
         {
-            "schema": 1,
+            "schema": 2,
             "run_id": "run",
             "seq": 0,
             "kind": "node_failed",
             "payload": {
-                "node_id": "work",
-                "error": "boom",
-                "error_type": "ValueError",
+                "failure": {
+                    "code": "node.execute",
+                    "message": "boom",
+                    "node_id": "work",
+                    "trace": [],
+                    "cause_type": "ValueError",
+                    "traceback": None,
+                },
                 "locator": {
                     "node": "work",
                     "kind": "not_a_locator_kind",
                     "key": "code",
                 },
                 "range": None,
-                "traceback": None,
             },
         },
     ],
@@ -288,24 +313,179 @@ def test_decode_rejects_unknown_missing_and_wrong_payload_fields(wire):
         decode_record(_json_bytes(wire))
 
 
+def _node_failure_wire() -> dict[str, Any]:
+    """Return one independently mutable valid schema-2 node-failure object."""
+    return {
+        "schema": 2,
+        "run_id": "run",
+        "seq": 0,
+        "kind": "node_failed",
+        "payload": {
+            "failure": {
+                "code": "node.execute",
+                "message": "boom",
+                "node_id": "work",
+                "trace": [{"key": "root/nodes/work/code"}],
+                "cause_type": "ValueError",
+                "traceback": "trace",
+            },
+            "locator": None,
+            "range": None,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "mutate"),
+    [
+        ("missing-failure", lambda payload: payload.pop("failure")),
+        ("extra-payload", lambda payload: payload.update(extra=True)),
+        (
+            "missing-code",
+            lambda payload: payload["failure"].pop("code"),
+        ),
+        (
+            "missing-message",
+            lambda payload: payload["failure"].pop("message"),
+        ),
+        (
+            "missing-node-id",
+            lambda payload: payload["failure"].pop("node_id"),
+        ),
+        (
+            "missing-trace",
+            lambda payload: payload["failure"].pop("trace"),
+        ),
+        (
+            "missing-cause-type",
+            lambda payload: payload["failure"].pop("cause_type"),
+        ),
+        (
+            "missing-traceback",
+            lambda payload: payload["failure"].pop("traceback"),
+        ),
+        (
+            "unknown-code",
+            lambda payload: payload["failure"].update(code="node.unknown"),
+        ),
+        (
+            "wrong-message",
+            lambda payload: payload["failure"].update(message=7),
+        ),
+        (
+            "null-node-id",
+            lambda payload: payload["failure"].update(node_id=None),
+        ),
+        (
+            "empty-node-id",
+            lambda payload: payload["failure"].update(node_id=""),
+        ),
+        (
+            "wrong-trace-container",
+            lambda payload: payload["failure"].update(trace="origin"),
+        ),
+        (
+            "missing-origin-key",
+            lambda payload: payload["failure"].update(trace=[{}]),
+        ),
+        (
+            "empty-origin-key",
+            lambda payload: payload["failure"].update(trace=[{"key": ""}]),
+        ),
+        (
+            "wrong-origin-key",
+            lambda payload: payload["failure"].update(trace=[{"key": 7}]),
+        ),
+        (
+            "extra-origin-field",
+            lambda payload: payload["failure"].update(
+                trace=[{"key": "origin", "site": "legacy"}]
+            ),
+        ),
+        (
+            "extra-failure-field",
+            lambda payload: payload["failure"].update(error="legacy"),
+        ),
+        (
+            "wrong-cause-type",
+            lambda payload: payload["failure"].update(cause_type=7),
+        ),
+        (
+            "wrong-traceback",
+            lambda payload: payload["failure"].update(traceback=[]),
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_decode_rejects_malformed_nested_failures(case, mutate):
+    wire = _node_failure_wire()
+    mutate(wire["payload"])
+
+    with pytest.raises(ValueError):
+        decode_record(_json_bytes(wire))
+
+
+def test_decode_rejects_schema_1_even_with_a_nested_failure():
+    wire = _node_failure_wire()
+    wire["schema"] = 1
+
+    with pytest.raises(ValueError):
+        decode_record(_json_bytes(wire))
+
+
+def test_decode_rejects_schema_2_flattened_failure_aliases():
+    wire = _node_failure_wire()
+    wire["payload"] = {
+        "node_id": "work",
+        "error": "boom",
+        "error_type": "ValueError",
+        "locator": None,
+        "range": None,
+        "traceback": "trace",
+    }
+
+    with pytest.raises(ValueError):
+        decode_record(_json_bytes(wire))
+
+
 def test_decode_rejects_duplicate_keys_at_any_object_depth():
     duplicate_payload_key = (
-        b'{"schema":1,"run_id":"run","seq":0,"kind":"node_started",'
+        b'{"schema":2,"run_id":"run","seq":0,"kind":"node_started",'
         b'"payload":{"node_id":"first","node_id":"second"}}'
     )
 
     with pytest.raises(ValueError, match="duplicate JSON object key"):
         decode_record(duplicate_payload_key)
 
+    duplicate_origin_key = (
+        b'{"schema":2,"run_id":"run","seq":0,"kind":"node_failed",'
+        b'"payload":{"failure":{"code":"node.execute","message":"boom",'
+        b'"node_id":"work","trace":[{"key":"one","key":"two"}],'
+        b'"cause_type":null,"traceback":null},"locator":null,"range":null}}'
+    )
+
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        decode_record(duplicate_origin_key)
+
 
 def test_encode_validates_programmatically_constructed_envelopes():
     with pytest.raises(ValueError):
         encode_record(
             RecordEnvelope(
-                schema=1,
+                schema=SCHEMA_VERSION,
                 run_id="run",
                 seq=0,
                 record=NodeStartedRecord(node_id=3),  # type: ignore[arg-type]
+            )
+        )
+
+    with pytest.raises(TypeError, match="failure must be a Failure"):
+        encode_record(
+            RecordEnvelope(
+                schema=SCHEMA_VERSION,
+                run_id="run",
+                seq=0,
+                record=NodeFailedRecord(failure=object()),  # type: ignore[arg-type]
             )
         )
 
@@ -358,7 +538,7 @@ def test_encode_validates_programmatically_constructed_envelopes():
 )
 def test_encode_rejects_invalid_id_tuple_carriers(record):
     with pytest.raises(ValueError):
-        encode_record(RecordEnvelope(1, "run", 0, record))
+        encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, record))
 
 
 def test_canonical_json_rejects_lone_unicode_surrogates_as_value_errors():
@@ -370,11 +550,13 @@ def test_canonical_json_rejects_lone_unicode_surrogates_as_value_errors():
         canonical_seed({surrogate: "nested key"})
     with pytest.raises(ValueError, match="Unicode surrogate"):
         encode_record(
-            RecordEnvelope(1, surrogate, 0, NodeStartedRecord(node_id="work"))
+            RecordEnvelope(
+                SCHEMA_VERSION, surrogate, 0, NodeStartedRecord(node_id="work")
+            )
         )
     with pytest.raises(ValueError, match="Unicode surrogate"):
         decode_record(
-            '{"schema":1,"run_id":"run","seq":0,"kind":"node_started",'
+            '{"schema":2,"run_id":"run","seq":0,"kind":"node_started",'
             '"payload":{"node_id":"\\ud800"}}'
         )
 
@@ -517,7 +699,9 @@ class _ProtocolLog:
         return iter(self._records)
 
     def append(self, record) -> RecordEnvelope:
-        envelope = RecordEnvelope(1, self.run_id, self.next_sequence, record)
+        envelope = RecordEnvelope(
+            SCHEMA_VERSION, self.run_id, self.next_sequence, record
+        )
         self._records.append(envelope)
         self.next_sequence += 1
         return envelope

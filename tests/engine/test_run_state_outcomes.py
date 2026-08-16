@@ -5,7 +5,7 @@ from __future__ import annotations
 import gc
 import tracemalloc
 from copy import deepcopy
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from statistics import median
 from typing import Any
 
@@ -455,6 +455,31 @@ def test_route_rejects_a_previously_settled_outgoing_edge(settled: NodeState):
     with pytest.raises(ValueError, match="route edge .* must be UNKNOWN"):
         prepare_node_routed(state, "router", "yes")
 
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == 4
+
+
+@pytest.mark.parametrize(
+    ("source_handle", "error_type"),
+    [(7, TypeError), (False, TypeError)],
+)
+def test_route_rejects_malformed_source_handle_as_a_host_invariant(
+    source_handle: Any,
+    error_type: type[Exception],
+):
+    state, log = _route_in_flight()
+    outgoing = state.flow._outgoing["router"]
+    selected = next(edge for edge in outgoing if edge.source_handle == "yes")
+    outgoing[outgoing.index(selected)] = replace(
+        selected,
+        source_handle=source_handle,
+    )
+    before = _state_snapshot(state)
+
+    with pytest.raises(error_type, match="source_handle") as caught:
+        prepare_node_routed(state, "router", "yes")
+
+    assert not isinstance(caught.value, state_module._NodeDataError)
     assert _state_snapshot(state) == before
     assert log.next_sequence == 4
 

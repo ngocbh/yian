@@ -18,6 +18,7 @@ import pytest
 import agent_composer.runtime.engine as engine_module
 import agent_composer.runtime.state as state_module
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
+from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.events import (
     NodeExpanded,
     NodeFailed,
@@ -29,7 +30,7 @@ from agent_composer.events import (
     StreamChunk,
 )
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route, _HostStop
-from agent_composer.nodes.contracts import ValueContract
+from agent_composer.nodes.contracts import ContractOrigins, ValueContract
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.engine import FlowEngine
@@ -64,8 +65,9 @@ class _ActionNode(Node):
         action: Callable[[], Any],
         *,
         output_contract: ValueContract | None = None,
+        origin: OriginRef | None = None,
     ) -> None:
-        super().__init__(node_id, output_contract=output_contract)
+        super().__init__(node_id, output_contract=output_contract, origin=origin)
         self._action = action
 
     def _run_impl(self, inputs: dict[str, Any]) -> Output:
@@ -270,6 +272,27 @@ def _dispatcher(
     )
 
 
+def _capture_semantic_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[Failure]:
+    """Spy on the one canonical-to-schema-1 projection without replacing it."""
+    captured: list[Failure] = []
+    project = FlowEngine._prepare_failure
+
+    def capture(self, node_id, failure, *, locator=None, range=None):
+        captured.append(failure)
+        return project(
+            self,
+            node_id,
+            failure,
+            locator=locator,
+            range=range,
+        )
+
+    monkeypatch.setattr(FlowEngine, "_prepare_failure", capture)
+    return captured
+
+
 class _GuardedLog(MemoryRunLog):
     """Inject append failures or inspect execution at exact durable records."""
 
@@ -438,16 +461,18 @@ def test_success_preparation_runtime_error_remains_exact_host_failure(monkeypatc
     ids=("success", "route", "growth"),
 )
 @pytest.mark.parametrize("error_type", [TypeError, ValueError])
+@pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
 def test_transition_preparation_data_shaped_programming_error_remains_exact_host_failure(
     monkeypatch,
     prepare_name,
     node_factory,
     error_type,
+    num_workers,
 ):
     expected = error_type("transition reducer programming fault")
     state, log = _initialized(
         _flow([node_factory()]),
-        num_workers=0,
+        num_workers=num_workers,
     )
     real_prepare = getattr(engine_module, prepare_name)
 
@@ -459,7 +484,7 @@ def test_transition_preparation_data_shaped_programming_error_remains_exact_host
     monkeypatch.setattr(engine_module, prepare_name, broken_prepare)
 
     with pytest.raises(error_type) as caught:
-        list(_dispatcher(state, log, num_workers=0).run())
+        list(_dispatcher(state, log, num_workers=num_workers).run())
 
     assert caught.value is expected
     assert tuple(state.in_flight) == ("work",)
@@ -497,21 +522,67 @@ def test_serial_yields_and_callbacks_follow_post_durable_observer_order():
     ]
 
 
-def test_invalid_raw_output_preparation_becomes_durable_node_failure():
+def test_invalid_raw_output_constructs_contract_failure_with_operation_origin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    node_origin = OriginRef("nodes/work")
+    contract_origin = OriginRef("nodes/work/output")
     node = _ActionNode(
         "work",
         lambda: "not-an-int",
-        output_contract=ValueContract(Type.scalar(ValueKind.INTEGER)),
+        output_contract=ValueContract(
+            Type.scalar(ValueKind.INTEGER),
+            ContractOrigins(default=contract_origin),
+        ),
+        origin=node_origin,
     )
     state, log = _initialized(_flow([node]), num_workers=0)
+    failures = _capture_semantic_failures(monkeypatch)
 
     events = list(_dispatcher(state, log, num_workers=0).run())
 
+    assert len(failures) == 1
+    assert failures[0].code == "contract.output"
+    assert failures[0].node_id == "work"
+    assert failures[0].trace == (contract_origin,)
+    assert failures[0].cause_type == "TypeCheckError"
+    assert failures[0].traceback is not None
     assert isinstance(events[-2], NodeFailed)
     assert isinstance(events[-1], RunFailed)
     assert events[-1].error_type == "TypeCheckError"
     assert isinstance(state.result, RunFailed)
     assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
+
+
+def test_redirected_output_uses_effective_target_contract_origin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    producer_origin = OriginRef("nodes/producer")
+    contract_origin = OriginRef("nodes/target/output")
+    producer = _ActionNode(
+        "producer",
+        lambda: "not-an-int",
+        origin=producer_origin,
+    )
+    producer.commit_as = "target"
+    flow = _flow([producer])
+    flow.nodes["target"] = _ActionNode(
+        "target",
+        lambda: 1,
+        output_contract=ValueContract(
+            Type.scalar(ValueKind.INTEGER),
+            ContractOrigins(default=contract_origin),
+        ),
+    )
+    state, log = _initialized(flow, num_workers=0)
+    failures = _capture_semantic_failures(monkeypatch)
+
+    list(_dispatcher(state, log, num_workers=0).run())
+
+    assert len(failures) == 1
+    assert failures[0].code == "contract.output"
+    assert failures[0].node_id == "producer"
+    assert failures[0].trace == (contract_origin,)
 
 
 def test_malformed_compiled_output_contract_remains_a_host_failure():
@@ -533,14 +604,24 @@ def test_malformed_compiled_output_contract_remains_a_host_failure():
 
 
 @pytest.mark.parametrize("num_workers", [0, 1], ids=("serial", "pooled"))
-def test_invalid_output_commit_target_becomes_durable_node_failure(num_workers: int):
+def test_invalid_output_metadata_constructs_contract_failure_with_node_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    num_workers: int,
+):
+    node_origin = OriginRef("nodes/work")
     state, log = _initialized(
-        _flow([_InvalidCommitTargetNode("work")]),
+        _flow([_InvalidCommitTargetNode("work", origin=node_origin)]),
         num_workers=num_workers,
     )
+    failures = _capture_semantic_failures(monkeypatch)
 
     events = list(_dispatcher(state, log, num_workers=num_workers).run())
 
+    assert len(failures) == 1
+    assert failures[0].code == "contract.output"
+    assert failures[0].node_id == "work"
+    assert failures[0].trace == (node_origin,)
+    assert failures[0].cause_type == "TypeError"
     assert isinstance(events[-2], NodeFailed)
     assert events[-2].node_id == "work"
     assert events[-2].error == "commit_as must be a string or None"
@@ -585,17 +666,43 @@ def test_route_raw_outcome_is_prepared_committed_and_reduced():
     assert isinstance(state.result, RunSucceeded)
 
 
-def test_invalid_route_handle_is_a_durable_node_failure():
-    state, log = _initialized(_flow([_InvalidRouteNode("route")]), num_workers=0)
+def test_invalid_route_constructs_contract_failure_with_node_origin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    node_origin = OriginRef("nodes/route")
+    state, log = _initialized(
+        _flow([_InvalidRouteNode("route", origin=node_origin)]),
+        num_workers=0,
+    )
+    failures = _capture_semantic_failures(monkeypatch)
 
     events = list(_dispatcher(state, log, num_workers=0).run())
 
+    assert len(failures) == 1
+    assert failures[0].code == "contract.route"
+    assert failures[0].node_id == "route"
+    assert failures[0].trace == (node_origin,)
+    assert failures[0].cause_type == "ValueError"
     assert isinstance(events[-2], NodeFailed)
     assert events[-2].node_id == "route"
     assert events[-2].error_type == "ValueError"
     assert "matches no outgoing edge" in events[-2].error
     assert isinstance(events[-1], RunFailed)
     assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
+
+
+def test_source_free_route_rejection_has_an_empty_trace(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Python-authored nodes do not invent source provenance."""
+    state, log = _initialized(_flow([_InvalidRouteNode("route")]), num_workers=0)
+    failures = _capture_semantic_failures(monkeypatch)
+
+    list(_dispatcher(state, log, num_workers=0).run())
+
+    assert len(failures) == 1
+    assert failures[0].code == "contract.route"
+    assert failures[0].trace == ()
 
 
 def test_grow_raw_outcome_uses_injected_builder_and_flat_record():

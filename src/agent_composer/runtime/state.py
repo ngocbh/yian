@@ -20,6 +20,7 @@ from agent_composer._state import NodeState
 from agent_composer.compile.manifest import expansion_digest
 from agent_composer.compile.model import CompiledFlow, Edge, Flow
 from agent_composer.compile.validation import _classify_path
+from agent_composer.diagnostics import OriginRef
 from agent_composer.events import (
     NodeExpanded,
     NodeFailed,
@@ -86,9 +87,15 @@ def _node_output_type(node: Node) -> Type | None:
 class _NodeDataError(Exception):
     """Private marker for an outcome-owned value rejected before durability."""
 
-    def __init__(self, original: Exception) -> None:
+    def __init__(
+        self,
+        original: Exception,
+        *,
+        origin: OriginRef | None = None,
+    ) -> None:
         super().__init__(str(original))
         self.original = original
+        self.origin = origin
 
 
 class _NodeDataTypeError(_NodeDataError, TypeError):
@@ -99,13 +106,17 @@ class _NodeDataValueError(_NodeDataError, ValueError):
     """Node-data rejection retaining compatibility with ``ValueError`` callers."""
 
 
-def _raise_node_data(original: Exception) -> NoReturn:
+def _raise_node_data(
+    original: Exception,
+    *,
+    origin: OriginRef | None = None,
+) -> NoReturn:
     """Raise the built-in-compatible marker matching one outcome-data error."""
     if isinstance(original, TypeError):
-        raise _NodeDataTypeError(original) from original
+        raise _NodeDataTypeError(original, origin=origin) from original
     if isinstance(original, ValueError):
-        raise _NodeDataValueError(original) from original
-    raise _NodeDataError(original) from original
+        raise _NodeDataValueError(original, origin=origin) from original
+    raise _NodeDataError(original, origin=origin) from original
 
 
 class RunState:
@@ -741,11 +752,17 @@ def prepare_node_succeeded(
                 )
             )
         raise ValueError(f"success commit target {target!r} does not exist in the flow")
-    declared_type = _node_output_type(state.flow.nodes[target])
+    target_node = state.flow.nodes[target]
+    declared_type = _node_output_type(target_node)
+    output_origin = (
+        target_node.output_contract.origins.default
+        if target_node.output_contract is not None
+        else None
+    )
     try:
         value_wire, typed = canonical_typed(output, declared_type)
     except (TypeError, ValueError) as exc:
-        _raise_node_data(exc)
+        _raise_node_data(exc, origin=output_origin)
     return _prepare_success_transition(
         state,
         NodeSucceededRecord(
@@ -2876,6 +2893,10 @@ def _route_outgoing(
     for edge in outgoing:
         if not isinstance(edge, Edge) or edge.from_ != node_id:
             raise ValueError(f"route node {node_id!r} has an invalid outgoing adjacency")
+        if edge.source_handle is not None and type(edge.source_handle) is not str:
+            raise TypeError(
+                f"route edge {edge.id!r} source_handle must be a string or None"
+            )
         if type(edge.id) is not str or not edge.id or edge.id in seen:
             raise ValueError(f"route node {node_id!r} has invalid outgoing edge IDs")
         seen.add(edge.id)

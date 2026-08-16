@@ -814,20 +814,21 @@ def test_nullable_open_blank_can_reenter_real_value(monkeypatch, typ, raw, expec
 
 
 @pytest.mark.parametrize(
-    "typ",
+    ("typ", "required"),
     [
-        Type(kind=ValueKind.STRING, nullable=True),
-        Type(kind=ValueKind.LIST_ANY, nullable=True),
-        Type(kind=ValueKind.OBJECT, nullable=True),
+        (Type(kind=ValueKind.STRING, nullable=True), False),
+        (Type(kind=ValueKind.LIST_ANY, nullable=True), False),
+        (Type(kind=ValueKind.OBJECT, nullable=True), False),
+        (Type(kind=ValueKind.STRING, nullable=True), True),
     ],
 )
-def test_nullable_open_set_null_does_not_open_editor(monkeypatch, typ):
+def test_nullable_open_set_null_does_not_open_editor(monkeypatch, typ, required):
     fake = _FakeQuestionary({"value": _SelectTitle("Set null")})
     monkeypatch.setitem(sys.modules, "questionary", fake)
     _sink(monkeypatch)
 
     gathered = _gather_missing_inputs(
-        [_parameter("value", typ)],
+        [_parameter("value", typ, required=required)],
         {},
         prompt_available=True,
     )
@@ -1163,6 +1164,7 @@ def test_prompt_collects_false_enum_and_text_overrides(monkeypatch):
     ("name", "typ", "required"),
     [
         ("flag", Type(kind=ValueKind.BOOLEAN, nullable=True), False),
+        ("required_flag", Type(kind=ValueKind.BOOLEAN, nullable=True), True),
         (
             "mode",
             Type(
@@ -1171,6 +1173,15 @@ def test_prompt_collects_false_enum_and_text_overrides(monkeypatch):
                 nullable=True,
             ),
             False,
+        ),
+        (
+            "required_mode",
+            Type(
+                kind=ValueKind.STRING,
+                tags=frozenset({"fast", "null"}),
+                nullable=True,
+            ),
+            True,
         ),
         ("nothing", Type.scalar(ValueKind.NONE), True),
         ("optional_nothing", Type(kind=ValueKind.NONE, nullable=True), False),
@@ -1195,6 +1206,43 @@ def test_finite_prompt_set_null_gathers_present_none(
     assert gathered == {name: None}
     assert [call.kind for call in fake.calls] == ["select"]
     assert "Set null" in [choice.title for choice in fake.calls[0].choices]
+
+
+@pytest.mark.parametrize(
+    ("parameter", "expected_titles"),
+    [
+        (
+            _parameter("nothing", Type.scalar(ValueKind.NONE), required=True),
+            ["Set null"],
+        ),
+        (
+            _parameter("optional_nothing", Type(kind=ValueKind.NONE, nullable=True)),
+            ["↩ Omit input", "Set null"],
+        ),
+        (
+            _parameter(
+                "default_nothing",
+                Type(kind=ValueKind.NONE, nullable=True),
+                has_default=True,
+                default=None,
+            ),
+            ["↩ Use declared default", "Set null"],
+        ),
+    ],
+)
+def test_null_only_prompt_offers_controls_but_no_value_editor(
+    monkeypatch,
+    parameter,
+    expected_titles,
+):
+    fake = _FakeQuestionary({parameter.name: _SelectTitle("Set null")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert gathered == {parameter.name: None}
+    assert [choice.title for choice in fake.calls[0].choices] == expected_titles
 
 
 @pytest.mark.parametrize(

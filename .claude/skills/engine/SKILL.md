@@ -54,7 +54,9 @@ Hold this model whenever you design anything:
   flow owns their `Binding` sources; parameter contracts/default presence/
   coercion policy stay source-neutral, and rewrites preserve all origins. Final
   Compose assembly stamps an ordinary authored `input:` key on its `Parameter`
-  and its value on the corresponding `Binding`; never add a parallel source map.
+  and its value on the corresponding `Binding`. Source-backed reserved MAP `over:`
+  and WAIT `until:` values are stamped only on their `Binding` because they have no
+  formal parameter. Never add a parallel source map.
 - Compiled `Node.output_contract` has one shape: an exact `ValueContract`, or
   `None` for an unenforced output. Runtime and node behavior project `.type`, while
   manifests exclude `.origins`. Compose descriptors, child signatures, producer
@@ -237,8 +239,9 @@ typed semantic paths to opaque origins and retains document occurrences with exp
 key/value anchors. Resolution replays an occurrence without reparsing or adding a
 parallel range map; virtual or unanchored cursors produce no origin. One builder is
 shared by a physical document's root, definitions, and inline bodies. Assembly stamps
-authored node headers plus ordinary node-input key/value origins directly on their
-canonical carriers, then freezes a document-local snapshot on
+authored node headers, ordinary node-input keys and values, and source-backed reserved
+MAP/WAIT wiring values directly on their canonical carriers, then freezes a
+document-local snapshot on
 `ComposedFlow._local_catalog`; the private field is not a complete cross-file resolver
 until embedded external origins are lexically rebased.
 Inline extraction intentionally takes one graph-wide nodes snapshot before

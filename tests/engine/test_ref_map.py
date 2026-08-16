@@ -152,7 +152,7 @@ def test_seed05_map_loads_with_list_output_and_parallel():
         "topic": "${item}",
         "as_of": '${input.as_of:-"today"}',
     }
-    assert wiring["over"].origin is None
+    assert wiring["over"].origin is not None
     assert wiring["topic"].origin is not None
     assert wiring["as_of"].origin is not None
     assert [p.name for p in research_each.params] == ["topic", "as_of"]

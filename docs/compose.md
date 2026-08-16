@@ -29,7 +29,8 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │
   ├─ build (per kind, via KINDS) → a runtime NODE + its flow-owned WIRING
   │                                (a case lowers in its own build, returning its edges)
-  ├─ stamp ordinary node inputs  → Parameter key origins + final Binding value origins
+  ├─ stamp node wiring       → ordinary Parameter key origins + ordinary/reserved
+  │                             final Binding value origins
   │
   ├─ infer_data_edges       → read every ${...} → draw the edges (nobody draws them by hand);
   │                            append each case's own data+control edges from its build
@@ -82,11 +83,13 @@ builder maps deterministic typed semantic paths to opaque origins and retains ea
 document occurrence plus an explicit key/value anchor. Resolution replays that occurrence
 into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and no YAML is
 reparsed or parallel range map created. The loader shares one builder across a physical
-document's root, `defs:`, and inline bodies. Assembly registers authored node headers and
-ordinary node-input key/value occurrences on the canonical carriers themselves. Each
-assembled `ComposedFlow` receives a frozen snapshot as private `_local_catalog` staging
-metadata. It is deliberately not a public, complete resolver yet: cached external-child
-origins still need lexical rebasing.
+document's root, `defs:`, and inline bodies. Assembly registers authored node headers,
+ordinary node-input keys and values, and source-backed reserved MAP/WAIT wiring values on
+the canonical carriers themselves. Without a retained source occurrence, Compose mints
+no origin and preserves any explicit programmatic origin. Each assembled `ComposedFlow`
+receives a frozen snapshot as private
+`_local_catalog` staging metadata. It is deliberately not a public, complete resolver yet:
+cached external-child origins still need lexical rebasing.
 
 External `uses:` resolution adds one reuse boundary. During a load graph, successfully
 compiled external flows are cached by resolved absolute path. A repeated alias or diamond
@@ -175,11 +178,15 @@ it to resolve the child flow they expand into.
 
 After all descriptor desugars and builds, the conductor pairs each source-backed ordinary
 `input:` entry with those two carriers: its selecting key becomes `Parameter.origin`, and
-its value becomes `Binding.origin`. The final (possibly rewritten) payload stays in
-`Binding.source`, so lowering does not detach provenance from the authored value. Inputs
-without a retained source occurrence remain origin-free; source-backed projections inherit
-their backing occurrence. Reserved kind-specific wiring and the synthesized START/END
-boundaries are separate migration steps.
+its value becomes `Binding.origin`. It also stamps source-backed reserved MAP `over:` and
+WAIT `until:` values on their canonical `Binding`; those fields are not formal parameters,
+so they have no `Parameter.origin`. The final (possibly rewritten) payload stays in
+`Binding.source`, so lowering does not detach provenance from the authored value. Entries
+without a retained source occurrence receive no new Compose origin; an explicit
+programmatic origin remains intact, and source-backed projections inherit their backing
+occurrence. CASE wiring, synthesized START/END boundaries, flow outputs,
+assertions, contracts, external rebasing, and runtime diagnostic consumption remain
+separate migration steps.
 
 ---
 

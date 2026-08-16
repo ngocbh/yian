@@ -306,7 +306,7 @@ def _register_inline_bodies(
     return associated
 
 
-def _stamp_node_input_origins(
+def _stamp_node_wiring_origins(
     descriptors: dict[str, NodeDescriptor],
     nodes_cursor: SourceCursor,
     nodes: dict[str, Node],
@@ -315,25 +315,25 @@ def _stamp_node_input_origins(
     owner: tuple[str, ...],
     catalog_builder: _SourceCatalogBuilder,
 ) -> None:
-    """Attach authored ordinary input sites to their canonical carriers.
+    """Attach authored node-wiring sites to their canonical carriers.
 
     Desugaring has already produced each final binding source, while
-    ``nodes_cursor`` still retains the original occurrence. Each source-backed
-    mapping entry therefore contributes two independent meanings: its key owns
-    the formal ``Parameter`` and its value owns the flow ``Binding``. Generated
-    names absent from the retained cursor remain origin-free. Reserved kind
-    fields such as MAP ``over`` and WAIT ``until`` are not descriptor inputs and
-    are deliberately outside this crossing.
+    ``nodes_cursor`` still retains the original occurrence. Each ordinary input
+    entry contributes two meanings: its key owns the formal ``Parameter`` and
+    its value owns the flow ``Binding``. A reserved MAP ``over`` or WAIT
+    ``until`` field contributes only a flow-owned ``Binding`` origin. For names
+    absent from the retained cursor, Compose mints no origin and preserves any
+    existing carrier origin.
 
     Args:
         descriptors (`dict[str, NodeDescriptor]`):
-            Final descriptors keyed by node id, after every graph desugar.
+            Final descriptors keyed by node id after every graph desugar.
         nodes_cursor (`SourceCursor`):
             Retained source view of the flow's authored node mapping.
         nodes (`dict[str, Node]`):
             Built runtime nodes keyed by final descriptor id.
         flow_wiring (`dict[str, dict]`):
-            Mutable final binding maps keyed by node id and parameter name.
+            Mutable final binding maps keyed by node id and wiring key.
         owner (`tuple[str, ...]`):
             Complete lexical owner path used to namespace catalog sites.
         catalog_builder (`_SourceCatalogBuilder`):
@@ -344,8 +344,6 @@ def _stamp_node_input_origins(
             Raised when a retained source cursor cannot be traversed.
     """
     for node_id, descriptor in descriptors.items():
-        if not descriptor.inputs:
-            continue
         node = nodes.get(node_id)
         wiring = flow_wiring.get(node_id)
         if node is None or wiring is None:
@@ -357,25 +355,39 @@ def _stamp_node_input_origins(
             node_cursor = normalize_node_signature_cursor(
                 nodes_cursor.child(node_id)
             )
-            if not node_cursor.has("inputs"):
+
+            for key in sorted(node.reserved_wiring_keys()):
+                if key not in wiring or not node_cursor.has(key):
+                    continue
+                binding_origin = catalog_builder.register(
+                    (*owner, "node", node_id, "reserved", key, "binding"),
+                    node_cursor.child(key),
+                )
+                if binding_origin is not None:
+                    wiring[key] = replace(
+                        as_binding(wiring[key]),
+                        origin=binding_origin,
+                    )
+
+            if (
+                not descriptor.inputs
+                or node.params is None
+                or not node_cursor.has("inputs")
+            ):
                 continue
             inputs_cursor = node_cursor.child("inputs")
-        except SourceAccessError as exc:
-            raise LoadError(str(exc), range=exc.range) from exc
-
-        if node.params is None:
-            continue
-        parameter_indexes = {
-            parameter.name: index
-            for index, parameter in enumerate(node.params)
-        }
-        parameters = list(node.params)
-        parameters_changed = False
-        for name in descriptor.inputs:
-            if name not in parameter_indexes or name not in wiring:
-                continue
-            try:
-                if not inputs_cursor.has(name):
+            parameter_indexes = {
+                parameter.name: index
+                for index, parameter in enumerate(node.params)
+            }
+            parameters = list(node.params)
+            parameters_changed = False
+            for name in descriptor.inputs:
+                if (
+                    name not in parameter_indexes
+                    or name not in wiring
+                    or not inputs_cursor.has(name)
+                ):
                     continue
                 entry_cursor = inputs_cursor.child(name)
                 parameter_origin = catalog_builder.register(
@@ -387,23 +399,23 @@ def _stamp_node_input_origins(
                     (*owner, "node", node_id, "input", name, "binding"),
                     entry_cursor,
                 )
-            except SourceAccessError as exc:
-                raise LoadError(str(exc), range=exc.range) from exc
 
-            parameter_index = parameter_indexes[name]
-            if parameter_origin is not None:
-                parameters[parameter_index] = replace(
-                    parameters[parameter_index],
-                    origin=parameter_origin,
-                )
-                parameters_changed = True
-            if binding_origin is not None:
-                wiring[name] = replace(
-                    as_binding(wiring[name]),
-                    origin=binding_origin,
-                )
-        if parameters_changed:
-            node.params = parameters
+                parameter_index = parameter_indexes[name]
+                if parameter_origin is not None:
+                    parameters[parameter_index] = replace(
+                        parameters[parameter_index],
+                        origin=parameter_origin,
+                    )
+                    parameters_changed = True
+                if binding_origin is not None:
+                    wiring[name] = replace(
+                        as_binding(wiring[name]),
+                        origin=binding_origin,
+                    )
+            if parameters_changed:
+                node.params = parameters
+        except SourceAccessError as exc:
+            raise LoadError(str(exc), range=exc.range) from exc
 
 
 def _flow_outputs(outputs) -> list[FlowOutput]:
@@ -768,7 +780,7 @@ def _assemble(
     flow_wiring: dict[str, dict] = {
         nid: result.wiring for nid, result in build_results.items()
     }
-    _stamp_node_input_origins(
+    _stamp_node_wiring_origins(
         descriptors,
         nodes_cursor,
         nodes_built,

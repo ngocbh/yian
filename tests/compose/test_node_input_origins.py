@@ -5,10 +5,15 @@ from __future__ import annotations
 import pytest
 
 from agent_composer.compose import load_flow
-from agent_composer.compose.build.pipeline import _assemble
+from agent_composer.compose.build.pipeline import (
+    _assemble,
+    _stamp_node_wiring_origins,
+)
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import _CallableScope
+from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceCatalog, SourceCursor, SourceDocument
+from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import Binding, Parameter
@@ -47,6 +52,39 @@ def _assert_input_site(
     assert parameter_frame.range == cursor.key_range
     assert binding_frame.range == cursor.range
     return parameter.origin, binding.origin
+
+
+def _assert_binding_site(
+    catalog: SourceCatalog,
+    binding: Binding,
+    cursor: SourceCursor,
+    *,
+    source,
+) -> OriginRef:
+    """Assert one authored value origin carried only by a flow ``Binding``.
+
+    Args:
+        catalog (`SourceCatalog`):
+            Document-local catalog that must resolve the binding origin.
+        binding (`Binding`):
+            Canonical flow-owned binding under test.
+        cursor (`SourceCursor`):
+            Expected authored value occurrence.
+        source (`object`):
+            Expected final semantic binding payload after desugaring.
+
+    Returns:
+        `OriginRef`:
+            The verified binding origin for identity comparisons.
+    """
+    assert isinstance(binding.origin, OriginRef)
+    assert binding.source == source
+
+    frame = catalog.resolve(binding.origin)
+    assert frame is not None
+    assert frame.text == cursor.document.text
+    assert frame.range == cursor.range
+    return binding.origin
 
 
 def test_root_def_and_inline_inputs_resolve_distinct_key_and_value_sites():
@@ -366,7 +404,7 @@ output: ${ask.output}
     assert exc_info.value.range == collision.range
 
 
-def test_map_over_and_wait_until_reserved_wiring_stay_originless():
+def test_map_over_and_wait_until_resolve_exact_value_sites_without_parameters():
     text = """id: reserved-input-origins
 name: reserved-input-origins
 input:
@@ -414,7 +452,239 @@ output: ${mapping.output}
         mapping_input,
         source="${item}",
     )
+
+    mapping_origin = _assert_binding_site(
+        loaded._local_catalog,
+        loaded.compiled.wiring["mapping"]["over"],
+        document.root.child("nodes").child("mapping").child("over"),
+        source="${input.items}",
+    )
+    waiting_origin = _assert_binding_site(
+        loaded._local_catalog,
+        loaded.compiled.wiring["waiting"]["until"],
+        document.root.child("nodes").child("waiting").child("until"),
+        source="${input.deadline}",
+    )
+    assert mapping_origin != waiting_origin
+    assert {parameter.name for parameter in mapping.params or []} == {"x"}
+    assert loaded.compiled.nodes["waiting"].params == []
+
+
+def test_desugared_map_over_keeps_authored_value_site_with_final_source():
+    text = """id: rewritten-reserved-origin
+name: rewritten-reserved-origin
+input:
+  items: list[str]
+defs:
+  echo:
+    input:
+      x: str
+    nodes:
+      worker:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.x}
+        output: str
+    output: ${worker.output}
+  produce:
+    input:
+      x: list[str]
+    nodes:
+      worker:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        input:
+          x: ${input.x}
+        output: list[str]
+    output: ${worker.output}
+nodes:
+  mapping:
+    kind: map
+    call: echo
+    over: call(produce, x=${input.items})
+    input:
+      x: ${item}
+output: ${mapping.output}
+"""
+    document = SourceDocument.parse(text)
+    loaded = load_flow(text)
+    mapping = loaded.compiled.nodes["mapping"]
+    wiring = loaded.compiled.wiring["mapping"]
+
+    assert {name: binding.source for name, binding in wiring.items()} == {
+        "over": "${__call_0.output}",
+        "x": "${item}",
+    }
+    _assert_binding_site(
+        loaded._local_catalog,
+        wiring["over"],
+        document.root.child("nodes").child("mapping").child("over"),
+        source="${__call_0.output}",
+    )
+    assert {parameter.name for parameter in mapping.params or []} == {"x"}
+
+
+def test_root_def_and_inline_wait_origins_are_lexically_distinct():
+    text = """id: lexical-reserved-origins
+name: lexical-reserved-origins
+defs:
+  named:
+    nodes:
+      pause:
+        kind: wait
+        until: named-deadline
+      worker:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        depends_on: [pause]
+        input:
+          x: named
+        output: str
+    output: ${worker.output}
+nodes:
+  pause:
+    kind: wait
+    until: root-deadline
+  named_call:
+    kind: call
+    call: named
+  inline_call:
+    kind: call
+    nodes:
+      pause:
+        kind: wait
+        until: inline-deadline
+      worker:
+        kind: code
+        code: tests.engine._compose_codefns:echo_x
+        depends_on: [pause]
+        input:
+          x: inline
+        output: str
+    output: ${worker.output}
+output:
+  named: ${named_call.output}
+  inline: ${inline_call.output}
+"""
+    document = SourceDocument.parse(text)
+    loaded = load_flow(text)
+    named_child = loaded.compiled.nodes["named_call"].child
+    inline_child = loaded.compiled.nodes["inline_call"].child
+    sites = (
+        (
+            loaded.compiled.nodes["pause"],
+            loaded.compiled.wiring["pause"]["until"],
+            document.root.child("nodes").child("pause").child("until"),
+            "root-deadline",
+        ),
+        (
+            named_child.nodes["pause"],
+            named_child.wiring["pause"]["until"],
+            document.root.child("defs")
+            .child("named")
+            .child("nodes")
+            .child("pause")
+            .child("until"),
+            "named-deadline",
+        ),
+        (
+            inline_child.nodes["pause"],
+            inline_child.wiring["pause"]["until"],
+            document.root.child("nodes")
+            .child("inline_call")
+            .child("nodes")
+            .child("pause")
+            .child("until"),
+            "inline-deadline",
+        ),
+    )
+
+    origins = set()
+    for node, binding, cursor, source in sites:
+        assert node.params == []
+        origins.add(
+            _assert_binding_site(
+                loaded._local_catalog,
+                binding,
+                cursor,
+                source=source,
+            )
+        )
+    assert len(origins) == 3
+
+
+def test_virtual_reserved_wiring_does_not_mint_or_erase_origins():
+    map_origin = OriginRef("programmatic-map-over")
+    wait_origin = OriginRef("programmatic-wait-until")
+    child = load_flow(
+        """id: echo
+name: echo
+input:
+  x: str
+nodes:
+  worker:
+    kind: code
+    code: tests.engine._compose_codefns:echo_x
+    input:
+      x: ${input.x}
+    output: str
+output: ${worker.output}
+"""
+    )
+
+    def resolve_child(flow_id: str, version=None):
+        assert flow_id == "echo"
+        return child
+
+    nodes_cursor = SourceCursor.virtual(
+        {
+            "mapping": {
+                "kind": "map",
+                "call": "echo",
+                "over": "${input.items}",
+                "inputs": {"x": "${item}"},
+            },
+            "waiting": {
+                "kind": "wait",
+                "until": "${input.deadline}",
+            },
+        }
+    )
+    loaded = _assemble(
+        inputs_section={"items": "list[str]", "deadline": "str"},
+        nodes_cursor=nodes_cursor,
+        outputs_section="${mapping.output}",
+        asserts_section=[],
+        registry={},
+        scope=_CallableScope({}, {}, resolve_child, {"echo": "echo"}),
+        owner=("root",),
+        n_lines={},
+        s_lines={},
+    )
+
+    mapping = loaded.compiled.nodes["mapping"]
+    waiting = loaded.compiled.nodes["waiting"]
     assert loaded.compiled.wiring["mapping"]["over"].origin is None
     assert loaded.compiled.wiring["waiting"]["until"].origin is None
     assert {parameter.name for parameter in mapping.params or []} == {"x"}
-    assert loaded.compiled.nodes["waiting"].params == []
+    assert waiting.params == []
+
+    loaded.compiled.wiring["mapping"]["over"] = Binding(
+        "${input.items}",
+        origin=map_origin,
+    )
+    loaded.compiled.wiring["waiting"]["until"] = Binding(
+        "${input.deadline}",
+        origin=wait_origin,
+    )
+    _stamp_node_wiring_origins(
+        parse_nodes(nodes_cursor),
+        nodes_cursor,
+        loaded.compiled.nodes,
+        loaded.compiled.wiring,
+        owner=("root",),
+        catalog_builder=_SourceCatalogBuilder(),
+    )
+    assert loaded.compiled.wiring["mapping"]["over"].origin == map_origin
+    assert loaded.compiled.wiring["waiting"]["until"].origin == wait_origin

@@ -9,10 +9,12 @@ The LAST compose phase before the loader. Three modules:
   (build every node kind-blind -> type/exhaustiveness checks -> edge inference ->
   reference/assert validation -> boundary synthesis -> cycle/handle checks ->
   `CompiledFlow.from_parts`), plus `ComposedFlow` (the compiled+validated result) and the
-  flow `outputs:` parser. It stamps authored node-header origins plus source-backed
-  ordinary `input:` key/value origins through the file-owned catalog builder, associates
-  retained inline bodies with their final descriptors, registers lazy builders through
-  the loader-owned callable-scope seam, and uses one success-only descriptor cache for
+  flow `outputs:` parser. It stamps authored node-header origins, source-backed ordinary
+  `input:` keys and values, and source-backed reserved MAP/WAIT wiring values through the
+  file-owned catalog builder. Only ordinary input keys stamp `Parameter` origins; each of
+  those retained wiring values stamps its canonical `Binding`. It associates retained
+  inline bodies with their final descriptors, registers lazy builders through the
+  loader-owned callable-scope seam, and uses one success-only descriptor cache for
   on-demand signature dependencies.
   `ComposedFlow._local_catalog` is a frozen document-local staging snapshot, not a
   complete resolver for embedded external flows.

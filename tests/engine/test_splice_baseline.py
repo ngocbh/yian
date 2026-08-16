@@ -61,7 +61,7 @@ def test_map_child_boundary_and_over_wiring():
         "over": "${input.topics}",
         "topic": "${item}",
     }
-    assert c.wiring["each"]["over"].origin is None
+    assert c.wiring["each"]["over"].origin is not None
     assert c.wiring["each"]["topic"].origin is not None
     assert sorted(e.id for e in c.edges) == ["__start__->each#0", "each->__end__#0"]
 

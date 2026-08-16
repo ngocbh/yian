@@ -107,11 +107,13 @@ copies, renders, or reparses YAML to reconstruct source.
 
 The loader creates one package-private catalog builder per physical document and
 threads it through root, definition, and inline-body assembly. The conductor stamps
-authored node-header origins plus ordinary node-input key/value origins directly on
-their canonical carriers, then freezes a snapshot on each `ComposedFlow._local_catalog`;
-sites without a retained occurrence remain source-free. The private field cannot stand in
-for a returned-flow resolver until external child origins are rebased into the caller's
-lexical namespace.
+authored node-header origins, ordinary node-input keys and values, and source-backed
+reserved MAP/WAIT wiring values directly on their canonical carriers. Only ordinary keys
+belong to `Parameter`; ordinary and reserved values belong to `Binding`. It then freezes a
+snapshot on each `ComposedFlow._local_catalog`; without a retained occurrence, Compose
+mints no origin and preserves any explicit programmatic origin. The private field cannot
+stand in for a returned-flow resolver until external
+child origins are rebased into the caller's lexical namespace.
 
 The loader owns two intentionally separate caches:
 

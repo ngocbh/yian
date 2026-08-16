@@ -77,10 +77,11 @@ one responsibility:
 | `ValueContract` | one recursive semantic `Type` plus nested origin selection |
 | `ContractOrigins` | immutable root/nested origin lookup for a value contract |
 
-All origins are optional, so Python-authored values remain source-free. The
-carriers are frozen only at their fields: arbitrary binding/default payloads are
-retained by identity. `map_origins()` performs pure lexical rebasing without
-copying semantic payloads. `Flow` construction is the single binding boundary:
+All origins are optional, so Python-authored values default to source-free and
+may supply an opaque origin explicitly. The carriers are frozen only at their
+fields: arbitrary binding/default payloads are retained by identity.
+`map_origins()` performs pure lexical rebasing without copying semantic payloads.
+`Flow` construction is the single binding boundary:
 every direct `flow.wiring[node_id][parameter]` value and every
 `FlowOutput.binding` is canonical `Binding`, while raw Python-authored values are
 accepted and wrapped origin-free. Expansion rewrites only `Binding.source` and
@@ -116,11 +117,14 @@ Parameter/default/contract origins do not affect manifest identity. Compose
 `input:` lowers directly into this same exact carrier shape; `ComposedFlow.input`
 and START use it without a parallel front-end declaration type. For an ordinary
 source-backed node input, final assembly puts the selecting-key origin on its
-`Parameter` and the value origin on its flow-owned `Binding`; a desugar may change
-`Binding.source` without moving that value origin. Inputs without a retained source
-occurrence stay origin-free; source-backed projections inherit their backing site.
-Reserved kind-specific wiring and synthesized flow boundaries remain outside this
-migration step.
+`Parameter` and the value origin on its flow-owned `Binding`. Source-backed reserved
+wiring carries only the value origin on its canonical `Binding`: MAP `over:` and WAIT
+`until:` have no corresponding `Parameter`. A desugar may change `Binding.source`
+without moving that value origin. When no source occurrence is retained, Compose
+mints no origin and preserves any explicit programmatic origin; source-backed
+projections inherit their backing site. CASE wiring,
+synthesized flow boundaries, flow outputs, assertions, contracts, external rebasing,
+and runtime diagnostic consumption remain outside this migration step.
 
 `Node.output_contract` is the canonical compiled output declaration: exactly one
 `ValueContract`, or `None` when the output is unenforced. Runtime enforcement and
@@ -164,9 +168,10 @@ into a `DiagnosticFrame`; it neither reparses YAML nor creates a parallel range
 map. Virtual or unanchored cursors produce no origin. One builder is shared by
 the root flow, its `defs:`, and its inline bodies, and each assembled
 `ComposedFlow` retains a frozen document-local snapshot as `_local_catalog`.
-Final assembly registers authored node headers plus ordinary node-input key/value
-occurrences directly on their canonical semantic carriers; it does not build a
-parallel location map.
+Final assembly registers authored node headers, ordinary node-input keys and values,
+and source-backed reserved MAP/WAIT wiring values directly on their canonical semantic
+carriers; it does not build a parallel location map. For sites without retained
+occurrences, Compose mints no origin and preserves any explicit programmatic origin.
 That field is intentionally private: external child origins still require
 lexical rebasing before the returned flow can expose one complete resolver.
 

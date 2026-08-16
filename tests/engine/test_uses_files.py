@@ -10,6 +10,7 @@ from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compose import loader as compose_loader
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
+from agent_composer.compose.source import SourceDocument
 from agent_composer.run import run_flow
 
 _CODE = "tests.seeds.fns:one_line_summary"
@@ -112,10 +113,13 @@ def test_version_guard_matches_dotted_tag(tmp_path):
 def test_version_guard_mismatch_is_loud_and_located(tmp_path):
     _write(tmp_path, "child", "child", version="v2")
     parent = _write(tmp_path, "p", "p", call="ch", uses={"ch": "child@v1"})
+    text = parent.read_text()
+    expected = SourceDocument.parse(text).root.child("uses").child("ch").range
     with pytest.raises(LoadError) as exc:
-        load_flow(parent.read_text(), search_paths=[tmp_path])
+        load_flow(text, search_paths=[tmp_path])
     assert "version" in str(exc.value)
-    assert exc.value.line is not None  # located at the uses: section (eager-loop wrap)
+    assert exc.value.range == expected
+    assert exc.value.line == expected.start_line
 
 
 def test_version_absent_ref_skips_guard(tmp_path):

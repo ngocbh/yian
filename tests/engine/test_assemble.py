@@ -44,10 +44,11 @@ _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 class _FakeBuildDescriptor:
     """A kind-neutral descriptor whose callback controls one build attempt."""
 
-    def __init__(self, node_id, calls, callback=None):
+    def __init__(self, node_id, calls, callback=None, *, range=None):
         self.node_id = node_id
         self.calls = calls
         self.callback = callback
+        self.range = range
 
     def build(self, ctx):
         self.calls.append((self.node_id, ctx))
@@ -188,6 +189,32 @@ def test_descriptor_build_cache_does_not_cache_failure_and_keeps_inner_line():
         "outer",
         "broken",
     ]
+
+
+def test_descriptor_build_cache_prefers_descriptor_range_over_line_map():
+    calls = []
+    source_range = SourceRange(27, 7, 27, 31)
+
+    def fail():
+        raise LoadError("broken descriptor")
+
+    descriptor = _FakeBuildDescriptor(
+        "broken",
+        calls,
+        fail,
+        range=source_range,
+    )
+    cache = _DescriptorBuildCache(
+        {"broken": descriptor},
+        BuildContext(registry={}),
+        {"broken": 24},
+    )
+
+    with pytest.raises(LoadError, match="broken descriptor") as caught:
+        cache.build_one("broken")
+
+    assert caught.value.range is source_range
+    assert caught.value.line == 27
 
 
 def _assemble_resolved_parameters(parameters):

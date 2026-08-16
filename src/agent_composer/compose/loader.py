@@ -651,10 +651,11 @@ def _load_flow(
     try:
         registry = read_typedefs(f.typedefs)
     except TypeCheckError as exc:
-        # coarse: the typesys layer doesn't track source lines, so anchor at the
-        # `typedefs:` section line (the box's context still shows the offending name).
+        # The typesys layer is source-neutral, so the authored section key is the
+        # narrowest source-backed location available at this boundary.
         raise LoadError(
-            f"bad typedefs: {exc}", line=_section_lines(root).get("typedefs")
+            f"bad typedefs: {exc}",
+            range=(root.key_range_of("typedefs") if root.has("typedefs") else None),
         ) from exc
 
     # `system.paths` is honored only when the file's OWN dir is known (loaded WITH
@@ -680,12 +681,14 @@ def _load_flow(
     # broken/recursive callable at load (loud, not a hang). The owned document supplies each
     # def's raw source cursor and absolute parent-file locations without another parse.
     defs_cursor = root.child("defs") if root.has("defs") else None
+    uses_cursor = root.child("uses") if root.has("uses") else None
     callable_scope = _CallableScope(
         f.defs,
         registry,
         external,
         f.uses,
         defs_cursor,
+        uses_cursor=uses_cursor,
     )
     callable_scope.eager_load_defs()
 
@@ -769,6 +772,9 @@ class _CallableScope:
         defs_cursor (`SourceCursor | None`, *optional*, defaults to `None`):
             Cursor over the authored ``defs:`` mapping. ``None`` supports
             programmatic scopes with virtual, location-free def cursors.
+        uses_cursor (`SourceCursor | None`, *optional*, defaults to `None`):
+            Cursor over the authored ``uses:`` mapping. It locates alias resolution
+            failures without retaining a parallel section-line map.
         catalog_builder (`_SourceCatalogBuilder | None`, *optional*):
             Mutable document-local registry shared by root, definitions, and
             inline bodies. A private builder is created for programmatic scopes.
@@ -781,6 +787,7 @@ class _CallableScope:
         external: Optional[ChildResolver],
         uses: dict,
         defs_cursor: SourceCursor | None = None,
+        uses_cursor: SourceCursor | None = None,
         catalog_builder: _SourceCatalogBuilder | None = None,
     ) -> None:
         both = sorted(set(defs_section) & set(uses))
@@ -795,6 +802,7 @@ class _CallableScope:
         self._external = external
         self._uses = uses
         self._defs_cursor = defs_cursor
+        self._uses_cursor = uses_cursor
         self._catalog_builder = (
             catalog_builder
             if catalog_builder is not None
@@ -962,24 +970,39 @@ class _CallableScope:
             self._built[flow_id] = loaded
             return loaded
         if flow_id in self._uses:
-            ref = parse_uses_ref(self._uses[flow_id])
-            if ref.scheme == "hub":
-                raise LoadError(
-                    f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): marketplace "
-                    f"not supported yet (hub: scheme)"
-                )
-            if ref.scheme is not None:
-                raise LoadError(
-                    f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): unknown "
-                    f"scheme {ref.scheme!r}: (recognized: a local ref, or hub:)"
-                )
-            if self._external is None:
-                raise LoadError(
-                    f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}) needs a search "
-                    f"path or child_resolver to resolve (load with search_paths=[...])"
-                )
-            child = self._external(ref.path, ref.version)
-            loaded = _rebase_external_child(flow_id, child)
+            try:
+                ref = parse_uses_ref(self._uses[flow_id])
+                if ref.scheme == "hub":
+                    raise LoadError(
+                        f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): marketplace "
+                        f"not supported yet (hub: scheme)"
+                    )
+                if ref.scheme is not None:
+                    raise LoadError(
+                        f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): unknown "
+                        f"scheme {ref.scheme!r}: (recognized: a local ref, or hub:)"
+                    )
+                if self._external is None:
+                    raise LoadError(
+                        f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}) needs a search "
+                        f"path or child_resolver to resolve (load with search_paths=[...])"
+                    )
+                child = self._external(ref.path, ref.version)
+                loaded = _rebase_external_child(flow_id, child)
+            except LoadError as exc:
+                if (
+                    exc.range is None
+                    and exc.line is None
+                    and self._uses_cursor is not None
+                ):
+                    try:
+                        alias_cursor = self._uses_cursor.child(flow_id)
+                    except SourceAccessError:
+                        alias_cursor = self._uses_cursor
+                    exc.range = alias_cursor.range
+                    if exc.line is None and exc.range is not None:
+                        exc.line = exc.range.start_line
+                raise
             self._built[flow_id] = loaded
             return loaded
         if flow_id.startswith(INLINE_FLOW_PREFIX):
@@ -1084,7 +1107,11 @@ def _load_def(
             line=exc.line,
             lines=exc.lines,
             notes=exc.notes,
-            range=exc.range,
+            range=(
+                exc.range
+                if exc.range is not None
+                else (def_cursor.range if def_cursor is not None else None)
+            ),
         ) from exc
 
 
@@ -1157,5 +1184,9 @@ def _load_single_node_def(
             line=exc.line,
             lines=exc.lines,
             notes=exc.notes,
-            range=exc.range,
+            range=(
+                exc.range
+                if exc.range is not None
+                else (def_cursor.range if def_cursor is not None else None)
+            ),
         ) from exc

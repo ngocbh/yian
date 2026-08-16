@@ -9,6 +9,8 @@ from agent_composer.compile import iter_flow_origins
 from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compose import ComposedFlow, load_flow
 from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.loader import _finalize_composed_flow
+from agent_composer.compose.source import SourceCatalog
 from agent_composer.diagnostics import OriginRef, ResolverTable
 
 
@@ -93,6 +95,9 @@ def test_one_alias_reuses_one_rebased_child_for_multiple_calls():
 
     assert first is second
     assert _origins(first) == _origins(second)
+    assert {
+        origin.key for origin in loaded.origin_resolver.origins
+    } == set(_origins(loaded.compiled))
     assert all(
         loaded.origin_resolver.resolve(origin) is not None
         for origin in _origins(first).values()
@@ -137,6 +142,47 @@ def test_originful_custom_child_requires_a_complete_resolver(replacement):
     assert caught.value.line is not None
 
 
+def test_custom_child_resolver_failure_is_wrapped_at_the_uses_boundary():
+    class BrokenResolver:
+        def resolve(self, _origin):
+            raise RuntimeError("resolver exploded")
+
+    child = replace(load_flow(_CHILD), origin_resolver=BrokenResolver())
+
+    with pytest.raises(LoadError, match="resolver exploded") as caught:
+        load_flow(
+            _PARENT,
+            child_resolver=lambda _path, _version=None: child,
+        )
+
+    assert caught.value.line is not None
+
+
+def test_external_resolver_must_return_a_composed_flow():
+    with pytest.raises(LoadError, match="expected ComposedFlow") as caught:
+        load_flow(
+            _PARENT,
+            child_resolver=lambda _path, _version=None: object(),
+        )
+
+    assert caught.value.line is not None
+
+
+def test_source_free_custom_child_rejects_an_origin_resolver():
+    child = replace(
+        load_flow("id: empty-child\nname: empty-child\nnodes: {}\n"),
+        origin_resolver=ResolverTable(),
+    )
+
+    with pytest.raises(LoadError, match="source-free child") as caught:
+        load_flow(
+            _PARENT,
+            child_resolver=lambda _path, _version=None: child,
+        )
+
+    assert caught.value.line is not None
+
+
 def test_source_free_custom_child_remains_source_free_when_embedded():
     child = load_flow("id: empty-child\nname: empty-child\nnodes: {}\n")
     parent = """id: empty-parent
@@ -167,3 +213,18 @@ def test_resolver_metadata_is_immutable_copy_reused_and_equality_neutral():
     assert copied.origin_resolver is loaded.origin_resolver
     assert copied.compiled is not loaded.compiled
     assert replaced == loaded
+
+
+def test_finalization_rejects_missing_and_overlapping_routes():
+    loaded = load_flow(_CHILD)
+    staged = replace(loaded, origin_resolver=None)
+    assert isinstance(loaded.origin_resolver, ResolverTable)
+
+    with pytest.raises(LoadError, match="no resolver route"):
+        _finalize_composed_flow(staged, SourceCatalog(), ())
+    with pytest.raises(LoadError, match="multiple resolver routes"):
+        _finalize_composed_flow(
+            staged,
+            SourceCatalog(),
+            (loaded.origin_resolver, loaded.origin_resolver),
+        )

@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from agent_composer.compile import iter_flow_origins
+from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compose import loader as compose_loader
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import load_flow
@@ -57,6 +59,11 @@ def _capture_external_source_access(monkeypatch):
     monkeypatch.setattr(Path, "read_text", track_read)
     monkeypatch.setattr(compose_loader, "parse_source_document", track_parse)
     return reads, parses
+
+
+def _origin_keys(flow) -> set[str]:
+    """Return the distinct opaque origin keys reachable from one compiled flow."""
+    return {origin.key for origin in iter_flow_origins(flow)}
 
 
 # --------------------------------------------------------------------------- #
@@ -227,10 +234,73 @@ def test_two_aliases_of_one_file_read_and_parse_once(tmp_path, monkeypatch):
     parent_text = parent.read_text()
     reads, parses = _capture_external_source_access(monkeypatch)
 
-    assert load_flow(parent_text, search_paths=[tmp_path]) is not None
+    loaded = load_flow(parent_text, search_paths=[tmp_path])
+    first = loaded.compiled.nodes["a"].child
+    second = loaded.compiled.nodes["b"].child
+    first_origins = _origin_keys(first)
+    second_origins = _origin_keys(second)
 
     assert Counter(reads) == Counter({child.resolve(): 1})
     assert Counter(parses) == Counter({"<flow>": 1, "child.yaml": 1})
+    assert first is not second
+    assert first_origins.isdisjoint(second_origins)
+    assert loaded.origin_resolver is not None
+    for origin in iter_flow_origins(first):
+        assert loaded.origin_resolver.resolve(origin).label == "child.yaml"
+    for origin in iter_flow_origins(second):
+        assert loaded.origin_resolver.resolve(origin).label == "child.yaml"
+
+
+def test_repeated_calls_through_one_alias_reuse_one_rebased_child(
+    tmp_path,
+    monkeypatch,
+):
+    child = _write(tmp_path, "child", "child")
+    parent = tmp_path / "parent.yaml"
+    parent.write_text(
+        "id: parent\nname: parent\ninput: {x: str}\nnodes:\n"
+        '  a: {kind: call, call: child_view, input: {x: "${input.x}"}}\n'
+        '  b: {kind: call, call: child_view, input: {x: "${a.output}"}}\n'
+        'output: {y: "${b.output}"}\n'
+        "uses:\n  child_view: child\n"
+    )
+    parent_text = parent.read_text()
+    reads, parses = _capture_external_source_access(monkeypatch)
+
+    loaded = load_flow(parent_text, search_paths=[tmp_path])
+    first = loaded.compiled.nodes["a"].child
+    second = loaded.compiled.nodes["b"].child
+
+    assert Counter(reads) == Counter({child.resolve(): 1})
+    assert Counter(parses) == Counter({"<flow>": 1, "child.yaml": 1})
+    assert first is second
+    assert _origin_keys(first) == _origin_keys(second)
+    assert loaded.origin_resolver is not None
+    for origin in iter_flow_origins(first):
+        assert loaded.origin_resolver.resolve(origin).label == "child.yaml"
+
+
+def test_alias_rebasing_does_not_mutate_the_canonical_path_cache(tmp_path):
+    _write(tmp_path, "child", "child")
+    parent = _flow(
+        "parent",
+        call="child_view",
+        uses={"child_view": "child"},
+    )
+    context = compose_loader._LoadCtx()
+    resolver = compose_loader.make_file_resolver([tmp_path], context)
+    canonical = resolver("child")
+    canonical_origins = _origin_keys(canonical.compiled)
+    canonical_fingerprint = flow_fingerprint(canonical.compiled)
+
+    loaded = load_flow(parent, child_resolver=resolver)
+    embedded = loaded.compiled.nodes["a"].child
+
+    assert resolver("child") is canonical
+    assert embedded is not canonical.compiled
+    assert _origin_keys(canonical.compiled) == canonical_origins
+    assert _origin_keys(embedded).isdisjoint(canonical_origins)
+    assert flow_fingerprint(embedded) == canonical_fingerprint
 
 
 def test_diamond_reuse_reads_and_parses_each_path_once(tmp_path, monkeypatch):
@@ -248,7 +318,11 @@ def test_diamond_reuse_reads_and_parses_each_path_once(tmp_path, monkeypatch):
     parent_text = parent.read_text()
     reads, parses = _capture_external_source_access(monkeypatch)
 
-    assert load_flow(parent_text, search_paths=[tmp_path]) is not None
+    loaded = load_flow(parent_text, search_paths=[tmp_path])
+    left_leaf = loaded.compiled.nodes["a"].child.nodes["a"].child
+    right_leaf = loaded.compiled.nodes["b"].child.nodes["a"].child
+    left_origins = _origin_keys(left_leaf)
+    right_origins = _origin_keys(right_leaf)
 
     assert Counter(reads) == Counter(
         {
@@ -265,6 +339,13 @@ def test_diamond_reuse_reads_and_parses_each_path_once(tmp_path, monkeypatch):
             "mid2.yaml": 1,
         }
     )
+    assert left_leaf is not right_leaf
+    assert left_origins.isdisjoint(right_origins)
+    assert loaded.origin_resolver is not None
+    for origin in iter_flow_origins(left_leaf):
+        assert loaded.origin_resolver.resolve(origin).label == "leaf.yaml"
+    for origin in iter_flow_origins(right_leaf):
+        assert loaded.origin_resolver.resolve(origin).label == "leaf.yaml"
 
 
 # --------------------------------------------------------------------------- #

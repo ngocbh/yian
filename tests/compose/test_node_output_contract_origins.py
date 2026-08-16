@@ -163,9 +163,7 @@ output: ${writer.output}
                 """Validate one deliberately invalid nested value."""
 
                 def invoke(self, _messages):
-                    return schema.model_validate(
-                        {"profile": {"age": "not-an-integer"}}
-                    )
+                    return schema.model_validate({"profile": {"age": "not-an-integer"}})
 
             return _Bound()
 

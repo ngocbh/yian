@@ -2049,7 +2049,6 @@ def _prepare_growth_topology(
     node_state[record.spawner_id] = NodeState.EXPANDED
     for node_id in prune_ids:
         node_state.pop(node_id, None)
-    _validate_final_redirect_owners(final_nodes, node_state)
 
     edge_state = dict(state.edge_state)
     edge_state.update((edge_id, NodeState.UNKNOWN) for edge_id in new_edge_ids)
@@ -2079,6 +2078,16 @@ def _prepare_growth_topology(
         node_id
         for node_id in state.in_flight
         if node_id != record.spawner_id and node_id not in prune_ids
+    )
+    _validate_final_redirects(
+        nodes=final_nodes,
+        node_state=node_state,
+        edge_state=edge_state,
+        pool_store=pool_store,
+        ready=ready,
+        in_flight=in_flight,
+        incoming=incoming,
+        outgoing=outgoing,
     )
 
     delta = _GrowthDelta(
@@ -2943,10 +2952,13 @@ def _prepare_route_delta(
             if redirect_owners is None:
                 redirect_owners = _skipped_output_owners(state)
             _require_unambiguous_redirect(
-                state,
                 owner_id=head,
                 target=target,
                 owners=redirect_owners.get(target, ()),
+                has_committed_value=target in state.pool.store,
+                disposition=state.node_state.get(target),
+                is_executable=target in state.ready or target in state.in_flight,
+                has_incoming=bool(state.flow.incoming(target)),
             )
         if target in propagated_targets:
             continue
@@ -3000,11 +3012,18 @@ def _validate_skipped_output_target(
     return target
 
 
-def _validate_final_redirect_owners(
+def _validate_final_redirects(
+    *,
     nodes: dict[str, Node],
     node_state: dict[str, NodeState],
+    edge_state: dict[str, NodeState],
+    pool_store: dict[str, TypedValue],
+    ready: tuple[str, ...],
+    in_flight: tuple[str, ...],
+    incoming: dict[str, list[Edge]],
+    outgoing: dict[str, list[Edge]],
 ) -> None:
-    """Reject several unfinished owners for one final growth output."""
+    """Require every final growth redirect to have one inert logical anchor."""
     mutable: dict[str, list[str]] = {}
     for node_id, node in nodes.items():
         if node_state.get(node_id) is not NodeState.UNKNOWN:
@@ -3016,15 +3035,29 @@ def _validate_final_redirect_owners(
             _raise_growth_rejected(exc)
         if target == node_id:
             continue
-        owner_ids = mutable.setdefault(target, [])
-        owner_ids.append(node_id)
-        if len(owner_ids) > 1:
-            _raise_growth_rejected(
-                ValueError(
-                    f"logical output target {target!r} has multiple skipped "
-                    f"output owners: {tuple(owner_ids)!r}"
-                )
+        mutable.setdefault(target, []).append(node_id)
+    for target, owner_ids in mutable.items():
+        owner_id = owner_ids[0]
+        try:
+            _require_unambiguous_redirect(
+                owner_id=owner_id,
+                target=target,
+                owners=tuple(owner_ids),
+                has_committed_value=target in pool_store,
+                disposition=node_state.get(target),
+                is_executable=target in ready or target in in_flight,
+                has_incoming=bool(incoming.get(target, ())),
             )
+        except ValueError as exc:
+            _raise_growth_rejected(exc)
+        for edge in outgoing.get(target, ()):
+            if edge_state.get(edge.id) is not NodeState.UNKNOWN:
+                _raise_growth_rejected(
+                    ValueError(
+                        f"logical output target {target!r} has a settled outgoing "
+                        f"edge {edge.id!r}"
+                    )
+                )
 
 
 def _skipped_output_owners(state: RunState) -> dict[str, tuple[str, ...]]:
@@ -3048,11 +3081,14 @@ def _skipped_output_owners(state: RunState) -> dict[str, tuple[str, ...]]:
 
 
 def _require_unambiguous_redirect(
-    state: RunState,
     *,
     owner_id: str,
     target: str,
     owners: tuple[str, ...],
+    has_committed_value: bool,
+    disposition: Any,
+    is_executable: bool,
+    has_incoming: bool,
 ) -> None:
     """Require one inert logical anchor to have one unfinished redirect owner.
 
@@ -3067,21 +3103,20 @@ def _require_unambiguous_redirect(
             f"logical output target {target!r} has multiple skipped output "
             f"owners: {owners!r}"
         )
-    if target in state.pool.store:
+    if has_committed_value:
         raise ValueError(
             f"logical output target {target!r} already has a committed value"
         )
-    disposition = state.node_state.get(target)
     if type(disposition) is not NodeState:
         raise ValueError(
             f"logical output target {target!r} has an invalid disposition"
         )
-    if target in state.ready or target in state.in_flight:
+    if is_executable:
         raise ValueError(
             f"logical output target {target!r} is also executable"
         )
     if disposition is NodeState.UNKNOWN:
-        if state.flow.incoming(target):
+        if has_incoming:
             raise ValueError(
                 f"logical output target {target!r} is also executable"
             )

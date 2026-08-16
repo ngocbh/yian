@@ -552,6 +552,53 @@ def test_growth_rejects_duplicate_redirect_owner_in_final_topology() -> None:
     assert log.next_sequence == 4
 
 
+def test_growth_rejects_executable_redirect_target_in_final_topology() -> None:
+    """A completion cannot redirect to a node that still has incoming work."""
+    state, log = _initialized_spawner()
+    before = _snapshot(state)
+
+    def executable_target_builder(spawner: Node, seed: Any) -> Flow:
+        fragment = _fragment(spawner.id)
+        fragment.nodes[fragment.end_id].commit_as = END_ID
+        return fragment
+
+    with pytest.raises(GrowthRejected, match="also executable"):
+        prepare_expanded(
+            state,
+            "spawn",
+            Grow(seed={}),
+            executable_target_builder,
+        )
+
+    assert _snapshot(state) == before
+    assert log.next_sequence == 4
+
+
+def test_growth_accepts_disconnected_inert_redirect_placeholder() -> None:
+    """A sparse no-edge placeholder remains a valid logical output anchor."""
+    state, log = _initialized_spawner()
+    anchor = _OverlayNode("anchor")
+    state.flow.add_subgraph({anchor.id: anchor}, [], {anchor.id: {}})
+    state.node_state[anchor.id] = NodeState.UNKNOWN
+    before = _snapshot(state)
+
+    def inert_target_builder(spawner: Node, seed: Any) -> Flow:
+        fragment = _fragment(spawner.id)
+        fragment.nodes[fragment.end_id].commit_as = anchor.id
+        return fragment
+
+    prepared = prepare_expanded(
+        state,
+        "spawn",
+        Grow(seed={}),
+        inert_target_builder,
+    )
+
+    assert isinstance(prepared.record, NodeExpandedRecord)
+    assert _snapshot(state) == before
+    assert log.next_sequence == 4
+
+
 @pytest.mark.parametrize(
     ("attribute", "value", "error"),
     [

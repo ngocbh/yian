@@ -42,15 +42,14 @@ from rich.text import Text
 from agent_composer.compile.model import END_ID, START_ID
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.compose.loader import load_flow, top_frame_ranges
-from agent_composer.compose.parse.file import parse_source_document
-from agent_composer.diagnostics import Diagnostic, DiagnosticFrame, SourceRange
+from agent_composer.compose.loader import load_flow
+from agent_composer.diagnostics import Diagnostic
 from agent_composer.run import (
     RunResult,
     _resume_flow_controlled,
     _run_flow_controlled,
 )
-from agent_composer.events import NodeFailed, SourceSpan
+from agent_composer.events import NodeFailed
 from agent_composer.nodes.base import _HostStop
 from agent_composer.tools import install_ask_user
 from agent_composer.typesys import canonical_type_label
@@ -132,41 +131,9 @@ def _render_host_run_error(
 # (a window, so a large flow doesn't dump in full — mirrors a Python traceback's code frame).
 _ERR_CONTEXT = 5
 
-# When a failure carries no precise locator, fall back to the best sub-field range for the
-# node's kind before the node header. These are field NAMES; the lookup tags each `("field", name)`
-# to match how `field_ranges` is keyed (a CODE node -> its `code:` range). First field present wins.
-_KIND_FALLBACK_FIELDS = ("code",)
-
-# The engine's `field` locator uses the SINGULAR write-boundary vocabulary (`output`/`input`),
-# but a node's `field_ranges` is keyed by the descriptor's canonical PLURAL field names
-# (`outputs`/`inputs`). Translate the locator key to the descriptor key before lookup.
-_FIELD_KEY_ALIAS = {"output": "outputs", "input": "inputs"}
-
-
-def _field_range(fields: dict, key: str) -> Optional[SourceRange]:
-    """Look up a `field` locator key in a node's `field_ranges` (keyed by `(kind, key)`),
-    honoring the singular alias. `fields` is one node's per-field map; the lookup tags `("field",
-    …)` so a field never collides with a like-named input (`("input", …)`)."""
-    return fields.get(("field", key)) or fields.get(("field", _FIELD_KEY_ALIAS.get(key, key)))
-
-
-def _top_ranges(loaded, text: str):
-    """The top flow's `(node_ranges, field_ranges)` for run-error framing.
-
-    Prefers the loaded IR's render-only `SourceFrame` (`loaded.source`) when the caller holds
-    it; otherwise recomputes the maps from `text` alone (best-effort). Both map a node id to
-    its header `SourceRange` and to its per-field `SourceRange`s — the source the single-frame
-    renderer boxes a node/field range from."""
-    if loaded is not None:
-        src = getattr(loaded, "source", None)
-        if src is not None:
-            return src.node_ranges, src.field_ranges
-        return {}, {}
-    try:
-        document = parse_source_document(text, "<flow>")
-    except LoadError:
-        return {}, {}
-    return top_frame_ranges(document)
+def _last_segment(node_id: Optional[str]) -> Optional[str]:
+    """Return the final namespace segment used by progress boundary filtering."""
+    return None if node_id is None else node_id.rsplit("/", 1)[-1]
 
 
 def _render_frame_box(text: str, marks, title: str) -> bool:
@@ -174,8 +141,7 @@ def _render_frame_box(text: str, marks, title: str) -> bool:
 
     `marks` are the 1-based offending lines; the panel shows the source around them with line
     numbers and each mark highlighted, titled `title:line[,line...]`. Returns `False` (nothing
-    printed) when no mark is in range, so the caller can fall back to a plain line. Shared by
-    the single-frame render and the multi-frame call-traceback stack."""
+    printed) when no mark is in range, so the canonical renderer can print the source label."""
     lines = text.splitlines()
     marks = sorted({m for m in marks if 1 <= m <= len(lines)})
     if not marks:
@@ -198,239 +164,6 @@ def _render_frame_box(text: str, marks, title: str) -> bool:
 def _render_load_error(err: LoadError) -> None:
     """Render the source-owned diagnostic carried by a Compose load failure."""
     render_diagnostic(err.diagnostic)
-
-
-def _node_range(node_id: str, node_ranges: dict, field_ranges: dict) -> Optional[SourceRange]:
-    """Best `SourceRange` for a (possibly namespaced/clone) node id, or `None`.
-
-    Tries the leaf segment first, then the owning top-level segment (so a runtime-namespaced
-    `gate/approve` or a loop-driver clone `polish~5` resolves to the authored `gate:`/`polish:`
-    node). For each, prefers the node's kind fallback sub-field (a code node's `code:` range),
-    else its header range. `None` when neither segment is an authored top-level node."""
-    leaf = _last_segment(node_id)
-    owning = _strip_clone_suffix(node_id.split("/", 1)[0])
-    for key in (leaf, owning):
-        if key is None:
-            continue
-        fields = field_ranges.get(key, {})
-        for fname in _KIND_FALLBACK_FIELDS:
-            if ("field", fname) in fields:
-                return fields[("field", fname)]
-        if key in node_ranges:
-            return node_ranges[key]
-    return None
-
-
-def _resolve_range(
-    span: Optional[SourceSpan], node_id: Optional[str], loaded, text: str
-) -> Optional[SourceRange]:
-    """Resolve a run failure to a source `SourceRange` for the single-frame box, or `None`.
-
-    A `kind=field` locator (e.g. an `output:` coercion mismatch) resolves against the failing
-    node's `field_ranges` (honoring the `output`/`outputs` alias); otherwise the node's own
-    range via `_node_range` (kind fallback, else header). `None` when nothing resolves, so the
-    caller degrades to a plain message line."""
-    node_ranges, field_ranges = _top_ranges(loaded, text)
-    if span is not None and span.kind == "field" and span.node is not None:
-        seg = _last_segment(span.node) or span.node
-        rng = _field_range(field_ranges.get(seg, {}), span.key)
-        if rng is not None:
-            return rng
-    if node_id:
-        return _node_range(node_id, node_ranges, field_ranges)
-    return None
-
-
-def _strip_clone_suffix(seg: str) -> str:
-    """Drop a runtime clone suffix from one id segment, mapping it back to its authored name:
-    a map element's `#<n>` (`gate#0` -> `gate`) or a loop driver clone's `~<k>` (`polish~5` ->
-    `polish`). Both are runtime-only decorations the parser never indexes."""
-    return seg.split("#", 1)[0].split("~", 1)[0]
-
-
-def _last_segment(node_id: Optional[str]) -> Optional[str]:
-    """The final `/`-segment of a (possibly namespaced) id, with any runtime `#<n>`/`~<k>`
-    suffix stripped (`gate#0/approve` -> `approve`, `polish~5` -> `polish`). `None` for a
-    `None` id."""
-    if node_id is None:
-        return None
-    return _strip_clone_suffix(node_id.split("/")[-1])
-
-
-def _node_owns_resolved_range(
-    node: Any,
-    span: Optional[SourceSpan],
-    resolved_range: Optional[SourceRange],
-) -> bool:
-    """Return whether a concrete range belongs to this node's current source frame.
-
-    Nested execution can relocate caller assertions onto a child boundary, and durable
-    results can outlive whitespace-only source edits. A bare `SourceRange` has no source
-    identity, so the CLI may place it in a child frame only when the current baked node owns
-    the exact locator site. This is an ownership check, not a second range resolver.
-
-    Args:
-        node:
-            Current baked node for one traversed runtime-id segment, or `None`.
-        span (`SourceSpan | None`): Symbolic operation site retained with the failure.
-        resolved_range (`SourceRange | None`): Evaluator-resolved concrete range.
-
-    Returns:
-        `bool`:
-            `True` when the current node carries the exact field/input or aligned assertion
-            range; otherwise `False`.
-    """
-    if node is None or span is None or resolved_range is None:
-        return False
-    if span.kind in {"input", "field"}:
-        return node.field_ranges.get((span.kind, span.key)) == resolved_range
-    if span.kind == "assert":
-        for assertions, ranges in (
-            (node.pre_asserts, node.pre_assert_ranges),
-            (node.post_asserts, node.post_assert_ranges),
-        ):
-            if any(
-                assertion.display == span.key and range_ == resolved_range
-                for assertion, range_ in zip(assertions, ranges)
-            ):
-                return True
-    return False
-
-
-def _walk_call_frames(
-    loaded,
-    node_id: str,
-    top_text: str,
-    top_label: str,
-    span: Optional[SourceSpan],
-    *,
-    resolved_range: Optional[SourceRange] = None,
-) -> list[tuple[str, str, SourceRange]]:
-    """Walk a namespaced runtime node id through the baked IR, one source frame per segment.
-
-    A runtime failure inside a called child surfaces with a NAMESPACED id (`gate/approve` =
-    node `approve` inside the child the top-level `call` node `gate` invokes; `gate#0/inner`
-    for a map element). This walks the id segment-by-segment — frame 0 the top flow, then each
-    child a CALL/MAP/LOOP descends into (a `defs:` callable or an external `uses:` file via
-    the node's render-only `child_source` `SourceFrame`) — down to the failing leaf.
-
-    Returns `list[(label, text, range)]`, most-recent-call-last (ready to render stacked). Each
-    frame's `label` names WHERE it lives: a top/external file frame is the filename alone; a
-    `defs:` child frame is filename-qualified (`<file> defs:<name>`) since its nodes physically
-    live in that file. A segment with NO recorded range (a synthetic `__start__`/`__end__`/`__ask…`
-    runtime segment, or a collapsed compact single-node def) is SKIPPED — its frame is dropped, the
-    frames collected so far kept. Descent stops at the first segment without a baked child
-    (the leaf), or when a segment can't be resolved. The evaluator's
-    already-resolved range replaces the fallback on the deepest traversed node that owns the
-    exact locator site. This prevents a caller-owned relocated assertion or a stale durable
-    range from being interpreted against unrelated child text. Without an owned concrete
-    range, the LAST segment tries a `kind=field` locator (e.g. an `output:` coercion), then
-    the node's kind fallback field (e.g. a code node's `code:`), then its body range (the node
-    header). Never raises — the caller treats any failure as "no multi-frame stack" and falls
-    back to the single-frame path.
-
-    Args:
-        loaded:
-            Compiled flow whose call nodes retain child flows and source frames.
-        node_id (`str`): Runtime-namespaced failing node identity.
-        top_text (`str`): Complete source text for the root flow.
-        top_label (`str`): Display label for the root source.
-        span (`SourceSpan | None`): Symbolic fallback location, when retained.
-        resolved_range (`SourceRange | None`, *optional*, defaults to `None`):
-            Concrete failing-operation range already resolved by evaluation. The walk uses it
-            only where current baked node metadata proves which source frame owns it.
-
-    Returns:
-        `list[tuple[str, str, SourceRange]]`:
-            Located frames ordered from the outermost call to the failing node.
-    """
-    segments = [_strip_clone_suffix(seg) for seg in node_id.split("/")]
-    nodes = loaded.compiled.nodes
-    # Both the top frame and each descended child read ranges off a render-only `SourceFrame`:
-    # frame 0 from the top flow's own `loaded.source`, then each child from its `child_source`.
-    # (The baked call/loop/map nodes a walk descends THROUGH carry no `.range` — only leaf kind
-    # builds stamp it — so the SourceFrame, populated by a span parse, is the uniform source.)
-    top_src = getattr(loaded, "source", None)
-    node_ranges: dict = dict(top_src.node_ranges) if top_src is not None else {}
-    field_ranges: dict = dict(top_src.field_ranges) if top_src is not None else {}
-    text, label = top_text, top_label
-    current_file = top_label  # the display filename of the file the current frame lives in
-    frame_candidates: list[tuple[str, str, Optional[SourceRange], bool]] = []
-    span_leaf = _last_segment(span.node) if span is not None else None
-
-    for i, seg in enumerate(segments):
-        is_last = i == len(segments) - 1
-        node = nodes.get(seg)
-        rng: Optional[SourceRange] = None
-        fields = field_ranges.get(seg, {})
-        if is_last:
-            if rng is None and span is not None and span.kind == "field" and span_leaf == seg:
-                rng = _field_range(fields, span.key)
-            if rng is None:  # else the node's kind fallback (e.g. a code node's `code:`)
-                for fname in _KIND_FALLBACK_FIELDS:
-                    if ("field", fname) in fields:
-                        rng = fields[("field", fname)]
-                        break
-        if rng is None:
-            rng = node_ranges.get(seg)  # the node body range (None -> synthetic/unauthored: skip)
-        frame_candidates.append(
-            (
-                label,
-                text,
-                rng,
-                _node_owns_resolved_range(node, span, resolved_range),
-            )
-        )
-
-        # Descend into the child this segment calls, if any (else the leaf is reached).
-        if node is None:
-            break
-        child = getattr(node, "child", None)
-        src = getattr(node, "child_source", None)
-        if child is None or src is None:
-            break
-        nodes = child.nodes
-        text = src.text
-        node_ranges, field_ranges = src.node_ranges, src.field_ranges
-        # A `defs:` child physically lives in the CURRENT file -> qualify its frame title with
-        # that filename (`<file> defs:<name>`); an external `uses:` child is a different file,
-        # so its own filename becomes the current file and stands alone as the title.
-        if src.label.startswith("defs:"):
-            label = f"{current_file} {src.label}"
-        else:
-            current_file = src.label
-            label = src.label
-
-    resolved_owner_index = next(
-        (
-            index
-            for index in range(len(frame_candidates) - 1, -1, -1)
-            if frame_candidates[index][3]
-        ),
-        None,
-    )
-    frames: list[tuple[str, str, SourceRange]] = []
-    for index, (candidate_label, candidate_text, fallback, _) in enumerate(
-        frame_candidates
-    ):
-        rng = resolved_range if index == resolved_owner_index else fallback
-        if rng is not None:
-            frames.append((candidate_label, candidate_text, rng))
-    return frames
-
-
-def _render_frame_stack(frames, message: str) -> None:
-    """Render a multi-frame call traceback (most-recent-call-last) + the message below.
-
-    Mirrors a Python traceback: a header, then one boxed `.yaml` frame per descended level
-    (outermost `call` first, the failing leaf last), then the error message in red. Each
-    frame carries a `SourceRange`; the box anchors on its `start_line` (one line per frame,
-    like a Python traceback), which for a call-chain node is its header line and for the failing
-    operation its source-owned resolved range or best available fallback."""
-    err_console.print(Text("call traceback (most recent call last):", style="red bold"))
-    for label, ftext, rng in frames:
-        _render_frame_box(ftext, [rng.start_line], label)
-    err_console.print(Text(message, style="red"))
 
 
 def render_diagnostic(diag: Diagnostic) -> None:

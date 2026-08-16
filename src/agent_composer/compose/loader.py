@@ -600,7 +600,6 @@ def _load_flow(
     ctx: "_LoadCtx",
 ) -> ComposedFlow:
     root = document.root
-    text = document.text
     diagnostics = LoadDiagnostics.from_document(document)
     f = parse_file(document)
     _reject_authored_private_callable_names(root, f.defs, f.uses)

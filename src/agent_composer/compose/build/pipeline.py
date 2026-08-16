@@ -868,8 +868,9 @@ def _assemble(
         except SourceAccessError as exc:
             raise diagnostics.error(str(exc), range=exc.range) from exc
 
-    # Inline CODE retains the flow label only as an opaque Python traceback filename;
-    # authored locations come from semantic origins. Inert for reference-mode CODE.
+    # Inline CODE receives the owning document label only as an opaque Python
+    # traceback filename; authored locations come from semantic origins. Inert for
+    # reference-mode CODE.
     flow_label = diagnostics.label or "<inline-code>"
     if inputs_section is not None:
         if inputs_cursor is not None:

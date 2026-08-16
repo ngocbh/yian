@@ -10,7 +10,7 @@ shared dispatch routes here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.nodes.contracts import ValueContract

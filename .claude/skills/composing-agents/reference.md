@@ -336,12 +336,15 @@ Keys in use: `max_tool_iterations` (agent) — tool-calling loop turns before an
 ac run <flow>.yaml --inputs base.json --input k=v
 ```
 Explicit JSON inputs load first; repeatable `--input` flags override individual
-keys. With an interactive stdin (TTY), `ac` prompts for declarations still missing;
-omitted optional/defaulted prompts remain absent so START owns their defaults or
-optional absence. Without a TTY, missing optional/defaulted declarations also remain
-absent, while all missing required declarations are rejected together as invalid CLI
-input (exit code `2`) before provider or run-log setup and must be supplied through
-`--input`/`--inputs`.
+keys but remain a string/scalar surface. With an interactive stdin (TTY), `ac`
+prompts for declarations still missing. Resolved list/object prompts accept JSON
+text and validate the entire declared type; invalid JSON or values are shown inline
+and re-prompted. Scalar/boolean/`Literal[...]` behavior is unchanged. Blank
+optional/defaulted text omits the key, while cancellation cancels the run. A textual
+root `null` is not explicit null; use `--inputs` for explicit null and for structured
+values without a TTY. Missing optional/defaulted declarations remain absent. Missing
+required declarations fail with exit code `2` before setup: structured values require
+`--inputs`, while scalars may use `--input` or `--inputs`.
 
 From Python: `load_flow(text, search_paths=[flow_dir])` loads + compiles without a
 model. A flow with only `code`/`tool` nodes runs with no provider; any `agent` node

@@ -50,10 +50,13 @@ transcript, that restart gets a separate log rather than reusing the failed run.
 A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
 (later overrides earlier):
 
-1. **`--inputs file.json`** — a JSON object of `{ "key": value, ... }`.
-2. **`--input k=v`** — one input, repeatable. Values arrive as strings and are
-   coerced, where supported, against each input's declared type at the run boundary.
-   A default applied by START was already validated at load and is not string-coerced.
+1. **`--inputs file.json`** — a JSON object of `{ "key": value, ... }`. This is
+   the non-interactive surface for native list/object values and explicit null.
+2. **`--input k=v`** — one input, repeatable. This is a string/scalar surface:
+   values arrive as strings and are coerced, where supported, against scalar input
+   types at the run boundary. It does not parse list/object JSON or explicit null.
+   A default applied by START was already validated at load and is not
+   string-coerced.
 
 When stdin is an interactive TTY, `ac` then prompts for each declaration still
 missing.
@@ -96,7 +99,15 @@ missing. The widget follows its resolved type:
 - a required `Literal[...]` → a select list of the allowed tags,
 - an optional/defaulted `Literal[...]` → the same list with the omit/default action
   preselected and each explicit tag labelled `Set value: ...`,
-- anything else → a free-text entry, initially blank.
+- a resolved list type → a text entry for a JSON array,
+- a resolved object or record type → a text entry for a JSON object,
+- any other scalar → the existing free-text entry, initially blank.
+
+List/object answers are parsed as JSON and validated recursively against the
+complete resolved type, including list elements and record fields. Invalid JSON,
+the wrong root shape, or a nested type mismatch is shown inside the prompt and the
+same question remains open for correction. Scalar, `Literal[...]`, and boolean
+answers keep their existing widgets and run-boundary behavior.
 
 Choosing the omit/default action, or leaving optional/defaulted free text blank,
 does not submit a value. The key stays absent: START applies the exact validated
@@ -111,16 +122,21 @@ ISO-8601 `date` / `datetime` scalars — whose accepted string form isn't obviou
 a label with no default also shows an **example** value (`e.g. 2026-05-21`,
 `e.g. 2026-05-21T14:30`); when a default is present it already shows the format,
 so the example is dropped. An explicit null default is shown as `[default: None]`.
-Whitespace-only optional/defaulted free text is also omission. To supply explicit
-null, whitespace-only strings, or structured list/object values, use `--inputs`
-JSON. Cancelling a prompt cancels the run.
+Whitespace-only optional/defaulted text, including a list/object JSON prompt, is
+also omission. Cancelling any prompt still cancels the run. Textual root `null`
+is never an explicit-null action: a list/object prompt rejects it, while scalar
+prompts retain their ordinary text behavior. Use `--inputs` JSON to supply explicit
+null, and use it as well for structured values in a non-interactive run.
+Whitespace-only string values also require an explicit input source rather than an
+omitted prompt.
 
 !!! note
     Initial input prompts need a real terminal (TTY). In a non-interactive context
     (a CI job, a piped command, `srun` without a pty), missing optional/defaulted
     declarations stay absent so START applies defaults or retains optional absence.
     If required declarations are missing, `ac` reports all of them and exits with
-    code `2` before provider or run-log setup; supply them through `--input` or
+    code `2` before provider or run-log setup. Required list/object inputs must be
+    supplied through `--inputs`; ordinary required scalars may use `--input` or
     `--inputs`.
 
 ## Blocking interactions

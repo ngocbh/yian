@@ -3,17 +3,22 @@ survives YAML 1.1's `on:` -> True key coercion; build LOWERS the case to a stric
 plus its data + control edges (the case's lowering is its own `.build(ctx)`, no leaf Node).
 """
 
+import textwrap
+
 import pytest
 
+from agent_composer.compile.expand import clone_child
+from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compose import load_flow
-from agent_composer.nodes.case import CaseNode
-from agent_composer.nodes.contracts import Binding
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.case import CaseDescriptor
 from agent_composer.compose.source import SourceDocument
+from agent_composer.compose.source.catalog import _scope_origin
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceRange
+from agent_composer.nodes.case import CaseNode
+from agent_composer.nodes.contracts import Binding
 from agent_composer.run import run_flow
 
 
@@ -91,6 +96,35 @@ nodes:
     code: 'return "cold"'
     output: str
 output: ${hot.output | cold.output}
+"""
+
+_CASE_CHILD_BODY = """\
+nodes:
+  zero:
+    kind: code
+    code: "return 0"
+    output: int
+  gate:
+    kind: case
+    cases:
+      - when: "${zero.output} > 0"
+        then: positive
+      - when: "1 / ${zero.output} > 0"
+        then: broken
+    else: negative
+  positive:
+    kind: code
+    code: 'return "positive"'
+    output: str
+  broken:
+    kind: code
+    code: 'return "broken"'
+    output: str
+  negative:
+    kind: code
+    code: 'return "negative"'
+    output: str
+output: ${positive.output | broken.output | negative.output}
 """
 
 
@@ -228,3 +262,146 @@ def test_case_descriptor_rejects_misaligned_or_nonopaque_origins():
             cases=[{"when": "true", "then": "positive"}],
             when_origins=("flow.yaml:12",),  # type: ignore[arg-type]
         )
+
+
+def test_named_definition_case_failure_keeps_child_predicate_origin():
+    """Named child assembly and CALL growth retain the exact failing arm."""
+    text = (
+        "id: named-case-origin\n"
+        "name: named-case-origin\n"
+        "defs:\n"
+        "  child:\n" + textwrap.indent(_CASE_CHILD_BODY, "    ") + "nodes:\n"
+        "  invoke:\n"
+        "    kind: call\n"
+        "    call: child\n"
+        "output: ${invoke.output}\n"
+    )
+    document = SourceDocument.parse(text, label="named-case.yaml")
+    expected = (
+        document.root.child("defs")
+        .child("child")
+        .child("nodes")
+        .child("gate")
+        .child("cases")
+        .child(1)
+        .child("when")
+    )
+    flow = load_flow(text, source_label="named-case.yaml")
+    case_node = flow.compiled.nodes["invoke"].child.nodes["gate"]
+
+    result = run_flow(flow, {})
+
+    assert result.failure is not None
+    assert result.failure.trace[-1] == case_node.cases[1].origin
+    assert flow.diagnose(result.failure).frames[-1].range == expected.range
+
+
+def test_inline_definition_case_failure_keeps_child_predicate_origin():
+    """Inline child assembly and CALL growth retain the exact failing arm."""
+    text = (
+        "id: inline-case-origin\n"
+        "name: inline-case-origin\n"
+        "nodes:\n"
+        "  invoke:\n"
+        "    kind: call\n"
+        + textwrap.indent(_CASE_CHILD_BODY, "    ")
+        + "output: ${invoke.output}\n"
+    )
+    document = SourceDocument.parse(text, label="inline-case.yaml")
+    expected = (
+        document.root.child("nodes")
+        .child("invoke")
+        .child("nodes")
+        .child("gate")
+        .child("cases")
+        .child(1)
+        .child("when")
+    )
+    flow = load_flow(text, source_label="inline-case.yaml")
+    case_node = flow.compiled.nodes["invoke"].child.nodes["gate"]
+
+    result = run_flow(flow, {})
+
+    assert result.failure is not None
+    assert result.failure.trace[-1] == case_node.cases[1].origin
+    assert flow.diagnose(result.failure).frames[-1].range == expected.range
+
+
+def test_external_alias_rebases_case_and_generated_binding_origins():
+    """An external view scopes CASE carriers without mutating its canonical child."""
+    child = load_flow(_SEARCHED_ORIGIN_FLOW, source_label="child-case.yaml")
+    parent = """\
+id: parent-case-origin
+name: parent-case-origin
+nodes:
+  invoke:
+    kind: call
+    call: child_view
+output: ${invoke.output}
+uses:
+  child_view: child
+"""
+    loaded = load_flow(
+        parent,
+        child_resolver=lambda _path, _version=None: child,
+    )
+    canonical = child.compiled.nodes["gate"]
+    embedded = loaded.compiled.nodes["invoke"].child.nodes["gate"]
+
+    assert tuple(case.origin for case in embedded.cases) == tuple(
+        _scope_origin("child_view", case.origin) for case in canonical.cases
+    )
+    canonical_binding = child.compiled.wiring["gate"]["__r0"]
+    embedded_binding = loaded.compiled.nodes["invoke"].child.wiring["gate"]["__r0"]
+    assert embedded_binding.origin == _scope_origin(
+        "child_view", canonical_binding.origin
+    )
+    assert loaded.origin_resolver is not None
+    assert child.origin_resolver is not None
+    assert tuple(
+        loaded.origin_resolver.resolve(case.origin) for case in embedded.cases
+    ) == tuple(child.origin_resolver.resolve(case.origin) for case in canonical.cases)
+
+
+def test_generated_child_clone_preserves_case_predicate_origins():
+    """CALL cloning keeps ordered CASE sites and generated binding provenance."""
+    loaded = load_flow(_SEARCHED_ORIGIN_FLOW)
+    original = loaded.compiled.nodes["gate"]
+
+    cloned = clone_child(loaded.compiled, callsite="invoke", record={})
+    generated = cloned.nodes["invoke/gate"]
+
+    assert generated is not original
+    assert tuple(case.origin for case in generated.cases) == tuple(
+        case.origin for case in original.cases
+    )
+    assert cloned.wiring["invoke/gate"]["__r0"].origin == (
+        loaded.compiled.wiring["gate"]["__r0"].origin
+    )
+
+
+def test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint():
+    """Semantic CASE identities survive comments while resolution follows the text."""
+    moved = _SEARCHED_ORIGIN_FLOW.replace(
+        "  gate:\n    kind: case\n",
+        "  # Formatting-only comments move the CASE.\n  gate:\n    kind: case\n",
+    ).replace(
+        "    cases:\n",
+        "    # The ordered predicates keep their semantic indices.\n    cases:\n",
+    )
+    baseline = load_flow(_SEARCHED_ORIGIN_FLOW)
+    relocated = load_flow(moved)
+    baseline_node = baseline.compiled.nodes["gate"]
+    relocated_node = relocated.compiled.nodes["gate"]
+    baseline_origins = tuple(case.origin for case in baseline_node.cases)
+    relocated_origins = tuple(case.origin for case in relocated_node.cases)
+
+    assert relocated_origins == baseline_origins
+    assert flow_fingerprint(relocated.compiled) == flow_fingerprint(baseline.compiled)
+    assert baseline.origin_resolver is not None
+    assert relocated.origin_resolver is not None
+    assert tuple(
+        baseline.origin_resolver.resolve(origin).range for origin in baseline_origins
+    ) != tuple(
+        relocated.origin_resolver.resolve(origin).range for origin in relocated_origins
+    )

@@ -22,6 +22,7 @@ from urllib.parse import unquote_plus
 from lark import Token, Tree
 
 from agent_composer.compile.model import CompiledFlow, Edge, Flow, FlowOutput
+from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError, expr_refs, scan_template
 from agent_composer.expr.template import Literal, Span
 from agent_composer.nodes.agent import AgentNode
@@ -1480,6 +1481,8 @@ def _case_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, An
     if type(value) is not Case:
         raise TypeError(f"{path}: expected Case, got {type(value).__name__}")
     _check_fields(value, _CASE_CANONICAL_FIELDS | _CASE_IGNORED_FIELDS, path)
+    if value.origin is not None and not isinstance(value.origin, OriginRef):
+        raise TypeError(f"{path}.origin: expected OriginRef or None")
     return {
         "handle": value.handle,
         "when": _canonical_value(value.when, ctx, f"{path}.when"),

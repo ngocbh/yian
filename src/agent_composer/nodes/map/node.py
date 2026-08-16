@@ -22,7 +22,7 @@ from typing import Any, Callable, ClassVar, Iterator, Optional
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Grow, Node, NodeKind
-from agent_composer.nodes.binding import _resolve_source
+from agent_composer.nodes.binding import BindingError, _resolve_source, _source_origin
 from agent_composer.nodes.contracts import (
     Parameter,
     _iter_origin_carrier,
@@ -116,8 +116,10 @@ class MapNode(Node):
         items = _resolve_source(over_src, pool)
         if items is None or not isinstance(items, list):
             display_src = binding_source(over_src)
-            raise RuntimeError(
-                f"MAP node {self.id!r}: `over` ({display_src}) did not resolve to a list"
+            raise BindingError(
+                f"MAP node {self.id!r}: `over` ({display_src}) did not resolve to a list",
+                failure_code="contract.input",
+                origin=_source_origin(over_src),
             )
         return {"over": items}
 

@@ -5,14 +5,23 @@ The evaluator binds from flow-owned wiring, runs the node, and returns exactly o
 belong to ``FlowEngine`` rather than this pure evaluation seam.
 """
 
+import pytest
+
 from agent_composer.compile.model import START_ID
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route
-from agent_composer.nodes.contracts import Assertion, Binding, Parameter
+from agent_composer.nodes.contracts import (
+    Assertion,
+    Binding,
+    ContractOrigins,
+    Parameter,
+    ValueContract,
+)
 from agent_composer.nodes.map import MapNode
 from agent_composer.nodes.wait import WaitNode
 from agent_composer.runtime.eval_node import EvaluationFailure
 from agent_composer.typesys.pool import VariablePool
+from agent_composer.typesys.values import Type, ValueKind
 from tests.engine._fakes import BranchNode, FailNode, FuncNode, drive, stamp_reads
 from tests.engine.test_golden_baseline import MAP_OVER_NOT_LIST_FMT
 
@@ -208,3 +217,75 @@ def test_map_over_not_a_list_message_is_byte_identical():
             id="m",
             src=raw_source,
         )
+
+
+def test_map_deferred_item_binding_keeps_input_contract_stage() -> None:
+    """MAP's binder capability does not become a node-body failure."""
+    contract_origin = OriginRef("map:x:contract")
+    node = MapNode("m", flow_id="child", child=object())
+    node.params = [
+        Parameter(
+            "x",
+            contract=ValueContract(
+                Type.scalar(ValueKind.INTEGER),
+                ContractOrigins(default=contract_origin),
+            ),
+        )
+    ]
+    node._wiring_src = {
+        "over": ["bad"],
+        "x": Binding("${item}", OriginRef("map:x:binding")),
+    }
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "contract.input"
+    assert result.failure.trace == (contract_origin,)
+
+
+@pytest.mark.parametrize(
+    ("node", "field"),
+    [
+        (MapNode("map", flow_id="child", child=object()), "over"),
+        (WaitNode("wait"), "until"),
+    ],
+)
+def test_missing_reserved_wiring_is_an_ir_fault(node: Node, field: str) -> None:
+    """A validated compiled graph must contain every trait-declared reserved key."""
+    node._wiring_src = {}
+
+    with pytest.raises(KeyError, match=field):
+        drive(node)
+
+
+def test_malformed_parameter_carrier_is_an_ir_fault() -> None:
+    """Malformed compiled setup escapes instead of becoming a flow failure."""
+    node = FuncNode("n", lambda inputs: inputs)
+    node.params = (Parameter("x"),)  # type: ignore[assignment]
+
+    with pytest.raises(TypeError, match="exact list"):
+        drive(node)
+
+
+@pytest.mark.parametrize(
+    ("node", "field", "value"),
+    [
+        (MapNode("map", flow_id="child", child=object()), "over", "not-a-list"),
+        (WaitNode("wait"), "until", "not-an-iso-date"),
+    ],
+)
+def test_reserved_input_rejection_is_an_input_contract_failure(
+    node: Node,
+    field: str,
+    value: str,
+) -> None:
+    """Expected reserved-value rejection keeps its authored binding origin."""
+    origin = OriginRef(f"{node.id}:{field}")
+    node._wiring_src = {field: Binding(value, origin)}
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "contract.input"
+    assert result.failure.trace == (origin,)

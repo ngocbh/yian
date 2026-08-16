@@ -103,7 +103,7 @@ def test_raw_failure_is_frozen_slotted_and_preserves_diagnostics():
     assert result.traceback is not None and "BindingError" in result.traceback
     assert not hasattr(result, "__dict__")
     with pytest.raises(FrozenInstanceError):
-        result.error = "changed"
+        result.failure = result.failure
 
 
 def test_raw_node_raise_and_invalid_grow_are_failures_not_observers():

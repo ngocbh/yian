@@ -20,8 +20,9 @@ coercion; both sit below/beside `nodes` in the layer ladder.
 from __future__ import annotations
 
 import copy
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
+from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceSpan
 from agent_composer.expr import (
     ExpressionError,
@@ -29,19 +30,47 @@ from agent_composer.expr import (
     eval_binding,
     resolve_reference,
 )
-from agent_composer.nodes.contracts import Parameter, binding_source
+from agent_composer.nodes.contracts import Binding, Parameter, binding_source
 from agent_composer.typesys import TypeCheckError, ValueKind, build_value_as
 from agent_composer.typesys.pool import VariablePool
 
 
-class BindingError(ValueError):
-    """A node's declared input could not be bound (missing-required or type mismatch).
+BindingFailureCode: TypeAlias = Literal["binding.evaluate", "contract.input"]
 
-    Carries an optional `locator` — a `SourceSpan(None, "input", <param>)` naming the
-    failing input. `bind_params` stamps it; eval_node's funnel fills in the node id.
+
+class BindingError(ValueError):
+    """An expected binding operation failed with one semantic stage and origin.
+
+    ``failure_code`` distinguishes expression/default/required evaluation from a
+    supplied value violating its input contract. ``origin`` is the most precise
+    currently available authored operation. ``locator`` remains a temporary
+    presentation bridge until all runtime diagnostics resolve opaque origins.
     """
 
-    locator: object = None  # Optional[SourceSpan]
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_code: BindingFailureCode,
+        origin: OriginRef | None = None,
+        locator: SourceSpan | None = None,
+    ) -> None:
+        """Retain one validated binder-owned semantic classification."""
+        super().__init__(message)
+        if failure_code not in ("binding.evaluate", "contract.input"):
+            raise ValueError(f"invalid binding failure code {failure_code!r}")
+        if origin is not None:
+            if not isinstance(origin, OriginRef):
+                raise TypeError("binding failure origin must be an OriginRef or None")
+            OriginRef(origin.key)
+        self.failure_code = failure_code
+        self.origin = origin
+        self.locator = locator
+
+
+def _source_origin(source: Any) -> OriginRef | None:
+    """Return one canonical binding carrier's origin, or ``None`` for raw input."""
+    return source.origin if isinstance(source, Binding) else None
 
 
 def _validate_parameters(params: list[Parameter]) -> None:
@@ -113,7 +142,15 @@ def apply_defaults(
         if parameter.name in output or not parameter.has_default:
             continue
         if parameter.contract is not None:
-            build_value_as(parameter.contract.type, parameter.default)
+            try:
+                build_value_as(parameter.contract.type, parameter.default)
+            except TypeCheckError as exc:
+                raise BindingError(
+                    str(exc),
+                    failure_code="binding.evaluate",
+                    origin=parameter.default_origin or parameter.origin,
+                    locator=SourceSpan(None, "input", parameter.name),
+                ) from exc
         output[parameter.name] = parameter.default
     return output
 
@@ -133,13 +170,22 @@ def _resolve_source(source: Any, pool: VariablePool, item: Any = None) -> Any:
     Parse/eval errors (malformed ref, two-level nesting, an unbound `:?`) surface as
     `BindingError` — `expr`'s `ExpressionError`/`RequiredError` never leak across the
     `nodes <- expr` boundary."""
-    source = binding_source(source)
-    if not isinstance(source, str):
-        return source
+    origin = _source_origin(source)
+    source_value = binding_source(source)
+    if not isinstance(source_value, str):
+        return source_value
     try:
-        return eval_binding(source, lambda path: resolve_reference(path, pool), item)
+        return eval_binding(
+            source_value,
+            lambda path: resolve_reference(path, pool),
+            item,
+        )
     except (RequiredError, ExpressionError) as exc:
-        raise BindingError(str(exc)) from exc
+        raise BindingError(
+            str(exc),
+            failure_code="binding.evaluate",
+            origin=origin,
+        ) from exc
 
 
 def bind_params(
@@ -190,7 +236,11 @@ def bind_params(
                     value = p.default
                     used_default = True
                 elif not present and p.required:
-                    raise BindingError(f"required input {p.name!r} is unbound (from={source!r})")
+                    raise BindingError(
+                        f"required input {p.name!r} is unbound (from={source!r})",
+                        failure_code="binding.evaluate",
+                        origin=p.origin,
+                    )
                 elif not present:
                     # Truly OMITTED, no default, not required -> leave the key ABSENT so the
                     # wrapper's apply_default can fill it (or the render raises on unbound).
@@ -206,7 +256,17 @@ def bind_params(
                 try:
                     checked = build_value_as(p.contract.type, value)
                 except TypeCheckError as exc:
-                    raise BindingError(f"input {p.name!r}: {exc}") from exc
+                    if used_default:
+                        failure_code: BindingFailureCode = "binding.evaluate"
+                        origin = p.default_origin or p.origin
+                    else:
+                        failure_code = "contract.input"
+                        origin = p.contract.origins.at(()) or p.origin
+                    raise BindingError(
+                        f"input {p.name!r}: {exc}",
+                        failure_code=failure_code,
+                        origin=origin,
+                    ) from exc
                 if not used_default:
                     value = checked.to_object()
             record[p.name] = copy.deepcopy(value)
@@ -215,5 +275,7 @@ def bind_params(
             # eval_node's funnel (binding has no node identity here).
             if exc.locator is None:
                 exc.locator = SourceSpan(node=None, kind="input", key=p.name)
+            if exc.origin is None:
+                exc.origin = p.origin
             raise
     return record

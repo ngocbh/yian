@@ -46,6 +46,15 @@ def test_load_error_rejects_payload_mutation(
         setattr(error, name, value)
 
 
+def test_load_error_rejects_inherited_dict_enrichment() -> None:
+    error = LoadError(Diagnostic(code="compose.load", message="broken"))
+
+    with pytest.raises(TypeError, match="does not support item assignment"):
+        error.__dict__["line"] = 7
+
+    assert not hasattr(error, "line")
+
+
 def test_load_error_copy_and_pickle_reconstruct_from_the_diagnostic() -> None:
     diagnostic = Diagnostic(code="compose.load", message="broken")
     error = LoadError(diagnostic)

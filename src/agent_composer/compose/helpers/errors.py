@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import Iterable, TYPE_CHECKING
 
 from agent_composer.diagnostics import Diagnostic, DiagnosticFrame, SourceRange
@@ -255,3 +256,10 @@ class LoadError(ValueError):
             super().__setattr__(name, value)
             return
         raise AttributeError("LoadError payload is immutable")
+
+    def __getattribute__(self, name: str) -> object:
+        """Expose inherited exception metadata through a read-only mapping."""
+        value = super().__getattribute__(name)
+        if name == "__dict__":
+            return MappingProxyType(value)
+        return value

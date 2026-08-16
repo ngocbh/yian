@@ -115,8 +115,8 @@ def test_compact_rejects_non_leaf_kind():
     with pytest.raises(LoadError, match="not allowed inline") as exc:
         parse_file(_COMPACT_NON_LEAF)
 
-    assert exc.value.range == SourceRange(6, 7, 6, 11)
-    assert exc.value.line == 6
+    assert exc.value.diagnostic.frames[-1].range == SourceRange(6, 7, 6, 11)
+    assert exc.value.diagnostic.frames[-1].range.start_line == 6
 
 
 _COMPACT_NO_ID = """
@@ -134,8 +134,11 @@ def test_compact_requires_id():
     with pytest.raises(LoadError, match="top-level `id:` is required") as exc:
         parse_file(document)
 
-    assert exc.value.range == document.root.range
-    assert exc.value.line == document.root.range.start_line
+    assert exc.value.diagnostic.frames[-1].range == document.root.range
+    assert (
+        exc.value.diagnostic.frames[-1].range.start_line
+        == document.root.range.start_line
+    )
 
 
 _COMPACT_BAD_INPUT = """
@@ -151,5 +154,5 @@ def test_compact_invalid_input_has_value_range():
     with pytest.raises(LoadError, match="must be a param map") as exc:
         parse_file(_COMPACT_BAD_INPUT)
 
-    assert exc.value.range == SourceRange(4, 8, 4, 15)
-    assert exc.value.line == 4
+    assert exc.value.diagnostic.frames[-1].range == SourceRange(4, 8, 4, 15)
+    assert exc.value.diagnostic.frames[-1].range.start_line == 4

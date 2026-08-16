@@ -293,14 +293,16 @@ Hand it to [`run_flow()`](engine.md) and the interpreter takes over.
 
 ---
 
-## Errors: one type, always located
+## Errors: one canonical diagnostic
 
-Every load failure is a single `LoadError` carrying a `SourceRange`. Each pass raises it
-at the most precise anchor it has — a bad field at that field's range, an unresolved
-`${...}` at the binding, a cycle at the node header. That is why the CLI can box the
-offending line instead of dumping a stack trace. When a pass genuinely lacks an interior
-line (e.g. a type error from the line-less `typesys` layer), it anchors at the enclosing
-section header rather than guessing.
+Every load failure is one `LoadError(Diagnostic)`. The diagnostic owns its message,
+notes, and ordered `DiagnosticFrame` values; each frame contains the source label,
+complete text, and exact `SourceRange` it indexes. A bad imported child therefore keeps
+the child's YAML frame instead of applying child coordinates to its parent file.
+Definition and import sites prepend outer context without mutating the inner failure,
+and a cycle uses authored-order peer frames. Source-free Python composition remains a
+valid unlocated diagnostic. No load-error renderer reparses YAML or receives source text
+separately.
 
 ---
 

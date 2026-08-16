@@ -19,6 +19,7 @@ consuming `${gate.output}` (incl. nested case-of-case).
 import pytest
 
 from agent_composer.compose import LoadError, expand_case_outputs, load_flow
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.run import run_flow
 from agent_composer.compose.parse.file import CaseDescriptor, CodeDescriptor
 
@@ -77,7 +78,9 @@ def test_case_of_case_value_flattens_to_leaves():
     # a case whose target is itself a case -> ${<outer>.output} flattens through the
     # nested case to its LEAF (non-case) targets (sound via the veto, which skip-floods
     # the nested gate when the outer branch loses).
-    outer = CaseDescriptor(id="outer", cases=[{"when": "w", "then": "inner"}], else_="x")
+    outer = CaseDescriptor(
+        id="outer", cases=[{"when": "w", "then": "inner"}], else_="x"
+    )
     inner = CaseDescriptor(id="inner", cases=[{"when": "w", "then": "a"}], else_="b")
     descs = {"outer": outer, "inner": inner, "c": _code("c", v="${outer.output}")}
     new, _ = expand_case_outputs(descs, None, [])
@@ -102,15 +105,25 @@ def test_non_case_ref_untouched():
 def test_multiple_case_values_in_one_binding_both_expand():
     g1 = CaseDescriptor(id="g1", cases=[{"when": "w", "then": "a"}], else_="b")
     g2 = CaseDescriptor(id="g2", cases=[{"when": "w", "then": "c"}], else_="d")
-    descs = {"g1": g1, "g2": g2, "n": _code("n", v="pre ${g1.output} mid ${g2.output} post")}
+    descs = {
+        "g1": g1,
+        "g2": g2,
+        "n": _code("n", v="pre ${g1.output} mid ${g2.output} post"),
+    }
     new, _ = expand_case_outputs(descs, None, [])
-    assert new["n"].inputs["v"] == "pre ${a.output | b.output} mid ${c.output | d.output} post"
+    assert (
+        new["n"].inputs["v"]
+        == "pre ${a.output | b.output} mid ${c.output | d.output} post"
+    )
 
 
 def test_case_value_in_tool_inputs_expands():
     from agent_composer.compose.parse.file import ToolDescriptor
 
-    descs = {"gate": _gate(), "t": ToolDescriptor(id="t", tool_id="x", inputs={"q": "${gate.output}"})}
+    descs = {
+        "gate": _gate(),
+        "t": ToolDescriptor(id="t", tool_id="x", inputs={"q": "${gate.output}"}),
+    }
     new, _ = expand_case_outputs(descs, None, [])
     assert new["t"].inputs["q"] == "${pro.output | caut.output}"
 
@@ -161,14 +174,23 @@ def test_case_ref_in_required_message_is_loud():
 def test_case_ref_in_assert_is_located():
     # the assert-position rejection locates at the asserts: line, not the outputs: line.
     descs = {"gate": _gate()}
+    diagnostics = LoadDiagnostics(label="flow.yaml", text=(" " * 80 + "\n") * 50)
     with pytest.raises(LoadError) as exc:
-        expand_case_outputs(descs, None, ['${gate.output} != ""'], asserts_line=42)
-    assert exc.value.line == 42
+        expand_case_outputs(
+            descs,
+            None,
+            ['${gate.output} != ""'],
+            asserts_line=42,
+            diagnostics=diagnostics,
+        )
+    assert exc.value.diagnostic.frames[0].range.start_line == 42
 
 
 def test_case_ref_in_condition_is_loud():
     # another case whose when: reads ${gate.output} (a case value) -> rejected.
-    other = CaseDescriptor(id="other", cases=[{"when": "${gate.output} == 1", "then": "z"}])
+    other = CaseDescriptor(
+        id="other", cases=[{"when": "${gate.output} == 1", "then": "z"}]
+    )
     descs = {"gate": _gate(), "other": other}
     with pytest.raises(LoadError, match="condition"):
         expand_case_outputs(descs, None, [])
@@ -341,9 +363,11 @@ def test_case_of_case_value_runs_taken_nested_leaf():
     loaded = load_flow(_CASE_OF_CASE_FLOW)
     # ${outer.output} flattened through `inner` to its leaves (+ outer's else `x`).
     assert loaded.compiled.outputs[0].from_ == "${hi.output | lo.output | x.output}"
-    assert run_flow(loaded, {"a": 0.9, "b": 0.9}).output == "HI"   # outer->inner->hi
-    assert run_flow(loaded, {"a": 0.9, "b": 0.2}).output == "LO"   # outer->inner->lo
-    assert run_flow(loaded, {"a": 0.2, "b": 0.9}).output == "X"    # outer->x (inner skip-flooded)
+    assert run_flow(loaded, {"a": 0.9, "b": 0.9}).output == "HI"  # outer->inner->hi
+    assert run_flow(loaded, {"a": 0.9, "b": 0.2}).output == "LO"  # outer->inner->lo
+    assert (
+        run_flow(loaded, {"a": 0.2, "b": 0.9}).output == "X"
+    )  # outer->x (inner skip-flooded)
 
 
 _INLINE_INTO_CASE = """

@@ -1,0 +1,141 @@
+"""Canonical diagnostic construction at the Compose load boundary."""
+
+import copy
+import pickle
+
+import pytest
+
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
+from agent_composer.compose.source import SourceDocument
+from agent_composer.diagnostics import Diagnostic, DiagnosticFrame
+
+
+def test_load_error_preserves_one_canonical_diagnostic() -> None:
+    diagnostic = Diagnostic(code="compose.load", message="broken")
+
+    error = LoadError(diagnostic)
+
+    assert error.diagnostic is diagnostic
+    assert error.args == (diagnostic,)
+    assert str(error) == "broken"
+    assert all(
+        not hasattr(error, name)
+        for name in ("line", "lines", "range", "notes")
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("diagnostic", Diagnostic(code="compose.load", message="replacement")),
+        ("_diagnostic", Diagnostic(code="compose.load", message="replacement")),
+        ("line", 7),
+        ("lines", [7]),
+        ("range", object()),
+        ("notes", ["replacement"]),
+        ("other", "enrichment"),
+    ],
+)
+def test_load_error_rejects_payload_mutation(
+    name: str,
+    value: object,
+) -> None:
+    error = LoadError(Diagnostic(code="compose.load", message="broken"))
+
+    with pytest.raises(AttributeError, match="payload is immutable"):
+        setattr(error, name, value)
+
+
+def test_load_error_rejects_inherited_dict_enrichment() -> None:
+    error = LoadError(Diagnostic(code="compose.load", message="broken"))
+
+    with pytest.raises(TypeError, match="does not support item assignment"):
+        error.__dict__["line"] = 7
+
+    assert not hasattr(error, "line")
+
+
+def test_load_error_copy_and_pickle_reconstruct_from_the_diagnostic() -> None:
+    diagnostic = Diagnostic(code="compose.load", message="broken")
+    error = LoadError(diagnostic)
+
+    for reconstructed in (copy.deepcopy(error), pickle.loads(pickle.dumps(error))):
+        assert reconstructed.diagnostic == diagnostic
+        assert reconstructed.args == (reconstructed.diagnostic,)
+        assert str(reconstructed) == "broken"
+
+
+def test_load_error_rejects_non_diagnostic_payloads() -> None:
+    with pytest.raises(TypeError, match="requires a Diagnostic"):
+        LoadError("broken")  # type: ignore[arg-type]
+
+
+def test_load_error_rejects_legacy_location_keywords() -> None:
+    diagnostic = Diagnostic(code="compose.load", message="broken")
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        LoadError(diagnostic, line=7)  # type: ignore[call-arg]
+
+
+def test_document_factory_owns_the_frame_source() -> None:
+    document = SourceDocument.parse("value: broken\n", "child.yaml")
+    value = document.root.child("value")
+
+    error = LoadDiagnostics.from_document(document).error(
+        "bad value",
+        range=value.range,
+        notes=("expected an integer",),
+    )
+
+    assert error.diagnostic == Diagnostic(
+        code="compose.load",
+        message="bad value",
+        frames=(
+            DiagnosticFrame(
+                label="child.yaml",
+                text=document.text,
+                range=value.range,
+            ),
+        ),
+        notes=("expected an integer",),
+    )
+
+
+def test_prepend_adds_outer_context_without_mutating_inner_error() -> None:
+    parent = SourceDocument.parse("uses:\n  child: child\n", "parent.yaml")
+    child = SourceDocument.parse("value: broken\n", "child.yaml")
+    child_value = child.root.child("value")
+    inner = LoadDiagnostics.from_document(child).error(
+        "bad child",
+        range=child_value.range,
+        notes=("inner note",),
+    )
+    original = inner.diagnostic
+
+    wrapped = LoadDiagnostics.from_document(parent).prepend(
+        inner,
+        range=parent.root.child("uses").child("child").range,
+        message="uses alias 'child': bad child",
+        note="imported here",
+    )
+
+    assert inner.diagnostic is original
+    assert wrapped is not inner
+    assert wrapped.diagnostic.message == "uses alias 'child': bad child"
+    assert [frame.label for frame in wrapped.diagnostic.frames] == [
+        "parent.yaml",
+        "child.yaml",
+    ]
+    assert wrapped.diagnostic.frames[0].note == "imported here"
+    assert wrapped.diagnostic.notes == ("inner note",)
+
+
+def test_source_free_factory_keeps_the_diagnostic_unlocated() -> None:
+    document = SourceDocument.parse("value: broken\n", "unused.yaml")
+
+    error = LoadDiagnostics().error(
+        "source-free failure",
+        range=document.root.range,
+    )
+
+    assert error.diagnostic.frames == ()

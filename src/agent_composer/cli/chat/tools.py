@@ -80,9 +80,14 @@ def validate_flow(
     Use this before `run_flow` (to learn what inputs to pass) and after `write_flow` edits.
     `path` is a workspace-relative flow file. Returns `OK: <name>; inputs: <names>` when it
     compiles, or `INVALID: <compile error>` when it does not."""
-    text = _resolve(path).read_text()
+    source = _resolve(path)
+    text = source.read_text()
     try:
-        loaded = load_flow(text, search_paths=[_WORKSPACE])
+        loaded = load_flow(
+            text,
+            search_paths=[_WORKSPACE],
+            source_label=source.name,
+        )
     except LoadError as err:
         return f"INVALID: {err}"
     names = ", ".join(d.name for d in loaded.input) or "(none)"
@@ -106,9 +111,14 @@ def run_flow(
     first. Returns `OUTPUT: <result>` on success or `FAILED: <error>` if the run errors.
     Blocking HUMAN_INPUT is served by the enclosing chat host, while authored WAIT remains
     live until its deadline."""
-    text = _resolve(path).read_text()
+    source = _resolve(path)
+    text = source.read_text()
     try:
-        loaded = load_flow(text, search_paths=[_WORKSPACE])
+        loaded = load_flow(
+            text,
+            search_paths=[_WORKSPACE],
+            source_label=source.name,
+        )
     except LoadError as err:
         return f"ERROR: {err}"
     parent_stop = _CONTROLLER_STOP.get()
@@ -142,7 +152,11 @@ def write_flow(
     lands on disk."""
     dest = _resolve(path)                        # raises on escape
     try:
-        load_flow(content, search_paths=[_WORKSPACE])
+        load_flow(
+            content,
+            search_paths=[_WORKSPACE],
+            source_label=dest.name,
+        )
     except LoadError as err:
         return f"INVALID (not written): {err}"
     dest.parent.mkdir(parents=True, exist_ok=True)

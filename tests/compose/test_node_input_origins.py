@@ -9,7 +9,7 @@ from agent_composer.compose.build.pipeline import (
     _assemble,
     _stamp_node_wiring_origins,
 )
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.loader import _CallableScope
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceCursor, SourceDocument
@@ -402,7 +402,7 @@ output: ${ask.output}
     with pytest.raises(LoadError, match="__questions.*reserved") as exc_info:
         load_flow(text)
 
-    assert exc_info.value.range == collision.range
+    assert exc_info.value.diagnostic.frames[-1].range == collision.range
 
 
 def test_map_over_and_wait_until_resolve_exact_value_sites_without_parameters():
@@ -686,6 +686,7 @@ output: ${worker.output}
         loaded.compiled.wiring,
         owner=("root",),
         catalog_builder=_SourceCatalogBuilder(),
+        diagnostics=LoadDiagnostics.from_cursor(nodes_cursor),
     )
     assert loaded.compiled.wiring["mapping"]["over"].origin == map_origin
     assert loaded.compiled.wiring["waiting"]["until"].origin == wait_origin

@@ -15,7 +15,6 @@ from typing import Any, Optional
 from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.nodes.contracts import ValueContract
 from agent_composer.nodes.loop import LoopNode
-from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.nodes.resolver import (
     _callable_display,
@@ -49,7 +48,9 @@ class LoopDescriptor(NodeDescriptor):
     """
 
     kind = "loop"
-    allowed = NodeDescriptor.allow("call", "inputs", "while", "until", "times", "max", "asserts")
+    allowed = NodeDescriptor.allow(
+        "call", "inputs", "while", "until", "times", "max", "asserts"
+    )
     required = NodeDescriptor.require("call")
     binding_fields = ()
     # Loop owns this remap (the base's is empty): `while`/`until` are Python keywords, so the
@@ -87,6 +88,8 @@ class LoopDescriptor(NodeDescriptor):
             self.call,
             resolver,
             self.child_label,
+            diagnostics=ctx.diagnostics,
+            range=self.field_ranges.get(("field", "call")) or self.range,
         )
         sig = child_signature(child)
         child_display = _callable_display(self.call, self.child_label)
@@ -99,7 +102,7 @@ class LoopDescriptor(NodeDescriptor):
             flow_version=None,
             child=child.compiled,
             child_inputs=sig.inputs,
-            child_source=child.source,        # render-only; the CLI nested-error traceback
+            child_source=child.source,  # render-only; the CLI nested-error traceback
             title=self.node_name,
         )
         node.params = self.sink_params()
@@ -111,7 +114,15 @@ class LoopDescriptor(NodeDescriptor):
         # driver. `while`/`until` are PREDICATE loops (record-scoped boolean, `max:` runaway
         # guard); `times: N` is a fixed COUNT (no predicate, `max:` redundant since the count
         # bounds it). Bake `predicate_kind`/`predicate`/`times`/`max_iters` per the present kind.
-        present = [k for k, v in (("while", self.while_), ("until", self.until_), ("times", self.times)) if v is not None]
+        present = [
+            k
+            for k, v in (
+                ("while", self.while_),
+                ("until", self.until_),
+                ("times", self.times),
+            )
+            if v is not None
+        ]
         if len(present) != 1:
             errors.append(
                 f"loop node {self.id!r}: exactly one of while:/until:/times: is required "
@@ -123,19 +134,25 @@ class LoopDescriptor(NodeDescriptor):
             node.predicate = self.while_ if kind == "while" else self.until_
             node.max_iters = self.max
             if self.max is None:
-                errors.append(f"loop node {self.id!r}: `max:` is required (runaway guard)")
+                errors.append(
+                    f"loop node {self.id!r}: `max:` is required (runaway guard)"
+                )
             elif not isinstance(self.max, int) or isinstance(self.max, bool):
                 # `max:` bounds the iteration COUNT, so it must be a plain integer. The descriptor
                 # is a bare dataclass (its `Optional[int]` annotation isn't enforced), so a YAML
                 # string/float passes through and would blow up the `< 1` compare or the runtime
                 # guard, and a YAML bool (an int subclass in Python) would silently read as 0/1.
                 # Reject any non-int type.
-                errors.append(f"loop node {self.id!r}: `max:` must be an integer (got {self.max!r})")
+                errors.append(
+                    f"loop node {self.id!r}: `max:` must be an integer (got {self.max!r})"
+                )
             elif self.max < 1:
                 # A runaway guard below 1 is nonsensical: the guard bounds the iteration COUNT, so
                 # it must permit at least one body run. Reject at the boundary rather than letting
                 # `max: 0` run one iteration and then fail with a confusing "exceeded max (0)".
-                errors.append(f"loop node {self.id!r}: `max:` must be >= 1 (got {self.max})")
+                errors.append(
+                    f"loop node {self.id!r}: `max:` must be >= 1 (got {self.max})"
+                )
         elif present[0] == "times":
             # `times: N` is a fixed count: exactly N runs, no predicate. `max_iters` doubles as
             # the count N so the runtime guard needs no `times`-special case. Same int/bool/`>= 1`
@@ -145,9 +162,13 @@ class LoopDescriptor(NodeDescriptor):
             node.times = self.times
             node.max_iters = self.times
             if not isinstance(self.times, int) or isinstance(self.times, bool):
-                errors.append(f"loop node {self.id!r}: `times:` must be an integer (got {self.times!r})")
+                errors.append(
+                    f"loop node {self.id!r}: `times:` must be an integer (got {self.times!r})"
+                )
             elif self.times < 1:
-                errors.append(f"loop node {self.id!r}: `times:` must be >= 1 (got {self.times})")
+                errors.append(
+                    f"loop node {self.id!r}: `times:` must be >= 1 (got {self.times})"
+                )
             if self.max is not None:
                 errors.append(
                     f"loop node {self.id!r}: max: is redundant with times: (times bounds the count)"
@@ -202,7 +223,7 @@ class LoopDescriptor(NodeDescriptor):
                     f"the predicate reads the carried record {sorted(carried)}"
                 )
         if errors:
-            raise LoadError("\n  ".join(errors))
+            raise ctx.diagnostics.error("\n  ".join(errors), range=self.range)
         return self._finish(node, wiring)
 
 

@@ -25,9 +25,14 @@ interpreter:
   recoverable run writes canonical JSONL records with fsync.
 
 ```python
+from pathlib import Path
+
 from agent_composer import load_flow, run_flow
 
-loaded = load_flow(open("flow.yaml").read())      # text  -> ComposedFlow
+path = Path("flow.yaml")
+loaded = load_flow(                               # text  -> ComposedFlow
+    path.read_text(), source_label=path.name
+)
 result = run_flow(loaded, {"question": "..."})    # graph -> RunResult
 print(result.output)
 ```

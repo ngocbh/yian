@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.validate.asserts import validate_node_asserts
 from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.base import Node
@@ -45,6 +46,11 @@ output: ${{x.output}}
 def _assertion_text(assertions: list[Assertion]) -> list[tuple[str, str]]:
     """Project carriers onto the executable and authored text under test here."""
     return [(assertion.expression, assertion.display) for assertion in assertions]
+
+
+def _range_diagnostics() -> LoadDiagnostics:
+    """Return source text large enough for direct validator ranges."""
+    return LoadDiagnostics(label="flow.yaml", text=("x" * 80 + "\n") * 30)
 
 
 # ---------- classify + stamp ----------
@@ -127,9 +133,7 @@ def test_reject_unknown_input_ref():
     )
     with pytest.raises(LoadError, match="not a declared input") as caught:
         load_flow(source)
-    assert caught.value.range is not None
-    assert caught.value.range.start_line == expected_line
-    assert caught.value.line == expected_line
+    assert caught.value.diagnostic.frames[0].range.start_line == expected_line
 
 
 def test_node_assert_field_error_prefers_the_exact_input_range():
@@ -148,10 +152,13 @@ def test_node_assert_field_error_prefers_the_exact_input_range():
     node.params = [Parameter(name="output")]
 
     with pytest.raises(LoadError, match="collides") as caught:
-        validate_node_asserts({"x": node}, {"x": descriptor})
+        validate_node_asserts(
+            {"x": node},
+            {"x": descriptor},
+            diagnostics=_range_diagnostics(),
+        )
 
-    assert caught.value.range == input_range
-    assert caught.value.line == input_range.start_line
+    assert caught.value.diagnostic.frames[0].range == input_range
 
 
 def test_node_assert_error_falls_back_to_the_descriptor_range():
@@ -167,14 +174,17 @@ def test_node_assert_error_falls_back_to_the_descriptor_range():
     node.params = []
 
     with pytest.raises(LoadError, match="not a declared input") as caught:
-        validate_node_asserts({"x": node}, {"x": descriptor})
+        validate_node_asserts(
+            {"x": node},
+            {"x": descriptor},
+            diagnostics=_range_diagnostics(),
+        )
 
-    assert caught.value.range == node_range
-    assert caught.value.line == node_range.start_line
+    assert caught.value.diagnostic.frames[0].range == node_range
 
 
-def test_node_assert_aggregate_location_belongs_to_its_first_error():
-    """A later range never replaces the first message's line-only location."""
+def test_node_assert_aggregate_uses_first_available_range():
+    """A later authored range locates an aggregate whose first error is unlocated."""
     later_range = SourceRange(20, 3, 20, 19)
     descriptors = {
         "first": SimpleNamespace(
@@ -197,10 +207,10 @@ def test_node_assert_aggregate_location_belongs_to_its_first_error():
             nodes,
             descriptors,
             node_lines={"first": 4, "later": 20},
+            diagnostics=_range_diagnostics(),
         )
 
-    assert caught.value.line == 4
-    assert caught.value.range is None
+    assert caught.value.diagnostic.frames[0].range == later_range
 
 
 def test_reject_pool_head_ref():

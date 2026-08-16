@@ -15,21 +15,29 @@ from agent_composer.typesys import TypeCheckError, Type, build_value_as, type_fo
 from agent_composer.typesys.values import ValueKind
 from agent_composer.typesys.types import TypeRegistry
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.events import SourceRange
 from agent_composer.compose.source import SourceSyntaxError, parse_yaml_literal
 
 
-def read_type(node, registry: TypeRegistry) -> Type:
+def read_type(
+    node,
+    registry: TypeRegistry,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
+) -> Type:
     """Read a Compose source node into one runtime `Type` (recursively)."""
+    diagnostics = diagnostics or LoadDiagnostics()
     if isinstance(node, str):
         try:
             return type_for(node, registry)
         except TypeCheckError as exc:
-            raise LoadError(f"bad type expression {node!r}: {exc}") from exc
+            raise diagnostics.error(f"bad type expression {node!r}: {exc}") from exc
 
     if isinstance(node, dict):
-        fields = {k: read_type(v, registry) for k, v in node.items()}
+        fields = {
+            k: read_type(v, registry, diagnostics=diagnostics) for k, v in node.items()
+        }
         return Type(
             kind=ValueKind.OBJECT,
             fields=fields,
@@ -40,13 +48,15 @@ def read_type(node, registry: TypeRegistry) -> Type:
         merged: dict = {}
         for elem in node:
             if not (isinstance(elem, dict) and len(elem) == 1):
-                raise LoadError(
+                raise diagnostics.error(
                     f"a list of fields must hold single-key maps, got {elem!r}"
                 )
             merged.update(elem)
-        return read_type(merged, registry)
+        return read_type(merged, registry, diagnostics=diagnostics)
 
-    raise LoadError(f"cannot read type from {node!r} (type {type(node).__name__})")
+    raise diagnostics.error(
+        f"cannot read type from {node!r} (type {type(node).__name__})"
+    )
 
 
 # ---------- flow `inputs:` declarations ----------
@@ -84,6 +94,8 @@ def read_flow_inputs(
     mapping,
     registry: TypeRegistry,
     ranges: Mapping[str, SourceRange | None] | None = None,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> list[Parameter]:
     """Read Compose ``inputs:`` directly into canonical semantic parameters.
 
@@ -92,29 +104,30 @@ def read_flow_inputs(
     escape-hatch map is intentionally not supported). Authored defaults must already
     satisfy their declared type; only supplied boundary strings are coercible.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     parameters: list[Parameter] = []
     for name, value in (mapping or {}).items():
         source_range = None if ranges is None else ranges.get(name)
         try:
             if isinstance(value, str):
                 type_part, default_part = _split_default(value)
-                typ = read_type(type_part, registry)
+                typ = read_type(type_part, registry, diagnostics=diagnostics)
                 has_default = default_part is not None
                 if has_default and default_part == "":
-                    raise LoadError(f"input {name!r}: default cannot be empty")
+                    raise diagnostics.error(f"input {name!r}: default cannot be empty")
                 default: Any = None
                 if has_default:
                     assert default_part is not None
                     try:
                         default = parse_yaml_literal(default_part)
                     except SourceSyntaxError as exc:
-                        raise LoadError(
+                        raise diagnostics.error(
                             f"input {name!r}: bad default {default_part!r}: {exc}"
                         ) from exc
                     try:
                         build_value_as(typ, default)
                     except ValueError as exc:
-                        raise LoadError(
+                        raise diagnostics.error(
                             f"input {name!r}: default {default!r} does not satisfy "
                             f"the declared type: {exc}"
                         ) from exc
@@ -129,7 +142,7 @@ def read_flow_inputs(
                     )
                 )
             elif isinstance(value, dict):
-                typ = read_type(value, registry)
+                typ = read_type(value, registry, diagnostics=diagnostics)
                 parameters.append(
                     Parameter(
                         name=name,
@@ -139,17 +152,15 @@ def read_flow_inputs(
                     )
                 )
             else:
-                raise LoadError(
+                raise diagnostics.error(
                     f"input {name!r}: declaration must be a type string or a record map, "
                     f"got {type(value).__name__}"
                 )
         except LoadError as exc:
-            if exc.range is not None or source_range is None:
+            if exc.diagnostic.frames or source_range is None:
                 raise
-            raise LoadError(
-                str(exc),
-                lines=exc.lines,
-                notes=exc.notes,
+            raise diagnostics.prepend(
+                exc,
                 range=source_range,
             ) from exc
     return parameters

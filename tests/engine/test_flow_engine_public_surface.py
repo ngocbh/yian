@@ -24,6 +24,7 @@ from agent_composer.compile.llm_cascade import resolve_llm_cascade
 from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, START_ID
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.events import (
     NodeExpanded,
     NodeStarted,
@@ -285,7 +286,7 @@ output: ${answer.output}
 def _child_resolver(flow_id: str, version: str | None = None):
     """Resolve the one test child used by direct CALL and MAP runs."""
     if flow_id != "direct-child":
-        raise LoadError(f"unknown child {flow_id!r}")
+        raise LoadDiagnostics().error(f"unknown child {flow_id!r}")
     return load_flow(_CHILD_FLOW)
 
 

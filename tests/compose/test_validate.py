@@ -2,14 +2,14 @@
 
 Covers cycle rejection, reference validation, the cross-flow call/loop type checks,
 wiring parity, the human_input questions surface, and assert/input-binding location
-metadata. Each check rejects an ill-formed flow with a `LoadError` that anchors its
-`.range` on the offending field span.
+metadata. Each check rejects an ill-formed flow with a canonical diagnostic frame
+anchored on the offending field span.
 """
 
 import pytest
 
 from agent_composer.compile.model import Edge
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.nodes.agent import AgentDescriptor
 from agent_composer.compose.nodes.base import BuildContext
@@ -25,6 +25,16 @@ def _nodes_reader(text):
     """Return the physical cursor over a flow document's ``nodes:`` mapping."""
 
     return SourceDocument.parse(text).root.child("nodes")
+
+
+def _diagnostics(text: str) -> LoadDiagnostics:
+    """Return one source authority for a test flow."""
+    return LoadDiagnostics(label="flow.yaml", text=text)
+
+
+def _range_diagnostics() -> LoadDiagnostics:
+    """Return source text large enough for synthetic ranges in direct checks."""
+    return _diagnostics(("x" * 80 + "\n") * 100)
 
 
 def _node_wiring(desc):
@@ -58,8 +68,8 @@ def _built_flow(text):
 
 
 def test_reject_cycles_diag_has_range():
-    # A directed cycle (a -> b -> a) is loud; the LoadError anchors its range on the first
-    # (sorted) stuck node that has one, taken from the passed node_ranges map.
+    # A directed cycle (a -> b -> a) is loud; every stuck node gets one frame in authored
+    # source order, independent of node-id order.
     edges = [
         Edge(id="a->b", from_="a", to="b", input_group="x"),
         Edge(id="b->a", from_="b", to="a", input_group="y"),
@@ -72,14 +82,10 @@ def test_reject_cycles_diag_has_range():
             {"a", "b"},
             node_lines={"a": 9, "b": 3},
             node_ranges={"a": ra, "b": rb},
+            diagnostics=_range_diagnostics(),
         )
-    # `a` sorts first among the stuck nodes, so its range is the anchor even though
-    # `b` appears earlier in the source. The compatibility line follows that range.
-    assert exc.value.range == ra
-    assert exc.value.line == ra.start_line
-    assert exc.value.lines == [9, 3]
-    # The "why" legend still spells out the loop's dependency edges.
-    assert exc.value.notes is not None
+    assert [frame.range for frame in exc.value.diagnostic.frames] == [rb, ra]
+    assert exc.value.diagnostic.notes
 
 
 def test_reject_cycles_no_ranges_leaves_range_none():
@@ -87,7 +93,69 @@ def test_reject_cycles_no_ranges_leaves_range_none():
     edges = [Edge(id="a->b", from_="a", to="b"), Edge(id="b->a", from_="b", to="a")]
     with pytest.raises(LoadError) as exc:
         reject_cycles(edges, {"a", "b"})
-    assert exc.value.range is None
+    assert exc.value.diagnostic.frames == ()
+
+
+def test_reject_cycles_excludes_nodes_only_blocked_downstream() -> None:
+    edges = [
+        Edge(id="a->b", from_="a", to="b", input_group="from_a"),
+        Edge(id="b->a", from_="b", to="a", input_group="from_b"),
+        Edge(id="b->tail", from_="b", to="tail", input_group="from_b"),
+        Edge(id="tail->end", from_="tail", to="end", input_group="from_tail"),
+    ]
+    ranges = {
+        "tail": SourceRange(1, 1, 1, 5),
+        "b": SourceRange(3, 1, 3, 2),
+        "a": SourceRange(5, 1, 5, 2),
+        "end": SourceRange(7, 1, 7, 4),
+    }
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(
+            edges,
+            set(ranges),
+            node_ranges=ranges,
+            diagnostics=_range_diagnostics(),
+        )
+
+    assert [frame.range for frame in caught.value.diagnostic.frames] == [
+        ranges["b"],
+        ranges["a"],
+    ]
+    assert "tail" not in str(caught.value)
+    assert all("tail" not in note for note in caught.value.diagnostic.notes)
+
+
+def test_reject_cycles_omits_edges_between_separate_cycles() -> None:
+    edges = [
+        Edge(id="a->b", from_="a", to="b", input_group="from_a"),
+        Edge(id="b->a", from_="b", to="a", input_group="from_b"),
+        Edge(id="b->c", from_="b", to="c", input_group="bridge"),
+        Edge(id="c->d", from_="c", to="d", input_group="from_c"),
+        Edge(id="d->c", from_="d", to="c", input_group="from_d"),
+    ]
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(edges, {"a", "b", "c", "d"})
+
+    assert set(caught.value.diagnostic.notes) == {
+        "a depends on b (a.input.from_b)",
+        "b depends on a (b.input.from_a)",
+        "c depends on d (c.input.from_d)",
+        "d depends on c (d.input.from_c)",
+    }
+
+
+def test_reject_cycles_reports_a_self_dependency() -> None:
+    edge = Edge(id="a->a", from_="a", to="a", input_group="self")
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles([edge], {"a"})
+
+    assert "['a']" in str(caught.value)
+    assert caught.value.diagnostic.notes == (
+        "a depends on a (a.input.self)",
+    )
 
 
 def test_validate_references_diag_has_range():
@@ -103,14 +171,21 @@ def test_validate_references_diag_has_range():
     )
     nodes, wiring, producers = _built_flow(text)
     with pytest.raises(LoadError) as exc:
-        validate_references(nodes, set(), producers, "${a.output}", wiring)
+        validate_references(
+            nodes,
+            set(),
+            producers,
+            "${a.output}",
+            wiring,
+            diagnostics=_diagnostics(text),
+        )
     assert "ghost" in str(exc.value)
-    assert exc.value.range is not None
-    assert exc.value.range == nodes["a"].field_ranges[("input", "x")]
+    frame = exc.value.diagnostic.frames[0]
+    assert frame.range == nodes["a"].field_ranges[("input", "x")]
     # ...and it is strictly narrower than the block it used to report: `x:` is on line 8, while
     # the `input:` mapping runs to line 9 (`output: str` — a different field entirely).
-    assert exc.value.range != nodes["a"].field_ranges[("field", "inputs")]
-    assert exc.value.range.start_line == exc.value.range.end_line == 8
+    assert frame.range != nodes["a"].field_ranges[("field", "inputs")]
+    assert frame.range.start_line == frame.range.end_line == 8
 
 
 def test_validate_references_diag_locates_case_when_via_synth_param():
@@ -133,8 +208,7 @@ def test_validate_references_diag_locates_case_when_via_synth_param():
     assert "ghost" in str(exc.value)
     assert "'__r0'" not in str(exc.value)      # the synthetic param does not leak...
     assert "cases[0].when" in str(exc.value)   # ...it is named by its author-facing site
-    assert exc.value.range is not None
-    assert exc.value.range.start_line == 7     # the `cases[0].when` line, not the `a:` header (4)
+    assert exc.value.diagnostic.frames[0].range.start_line == 7
 
 
 def test_validate_references_diag_case_on_form_locates_at_on_line():
@@ -154,7 +228,7 @@ def test_validate_references_diag_case_on_form_locates_at_on_line():
     assert "nope" in str(exc.value)
     assert "__on" not in str(exc.value)          # the synthetic param does not leak...
     assert "on:" in str(exc.value)               # ...it is named `on:`
-    assert exc.value.range is not None and exc.value.range.start_line == 6
+    assert exc.value.diagnostic.frames[0].range.start_line == 6
 
 
 def test_validate_references_diag_case_when_multi_ref_locates_at_that_when():
@@ -173,7 +247,7 @@ def test_validate_references_diag_case_when_multi_ref_locates_at_that_when():
         load_flow(text)
     assert "nope" in str(exc.value) and "cases[0].when" in str(exc.value)
     assert "__r" not in str(exc.value)
-    assert exc.value.range is not None and exc.value.range.start_line == 11
+    assert exc.value.diagnostic.frames[0].range.start_line == 11
 
 
 def test_validate_references_diag_case_then_call_locates_at_then_line():
@@ -196,7 +270,7 @@ def test_validate_references_diag_case_then_call_locates_at_then_line():
     with pytest.raises(LoadError) as exc:
         load_flow(text)
     assert "nope" in str(exc.value) and "'__call_0'" in str(exc.value)
-    assert exc.value.range is not None and exc.value.range.start_line == 12
+    assert exc.value.diagnostic.frames[0].range.start_line == 12
 
 
 def test_check_ref_map_types_moved():
@@ -228,10 +302,16 @@ def test_check_ref_map_types_moved():
     }  # source is a string
     wiring = {"c": {"n": "${src.output}"}}  # bound to the int-expecting child input
     with pytest.raises(LoadError) as exc:
-        check_ref_map_types({"c": node}, producers, {}, wiring, {"c": 99})
+        check_ref_map_types(
+            {"c": node},
+            producers,
+            {},
+            wiring,
+            {"c": 99},
+            diagnostics=_range_diagnostics(),
+        )
     assert "child expects" in str(exc.value)
-    assert exc.value.range == rng
-    assert exc.value.line == rng.start_line
+    assert exc.value.diagnostic.frames[0].range == rng
 
 
 def test_check_loop_type_contract_moved():
@@ -256,10 +336,16 @@ def test_check_loop_type_contract_moved():
     }  # seed source is a string
     wiring = {"lp": {"n": "${src.output}"}}  # carried `n` seeded from the string
     with pytest.raises(LoadError) as exc:
-        check_loop_type_contract({"lp": node}, producers, {}, wiring, {"lp": 99})
+        check_loop_type_contract(
+            {"lp": node},
+            producers,
+            {},
+            wiring,
+            {"lp": 99},
+            diagnostics=_range_diagnostics(),
+        )
     assert "carried field" in str(exc.value)
-    assert exc.value.range == rng
-    assert exc.value.line == rng.start_line
+    assert exc.value.diagnostic.frames[0].range == rng
 
 
 def test_type_validators_reject_noncanonical_contract_maps_before_walking():
@@ -290,10 +376,10 @@ def test_check_wiring_parity_moved():
             {"n": node},
             {"n": {**wiring, "orphan": "${input.y}"}},
             {"n": 99},
+            diagnostics=_range_diagnostics(),
         )
     assert "key parity" in str(exc.value)
-    assert exc.value.range == rng
-    assert exc.value.line == rng.start_line
+    assert exc.value.diagnostic.frames[0].range == rng
 
 
 def test_validate_human_questions_diag_has_range():
@@ -309,10 +395,13 @@ def test_validate_human_questions_diag_has_range():
     rng = SourceRange(start_line=5, start_col=5, end_line=6, end_col=20)
     node.field_ranges = {("field", "questions"): rng}
     with pytest.raises(LoadError) as exc:
-        validate_human_questions({"ask": node}, node_lines={"ask": 99})
+        validate_human_questions(
+            {"ask": node},
+            node_lines={"ask": 99},
+            diagnostics=_range_diagnostics(),
+        )
     assert "questions" in str(exc.value)
-    assert exc.value.range == rng
-    assert exc.value.line == rng.start_line
+    assert exc.value.diagnostic.frames[0].range == rng
 
 
 _ASSERT_FLOW = """\

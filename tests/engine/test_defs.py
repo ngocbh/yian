@@ -894,8 +894,7 @@ output: ${go.output}
     with pytest.raises(LoadError, match="defs entry 'child'") as caught:
         load_flow(source)
 
-    assert caught.value.range is not None
-    assert caught.value.range.start_line == 9
+    assert caught.value.diagnostic.frames[-1].range.start_line == 9
 
 
 def test_def_yaml_merge_uses_local_nodes_override():

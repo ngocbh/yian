@@ -58,7 +58,7 @@ def test_parse_nodes_unknown_kind_is_located():
     with pytest.raises(LoadError) as exc:
         parse_nodes(_nodes_reader(text))
     assert "wizard" in str(exc.value)
-    assert exc.value.range is not None  # located at the `kind:` value
+    assert exc.value.diagnostic.frames[-1].range is not None
 
 
 def test_parse_nodes_reserved_node_id_is_loud():
@@ -143,4 +143,4 @@ nodes:
     with pytest.raises(LoadError, match="field 1 is not allowed") as caught:
         parse_nodes(nodes)
 
-    assert caught.value.range == route.range_of(True)
+    assert caught.value.diagnostic.frames[-1].range == route.range_of(True)

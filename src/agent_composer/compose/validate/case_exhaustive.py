@@ -22,7 +22,7 @@ from typing import Optional
 from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.nodes.contracts import ValueContract
 from agent_composer.typesys.values import Type
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.parse.file import CaseDescriptor
 
 
@@ -30,31 +30,28 @@ def check_case_exhaustive(
     descriptors,
     producers: dict[str, ValueContract],
     node_lines=None,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
 ):
     """Enum-exhaustiveness over every `case` descriptor's on:-form. Raises LoadError
     (range-stamped at the case node) on a non-exhaustive enum with no else:.
 
     `descriptors` is the flow's `{node_id -> NodeDescriptor}`; `producers` maps producer-node
     id -> its exact `ValueContract` (whose semantic type drives the dotted-field walk).
-    The descriptor's own range is authoritative; `node_lines` remains only as the
-    source-free compatibility fallback.
+    The descriptor's own range is authoritative; `node_lines` remains only for
+    transitional caller compatibility.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     for producer_id, contract in producers.items():
         if type(contract) is not ValueContract:
             raise TypeError(
                 "output producer contracts must be exact ValueContract values, "
                 f"got {type(contract).__name__} for {producer_id!r}"
             )
-    node_lines = node_lines or {}
-    for nid, desc in descriptors.items():
+    for desc in descriptors.values():
         if not isinstance(desc, CaseDescriptor):
             continue
-        try:
-            _check_exhaustive(desc, _on_covered(desc), producers)
-        except LoadError as exc:
-            if exc.line is None:
-                exc.line = node_lines.get(nid)
-            raise
+        _check_exhaustive(desc, _on_covered(desc), producers, diagnostics)
 
 
 def _on_covered(desc: CaseDescriptor) -> set[str]:
@@ -114,6 +111,7 @@ def _check_exhaustive(
     desc: CaseDescriptor,
     covered: set[str],
     producers: dict[str, ValueContract],
+    diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Enum-exhaustiveness for the `on:` form.
 
@@ -121,6 +119,7 @@ def _check_exhaustive(
     be a `when:` match value OR be covered by a present `else:`. A missing tag with no
     `else:` is a `LoadError`. A non-enum / unresolved producer is lenient (no check).
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     if desc.on is None or desc.else_ is not None:
         return  # searched form, or an else: that satisfies coverage
     typ = _resolve_on_type(desc.on, producers)
@@ -128,7 +127,7 @@ def _check_exhaustive(
         return  # not a checked enum producer -> lenient
     missing = sorted(typ.tags - covered)
     if missing:
-        raise LoadError(
+        raise diagnostics.error(
             f"case node {desc.id!r} on {desc.on}: non-exhaustive — enum tag(s) "
             f"{missing} not covered by a case `when:` or an `else:`",
             range=desc.range,

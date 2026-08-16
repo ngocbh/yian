@@ -172,9 +172,9 @@ def chat(
     #   - a malformed flow raises LoadError (a ValueError) -> a located `.yaml` source frame;
     #   - a missing key with no TTY raises RuntimeError    -> a red key message.
     try:
-        loaded = load_flow(text, search_paths=search)
+        loaded = load_flow(text, search_paths=search, source_label=path.name)
     except LoadError as err:
-        _render_load_error(err, path, text)
+        _render_load_error(err)
         raise typer.Exit(code=1)
     try:
         _ensure_provider_keys(loaded, cli_cfg)
@@ -191,7 +191,11 @@ def chat(
             # A node failure sets its run's cooperative stop event to drain siblings.
             # Start each attempt under a fresh broker/controller lifecycle so that a
             # failed run's terminal event never leaks into the next immutable run.
-            current_flow = load_flow(text, search_paths=search)
+            current_flow = load_flow(
+                text,
+                search_paths=search,
+                source_label=path.name,
+            )
             run_id = default_run_id()
             log = _default_run_log_path(run_id)
             _report_run_log(log)

@@ -7,7 +7,7 @@ the declaring node descriptor's range.
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.edges.ordering import infer_ordering_edges
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceDocument
@@ -27,11 +27,18 @@ def test_infer_ordering_edges_unknown_target_is_located():
         "  a:\n    kind: code\n    code: m:f\n    depends_on: [ghost]\n    output: str\n"
         "output: ${a.output}\n"
     )
-    descriptors = parse_nodes(_nodes_reader(text))
+    nodes_cursor = _nodes_reader(text)
+    descriptors = parse_nodes(nodes_cursor)
     with pytest.raises(LoadError) as exc:
-        infer_ordering_edges(descriptors, set(descriptors))
+        infer_ordering_edges(
+            descriptors,
+            set(descriptors),
+            diagnostics=LoadDiagnostics.from_cursor(nodes_cursor),
+        )
     assert "ghost" in str(exc.value)
-    assert exc.value.range == descriptors["a"].range
+    assert len(exc.value.diagnostic.frames) == 1
+    assert exc.value.diagnostic.frames[0].range == descriptors["a"].range
+    assert exc.value.diagnostic.frames[0].text == text
 
 
 def test_infer_ordering_edges_builds_ordering_edges():

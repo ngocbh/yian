@@ -207,35 +207,9 @@ def _render_source_frame(text: str, marks, title: str, message: str) -> None:
     err_console.print(Text(message, style="red"))
 
 
-def _render_load_error(err: LoadError, flow: Path, text: str) -> None:
-    """Print a located compile error for the author as a boxed `.yaml` source frame.
-
-    Surfaces `LoadError.line`/`.lines` (the loader's source-line tracking) at the CLI boundary
-    so a failed compile points at WHERE in the `.yaml` it broke. A multi-line error (e.g. a cycle,
-    which implicates several nodes) highlights ALL of them. When no line is known (or all are out
-    of range), prints `file: <message>` with no frame. The "why" legend (`.notes`) follows.
-    """
-    marks = err.lines or ([err.line] if err.line is not None else [])
-    if len(marks) > 1:
-        # A multi-node error (a cycle implicates several nodes) highlights EVERY stuck line —
-        # `.range` anchors only the first, so the multi-mark frame wins here to box them all.
-        _render_source_frame(text, marks, flow.name, str(err))
-        _render_notes(err)
-        return
-    if err.range is not None:
-        # Span-aware path (Step 8): the loader resolved a precise `SourceRange`, so box it
-        # directly instead of re-deriving a line. The `.notes` "why" legend still follows.
-        render_diagnostic(
-            Diagnostic(
-                code="compose.load",
-                message=str(err),
-                frames=(DiagnosticFrame(flow.name, text, err.range),),
-                notes=tuple(err.notes or ()),
-            )
-        )
-        return
-    _render_source_frame(text, marks, flow.name, str(err))
-    _render_notes(err)
+def _render_load_error(err: LoadError) -> None:
+    """Render the source-owned diagnostic carried by a Compose load failure."""
+    render_diagnostic(err.diagnostic)
 
 
 def _node_range(node_id: str, node_ranges: dict, field_ranges: dict) -> Optional[SourceRange]:
@@ -397,7 +371,7 @@ def render_diagnostic(diag: Diagnostic) -> None:
         diag (`Diagnostic`): Fully resolved presentation data to write to stderr.
     """
     if len(diag.frames) > 1:
-        err_console.print(Text("source context (outermost first):", style="red bold"))
+        err_console.print(Text("source locations:", style="red bold"))
     for frame in diag.frames:
         marks = frame.range.covered_lines(frame.text)
         if not _render_frame_box(frame.text, marks, frame.label):
@@ -495,17 +469,6 @@ def _render_run_error(
         )
     if engine_trace and tb:
         _render_traceback(tb)
-
-
-def _render_notes(err: LoadError) -> None:
-    """Print the error's "why" legend (`LoadError.notes`) under the message, if any.
-
-    Each note is an explanatory line the source frame can't show — e.g. the dependency
-    edges that close a cycle — rendered indented and dim so it reads as context, not a
-    second error.
-    """
-    for note in err.notes or []:
-        err_console.print(Text(f"  ↳ {note}", style="yellow"))
 
 
 class _ProgressReporter:
@@ -1339,11 +1302,15 @@ def run(
     _ensure_cwd_importable()  # so `code: pkg.mod:fn` refs to repo-local packages resolve
     text = flow.read_text()
     try:
-        loaded = load_flow(text, search_paths=[flow.parent])
+        loaded = load_flow(
+            text,
+            search_paths=[flow.parent],
+            source_label=flow.name,
+        )
     except LoadError as err:
         # An author's flow failed to compile: point at WHERE in the `.yaml` it broke, not at
         # the engine internals. `--engine-trace` adds the Python traceback for engine debugging.
-        _render_load_error(err, flow, text)
+        _render_load_error(err)
         if engine_trace:
             err_console.print_exception()
         raise typer.Exit(code=1)

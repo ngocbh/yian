@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.diagnostics import SourceRange
 from agent_composer.llm_clients import LLMConfig
@@ -25,6 +25,7 @@ def _validate_llm_config(
     cfg: Mapping[str, Any] | None,
     node_id: str,
     source_range: SourceRange | None = None,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """Validate a raw llm_config mapping at LOAD time and split off `inherit`.
 
@@ -47,10 +48,11 @@ def _validate_llm_config(
     Raises:
         `LoadError`: The config is not a mapping or violates `LLMConfig`.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     if cfg is None:
         return {}, True
     if not isinstance(cfg, Mapping):
-        raise LoadError(
+        raise diagnostics.error(
             f"node {node_id!r}: llm_config must be a mapping",
             range=source_range,
         )
@@ -61,7 +63,7 @@ def _validate_llm_config(
     try:
         LLMConfig(**cfg)
     except Exception as exc:
-        raise LoadError(
+        raise diagnostics.error(
             f"node {node_id!r}: llm_config: {exc}",
             range=source_range,
         ) from exc
@@ -86,7 +88,14 @@ class AgentDescriptor(NodeDescriptor):
 
     kind = "agent"
     allowed = NodeDescriptor.allow(
-        "inputs", "outputs", "prompt", "tools", "mode", "llm_config", "retries", "asserts"
+        "inputs",
+        "outputs",
+        "prompt",
+        "tools",
+        "mode",
+        "llm_config",
+        "retries",
+        "asserts",
     )
     required = NodeDescriptor.require()
     binding_fields = ("inputs",)
@@ -111,17 +120,16 @@ class AgentDescriptor(NodeDescriptor):
         wraps them in a `BuildResult`). `ctx.resolver` is unused (leaf kind) and the inline-CODE
         anchors on `ctx` are read only by the CODE build.
         """
-        llm_config_range = (
-            self.field_ranges.get(("field", "llm_config")) or self.range
-        )
+        llm_config_range = self.field_ranges.get(("field", "llm_config")) or self.range
         own_cfg, inherit = _validate_llm_config(
             self.llm_config,
             self.id,
             llm_config_range,
+            ctx.diagnostics,
         )
         mode_range = self.field_ranges.get(("field", "mode")) or self.range
         if not isinstance(self.mode, str):
-            raise LoadError(
+            raise ctx.diagnostics.error(
                 f"node {self.id!r}: mode must be a string",
                 range=mode_range,
             )
@@ -139,14 +147,16 @@ class AgentDescriptor(NodeDescriptor):
         except ValueError as exc:
             # AgentNode validates the mode registry; surface a rejection as
             # the loader's one error type (loud), not a bare ValueError.
-            raise LoadError(
+            raise ctx.diagnostics.error(
                 f"node {self.id!r}: {exc}",
                 range=mode_range,
             ) from exc
 
         override = self.output_contract_override
         node.output_contract = (
-            override if override is not None else self.output_contract(ctx.registry)
+            override
+            if override is not None
+            else self.output_contract(ctx.registry, ctx.diagnostics)
         )
         node.params = self.sink_params()
         wiring = self.sink_wiring()

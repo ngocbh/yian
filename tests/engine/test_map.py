@@ -11,6 +11,7 @@ import pytest
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.model import START_ID
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.run import run_flow
 from tests.engine._graph_builder import _engine
 
@@ -73,7 +74,7 @@ def _resolver(**children):
         try:
             return loaded[flow_id]
         except KeyError as exc:
-            raise LoadError(f"unknown child {flow_id!r}") from exc
+            raise LoadDiagnostics().error(f"unknown child {flow_id!r}") from exc
 
     return resolve
 

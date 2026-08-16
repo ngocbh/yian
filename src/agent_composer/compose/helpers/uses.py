@@ -20,30 +20,37 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 
 
 @dataclass(frozen=True)
 class UsesRef:
-    scheme: Optional[str]   # None = local; "hub" = marketplace; else rejected at resolve
-    path: str               # relative flow path, possibly nested
+    scheme: Optional[str]  # None = local; "hub" = marketplace; else rejected at resolve
+    path: str  # relative flow path, possibly nested
     version: Optional[str]  # opaque tag, optional
 
 
-def parse_uses_ref(value: str) -> UsesRef:
+def parse_uses_ref(
+    value: str,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
+) -> UsesRef:
     """Parse a `uses:` value into a `UsesRef`, or raise `LoadError` on a malformed ref."""
+    diagnostics = diagnostics or LoadDiagnostics()
     raw = (value or "").strip()
     if not raw:
-        raise LoadError("uses: ref must be a non-empty string")
+        raise diagnostics.error("uses: ref must be a non-empty string")
 
     scheme: Optional[str] = None
     rest = raw
     m = _SCHEME.match(raw)
-    if m and "/" not in raw[: m.start(1)]:  # a scheme only if its colon precedes any '/'
+    if (
+        m and "/" not in raw[: m.start(1)]
+    ):  # a scheme only if its colon precedes any '/'
         scheme = m.group(1).lower()
-        rest = raw[m.end():]
+        rest = raw[m.end() :]
 
     if "@" in rest:
         path, _, version = rest.rpartition("@")
@@ -51,7 +58,9 @@ def parse_uses_ref(value: str) -> UsesRef:
         path, version = rest, None
 
     if not path:
-        raise LoadError(f"uses: ref {value!r} has no flow path")
+        raise diagnostics.error(f"uses: ref {value!r} has no flow path")
     if version == "":
-        raise LoadError(f"uses: ref {value!r} has an empty version (trailing '@')")
+        raise diagnostics.error(
+            f"uses: ref {value!r} has an empty version (trailing '@')"
+        )
     return UsesRef(scheme, path, version)

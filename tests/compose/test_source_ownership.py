@@ -173,8 +173,7 @@ def test_parse_source_document_translates_syntax_error():
     with pytest.raises(LoadError, match="invalid YAML") as caught:
         parse_source_document("id: [", "broken.yaml")
 
-    assert caught.value.range is not None
-    assert caught.value.range.start_line == 1
+    assert caught.value.diagnostic.frames[-1].range.start_line == 1
 
 
 @pytest.mark.parametrize(
@@ -226,8 +225,7 @@ def test_load_flow_malformed_root_is_located_load_error():
     with pytest.raises(LoadError, match="invalid YAML") as caught:
         compose_loader.load_flow("id: [")
 
-    assert caught.value.range is not None
-    assert caught.value.range.start_line == 1
+    assert caught.value.diagnostic.frames[-1].range.start_line == 1
 
 
 def test_recursive_boundary_alias_does_not_escape_as_source_access_error():

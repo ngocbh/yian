@@ -14,10 +14,15 @@ from __future__ import annotations
 from agent_composer.compile.model import Edge
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 
 
-def check_case_handles(nodes: dict[str, Node], edges: list[Edge]) -> None:
+def check_case_handles(
+    nodes: dict[str, Node],
+    edges: list[Edge],
+    *,
+    diagnostics: LoadDiagnostics | None = None,
+) -> None:
     """Every desugared `CaseNode`'s handles align with its outgoing control edges.
 
     Mirrors `compile.validation._check_case_handles`: each outgoing edge's handle
@@ -26,6 +31,7 @@ def check_case_handles(nodes: dict[str, Node], edges: list[Edge]) -> None:
     `gate -> <then|else>` control edges and the `CaseNode.cases`; this pins them
     consistent. Raises `LoadError` on the first misalignment.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     for node_id, node in nodes.items():
         if not isinstance(node, CaseNode):
             continue
@@ -35,11 +41,11 @@ def check_case_handles(nodes: dict[str, Node], edges: list[Edge]) -> None:
         }
         for handle in out_handles:
             if handle != DEFAULT_HANDLE and handle not in case_handles:
-                raise LoadError(
+                raise diagnostics.error(
                     f"case node {node_id!r} has edge handle {handle!r} with no matching case"
                 )
         for handle in case_handles:
             if handle not in out_handles:
-                raise LoadError(
+                raise diagnostics.error(
                     f"case node {node_id!r} case {handle!r} has no outgoing edge"
                 )

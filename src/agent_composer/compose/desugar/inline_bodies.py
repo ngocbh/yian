@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.source import SourceCursor
 from agent_composer.events import SourceRange
 
@@ -80,6 +80,7 @@ def extract_inline_bodies(
     values and source locations. The supplied cursor and its YAML anchors remain
     read-only.
     """
+    diagnostics = LoadDiagnostics.from_cursor(nodes_cursor)
     nodes = nodes_cursor._value_view()
     if not isinstance(nodes, Mapping):
         return nodes_cursor, {}
@@ -105,7 +106,7 @@ def extract_inline_bodies(
             conflict_range = (
                 body_cursor.range_of("nodes") if has_nodes else body_cursor.range
             )
-            raise LoadError(
+            raise diagnostics.error(
                 f"node {node_id!r} (kind={raw_body['kind']}): exactly one of "
                 "`call:` or inline `nodes:` is required",
                 range=conflict_range,
@@ -113,7 +114,7 @@ def extract_inline_bodies(
 
         if has_call:
             if "output" in raw_body:
-                raise LoadError(
+                raise diagnostics.error(
                     f"node {node_id!r} (kind={raw_body['kind']}): `output:` is only "
                     "valid with inline `nodes:`",
                     range=body_cursor.range_of("output"),
@@ -123,19 +124,19 @@ def extract_inline_bodies(
 
         child_nodes = raw_body["nodes"]
         if not isinstance(child_nodes, Mapping):
-            raise LoadError(
+            raise diagnostics.error(
                 f"node {node_id!r} (kind={raw_body['kind']}): inline `nodes:` must "
                 "be a non-empty mapping",
                 range=body_cursor.range_of("nodes"),
             )
         if not child_nodes:
-            raise LoadError(
+            raise diagnostics.error(
                 f"node {node_id!r} (kind={raw_body['kind']}): inline `nodes:` must "
                 "be a non-empty mapping",
                 range=body_cursor.range_of("nodes"),
             )
         if "output" not in raw_body:
-            raise LoadError(
+            raise diagnostics.error(
                 f"node {node_id!r} (kind={raw_body['kind']}): inline `nodes:` "
                 "requires `output:`",
                 range=body_cursor.range,
@@ -145,7 +146,7 @@ def extract_inline_bodies(
         if not isinstance(outer_input, Mapping) or not all(
             isinstance(key, str) for key in outer_input
         ):
-            raise LoadError(
+            raise diagnostics.error(
                 f"node {node_id!r} (kind={raw_body['kind']}): inline `input:` must "
                 "be a mapping with string keys",
                 range=body_cursor.range_of("input"),
@@ -179,6 +180,7 @@ def _reject_authored_private_call_targets(nodes_cursor: SourceCursor) -> None:
     masked. Otherwise an authored call later in source order could target the
     predictable id of a sibling that extraction had already synthesized.
     """
+    diagnostics = LoadDiagnostics.from_cursor(nodes_cursor)
     nodes = nodes_cursor._value_view()
     if not isinstance(nodes, Mapping):
         return
@@ -194,7 +196,7 @@ def _reject_authored_private_call_targets(nodes_cursor: SourceCursor) -> None:
             INLINE_FLOW_PREFIX
         ):
             continue
-        raise LoadError(
+        raise diagnostics.error(
             f"node {node_id!r} (kind={raw_body['kind']}): call targets beginning "
             f"with {INLINE_FLOW_PREFIX!r} are reserved for compiler-generated "
             "inline child flows",

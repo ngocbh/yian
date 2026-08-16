@@ -118,8 +118,9 @@ def test_version_guard_mismatch_is_loud_and_located(tmp_path):
     with pytest.raises(LoadError) as exc:
         load_flow(text, search_paths=[tmp_path])
     assert "version" in str(exc.value)
-    assert exc.value.range == expected
-    assert exc.value.line == expected.start_line
+    frames = exc.value.diagnostic.frames
+    assert len(frames) == 1
+    assert frames[0].range == expected
 
 
 def test_version_absent_ref_skips_guard(tmp_path):
@@ -166,15 +167,37 @@ def test_missing_ref_errors(tmp_path):
         load_flow(parent.read_text(), search_paths=[tmp_path])
 
 
-def test_malformed_external_child_is_located_load_error(tmp_path):
-    (tmp_path / "child.yaml").write_text("id: [")
+def test_malformed_external_child_retains_parent_and_child_sources_once(
+    tmp_path,
+    monkeypatch,
+):
+    child = tmp_path / "child.yaml"
+    child_text = "id: ["
+    child.write_text(child_text)
     parent = _write(tmp_path, "p", "p", call="ch", uses={"ch": "child"})
+    parent_text = parent.read_text()
+    expected_parent_range = (
+        SourceDocument.parse(parent_text, parent.name)
+        .root.child("uses")
+        .child("ch")
+        .range
+    )
+    reads, parses = _capture_external_source_access(monkeypatch)
 
     with pytest.raises(LoadError, match="invalid YAML") as caught:
-        load_flow(parent.read_text(), search_paths=[tmp_path])
+        load_flow(
+            parent_text,
+            search_paths=[tmp_path],
+            source_label=parent.name,
+        )
 
-    assert caught.value.range is not None
-    assert caught.value.range.start_line == 1
+    frames = caught.value.diagnostic.frames
+    assert [frame.label for frame in frames] == [parent.name, child.name]
+    assert [frame.text for frame in frames] == [parent_text, child_text]
+    assert frames[0].range == expected_parent_range
+    assert frames[1].range.start_line == 1
+    assert Counter(reads) == Counter({child.resolve(): 1})
+    assert Counter(parses) == Counter({parent.name: 1, child.name: 1})
 
 
 def test_search_path_precedence_own_dir_first(tmp_path):

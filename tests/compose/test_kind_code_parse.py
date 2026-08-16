@@ -1,11 +1,12 @@
 """6.2 — the `code` kind handle: parse records the code body's range; build reconciles the
-inline `def main(inputs):` wrapper offset so an inline syntax slip frames at the YAML line."""
+inline `def main(inputs):` wrapper offset so an inline syntax slip frames at the YAML line.
+"""
 
 from dataclasses import replace
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.source import SourceDocument
@@ -71,7 +72,9 @@ def test_code_build_stamps_descriptor_origin_without_affecting_equality():
 
     assert located == parsed
     assert result.node.origin is origin
-    with pytest.raises(TypeError, match="node descriptor origin must be an OriginRef or None"):
+    with pytest.raises(
+        TypeError, match="node descriptor origin must be an OriginRef or None"
+    ):
         replace(parsed, origin="root/node/verdict")  # type: ignore[arg-type]
 
 
@@ -90,6 +93,14 @@ def test_code_build_frames_inline_syntax_error_at_yaml_line():
     reader = _reader_for(text, "broken")
     desc = CodeDescriptor.parse("broken", reader)
     with pytest.raises(LoadError) as ei:
-        desc.build(BuildContext({}, source_file="flow.yaml"))
+        desc.build(
+            BuildContext(
+                {},
+                source_file="flow.yaml",
+                diagnostics=LoadDiagnostics.from_cursor(reader),
+            )
+        )
     # The padded compile frames the slip at its absolute YAML line (8), not body-relative.
-    assert ei.value.line == 8
+    assert len(ei.value.diagnostic.frames) == 1
+    assert ei.value.diagnostic.frames[0].range.start_line == 8
+    assert ei.value.diagnostic.frames[0].text == text

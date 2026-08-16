@@ -38,10 +38,11 @@ The loader also owns each file's callable scope:
 authored `defs:`/`uses:` plus a resolver-private, lazy cache for inline CALL/MAP/LOOP
 children lowered by `desugar/` and assembled by `build/`.
 
-Errors carry a concrete `SourceRange` (owned by `diagnostics` and temporarily
-re-exported from `events`): a `SourceCursor` records each field's range during
-`parse`, the runtime funnel resolves a failure's range from `node.field_ranges`,
-and the CLI boxes it as a `Diagnostic`.
+Load errors cross the package boundary only as `LoadError(Diagnostic)`: Compose
+resolves each retained cursor/range against its owning document before raising,
+and definition/import context becomes ordered outer frames. The CLI receives no
+separate YAML text or coordinates for load failures. Runtime failure ranges on
+nodes remain a separate temporary bridge until their own cutover.
 
 Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes`; nothing
 in the engine imports `compose`.

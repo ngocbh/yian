@@ -36,7 +36,7 @@ from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.types import read_type
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.source import SourceCursor
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceRange
@@ -46,11 +46,12 @@ from agent_composer.events import SourceRange
 class BuildContext:
     """The immutable inputs a node `.build()` reads — the read-only build environment."""
 
-    registry: Any                          # TypeRegistry (flow's read_typedefs map)
-    resolver: Any = None                   # ChildResolver | None (None for leaves)
-    source_file: str = "<inline-code>"     # flow file label — frames CODE tracebacks
-    code_line: int | None = None           # inline CODE content-start override
-    code_field_line: int | None = None     # inline CODE field-key override
+    registry: Any  # TypeRegistry (flow's read_typedefs map)
+    resolver: Any = None  # ChildResolver | None (None for leaves)
+    source_file: str = "<inline-code>"  # flow file label — frames CODE tracebacks
+    code_line: int | None = None  # inline CODE content-start override
+    code_field_line: int | None = None  # inline CODE field-key override
+    diagnostics: LoadDiagnostics = field(default_factory=LoadDiagnostics)
 
 
 @dataclass(frozen=True)
@@ -58,8 +59,8 @@ class BuildResult:
     """The immutable product a node `.build()` returns — the built node + its wiring/edges."""
 
     node: Node
-    wiring: dict[str, Any]                  # flow-owned {param -> source}
-    edges: tuple[Edge, ...] = ()            # () for leaf/call/loop; case returns its own
+    wiring: dict[str, Any]  # flow-owned {param -> source}
+    edges: tuple[Edge, ...] = ()  # () for leaf/call/loop; case returns its own
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -85,7 +86,8 @@ class NodeDescriptor:
 
     `kw_only=True` (inherited by every subclass) makes all fields keyword-only, so a subclass may
     declare REQUIRED kind fields (`code`, `model_id`, `call`, ...) after these defaulted commons
-    without the "non-default follows default" error. Every construction site is keyword-only."""
+    without the "non-default follows default" error. Every construction site is keyword-only.
+    """
 
     # --- Class-level parse/build contract (per-kind overrides, not dataclass fields) ---
     #
@@ -148,23 +150,40 @@ class NodeDescriptor:
         if self.origin is not None and not isinstance(self.origin, OriginRef):
             raise TypeError("node descriptor origin must be an OriginRef or None")
 
-    def output_contract(self, registry: TypeRegistry) -> Optional[ValueContract]:
+    def output_contract(
+        self,
+        registry: TypeRegistry,
+        diagnostics: LoadDiagnostics | None = None,
+    ) -> Optional[ValueContract]:
         """Return the declared `outputs:` as one canonical contract, or `None`."""
         if self.outputs is None:
             return None
-        return ValueContract(read_type(self.outputs, registry))
+        diagnostics = diagnostics or LoadDiagnostics()
+        try:
+            return ValueContract(
+                read_type(self.outputs, registry, diagnostics=diagnostics)
+            )
+        except LoadError as exc:
+            if exc.diagnostic.frames:
+                raise
+            raise diagnostics.prepend(
+                exc,
+                range=self.field_ranges.get(("field", "outputs")) or self.range,
+            ) from exc
 
     def sink_params(self) -> list[Parameter]:
         """This descriptor's `inputs:` map -> untyped Parameters (the node-side signature).
 
         The split: `params` carries only the declared NAMES (no source); the flow owns the
         sources in `CompiledFlow.wiring`. These parameters have `contract=None`; they are
-        derived from the SAME map as `sink_wiring` so names and keys stay in lockstep."""
+        derived from the SAME map as `sink_wiring` so names and keys stay in lockstep.
+        """
         return [Parameter(name=k) for k in (self.inputs or {})]
 
     def sink_wiring(self) -> dict[str, Any]:
         """This descriptor's `inputs:` map -> the flow-owned wiring (`param -> source`).
-        The source half of the split; the same dict `sink_params` reads the names from."""
+        The source half of the split; the same dict `sink_params` reads the names from.
+        """
         return dict(self.inputs or {})
 
     # --- Key-set extension helpers ------------------------------------------------------
@@ -175,7 +194,8 @@ class NodeDescriptor:
 
         Unions THIS class's allowed set (already carrying the commons + `kind`, plus any keys
         added by ancestors) with the extra surface keys, so a subclass inherits its parent's
-        keys and lists only its additions (e.g. `CallDescriptor.allow("over", "parallel")`)."""
+        keys and lists only its additions (e.g. `CallDescriptor.allow("over", "parallel")`).
+        """
         return cls.allowed | frozenset(keys)
 
     @classmethod
@@ -197,19 +217,21 @@ class NodeDescriptor:
         the commons + `kind` + the kind's own keys, so no manual union is needed), then requires
         every key in `cls.required`. Raises a located `LoadError` for the first offense — an
         unknown key caret-points at that key's value, a missing key at the node body. Reads
-        nothing into the descriptor (that is `_read_common_fields` + the template's own-key loop)."""
+        nothing into the descriptor (that is `_read_common_fields` + the template's own-key loop).
+        """
+        diagnostics = LoadDiagnostics.from_cursor(cursor)
         allowed_keys = cls.allowed
         body = cursor._value_view()
         for key in body:
             if key not in allowed_keys:
-                raise LoadError(
+                raise diagnostics.error(
                     f"node {node_id!r} (kind={cls.kind}): field {key!r} is not allowed "
                     f"(allowed: {', '.join(sorted(allowed_keys))})",
                     range=cursor.range_of(key),
                 )
         for key in cls.required:
             if key not in body:
-                raise LoadError(
+                raise diagnostics.error(
                     f"node {node_id!r} (kind={cls.kind}): missing required field {key!r}",
                     range=cursor.range,
                 )
@@ -230,6 +252,7 @@ class NodeDescriptor:
         constructor). `env:` is validated to be a mapping with string keys — a bad shape raises
         a located `LoadError` naming `cls.kind`. The other three are copied through untouched
         (their per-field shape is checked later by the loader edge pass)."""
+        diagnostics = LoadDiagnostics.from_cursor(cursor)
         body = cursor._value_view()
         for key in ("node_name", "depends_on", "runs_after"):
             if key in body:
@@ -239,10 +262,8 @@ class NodeDescriptor:
                     ranges[("field", key)] = rng
         if "env" in body:
             env = body["env"]
-            if not isinstance(env, Mapping) or not all(
-                isinstance(k, str) for k in env
-            ):
-                raise LoadError(
+            if not isinstance(env, Mapping) or not all(isinstance(k, str) for k in env):
+                raise diagnostics.error(
                     f"node {node_id!r} (kind={cls.kind}): `env:` must be a mapping "
                     f"with string keys",
                     range=cursor.range_of("env"),
@@ -271,6 +292,7 @@ class NodeDescriptor:
         A kind customizes only the two hooks; 8 of 10 kinds inherit this untouched. Returns
         the fully-populated descriptor instance (`cls`, never the abstract base)."""
         cursor = cls._normalize_cursor(cursor)
+        diagnostics = LoadDiagnostics.from_cursor(cursor)
         cls._check_keys(node_id, cursor)
         body = cursor._value_view()
         own_range = cursor.range
@@ -283,7 +305,7 @@ class NodeDescriptor:
             if rng is not None:
                 ranges[("field", key)] = rng
             kwargs[cls.keyword_remap.get(key, key)] = cursor.get(key)
-        cls._validate_fields(node_id, kwargs, ranges, own_range)
+        cls._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
         cls._read_common_fields(node_id, cursor, kwargs, ranges)
         return cls(**kwargs, range=own_range, field_ranges=ranges)
 
@@ -304,6 +326,7 @@ class NodeDescriptor:
         kwargs: dict[str, Any],
         ranges: dict[tuple[str, str], SourceRange],
         own_range: Optional[SourceRange],
+        diagnostics: LoadDiagnostics,
     ) -> None:
         """Kind-specific field legality, run by the template `parse` after the own-key loop.
 
@@ -312,12 +335,13 @@ class NodeDescriptor:
         has no per-field range). Default: if an `asserts:` field is present, it must be a `list`
         of `str` — a bad shape raises a located `LoadError` naming `cls.kind`. Presence-guarded:
         absent `asserts` is a no-op, so kinds that never author `asserts` are unaffected. Only
-        `human_input` overrides this (running its one-of-three check, then `super()` for asserts)."""
+        `human_input` overrides this (running its one-of-three check, then `super()` for asserts).
+        """
         asserts = kwargs.get("asserts")
         if asserts is not None and not (
             isinstance(asserts, list) and all(isinstance(a, str) for a in asserts)
         ):
-            raise LoadError(
+            raise diagnostics.error(
                 f"node {node_id!r} (kind={cls.kind}): `asserts:` must be a list of strings",
                 range=ranges.get(("field", "asserts")),
             )
@@ -334,7 +358,8 @@ class NodeDescriptor:
         `output_contract`),
         `ctx.resolver` (the child-flow resolver for call/map/loop), and the inline-CODE traceback
         anchors `ctx.source_file`/`ctx.code_line`/`ctx.code_field_line` (only the CODE build reads
-        them). A leaf kind reads only `ctx.registry`; call/map/loop also read `ctx.resolver`."""
+        them). A leaf kind reads only `ctx.registry`; call/map/loop also read `ctx.resolver`.
+        """
         raise NotImplementedError(f"{type(self).__name__} has no build")
 
     def _finish(self, node, wiring, edges=()) -> BuildResult:

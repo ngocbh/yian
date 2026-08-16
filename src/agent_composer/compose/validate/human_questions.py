@@ -4,8 +4,8 @@ A loader post-build pass over the built node map. A LITERAL `questions:` list is
 checked via `parse_questions` (rejects bad count/shape/duplicate headers); a ref-form
 `questions_input` must name one of the node's declared inputs (mirrors the AGENT prompt-scope
 rule). It relocates `validate.validate_human_questions` verbatim, adding a `.range` anchor off
-the built gate's `field_ranges[("field", "questions")]` (the coarse `questions:` span, else the node's own
-range) — the transitional `node_lines` still feeds `.line`.
+the built gate's `field_ranges[("field", "questions")]` (the coarse `questions:` span,
+else the node's own range).
 
 Imports flow down only: `nodes` (HumanInputNode + its questions parser), `compose.helpers.errors`,
 `events` (SourceRange). Only the loader (and the compose package facade) import this back.
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import Node
 
@@ -23,6 +23,8 @@ from agent_composer.nodes.base import Node
 def validate_human_questions(
     nodes: dict[str, Node],
     node_lines: "dict[str, int] | None" = None,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Validate each built human_input gate's questions surface at load time.
 
@@ -31,22 +33,21 @@ def validate_human_questions(
     - A ref-form questions_input -> the name MUST be one of the node's declared inputs
       (mirrors the AGENT prompt-scope rule); otherwise LoadError with a hint.
     Legacy (no questions) gates pass through. Each error anchors on the gate's `questions:`
-    field range (`field_ranges[("field", "questions")]`, else the node's own range); `node_lines` still
-    feeds the transitional `.line`. Accumulates all errors into one LoadError.
+    field range (`field_ranges[("field", "questions")]`, else the node's own range).
+    `node_lines` is accepted for transitional caller compatibility but is not location
+    authority. Accumulates all errors into one LoadError.
     """
+    diagnostics = diagnostics or LoadDiagnostics()
     from agent_composer.nodes.human_input.node import HumanInputNode
     from agent_composer.nodes.human_input.questions import (
         QuestionSpecError,
         parse_questions,
     )
 
-    lines = node_lines or {}
-    # (message, line, range) triples — line/range locate the offending site where known.
-    errors: list[tuple[str, "int | None", Optional[SourceRange]]] = []
+    errors: list[tuple[str, Optional[SourceRange]]] = []
     for node_id, node in nodes.items():
         if not isinstance(node, HumanInputNode):
             continue
-        line = lines.get(node_id)
         rng = node.field_ranges.get(("field", "questions")) or node.range
         if node.questions is not None:
             # A literal list baked into the node: structurally check it at LOAD,
@@ -54,7 +55,7 @@ def validate_human_questions(
             try:
                 parse_questions(node.questions)
             except QuestionSpecError as exc:
-                errors.append((f"node {node_id!r} (kind=human_input): {exc}", line, rng))
+                errors.append((f"node {node_id!r} (kind=human_input): {exc}", rng))
         elif node.questions_input is not None:
             # A ref-form gate reads its questions from a declared input — the name
             # must be wired in via `input:` (mirrors the AGENT prompt-scope rule).
@@ -65,23 +66,15 @@ def validate_human_questions(
                     f"${{{node.questions_input}}} is not a declared input — feed dynamic "
                     f"questions through `input:` wiring and reference the declared name "
                     f"(questions: ${{name}}), or use adaptive_questions:",
-                    line,
                     rng,
                 ))
     if errors:
-        first_line, first_range = next(
-            (
-                (line, error_range)
-                for _, line, error_range in errors
-                if line is not None or error_range is not None
-            ),
-            (None, None),
+        first_range = next(
+            (error_range for _, error_range in errors if error_range is not None),
+            None,
         )
-        if first_range is not None:
-            first_line = None
-        raise LoadError(
+        raise diagnostics.error(
             "flow has invalid human_input questions:\n  "
-            + "\n  ".join(msg for msg, _, _ in errors),
-            line=first_line,
+            + "\n  ".join(msg for msg, _ in errors),
             range=first_range,
         )

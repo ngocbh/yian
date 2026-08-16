@@ -7,7 +7,6 @@ like a Python traceback's code box — and the engine Python traceback is suppre
 """
 
 from io import StringIO
-from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -15,15 +14,8 @@ from typer.testing import CliRunner
 
 import agent_composer.cli.run as climod
 from agent_composer.cli.run import _render_load_error
-from agent_composer.compose.helpers.errors import LoadError
-
-
-def test_loaderror_line_defaults_to_min_of_lines():
-    # `.line` (the primary anchor) defaults to the smallest of `.lines` when not given,
-    # and an explicit `line=` still wins.
-    assert LoadError("x", lines=[9, 4, 7]).line == 4
-    assert LoadError("x", line=2, lines=[9, 4]).line == 2
-    assert LoadError("x").line is None
+from agent_composer.compose.helpers.errors import LoadDiagnostics
+from agent_composer.diagnostics import SourceRange
 
 
 def _sink(monkeypatch) -> StringIO:
@@ -37,7 +29,11 @@ def _sink(monkeypatch) -> StringIO:
 def test_render_located_error(monkeypatch):
     buf = _sink(monkeypatch)
     text = "id: f\nname: f\nnodes:\n  b:\n    kind: agent\n"
-    _render_load_error(LoadError("node 'b' is broken", line=4), Path("flow.yaml"), text)
+    error = LoadDiagnostics("flow.yaml", text).error(
+        "node 'b' is broken",
+        range=SourceRange(4, 3, 4, 5),
+    )
+    _render_load_error(error)
     out = buf.getvalue()
     assert "flow.yaml:4" in out          # panel title carries file:line
     assert "b:" in out                   # the source frame echoes the YAML
@@ -47,27 +43,39 @@ def test_render_located_error(monkeypatch):
 
 def test_render_unlocated_error_has_no_frame(monkeypatch):
     buf = _sink(monkeypatch)
-    _render_load_error(LoadError("global problem", line=None), Path("flow.yaml"), "id: f\n")
+    _render_load_error(LoadDiagnostics().error("global problem"))
     out = buf.getvalue()
-    assert "flow.yaml:" in out
+    assert "flow.yaml" not in out
     assert "global problem" in out
 
 
 def test_render_out_of_range_line_falls_back(monkeypatch):
     buf = _sink(monkeypatch)
     # A line past EOF must not crash; degrade to the message-only form.
-    _render_load_error(LoadError("weird", line=999), Path("flow.yaml"), "id: f\n")
+    error = LoadDiagnostics("flow.yaml", "id: f\n").error(
+        "weird",
+        range=SourceRange(999, 1, 999, 2),
+    )
+    _render_load_error(error)
     assert "weird" in buf.getvalue()
 
 
 def test_render_multi_line_error_spans_and_titles_all(monkeypatch):
     buf = _sink(monkeypatch)
     text = "\n".join(f"line {i}" for i in range(1, 21)) + "\n"
-    _render_load_error(LoadError("a cycle", lines=[4, 12]), Path("flow.yaml"), text)
+    diagnostics = LoadDiagnostics("flow.yaml", text)
+    frames = tuple(
+        diagnostics.frame(SourceRange(line, 1, line, 7))
+        for line in (4, 12)
+    )
+    assert all(frame is not None for frame in frames)
+    _render_load_error(diagnostics.error("a cycle", frames=frames))
     out = buf.getvalue()
-    assert "flow.yaml:4,12" in out   # title lists every offending line
+    assert "source locations:" in out
+    assert "flow.yaml:4" in out
+    assert "flow.yaml:12" in out
     assert "line 4" in out           # window covers the first mark
-    assert "line 12" in out          # ...and the last mark (a wider span than ±context alone)
+    assert "line 12" in out
 
 
 # --- CLI integration: a real broken flow ------------------------------------- #
@@ -124,8 +132,10 @@ def test_cli_cycle_error_highlights_both_nodes(monkeypatch, tmp_path):
     res = CliRunner().invoke(_app(), [str(f)])
     assert res.exit_code == 1
     out = buf.getvalue()
-    # Node `a` is on line 4, node `b` on line 9; both are surfaced in the title and the frame.
-    assert "flow.yaml:4,9" in out
+    # Node `a` is on line 4, node `b` on line 9; each is its own ordered source frame.
+    assert "source locations:" in out
+    assert "flow.yaml:4" in out
+    assert "flow.yaml:9" in out
     assert "a:" in out and "b:" in out
     assert "cycle" in out
     # The "why" legend names each dependency edge that closes the loop.
@@ -135,11 +145,13 @@ def test_cli_cycle_error_highlights_both_nodes(monkeypatch, tmp_path):
 
 def test_render_notes_printed_under_message(monkeypatch):
     buf = _sink(monkeypatch)
+    diagnostics = LoadDiagnostics("flow.yaml", "id: f\nname: f\n")
     _render_load_error(
-        LoadError("a cycle", lines=[1], notes=["a depends on b (a.input.x)"]),
-        Path("flow.yaml"),
-        "id: f\nname: f\n",
+        diagnostics.error(
+            "a cycle",
+            range=SourceRange(1, 1, 1, 6),
+            notes=("a depends on b (a.input.x)",),
+        )
     )
     assert "a depends on b (a.input.x)" in buf.getvalue()
-
 

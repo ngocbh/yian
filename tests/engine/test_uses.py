@@ -2,7 +2,7 @@
 
 import pytest
 
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.parse.file import parse_file
 from agent_composer.compose.helpers.uses import UsesRef, parse_uses_ref
@@ -203,13 +203,14 @@ def test_uncalled_broken_alias_is_loud():
 def test_uncalled_missing_alias_is_loud():
     # `dead` -> a local ref the fake resolver rejects; eager resolution surfaces it at load
     def reject(flow_id, version=None):
-        raise LoadError(f"no such flow {flow_id!r}")
+        raise LoadDiagnostics().error(f"no such flow {flow_id!r}")
     text = _BASE + "uses:\n  dead: nope\n"
     expected = SourceDocument.parse(text).root.child("uses").child("dead").range
     with pytest.raises(LoadError) as caught:
         load_flow(text, child_resolver=reject)
-    assert caught.value.range == expected
-    assert caught.value.line == expected.start_line
+    frames = caught.value.diagnostic.frames
+    assert len(frames) == 1
+    assert frames[0].range == expected
 
 
 def test_inline_call_routes_through_uses_arm():
@@ -260,5 +261,5 @@ def test_bare_call_without_uses_or_def_is_located_loaderror():
     with pytest.raises(LoadError) as exc:
         load_flow(text, child_resolver=_fake_resolver(seen))
     assert "ghost" in str(exc.value)
-    assert exc.value.line is not None        # located at the call node's line
+    assert exc.value.diagnostic.frames       # located at the call node's source range
     assert seen == []                         # the resolver was never reached

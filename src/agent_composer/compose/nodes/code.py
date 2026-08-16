@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.diagnostics import SourceRange
 from agent_composer.nodes.code import CodeNode
@@ -114,12 +113,12 @@ class CodeDescriptor(NodeDescriptor):
                 error_range = _line_range(exc.lineno) or code_error_range
             else:
                 error_range = code_error_range
-            raise LoadError(
+            raise ctx.diagnostics.error(
                 f"node {self.id!r}: {exc}",
                 range=error_range,
             ) from exc
 
-        node.output_contract = self.output_contract(ctx.registry)
+        node.output_contract = self.output_contract(ctx.registry, ctx.diagnostics)
         node.params = self.sink_params()
         wiring = self.sink_wiring()
         return self._finish(node, wiring)

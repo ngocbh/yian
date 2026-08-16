@@ -4,6 +4,7 @@ from agent_composer.compose import (
     LoadError,
     load_flow,
 )
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.run import run_flow
 from agent_composer.tools import install_ask_user
 
@@ -23,7 +24,7 @@ def _resolver(**children):
         try:
             return loaded[flow_id]
         except KeyError as exc:
-            raise LoadError(f"unknown child {flow_id!r}") from exc
+            raise LoadDiagnostics().error(f"unknown child {flow_id!r}") from exc
 
     return resolve
 

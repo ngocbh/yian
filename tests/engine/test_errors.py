@@ -1,9 +1,8 @@
-"""Negative `errors/` fixtures + `.yaml`-line source-mapping.
+"""Negative `errors/` fixtures + canonical `.yaml` source diagnostics.
 
 The "loud + located" contract for the loader: a malformed flow raises a
-`LoadError` whose `.line` points at the offending `.yaml` line. The three
-seed fixtures pin it end-to-end (load the fixture by path, call `load_flow`, assert the
-right class + a located `.line`):
+`LoadError` whose diagnostic frames point at the offending `.yaml` source. The
+three seed fixtures pin that contract end-to-end:
 
 - **e01** — a dangling flow-output ref (`${scor.output}` typo) -> located at the
   `outputs:` line (the offending line).
@@ -25,6 +24,8 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.compose.helpers.errors import LoadDiagnostics
+from agent_composer.diagnostics import SourceRange
 from agent_composer.run import run_flow
 
 _ERRORS = Path(__file__).resolve().parents[2] / "tests" / "seeds" / "errors"
@@ -35,6 +36,18 @@ def _load_error(filename: str) -> LoadError:
     with pytest.raises(LoadError) as exc_info:
         load_flow((_ERRORS / filename).read_text())
     return exc_info.value
+
+
+def _error_ranges(error: LoadError) -> tuple[SourceRange, ...]:
+    """Return the canonical outer-to-inner ranges carried by one load error."""
+    return tuple(frame.range for frame in error.diagnostic.frames)
+
+
+def _only_error_range(error: LoadError) -> SourceRange:
+    """Return the sole source range expected for a single-site failure."""
+    ranges = _error_ranges(error)
+    assert len(ranges) == 1
+    return ranges[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -48,7 +61,7 @@ def test_e01_dangling_ref_located():
     assert "unresolved references" in msg
     assert "scor" in msg  # names the dangling ref
     # `outputs: ${scor.output}` is line 19 of the fixture (the offending line).
-    assert err.line == 19
+    assert _only_error_range(err).start_line == 19
 
 
 # --------------------------------------------------------------------------- #
@@ -62,7 +75,7 @@ def test_e02_cycle_located():
     assert "cycle" in msg
     assert "'a'" in msg and "'b'" in msg  # names the stuck nodes
     # node `a` (the first stuck node) is at line 12 — the documented coarse anchor.
-    assert err.line == 12
+    assert _error_ranges(err)[0].start_line == 12
 
 
 # --------------------------------------------------------------------------- #
@@ -76,11 +89,11 @@ def test_e03_unknown_field_located():
     assert "unresolved references" in msg
     assert "confidence" in msg  # names the missing record field
     # `outputs: ${score.output.confidence}` is line 21 of the fixture.
-    assert err.line == 21
+    assert _only_error_range(err).start_line == 21
 
 
 # --------------------------------------------------------------------------- #
-# every negative fixture carries a non-None located `.line`
+# every negative fixture carries a source frame
 # --------------------------------------------------------------------------- #
 
 
@@ -94,8 +107,7 @@ def test_e03_unknown_field_located():
 )
 def test_negative_fixtures_are_located(filename, line):
     err = _load_error(filename)
-    assert err.line is not None
-    assert err.line == line
+    assert _error_ranges(err)[0].start_line == line
 
 
 # --------------------------------------------------------------------------- #
@@ -188,7 +200,7 @@ def _research_resolver():
     def resolve(flow_id, version=None):
         if flow_id == "research-one":
             return child
-        raise LoadError(f"unknown child {flow_id!r}")
+        raise LoadDiagnostics().error(f"unknown child {flow_id!r}")
 
     return resolve
 
@@ -218,7 +230,7 @@ def test_e06_cross_flow_type_mismatch_is_loud():
         ("e10-unknown-node-kind.yaml", "unknown kind 'llm'", 8),  # the `kind:` value
         ("e11-field-not-allowed.yaml", "field 'prompt' is not allowed", 13),  # the stray field
         ("e12-missing-required-field.yaml", "missing required field 'code'", 8),  # the node body
-        ("e13-bad-type-expression.yaml", "bad type expression 'list['", 7),
+        ("e13-bad-type-expression.yaml", "bad type expression 'list['", 11),
         ("e14-unknown-system-ambient.yaml", "bogus", 11),
         ("e15-prompt-undeclared-input.yaml", "is not a declared input", 12),
         ("e16-bad-typedef-name.yaml", "shadows", 4),
@@ -233,7 +245,7 @@ def test_compile_error_gallery(filename, substr, line):
     err = _load_error(filename)
     assert substr in str(err)
     if line is not None:
-        assert err.line == line  # located at the offending .yaml line
+        assert _error_ranges(err)[0].start_line == line
 
 
 @pytest.mark.parametrize(
@@ -245,11 +257,9 @@ def test_compile_error_gallery(filename, substr, line):
     ],
 )
 def test_inline_code_construction_errors_carry_ranges(filename, line):
-    """Every CODE construction rejection exposes a range, not only a legacy line."""
+    """Every CODE construction rejection exposes one precise source frame."""
     err = _load_error(filename)
-    assert err.range is not None
-    assert err.range.start_line == line
-    assert err.line == line
+    assert _only_error_range(err).start_line == line
 
 
 @pytest.mark.parametrize(
@@ -311,8 +321,7 @@ output: ${echo.output}
     with pytest.raises(LoadError, match="default") as caught:
         load_flow(source)
 
-    assert caught.value.range is not None
-    assert caught.value.range.start_line == 4
+    assert _only_error_range(caught.value).start_line == 4
 
 
 def test_false_boundary_assert_carries_range():
@@ -340,8 +349,8 @@ def test_bad_input_ref_locates_the_offending_entry():
     # Reordering e14's inputs will break this — correctly.
     err = _load_error("e14-unknown-system-ambient.yaml")
     assert "bogus" in str(err)
-    assert err.range is not None
-    assert (err.range.start_line, err.range.end_line) == (11, 11)
+    source_range = _only_error_range(err)
+    assert (source_range.start_line, source_range.end_line) == (11, 11)
 
 
 def test_bad_map_per_element_input_ref_locates_the_offending_entry():
@@ -351,8 +360,8 @@ def test_bad_map_per_element_input_ref_locates_the_offending_entry():
     err = _load_error("e36-bad-map-input-ref.yaml")
     assert "unresolved references" in str(err)
     assert "map input 'extra'" in str(err)
-    assert err.range is not None
-    assert (err.range.start_line, err.range.end_line) == (33, 33)
+    source_range = _only_error_range(err)
+    assert (source_range.start_line, source_range.end_line) == (33, 33)
 
 
 def test_map_over_ref_locates_the_over_line():
@@ -362,8 +371,8 @@ def test_map_over_ref_locates_the_over_line():
     err = _load_error("e35-bad-map-over-ref.yaml")
     assert "unresolved references" in str(err)
     assert "map over" in str(err)  # names the reserved key, not an input
-    assert err.range is not None
-    assert (err.range.start_line, err.range.end_line) == (26, 26)
+    source_range = _only_error_range(err)
+    assert (source_range.start_line, source_range.end_line) == (26, 26)
 
 
 def test_duplicate_asserts_caret_at_first_occurrence():
@@ -391,11 +400,11 @@ def test_input_named_like_a_field_does_not_collide():
 
     err = _load_error("e33-input-named-like-field.yaml")
     assert "unresolved references" in str(err) and "'env'" in str(err)
-    assert err.range is not None
+    source_range = _only_error_range(err)
     # per-entry resolution (#87, PR #104) lands ON the offending `env:` input (L35), never L32 —
     # a collision would have put the caret on the unrelated `env:` field value instead.
-    assert err.range.start_line == 35
-    assert err.range.start_line != 32
+    assert source_range.start_line == 35
+    assert source_range.start_line != 32
 
 
 # --------------------------------------------------------------------------- #
@@ -411,9 +420,7 @@ def test_llm_config_error_carries_the_field_range():
     # the node header on L24.
     err = _load_error("e39-llm-config-no-range.yaml")
     assert "llm_config" in str(err) and "provider" in str(err)  # the entry IS named
-    assert err.range is not None
-    assert err.range.start_line == 27
-    assert err.line == 27
+    assert _only_error_range(err).start_line == 27
 
 
 def test_agent_controls_field_is_retired_and_located():
@@ -421,8 +428,7 @@ def test_agent_controls_field_is_retired_and_located():
     # retired field at its value range and directs authors to the ordinary `tools:` surface.
     err = _load_error("e40-agent-controls-no-range.yaml")
     assert "field 'controls' is not allowed" in str(err)
-    assert err.range is not None and err.range.start_line == 14
-    assert err.line == 14
+    assert _only_error_range(err).start_line == 14
 
 
 def test_structured_output_failure_names_whole_field_and_range_is_none():
@@ -459,8 +465,8 @@ def test_synth_node_locates_at_its_call_directive_line():
     err = _load_error("e37-synth-node-inherits-host-ranges.yaml")
     assert "unresolved references" in str(err)
     assert "__call_0" in str(err) and "'topic'" in str(err)  # the SYNTH node's input, not the host's
-    assert err.range is not None
-    assert err.range.start_line == 30  # the `call(...)` directive (was L29, the host's valid `topic:`)
+    # The `call(...)` directive (was L29, the host's valid `topic:`).
+    assert _only_error_range(err).start_line == 30
 
 
 def test_case_when_ref_locates_at_when_line():
@@ -472,8 +478,8 @@ def test_case_when_ref_locates_at_when_line():
     assert "unresolved references" in str(err)
     assert "'__r1'" not in str(err)       # the synthetic name no longer leaks
     assert "cases[1].when" in str(err)     # ... it is named by the author-facing site instead
-    assert err.range is not None
-    assert err.range.start_line == 36  # the offending `cases[1].when` (was L31, the `gate:` header)
+    # The offending `cases[1].when` (was L31, the `gate:` header).
+    assert _only_error_range(err).start_line == 36
 
 
 # --------------------------------------------------------------------------- #

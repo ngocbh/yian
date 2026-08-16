@@ -16,9 +16,7 @@ Two subtleties mirror the legacy collector:
 
 Located parse metadata: each error anchors on the referencing field's `SourceRange`, read
 off the built node's `field_ranges` (the coarse per-field span — e.g. the node's `input:`
-mapping for an input-binding ref, its `prompt:` for a prompt ref). The transitional
-`node_lines`/`outputs_line` provide compatibility fallbacks when no retained range exists
-renderer; a later renderer collapse retires them for the range.
+mapping for an input-binding ref, its `prompt:` for a prompt ref).
 
 Imports flow down only: `compile.validation` (the leaf ref checker), `expr` (the binding
 parser), `nodes` (Node/AgentNode/WaitNode discrimination and `ValueContract`),
@@ -31,7 +29,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from agent_composer.compile.validation import _classify_path
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.events import SourceRange
 from agent_composer.expr import (
     ExpressionError,
@@ -73,6 +71,7 @@ def validate_references(
     node_lines: "dict[str, int] | None" = None,
     outputs_line: "int | None" = None,
     outputs_range: Optional[SourceRange] = None,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Validate every `${...}` reference site of a built flow.
 
@@ -88,18 +87,15 @@ def validate_references(
     Each error anchors on the referencing site's `SourceRange`, resolved off the built node's
     `field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
     binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
-    / `("field", "prompt")`), else the node header. The transitional `node_lines` (node id ->
-    source line) + `outputs_line` (the `outputs:` section line) feed `LoadError.line`
-    only when no retained range exists. `outputs_range` is the authored output value/block
-    range when the caller retains it; otherwise output errors fall back to `outputs_line`.
-    The aggregate `LoadError` carries the first error with either location, preserving that
-    error's line/range pair rather than mixing locations from separate messages.
+    / `("field", "prompt")`), else the node header. `outputs_range` is the authored output
+    value/block range when the caller retains it. `node_lines` and `outputs_line` remain only
+    for transitional caller compatibility. The aggregate carries the first retained range.
 
     Accumulates ALL located errors and raises a single `LoadError`; passes silently
     on a clean flow. Reuses `_classify_path` (head-resolution + dotted walk)
     verbatim — the per-node walk glue is the only loader-specific code.
     """
-    lines = node_lines or {}
+    diagnostics = diagnostics or LoadDiagnostics()
     valid_targets = set(nodes)
     # The representation-neutral leaf checker speaks Type. Project only at that boundary;
     # the canonical ValueContract carriers (and their origins) stay untouched here.
@@ -112,13 +108,11 @@ def validate_references(
     producer_types = {
         node_id: contract.type for node_id, contract in producers.items()
     }
-    # (message, line, range) triples — line/range locate the offending site where known.
-    errors: list[tuple[str, "int | None", Optional[SourceRange]]] = []
+    errors: list[tuple[str, Optional[SourceRange]]] = []
 
     def scan(
         from_value: Any,
         where: str,
-        line: "int | None",
         rng: Optional[SourceRange],
         extra_heads: tuple = (),
     ) -> None:
@@ -133,17 +127,16 @@ def validate_references(
         try:
             paths = expr_refs_of(from_value)
         except ExpressionError as exc:
-            errors.append((f"{where}: {exc}", line, rng))
+            errors.append((f"{where}: {exc}", rng))
             return
         for path in paths:
             err = _classify_path(
                 path, valid_targets, flow_inputs, extra_heads, producer_types
             )
             if err is not None:
-                errors.append((f"{where}: {err}", line, rng))
+                errors.append((f"{where}: {err}", rng))
 
     for node_id, node in nodes.items():
-        node_line = lines.get(node_id)
         franges = node.field_ranges
         # Prompt scope: a strict AGENT prompt may interpolate ONLY this node's
         # declared inputs as bare `${name}` (or as a `${name}`-wrapped builtin-call arg);
@@ -155,7 +148,7 @@ def validate_references(
             try:
                 refs = prompt_refs(node.prompt)
             except ExpressionError as exc:
-                errors.append((f"node {node_id!r} prompt: {exc}", node_line, prompt_rng))
+                errors.append((f"node {node_id!r} prompt: {exc}", prompt_rng))
                 refs = []
             for ref in refs:
                 head = ref.split(".", 1)[0].strip()
@@ -167,7 +160,6 @@ def validate_references(
                     )
                     errors.append((
                         f"node {node_id!r} prompt: ${{{ref}}} is not a declared input{hint}",
-                        node_line,
                         prompt_rng,
                     ))
         # A per-item binder (MAP) reads a parent-pool `list[T]` from its reserved wiring key(s)
@@ -182,14 +174,13 @@ def validate_references(
                 # `("field", key)` — not the bare key, which would never match and would
                 # silently anchor the error on the whole `input:` block instead.
                 over_rng = franges.get(("field", key)) or input_rng
-                scan(nwiring.get(key), f"node {node_id!r} map {key}", node_line, over_rng)
+                scan(nwiring.get(key), f"node {node_id!r} map {key}", over_rng)
             for param, src in nwiring.items():
                 if param in reserved:
                     continue  # the iteration source, scanned above (not a per-element input)
                 scan(
                     src,
                     f"node {node_id!r} map input {param!r} from",
-                    node_line,
                     franges.get(("input", param)) or input_rng,
                     extra_heads=("item",),
                 )
@@ -208,7 +199,7 @@ def validate_references(
         # synthetic param the author-facing name it was hoisted from instead of leaking `__rN`.
         input_rng = franges.get(("field", "inputs")) or node.range
         for param, src in flow_wiring.get(node_id, {}).items():
-            scan(src, f"node {node_id!r} {node.wiring_ref_label(param)} from", node_line,
+            scan(src, f"node {node_id!r} {node.wiring_ref_label(param)} from",
                  franges.get(("input", param)) or input_rng)
 
     # Flow outputs (the codomain): each binding `from:` checked like a node input —
@@ -216,22 +207,15 @@ def validate_references(
     # No built node owns the flow `outputs:` block. A retained child body can supply its
     # output value/block range; other callers keep the section-line fallback.
     for value in _output_bindings(outputs):
-        scan(value, "flow output from", outputs_line, outputs_range)
+        scan(value, "flow output from", outputs_range)
 
     if errors:
-        first_line, first_range = next(
-            (
-                (line, error_range)
-                for _, line, error_range in errors
-                if line is not None or error_range is not None
-            ),
-            (None, None),
+        first_range = next(
+            (error_range for _, error_range in errors if error_range is not None),
+            None,
         )
-        if first_range is not None:
-            first_line = None
-        raise LoadError(
+        raise diagnostics.error(
             "flow has unresolved references:\n  "
-            + "\n  ".join(msg for msg, _, _ in errors),
-            line=first_line,
+            + "\n  ".join(msg for msg, _ in errors),
             range=first_range,
         )

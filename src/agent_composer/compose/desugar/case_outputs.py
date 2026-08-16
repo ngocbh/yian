@@ -28,7 +28,7 @@ from agent_composer.events import SourceRange
 from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.compose.nodes.bindings import map_binding_strings
 from agent_composer.compose.desugar.inline_calls import map_outputs_strings
-from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.parse.file import CaseDescriptor
 from agent_composer.nodes.contracts import Assertion
 
@@ -41,6 +41,18 @@ _CASE_OUTPUT_INTERIOR = re.compile(
 )
 
 
+def _range_or_line(
+    range: SourceRange | None,
+    line: int | None,
+) -> SourceRange | None:
+    """Prefer a retained span, otherwise convert a legacy line into a point range."""
+    if range is not None:
+        return range
+    if line is None:
+        return None
+    return SourceRange(line, 1, line, 1)
+
+
 def expand_case_outputs(
     descriptors: dict,
     outputs_section: Any,
@@ -51,6 +63,7 @@ def expand_case_outputs(
     asserts_line: "int | None" = None,
     outputs_range: Optional[SourceRange] = None,
     assertion_range_at: Optional[Callable[[int], Optional[SourceRange]]] = None,
+    diagnostics: LoadDiagnostics | None = None,
 ) -> tuple:
     """Expand every `${<case>.output}` binding ref to a coalesce over the case's branch
     targets, returning `(new_descriptors, new_outputs)`.
@@ -62,6 +75,7 @@ def expand_case_outputs(
     not bindings. Descriptor field/item ranges are preferred; ``outputs_range`` and
     ``assertion_range_at`` locate section-owned sites. Legacy lines are used only when no
     range exists. A flow with no `case` node returns its inputs unchanged."""
+    diagnostics = diagnostics or LoadDiagnostics()
     case_ids = {nid for nid, d in descriptors.items() if isinstance(d, CaseDescriptor)}
     if not case_ids:
         return descriptors, outputs_section  # fast path
@@ -70,6 +84,7 @@ def expand_case_outputs(
 
     new_descriptors = {}
     for nid, descriptor in descriptors.items():
+
         def expand_binding(
             field: str,
             key: str,
@@ -85,6 +100,7 @@ def expand_case_outputs(
                 f"node {_nid!r}",
                 None if binding_range is not None else lines.get(_nid),
                 range=binding_range,
+                diagnostics=diagnostics,
             )(value)
 
         new_descriptors[nid] = map_binding_strings(descriptor, expand_binding)
@@ -97,6 +113,7 @@ def expand_case_outputs(
             "flow outputs",
             None if outputs_range is not None else outputs_line,
             range=outputs_range,
+            diagnostics=diagnostics,
         ),
     )
 
@@ -111,6 +128,7 @@ def expand_case_outputs(
                     f"case node {nid!r} condition",
                     None if condition_range is not None else lines.get(nid),
                     range=condition_range,
+                    diagnostics=diagnostics,
                 )
             for index, case in enumerate(d.cases):
                 condition_range = _when_range(d, index)
@@ -120,6 +138,7 @@ def expand_case_outputs(
                     f"case node {nid!r} condition",
                     None if condition_range is not None else lines.get(nid),
                     range=condition_range,
+                    diagnostics=diagnostics,
                 )
     for index, assertion in enumerate(asserts_section or []):
         assertion_range = (
@@ -131,6 +150,7 @@ def expand_case_outputs(
             "assert",
             None if assertion_range is not None else asserts_line,
             range=assertion_range,
+            diagnostics=diagnostics,
         )
 
     return new_descriptors, new_outputs
@@ -173,6 +193,7 @@ def _expander(
     line: Optional[int],
     *,
     range: Optional[SourceRange] = None,
+    diagnostics: LoadDiagnostics,
 ):
     """A `value -> value` binding transform: expand a clean WHOLE-SPAN case-output ref to
     the branch coalesce; reject a case ref in any non-clean position. Scans TOP-LEVEL
@@ -204,6 +225,7 @@ def _expander(
                         host,
                         None if range is not None else line,
                         range=range,
+                        diagnostics=diagnostics,
                     )
                 )
                 i = j + 1
@@ -223,6 +245,7 @@ def _expand_span(
     line: Optional[int],
     *,
     range: Optional[SourceRange] = None,
+    diagnostics: LoadDiagnostics,
 ) -> str:
     """One TOP-LEVEL `${…}` span (its interior) -> the replacement `${…}` text.
 
@@ -238,12 +261,13 @@ def _expand_span(
         suffix = m.group(2) or ""
         if cid in case_ids:
             leaves = targets[cid]
-            if not leaves:  # no then:/else:, or a case-target cycle (the flatten dropped the arm)
-                raise LoadError(
+            if (
+                not leaves
+            ):  # no then:/else:, or a case-target cycle (the flatten dropped the arm)
+                raise diagnostics.error(
                     f"{host}: ${{{cid}.output}} — case {cid!r} has no resolvable branch value "
                     f"(a case needs a `then:` or `else:`, and its targets must not form a cycle)",
-                    range=range,
-                    line=None if range is not None else line,
+                    range=_range_or_line(range, line),
                 )
             # Emit the NEW node-first branch coalesce.
             return "${" + " | ".join(f"{t}.output{suffix}" for t in leaves) + "}"
@@ -253,6 +277,7 @@ def _expand_span(
         host,
         None if range is not None else line,
         range=range,
+        diagnostics=diagnostics,
     )  # non-clean read -> loud
     return "${" + interior + "}"
 
@@ -285,6 +310,7 @@ def _reject_case_refs(
     line: Optional[int],
     *,
     range: Optional[SourceRange] = None,
+    diagnostics: LoadDiagnostics,
 ) -> None:
     """Raise a located `LoadError` if any string reads a `${<case>.output}` value
     (`<case>` a case node id) — the floor for the non-clean / condition / assert
@@ -304,12 +330,11 @@ def _reject_case_refs(
             if len(parts) >= 2 and parts[1] == "output" and parts[0] in case_ids:
                 case_id = parts[0]
             if case_id is not None:
-                raise LoadError(
+                raise diagnostics.error(
                     f"{where}: ${{{case_id}.output}} (a case value) is only supported as a "
                     f"whole single reference in a binding — not in a coalesce / default / "
                     f"condition / assert (only the `then:/else: call(...)` value form is supported)",
-                    range=range,
-                    line=None if range is not None else line,
+                    range=_range_or_line(range, line),
                 )
 
 
@@ -320,7 +345,8 @@ def _case_leaf_targets(descriptors: dict, case_ids: set) -> dict:
     `case` is flattened to ITS leaf targets (recursive, cycle-guarded — a case-target cycle
     drops that arm and surfaces as an empty-leaves `LoadError` here, or a graph cycle at DAG
     validation). Duplicates removed preserving order. Sound via the case-route veto: the nested gate
-    skip-floods when the outer branch loses, so only the taken leaf is non-null in the coalesce."""
+    skip-floods when the outer branch loses, so only the taken leaf is non-null in the coalesce.
+    """
     raw: dict = {}
     for nid, d in descriptors.items():
         if isinstance(d, CaseDescriptor):

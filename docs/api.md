@@ -6,9 +6,16 @@ HUMAN_INPUT, and WAIT stay inside live node calls; their enclosing nodes return
 ordinary outputs.
 
 ```python
+from pathlib import Path
+
 from agent_composer import load_flow, run_flow
 
-loaded = load_flow(open("hello.yaml").read(), search_paths=["."])
+flow_path = Path("hello.yaml")
+loaded = load_flow(
+    flow_path.read_text(),
+    search_paths=[flow_path.parent],
+    source_label=flow_path.name,
+)
 result = run_flow(loaded, {"name": "Ada"})
 print(result.status, result.output)
 ```
@@ -26,7 +33,7 @@ These names are exported from the top-level `agent_composer` package:
 | `CompiledFlow` | the compiled flow IR (`loaded.compiled`) |
 | `VariablePool` | the typed value pool |
 | `evaluate_when` | evaluate a boolean `when:`/assert expression |
-| `LoadError` | raised by `load_flow` on a bad flow |
+| `LoadError` | bad-flow exception containing one canonical `diagnostic` |
 | `FlowValidationError` | raised on a failed validation check |
 | `ExpressionError` | raised on a bad `${...}` expression |
 
@@ -44,14 +51,32 @@ the package-root functions below own that setup for normal callers.
 ## `load_flow`
 
 ```python
-load_flow(text: str, *, search_paths: list[str | Path] = ...) -> ComposedFlow
+load_flow(
+    text: str,
+    *,
+    search_paths: list[str | Path] = ...,
+    source_label: str = "<flow>",
+) -> ComposedFlow
 ```
 
 Parses, compiles, and validates the flow `text`, including every authored input
 default. Pass `search_paths` so that a flow's `call:` / `uses:` references resolve
 relative to the flow file's directory — typically `search_paths=[flow_dir]`.
-Raises `LoadError` / `FlowValidationError` on a bad flow (compile-time errors
-surface here, not at run time).
+Pass the filename as `source_label` when `text` came from a file. Raises
+`LoadError` on a bad flow (compile-time errors surface here, not at run time);
+its immutable `.diagnostic` owns the message, notes, and every ordered
+`DiagnosticFrame`, including frames from imported files.
+
+```python
+from agent_composer import LoadError
+
+try:
+    loaded = load_flow(text, source_label="flow.yaml")
+except LoadError as error:
+    print(error.diagnostic.message)
+    for frame in error.diagnostic.frames:
+        print(frame.label, frame.range.start_line)
+```
 
 The returned `ComposedFlow.origin_resolver` has one exact route for every
 reachable source origin. It is `None` only for a source-free graph. External
@@ -167,7 +192,12 @@ from agent_composer import load_flow, run_flow
 from agent_composer.run import resume_flow
 
 run_log = Path("run.jsonl")
-loaded = load_flow(open("flow.yaml").read(), search_paths=["."])
+flow_path = Path("flow.yaml")
+loaded = load_flow(
+    flow_path.read_text(),
+    search_paths=[flow_path.parent],
+    source_label=flow_path.name,
+)
 
 # In the original process. `run.jsonl` must not already exist.
 result = run_flow(loaded, {"question": "..."}, log=run_log)

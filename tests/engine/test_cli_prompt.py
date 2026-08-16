@@ -22,6 +22,7 @@ from agent_composer.cli.run import (
     _render_run_error,
 )
 from agent_composer.compose.loader import load_flow
+from agent_composer.diagnostics import Failure
 from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.run import RunResult, run_flow
 from agent_composer.tools import install_ask_user
@@ -262,8 +263,8 @@ def test_prompt_leaves_explicit_null_defaults_omitted_for_every_widget_kind(monk
 
 # --- _render_run_error: a runtime failure boxes the .yaml at the PRECISE line ------ #
 def test_run_error_boxes_failing_node(monkeypatch):
-    # e07 omits `as_of` -> the `report` node's `:?` fires at bind time -> NodeFailed
-    # carrying an input locator -> the box points at the `as_of:` binding, not the header.
+    # e07 omits `as_of` -> the `report` node's `:?` fails at bind time. RunResult carries
+    # its canonical Failure plus an input locator, so the box points at the binding.
     flow = _ERRORS / "e07-required-missing.yaml"
     text = flow.read_text()
     result = run_flow(load_flow(text, search_paths=[flow.parent]), {"topic": "X"})
@@ -277,7 +278,7 @@ def test_run_error_boxes_failing_node(monkeypatch):
 
 
 def test_run_error_kind_fallback_for_code_raise(monkeypatch):
-    # e20's code callable raises -> NodeFailed with no precise locator -> the chain falls
+    # e20's code callable raises with no precise locator -> the result's node id falls
     # back to the node-kind best sub-line: a code node's `code:` field (not the header, not plain).
     flow = _ERRORS / "e20-code-raises.yaml"
     text = flow.read_text()
@@ -305,7 +306,7 @@ def test_run_error_boxes_boundary_assert_line(monkeypatch):
 
 def test_run_error_boxes_code_wrong_type_output(monkeypatch):
     # e21's code node returns a value that fails its declared `output: int` -> the typed write
-    # boundary rejects it. The node-less RunFailed carries a `field` locator -> BOXED at the
+    # boundary rejects it. The RunResult carries a `field` locator -> BOXED at the
     # node's `output:` declaration (not a plain message, not the node header).
     flow = _ERRORS / "e21-code-wrong-type.yaml"
     text = flow.read_text()
@@ -333,7 +334,7 @@ def test_run_error_boxes_flow_input_line(monkeypatch):
 
 
 def test_run_error_plain_when_unlocatable(monkeypatch):
-    # A failure with no NodeFailed AND no locator (e.g. a terminal-skipped run) has nowhere
+    # A failure with no node id and no locator has nowhere
     # to point -> the plain `run <status>: <message>` line, no frame.
     flow = _ERRORS / "e18-false-boundary-assert.yaml"
     text = flow.read_text()
@@ -342,7 +343,7 @@ def test_run_error_plain_when_unlocatable(monkeypatch):
         status="failed",
         run_id="cli-test",
         log=None,
-        error="boom",
+        failure=Failure("graph.terminal_unreachable", "boom", None),
         locator=None,
         events=[],
     )
@@ -354,7 +355,7 @@ def test_run_error_plain_when_unlocatable(monkeypatch):
 
 
 def test_run_error_boxes_namespaced_failure_at_owning_call(monkeypatch):
-    # e24's code node raises INSIDE a called child, so its NodeFailed id is runtime-namespaced
+    # e24's code node raises INSIDE a called child, so Failure.node_id is runtime-namespaced
     # (`run/boom`) — a line the parser never indexes. The renderer must fall back to the OWNING
     # top-level call node (`run`) and still box a real source frame, not degrade to a bare line.
     flow = _ERRORS / "e24-nested-code-raise.yaml"
@@ -373,20 +374,21 @@ def test_run_error_boxes_loop_max_exceeded_at_loop_node(monkeypatch):
     # `~<k>` suffix (`polish~5`) — a line the parser never indexes and which has no locator. The
     # renderer must strip the clone suffix, resolve to the authored `polish:` loop node, and box a
     # real source frame instead of degrading to a bare `run failed:` line.
-    from agent_composer.events import NodeFailed
-
     flow = _SEEDS / "28-refine-loop.yaml"
     text = flow.read_text()
-    nf = NodeFailed("polish~5", error="loop 'polish' exceeded max (5)",
-                    error_type="LoopMaxExceeded", locator=None)
     result = RunResult(
         input={},
         status="failed",
         run_id="cli-test",
         log=None,
-        error="loop 'polish' exceeded max (5)",
+        failure=Failure(
+            "node.execute",
+            "loop 'polish' exceeded max (5)",
+            "polish~5",
+            cause_type="LoopMaxExceeded",
+        ),
         locator=None,
-        events=[nf],
+        events=[],
     )
     buf = _sink(monkeypatch)
     _render_run_error(result, flow, text)
@@ -402,7 +404,8 @@ def test_run_error_traceback_only_under_engine_trace(monkeypatch):
     flow = _ERRORS / "e24-nested-code-raise.yaml"
     text = flow.read_text()
     result = run_flow(load_flow(text, search_paths=[flow.parent]), {"topic": "X"})
-    assert result.traceback                          # captured at the node-failure boundary
+    assert result.failure is not None
+    assert result.failure.traceback  # captured at the node-failure boundary
 
     buf = _sink(monkeypatch)
     _render_run_error(result, flow, text, engine_trace=False)

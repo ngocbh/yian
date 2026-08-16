@@ -142,7 +142,7 @@ def test_inline_raise_is_framed_at_the_yaml_line():
     )
     result = run_flow(load_flow(flow), {"rating": 3.0})
     assert result.status != "succeeded"
-    assert "boom" in (result.error or "")
+    assert "boom" in result.failure.message
 
 
 # --- CODE-owned watchdog (soft-budget logger) ------------------------------------------- #

@@ -246,4 +246,4 @@ def test_child_end_violated_synth_param_post_assert_fails():
     pool.set("each/tail", "")                    # binds `__assert_tail` = "" -> violates the assert
     result = _run_end(_tail_assert_end(), pool)
     assert isinstance(result, EvaluationFailure)
-    assert "post-assert" in result.error
+    assert "post-assert" in result.failure.message

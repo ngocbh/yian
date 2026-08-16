@@ -107,7 +107,8 @@ def test_map_child_failure_fails_the_run():
                      child_resolver=_resolver(**{"boom-child": _BOOM_CHILD}))
     result = run_flow(flow, {"topics": ["ACME"]})
     assert result.status != "succeeded"
-    assert "boom" in (result.error or "")
+    assert result.failure is not None
+    assert "boom" in result.failure.message
 
 
 # `over:` with a `|` coalesce resolves at run through the same template layer it

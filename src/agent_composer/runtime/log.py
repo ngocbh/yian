@@ -29,6 +29,7 @@ from typing import (
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
+from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import SourceRange, SourceSpan
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import (
@@ -41,7 +42,7 @@ from agent_composer.typesys.values import (
 )
 
 
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
 """The one run-record wire schema understood by this release."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -98,10 +99,11 @@ class NodeSucceededRecord:
 
 @dataclass(frozen=True, slots=True)
 class NodeRoutedRecord:
-    """Select one named outgoing route for an executing node."""
+    """Select one route and retain any terminal failure it first proves."""
 
     node_id: str
     handle: str
+    terminal_failure: Failure | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,12 +120,9 @@ class NodeExpandedRecord:
 class NodeFailedRecord:
     """Make a run terminal-failed with the captured node diagnostic."""
 
-    node_id: str
-    error: str
-    error_type: str = ""
+    failure: Failure
     locator: SourceSpan | None = None
     range: SourceRange | None = None
-    traceback: str | None = None
 
 
 RunRecord: TypeAlias = (
@@ -512,7 +511,7 @@ class _EnvelopeWire(_StrictModel):
     @field_validator("schema_version", mode="before")
     @classmethod
     def _exact_integer_schema(cls, value: Any) -> Any:
-        """Reject bools and integral floats before ``Literal[1]`` can coerce them."""
+        """Reject bools and integral floats before the schema literal can coerce them."""
         if type(value) is not int:
             raise ValueError("run-record schema must be an integer")
         return value
@@ -559,11 +558,29 @@ class _NodeSucceededPayload(_StrictModel):
     value: dict[str, Any]
 
 
+class _OriginRefPayload(_StrictModel):
+    """Strict single-key JSON form of one opaque authored origin."""
+
+    key: str = Field(min_length=1)
+
+
+class _FailurePayload(_StrictModel):
+    """Strict nested JSON form of one canonical semantic failure."""
+
+    code: FailureCode
+    message: str
+    node_id: str = Field(min_length=1)
+    trace: list[_OriginRefPayload]
+    cause_type: str | None
+    traceback: str | None
+
+
 class _NodeRoutedPayload(_StrictModel):
     """Strict wire payload for :class:`NodeRoutedRecord`."""
 
     node_id: str = Field(min_length=1)
     handle: str = Field(min_length=1)
+    terminal_failure: _FailurePayload | None
 
 
 class _NodeExpandedPayload(_StrictModel):
@@ -605,12 +622,9 @@ class _SourceRangePayload(_StrictModel):
 class _NodeFailedPayload(_StrictModel):
     """Strict wire payload for :class:`NodeFailedRecord`."""
 
-    node_id: str = Field(min_length=1)
-    error: str
-    error_type: str
+    failure: _FailurePayload
     locator: _SourceSpanPayload | None
     range: _SourceRangePayload | None
-    traceback: str | None
 
 
 _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
@@ -814,8 +828,7 @@ def decode_record(data: bytes | str) -> RecordEnvelope:
     model_type = _KIND_TO_MODEL.get(envelope.kind)
     if model_type is None:
         raise ValueError(f"unknown run-record kind: {envelope.kind!r}")
-    payload_wire = _migrate_legacy_input_locator(envelope.kind, envelope.payload)
-    payload = model_type.model_validate(payload_wire)
+    payload = model_type.model_validate(envelope.payload)
     record = _record_from_payload(envelope.kind, payload)
     return RecordEnvelope(
         schema=envelope.schema_version,
@@ -824,32 +837,38 @@ def decode_record(data: bytes | str) -> RecordEnvelope:
         record=record,
     )
 
-
-def _migrate_legacy_input_locator(kind: str, payload: Any) -> Any:
-    """Map schema-1 START's retired ``input_decl`` locator to generic ``input``.
-
-    Encoding remains strict and emits only the current vocabulary. This decode-only
-    normalization keeps already-written schema-1 failed runs readable without
-    retaining a second semantic locator kind in the runtime model.
-    """
-    if kind != "node_failed" or not isinstance(payload, dict):
-        return payload
-    locator = payload.get("locator")
-    if not isinstance(locator, dict) or locator.get("kind") != "input_decl":
-        return payload
-    migrated = dict(payload)
-    migrated_locator = dict(locator)
-    migrated_locator["kind"] = "input"
-    migrated["locator"] = migrated_locator
-    return migrated
-
-
 def _kind_for_record(record: RunRecord) -> str:
     """Map one closed record variant to its stable wire discriminator."""
     try:
         return _TYPE_TO_KIND[type(record)]
     except KeyError as exc:
         raise TypeError(f"unsupported run record: {type(record).__name__}") from exc
+
+
+def _failure_payload(failure: Failure, *, carrier: str) -> dict[str, Any]:
+    """Return the one explicit wire form shared by failure-bearing records."""
+    if type(failure) is not Failure:
+        raise TypeError(f"{carrier} failure must be a Failure")
+    return {
+        "code": failure.code,
+        "message": failure.message,
+        "node_id": failure.node_id,
+        "trace": [{"key": origin.key} for origin in failure.trace],
+        "cause_type": failure.cause_type,
+        "traceback": failure.traceback,
+    }
+
+
+def _failure_from_payload(payload: dict[str, Any]) -> Failure:
+    """Rebuild one canonical Failure from an already validated wire mapping."""
+    return Failure(
+        code=payload["code"],
+        message=payload["message"],
+        node_id=payload["node_id"],
+        trace=tuple(OriginRef(origin["key"]) for origin in payload["trace"]),
+        cause_type=payload["cause_type"],
+        traceback=payload["traceback"],
+    )
 
 
 def _payload_for_record(record: RunRecord) -> dict[str, Any]:
@@ -883,7 +902,18 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             "value": _copy_json(canonical),
         }
     elif isinstance(record, NodeRoutedRecord):
-        raw = asdict(record)
+        raw = {
+            "node_id": record.node_id,
+            "handle": record.handle,
+            "terminal_failure": (
+                _failure_payload(
+                    record.terminal_failure,
+                    carrier="NodeRoutedRecord",
+                )
+                if record.terminal_failure is not None
+                else None
+            ),
+        }
     elif isinstance(record, NodeExpandedRecord):
         raw = {
             "spawner_id": record.spawner_id,
@@ -894,7 +924,14 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             "topology_digest": record.topology_digest,
         }
     elif isinstance(record, NodeFailedRecord):
-        raw = asdict(record)
+        raw = {
+            "failure": _failure_payload(
+                record.failure,
+                carrier="NodeFailedRecord",
+            ),
+            "locator": asdict(record.locator) if record.locator is not None else None,
+            "range": asdict(record.range) if record.range is not None else None,
+        }
     else:  # protected by _kind_for_record; retained for exhaustive local reasoning
         raise TypeError(f"unsupported run record: {type(record).__name__}")
 
@@ -935,7 +972,16 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             value=_copy_json(canonical),
         )
     if kind == "node_routed":
-        return NodeRoutedRecord(node_id=values["node_id"], handle=values["handle"])
+        terminal_payload = values["terminal_failure"]
+        return NodeRoutedRecord(
+            node_id=values["node_id"],
+            handle=values["handle"],
+            terminal_failure=(
+                _failure_from_payload(terminal_payload)
+                if terminal_payload is not None
+                else None
+            ),
+        )
     if kind == "node_expanded":
         seed = canonical_seed(values["seed"])[0]
         return NodeExpandedRecord(
@@ -945,12 +991,11 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             topology_digest=values["topology_digest"],
         )
     if kind == "node_failed":
+        failure_payload = values["failure"]
         locator_payload = values["locator"]
         range_payload = values["range"]
         return NodeFailedRecord(
-            node_id=values["node_id"],
-            error=values["error"],
-            error_type=values["error_type"],
+            failure=_failure_from_payload(failure_payload),
             locator=(
                 SourceSpan(**locator_payload)
                 if locator_payload is not None
@@ -961,7 +1006,6 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
                 if range_payload is not None
                 else None
             ),
-            traceback=values["traceback"],
         )
     raise ValueError(f"unknown run-record kind: {kind!r}")
 

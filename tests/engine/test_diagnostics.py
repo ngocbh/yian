@@ -496,6 +496,37 @@ assert not loaded_yaml_modules, loaded_yaml_modules
     assert result.returncode == 0, result.stderr
 
 
+def test_root_failure_import_preserves_diagnostic_leaf_isolation() -> None:
+    """The public Failure export must load only its dependency-free leaf."""
+    source_root = Path(__file__).parents[2] / "src"
+    script = """
+import sys
+from agent_composer import Failure
+
+assert Failure.__module__ == "agent_composer.diagnostics"
+loaded_project_modules = sorted(
+    name
+    for name in sys.modules
+    if name.startswith("agent_composer.") and name != "agent_composer.diagnostics"
+)
+loaded_yaml_modules = sorted(
+    name for name in sys.modules if name == "yaml" or name.startswith("yaml.")
+)
+assert not loaded_project_modules, loaded_project_modules
+assert not loaded_yaml_modules, loaded_yaml_modules
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", script],
+        cwd=source_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_lazy_package_facade_preserves_every_declared_root_export() -> None:
     """Leaf isolation must not remove or rename the established root API."""
     source_root = Path(__file__).parents[2] / "src"
@@ -505,6 +536,7 @@ import agent_composer
 expected = [
     "ExpressionError",
     "FlowValidationError",
+    "Failure",
     "LoadError",
     "ComposedFlow",
     "CompiledFlow",

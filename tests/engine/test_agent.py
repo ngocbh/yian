@@ -167,7 +167,7 @@ def test_tool_calling_rejects_globally_registered_but_ungranted_tool(monkeypatch
 
     event = _run_node(_node(tools=[]))
     assert isinstance(event, EvaluationFailure)
-    assert "not granted" in event.error
+    assert "not granted" in event.failure.message
     assert seen == []
 
 
@@ -191,7 +191,7 @@ def test_tool_calling_rejects_model_injected_arguments(monkeypatch):
 
     event = _run_node(_node(tools=["lookup"]))
     assert isinstance(event, EvaluationFailure)
-    assert "unsupported argument" in event.error
+    assert "unsupported argument" in event.failure.message
     assert seen == []
 
 
@@ -210,8 +210,8 @@ def test_tool_calling_propagates_tool_exception_as_node_failure(monkeypatch):
 
     event = _run_node(_node(tools=["explode"]))
     assert isinstance(event, EvaluationFailure)
-    assert event.error_type == "RuntimeError"
-    assert "cannot load ACME" in event.error
+    assert event.failure.cause_type == "RuntimeError"
+    assert "cannot load ACME" in event.failure.message
 
 
 def test_tool_calling_cap_trips_when_bounded(monkeypatch):
@@ -226,8 +226,8 @@ def test_tool_calling_cap_trips_when_bounded(monkeypatch):
     node.env = {"max_tool_iterations": cap}
     ev = _run_node(node)
     assert isinstance(ev, EvaluationFailure)
-    assert ev.error_type == "AgentLoopError"
-    assert "tool-iteration cap" in ev.error
+    assert ev.failure.cause_type == "AgentLoopError"
+    assert "tool-iteration cap" in ev.failure.message
 
 
 def test_default_no_cap_runs_unbounded(monkeypatch):
@@ -256,8 +256,8 @@ def test_env_max_tool_iterations_overrides_cap(monkeypatch):
     node.env = {"max_tool_iterations": 2}
     ev = _run_node(node)
     assert isinstance(ev, EvaluationFailure)
-    assert ev.error_type == "AgentLoopError"
-    assert "(2)" in ev.error          # the cap in the message is the env override, not the default
+    assert ev.failure.cause_type == "AgentLoopError"
+    assert "(2)" in ev.failure.message  # the message uses the env override, not the default
     assert looping.calls == 2         # stopped at exactly the env bound
 
 
@@ -276,7 +276,7 @@ def test_env_max_tool_iterations_rejects_bad_value(monkeypatch):
     node.env = {"max_tool_iterations": 0}
     ev = _run_node(node)
     assert isinstance(ev, EvaluationFailure)
-    assert "max_tool_iterations" in ev.error
+    assert "max_tool_iterations" in ev.failure.message
 
 
 def test_agent_run_has_no_scratch_kwarg():

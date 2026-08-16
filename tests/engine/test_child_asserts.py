@@ -82,7 +82,8 @@ def test_ref_child_boundary_assert_satisfying_value_succeeds():
 def test_ref_child_boundary_assert_violating_value_fails():
     res = run_flow(load_flow(_REF_FLOW), {"v": -1})          # -1 violates ${input.n} >= 0
     assert res.status == "failed"                            # eager boundary eval in _apply_grow
-    assert "assert failed" in res.error
+    assert res.failure is not None
+    assert "assert failed" in res.failure.message
 
 
 def test_ref_child_post_assert_satisfying_value_succeeds():
@@ -93,7 +94,8 @@ def test_ref_child_post_assert_satisfying_value_succeeds():
 def test_ref_child_post_assert_violating_value_fails():
     res = run_flow(load_flow(_REF_FLOW), {"v": 60})          # x=120 violates ${x.output} < 100
     assert res.status == "failed"                            # child END_ID pool-scoped post-assert
-    assert "assert failed" in res.error
+    assert res.failure is not None
+    assert "assert failed" in res.failure.message
 
 
 # --- MAP: non-vacuous per-element boundary pair, run through expansion. The boundary
@@ -107,7 +109,8 @@ def test_map_child_asserts_all_elements_satisfy_succeeds():
 def test_map_child_assert_one_violating_element_fails():
     res = run_flow(load_flow(_MAP_FLOW), {"vs": [1, -1, 3]})         # element -1 violates ${input.n} >= 0
     assert res.status == "failed"                                    # per-element eager boundary eval
-    assert "assert failed" in res.error
+    assert res.failure is not None
+    assert "assert failed" in res.failure.message
 
 
 # --- a failing child boundary assert fails the run through the cloned child START ---------- #
@@ -131,7 +134,8 @@ def test_ref_boundary_failure_fails_run(num_workers):
                      num_workers=num_workers, grow_builder=build_grow)
     events = list(eng.run())
     assert isinstance(events[-1], RunFailed)
-    assert "post-assert failed" in events[-1].error    # fired by the cloned child StartNode post-asserts
+    # Fired by the cloned child StartNode post-asserts.
+    assert "post-assert failed" in events[-1].failure.message
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
@@ -141,4 +145,4 @@ def test_map_boundary_failure_fails_run(num_workers):
                      num_workers=num_workers, grow_builder=build_grow)
     events = list(eng.run())
     assert isinstance(events[-1], RunFailed)
-    assert "post-assert failed" in events[-1].error
+    assert "post-assert failed" in events[-1].failure.message

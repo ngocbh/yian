@@ -306,7 +306,7 @@ def test_deep_ref_chain_trips_max_ref_depth(num_workers):
         ).run()
     )
     assert isinstance(events[-1], RunFailed)            # status=="failed", not pytest.raises
-    assert "MAX_REF_DEPTH" in events[-1].error
+    assert "MAX_REF_DEPTH" in events[-1].failure.message
 
 
 def _wide_child(n: int) -> CompiledFlow:
@@ -350,4 +350,4 @@ def test_over_budget_expansion_trips_max_total_nodes(num_workers):
         ).run()
     )
     assert isinstance(events[-1], RunFailed)            # status=="failed" via the dispatcher wrap
-    assert "node budget" in events[-1].error
+    assert "node budget" in events[-1].failure.message

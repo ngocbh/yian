@@ -104,7 +104,7 @@ def test_ref_child_failure_fails_the_run():
     parent = load_flow(_REF_BOOM, child_resolver=_resolver(**{"boom-child": _BOOM_CHILD}))
     result = run_flow(parent, {"topic": "ACME"})
     assert result.status != "succeeded"
-    assert "boom" in (result.error or "")
+    assert "boom" in result.failure.message
 
 
 def test_ref_child_applies_its_own_default():
@@ -158,7 +158,7 @@ def test_ref_boundary_assert_sees_omitted_default():
     # driver-apply_defaults drop left the assert reading the raw, un-defaulted record).
     parent = load_flow(_REF_PARENT_BD, child_resolver=_resolver(**{"child-bd": _CHILD_BOUNDARY_DEFAULT}))
     result = run_flow(parent, {"topic": "ACME"})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == "ACME"
 
 
@@ -187,7 +187,7 @@ def test_ref_boundary_assert_sees_coerced_present_value():
     # str-vs-int TypeError and spuriously fails a child the body would run fine.
     parent = load_flow(_REF_PARENT_BD_COERCE, child_resolver=_resolver(**{"child-bd": _CHILD_BOUNDARY_DEFAULT}))
     result = run_flow(parent, {"topic": "ACME"})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == "ACME"
 
 

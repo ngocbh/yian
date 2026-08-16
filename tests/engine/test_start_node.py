@@ -75,7 +75,7 @@ def test_start_e08_type_mismatch_returns_generic_input_failure():
     result = eval_node(node, flow, pool)
 
     assert isinstance(result, EvaluationFailure)
-    assert "does not match declared type int" in result.error
+    assert "does not match declared type int" in result.failure.message
     assert result.locator is not None
     assert result.locator.kind == "input"
     assert result.locator.key == "n"

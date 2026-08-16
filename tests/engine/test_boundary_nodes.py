@@ -98,8 +98,8 @@ def test_terminal_coskip_fails_via_end_disposition():
     # END_ID is skip-flooded, never commits -> RunFailed (via END_ID disposition), byte-stable msg.
     res = run_flow(load_flow(_COALESCE_REQUIRED), _E7_INPUTS)
     assert res.status == "failed"
-    assert "skipped" in (res.error or "")
-    assert res.error == "terminal output 'result' skipped"
+    assert "skipped" in res.failure.message
+    assert res.failure.message == "terminal output 'result' skipped"
 
 
 # --- START_ID seeded at engine init + ${input.X} -> store[START_ID]; inputs namespace retired -- #

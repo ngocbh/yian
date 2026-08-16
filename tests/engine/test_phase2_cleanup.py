@@ -178,10 +178,9 @@ def test_final_log_only_runtime_and_public_surface():
         "run_id",
         "log",
         "output",
-        "error",
+        "failure",
         "locator",
         "range",
-        "traceback",
         "events",
     ]
 

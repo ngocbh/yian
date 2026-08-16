@@ -232,7 +232,8 @@ def chat(
             )
             if result.status != "failed":
                 break
-            console.print(f"[red]turn failed:[/red] {result.error}")
+            detail = result.failure.message if result.failure is not None else "(no detail)"
+            console.print(f"[red]turn failed:[/red] {detail}")
             console.print("[dim]continuing — your conversation so far is preserved.[/dim]")
     except KeyboardInterrupt:
         err_console.print("[yellow]cancelled by user[/yellow]")

@@ -44,4 +44,4 @@ def test_leaf_grow_is_an_evaluation_failure():
     result = drive(_FakeLeaf("l"))
 
     assert isinstance(result, EvaluationFailure)
-    assert "not a spawner" in result.error
+    assert "not a spawner" in result.failure.message

@@ -419,9 +419,10 @@ def _render_run_error(
 ) -> None:
     """Print a runtime failure as a located `.yaml` frame at its PRECISE originating line.
 
-    The failure's `SourceSpan` locator (from the last `NodeFailed`, or the flow-level
-    `RunResult.locator` when no node is behind it) names exactly where the run broke — an
-    input binding, an assert expr, an input decl, an `output:` coercion.
+    The result's `SourceSpan` locator names exactly where the run broke — an input
+    binding, an assert expr, an input decl, or an `output:` coercion. Semantic
+    message, node identity, and traceback data come only from `RunResult.failure`,
+    so terminal recovery renders identically without invocation-local events.
 
     When the failing node id is RUNTIME-NAMESPACED (a node inside a called child, e.g.
     `gate/approve`) and the loaded IR is available, the error renders a **call traceback**: a
@@ -430,21 +431,21 @@ def _render_run_error(
     (`_walk_call_frames`). With fewer than two frames it falls back to the single-frame box,
     whose `SourceRange` is resolved by, in order:
 
-    1. the `NodeFailed`'s resolved `range` (the funnel's key->range twin of its locator);
-    2. else the flow-level `RunResult.range` (a node-less boundary input-decl / assert failure);
-    3. else `_resolve_range`: a `kind=field` locator's field range, else the node's own range
+    1. the flow-level `RunResult.range` retained by the temporary presentation bridge;
+    2. else `_resolve_range`: a `kind=field` locator's field range, else the node's own range
        (its kind fallback `code:` range, else the header), resolving a namespaced/clone id to
        its owning top-level node;
-    4. else a plain `run <status>: <message>` line (no frame).
+    3. else a plain `run <status>: <message>` line (no frame).
 
     When `engine_trace` is set and a Python traceback was captured (a code/tool/agent raise),
     it is boxed below for debugging."""
-    failed = [e for e in result.events if isinstance(e, NodeFailed)]
-    nf = failed[-1] if failed else None
-    span = nf.locator if nf is not None else getattr(result, "locator", None)
-    node_id = nf.node_id if nf is not None else (span.node if span is not None else None)
-    message = result.error or "(no detail)"
-    tb = getattr(result, "traceback", None)
+    failure = result.failure
+    span = result.locator
+    node_id = failure.node_id if failure is not None else None
+    if node_id is None and span is not None:
+        node_id = span.node
+    message = failure.message if failure is not None else "(no detail)"
+    tb = failure.traceback if failure is not None else None
 
     # Multi-frame call traceback: when the failing id is namespaced (a node inside a called
     # child) and we have the loaded IR, walk into the child(ren) and box a frame per level.
@@ -461,12 +462,8 @@ def _render_run_error(
             _render_traceback(tb)
         return
 
-    # Span-aware single frame (Step 8): a concrete `SourceRange` the funnel already resolved —
-    # on the failing `NodeFailed` (a node error), else on the flow-level `RunResult` (a node-less
-    # boundary input-decl / assert failure). Box it directly.
-    rng = nf.range if nf is not None else None
-    if rng is None:
-        rng = getattr(result, "range", None)
+    # Span-aware single frame: box the concrete range already retained on the public result.
+    rng = result.range
     # else resolve from the locator/node against the source ranges (kind=field precision, then
     # the node's kind fallback / header), recomputed from the loaded IR or the text.
     if rng is None:
@@ -545,7 +542,11 @@ class _ProgressReporter:
 
     def handle(self, event: Any) -> None:
         """Fold one engine event into the display. Boundary nodes are ignored."""
-        node_id = getattr(event, "node_id", None)
+        node_id = (
+            event.failure.node_id
+            if isinstance(event, NodeFailed)
+            else getattr(event, "node_id", None)
+        )
         # Skip synthesized boundary nodes at any depth: the top-level `__start__`/`__end__`
         # AND the per-iteration/per-element namespaced ones (`polish#0/__start__`), which carry
         # no authored meaning and only clutter the progress stream.
@@ -577,7 +578,7 @@ class _ProgressReporter:
         elif name == "NodeFailed":
             self._running.pop(node_id, None)
             self._emit(Text(f"✗ {node_id}", style="red bold"))
-            self._emit(Text(f"    {event.error}", style="red"))
+            self._emit(Text(f"    {event.failure.message}", style="red"))
             self._refresh()
 
     def _emit_output(self, output: Any) -> None:

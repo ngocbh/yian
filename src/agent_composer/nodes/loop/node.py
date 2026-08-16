@@ -34,9 +34,8 @@ from agent_composer.nodes.ids import map_callsite, ns
 class LoopMaxExceeded(RuntimeError):
     """The while/until runaway guard tripped (the next iteration would reach `max_iters`).
 
-    Raised inside `LoopNode.run` so `eval_node`'s boundary makes it a located `NodeFailed`
-    carrying this type name (`error_type == "LoopMaxExceeded"`) and the `"exceeded max (N)"`
-    message on the `RunFailed` event."""
+    Raised inside `LoopNode.run` so `eval_node` records a located `Failure` whose
+    `cause_type` is `"LoopMaxExceeded"` and whose message names the exceeded limit."""
 
 
 class LoopNode(Node):

@@ -43,7 +43,7 @@ asserts:
 def test_boundary_assert_violating_value_fails():
     res = run_flow(load_flow(_AGE_FLOW), {"age": 10})
     assert res.status == "failed"
-    assert "assert failed" in (res.error or "")
+    assert "assert failed" in res.failure.message
 
 
 def test_boundary_assert_satisfying_value_succeeds():
@@ -152,7 +152,7 @@ output: ${call_it.output}
 def test_child_boundary_assert_violation_fails_run(num_workers):
     res = run_flow(load_flow(_CHILD_ASSERT_FLOW), {"v": -1}, num_workers=num_workers)
     assert res.status == "failed"
-    assert "assert failed" in (res.error or "")
+    assert "assert failed" in res.failure.message
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])

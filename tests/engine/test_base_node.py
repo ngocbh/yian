@@ -46,14 +46,20 @@ def test_raising_node_returns_evaluation_failure():
     result = drive(FailNode("n", "kaboom"))
 
     assert isinstance(result, EvaluationFailure)
-    assert (result.error, result.error_type) == ("kaboom", "RuntimeError")
+    assert (result.failure.message, result.failure.cause_type) == (
+        "kaboom",
+        "RuntimeError",
+    )
 
 
 def test_policy_exception_returns_typed_evaluation_failure():
     result = drive(ReturnsFailedNode("n"))
 
     assert isinstance(result, EvaluationFailure)
-    assert (result.error, result.error_type) == ("declined", "Policy")
+    assert (result.failure.message, result.failure.cause_type) == (
+        "declined",
+        "Policy",
+    )
 
 
 def test_branch_node_returns_route_handle():

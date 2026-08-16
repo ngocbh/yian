@@ -69,14 +69,14 @@ outermost-to-innermost `tuple[OriginRef, ...]` trace, optional Python
 `cause_type`, and optional debugging `traceback`. The exception class is retained
 only as diagnostic data; consumers must branch on the closed semantic code,
 never on `cause_type` or traceback text. `Failure` is imported from the leaf
-module while the evaluator/record/public-result cutover is in progress; it is
-not yet a package-root export.
+module inside lower layers and is lazy-exported from the package root for public
+result consumers.
 
 The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
 `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
 `contract.growth`, and `graph.terminal_unreachable`. They cover expected
-flow-owned rejection. `EvaluationFailure` now owns one `Failure` plus temporary
-legacy locator/range metadata. The evaluator assigns its first five codes by
+flow-owned rejection. `EvaluationFailure` owns one `Failure` plus temporary
+locator/range presentation metadata. The evaluator assigns its first five codes by
 operation stage: expression/default/required binding, supplied-input contracts,
 base-wrapper assertions, node execution, and result validation. Its trace is the
 best operation origin, or the authored node origin as fallback. Host control,
@@ -92,10 +92,18 @@ empty trace. Unsupported growth kinds and arbitrary builder, compiler,
 spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
 faults escape rather than becoming flow failures.
 
-`FlowEngine` projects evaluator and dispatcher failures through one schema-1
-`NodeFailedRecord` boundary, so `code` and opaque `trace` are not durable yet.
-Terminal-graph failure plus durable record, observer, and public-result cutover
-remain tracked by #182.
+At the schema-2 boundary, every trace item becomes an exact base
+`OriginRef(key)`: front-end-specific subclasses are valid in memory, but class
+identity is intentionally absent from the single-key wire. The reducer carries
+that canonical immutable `Failure` through `NodeFailed`, terminal `RunFailed`,
+and `RunResult.failure` without flattened aliases; live carriers share the same
+object, while recovery reconstructs an equal canonical value. `locator` and
+`range` remain adjacent temporary YAML presentation metadata until operation
+origins provide equivalent precision. A route that first skip-floods END latches
+`graph.terminal_unreachable` with the causal router and its origin. That
+`NodeRoutedRecord` persists the derived failure; replay structurally revalidates
+the route and restores the recorded value. No additional terminal record is
+added, and an explicit node failure still supersedes the latch.
 
 ## Semantic IR carriers
 
@@ -339,10 +347,11 @@ targets, and floods the target's outgoing edges.
 Failure is a `raise`, not another result variant. `eval_node` structurally turns
 expected binding, assertion, body, and result rejection into
 `EvaluationFailure(Failure)`. Result preparation constructs the same canonical
-value for expected output, route, and growth rejection. Both paths use one
-schema-1 projector; host control, stream callbacks, unexpected binder faults,
-malformed setup, and arbitrary host/compiler faults escape. A streaming kind may
-yield transient `StreamChunk` values and then return one of the same three results.
+value for expected output, route, and growth rejection. Schema 2 carries that
+value unchanged through the durable record, reducer, observer events, and public
+result. Host control, stream callbacks, unexpected binder faults, malformed
+setup, and arbitrary host/compiler faults escape. A streaming kind may yield
+transient `StreamChunk` values and then return one of the same three results.
 
 The runtime core is **kind-blind**. It dispatches on this result sum and node-owned
 traits/hooks (`is_spawner`, `binds_per_item`, `bind_reserved`,
@@ -366,6 +375,13 @@ an fsync per append. Both accept the same closed record vocabulary:
 RunStartedRecord | RunResumedRecord | NodeStartedRecord |
 NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord
 ```
+
+The exact wire version is schema 2. `NodeFailedRecord` contains one nested
+`Failure` plus the temporary locator/range bridge; schema 1 is rejected rather
+than migrated. Terminal success remains derived from the END value. The first
+route whose skip closure reaches END persists its causal `Failure` on that
+`NodeRoutedRecord`; replay revalidates the route before restoring it, and no
+additional terminal record is written.
 
 Runtime handles every transition in one order:
 

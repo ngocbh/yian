@@ -154,10 +154,14 @@ spawner kind means setting traits on its node; the core never gains a branch. De
 
 Node evaluation may raise (a failed assert, a bad LLM response); the engine catches the
 exception at the evaluation boundary. The dispatcher then prepares and commits a
-`NodeFailedRecord` carrying the source locator and traceback; only after the record is
-appended does the reducer derive `NodeFailed` and terminal `RunFailed` observers. The
-`Node.on_failure` method remains reserved for a future error-strategy seam and is not
-driven today.
+schema-2 `NodeFailedRecord` carrying one nested, immutable `Failure` plus temporary
+source `locator`/`range` presentation metadata. Only after the record is appended
+does the reducer expose that same `Failure` through `NodeFailed`, terminal
+`RunFailed`, and `RunResult.failure`. There are no flattened error, type, node, or
+traceback aliases. The single-key wire canonicalizes any valid front-end
+`OriginRef` subclass to exact `OriginRef(key)`; subclass identity is not durable.
+The `Node.on_failure` method remains reserved for a future
+error-strategy seam and is not driven today.
 
 Every execution uses one `RunLog`. `MemoryRunLog` gives a process-local run the same
 ordering semantics; `JsonlRunLog` holds a nonblocking exclusive lock and fsyncs each
@@ -170,7 +174,11 @@ NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord
 
 There is no separate terminal record: success is derived when the terminal node's
 success transition reduces. Failure is derived either from `NodeFailedRecord` or
-from a reduced transition that skip-floods the declared terminal output.
+from a reduced route that skip-floods the declared terminal output. The first such
+route latches `graph.terminal_unreachable` with the causal router and its authored
+origin, even when unrelated pooled work drains later, and persists that failure on
+the causal `NodeRoutedRecord`. Replay structurally revalidates the route before
+restoring the recorded failure; a later explicit node failure still wins immediately.
 
 `resume_flow(flow, log=path)` locks and validates an existing contiguous prefix,
 checks the authored-flow fingerprint, rebuilds a private graph, and folds every record

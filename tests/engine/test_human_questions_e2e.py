@@ -33,7 +33,7 @@ def test_static_questions_block_and_return_answer():
     with install_ask_user(lambda **request: requests.append(request) or answer):
         result = run_flow(loaded, {"proj": "Atlas"})
 
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     questions = requests[0]["questions"]
     assert questions, "the gate must pass the static questions"
     headers = [q["header"] for q in questions]
@@ -74,7 +74,7 @@ def test_manual_ref_questions_block_and_return_answer():
     ):
         result = run_flow(loaded, {"seed": "Which option?"})
 
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert len(requests[0]["questions"]) == 1
     q = requests[0]["questions"][0]
     assert q["question"] == "Which option?"  # the seed input flowed through the code node
@@ -149,7 +149,7 @@ def test_adaptive_questions_block_and_return_answer(monkeypatch):
     ):
         result = run_flow(loaded, {"ctx": "storage"})
 
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     questions = requests[0]["questions"]
     assert [q["header"] for q in questions] == ["DB"]
     assert questions[0]["question"] == "Which database?"

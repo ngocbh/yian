@@ -21,6 +21,7 @@ from agent_composer.runtime.log import (
     NodeStartedRecord,
     RecordEnvelope,
     RunStartedRecord,
+    SCHEMA_VERSION,
     encode_pool,
 )
 from agent_composer.runtime.state import (
@@ -187,6 +188,7 @@ def _state_snapshot(state: RunState) -> dict[str, Any]:
         "ready": tuple(state.ready),
         "in_flight": tuple(state.in_flight),
         "result": state.result,
+        "terminal_unreachable_failure": state.terminal_unreachable_failure,
         "depth": dict(state.depth),
         "wiring_overrides": copy.deepcopy(state.wiring_overrides),
         "run_id": state.run_id,
@@ -349,7 +351,7 @@ def test_replay_rejects_changed_but_valid_growth_digest(monkeypatch):
         _ReadOnlyLog(
             (
                 RecordEnvelope(
-                    schema=1,
+                    schema=SCHEMA_VERSION,
                     run_id=_RUN_ID,
                     seq=0,
                     record=NodeStartedRecord(node_id=START_ID),
@@ -359,7 +361,7 @@ def test_replay_rejects_changed_but_valid_growth_digest(monkeypatch):
         _ReadOnlyLog(
             (
                 RecordEnvelope(
-                    schema=1,
+                    schema=SCHEMA_VERSION,
                     run_id=_RUN_ID,
                     seq=1,
                     record=NodeStartedRecord(node_id=START_ID),

@@ -59,7 +59,7 @@ def _succeeded(result) -> set[str]:
 def test_warm_runs_both_dependents_run():
     # score >= 0.5 -> warm runs -> both ordering edges satisfied -> both dependents run.
     result = run_flow(load_flow(_FLOW), {"score": 0.9, "topic": "ACME"})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     ran = _succeeded(result)
     assert {"warm", "dep_fetch", "after_fetch"} <= ran
     # coalesce picks the first non-None producer (dep_fetch ran).
@@ -69,7 +69,7 @@ def test_warm_runs_both_dependents_run():
 def test_warm_skipped_depends_on_co_skips_runs_after_survives():
     # score < 0.5 -> warm is skipped. dep_fetch co-skips (depends_on); after_fetch runs.
     result = run_flow(load_flow(_FLOW), {"score": 0.2, "topic": "ACME"})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     ran = _succeeded(result)
     assert "warm" not in ran
     assert "dep_fetch" not in ran        # depends_on co-skipped it

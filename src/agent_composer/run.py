@@ -29,6 +29,7 @@ from agent_composer.compile.llm_cascade import (
 )
 from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compose.loader import ComposedFlow
+from agent_composer.diagnostics import Failure
 from agent_composer.events import (
     RunFailed,
     RunSucceeded,
@@ -81,14 +82,12 @@ class RunResult:
             Durable JSONL path, or ``None`` for a process-local fresh run.
         output (`Any | None`):
             Terminal flow value on success.
-        error (`str | None`):
-            Human-readable terminal failure detail.
+        failure (`Failure | None`):
+            Canonical terminal failure on failure; otherwise `None`.
         locator (`SourceSpan | None`):
             Symbolic source location for a failed flow.
         range (`SourceRange | None`):
             Resolved source range for a failed flow.
-        traceback (`str | None`):
-            Captured node traceback when the failure originated in an exception.
         events (`list[Any]`):
             Post-durable observers from this fresh or resume segment only.
     """
@@ -98,10 +97,9 @@ class RunResult:
     run_id: str
     log: Path | None
     output: Any = None
-    error: str | None = None
+    failure: Failure | None = None
     locator: SourceSpan | None = None
     range: SourceRange | None = None
-    traceback: str | None = None
     events: list[Any] = field(default_factory=list)
 
 
@@ -487,10 +485,9 @@ def _result_from_state(
             status="failed",
             run_id=_required_state_run_id(state),
             log=path,
-            error=terminal.error,
+            failure=terminal.failure,
             locator=terminal.locator,
             range=terminal.range,
-            traceback=terminal.traceback,
             events=events,
         )
     raise RuntimeError("engine returned without deriving a terminal run result")

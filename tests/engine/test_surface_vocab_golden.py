@@ -271,7 +271,7 @@ def test_end_post_assert_reads_output() -> None:
     g_fail = _make_flow("${output} > 100")
     events_fail = list(_engine(g_fail).run())
     assert type(events_fail[-1]).__name__ == "RunFailed", events_fail[-1]
-    assert "post-assert failed" in events_fail[-1].error
+    assert "post-assert failed" in events_fail[-1].failure.message
 
 
 # --------------------------------------------------------------------------- #

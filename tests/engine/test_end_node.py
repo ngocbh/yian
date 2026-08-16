@@ -71,7 +71,7 @@ def test_end_post_asserts_fire_record_scoped_through_eval_node():
     bad.params.append(Parameter(name="__assert_emit"))
     failed = eval_node(bad, flow, pool)
     assert isinstance(failed, EvaluationFailure)
-    assert "post-assert failed" in failed.error
+    assert "post-assert failed" in failed.failure.message
 
 
 def test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param():
@@ -100,4 +100,4 @@ def test_end_post_asserts_resolve_namespaced_cross_node_ref_via_synth_param():
     bad_node.params.append(Parameter(name="__assert_score"))
     failed = eval_node(bad_node, flow, pool)
     assert isinstance(failed, EvaluationFailure)
-    assert "post-assert failed" in failed.error
+    assert "post-assert failed" in failed.failure.message

@@ -9,7 +9,7 @@ inputs (the read boundary) and hands it a record. Narrow effects enter through t
 capabilities: MAP receives `bind_item`, and a cooperatively blocking node may receive
 `stop_event`. Failure is **not** a variant — a
 failing node `raise`s; expected evaluator rejection becomes a canonical
-`EvaluationFailure`, temporarily projected into the schema-1 failure record. A streaming
+`EvaluationFailure(Failure)` retained by the schema-2 failure record. A streaming
 kind is a generator that yields `StreamChunk` and *returns* its `NodeResult` (drained
 by `_drain_node_generator`).
 
@@ -555,7 +555,7 @@ class Node(ABC):
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
         are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
         Expected rejection is a `raise`, not a result variant; the evaluator classifies
-        its structural stage before the dispatcher records the temporary schema-1 view."""
+        its structural stage before the dispatcher records the canonical `Failure`."""
         from agent_composer.events import SourceSpan
 
         params = self.params if self.params is not None else []

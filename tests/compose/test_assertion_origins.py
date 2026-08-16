@@ -101,6 +101,73 @@ asserts:
     ]
 
 
+def test_alias_occurrences_mint_distinct_node_and_flow_assertion_origins():
+    """Alias uses remain distinct even when they share one definition range."""
+    text = """id: aliased-assertion-origins
+name: aliased-assertion-origins
+input:
+  n: int
+nodes:
+  first: &shared_node
+    kind: code
+    code: return 1
+    output: int
+    asserts:
+      - ${output} >= 0
+  second: *shared_node
+output:
+  first: ${first.output}
+  second: ${second.output}
+asserts:
+  - &shared_rule ${input.n} >= 0
+  - *shared_rule
+"""
+    document = SourceDocument.parse(text)
+    loaded = load_flow(text)
+    catalog = loaded._local_catalog
+
+    first_cursor = (
+        document.root.child("nodes")
+        .child("first")
+        .child("asserts")
+        .child(0)
+    )
+    second_cursor = (
+        document.root.child("nodes")
+        .child("second")
+        .child("asserts")
+        .child(0)
+    )
+    node_origins = {
+        _assert_assertion_site(
+            catalog,
+            loaded.compiled.nodes[node_id].post_asserts[0],
+            cursor,
+        )
+        for node_id, cursor in (
+            ("first", first_cursor),
+            ("second", second_cursor),
+        )
+    }
+    assert first_cursor.range == second_cursor.range
+    assert first_cursor.path != second_cursor.path
+    assert len(node_origins) == 2
+
+    flow_cursors = document.root.child("asserts")
+    start_assertions = loaded.compiled.nodes[START_ID].post_asserts
+    flow_origins = {
+        _assert_assertion_site(
+            catalog,
+            assertion,
+            flow_cursors.child(index),
+        )
+        for index, assertion in enumerate(start_assertions)
+    }
+    assert flow_cursors.child(0).range == flow_cursors.child(1).range
+    assert flow_cursors.child(0).path != flow_cursors.child(1).path
+    assert len(flow_origins) == 2
+
+
 def test_same_node_assertion_text_has_distinct_root_def_inline_and_flat_sites():
     """Lexically equal node assertions retain four physical identities."""
     assertion_text = "${output} >= 0"

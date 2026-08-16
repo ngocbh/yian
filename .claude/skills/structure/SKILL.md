@@ -126,8 +126,17 @@ recursive type compiler. For retained root/definition flow inputs, declaration k
 stamp `Parameter.origin`, type values and authored nested record fields
 populate `ContractOrigins`, and packed defaults stamp `default_origin`; START reuses
 those carriers. Scalar alias/list type expressions fall back to the contract root.
-Python/source-free declarations and inferred inline parameters remain source-free;
-external aliases use the existing lexical graph rebasing. Assembly separately registers
+Python/source-free declarations and inferred inline parameters remain source-free.
+For authored node outputs, `compose/build` injects a Compose-owned optional reader through
+`BuildContext`; the base descriptor invokes it only when an output-authoring leaf reaches
+its established contract step. This preserves earlier kind-owned validation order while
+letting the reader select the normalized physical `output:` cursor. Its default origin owns
+the declaration root, nested record fields own exact paths, and scalar alias/list interiors
+fall back to the nearest authored ancestor or root. Compact roots and flat definitions use
+source-aligned projections that retain top-level `output:` for their synthesized node.
+Direct/virtual builds and generated contracts without an authorable type occurrence remain
+source-free. External aliases use the existing lexical graph rebasing for every retained
+carrier. Assembly separately registers
 authored node headers, ordinary node-input keys and bound values, source-backed reserved
 MAP/WAIT wiring values, and source-backed flow-output values directly on the canonical
 carriers. A kind-blind descriptor hook registers
@@ -146,8 +155,9 @@ values belong to `Binding`.
 Flow outputs
 are stamped after rewrites and reused by END; output mapping keys stay origin-free.
 Generated compact-root and single-node-definition reexports have no authored binding
-occurrence and stay origin-free; authored node-output contract provenance is the remaining
-deferred contract work. Without a retained occurrence, Compose mints no origin and
+occurrence and stay origin-free. This flow-output `Binding` rule is separate from the
+physical `output:` contract provenance retained by the compact/flat node projection.
+Without a retained occurrence, Compose mints no origin and
 preserves any explicit programmatic origin. Private assembly leaves the resolver unset while
 its shared catalog grows. The loader validates and lexically rebases external children per alias, performs the
 only successful-load catalog freeze at the physical-file boundary, and installs the exact

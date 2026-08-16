@@ -4,10 +4,11 @@
 callable:
 
   flow parameters + authored parameter/contract/default origins -> build every node
-  kind-blind (`desc.build(ctx)`; a case lowers
+  kind-blind (`desc.build(ctx)`; physical node-output contracts compile at their
+  existing leaf-owned build position; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
   edges + append each case's own edges -> validate references + classify asserts
-  -> attach authored assertion/output origins -> synthesize the START_ID/END_ID
+  -> attach authored assertion/flow-output binding origins -> synthesize the START_ID/END_ID
   boundary over ALL edges -> reject cycles + check if/else handles ->
   CompiledFlow.from_parts. One retained assertion item cursor supplies both its
   carrier origin and aligned temporary range; rewrites preserve the carrier fields
@@ -738,17 +739,21 @@ def _assemble(
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
 
-      flow parameters -> build every node kind-blind (`desc.build(ctx)`; a case lowers
+      flow parameters -> build every node kind-blind (`desc.build(ctx)`; physical
+      node-output contracts compile at their existing leaf-owned position; a case lowers
       in its own build) -> cross-flow type check + case exhaustiveness -> infer data
       edges + append each case's own edges -> validate references + classify asserts
-      -> attach authored output origins -> synthesize roots/terminals -> reject cycles
+      -> attach authored flow-output binding origins -> synthesize roots/terminals -> reject cycles
       + check if/else handles -> CompiledFlow.from_parts.
 
     Exactly one input representation is required: `inputs_section` is the authored
     mapping that still needs parsing, while `input_parameters` carries parameters already
     resolved by an earlier compiler pass. `inputs_cursor` is the optional retained
     occurrence for the authored mapping; when present, input parameters and their
-    recursive contracts compile opaque origins from it. `scope` owns composite call resolution
+    recursive contracts compile opaque origins from it. A Compose-owned callable in
+    `BuildContext` compiles a physical node `output:` cursor into its canonical contract
+    only when the leaf reaches its established output-contract step; source-free builds
+    use the descriptor's ordinary type reader. `scope` owns composite call resolution
     (defs-first) and private child registration; `registry` is the file's
     `read_typedefs(...)`. Retained ranges and `nodes_cursor` own diagnostic locations; after
     the common header stamp each descriptor may immutably attach kind-owned opaque origins.

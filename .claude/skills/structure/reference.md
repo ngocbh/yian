@@ -142,8 +142,16 @@ retained root/definition flow inputs, declaration keys stamp `Parameter.origin`,
 values and authored nested record fields populate `ContractOrigins`, and
 packed defaults stamp `default_origin`; START reuses those carriers. Scalar alias/list
 type expressions fall back to the contract root. Python/source-free declarations and
-inferred inline parameters remain source-free; external aliases use existing lexical
-graph rebasing. The conductor separately stamps authored node-header origins, ordinary
+inferred inline parameters remain source-free. For authored node outputs, the conductor
+injects an optional Compose-owned reader through `BuildContext`. The base descriptor calls
+it only from the output-authoring leaf's established contract step, preserving earlier
+kind validation and error order. It selects the normalized physical `output:` cursor and
+uses the same recursive compiler: the complete declaration owns the root/default, physical
+record fields own exact nested paths, and scalar alias/list interiors use the nearest
+authored ancestor or root fallback. Compact roots and flat definitions retain top-level
+`output:` through source-aligned synthesized-node projections. Direct/virtual builds and
+generated contracts without an authorable type occurrence stay source-free; external
+aliases use existing lexical graph rebasing. The conductor separately stamps authored node-header origins, ordinary
 node-input keys and bound values, and source-backed reserved MAP/WAIT wiring values directly
 on their canonical carriers. It invokes one
 kind-blind descriptor hook for extra semantic sites; CODE registers its whole scalar and
@@ -161,8 +169,9 @@ final `FlowOutput.binding` after rewrites; END reuses that binding, and output m
 stay origin-free. Flow-input declaration keys and ordinary node-input keys belong to
 `Parameter`; ordinary node-input, reserved, and flow-output bound values belong to `Binding`.
 Generated compact-root and single-node-definition
-reexports remain origin-free because their output declaration is a contract site whose origin
-remains deferred only for authored node-output contract provenance. Without a retained
+reexports remain origin-free because no authored binding occurrence backs those generated
+references. This `FlowOutput.binding` rule is distinct from their physical `output:`
+node-contract site retained by the compact/flat projection. Without a retained
 occurrence, Compose mints no origin and preserves any explicit programmatic origin. Private
 assembly leaves resolver installation to the loader.
 At the physical-file boundary it performs the only successful-load freeze of the shared local

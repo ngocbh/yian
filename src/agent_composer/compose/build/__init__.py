@@ -16,10 +16,22 @@ The LAST compose phase before the loader. Three modules:
   node-header origins, then invokes each
   descriptor's immutable source-origin hook while its located cursor is available. CODE uses
   that hook for its whole `code:` value and ordered exact literal-line sites; other descriptors
-  currently keep the no-op default. After attachment, the shared `BuildContext` exposes the
-  builder's read-only registered-site lookup so a CODE syntax error can resolve the same
-  source-neutral line selector used at runtime. This neither reparses the document nor freezes
-  the still-growing catalog. It also stamps source-backed ordinary `input:` keys and
+  currently keep the no-op default. The shared `BuildContext` exposes the builder's read-only
+  registered-site lookup so a CODE syntax error can resolve the same source-neutral line
+  selector used at runtime. It also carries an optional Compose-owned output-contract reader:
+  `(node_id, output_spec) -> ValueContract | None`. `NodeDescriptor.output_contract()` invokes
+  it only when an output-authoring leaf reaches its established contract step, preserving all
+  earlier kind-owned validation and error ordering.
+  The reader selects the normalized physical `output:` cursor and uses the shared recursive
+  compiler; direct descriptor builds omit the seam, and a virtual site falls back to the
+  source-free type reader. Neither seam reparses the document nor freezes the still-growing
+  catalog. The contract root is the default origin, physical nested record values own exact
+  path origins, and scalar alias/list interiors fall back through the nearest authored
+  ancestor to the root. Compact-root and flat-def
+  cursor projections retain their top-level `output:` for the synthesized leaf; generated
+  contracts without an authorable type occurrence remain source-free, while external aliases
+  are rebased by the ordinary compiled-origin pass. It also stamps source-backed ordinary
+  `input:` keys and
   values, and source-backed reserved MAP/WAIT wiring values through the file-owned catalog
   builder. Ordinary authored node-input keys also stamp their sink `Parameter` origins; each
   retained node-input value stamps its canonical `Binding`. It aligns retained assertion
@@ -32,9 +44,9 @@ The LAST compose phase before the loader. Three modules:
   multi-node-definition, and inline-child output values on the final
   `FlowOutput.binding`; boundary synthesis reuses that exact binding, and output mapping
   keys stay origin-free. Generated compact-root and single-node-definition
-  reexports remain origin-free because their authored output declaration is a contract site,
-  not a retained binding occurrence; authored node-output contract provenance remains a
-  separate migration. The conductor
+  reexports remain origin-free because they have no retained binding occurrence. This does not
+  erase the separate node-output contract provenance compiled from the physical `output:`
+  declaration through the compact/flat projection. The conductor
   also associates retained inline bodies with their final descriptors, registers lazy
   builders through the loader-owned callable-scope seam, and uses one success-only
   descriptor cache for on-demand signature dependencies.

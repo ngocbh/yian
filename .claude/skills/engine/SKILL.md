@@ -133,8 +133,10 @@ Hold this model whenever you design anything:
   values into an already-constructed flow. Compose stamps source-backed bare/mapped
   root, multi-node-definition, and inline-child output values on the final binding after
   rewrites, and END reuses that exact carrier; output mapping keys stay origin-free.
-  Generated compact-root and single-node-definition reexports remain origin-free;
-  authored node-output contract provenance is the remaining deferred contract work.
+  Generated compact-root and single-node-definition reexports remain origin-free because
+  they have no authored binding occurrence. Keep that flow-output binding rule distinct
+  from node-output contract provenance: the same physical top-level `output:` is projected
+  onto the synthesized leaf and owns its contract origins.
 - Compiled node assertions also have one shape: ordered `Assertion` carriers.
   Compose creates one carrier per authored flow/node list position and derives
   its `.origin` (`OriginRef`) plus the temporary positional range from the same retained item
@@ -166,8 +168,17 @@ Hold this model whenever you design anything:
   manifests exclude `.origins`. Compose descriptors, child signatures, producer
   maps, and validators retain the contract and project `.type` only inside type
   algorithms. Python-authored nodes pass `output_contract=`; there is no parallel
-  output-Type API. Authored `output:` / `outputs:` syntax stays unchanged; authored
-  node-output contract origins remain deferred.
+  output-Type API. Authored `output:` syntax (the descriptor's normalized `outputs` field)
+  stays unchanged. Compose injects an optional source-aware reader through `BuildContext`;
+  `NodeDescriptor.output_contract()` invokes it
+  only at each output-authoring leaf's established build position, so earlier kind-owned
+  validation and error ordering do not move. A physical declaration supplies the contract
+  root/default and exact nested record-field origins; scalar alias/list interiors fall back
+  through the nearest authored ancestor to the root. Compact roots and flat definitions
+  project their top-level declaration onto the synthesized leaf. Direct/source-free builds
+  and generated contracts without an
+  authorable type occurrence keep empty origins, while derived child contracts preserve
+  their carriers and external alias views use ordinary lexical rebasing.
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
   it does not rewrite the graph at runtime.
 
@@ -380,6 +391,15 @@ retained root/definition flow inputs it stamps the key on `Parameter.origin`, th
 value and authored nested record fields on `ContractOrigins`, and a packed
 default on `default_origin`; START reuses those carriers. Scalar alias/list expressions fall back
 to the root. Python/source-free and inferred inline parameters remain source-free.
+Assembly also supplies a Compose-owned output-contract reader through the optional
+`BuildContext` seam. The descriptor calls it only from the leaf's existing contract step;
+the reader selects the normalized physical `output:` cursor and delegates to the same
+recursive compiler. The whole declaration becomes the default origin, physical record
+fields become exact nested entries, and scalar alias/list internals use the nearest
+authored ancestor and then the root fallback.
+Compact roots and flat single-node definitions retain top-level `output:` through their
+source-aligned node projections. A virtual/missing occurrence falls back to source-free
+compilation; synthesized contracts without an authorable type site stay source-free.
 Assembly separately stamps authored node headers, ordinary node-input keys and bound
 values, source-backed reserved
 MAP/WAIT wiring values, source-backed flow-output values, and authored flow/node
@@ -391,7 +411,8 @@ their assertions onto the synthesized node, where they remain node-local. Flow-o
 values are stamped after rewrites on `FlowOutput.binding`; END reuses that binding and
 output mapping keys remain origin-free. Generated compact-root and
 single-node-definition reexports have no authored binding occurrence and stay origin-free;
-authored node-output contract provenance remains deferred. Private assembly keeps the
+their physical `output:` remains a separate node-contract site through the projection.
+Private assembly keeps the
 resolver unset while the shared catalog grows. The loader validates and lexically rebases
 each external alias view, then freezes the local catalog once and installs an exact
 `ComposedFlow.origin_resolver`; source-free graphs use `None`.

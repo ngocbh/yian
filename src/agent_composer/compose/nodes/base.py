@@ -424,9 +424,11 @@ class NodeDescriptor:
         is the immutable `BuildContext`: `ctx.registry` (the `TypeRegistry` for
         `output_contract`),
         `ctx.resolver` (the child-flow resolver for call/map/loop), the inline-CODE
-        traceback label `ctx.source_file`, and the optional Compose presentation seam
-        `ctx.resolve_origin` (only CODE reads the latter two). Other leaves read only
-        `ctx.registry`; call/map/loop also read `ctx.resolver`.
+        traceback label `ctx.source_file`, the optional Compose presentation seam
+        `ctx.resolve_origin`, and the optional source-aware `ctx.output_contract_reader`.
+        CODE alone reads the filename/resolver pair; every output-authoring leaf may use
+        the contract reader at its normal build position. Call/map/loop also read
+        `ctx.resolver`.
         """
         raise NotImplementedError(f"{type(self).__name__} has no build")
 

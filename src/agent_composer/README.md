@@ -259,8 +259,9 @@ mapped flow-output values on root flows, multi-node definitions, and inline chil
 the final `FlowOutput.binding` after desugaring rewrites; the synthesized END boundary
 reuses that exact binding. Output mapping keys carry no origin. Compact-root and
 single-node-definition reexports are generated without an authored binding occurrence and
-remain origin-free. Authored node-output contract provenance is the remaining deferred
-contract work.
+remain origin-free. That binding provenance is separate from node-output contract
+provenance: a physical `output:` type declaration owns the root and authored nested sites
+on `Node.output_contract`, including when compact/flat lowering generates the reexport.
 
 `Node.output_contract` is the canonical compiled output declaration: exactly one
 `ValueContract`, or `None` when the output is unenforced. Runtime enforcement and
@@ -276,8 +277,15 @@ producer maps, and validators retain the carrier; algorithms that only compare o
 types project `.type` at their boundary. CALL and LOOP preserve a child's output
 contract, while MAP deliberately derives a new list contract. There is no parallel
 output-Type API: Python-authored nodes pass `output_contract=` explicitly.
-The authored `output:` / `outputs:` YAML syntax is unchanged; attaching source
-origins to authored node-output contracts remains deferred.
+For a physical node `output:` declaration, Compose injects a source-aware reader into the
+descriptor's existing per-kind build position. The shared recursive compiler returns the
+canonical contract with its declaration root and each authored nested record field; this
+preserves kind-owned validation order without a parallel source map or second type walk.
+Full and compact roots, multi-node and flat definitions, and inline children retain or
+project the needed cursor. External aliases use ordinary lexical graph rebasing. Scalar
+aliases and scalar `list[...]` expressions have no interior declaration, so a nested
+failure falls back to the contract root. Generated declarations and Python-authored nodes
+remain source-free.
 
 ### Compiled origin traversal and rebasing
 
@@ -367,6 +375,12 @@ stamp `Parameter.origin`, type values and authored nested record fields
 populate `ContractOrigins`, and packed defaults stamp `default_origin`. START reuses
 those carriers. Scalar alias/list type expressions fall back to the contract root;
 Python/source-free declarations and inferred inline parameters remain source-free.
+At each output-authoring leaf's established build position, an injected Compose reader
+uses the retained normalized node cursor to compile a physical `output:` declaration into
+the same canonical `ValueContract` shape. Compact roots and flat definitions project their
+top-level declaration onto the node; multi-node definitions and inline children retain
+their own node cursors. External child views rebase the resulting root/nested origins.
+Virtual/generated declarations and direct Python descriptor builds remain source-free.
 Final assembly separately registers authored node headers, ordinary node-input keys
 and bound values, source-backed reserved MAP/WAIT wiring values, CODE source fields,
 assertions, and source-backed flow-output values directly on their canonical semantic
@@ -381,8 +395,10 @@ node-local. Flow outputs are stamped after rewrites on `FlowOutput.binding`, and
 END reuses that binding; mapping keys are not origin sites. For sites without
 retained occurrences, Compose mints no origin and preserves any explicit
 programmatic origin. Generated compact-root and single-node-definition reexports
-are such source-free output sites. Authored node-output contract provenance is the
-remaining deferred contract work.
+are such source-free binding sites even though their physical type declaration originates
+the node's output contract. Runtime output validation selects the effective target
+contract's exact/nearest/default origin from `TypeCheckError.path`, then falls back to the
+executing node.
 At each `uses:` alias, the loader validates the canonical child's complete resolver,
 copies and rebases its compiled origin graph under a collision-free lexical key, and
 caches that alias view. The physical resolved-path cache remains canonical and is never

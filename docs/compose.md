@@ -30,7 +30,8 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ desugar_case_call_targets   │  After this, only core kinds remain.
   ├─ expand_case_outputs         ┘
   │
-  ├─ build (per kind, via KINDS) → a runtime NODE + its flow-owned WIRING
+  ├─ build (per kind, via KINDS) → a runtime NODE + its flow-owned WIRING;
+  │                                physical output contracts compile root/nested origins here
   │                                (a case lowers in its own build, returning its edges)
   ├─ stamp node wiring       → ordinary Parameter key origins + ordinary/reserved
   │                             final Binding value origins
@@ -101,11 +102,12 @@ key. When exact scalar-line provenance is unavailable, line registration returns
 so the consumer can register the whole scalar instead. No YAML is reparsed and no parallel
 range map is created. The loader shares one builder across a physical
 document's root, `defs:`, and inline bodies. Assembly registers authored node headers,
-root/def flow-input keys and recursive type values, ordinary node-input keys and values,
-source-backed reserved MAP/WAIT wiring values, and source-backed flow-output values on the
-canonical carriers themselves. A packed flow-input default receives its own semantic key,
-even though it resolves to the same scalar range as the contract root. After the common
-header is stamped, assembly also calls each descriptor's immutable
+root/def flow-input keys and recursive type values, physical node-output contract roots and
+nested fields, ordinary node-input keys and values, source-backed reserved MAP/WAIT wiring
+values, and source-backed flow-output values on the canonical carriers themselves. A packed
+flow-input default receives its own semantic key, even though it resolves to the same scalar
+range as the contract root. After the common header is stamped, assembly also calls each
+descriptor's immutable
 `with_source_origins(...)` hook. The default is a no-op; CODE registers its whole `code:`
 scalar and every available exact literal constructed line, then carries only those opaque
 origins into `CodeNode`. It also indexes flow and node assertions by authored list order,
@@ -162,7 +164,8 @@ clean and generic.
     source sites; the default returns the descriptor unchanged,
   - **`build(ctx: BuildContext) -> BuildResult`** — a method that constructs the runtime
     `Node` + its flow-owned wiring (and, for a `case`, its own data+control edges). `ctx`
-    carries the shared build inputs (`registry`, `resolver`, inline-CODE source hints).
+    carries the shared build inputs (`registry`, `resolver`, the optional physical
+    node-output contract reader, and inline-CODE source hints).
 
   `compose/nodes/__init__.py` derives the `KINDS` table from a single `_DESCRIPTORS` tuple —
   each kind maps its `kind` string to its descriptor class:
@@ -219,6 +222,17 @@ injects the current file catalog builder's registered-site lookup after every CO
 origin is attached. That lookup replays the already-parsed document without freezing;
 the loader remains the single successful-load catalog freeze.
 
+Each output-authoring leaf calls the descriptor's common output compiler at its established
+position inside `build()`, after any earlier kind-owned validation. For a physical
+declaration, the injected `BuildContext.output_contract_reader` selects the retained,
+normalized `output:` cursor and the shared recursive type reader returns one
+`ValueContract` carrying its root and nested field origins. Full and compact roots,
+multi-node and flat `defs:`, and inline children all reach that path through their retained
+or projected cursors. External `uses:` views rebase the resulting carrier with the rest of
+the child graph. A virtual/generated declaration or a direct Python descriptor falls back
+to the source-free reader. Scalar aliases and scalar `list[...]` expressions expose only
+the contract root.
+
 After all descriptor desugars and builds, the conductor pairs each source-backed ordinary
 `input:` entry with those two carriers: its selecting key becomes `Parameter.origin`, and
 its value becomes `Binding.origin`. It also stamps source-backed reserved MAP `over:` and
@@ -227,7 +241,7 @@ so they have no `Parameter.origin`. The final (possibly rewritten) payload stays
 `Binding.source`, so lowering does not detach provenance from the authored value. Entries
 without a retained source occurrence receive no new Compose origin; an explicit
 programmatic origin remains intact, and source-backed projections inherit their backing
-occurrence. CASE wiring and node-output contracts remain separate migration steps.
+occurrence. CASE wiring remains a separate migration step.
 CODE's extra origins enter
 the existing clone and external-rebase paths through its node-owned traversal/rewrite hooks.
 The same CODE-owned wrapped-line selector serves runtime tracebacks and Compose
@@ -242,8 +256,12 @@ range. Boundary failures select an exact contract path, then an authored ancesto
 contract root, and finally the parameter key. Scalar aliases and scalar `list[...]`
 spellings expose only a root site. Generated or Python-built contracts and inferred inline
 signatures stay source-free, while external aliases use the existing origin-rebasing path.
-Node-output contract origins remain deferred to
-[#215](https://github.com/ngocbh/agent-composer/issues/215).
+Physical node `output:` declarations use that same recursive compiler at their existing
+per-kind build position. Their canonical `Node.output_contract` owns the declaration root
+and authored nested record sites; output validation resolves `TypeCheckError.path` through
+those origins before falling back to the executing node. Compact roots, both definition
+forms, inline children, and external aliases preserve the same contract provenance, while
+generated and Python-built contracts stay source-free.
 
 Authored assertions cross into one ordered `Assertion` carrier per source occurrence.
 Flow assertions are carrierized during inline-call desugaring; node assertions are
@@ -261,8 +279,9 @@ children stamp the final `FlowOutput.binding` after output rewrites. The synthes
 boundary reuses that exact binding. Output mapping keys do not carry origins. Compact root
 flows and single-node defs generate a reexport rather than retaining an authored binding
 occurrence, so that generated binding stays origin-free; their authored `output:` value is
-the output contract and remains reserved for
-[#215](https://github.com/ngocbh/agent-composer/issues/215).
+still the physical node-output contract and carries its root/nested origins. These are
+different carriers: `FlowOutput.binding` locates the reexport expression, while
+`Node.output_contract` locates the type declaration.
 
 ---
 

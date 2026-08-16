@@ -182,6 +182,26 @@ nodes:
 output: ${inspect.output}
 """
 
+NULLABLE_DEFAULTED_SCALAR_FLOW = """\
+id: cli_nullable_defaulted_scalar
+name: cli_nullable_defaulted_scalar
+input:
+  value: Optional[int] = 7
+nodes:
+  inspect:
+    kind: code
+    input:
+      value: ${input.value}
+    output: object
+    code: |
+      return {
+          "value": inputs["value"],
+          "is_none": inputs["value"] is None,
+          "is_fallback": inputs["value"] == 7,
+      }
+output: ${inspect.output}
+"""
+
 
 def test_run_succeeds_with_input_flag(tmp_path: Path):
     flow = _write_flow(tmp_path, ECHO_FLOW)
@@ -361,6 +381,74 @@ def test_tty_run_parses_structured_prompt_as_native_value(
     assert literal_eval(_plain(result.stdout)) == {
         "is_list": True,
         "items": [2, 3, 5],
+    }
+
+
+def test_tty_run_binds_explicit_null_instead_of_declared_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The visible null action crosses START as present ``None``, not omission."""
+    flow = _write_flow(tmp_path, NULLABLE_DEFAULTED_SCALAR_FLOW)
+    log = tmp_path / "run.jsonl"
+    choice_titles: list[list[str]] = []
+    questionary = ModuleType("questionary")
+
+    class Choice:
+        """Questionary-compatible visible title and opaque production value."""
+
+        def __init__(self, title, value=None, **_options) -> None:
+            self.title = title
+            self.value = title if value is None else value
+
+    class SelectWidget:
+        """Return the value carried by the selected production choice."""
+
+        def __init__(self, value) -> None:
+            self._value = value
+
+        def ask(self):
+            """Return the selected choice's opaque production value."""
+            return self._value
+
+    def style(_rules):
+        """Supply the minimal style constructor used by the production prompt."""
+        return object()
+
+    def select(_label, *, choices, **_options):
+        """Select exactly the production choice visibly labelled ``Set null``."""
+        titles = [choice.title for choice in choices]
+        choice_titles.append(titles)
+        matches = [choice for choice in choices if choice.title == "Set null"]
+        assert len(matches) == 1
+        return SelectWidget(matches[0].value)
+
+    def unexpected_widget(*_args, **_kwargs):
+        """Fail if the explicit null action opens a value-entry widget."""
+        raise AssertionError("Set null must bypass text and confirm widgets")
+
+    questionary.Style = style
+    questionary.Choice = Choice
+    questionary.select = select
+    questionary.text = unexpected_widget
+    questionary.confirm = unexpected_widget
+    monkeypatch.setitem(sys.modules, "questionary", questionary)
+    monkeypatch.setattr(run_cli, "_Q_STYLE", None)
+    monkeypatch.setattr(typer_testing, "make_input_stream", _tty_input_stream)
+
+    result = runner.invoke(
+        app,
+        ["run", str(flow), "--log", str(log), "--quiet"],
+        input=b"",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert log.is_file()
+    assert choice_titles == [["↩ Use declared default", "Set null", "Enter value"]]
+    assert literal_eval(_plain(result.stdout)) == {
+        "is_fallback": False,
+        "is_none": True,
+        "value": None,
     }
 
 

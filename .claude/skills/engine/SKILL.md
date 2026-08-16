@@ -283,10 +283,11 @@ Most are just the functional model (above) made enforceable:
   mutates shared state.
 - **Typed, losslessly-serializable state** *(the type system)* —
   `TypedValue` / `VariablePool`; the basis for canonical run-record payloads and
-  `${...}` references. Within a refined list, `Type.element.nullable` alone
-  controls semantic admission of `None`; bare and non-nullable list contracts
-  still reject it. The specialized `LIST_*` discriminator and carrier remain
-  unchanged and preserve `None` through canonical round-trips.
+  `${...}` references. Within a refined specialized list,
+  `Type.element.nullable` permits `None`; bare and non-nullable specialized lists
+  still reject it, while existing `LIST_ANY` and explicit `None`-element semantics
+  remain unchanged. The specialized `LIST_*` discriminator and carrier preserve
+  `None` through canonical round-trips.
 - **Append-only durable authority** — a fresh run records complete initialization,
   then every node start and accepted outcome. A transition is validated and prepared,
   appended to its `RunLog`, and only then applied to `RunState`; observers become

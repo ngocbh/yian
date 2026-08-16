@@ -125,9 +125,8 @@ Contract:
   (with int/float widening), and
   lone direct references retain exact structure. Record field walks require
   proven fields and carry any root/intermediate nullability into the result.
-  An actual null list item is admitted only when the proven element `Type` is
-  nullable; the specialized list storage kind remains its discriminator and
-  round-trips that item as `None`.
+  An optional proven element `Type` admits actual null list items; a specialized
+  list keeps its storage discriminator and round-trips those items as `None`.
   Unsupported whole-value computations, empty/heterogeneous lists, producers
   without an available static output type, or incomplete list element types fail
   at the authored binding; use a typed named `defs:` body as the escape hatch.

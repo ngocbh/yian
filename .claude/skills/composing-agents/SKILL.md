@@ -325,9 +325,9 @@ parameters and child-node outputs inside. Run-global `${system.today}`,
 `${system.now}`, and `${system.run_id}` remain available. Types are inferred
 strictly from YAML null/bool/int/float/string values, structural containers, or
 direct typed refs; refs preserve structure/nullability, and only a lone
-whole-value `${item...}` lazily requires a proven `over:` element type. An actual
-null list item is admitted only when that refined element type is nullable; the
-specialized list storage kind and `None` survive lossless round-trips. If
+whole-value `${item...}` lazily requires a proven `over:` element type. An
+optional element admits actual null list items; a specialized list keeps its
+storage kind and preserves `None` through lossless round-trips. If
 inference cannot prove a type, write a named `defs:` child with an explicit
 signature. Strings nested in literal containers stay literal and are not
 reference-scanned. Other

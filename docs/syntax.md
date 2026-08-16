@@ -150,8 +150,8 @@ required input has neither; `lookback: int = 30` defaults when omitted; and
 default for a non-nullable type is invalid, as is an empty `=`.
 
 Typed storage for `list[Optional[X]]` accepts actual null items because its
-refined element type is nullable, and preserves those items as `None` without
-changing the list's specialized storage kind.
+refined element type is nullable. When `X` has a specialized list storage kind,
+those items remain `None` without lowering that kind to `list[Any]`.
 
 The default RHS is a YAML literal validated against the declared type while the
 flow loads. Stored defaults are never string-coerced: write `int = 30`, not
@@ -563,8 +563,8 @@ Inline-body rules:
   whole-value `${item...}` reference. An opaque `over:` therefore remains legal
   when the inline body does not need the item. When item typing is requested,
   `over:` must have an exact proven list element type. That proof retains
-  element nullability, so actual null items are admitted only when the refined
-  element type is nullable and remain `None` in typed storage.
+  element nullability, so an optional element admits actual null items and
+  preserves them as `None` in typed storage.
 - Strings nested inside literal lists or mappings stay literal. For example,
   `payload: {text: "${input.text}"}` passes the characters `${input.text}`; nested
   containers are not scanned for references.

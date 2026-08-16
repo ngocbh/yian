@@ -999,9 +999,12 @@ class _CallableScope:
                         alias_cursor = self._uses_cursor.child(flow_id)
                     except SourceAccessError:
                         alias_cursor = self._uses_cursor
-                    exc.range = alias_cursor.range
-                    if exc.line is None and exc.range is not None:
-                        exc.line = exc.range.start_line
+                    raise LoadError(
+                        str(exc),
+                        lines=exc.lines,
+                        notes=exc.notes,
+                        range=alias_cursor.range,
+                    ) from exc
                 raise
             self._built[flow_id] = loaded
             return loaded

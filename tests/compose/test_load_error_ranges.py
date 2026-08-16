@@ -126,3 +126,55 @@ output: ${{invoke.output}}
 
     assert caught.value.line == 999
     assert caught.value.range is None
+
+
+def test_external_resolver_error_location_is_owned_by_each_source_document() -> None:
+    """Locating a shared resolver exception never mutates or reuses its first site."""
+    shared_error = LoadError("external failure")
+
+    def fail_resolver(_path: str, _version: str | None = None):
+        raise shared_error
+
+    sources = [
+        """id: first-parent
+name: first_parent
+uses:
+  external: child.yaml
+nodes:
+  invoke:
+    kind: call
+    call: external
+output: ${invoke.output}
+""",
+        """id: second-parent
+name: second_parent
+
+# Keep the same alias at a different authored site.
+uses:
+  external: child.yaml
+nodes:
+  invoke:
+    kind: call
+    call: external
+output: ${invoke.output}
+""",
+    ]
+
+    seen_ranges = []
+    for text in sources:
+        expected = (
+            SourceDocument.parse(text)
+            .root.child("uses")
+            .child("external")
+            .range
+        )
+        with pytest.raises(LoadError, match="external failure") as caught:
+            load_flow(text, child_resolver=fail_resolver)
+        assert caught.value is not shared_error
+        assert caught.value.range == expected
+        assert caught.value.line == expected.start_line
+        seen_ranges.append(caught.value.range)
+
+    assert seen_ranges[0] != seen_ranges[1]
+    assert shared_error.range is None
+    assert shared_error.line is None

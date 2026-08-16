@@ -1,12 +1,4 @@
-"""The call-traceback stack (`_walk_call_frames`) reads its frame lines from `SourceRange`.
-
-Step 8 re-plumbs `_walk_call_frames` off the retired `*_lines` maps and onto the range
-metadata the span parser records: the top flow's frames come from the baked IR
-(`node.range`/`node.field_ranges`), and each descended child's frames come from its
-render-only `SourceFrame` (`node_ranges`/`field_ranges`). This test pins that contract —
-the boxed frame line for a nested failure must equal the `SourceRange.start_line` the
-child's `SourceFrame` carries, not a hard-coded lookup.
-"""
+"""Runtime CLI diagnostics preserve canonical nested source-frame ordering."""
 
 from __future__ import annotations
 
@@ -22,6 +14,7 @@ from agent_composer.diagnostics import SourceRange
 from agent_composer.events import SourceSpan
 from agent_composer.nodes.base import Node
 from agent_composer.run import RunResult, run_flow
+from tests.engine.test_loop_run import NESTED_CALL_LOOP_MAXED
 
 _ERRORS = Path(__file__).resolve().parents[1] / "seeds" / "errors"
 
@@ -154,7 +147,7 @@ def _render(source: str, monkeypatch) -> tuple[str, RunResult]:
     assert result.status == "failed"
 
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, source, loaded=loaded)
+    _render_run_error(result, loaded)
     return buf.getvalue(), result
 
 
@@ -172,28 +165,24 @@ def test_assert_range_requires_an_aligned_assertion_site() -> None:
 
 
 def test_nested_call_error_frames_at_child_range(monkeypatch):
-    # e24 raises in `run/boom` — a CODE node inside a called `defs:inner` child. The stack
-    # descends one level: frame 0 the top `run:` call node, frame 1 the failing `boom` node
-    # boxed at its `code:` line in `defs:inner`. Both frame lines must come from the recorded
-    # SourceRanges (the child's `SourceFrame`), which is the migration's contract.
+    # e24 raises in `run/boom` — canonical diagnosis resolves the call and its CODE
+    # invocation directly from the ordered origin trace.
     flow = _ERRORS / "e24-nested-code-raise.yaml"
     text = flow.read_text()
-    loaded = load_flow(text, search_paths=[flow.parent])
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
     result = run_flow(loaded, {"topic": "X"})
     assert result.status == "failed"
 
-    frame = loaded.compiled.nodes["run"].child_source
-    boom_code_line = frame.field_ranges["boom"][("field", "code")].start_line
+    diagnostic = loaded.diagnose(result.failure)
+    assert [frame.range.start_line for frame in diagnostic.frames] == [27, 20]
 
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text, loaded=loaded)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
 
-    # A stacked traceback with at least two frames, the deepest boxed at the child's
-    # recorded `code:` range start line (not a top-level line).
-    assert "call traceback (most recent call last):" in out
-    assert f"defs:inner:{boom_code_line}" in out
-    assert boom_code_line == 20
+    assert "source locations:" in out
+    assert f"{flow.name}:27" in out
+    assert f"{flow.name}:20" in out
 
 
 def test_nested_call_input_failure_uses_resolved_child_range(monkeypatch):
@@ -205,8 +194,8 @@ def test_nested_call_input_failure_uses_resolved_child_range(monkeypatch):
     assert (result.locator.kind, result.locator.key) == ("input", "bad")
     assert result.range is not None and result.range.start_line == 12
     assert "nested.yaml:17" in out
-    assert "nested.yaml defs:inner:12" in out
-    assert "nested.yaml defs:inner:14" not in out
+    assert "nested.yaml:12" in out
+    assert "nested.yaml:14" not in out
 
 
 def test_nested_map_input_failure_uses_resolved_child_range(monkeypatch):
@@ -218,8 +207,8 @@ def test_nested_map_input_failure_uses_resolved_child_range(monkeypatch):
     assert (result.locator.kind, result.locator.key) == ("input", "bad")
     assert result.range is not None and result.range.start_line == 12
     assert "nested.yaml:17" in out
-    assert "nested.yaml defs:inner:12" in out
-    assert "nested.yaml defs:inner:14" not in out
+    assert "nested.yaml:12" in out
+    assert "nested.yaml:14" not in out
 
 
 def test_caller_assert_range_is_not_attached_to_external_child(monkeypatch):
@@ -242,12 +231,7 @@ def test_caller_assert_range_is_not_attached_to_external_child(monkeypatch):
     assert result.range is not None
 
     buf = _sink(monkeypatch)
-    _render_run_error(
-        result,
-        Path("parent.yaml"),
-        _CALLER_POST_ASSERT,
-        loaded=loaded,
-    )
+    _render_run_error(result, loaded)
     out = buf.getvalue()
 
     assert f"parent.yaml:{result.range.start_line}" in out
@@ -262,17 +246,12 @@ def test_stale_child_range_falls_back_to_current_child_source(monkeypatch):
     shifted_source = "\n" + _CALL_INPUT_FAILURE
     shifted_loaded = load_flow(shifted_source, source_label="nested.yaml")
     buf = _sink(monkeypatch)
-    _render_run_error(
-        result,
-        Path("nested.yaml"),
-        shifted_source,
-        loaded=shifted_loaded,
-    )
+    _render_run_error(result, shifted_loaded)
     out = buf.getvalue()
 
     assert "nested.yaml:18" in out
-    assert "nested.yaml defs:inner:15" in out
-    assert "nested.yaml defs:inner:12" not in out
+    assert "nested.yaml:13" in out
+    assert "nested.yaml:12" not in out
 
 
 def test_nested_caller_assert_range_stays_with_owning_call_frame(monkeypatch):
@@ -284,18 +263,29 @@ def test_nested_caller_assert_range_stays_with_owning_call_frame(monkeypatch):
     assert result.failure is not None
     assert result.failure.node_id == "outer/via/__end__"
     assert result.range is not None
-    middle = loaded.compiled.nodes["outer"].child
-    assert_line = middle.nodes["via"].post_assert_ranges[0].start_line
+    diagnostic = loaded.diagnose(result.failure)
+    assert_line = diagnostic.frames[-1].range.start_line
     assert result.range.start_line == assert_line
 
     buf = _sink(monkeypatch)
-    _render_run_error(
-        result,
-        Path("nested-assert.yaml"),
-        source,
-        loaded=loaded,
-    )
+    _render_run_error(result, loaded)
     out = buf.getvalue()
 
-    assert f"nested-assert.yaml defs:middle:{assert_line}" in out
-    assert f"nested-assert.yaml defs:deep:{assert_line}" not in out
+    assert [frame.range.start_line for frame in diagnostic.frames] == [28, 19, 25]
+    assert f"nested-assert.yaml:{assert_line}" in out
+
+
+def test_nested_loop_failure_renders_ordered_catalog_frames(monkeypatch):
+    """A respawned LOOP id needs no clone parsing to locate its authored frames."""
+    loaded = load_flow(NESTED_CALL_LOOP_MAXED, source_label="nested-loop.yaml")
+    result = run_flow(loaded, {})
+    assert result.status == "failed"
+
+    diagnostic = loaded.diagnose(result.failure)
+    assert [frame.range.start_line for frame in diagnostic.frames] == [28, 19]
+
+    buf = _sink(monkeypatch)
+    _render_run_error(result, loaded)
+    out = buf.getvalue()
+    assert out.index("nested-loop.yaml:28") < out.index("nested-loop.yaml:19")
+    assert "exceeded max (1)" in out

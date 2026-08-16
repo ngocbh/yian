@@ -8,6 +8,7 @@ boxes the `.yaml` at the node that raised, mirroring the compile-error frame.
 """
 
 import sys
+from dataclasses import replace
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +23,7 @@ from agent_composer.cli.run import (
     _render_run_error,
 )
 from agent_composer.compose.loader import load_flow
-from agent_composer.diagnostics import Failure
+from agent_composer.diagnostics import Diagnostic, Failure, OriginRef
 from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.run import RunResult, run_flow
 from agent_composer.tools import install_ask_user
@@ -262,15 +263,51 @@ def test_prompt_leaves_explicit_null_defaults_omitted_for_every_widget_kind(monk
 
 
 # --- _render_run_error: a runtime failure boxes the .yaml at the PRECISE line ------ #
+def test_run_error_uses_loaded_canonical_diagnosis(monkeypatch):
+    """The CLI renders the front end's Diagnostic without resolving source itself."""
+    failure = Failure(
+        "node.execute",
+        "semantic failure",
+        "work",
+        trace=(OriginRef("site"),),
+    )
+    result = RunResult(
+        input={},
+        status="failed",
+        run_id="cli-test",
+        log=None,
+        failure=failure,
+    )
+    seen = []
+
+    class _Loaded:
+        def diagnose(self, candidate):
+            seen.append(candidate)
+            return Diagnostic(
+                code=candidate.code,
+                message=candidate.message,
+                notes=("canonical presentation",),
+                node_id=candidate.node_id,
+            )
+
+    buf = _sink(monkeypatch)
+    _render_run_error(result, _Loaded())
+
+    assert seen == [failure]
+    assert "semantic failure" in buf.getvalue()
+    assert "canonical presentation" in buf.getvalue()
+
+
 def test_run_error_boxes_failing_node(monkeypatch):
     # e07 omits `as_of` -> the `report` node's `:?` fails at bind time. RunResult carries
     # its canonical Failure plus an input locator, so the box points at the binding.
     flow = _ERRORS / "e07-required-missing.yaml"
     text = flow.read_text()
-    result = run_flow(load_flow(text, search_paths=[flow.parent]), {"topic": "X"})
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
+    result = run_flow(loaded, {"topic": "X"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
     assert "e07-required-missing.yaml:23" in out   # the as_of binding, not the node header
     assert "report" in out                         # still inside the source window
@@ -282,10 +319,11 @@ def test_run_error_kind_fallback_for_code_raise(monkeypatch):
     # back to the node-kind best sub-line: a code node's `code:` field (not the header, not plain).
     flow = _ERRORS / "e20-code-raises.yaml"
     text = flow.read_text()
-    result = run_flow(load_flow(text, search_paths=[flow.parent]), {"topic": "X"})
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
+    result = run_flow(loaded, {"topic": "X"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
     assert "╭" in out and "code:" in out           # boxed at the `code:` field
 
@@ -295,10 +333,11 @@ def test_run_error_boxes_boundary_assert_line(monkeypatch):
     # flow-level assert locator -> the failure is now BOXED at the `asserts:` line (was plain).
     flow = _ERRORS / "e18-false-boundary-assert.yaml"
     text = flow.read_text()
-    result = run_flow(load_flow(text, search_paths=[flow.parent]), {"window": -5})
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
+    result = run_flow(loaded, {"window": -5})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
     assert "e18-false-boundary-assert.yaml:15" in out   # the `${input.window} > 0` line
     assert "assert failed" in out
@@ -310,10 +349,11 @@ def test_run_error_boxes_code_wrong_type_output(monkeypatch):
     # node's `output:` declaration (not a plain message, not the node header).
     flow = _ERRORS / "e21-code-wrong-type.yaml"
     text = flow.read_text()
-    result = run_flow(load_flow(text, search_paths=[flow.parent]), {"topic": "X"})
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
+    result = run_flow(loaded, {"topic": "X"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
     assert "e21-code-wrong-type.yaml:12" in out   # the `output: int` field line
     assert "╭" in out
@@ -324,10 +364,11 @@ def test_run_error_boxes_flow_input_line(monkeypatch):
     # `window:` declaration line.
     flow = _ERRORS / "e08-input-type-mismatch.yaml"
     text = flow.read_text()
-    result = run_flow(load_flow(text, search_paths=[flow.parent]), {"topic": "X", "window": "soon"})
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
+    result = run_flow(loaded, {"topic": "X", "window": "soon"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
     assert "e08-input-type-mismatch.yaml:20" in out     # the `window: int` decl line
     assert "╭" in out
@@ -347,10 +388,11 @@ def test_run_error_plain_when_unlocatable(monkeypatch):
         locator=None,
         events=[],
     )
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
-    assert "run failed:" in out
+    assert out.strip() == "boom"
     assert "╭" not in out                          # no boxed frame
 
 
@@ -360,10 +402,11 @@ def test_run_error_boxes_namespaced_failure_at_owning_call(monkeypatch):
     # top-level call node (`run`) and still box a real source frame, not degrade to a bare line.
     flow = _ERRORS / "e24-nested-code-raise.yaml"
     text = flow.read_text()
-    result = run_flow(load_flow(text, search_paths=[flow.parent]), {"topic": "X"})
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
+    result = run_flow(loaded, {"topic": "X"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
     assert "e24-nested-code-raise.yaml:27" in out   # the owning `run:` call node line
     assert "╭" in out                               # boxed, not a plain `run failed:` line
@@ -376,6 +419,9 @@ def test_run_error_boxes_loop_max_exceeded_at_loop_node(monkeypatch):
     # real source frame instead of degrading to a bare `run failed:` line.
     flow = _SEEDS / "28-refine-loop.yaml"
     text = flow.read_text()
+    loaded = load_flow(text, source_label=flow.name)
+    loop_origin = loaded.compiled.nodes["polish"].origin
+    assert loop_origin is not None
     result = RunResult(
         input={},
         status="failed",
@@ -385,13 +431,14 @@ def test_run_error_boxes_loop_max_exceeded_at_loop_node(monkeypatch):
             "node.execute",
             "loop 'polish' exceeded max (5)",
             "polish~5",
+            trace=(loop_origin,),
             cause_type="LoopMaxExceeded",
         ),
         locator=None,
         events=[],
     )
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
     assert "╭" in out                                # boxed, not a plain `run failed:` line
     assert "28-refine-loop.yaml:45" in out           # resolved to the authored `polish:` loop node
@@ -403,16 +450,17 @@ def test_run_error_traceback_only_under_engine_trace(monkeypatch):
     # `engine_trace=True`; the default terse display omits it.
     flow = _ERRORS / "e24-nested-code-raise.yaml"
     text = flow.read_text()
-    result = run_flow(load_flow(text, search_paths=[flow.parent]), {"topic": "X"})
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
+    result = run_flow(loaded, {"topic": "X"})
     assert result.failure is not None
     assert result.failure.traceback  # captured at the node-failure boundary
 
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text, engine_trace=False)
+    _render_run_error(result, loaded, engine_trace=False)
     assert "python traceback" not in buf.getvalue()
 
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text, engine_trace=True)
+    _render_run_error(result, loaded, engine_trace=True)
     out = buf.getvalue()
     assert "python traceback" in out
     assert "intentional CODE failure" in out         # the originating Python exception
@@ -425,15 +473,15 @@ def test_run_error_multi_frame_stack_into_def(monkeypatch):
     # node in this file, then the failing `boom` node's `code:` line in `defs:inner`.
     flow = _ERRORS / "e24-nested-code-raise.yaml"
     text = flow.read_text()
-    loaded = load_flow(text, search_paths=[flow.parent])
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
     result = run_flow(loaded, {"topic": "X"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text, loaded=loaded)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
-    assert "call traceback (most recent call last):" in out
+    assert "source locations:" in out
     assert "e24-nested-code-raise.yaml:27" in out   # frame 0: the owning `run:` call node (header)
-    assert "e24-nested-code-raise.yaml defs:inner:20" in out  # frame 1: filename-qualified def
+    assert "e24-nested-code-raise.yaml:20" in out  # frame 1: the authored `code:` value
     assert "intentional CODE failure" in out
 
 
@@ -443,13 +491,13 @@ def test_run_error_multi_frame_stack_into_external(monkeypatch):
     # in lib_boom.yaml (the frame label is THAT external filename, not this seed's).
     flow = _ERRORS / "e25-external-raise.yaml"
     text = flow.read_text()
-    loaded = load_flow(text, search_paths=[flow.parent])
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
     result = run_flow(loaded, {"topic": "X"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text, loaded=loaded)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
-    assert "call traceback (most recent call last):" in out
+    assert "source locations:" in out
     assert "e25-external-raise.yaml:19" in out      # frame 0: the `go:` call node (header)
     assert "lib_boom.yaml:18" in out                # frame 1: the external file's `code:` line
 
@@ -459,16 +507,16 @@ def test_run_error_multi_frame_three_levels(monkeypatch):
     # The stack must box all three frames, most-recent-call-last.
     flow = _ERRORS / "e26-three-level-raise.yaml"
     text = flow.read_text()
-    loaded = load_flow(text, search_paths=[flow.parent])
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
     result = run_flow(loaded, {"topic": "X"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text, loaded=loaded)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
-    assert "call traceback (most recent call last):" in out
+    assert "source locations:" in out
     assert "e26-three-level-raise.yaml:37" in out   # frame 0: the top `outer:` call node (header)
-    assert "e26-three-level-raise.yaml defs:middle:29" in out  # frame 1: `via:` call in `middle` (header)
-    assert "e26-three-level-raise.yaml defs:deep:20" in out    # frame 2: `boom` code in `deep`
+    assert "e26-three-level-raise.yaml:29" in out  # frame 1: `via:` call in `middle`
+    assert "e26-three-level-raise.yaml:20" in out  # frame 2: `boom` code in `deep`
 
 
 def test_run_error_multi_frame_on_nested_human_input_failure(monkeypatch):
@@ -478,32 +526,32 @@ def test_run_error_multi_frame_on_nested_human_input_failure(monkeypatch):
     # node header — frame 0 the `gate:` call, frame 1 `defs:review` `output:`.
     flow = _SEEDS / "25-nested-suspension.yaml"
     text = flow.read_text()
-    loaded = load_flow(text, search_paths=[flow.parent])
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
     with install_ask_user(lambda **request: "maybe"):
         result = run_flow(loaded, {"action": "ship it"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text, loaded=loaded)
+    _render_run_error(result, loaded)
     out = buf.getvalue()
-    assert "call traceback (most recent call last):" in out
+    assert "source locations:" in out
     assert "25-nested-suspension.yaml:41" in out    # frame 0: the `gate:` call node (header)
-    assert "25-nested-suspension.yaml defs:review:31" in out  # frame 1: precise `output:` line
+    assert "25-nested-suspension.yaml:31" in out  # frame 1: precise `output:` line
     assert "is not a member of variant" in out
 
 
-def test_run_error_single_frame_when_loaded_absent(monkeypatch):
-    # The multi-frame stack is gated on the loaded IR being available: without it the renderer
-    # can't descend, so a namespaced failure falls back to the single owning-call frame (no
-    # "call traceback" header). Guards that the new path is opt-in, not always-on.
+def test_run_error_unavailable_presentation_stays_unlocated(monkeypatch):
+    """A missing resolver cannot be bypassed with CLI graph inference."""
     flow = _ERRORS / "e24-nested-code-raise.yaml"
     text = flow.read_text()
-    result = run_flow(load_flow(text, search_paths=[flow.parent]), {"topic": "X"})
+    loaded = load_flow(text, search_paths=[flow.parent], source_label=flow.name)
+    result = run_flow(loaded, {"topic": "X"})
     assert result.status == "failed"
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, text)            # no loaded= -> single frame
+    _render_run_error(result, replace(loaded, origin_resolver=None))
     out = buf.getvalue()
-    assert "call traceback (most recent call last):" not in out
-    assert "e24-nested-code-raise.yaml:27" in out    # the owning call node, single box
+    assert "╭" not in out
+    assert "Source presentation was unavailable." in out
+    assert "intentional CODE failure" in out
 
 
 # --- _ensure_cwd_importable: a flow's `code:` refs to repo-local packages resolve ---- #

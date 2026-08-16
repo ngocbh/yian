@@ -437,9 +437,10 @@ agent `entry:`/`controls:` field or event-mode WAIT.
   missing required declarations are rejected together as invalid CLI input (exit
   code `2`) before provider or run-log setup and must be supplied through
   `--input`/`--inputs`.
-  `human_input` and `ask_user` are separate live-run terminal interactions; they
-  also require an interactive TTY. The host serves them while the run remains live.
-  WAIT does not ask for terminal input and also remains in the live run.
+  `human_input` and `ask_user` are separate live-run interactions, unchanged by
+  the initial-input omission policy. The host broker reads their answers from its
+  input stream while the run remains live. WAIT does not prompt and also remains
+  in the live run.
 - A flow with only `code`/`tool` nodes runs with **no provider**; any `agent` node
   needs a provider/model configured (see `docs/installation.md`).
 

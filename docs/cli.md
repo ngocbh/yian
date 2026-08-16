@@ -126,12 +126,12 @@ JSON. Cancelling a prompt cancels the run.
 ## Blocking interactions
 
 `human_input` and an agent's authored `ask_user` tool are blocking interactions
-inside live node calls. These terminal interactions also require an interactive
-TTY; the initial-input omission policy above does not make them non-interactive.
-`ac` runs the flow behind a main-thread terminal broker: the node's worker waits,
-the broker collects the answer, and the answer returns into that same live node
-call. A `human_input` always asks; an agent calls `ask_user` only when its model
-chooses to.
+inside live node calls. They are separate from initial input gathering and are
+unchanged by its non-TTY omission policy. `ac` runs the flow behind a main-thread
+terminal broker: the node's worker waits, the broker reads the answer from the
+host input stream, and the answer returns into that same live node call. A
+`human_input` always asks; an agent calls `ask_user` only when its model chooses
+to.
 
 ```console
 ac run examples/human-approval.yaml --input task="Plan a team offsite"

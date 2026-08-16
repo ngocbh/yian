@@ -140,12 +140,12 @@ ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
   absence; missing required declarations are rejected together as invalid CLI input
   (exit code `2`), before provider or run-log setup, and must be supplied through
   `--input`/`--inputs`.
-- `HUMAN_INPUT` and an authored agent `ask_user` tool are live terminal
-  interactions and also require an interactive TTY. They block inside the live
-  node call while the CLI's main-thread broker collects the answer. `WAIT` does
-  not ask for terminal input; it blocks a worker until its absolute UTC deadline
-  and returns `None`. Each interaction completes inside the same live node
-  invocation.
+- `HUMAN_INPUT` and an authored agent `ask_user` tool are separate live-run
+  interactions, unchanged by the initial-input omission policy. They block inside
+  the live node call while the CLI's main-thread broker reads the answer from the
+  host input stream. `WAIT` does not prompt; it blocks a worker until its absolute
+  UTC deadline and returns `None`. Each interaction completes inside the same live
+  node invocation.
 - Per-node progress prints to **stderr**: each running node shows a spinner that
   becomes a green `✓` on success or a red `✗` (plus the error) on failure.
   `--quiet`/`-q` suppresses it; `--verbose`/`-v` also prints each node's output.

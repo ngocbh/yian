@@ -113,7 +113,7 @@ haven't installed raises a clear `pip install agent-composer[...]` hint.
 ## The `ac` CLI
 
 ```console
-ac run FLOW.yaml [--input k=v]... [--inputs inputs.json] [--log PATH] [-w N] [--provider P] [--model M] [--quiet] [--verbose] [--engine-trace]
+ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [-w N] [--provider P] [--model M] [--quiet] [--verbose] [--engine-trace]
 ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
 ```
 
@@ -125,22 +125,27 @@ ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
 - `--resume PATH` recovers that log with the same flow. It rejects `--input`,
   `--inputs`, `--provider`, `--model`, and `--log`, so recovery cannot replace
   recorded inputs or model configuration.
-- `--input k=v` — set one input (repeatable). Supplied strings are coerced, where
-  supported, against the input's declared type; stored defaults are not coerced.
-- `--inputs file.json` — load inputs from a JSON object. `--input` flags override
-  individual keys.
+- `--inputs file.json` loads inputs from a JSON object.
+- Repeatable `--input k=v` flags override individual JSON keys. Their string
+  values are coerced, where supported, against the input's declared type; stored
+  defaults are not coerced.
 - At run start a boxed **banner** (to stderr) names the flow being run — its
   `name`, `version`, and `description` — unless `--quiet`.
-- Each declared input still missing is **prompted interactively** — each prompt is
-  labelled with its canonical resolved type, a required (`*`)/optional mark, and
-  any default. Optional/defaulted boolean and `Literal[...]` prompts offer an
-  explicit omit/use-declared-default action; blank optional/defaulted free text does
-  the same. Omitted keys stay absent so START applies an exact authored default when
-  present, while an optional input without one remains absent.
-- `HUMAN_INPUT` and an authored agent `ask_user` tool block inside the live node
-  call while the CLI's main-thread broker collects the answer. `WAIT` likewise
-  blocks a worker until its absolute UTC deadline and returns `None`. Each
-  interaction completes inside the same live node invocation.
+- With an interactive stdin (TTY), each declared input still missing is
+  **prompted interactively**. Each prompt is labelled with its canonical resolved
+  type, a required (`*`)/optional mark, and any default. Optional/defaulted boolean
+  and `Literal[...]` prompts offer an explicit omit/use-declared-default action;
+  blank optional/defaulted free text does the same. Without a TTY, missing
+  optional/defaulted declarations stay absent so START owns defaults and optional
+  absence; missing required declarations are rejected together as invalid CLI input
+  (exit code `2`), before provider or run-log setup, and must be supplied through
+  `--input`/`--inputs`.
+- `HUMAN_INPUT` and an authored agent `ask_user` tool are live terminal
+  interactions and also require an interactive TTY. They block inside the live
+  node call while the CLI's main-thread broker collects the answer. `WAIT` does
+  not ask for terminal input; it blocks a worker until its absolute UTC deadline
+  and returns `None`. Each interaction completes inside the same live node
+  invocation.
 - Per-node progress prints to **stderr**: each running node shows a spinner that
   becomes a green `✓` on success or a red `✗` (plus the error) on failure.
   `--quiet`/`-q` suppresses it; `--verbose`/`-v` also prints each node's output.

@@ -30,7 +30,8 @@ engine always drives that shared wrapper.
 
 ```python
 class Node:
-    id: NodeId                       # where my output is stored
+    id: NodeId                       # physical execution identity
+    commit_as: NodeId | None         # optional baked logical-output redirect
     params: list[Parameter]          # formal inputs only — the flow owns their Binding sources
     pre_asserts: list[Assertion]      # ordered contracts checked before the body
     post_asserts: list[Assertion]     # ordered contracts checked after an Output
@@ -46,6 +47,9 @@ class Node:
 
     def _run_impl(self, inputs, **caps) -> NodeResult:
         ...
+
+    def skipped_output_target(self) -> NodeId:
+        return self.id if self.commit_as is None else self.commit_as
 ```
 
 `run` receives two things:
@@ -62,6 +66,13 @@ class Node:
 **Why only `_run_impl`?** Default filling and assertion checks are identical for every
 kind — so they are protocol, not kind behavior, and live in the base template. See
 [the engine loop](engine.md#the-loop-read-eval-record-reduce).
+
+`skipped_output_target()` is a pure, deterministic topology hook, not another
+effectful body method. It must derive only from execution state represented in
+the flow manifest and return an existing node id. The base implementation mirrors
+the baked `Node.commit_as`; LOOP overrides it with manifest-backed `origin_id` to
+mirror its dynamic success redirect. A result-carried `Output.commit_as` affects
+success only unless the hook explicitly names the same target for absence.
 
 ## Two families
 
@@ -83,7 +94,8 @@ what `run` returns:
   the live out-edge (siblings skip-flood). Still `is_spawner=False`; routing isn't growth.
 - A **spawner** returns `Grow` with a canonical seed describing the requested work.
   Compile-owned `build_grow` turns it into a subgraph with one `__start__` and
-  `__end__` (whose result becomes this node's result via a baked `commit_as`). See
+  `__end__` (whose result and absence cross this node's boundary via baked
+  `commit_as` and the inherited skip-target hook). See
   [growth](engine.md#growth-a-node-that-is-really-a-subflow).
 
 ## A kind is one `_run_impl`
@@ -124,6 +136,14 @@ branching on kind.
 | `bind_reserved` / `reserved_wiring_keys` | wait, map | reserved keys resolved before `run` (`until`, `over`); the names for load-time checks |
 | `grow_depth_delta` / `is_loop` | spawners | recursion-depth stamp; loop bookkeeping |
 | `needs_stop_event` | agent, wait | receive the run-owned cooperative stop event |
+| `skipped_output_target()` | base; loop overrides | logical target whose out-edges receive this physical node's absence |
+
+A redirected target is an exclusive, inert logical anchor: it has exactly one
+physical redirect owner and is either an expanded spawner or an unknown
+placeholder with no incoming work. It cannot also be ready, in flight, or
+already committed, and all of its outgoing edges must still be unknown;
+supporting several possible producers would require a separate
+OR-join/multi-writer contract.
 
 ## Why this shape
 

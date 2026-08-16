@@ -319,9 +319,22 @@ of the closed result sum:
 
 | Result | Meaning |
 |--------|---------|
-| `Output(value, commit_as=None)` | one value for the engine to type-check and bind |
-| `Route(handle)` | one named outgoing branch, with sibling skip-flooding |
+| `Output(value, commit_as=None)` | one value for the engine to type-check and bind under the resolved success target |
+| `Route(handle)` | one named outgoing branch, with redirect-aware sibling skip-flooding |
 | `Grow(seed, prune)` | one canonical deterministic expansion description |
+
+Success and absence resolve their logical output boundaries through distinct
+carriers. Success resolves an explicit `Output.commit_as`, then the baked
+`Node.commit_as`, then the physical node id. A skip cannot observe result-carried
+`Output.commit_as`, so the reducer instead asks the pure, deterministic
+`Node.skipped_output_target()` hook, which may consult only manifest-backed node
+state. The base hook returns baked `commit_as` or the node id; LOOP returns its
+manifest-backed `origin_id` to mirror its dynamic success redirect. A redirected
+target has exactly one physical owner and must be an inert logical anchor: an
+expanded spawner or an unknown placeholder with no incoming work, never a
+ready, in-flight, or already-committed node; all of its outgoing edges must still
+be unknown. The reducer marks the physical node skipped, deduplicates logical
+targets, and floods the target's outgoing edges.
 
 Failure is a `raise`, not another result variant. `eval_node` structurally turns
 expected binding, assertion, body, and result rejection into
@@ -334,8 +347,8 @@ yield transient `StreamChunk` values and then return one of the same three resul
 The runtime core is **kind-blind**. It dispatches on this result sum and node-owned
 traits/hooks (`is_spawner`, `binds_per_item`, `bind_reserved`,
 `validate_execution_setup`, `exception_origin`, `grow_depth_delta`, `is_loop`,
-and `needs_stop_event`), never on `NodeKind`. The closed kind-aware
-growth match lives in `compile.expand.build_grow`, outside runtime.
+`needs_stop_event`, and `skipped_output_target`), never on `NodeKind`. The
+closed kind-aware growth match lives in `compile.expand.build_grow`, outside runtime.
 `compile.model.GrowthRejected` crosses that boundary only when a legal
 CALL/MAP/LOOP kind supplies a malformed seed. Unsupported kinds and builder or
 compiler helper faults remain raw; runtime marks only explicit seed, fragment,

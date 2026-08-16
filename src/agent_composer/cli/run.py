@@ -3,7 +3,7 @@
 Fresh inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`); any
 declared input still missing is prompted for interactively (required ones are
 starred). Optional/defaulted prompts can be omitted so START retains ownership of
-the exact declared default. Fresh runs use a reported durable log under
+any declared default or optional absence. Fresh runs use a reported durable log under
 ``~/.agent_composer/runs`` unless ``--log`` selects a new path. ``--resume``
 recovers an existing path without gathering fresh inputs or model configuration.
 

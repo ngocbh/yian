@@ -7,6 +7,7 @@ durable reconstruction builds the SAME `L#k/…` namespace.
 """
 from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, ns
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.contracts import Binding, Parameter
 from agent_composer.nodes.loop import LoopNode
@@ -59,6 +60,32 @@ def test_continue_splices_next_driver_and_edge():
     body_end = ns(map_callsite("lp", 0), END_ID)
     assert any(e.from_ == body_end and e.to == "lp~1" for e in sg.edges)
     assert sg.wiring["lp~1"] == {"x": Binding(f"${{{body_end}.output.x}}")}
+
+
+def test_continue_context_prefixes_body_but_not_driver_local_origin():
+    child = _child_flow()
+    outer = OriginRef("root/nodes/call")
+    loop_origin = OriginRef("child/nodes/loop")
+    driver = _driver("lp", 1, child)
+    driver.origin = loop_origin
+    driver.origin_context = (outer,)
+
+    sg = loop_continue_subgraph(
+        child,
+        origin="lp",
+        carried={"x": 1},
+        k=0,
+        driver=driver,
+        origin_context=(outer, loop_origin),
+    )
+
+    body_ids = set(sg.nodes) - {driver.id}
+    assert body_ids
+    assert {
+        sg.nodes[node_id].origin_context for node_id in body_ids
+    } == {(outer, loop_origin)}
+    assert sg.nodes[driver.id].origin_context == (outer,)
+    assert sg.nodes[driver.id].failure_trace() == (outer, loop_origin)
 
 
 def test_continue_seeds_only_fields_declared_by_the_body_start():

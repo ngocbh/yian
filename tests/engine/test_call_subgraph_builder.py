@@ -9,6 +9,7 @@ callsite.
 
 from agent_composer.compile.expand import call_subgraph, ns
 from agent_composer.compile.model import END_ID, Flow
+from agent_composer.diagnostics import OriginRef
 
 from tests.engine.test_expand import _child_flow
 
@@ -27,3 +28,19 @@ def test_call_subgraph_matches_grow_call_type():
     # Every cloned node id is namespaced under the callsite.
     assert all(nid.startswith("c0/") for nid in sg.nodes)
     assert set(sg.nodes) == {ns("c0", nid) for nid in child.nodes}
+
+
+def test_call_subgraph_prefixes_every_cloned_node_including_boundaries():
+    child = _child_flow()
+    context = (OriginRef("root/nodes/call"),)
+
+    sg = call_subgraph(
+        child,
+        callsite="c0",
+        record={"x": 1},
+        origin_context=context,
+    )
+
+    assert {node.origin_context for node in sg.nodes.values()} == {context}
+    assert sg.nodes[sg.start_id].origin_context == context
+    assert sg.nodes[sg.end_id].origin_context == context

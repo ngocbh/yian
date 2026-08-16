@@ -35,7 +35,7 @@ from agent_composer.compile.model import (
     Flow,
     GrowthRejected,
 )
-from agent_composer.diagnostics import SourceRange
+from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.expr import rewrite_template_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.nodes.base import Node, NodeKind
@@ -215,6 +215,7 @@ def _lower_spawner_post_asserts(
 
 
 def clone_child(child, callsite: str, record: dict, *,
+                origin_context: "tuple[OriginRef, ...]" = (),
                 post_asserts: "list[Assertion] | None" = None,
                 post_assert_ranges: "list[Optional[SourceRange]] | None" = None,
                 input_names: "set[str] | None" = None) -> Flow:
@@ -226,15 +227,18 @@ def clone_child(child, callsite: str, record: dict, *,
     Returns a `Flow` whose `start_id` is the namespaced child START (the sole seed point) and whose
     `end_id` is the namespaced child END (the alias filler for REF / one element input for MAP).
 
-    `post_asserts`/`post_assert_ranges`/`input_names` (default empty) carry a SPAWNER's node-level POST
-    `asserts:` — a `call` node may declare `asserts:` reading `${output}` (its committed output)
-    and its declared inputs. They are LOWERED onto the cloned child END (via
-    `_lower_spawner_post_asserts`) so they fire through the inherited `run` template,
-    NOT a bespoke redirect-commit site. Empty for MAP/LOOP and for a CALL without node asserts."""
+    `origin_context` is the enclosing spawner's ordered failure trace. It is prefixed to each
+    clone's existing generated ancestry without deduplication. `post_asserts`/
+    `post_assert_ranges`/`input_names` (default empty) carry a SPAWNER's node-level POST `asserts:`
+    — a `call` node may declare `asserts:` reading `${output}` (its committed output) and its
+    declared inputs. They are LOWERED onto the cloned child END (via
+    `_lower_spawner_post_asserts`) so they fire through the inherited `run` template, NOT a
+    bespoke redirect-commit site. Empty for MAP/LOOP and for a CALL without node asserts."""
     nodes: dict[str, Node] = {}
     for nid, node in child.nodes.items():
         clone = copy.deepcopy(node)
         clone.id = ns(callsite, nid)
+        clone.origin_context = origin_context + clone.origin_context
         # Re-namespace a self-attribution origin that pointed at THIS node's pre-clone id (a
         # compiled loop `L` inside the child: `origin_id == old id`). The cloned loop is a NEW
         # compiled origin at the namespaced callsite, so its origin must follow to `clone.id`;
@@ -319,6 +323,7 @@ def _producer_of(src: str) -> Optional[str]:
 
 
 def call_subgraph(child, callsite: str, record: dict, *,
+                  origin_context: "tuple[OriginRef, ...]" = (),
                   post_asserts: "list[Assertion] | None" = None,
                   post_assert_ranges: "list[Optional[SourceRange]] | None" = None,
                   input_names: "set[str] | None" = None) -> Flow:
@@ -335,10 +340,12 @@ def call_subgraph(child, callsite: str, record: dict, *,
     `post_asserts`/`post_assert_ranges`/`input_names` carry the SPAWNER's OWN node-level POST `asserts:`
     (a `call` node's `asserts:` reading `${output}` + declared inputs). They are lowered onto the
     cloned child END by `clone_child`, so they fire through the SAME eval_node post-assert seam —
-    NOT a bespoke redirect-commit site. The CALL node passes its ordered assertion carriers,
-    temporary positional ranges, and declared-input names; durable `build_grow` uses the same
-    inputs so a resumed run's rebuilt child END is identical."""
+    NOT a bespoke redirect-commit site. `origin_context` is the spawner's outer-to-inner failure
+    trace and is prefixed to every clone, including both child boundaries. The CALL node passes its
+    ordered assertion carriers, temporary positional ranges, and declared-input names; durable
+    `build_grow` uses the same inputs so a resumed run's rebuilt child END is identical."""
     cloned = clone_child(child, callsite=callsite, record=record,
+                         origin_context=origin_context,
                          post_asserts=post_asserts, post_assert_ranges=post_assert_ranges,
                          input_names=input_names)
     cloned.nodes[cloned.end_id].commit_as = callsite
@@ -346,7 +353,13 @@ def call_subgraph(child, callsite: str, record: dict, *,
                 start_id=cloned.start_id, end_id=cloned.end_id)
 
 
-def map_subgraph(child, spawner_id: str, records: list) -> Flow:
+def map_subgraph(
+    child,
+    spawner_id: str,
+    records: list,
+    *,
+    origin_context: "tuple[OriginRef, ...]" = (),
+) -> Flow:
     """The pure MAP builder: the self-describing fragment a MAP spawner grows into.
 
     MAP is CALL × N plus a synthesized `map#/__start__` fan-out and a list-`END` fan-in. For each
@@ -365,6 +378,9 @@ def map_subgraph(child, spawner_id: str, records: list) -> Flow:
     Returns a `Flow` with `start_id = ns(spawner_id, START_ID)` (the synthetic start) and
     `end_id = ns(spawner_id, END_ID)` (the list collector).
 
+    `origin_context` is the spawner's outer-to-inner failure trace. Every element clone and both
+    generated fan-out/fan-in boundaries receive that same authored context.
+
     N=0 (empty map): the only body node is the list-END; `map#/__start__ → map#/__end__` is wired
     with the same ordering edge so the collector still schedules and emits `[]`."""
     map_start_id = ns(spawner_id, START_ID)              # the synthetic fan-out start
@@ -377,7 +393,12 @@ def map_subgraph(child, spawner_id: str, records: list) -> Flow:
     start_edges: list[Edge] = []                         # map_start -> each element start (ordering)
 
     for i, record in enumerate(records):
-        cloned = clone_child(child, callsite=map_callsite(spawner_id, i), record=record)
+        cloned = clone_child(
+            child,
+            callsite=map_callsite(spawner_id, i),
+            record=record,
+            origin_context=origin_context,
+        )
         nodes.update(cloned.nodes)
         edges.extend(cloned.edges)
         wiring.update(cloned.wiring)
@@ -392,13 +413,16 @@ def map_subgraph(child, spawner_id: str, records: list) -> Flow:
 
     # The synthetic fan-out start: a StartNode with no parameters — it runs once, emits `{}`, and its
     # out-edges make every element START ready (the single-start entry, like CALL and the top level).
-    nodes[map_start_id] = StartNode(map_start_id, params=[])
+    map_start = StartNode(map_start_id, params=[])
+    map_start.origin_context = origin_context
+    nodes[map_start_id] = map_start
     wiring[map_start_id] = {}
 
     # ONE EndNode in LIST mode — the MAP fan-in over the N child ENDs (still built + stamped at
     # N=0). Bake the commit redirect so its list Output commits under the spawner id.
     map_end = EndNode.list_(map_end_id, n=len(records))
     map_end.commit_as = spawner_id
+    map_end.origin_context = origin_context
     nodes[map_end_id] = map_end
     edges.extend(start_edges)
     edges.extend(end_edges)
@@ -414,7 +438,15 @@ def map_subgraph(child, spawner_id: str, records: list) -> Flow:
                 start_id=map_start_id, end_id=map_end_id)
 
 
-def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) -> Flow:
+def loop_continue_subgraph(
+    child,
+    origin: str,
+    carried: dict,
+    k: int,
+    driver,
+    *,
+    origin_context: "tuple[OriginRef, ...]" = (),
+) -> Flow:
     """The pure LOOP CONTINUE builder: body_k + the fresh next-iteration driver.
 
     `origin` is the ORIGIN loop id `L` (NOT the running driver id) — bodies are always keyed
@@ -432,7 +464,11 @@ def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) ->
 
     Unlike `call_subgraph`/`map_subgraph`, the body-END carries NO `commit_as`: the CONTINUE arm
     never commits under the origin (only the STOP arm's `Output(carried, commit_as=origin)` does),
-    so `_derived_terminals` returns `[]` for a continue grow and the terminal stamping no-ops."""
+    so `_derived_terminals` returns `[]` for a continue grow and the terminal stamping no-ops.
+
+    `origin_context` is the running driver's complete failure trace and prefixes only the body
+    clones. The supplied next driver already owns its copied outer context; its authored LOOP
+    origin remains local and is appended by `Node.failure_trace`."""
     # The loop's carried record may be wider than the body domain: the authoring
     # contract permits body inputs to be a subset of carried fields. Seed only those
     # declared child inputs into its START, while the full record continues through
@@ -447,6 +483,7 @@ def loop_continue_subgraph(child, origin: str, carried: dict, k: int, driver) ->
         child,
         callsite=map_callsite(origin, k),
         record=body_seed,
+        origin_context=origin_context,
     )
     body_end = cloned.end_id                               # ns(map_callsite(origin, k), END_ID)
     nodes = dict(cloned.nodes)
@@ -541,6 +578,7 @@ def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
                 spawner.child,
                 callsite=spawner.id,
                 record=dict(record),
+                origin_context=spawner.failure_trace(),
                 post_asserts=spawner.post_asserts,
                 post_assert_ranges=spawner.post_assert_ranges,
                 input_names={param.name for param in (spawner.params or [])},
@@ -551,6 +589,7 @@ def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
                 spawner.child,
                 spawner_id=spawner.id,
                 records=[dict(record) for record in records],
+                origin_context=spawner.failure_trace(),
             )
         case NodeKind.LOOP:
             carried, iteration = _loop_growth_seed(canonical_seed)
@@ -560,6 +599,7 @@ def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
                 dict(carried),
                 iteration,
                 spawner.respawn(iteration + 1),
+                origin_context=spawner.failure_trace(),
             )
         case _:
             raise ValueError(

@@ -12,6 +12,7 @@ the list-END and that the synthetic start wires straight to it (so it schedules 
 
 from agent_composer.compile.expand import map_callsite, map_subgraph, ns
 from agent_composer.compile.model import END_ID, START_ID, Flow
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.contracts import Binding
 
 from tests.engine.test_expand import _child_flow
@@ -74,9 +75,35 @@ def test_map_subgraph_n_ge_2_start_fans_out_to_all_element_starts():
     assert fanout == expected
 
 
+def test_map_subgraph_shares_context_across_distinct_clones_and_boundaries():
+    child = _child_flow()
+    context = (OriginRef("root/nodes/map"),)
+
+    sg = map_subgraph(
+        child,
+        spawner_id="m0",
+        records=[{"x": 1}, {"x": 2}],
+        origin_context=context,
+    )
+
+    first_body = ns(map_callsite("m0", 0), "head")
+    second_body = ns(map_callsite("m0", 1), "head")
+    assert first_body != second_body
+    assert sg.nodes[first_body].origin_context == context
+    assert sg.nodes[second_body].origin_context == context
+    assert sg.nodes[ns("m0", START_ID)].origin_context == context
+    assert sg.nodes[ns("m0", END_ID)].origin_context == context
+
+
 def test_map_subgraph_n0_wires_start_to_collector():
     child = _child_flow()
-    sg = map_subgraph(child, spawner_id="m0", records=[])
+    context = (OriginRef("root/nodes/map"),)
+    sg = map_subgraph(
+        child,
+        spawner_id="m0",
+        records=[],
+        origin_context=context,
+    )
 
     map_start_id = ns("m0", START_ID)
     map_end_id = ns("m0", END_ID)
@@ -90,3 +117,5 @@ def test_map_subgraph_n0_wires_start_to_collector():
     assert edges_to_end[0].from_ == map_start_id
     assert edges_to_end[0].ordering is True
     assert sg.nodes[map_end_id].commit_as == "m0"
+    assert sg.nodes[map_start_id].origin_context == context
+    assert sg.nodes[map_end_id].origin_context == context

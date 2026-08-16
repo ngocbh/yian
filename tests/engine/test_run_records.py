@@ -160,6 +160,54 @@ def test_node_failure_encoding_nests_one_canonical_failure():
     assert decode_record(encoded) == envelope
 
 
+def test_route_encoding_persists_only_its_optional_terminal_failure():
+    failure = Failure(
+        code="graph.terminal_unreachable",
+        message="terminal output 'result' skipped",
+        node_id="choice",
+        trace=(OriginRef("root/nodes/choice"),),
+    )
+    causal = RecordEnvelope(
+        schema=SCHEMA_VERSION,
+        run_id="run-route",
+        seq=3,
+        record=NodeRoutedRecord(
+            node_id="choice",
+            handle="default",
+            terminal_failure=failure,
+        ),
+    )
+    noncausal = RecordEnvelope(
+        schema=SCHEMA_VERSION,
+        run_id="run-route",
+        seq=4,
+        record=NodeRoutedRecord(node_id="other", handle="yes"),
+    )
+
+    causal_wire = json.loads(encode_record(causal))
+    noncausal_wire = json.loads(encode_record(noncausal))
+
+    assert causal_wire["payload"] == {
+        "node_id": "choice",
+        "handle": "default",
+        "terminal_failure": {
+            "code": "graph.terminal_unreachable",
+            "message": "terminal output 'result' skipped",
+            "node_id": "choice",
+            "trace": [{"key": "root/nodes/choice"}],
+            "cause_type": None,
+            "traceback": None,
+        },
+    }
+    assert noncausal_wire["payload"] == {
+        "node_id": "other",
+        "handle": "yes",
+        "terminal_failure": None,
+    }
+    assert decode_record(encode_record(causal)) == causal
+    assert decode_record(encode_record(noncausal)) == noncausal
+
+
 def test_records_and_envelopes_are_frozen():
     record = NodeStartedRecord(node_id="work")
     envelope = RecordEnvelope(
@@ -442,6 +490,44 @@ def test_decode_rejects_schema_2_flattened_failure_aliases():
         "locator": None,
         "range": None,
         "traceback": "trace",
+    }
+
+    with pytest.raises(ValueError):
+        decode_record(_json_bytes(wire))
+
+
+def test_decode_requires_explicit_route_terminal_failure_field():
+    wire = {
+        "schema": 2,
+        "run_id": "run",
+        "seq": 0,
+        "kind": "node_routed",
+        "payload": {"node_id": "choice", "handle": "default"},
+    }
+
+    with pytest.raises(ValueError):
+        decode_record(_json_bytes(wire))
+
+
+def test_decode_rejects_extra_nested_route_terminal_failure_field():
+    wire = {
+        "schema": 2,
+        "run_id": "run",
+        "seq": 0,
+        "kind": "node_routed",
+        "payload": {
+            "node_id": "choice",
+            "handle": "default",
+            "terminal_failure": {
+                "code": "graph.terminal_unreachable",
+                "message": "terminal output 'result' skipped",
+                "node_id": "choice",
+                "trace": [],
+                "cause_type": None,
+                "traceback": None,
+                "extra": True,
+            },
+        },
     }
 
     with pytest.raises(ValueError):

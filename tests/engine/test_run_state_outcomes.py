@@ -1043,10 +1043,25 @@ def test_success_resolves_redirect_precedence_and_preserves_target_disposition(
 
 def test_success_validates_ordinary_target_against_output_contract_type():
     """A non-redirected commit uses its own contract's semantic Type."""
-    state, log = _redirect_ready()
-    filler = state.flow.nodes["filler"]
-    filler.commit_as = None
-    filler.output_contract = ValueContract(Type.scalar(ValueKind.NUMBER))
+    flow = CompiledFlow.from_parts(
+        nodes={
+            START_ID: StartNode(START_ID),
+            "filler": FuncNode(
+                "filler",
+                lambda inputs: inputs,
+                output_contract=ValueContract(Type.scalar(ValueKind.NUMBER)),
+            ),
+            "after": FuncNode("after", lambda inputs: inputs),
+            END_ID: EndNode.record(END_ID, output_names=[]),
+        },
+        edges=[
+            Edge(id="start-filler", from_=START_ID, to="filler"),
+            Edge(id="filler-after", from_="filler", to="after"),
+        ],
+    )
+    state, log = _initialized_and_started(flow)
+    _commit_start_success(state, log)
+    commit_prepared(log, state, prepare_node_started(state, "filler"))
 
     prepared = prepare_node_succeeded(state, "filler", 3)
     commit_prepared(log, state, prepared)
@@ -1054,6 +1069,7 @@ def test_success_validates_ordinary_target_against_output_contract_type():
     assert prepared.record.commit_target == "filler"
     assert prepared.record.value == {"kind": "float", "value": 3.0}
     assert state.pool.get("filler") == 3.0
+    assert tuple(state.ready) == ("after",)
 
 
 def test_success_rejects_malformed_target_contract_as_a_host_invariant():
@@ -1998,6 +2014,9 @@ def test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record()
         message="terminal output 'zeta' skipped",
         node_id="router",
     )
+    failure = prepared.record.terminal_failure
+    assert failure is prepared._plan.delta.terminal_unreachable_failure
+    assert failure == expected_failure
     expected_terminal = RunFailed(expected_failure)
     assert prepared.observers == (
         NodeRouted("router", "go"),
@@ -2016,6 +2035,7 @@ def test_route_terminal_skip_uses_first_required_end_group_and_no_extra_record()
     assert tuple(state.ready) == ()
     assert tuple(state.in_flight) == ()
     assert [type(envelope.record) for envelope in log][-1:] == [NodeRoutedRecord]
+    assert tuple(log)[-1].record.terminal_failure == expected_failure
     assert len(tuple(log)) == 5
 
 
@@ -2032,6 +2052,7 @@ def test_route_latches_causal_terminal_failure_until_sibling_quiescence():
         trace=(OriginRef("router-site"),),
     )
     assert failure.trace == (state.flow.nodes["router"].origin,)
+    assert prepared.record.terminal_failure is failure
     assert prepared._plan.terminal is None
     assert all(not isinstance(event, RunFailed) for event in prepared.observers)
     assert state.terminal_unreachable_failure is None
@@ -2101,6 +2122,126 @@ def test_terminal_unreachable_latch_is_installed_only_after_route_append():
     assert log.next_sequence == prior.next_sequence
 
 
+def test_causal_route_replay_requires_its_persisted_terminal_failure():
+    state, log = _terminal_skip_router_in_flight()
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match="requires a persisted terminal failure"):
+        prepare_record(state, NodeRoutedRecord(node_id="router", handle="go"))
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == state.next_sequence
+
+
+def test_noncausal_route_replay_rejects_a_terminal_failure():
+    state, log = _route_in_flight()
+    failure = Failure(
+        code="graph.terminal_unreachable",
+        message="terminal output None skipped",
+        node_id="router",
+    )
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match="present on a noncausal route"):
+        prepare_record(
+            state,
+            NodeRoutedRecord(
+                node_id="router",
+                handle="yes",
+                terminal_failure=failure,
+            ),
+        )
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == state.next_sequence
+
+
+@pytest.mark.parametrize(
+    ("failure", "match"),
+    [
+        (
+            Failure("node.execute", "terminal output 'zeta' skipped", "router"),
+            "wrong failure code",
+        ),
+        (
+            Failure(
+                "graph.terminal_unreachable",
+                "terminal output 'zeta' skipped",
+                "other",
+            ),
+            "wrong causal node ID",
+        ),
+        (
+            Failure("graph.terminal_unreachable", "wrong", "router"),
+            "wrong message",
+        ),
+        (
+            Failure(
+                "graph.terminal_unreachable",
+                "terminal output 'zeta' skipped",
+                "router",
+                trace=(OriginRef("one"), OriginRef("two")),
+            ),
+            "at most one origin",
+        ),
+        (
+            Failure(
+                "graph.terminal_unreachable",
+                "terminal output 'zeta' skipped",
+                "router",
+                cause_type="RuntimeError",
+            ),
+            "exception diagnostics",
+        ),
+        (
+            Failure(
+                "graph.terminal_unreachable",
+                "terminal output 'zeta' skipped",
+                "router",
+                traceback="trace",
+            ),
+            "exception diagnostics",
+        ),
+    ],
+    ids=["code", "node", "message", "trace", "cause", "traceback"],
+)
+def test_causal_route_replay_rejects_mismatched_terminal_failure(
+    failure: Failure,
+    match: str,
+):
+    state, log = _terminal_skip_router_in_flight()
+    before = _state_snapshot(state)
+
+    with pytest.raises(ValueError, match=match):
+        prepare_record(
+            state,
+            NodeRoutedRecord(
+                node_id="router",
+                handle="go",
+                terminal_failure=failure,
+            ),
+        )
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == state.next_sequence
+
+
+def test_quiescence_without_retained_causal_failure_is_a_graph_fault():
+    state, log = _terminal_skip_with_sibling_in_flight()
+    commit_prepared(log, state, prepare_node_routed(state, "router", "go"))
+    state.terminal_unreachable_failure = None
+    before = _state_snapshot(state)
+
+    with pytest.raises(
+        ValueError,
+        match="quiesced without END output or a causal terminal failure",
+    ):
+        prepare_node_succeeded(state, "unrelated", {"done": True})
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == state.next_sequence
+
+
 def test_terminal_unreachable_latch_replays_before_and_at_quiescence():
     live_state, live_log = _terminal_skip_with_sibling_in_flight()
     commit_prepared(
@@ -2109,7 +2250,7 @@ def test_terminal_unreachable_latch_replays_before_and_at_quiescence():
         prepare_node_routed(live_state, "router", "go"),
     )
     replay_flow = _terminal_skip_route_flow(
-        router_origin=OriginRef("router-site"),
+        router_origin=OriginRef("rebased-router-site"),
         sibling=True,
     )
 
@@ -2133,7 +2274,7 @@ def test_terminal_unreachable_latch_replays_before_and_at_quiescence():
     )
     final_state, final_log, final_observers = _replay_outcome_log(
         _terminal_skip_route_flow(
-            router_origin=OriginRef("router-site"),
+            router_origin=OriginRef("rebased-router-site"),
             sibling=True,
         ),
         live_log,
@@ -2611,6 +2752,27 @@ def test_failure_replay_rejects_noncanonical_diagnostic_carriers():
 
     with pytest.raises(TypeError, match="locator"):
         prepare_record(state, record)
+
+    assert _state_snapshot(state) == before
+    assert log.next_sequence == state.next_sequence
+
+
+def test_failure_record_rejects_derived_terminal_unreachable_code():
+    state, log = _failure_in_flight()
+    failure = Failure(
+        code="graph.terminal_unreachable",
+        message="terminal output 'result' skipped",
+        node_id="failing",
+    )
+    before = _state_snapshot(state)
+    calls = (
+        lambda: prepare_node_failed(state, failure),
+        lambda: prepare_record(state, NodeFailedRecord(failure=failure)),
+    )
+
+    for call in calls:
+        with pytest.raises(ValueError, match="derived from a route record"):
+            call()
 
     assert _state_snapshot(state) == before
     assert log.next_sequence == state.next_sequence

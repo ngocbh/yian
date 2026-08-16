@@ -99,10 +99,11 @@ class NodeSucceededRecord:
 
 @dataclass(frozen=True, slots=True)
 class NodeRoutedRecord:
-    """Select one named outgoing route for an executing node."""
+    """Select one route and retain any terminal failure it first proves."""
 
     node_id: str
     handle: str
+    terminal_failure: Failure | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -557,11 +558,29 @@ class _NodeSucceededPayload(_StrictModel):
     value: dict[str, Any]
 
 
+class _OriginRefPayload(_StrictModel):
+    """Strict single-key JSON form of one opaque authored origin."""
+
+    key: str = Field(min_length=1)
+
+
+class _FailurePayload(_StrictModel):
+    """Strict nested JSON form of one canonical semantic failure."""
+
+    code: FailureCode
+    message: str
+    node_id: str = Field(min_length=1)
+    trace: list[_OriginRefPayload]
+    cause_type: str | None
+    traceback: str | None
+
+
 class _NodeRoutedPayload(_StrictModel):
     """Strict wire payload for :class:`NodeRoutedRecord`."""
 
     node_id: str = Field(min_length=1)
     handle: str = Field(min_length=1)
+    terminal_failure: _FailurePayload | None
 
 
 class _NodeExpandedPayload(_StrictModel):
@@ -598,23 +617,6 @@ class _SourceRangePayload(_StrictModel):
     start_col: int = Field(ge=1)
     end_line: int = Field(ge=1)
     end_col: int = Field(ge=1)
-
-
-class _OriginRefPayload(_StrictModel):
-    """Strict single-key JSON form of one opaque authored origin."""
-
-    key: str = Field(min_length=1)
-
-
-class _FailurePayload(_StrictModel):
-    """Strict nested JSON form of one canonical semantic failure."""
-
-    code: FailureCode
-    message: str
-    node_id: str = Field(min_length=1)
-    trace: list[_OriginRefPayload]
-    cause_type: str | None
-    traceback: str | None
 
 
 class _NodeFailedPayload(_StrictModel):
@@ -843,6 +845,32 @@ def _kind_for_record(record: RunRecord) -> str:
         raise TypeError(f"unsupported run record: {type(record).__name__}") from exc
 
 
+def _failure_payload(failure: Failure, *, carrier: str) -> dict[str, Any]:
+    """Return the one explicit wire form shared by failure-bearing records."""
+    if type(failure) is not Failure:
+        raise TypeError(f"{carrier} failure must be a Failure")
+    return {
+        "code": failure.code,
+        "message": failure.message,
+        "node_id": failure.node_id,
+        "trace": [{"key": origin.key} for origin in failure.trace],
+        "cause_type": failure.cause_type,
+        "traceback": failure.traceback,
+    }
+
+
+def _failure_from_payload(payload: dict[str, Any]) -> Failure:
+    """Rebuild one canonical Failure from an already validated wire mapping."""
+    return Failure(
+        code=payload["code"],
+        message=payload["message"],
+        node_id=payload["node_id"],
+        trace=tuple(OriginRef(origin["key"]) for origin in payload["trace"]),
+        cause_type=payload["cause_type"],
+        traceback=payload["traceback"],
+    )
+
+
 def _payload_for_record(record: RunRecord) -> dict[str, Any]:
     """Build and validate the canonical JSON payload for one record variant."""
     kind = _kind_for_record(record)
@@ -874,7 +902,18 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             "value": _copy_json(canonical),
         }
     elif isinstance(record, NodeRoutedRecord):
-        raw = asdict(record)
+        raw = {
+            "node_id": record.node_id,
+            "handle": record.handle,
+            "terminal_failure": (
+                _failure_payload(
+                    record.terminal_failure,
+                    carrier="NodeRoutedRecord",
+                )
+                if record.terminal_failure is not None
+                else None
+            ),
+        }
     elif isinstance(record, NodeExpandedRecord):
         raw = {
             "spawner_id": record.spawner_id,
@@ -885,18 +924,11 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             "topology_digest": record.topology_digest,
         }
     elif isinstance(record, NodeFailedRecord):
-        failure = record.failure
-        if type(failure) is not Failure:
-            raise TypeError("NodeFailedRecord failure must be a Failure")
         raw = {
-            "failure": {
-                "code": failure.code,
-                "message": failure.message,
-                "node_id": failure.node_id,
-                "trace": [{"key": origin.key} for origin in failure.trace],
-                "cause_type": failure.cause_type,
-                "traceback": failure.traceback,
-            },
+            "failure": _failure_payload(
+                record.failure,
+                carrier="NodeFailedRecord",
+            ),
             "locator": asdict(record.locator) if record.locator is not None else None,
             "range": asdict(record.range) if record.range is not None else None,
         }
@@ -940,7 +972,16 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             value=_copy_json(canonical),
         )
     if kind == "node_routed":
-        return NodeRoutedRecord(node_id=values["node_id"], handle=values["handle"])
+        terminal_payload = values["terminal_failure"]
+        return NodeRoutedRecord(
+            node_id=values["node_id"],
+            handle=values["handle"],
+            terminal_failure=(
+                _failure_from_payload(terminal_payload)
+                if terminal_payload is not None
+                else None
+            ),
+        )
     if kind == "node_expanded":
         seed = canonical_seed(values["seed"])[0]
         return NodeExpandedRecord(
@@ -954,17 +995,7 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
         locator_payload = values["locator"]
         range_payload = values["range"]
         return NodeFailedRecord(
-            failure=Failure(
-                code=failure_payload["code"],
-                message=failure_payload["message"],
-                node_id=failure_payload["node_id"],
-                trace=tuple(
-                    OriginRef(origin_payload["key"])
-                    for origin_payload in failure_payload["trace"]
-                ),
-                cause_type=failure_payload["cause_type"],
-                traceback=failure_payload["traceback"],
-            ),
+            failure=_failure_from_payload(failure_payload),
             locator=(
                 SourceSpan(**locator_payload)
                 if locator_payload is not None

@@ -13,7 +13,7 @@ from __future__ import annotations
 import copy
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
 from agent_composer._state import NodeState
@@ -824,6 +824,7 @@ def prepare_node_routed(
     return _prepare_route_transition(
         state,
         NodeRoutedRecord(node_id=node_id, handle=handle),
+        derive_terminal_failure=True,
     )
 
 
@@ -1177,9 +1178,41 @@ def _prepare_success_transition(
 def _prepare_route_transition(
     state: RunState,
     record: NodeRoutedRecord,
+    *,
+    derive_terminal_failure: bool = False,
 ) -> PreparedTransition:
     """Freeze one fully validated route delta and its canonical public record."""
-    delta, edge_updates = _prepare_route_delta(state, record)
+    delta, edge_updates, causal_failure = _prepare_route_delta(
+        state,
+        record,
+        derive_terminal_failure=derive_terminal_failure,
+    )
+    record_for_wire = replace(record, terminal_failure=causal_failure)
+    run_id = state.run_id
+    if not isinstance(run_id, str):  # established by initialized-state validation
+        raise ValueError("run state is not initialized")
+    canonical_bytes = encode_record(
+        RecordEnvelope(
+            schema=SCHEMA_VERSION,
+            run_id=run_id,
+            seq=state.next_sequence,
+            record=record_for_wire,
+        )
+    )
+    canonical_envelope = decode_record(canonical_bytes)
+    canonical_record = canonical_envelope.record
+    if not isinstance(canonical_record, NodeRoutedRecord):
+        raise TypeError("node-route envelope decoded to a different record kind")
+    if canonical_record != record_for_wire:
+        raise ValueError("NodeRoutedRecord is not in canonical wire form")
+    if causal_failure is not None:
+        if canonical_record.terminal_failure is None:
+            raise ValueError("causal route lost its terminal failure")
+        delta = replace(
+            delta,
+            terminal_unreachable_failure=canonical_record.terminal_failure,
+        )
+
     terminal = _prepare_terminal_delta(
         state,
         completing_node_id=delta.node_id,
@@ -1189,23 +1222,6 @@ def _prepare_route_transition(
         edge_updates=edge_updates,
         terminal_unreachable_failure=delta.terminal_unreachable_failure,
     )
-    run_id = state.run_id
-    if not isinstance(run_id, str):  # established by initialized-state validation
-        raise ValueError("run state is not initialized")
-    canonical_bytes = encode_record(
-        RecordEnvelope(
-            schema=SCHEMA_VERSION,
-            run_id=run_id,
-            seq=state.next_sequence,
-            record=record,
-        )
-    )
-    canonical_envelope = decode_record(canonical_bytes)
-    canonical_record = canonical_envelope.record
-    if not isinstance(canonical_record, NodeRoutedRecord):
-        raise TypeError("node-route envelope decoded to a different record kind")
-    if canonical_record != record:
-        raise ValueError("NodeRoutedRecord is not in canonical wire form")
 
     start_id = state.flow.start_id
     end_id = state.flow.end_id
@@ -1645,6 +1661,11 @@ def _commit_route(
         and prepared.record.handle == delta.handle
     ):
         raise ValueError("route record and prevalidated delta disagree")
+    if prepared.record.terminal_failure is not None:
+        if delta.terminal_unreachable_failure is not prepared.record.terminal_failure:
+            raise ValueError("route record and terminal-failure delta disagree")
+    elif delta.terminal_unreachable_failure is not state.terminal_unreachable_failure:
+        raise ValueError("noncausal route changed terminal-failure authority")
     apply = _materialize_route(plan)
 
     _append_and_verify(log, prepared)
@@ -2741,6 +2762,10 @@ def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
     """Validate exact diagnostic carriers and the executing node for replay."""
     if type(record.failure) is not Failure:
         raise TypeError("NodeFailedRecord failure must be a Failure")
+    if record.failure.code == "graph.terminal_unreachable":
+        raise ValueError(
+            "graph.terminal_unreachable must be derived from a route record"
+        )
     node_id = record.failure.node_id
     if type(node_id) is not str:
         raise TypeError("NodeFailedRecord failure node_id must be a string")
@@ -2763,6 +2788,13 @@ def _validate_route_record(state: RunState, record: NodeRoutedRecord) -> None:
         raise TypeError("NodeRoutedRecord handle must be a string")
     if not record.handle:
         raise ValueError("NodeRoutedRecord handle must be non-empty")
+    if (
+        record.terminal_failure is not None
+        and type(record.terminal_failure) is not Failure
+    ):
+        raise TypeError(
+            "NodeRoutedRecord terminal failure must be a Failure or None"
+        )
     _require_routing_node(state, record.node_id)
 
 
@@ -2876,7 +2908,9 @@ def _prepare_success_delta(
 def _prepare_route_delta(
     state: RunState,
     record: NodeRoutedRecord,
-) -> tuple[_RouteDelta, dict[str, NodeState]]:
+    *,
+    derive_terminal_failure: bool,
+) -> tuple[_RouteDelta, dict[str, NodeState], Failure | None]:
     """Validate one route and return its redirect-aware frozen skip closure."""
     _validate_route_record(state, record)
     edge_updates: dict[str, NodeState] = {}
@@ -2976,15 +3010,33 @@ def _prepare_route_delta(
         for child in reversed(children):
             work.append((child, NodeState.SKIPPED))
 
+    causal_failure: Failure | None = None
     terminal_unreachable_failure = state.terminal_unreachable_failure
-    if (
+    first_terminal_skip = (
         terminal_unreachable_failure is None
         and state.flow.end_id in skipped_nodes
-    ):
-        terminal_unreachable_failure = _make_terminal_unreachable_failure(
-            state,
-            causal_node_id=record.node_id,
-            edge_updates=edge_updates,
+    )
+    if first_terminal_skip:
+        if derive_terminal_failure:
+            if record.terminal_failure is not None:
+                raise ValueError(
+                    "live route preparation cannot supply a terminal failure"
+                )
+            causal_failure = _make_terminal_unreachable_failure(
+                state,
+                causal_node_id=record.node_id,
+                edge_updates=edge_updates,
+            )
+        else:
+            causal_failure = _validate_recorded_terminal_failure(
+                state,
+                record,
+                edge_updates=edge_updates,
+            )
+        terminal_unreachable_failure = causal_failure
+    elif record.terminal_failure is not None:
+        raise ValueError(
+            "NodeRoutedRecord terminal failure is present on a noncausal route"
         )
 
     return (
@@ -2997,6 +3049,7 @@ def _prepare_route_delta(
             terminal_unreachable_failure=terminal_unreachable_failure,
         ),
         edge_updates,
+        causal_failure,
     )
 
 
@@ -3167,6 +3220,37 @@ def _make_terminal_unreachable_failure(
     )
 
 
+def _validate_recorded_terminal_failure(
+    state: RunState,
+    record: NodeRoutedRecord,
+    *,
+    edge_updates: dict[str, NodeState],
+) -> Failure:
+    """Validate the persisted authority for one structurally causal route."""
+    failure = record.terminal_failure
+    if failure is None:
+        raise ValueError(
+            "causal NodeRoutedRecord requires a persisted terminal failure"
+        )
+    if type(failure) is not Failure:
+        raise TypeError("NodeRoutedRecord terminal failure must be a Failure")
+    expected_message = (
+        f"terminal output {_terminal_skipped_output_name(state, edge_updates)!r} "
+        "skipped"
+    )
+    if failure.code != "graph.terminal_unreachable":
+        raise ValueError("route terminal failure has the wrong failure code")
+    if failure.node_id != record.node_id:
+        raise ValueError("route terminal failure has the wrong causal node ID")
+    if failure.message != expected_message:
+        raise ValueError("route terminal failure has the wrong message")
+    if len(failure.trace) > 1:
+        raise ValueError("route terminal failure trace must contain at most one origin")
+    if failure.cause_type is not None or failure.traceback is not None:
+        raise ValueError("route terminal failure cannot carry exception diagnostics")
+    return failure
+
+
 def _prepare_terminal_delta(
     state: RunState,
     *,
@@ -3213,10 +3297,8 @@ def _prepare_terminal_delta(
             failure=None,
         )
     if terminal_unreachable_failure is None:
-        terminal_unreachable_failure = _make_terminal_unreachable_failure(
-            state,
-            causal_node_id=completing_node_id,
-            edge_updates=edge_updates,
+        raise ValueError(
+            "run quiesced without END output or a causal terminal failure"
         )
     return _TerminalDelta(
         succeeded=False,

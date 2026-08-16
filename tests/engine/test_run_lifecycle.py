@@ -27,7 +27,9 @@ import agent_composer.run as run_module
 from agent_composer.compile.llm_cascade import resolve_llm_cascade
 from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compile.model import START_ID
-from agent_composer.compose import load_flow
+from agent_composer.compile.origins import rebase_flow_origins
+from agent_composer.compose import ComposedFlow, load_flow
+from agent_composer.diagnostics import OriginRef
 from agent_composer.events import (
     NodeFailed,
     NodeStarted,
@@ -42,6 +44,7 @@ from agent_composer.runtime.log import (
     JsonlRunLog,
     MemoryRunLog,
     NodeFailedRecord,
+    NodeRoutedRecord,
     NodeStartedRecord,
     NodeSucceededRecord,
     RunResumedRecord,
@@ -191,6 +194,26 @@ nodes:
       x: ${input.window}
     output: int
 output: ${echo.output}
+"""
+
+_TERMINAL_SKIP_FLOW = """
+id: lifecycle-terminal-skip
+name: lifecycle_terminal_skip
+input:
+  score: float
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "${input.score} >= 1.0"
+        then: selected
+  selected:
+    kind: code
+    code: tests.engine._compose_codefns:positive
+    input:
+      topic: selected
+    output: str
+output: ${selected.output}
 """
 
 _ACTION_FLOW = """
@@ -630,6 +653,56 @@ def test_terminal_resume_preserves_located_failure_diagnostics(tmp_path: Path) -
     assert resumed.events == []
     assert path.read_bytes() == before
     _durable_records(path)
+
+
+def test_terminal_resume_preserves_recorded_trace_across_origin_rebase(
+    tmp_path: Path,
+) -> None:
+    """Replay uses causal-record provenance, not the newly loaded graph's origins."""
+    path = tmp_path / "terminal-origin-rebase.jsonl"
+    loaded = load_flow(_TERMINAL_SKIP_FLOW)
+    fresh = run_module.run_flow(
+        loaded,
+        {"score": 0.0},
+        log=path,
+        run_id=_RUN_ID,
+    )
+    before = path.read_bytes()
+
+    assert fresh.status == "failed"
+    assert fresh.failure is not None
+    assert fresh.failure.code == "graph.terminal_unreachable"
+    assert fresh.failure.trace
+    routed = [
+        record
+        for record in _durable_records(path)
+        if isinstance(record, NodeRoutedRecord)
+    ]
+    assert len(routed) == 1
+    assert routed[0].terminal_failure == fresh.failure
+
+    rebased_compiled, resolver = rebase_flow_origins(
+        loaded.compiled,
+        lambda origin: OriginRef(f"rebased:{origin.key}"),
+        resolver=loaded.origin_resolver,
+    )
+    rebased = ComposedFlow(
+        compiled=rebased_compiled,
+        version=loaded.version,
+        name=loaded.name,
+        description=loaded.description,
+        source=loaded.source,
+        origin_resolver=resolver,
+    )
+    assert flow_fingerprint(rebased.compiled) == flow_fingerprint(loaded.compiled)
+
+    resumed = run_module.resume_flow(rebased, log=path)
+
+    assert resumed.status == "failed"
+    assert resumed.failure == fresh.failure
+    assert resumed.failure.trace == fresh.failure.trace
+    assert resumed.events == []
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize(

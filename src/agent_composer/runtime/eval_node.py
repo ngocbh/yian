@@ -33,7 +33,14 @@ from typing import Any, TypeAlias
 
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import SourceRange, SourceSpan, StreamChunk
-from agent_composer.nodes.base import Grow, Output, Route, _HostStop
+from agent_composer.nodes.base import (
+    Grow,
+    NodeAssertFailed,
+    Output,
+    Route,
+    _HostStop,
+    _NodeBodyError,
+)
 from agent_composer.nodes.binding import BindingError, bind_params
 from agent_composer.typesys.pool import VariablePool
 
@@ -83,6 +90,7 @@ def _evaluation_failure(
     exception: Exception,
     *,
     origin: OriginRef | None = None,
+    traceback_text: str | None = None,
 ) -> EvaluationFailure:
     """Build one semantic failure plus the temporary range presentation bridge."""
     locator = getattr(exception, "locator", None)
@@ -98,10 +106,21 @@ def _evaluation_failure(
             node_id=node.id,
             trace=_failure_trace(node, origin),
             cause_type=type(exception).__name__,
-            traceback=_tb.format_exc(),
+            traceback=(traceback_text if traceback_text is not None else _tb.format_exc()),
         ),
         locator=locator,
         range=range_,
+    )
+
+
+def _format_exception(exception: Exception) -> str:
+    """Format one original exception without a private stage-marker tail."""
+    return "".join(
+        _tb.format_exception(
+            type(exception),
+            exception,
+            exception.__traceback__,
+        )
     )
 
 
@@ -182,22 +201,12 @@ def _evaluate_node_stream(
 
     try:
         outcome = node.run(record, **caps)
-        if isinstance(outcome, (Output, Route, Grow)):
-            result = outcome
-        elif inspect.isgenerator(outcome):
-            result = yield from node._drain_node_generator(outcome)
-        else:
-            raise RuntimeError(
-                f"node {node.id!r} run() returned {type(outcome).__name__}, "
-                "not a NodeResult"
-            )
-        if isinstance(result, Grow) and not node.is_spawner:
-            # `node.kind.value` is message-only; the gate remains the kind-blind trait.
-            raise RuntimeError(
-                f"node {node.id!r} (kind {node.kind.value}) returned a Grow but is "
-                "not a spawner (CALL/MAP/LOOP); only spawner kinds may grow the graph"
-            )
-        return result
+        streamed = inspect.isgenerator(outcome)
+        result = (
+            (yield from node._drain_node_generator(outcome))
+            if streamed
+            else outcome
+        )
     except _HostStop:
         raise
     except BindingError as exc:
@@ -207,8 +216,44 @@ def _evaluate_node_stream(
             exc,
             origin=exc.origin,
         )
-    except Exception as exc:  # noqa: BLE001 - temporary node execution boundary
-        return _evaluation_failure(node, "node.execute", exc)
+    except NodeAssertFailed as exc:
+        if exc.assertion is None:
+            return _evaluation_failure(node, "node.execute", exc)
+        return _evaluation_failure(
+            node,
+            "assertion.failed",
+            exc,
+            origin=exc.assertion.origin,
+        )
+    except _NodeBodyError as wrapped:
+        original = wrapped.original
+        return _evaluation_failure(
+            node,
+            "node.execute",
+            original,
+            origin=node.exception_origin(original),
+            traceback_text=_format_exception(original),
+        )
+
+    try:
+        if not isinstance(result, (Output, Route, Grow)):
+            if streamed:
+                raise RuntimeError(
+                    f"node {node.id!r} generator did not return a NodeResult"
+                )
+            raise RuntimeError(
+                f"node {node.id!r} run() returned {type(result).__name__}, "
+                "not a NodeResult"
+            )
+        if isinstance(result, Grow) and not node.is_spawner:
+            # `node.kind.value` is message-only; the gate remains the kind-blind trait.
+            raise RuntimeError(
+                f"node {node.id!r} (kind {node.kind.value}) returned a Grow but is "
+                "not a spawner (CALL/MAP/LOOP); only spawner kinds may grow the graph"
+            )
+    except Exception as exc:  # synthetic result-contract boundary
+        return _evaluation_failure(node, "contract.node_result", exc)
+    return result
 
 
 def eval_node(

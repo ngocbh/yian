@@ -9,7 +9,14 @@ import pytest
 
 from agent_composer.compile.model import START_ID
 from agent_composer.diagnostics import OriginRef
-from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route
+from agent_composer.nodes.base import (
+    Grow,
+    Node,
+    NodeAssertFailed,
+    NodeKind,
+    Output,
+    Route,
+)
 from agent_composer.nodes.contracts import (
     Assertion,
     Binding,
@@ -65,13 +72,15 @@ def test_node_chosen_commit_target_remains_on_output():
 
 
 def test_binding_failure_returns_diagnostic_evaluation_failure():
-    node = FuncNode("n", lambda inputs: inputs)
+    node = FuncNode("n", lambda inputs: inputs, origin=OriginRef("node:n"))
     node.params = [Parameter(name="x", required=True)]
     node._wiring_src = {}
 
     result = drive(node)
 
     assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "binding.evaluate"
+    assert result.failure.trace == (node.origin,)
     assert result.error_type == "BindingError"
 
 
@@ -129,9 +138,13 @@ def test_wait_until_accepts_a_binding_carrier():
 
 
 def test_node_raise_returns_evaluation_failure():
-    result = drive(FailNode("n", "boom"))
+    node = FailNode("n", "boom", origin=OriginRef("node:n"))
+
+    result = drive(node)
 
     assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "node.execute"
+    assert result.failure.trace == (node.origin,)
     assert (result.error, result.error_type) == ("boom", "RuntimeError")
 
 
@@ -175,9 +188,13 @@ class _MutatingNode(Node):
 
 
 def test_non_spawner_grow_returns_clear_evaluation_failure():
-    result = drive(_NonSpawnerGrowNode("n"))
+    node = _NonSpawnerGrowNode("n", origin=OriginRef("node:n"))
+
+    result = drive(node)
 
     assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "contract.node_result"
+    assert result.failure.trace == (node.origin,)
     assert result.error_type == "RuntimeError"
     assert "Grow" in result.error and "spawner" in result.error
 
@@ -186,6 +203,8 @@ def test_bad_return_type_returns_clear_evaluation_failure():
     result = drive(_BadReturnNode("n"))
 
     assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "contract.node_result"
+    assert result.failure.trace == ()
     assert result.error_type == "RuntimeError"
     assert "not a NodeResult" in result.error
 
@@ -199,6 +218,53 @@ def test_post_assert_isolated_from_node_input_mutation():
     result = drive(node, pool)
 
     assert result == Output("done")
+
+
+def test_wrapper_assertion_failure_uses_assertion_stage_and_origin() -> None:
+    """Only the wrapper-owned authored assertion gets `assertion.failed`."""
+    assertion_origin = OriginRef("assert:n:0")
+    node = FuncNode("n", lambda _inputs: "never", origin=OriginRef("node:n"))
+    node.pre_asserts = [
+        Assertion("1 == 2", "must hold", origin=assertion_origin)
+    ]
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "assertion.failed"
+    assert result.failure.trace == (assertion_origin,)
+    assert result.failure.cause_type == "NodeAssertFailed"
+    assert result.failure.traceback is not None
+
+
+class _BodyRaisesAssertion(Node):
+    """Raise the wrapper's exception type from a node body."""
+
+    kind = NodeKind.CODE
+
+    def _run_impl(self, inputs):
+        raise NodeAssertFailed("body chose this exception type")
+
+
+def test_body_raised_assertion_exception_remains_node_execution() -> None:
+    """Semantic classification follows the body stage, not exception class."""
+    node = _BodyRaisesAssertion("n", origin=OriginRef("node:n"))
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "node.execute"
+    assert result.failure.trace == (node.origin,)
+    assert result.failure.cause_type == "NodeAssertFailed"
+
+
+def test_malformed_assertion_carrier_is_an_ir_fault() -> None:
+    """Unexpected wrapper-state faults are outside expected flow failure."""
+    node = FuncNode("n", lambda _inputs: "never")
+    node.pre_asserts = [object()]  # type: ignore[list-item]
+
+    with pytest.raises(AttributeError):
+        drive(node)
 
 
 def test_map_over_not_a_list_message_is_byte_identical():

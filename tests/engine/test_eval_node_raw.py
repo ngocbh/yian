@@ -6,12 +6,13 @@ outside the node-failure sum.
 """
 
 import threading
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, fields
 from types import SimpleNamespace
 
 import pytest
 
 from agent_composer.events import SourceRange, SourceSpan, StreamChunk
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import (
     Grow,
     Node,
@@ -101,6 +102,11 @@ def test_raw_failure_is_frozen_slotted_and_preserves_diagnostics():
     assert result.locator == SourceSpan("work", "input", "required")
     assert result.range == expected_range
     assert result.traceback is not None and "BindingError" in result.traceback
+    assert [field.name for field in fields(EvaluationFailure)] == [
+        "failure",
+        "locator",
+        "range",
+    ]
     assert not hasattr(result, "__dict__")
     with pytest.raises(FrozenInstanceError):
         result.failure = result.failure
@@ -111,9 +117,54 @@ def test_raw_node_raise_and_invalid_grow_are_failures_not_observers():
     invalid_grow = _raw(_LeafGrow("leaf"))
 
     assert isinstance(raised, EvaluationFailure)
+    assert raised.failure.code == "node.execute"
     assert (raised.error, raised.error_type) == ("boom", "RuntimeError")
     assert isinstance(invalid_grow, EvaluationFailure)
+    assert invalid_grow.failure.code == "contract.node_result"
     assert "not a spawner" in invalid_grow.error
+
+
+class _RaisingStreamNode(Node):
+    """Raise while a generator body is being advanced."""
+
+    kind = NodeKind.CODE
+
+    def _run_impl(self, inputs):
+        yield StreamChunk(self.id, "output", "first")
+        raise ValueError("stream body failed")
+
+
+class _InvalidStreamReturnNode(Node):
+    """Return a value outside NodeResult from a generator body."""
+
+    kind = NodeKind.CODE
+
+    def _run_impl(self, inputs):
+        if False:
+            yield StreamChunk(self.id, "output", "never")
+        return "invalid"
+
+
+def test_stream_body_exception_and_invalid_return_use_distinct_stages() -> None:
+    """Generator execution is node code; its terminal value is a result contract."""
+    body = _RaisingStreamNode("body", origin=OriginRef("node:body"))
+    invalid = _InvalidStreamReturnNode("invalid", origin=OriginRef("node:invalid"))
+    chunks = []
+
+    body_failure = _raw(body, emit_stream=chunks.append)
+    result_failure = _raw(invalid)
+
+    assert [chunk.chunk for chunk in chunks] == ["first"]
+    assert isinstance(body_failure, EvaluationFailure)
+    assert body_failure.failure.code == "node.execute"
+    assert body_failure.failure.trace == (body.origin,)
+    assert body_failure.failure.cause_type == "ValueError"
+    assert "ValueError: stream body failed" in (body_failure.failure.traceback or "")
+    assert isinstance(result_failure, EvaluationFailure)
+    assert result_failure.failure.code == "contract.node_result"
+    assert result_failure.failure.trace == (invalid.origin,)
+    assert result_failure.failure.cause_type == "RuntimeError"
+    assert "generator did not return a NodeResult" in result_failure.failure.message
 
 
 def test_raw_stream_callback_failure_propagates_unchanged():

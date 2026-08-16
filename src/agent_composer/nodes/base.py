@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterator, Optional, U
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
-from agent_composer.nodes.binding import apply_defaults
+from agent_composer.nodes.binding import BindingError, apply_defaults
 from agent_composer.nodes.contracts import (
     Assertion,
     Parameter,
@@ -182,10 +182,28 @@ class NodeAssertFailed(Exception):
     corresponding node failure before the reducer derives `RunFailed`.
     """
 
-    def __init__(self, message: str, *, locator: Any = None, range: Any = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        assertion: Assertion | None = None,
+        locator: Any = None,
+        range: Any = None,
+    ) -> None:
+        """Retain the wrapper-owned assertion plus the legacy presentation bridge."""
         super().__init__(message)
+        self.assertion = assertion
         self.locator = locator
         self.range = range
+
+
+class _NodeBodyError(Exception):
+    """Private stage marker retaining one exception raised by node implementation."""
+
+    def __init__(self, original: Exception) -> None:
+        """Keep the exact body exception and its original traceback identity."""
+        super().__init__(str(original))
+        self.original = original
 
 
 class Node(ABC):
@@ -429,6 +447,14 @@ class Node(ABC):
         """
         return ()
 
+    def exception_origin(self, exception: Exception) -> OriginRef | None:
+        """Return the authored operation origin for one node-body exception.
+
+        Kinds with finer source-neutral exception mapping may override this hook.
+        The default is the authored node context; source-free nodes return ``None``.
+        """
+        return self.origin
+
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Template method: fill declared defaults for omitted inputs, fire pre-asserts
         (record-only), run the kind's `_run_impl`, then fire post-asserts (record-only)
@@ -479,6 +505,7 @@ class Node(ABC):
             rng = self.pre_assert_ranges[bad_i] if bad_i < len(self.pre_assert_ranges) else None
             raise NodeAssertFailed(
                 f"node {self.id!r} pre-assert failed: {bad.display}",
+                assertion=bad,
                 locator=SourceSpan(self.id, "assert", bad.display),
                 range=rng,
             )
@@ -487,7 +514,12 @@ class Node(ABC):
         # not corrupt the post-assert scope — the contract check has to see the inputs as bound,
         # not as the body left them. Only paid when this node declares post-asserts.
         post_input = copy.deepcopy(inputs) if self.post_asserts else None
-        result = self._run_impl(inputs, **caps)
+        try:
+            result = self._run_impl(inputs, **caps)
+        except (_HostStop, BindingError, _NodeBodyError):
+            raise
+        except Exception as exc:
+            raise _NodeBodyError(exc) from exc
         # Post-asserts fire ONLY for an `Output` result — never Route/Grow. A spawner's
         # Grow post-asserts are handled in a later step. A generator (streaming) result also
         # falls through the guard untouched — the DORMANT streaming path: the wrapper must not
@@ -504,6 +536,7 @@ class Node(ABC):
                 rng = self.post_assert_ranges[bad_i] if bad_i < len(self.post_assert_ranges) else None
                 raise NodeAssertFailed(
                     f"node {self.id!r} post-assert failed: {bad.display}",
+                    assertion=bad,
                     locator=SourceSpan(self.id, "assert", bad.display),
                     range=rng,
                 )
@@ -564,16 +597,20 @@ class Node(ABC):
         except ExpressionError:
             return False
 
-    def _drain_node_generator(self, gen: Generator) -> Generator[Any, Any, "NodeResult"]:
-        """Forward a streaming node's yielded `StreamChunk`s and capture its returned
-        `NodeResult`; generators yield only transient chunks before that result."""
-        try:
-            event = next(gen)
-            while True:
-                yield event  # StreamChunk
+    def _drain_node_generator(self, gen: Generator) -> Generator[Any, Any, Any]:
+        """Forward transient chunks and return the generator's raw terminal value.
+
+        Generator execution belongs to the node-body stage. The evaluator validates
+        the returned value afterward so body exceptions and result-contract rejection
+        cannot collapse into one category.
+        """
+        while True:
+            try:
                 event = next(gen)
-        except StopIteration as stop:
-            result = stop.value
-            if not isinstance(result, (Output, Route, Grow)):
-                raise RuntimeError(f"node {self.id!r} generator did not return a NodeResult")
-            return result
+            except StopIteration as stop:
+                return stop.value
+            except (_HostStop, BindingError, _NodeBodyError):
+                raise
+            except Exception as exc:
+                raise _NodeBodyError(exc) from exc
+            yield event

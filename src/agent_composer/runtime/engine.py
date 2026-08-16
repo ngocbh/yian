@@ -261,19 +261,20 @@ class FlowEngine:
     ) -> tuple[Any, ...]:
         """Prepare node data, append its record, and apply the total reducer plan."""
         if isinstance(outcome, EvaluationFailure):
-            if outcome.node_id != node_id:
+            failure = outcome.failure
+            if failure.node_id != node_id:
                 raise RuntimeError(
                     "raw evaluation failure node identity mismatch: "
-                    f"expected {node_id!r}, found {outcome.node_id!r}"
+                    f"expected {node_id!r}, found {failure.node_id!r}"
                 )
             prepared = prepare_node_failed(
                 self.state,
                 node_id,
-                outcome.error,
-                error_type=outcome.error_type,
+                failure.message,
+                error_type=failure.cause_type or "",
                 locator=outcome.locator,
                 range=outcome.range,
-                traceback=outcome.traceback,
+                traceback=failure.traceback,
             )
             return commit_prepared(self.log, self.state, prepared)
 

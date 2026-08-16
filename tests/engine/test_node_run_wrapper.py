@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from agent_composer.diagnostics import SourceRange
+from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.base import (
     Node,
     NodeAssertFailed,
@@ -57,12 +57,18 @@ def test_run_returns_impl_output_when_asserts_hold():
 def test_pre_assert_failure_raises_before_impl_runs():
     """A violated pre-assert raises `NodeAssertFailed` before `_run_impl` runs."""
     node = _ImplNode("n", value={"output": 1})
-    node.pre_asserts = [Assertion("${x} > 100", "x is greater than 100")]
+    assertion = Assertion(
+        "${x} > 100",
+        "x is greater than 100",
+        origin=OriginRef("assert:n:0"),
+    )
+    node.pre_asserts = [assertion]
 
     with pytest.raises(NodeAssertFailed) as excinfo:
         node.run({"x": 5})
 
     assert node.ran is False  # short-circuited before the body
+    assert excinfo.value.assertion is assertion
     assert "pre-assert failed" in str(excinfo.value)
     assert "'n'" in str(excinfo.value)
 

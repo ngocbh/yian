@@ -22,7 +22,7 @@ import json
 from typing import Any, Callable, List, Literal, Optional
 
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, ValidationError, create_model
 
 from agent_composer.nodes.base import _HostStop
 from agent_composer.typesys.values import Type, ValueKind
@@ -264,3 +264,55 @@ def _generate_fallback(
         else:
             return value
     raise last_err  # type: ignore[misc]
+
+
+def _structured_validation_path(
+    exception: Exception,
+    expected_type: Type,
+) -> tuple[str | int, ...] | None:
+    """Project an owned structured-output error to a contract-relative path.
+
+    A Pydantic error can also come from AGENT tool arguments or provider internals.
+    Ownership therefore requires the exhausted error's exact native/fallback frame,
+    the same semantic type object, the frame's final-error identity, and the generated
+    schema title. Record locations already match contract paths; scalar/list wrapper
+    fields are removed. ``()`` identifies the output-contract root, while ``None``
+    means this exception is not attributable to generated structured output.
+    """
+    if not isinstance(exception, ValidationError):
+        return None
+
+    traceback = exception.__traceback__
+    owned = False
+    while traceback is not None:
+        frame = traceback.tb_frame
+        if (
+            (
+                frame.f_code is _generate_native.__code__
+                or frame.f_code is _generate_fallback.__code__
+            )
+            and frame.f_locals.get("typ") is expected_type
+            and frame.f_locals.get("last_err") is exception
+        ):
+            schema = frame.f_locals.get("schema")
+            if getattr(schema, "__name__", None) == exception.title:
+                owned = True
+                break
+        traceback = traceback.tb_next
+    if not owned:
+        return None
+
+    is_record = expected_type.kind == ValueKind.OBJECT and bool(expected_type.fields)
+    is_list = expected_type.kind == ValueKind.LIST_ANY or expected_type.kind.is_list()
+    wrapper = None if is_record else "items" if is_list else "value"
+    for detail in exception.errors():
+        location = detail.get("loc")
+        if type(location) is not tuple or any(
+            type(segment) not in (str, int) for segment in location
+        ):
+            continue
+        if not location or wrapper is None:
+            return location
+        if location[0] == wrapper:
+            return location[1:]
+    return None

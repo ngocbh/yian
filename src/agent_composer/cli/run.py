@@ -195,18 +195,6 @@ def _render_frame_box(text: str, marks, title: str) -> bool:
     return True
 
 
-def _render_source_frame(text: str, marks, title: str, message: str) -> None:
-    """Print an error as a boxed `.yaml` source frame + the message below (red).
-
-    Shared by compile and runtime single-frame errors: boxes the source around `marks`
-    (like a Python traceback's code box), then prints `message` under it. When no mark is in
-    range, prints a plain `title: message` line (no box)."""
-    if not _render_frame_box(text, marks, title):
-        err_console.print(Text(f"{title}: ", style="red bold") + Text(message, style="red"))
-        return
-    err_console.print(Text(message, style="red"))
-
-
 def _render_load_error(err: LoadError) -> None:
     """Render the source-owned diagnostic carried by a Compose load failure."""
     render_diagnostic(err.diagnostic)

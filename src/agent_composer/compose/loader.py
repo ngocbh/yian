@@ -3,10 +3,12 @@
 The file-I/O front door: own one source document, build the typedefs registry, compose the
 call resolver, load every `defs:` callable, and hand the parsed sections to the
 post-parse conductor (`build.pipeline._assemble`, imported back here) which returns
-the `ComposedFlow`. This module owns root/def source projections,
-frame ranges, the resolver composition (`make_file_resolver`/
-`_CallableScope`), and the defs loaders (`_load_def`/`_load_single_node_def`) —
-not the assembly pipeline itself.
+the `ComposedFlow`. This module owns root/def source projections, including routing the
+physical flow-assertion cursor for a full root or multi-node def. Compact roots and flat
+single-node defs instead project their `asserts:` onto the synthesized node, so they do not
+invent a parallel flow-assertion site. It also owns frame ranges, the resolver composition
+(`make_file_resolver`/`_CallableScope`), and the defs loaders
+(`_load_def`/`_load_single_node_def`) — not the assembly pipeline itself.
 
 `call` resolution is **defs-first**: a `call:` names an in-file `defs:` callable (built
 in-loader by the same `_assemble`) or a `uses:` alias resolved through the injected

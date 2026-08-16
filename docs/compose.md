@@ -22,8 +22,9 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered)
   ├─ stamp authored headers → optional Node origins in one document-local catalog
   │
-  ├─ desugar_inline_calls        ┐  rewrite author sugar into core nodes,
-  ├─ desugar_adaptive_questions  │  minting synthetic nodes where needed.
+  ├─ desugar_inline_calls        ┐  rewrite author sugar into core nodes and
+  │                               │  carrierize flow assertions by source order.
+  ├─ desugar_adaptive_questions  │  Mint synthetic nodes where needed.
   ├─ desugar_case_call_targets   │  After this, only core kinds remain.
   ├─ expand_case_outputs         ┘
   │
@@ -34,14 +35,15 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │
   ├─ infer_data_edges       → read every ${...} → draw the edges (nobody draws them by hand);
   │                            append each case's own data+control edges from its build
-  ├─ validate_references    → every ${...} resolves & type-checks; classify asserts
+  ├─ validate_references    → every ${...} resolves and type-checks
+  ├─ stamp node assertions → validate/classify one originated carrier per list position
   ├─ stamp flow outputs     → source-backed bare/mapped values on final
   │                            FlowOutput bindings (mapping keys stay origin-free)
   ├─ synthesize boundary    → START/END nodes, edges, and binding-preserving wiring
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
   ▼
- CompiledFlow   (returned inside a ComposedFlow: + parameters, asserts, source frame)
+ CompiledFlow   (returned inside a ComposedFlow: + parameters, source frame, local catalog)
 ```
 
 Everything below just explains three of those words: **descriptor**, **build**, and
@@ -88,10 +90,13 @@ into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and n
 reparsed or parallel range map created. The loader shares one builder across a physical
 document's root, `defs:`, and inline bodies. Assembly registers authored node headers,
 ordinary node-input keys and values, source-backed reserved MAP/WAIT wiring values, and
-source-backed flow-output values on the canonical carriers themselves. Flow-output
-registration happens after desugaring, so an authored occurrence locates the final
-`FlowOutput.binding` source. Output mapping keys stay origin-free. Without a retained
-source occurrence, Compose mints no origin and preserves any explicit programmatic origin.
+source-backed flow-output values on the canonical carriers themselves. It also indexes
+flow and node assertions by authored list order, deriving each `Assertion.origin` and its
+aligned temporary `SourceRange` from the same item cursor. Equal text at two positions is
+therefore two distinct source sites. Flow-output registration happens after desugaring,
+so an authored occurrence locates the final `FlowOutput.binding` source. Output mapping
+keys stay origin-free. Without a retained source occurrence, Compose mints no origin and
+preserves any explicit programmatic origin.
 Each assembled `ComposedFlow` receives a frozen snapshot as private
 `_local_catalog` staging metadata. It is deliberately not a public, complete resolver yet:
 cached external-child origins still need lexical rebasing.
@@ -189,9 +194,19 @@ so they have no `Parameter.origin`. The final (possibly rewritten) payload stays
 `Binding.source`, so lowering does not detach provenance from the authored value. Entries
 without a retained source occurrence receive no new Compose origin; an explicit
 programmatic origin remains intact, and source-backed projections inherit their backing
-occurrence. CASE wiring, synthesized START/END boundary parameters, assertions, contracts,
-external rebasing, and runtime diagnostic consumption remain
-separate migration steps.
+occurrence. CASE wiring, synthesized START/END boundary parameters, contracts, external
+rebasing, and runtime diagnostic consumption remain separate migration steps.
+
+Authored assertions cross into one ordered `Assertion` carrier per source occurrence.
+Flow assertions are carrierized during inline-call desugaring; node assertions are
+carrierized during validation. For physical YAML entries, assembly uses the retained
+list-item cursor as the single source of the opaque `OriginRef` and the temporary positional
+range; flow carrierization preserves an explicit programmatic origin rather than replacing
+it. Inline-call desugaring and flow lowering change only the executable expression, while
+child cloning, CALL relocation, and LOOP respawn retain the carrier's display and origin.
+Lowered flow carriers are reused on START/END. Full root flows and multi-node `defs:` retain a flow
+assertion cursor; compact roots and flat single-node defs project `asserts:` onto their
+synthesized node, so those assertions are node-local.
 
 Source-backed bare and mapped output values on root flows, multi-node `defs:`, and inline
 children stamp the final `FlowOutput.binding` after output rewrites. The synthesized END
@@ -249,10 +264,9 @@ corresponds to them; authored nodes inside retained inline bodies are stamped no
 `load_flow()` returns a **`ComposedFlow`**:
 
 - `compiled` — the `CompiledFlow` (immutable topology: nodes, inferred edges, wiring,
-  synthesized `start`/`end` boundaries),
+  synthesized `start`/`end` boundaries, and ordered node/boundary assertion carriers),
 - `input` — the canonical typed `Parameter` values. Authored defaults are
   validated at load; supplied values are checked when the boundary binds them,
-- `asserts` — flow-level pre/post checks,
 - `source` — a render-only `SourceFrame` (the text + per-node ranges) that lets a
   runtime failure draw a caret back at your YAML, even across nested flow calls.
 

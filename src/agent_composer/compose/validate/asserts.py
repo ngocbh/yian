@@ -21,12 +21,16 @@ START/END boundary nodes so it fires node-locally through `eval_node`:
   child-cloning/namespacing under `kind: call`).
 
 `${system.X}` is forbidden in a flow assert (ambient — no producer to draw an edge
-from). This module does NOT run the asserts — the boundary nodes fire them.
+from). This module does NOT run the asserts — the boundary nodes fire them. Lowering
+replaces only each carrier's executable expression; START/END receive the same
+display/origin-bearing carriers and aligned temporary ranges.
 
 NODE-LOCAL (`validate_node_asserts` + `_POOL_HEADS`). A node assert is scoped to
 one node: a bare `${name}` is a declared input, `${output}`/`${output.field}` is
 the node's own output. It validates + classifies each PRE/POST and stamps
-`node.pre_asserts` / `node.post_asserts`.
+`node.pre_asserts` / `node.post_asserts`. The build conductor optionally supplies
+the origin and temporary range together from one retained item cursor, keyed by
+node id and authored list index; validation remains source-representation-neutral.
 
 Imports flow DOWN only within the engine core (`compile.validation`, `expr`,
 `typesys.values`) plus two acknowledged validate-phase edges: `nodes` (Node/

@@ -5,7 +5,8 @@ The parse-independent slice of the loader's render-only source mapping: the
 They never parse or call `parse_nodes`/`parse_file`. Kept at the bottom
 of the ladder (`helpers <- parse`) so `parse/` can depend on it without a cycle; the
 frame-range helpers that DO call the parser (`_frame_ranges`, `top_frame_ranges`) stay in
-`loader.py`, which sits above `parse`.
+`loader.py`, which sits above `parse`. Assertion origins and temporary ranges are
+deliberately absent: the build conductor derives both from one retained item cursor.
 """
 
 from __future__ import annotations

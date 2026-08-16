@@ -6,8 +6,11 @@ callable:
   flow parameters -> build every node kind-blind (`desc.build(ctx)`; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
   edges + append each case's own edges -> validate references + classify asserts
-  -> attach authored output origins -> synthesize the START_ID/END_ID boundary over
-  ALL edges -> reject cycles + check if/else handles -> CompiledFlow.from_parts.
+  -> attach authored assertion/output origins -> synthesize the START_ID/END_ID
+  boundary over ALL edges -> reject cycles + check if/else handles ->
+  CompiledFlow.from_parts. One retained assertion item cursor supplies both its
+  carrier origin and aligned temporary range; rewrites preserve the carrier fields
+  while the range remains positionally aligned.
 
 Holds `ComposedFlow` (the compiled+validated flow the engine runs) plus the flow
 `outputs:` parser and source-origin attachment. Ladder position: the LAST phase

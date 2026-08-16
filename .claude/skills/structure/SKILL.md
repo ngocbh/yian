@@ -109,7 +109,12 @@ doing semantic work; they do not own a second parser.
 One package-private catalog builder is shared across a physical document's root,
 definitions, and inline bodies. Assembly registers authored node headers, ordinary
 node-input keys and values, source-backed reserved MAP/WAIT wiring values, and source-backed
-flow-output values directly on the canonical carriers. Only ordinary input keys belong to
+flow-output values directly on the canonical carriers. It also registers each authored
+flow/node assertion by source-order index; the same retained item cursor supplies both its
+`Assertion.origin` and aligned temporary range, so equal text at different positions stays
+distinct. Full roots and multi-node definitions retain flow assertion cursors and reuse
+the lowered carriers on START/END. Compact roots and flat single-node definitions project
+their assertions onto the synthesized node instead. Only ordinary input keys belong to
 `Parameter`; ordinary, reserved, and flow-output values belong to `Binding`. Flow outputs
 are stamped after rewrites and reused by END; output mapping keys stay origin-free.
 Generated compact-root and single-node-definition reexports have no authored binding

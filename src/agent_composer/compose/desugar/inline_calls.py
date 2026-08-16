@@ -20,6 +20,11 @@ its output). NOT `when:`/`on:` (the case condition grammar) and NOT a node-local
 `asserts:` (those stay node-local — no inline call). A `case` descriptor carries no walked
 bindings, so it is untouched.
 
+This is also the flow-assert carrier boundary. Raw entries become one ordered
+`Assertion` per source position; assembly injects an origin lookup by authored index.
+Desugaring replaces only the executable expression, preserving display and any existing
+or injected origin for later START/END lowering.
+
 Three guards (loud): an inline call cannot target the compiler-private
 `__inline_flow_` namespace or capture `${item}` (the synth node is a top-level node
 with no map-element scope — use a named `call` node with `over:`), and a user node id

@@ -276,9 +276,13 @@ context. Compose stamps physical root/definition/inline headers; direct Python a
 generated nodes default to `None`, and cloning preserves an existing value. It is
 manifest-neutral and unrelated to LOOP's execution-only `origin_id`.
 `Node.pre_asserts` / `post_asserts` are likewise canonical ordered `Assertion`
-lists. Compose crosses raw YAML text into one carrier per occurrence; lowering
-and growth use `replace(..., expression=...)`, so display/origin survive. The
-manifest projects `{expression, display}` and ignores origin. `Node.params` is
+lists. Compose crosses raw YAML text into one carrier per authored flow/node list
+position. That item's retained cursor supplies both the carrier origin and the
+temporary positional range; source-order indexing keeps duplicate text distinct.
+Inline-call desugaring, flow lowering, child cloning/CALL relocation, and LOOP
+respawn replace only the executable expression or copy the carrier, so display and
+origin survive. START/END reuse the lowered flow carriers. The manifest projects
+`{expression, display}` and ignores origin. `Node.params` is
 an ordered exact `Parameter` list: `bind_params` reads its optional resolved
 contract, explicit default-presence bit, and string-coercion policy while the
 flow owns the corresponding `Binding` sources. Parameter/default/contract
@@ -293,8 +297,8 @@ wiring receives a `Binding.origin` only; neither field is a formal `Parameter`.
 Desugaring may replace `Binding.source` but retains that value origin. Without a retained
 source occurrence, Compose mints no origin and preserves any explicit programmatic origin;
 source-backed projections inherit their backing site. CASE wiring, synthesized boundary
-parameters, assertions, contracts, external rebasing, and runtime diagnostic consumption
-are deferred. Source-backed bare/mapped root, multi-node-definition, and inline-child
+parameters, contracts, external rebasing, and runtime diagnostic consumption are deferred.
+Source-backed bare/mapped root, multi-node-definition, and inline-child
 output values stamp the final `FlowOutput.binding` after rewrites, and the synthesized END
 boundary reuses that exact binding. Output mapping keys receive no origin. Compact-root and
 single-node-definition reexports are generated without an authored binding occurrence and
@@ -350,8 +354,12 @@ into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and n
 YAML is reparsed or parallel range map created. The loader creates one builder per
 physical document and shares it through root, `defs:`, and inline-body assembly.
 Authored node headers, ordinary node-input keys and values, and source-backed reserved
-MAP/WAIT wiring values, plus source-backed flow-output values, are registered under their
-complete lexical owner paths and carried by the semantic IR rather than a parallel map.
+MAP/WAIT wiring values, plus source-backed flow-output values and flow/node assertion
+occurrences, are registered under their complete lexical owner paths and carried by the
+semantic IR rather than a parallel map. Assertion paths include their authored list index,
+and each retained item cursor supplies both `Assertion.origin` and the aligned temporary
+range. Full roots and multi-node definitions retain a flow assertion cursor, while compact
+roots and flat single-node definitions project `asserts:` onto their synthesized node.
 Flow-output values are registered after rewrites on `FlowOutput.binding`; END reuses that
 binding, and output mapping keys are not origin sites. Generated compact-root and
 single-node-definition reexports stay origin-free because their output declaration is a
@@ -503,10 +511,12 @@ resolved to a line at the CLI boundary — never a text heuristic.
   Output-type failures occur after evaluation, so their durable failure may carry only the
   symbolic `field` locator; the CLI resolves it from the supplied flow when no concrete range
   was recorded.
-- **Migration boundary:** authored nodes now carry an opaque header `origin`, but runtime and
-  CLI failure rendering still use the legacy locator/range path above. The document-local
-  catalog remains private until carrier stamping and cross-file rebasing make one returned-flow
-  resolver complete.
+- **Migration boundary:** authored nodes and assertions now carry opaque origins, but runtime
+  and CLI failure rendering still use the legacy locator/range path above. For assertions,
+  Compose derives that temporary positional range and `Assertion.origin` from the same
+  retained item cursor before rewrites preserve both. The document-local catalog remains
+  private until the remaining carrier stamping and cross-file rebasing make one
+  returned-flow resolver complete.
 - **Resolution (CLI boundary):** `cli/run.py` prefers the pre-resolved `nf.range` →
   `result.range`; only if both are absent does `_resolve_range` map the span itself, via
   `_top_ranges` (the loaded flow's `SourceFrame` maps, or the defensive

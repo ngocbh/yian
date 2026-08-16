@@ -25,7 +25,7 @@ from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.contracts import ContractOrigins, ValueContract
 from agent_composer.typesys.values import ValueKind, Type
-from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.nodes.base import BuildContext, BuildResult
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.parse.file import (
     CaseDescriptor,
@@ -35,7 +35,7 @@ from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.helpers.types import read_flow_inputs
 from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.validate.references import validate_references
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 from tests.engine._fakes import derive_wiring, stamp_reads
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
@@ -48,34 +48,45 @@ def _seed_diagnostics(seed: str) -> LoadDiagnostics:
 
 
 def _load(seed: str):
-    """(nodes, flow_inputs, producers, outputs, flow_wiring) for a seed — every descriptor
+    """Return build products and validation inputs for one seed flow.
+
+    Every descriptor
     built kind-blind via `desc.build(...)`. A `case`'s lowering (its `__rN`/`__on` split) is
-    part of its own build, so its rewritten `.node`/`.wiring` come out of the same call."""
+    part of its own build, so its rewritten `.node`/`.wiring` come out of the same call.
+    """
     path = _SEEDS / seed
     document = SourceDocument.parse(path.read_text(), label=str(path))
     f = parse_file(document)
     descriptors = parse_nodes(document.root.child("nodes"))
     # First pass: build leaf nodes to learn the producer output contracts.
-    nodes: dict = {}
+    build_results: dict[str, BuildResult] = {}
     flow_wiring: dict = {}
     for nid, d in descriptors.items():
         if not isinstance(d, CaseDescriptor):
             result = d.build(BuildContext({}))
-            nodes[nid] = result.node
+            build_results[nid] = result
             flow_wiring[nid] = result.wiring
     producers = {
-        nid: n.output_contract
-        for nid, n in nodes.items()
-        if n.output_contract is not None
+        nid: result.node.output_contract
+        for nid, result in build_results.items()
+        if result.node.output_contract is not None
     }
     # Second pass: build the cases (their on:/when: type-legality reads producers).
     for nid, d in descriptors.items():
         if isinstance(d, CaseDescriptor):
             result = d.build(BuildContext(producers))
-            nodes[nid] = result.node
+            build_results[nid] = result
             flow_wiring[nid] = result.wiring
     flow_inputs = {decl.name for decl in read_flow_inputs(f.inputs, {})}
-    return nodes, flow_inputs, producers, f.outputs, flow_wiring
+    return build_results, flow_inputs, producers, f.outputs, flow_wiring
+
+
+def _source_free_results(nodes: dict[str, object]) -> dict[str, BuildResult]:
+    """Wrap hand-built semantic nodes for a direct Compose validator call."""
+    return {
+        node_id: BuildResult(node=node, wiring={})  # type: ignore[arg-type]
+        for node_id, node in nodes.items()
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -142,7 +153,7 @@ def test_aggregate_location_uses_first_available_range():
 
     with pytest.raises(LoadError) as exc:
         validate_references(
-            nodes,
+            _source_free_results(nodes),
             set(),
             {},
             "${missing_output.output}",
@@ -190,7 +201,7 @@ def test_reference_walk_projects_type_without_replacing_contract_origins():
     nodes = {"score": score, "sink": sink}
 
     validate_references(
-        nodes,
+        _source_free_results(nodes),
         set(),
         {"score": contract},
         None,
@@ -205,7 +216,7 @@ def test_reference_walk_rejects_non_contract_producer_map_values():
     """The Compose validator boundary accepts canonical carriers, not bare Types."""
     with pytest.raises(TypeError, match="producer contracts.*ValueContract"):
         validate_references(  # type: ignore[dict-item]
-            {"score": AgentNode("score")},
+            {"score": BuildResult(node=AgentNode("score"), wiring={})},
             set(),
             {"score": Type.scalar(ValueKind.STRING)},
             None,
@@ -226,7 +237,7 @@ def test_prompt_l1_pool_ref_is_loud():
     nodes = {"bad": node}
     flow_wiring = derive_wiring(nodes)
     with pytest.raises(LoadError) as exc:
-        validate_references(nodes, set(), {}, None, flow_wiring)
+        validate_references(_source_free_results(nodes), set(), {}, None, flow_wiring)
     msg = str(exc.value)
     # the head is the node id (`upstream`), not `outputs`. The error names the ref
     # and notes it isn't a declared input.
@@ -240,7 +251,13 @@ def test_prompt_l1_declared_input_passes():
     stamp_reads(node, {"topic": "${input.topic}"})  # stamps params + the fake wiring
     nodes = {"ok": node}
     flow_wiring = derive_wiring(nodes)
-    validate_references(nodes, {"topic"}, {}, None, flow_wiring)  # no raise
+    validate_references(
+        _source_free_results(nodes),
+        {"topic"},
+        {},
+        None,
+        flow_wiring,
+    )  # no raise
 
 
 # --------------------------------------------------------------------------- #
@@ -253,7 +270,7 @@ def _desugared_case_nodes(when_or_on: dict):
     Returns (nodes, flow_wiring) — the gate's __rN sources live on flow.wiring now."""
     desc = CaseDescriptor(id="gate", **when_or_on)
     result = desc.build(BuildContext({}))
-    return {"gate": result.node}, {"gate": result.wiring}
+    return {"gate": result}, {"gate": result.wiring}
 
 
 def test_case_dangling_data_ref_is_loud():
@@ -273,7 +290,7 @@ def test_case_node_local_ref_does_not_error():
     # source IS a real node passes (the node-local rewrite never trips "unknown node").
     nodes, flow_inputs, producers, outputs, flow_wiring = _load("02-case.yaml")
     # seed 02 gate: param __r0 wired to ${score.output} (score is real); when uses __r0.
-    gate = nodes["gate"]
+    gate = nodes["gate"].node
     assert [p.name for p in gate.params] == ["__r0"]
     assert flow_wiring["gate"] == {"__r0": "${score.output}"}
     assert gate.cases[0].when == "__r0 >= 0.5"  # node-local — must NOT be classified

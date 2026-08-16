@@ -12,13 +12,13 @@ from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.nodes.agent import AgentDescriptor
-from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.nodes.base import BuildContext, BuildResult
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.validate.references import validate_references
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 def _nodes_reader(text):
@@ -47,24 +47,23 @@ def _built_flow(text):
     """Build leaf nodes + flow wiring + producers from a flow's `nodes:` (span-aware).
 
     Mirrors the loader's leaf-build slice: parse the `nodes:` mapping from one source document,
-    build each agent/code leaf, and split into `{nid: node}` / `{nid: wiring}` plus the
+    build each agent/code leaf, and retain `{nid: BuildResult}` plus wiring and the
     `{nid: output_contract}` producer map — enough to drive `validate_references` in
-    isolation.
+    isolation without placing YAML ranges on semantic nodes.
     """
     descriptors = parse_nodes(SourceDocument.parse(text).root.child("nodes"))
-    built = {
-        nid: _node_wiring(d)
+    build_results = {
+        nid: d.build(BuildContext({}))
         for nid, d in descriptors.items()
         if isinstance(d, (AgentDescriptor, CodeDescriptor))
     }
-    nodes = {nid: n for nid, (n, _) in built.items()}
-    wiring = {nid: w for nid, (_, w) in built.items()}
+    wiring = {nid: result.wiring for nid, result in build_results.items()}
     producers = {
-        nid: n.output_contract
-        for nid, n in nodes.items()
-        if n.output_contract is not None
+        nid: result.node.output_contract
+        for nid, result in build_results.items()
+        if result.node.output_contract is not None
     }
-    return nodes, wiring, producers
+    return build_results, wiring, producers
 
 
 def test_reject_cycles_diag_has_range():
@@ -174,10 +173,10 @@ def test_validate_references_diag_has_range():
         "    input:\n      x: ${ghost.output}\n    output: str\n"
         "output: ${a.output}\n"
     )
-    nodes, wiring, producers = _built_flow(text)
+    build_results, wiring, producers = _built_flow(text)
     with pytest.raises(LoadError) as exc:
         validate_references(
-            nodes,
+            build_results,
             set(),
             producers,
             "${a.output}",
@@ -186,10 +185,10 @@ def test_validate_references_diag_has_range():
         )
     assert "ghost" in str(exc.value)
     frame = exc.value.diagnostic.frames[0]
-    assert frame.range == nodes["a"].field_ranges[("input", "x")]
+    assert frame.range == build_results["a"].field_ranges[("input", "x")]
     # ...and it is strictly narrower than the block it used to report: `x:` is on line 8, while
     # the `input:` mapping runs to line 9 (`output: str` — a different field entirely).
-    assert frame.range != nodes["a"].field_ranges[("field", "inputs")]
+    assert frame.range != build_results["a"].field_ranges[("field", "inputs")]
     assert frame.range.start_line == frame.range.end_line == 8
 
 
@@ -301,14 +300,18 @@ def test_check_ref_map_types_moved():
         ],
     )
     rng = SourceRange(start_line=7, start_col=5, end_line=8, end_col=20)
-    node.field_ranges = {("field", "inputs"): rng}
+    result = BuildResult(
+        node=node,
+        wiring={"n": "${src.output}"},
+        field_ranges={("field", "inputs"): rng},
+    )
     producers = {
         "src": ValueContract(Type.scalar(ValueKind.STRING))
     }  # source is a string
     wiring = {"c": {"n": "${src.output}"}}  # bound to the int-expecting child input
     with pytest.raises(LoadError) as exc:
         check_ref_map_types(
-            {"c": node},
+            {"c": result},
             producers,
             {},
             wiring,
@@ -334,14 +337,18 @@ def test_check_loop_type_contract_moved():
         Type(kind=ValueKind.OBJECT, fields={"n": Type.scalar(ValueKind.INTEGER)})
     )
     rng = SourceRange(start_line=4, start_col=5, end_line=5, end_col=20)
-    node.field_ranges = {("field", "inputs"): rng}
+    result = BuildResult(
+        node=node,
+        wiring={"n": "${src.output}"},
+        field_ranges={("field", "inputs"): rng},
+    )
     producers = {
         "src": ValueContract(Type.scalar(ValueKind.STRING))
     }  # seed source is a string
     wiring = {"lp": {"n": "${src.output}"}}  # carried `n` seeded from the string
     with pytest.raises(LoadError) as exc:
         check_loop_type_contract(
-            {"lp": node},
+            {"lp": result},
             producers,
             {},
             wiring,
@@ -367,16 +374,20 @@ def test_type_validators_reject_noncanonical_contract_maps_before_walking():
 def test_check_wiring_parity_moved():
     # A node whose `flow.wiring` keys don't match its declared params is loud. The check lives
     # in `validate.wiring_parity`; the LoadError anchors on the node's `input:` mapping
-    # span (else node.range), and the canonical frame carries that range.
+    # span (else its Compose-owned node range), and the canonical frame carries that range.
     from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 
     node, wiring = _node_wiring(CodeDescriptor(id="n", code="m:f", inputs={"x": "${input.x}"}))
     rng = SourceRange(start_line=3, start_col=5, end_line=4, end_col=20)
-    node.field_ranges = {("field", "inputs"): rng}
+    result = BuildResult(
+        node=node,
+        wiring=wiring,
+        field_ranges={("field", "inputs"): rng},
+    )
     with pytest.raises(LoadError) as exc:
         # orphan wiring key with no matching param -> parity failure
         check_wiring_parity(
-            {"n": node},
+            {"n": result},
             {"n": {**wiring, "orphan": "${input.y}"}},
             diagnostics=_range_diagnostics(),
         )
@@ -395,10 +406,14 @@ def test_validate_human_questions_diag_has_range():
 
     node = HumanInputNode("ask", questions=[])  # empty -> "expected 1..4 questions, got 0"
     rng = SourceRange(start_line=5, start_col=5, end_line=6, end_col=20)
-    node.field_ranges = {("field", "questions"): rng}
+    result = BuildResult(
+        node=node,
+        wiring={},
+        field_ranges={("field", "questions"): rng},
+    )
     with pytest.raises(LoadError) as exc:
         validate_human_questions(
-            {"ask": node},
+            {"ask": result},
             diagnostics=_range_diagnostics(),
         )
     assert "questions" in str(exc.value)

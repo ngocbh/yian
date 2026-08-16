@@ -35,7 +35,7 @@ from agent_composer.compile.model import (
     Flow,
     GrowthRejected,
 )
-from agent_composer.diagnostics import OriginRef, SourceRange
+from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import rewrite_template_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.nodes.base import Node, NodeKind
@@ -118,7 +118,6 @@ def _lower_spawner_post_asserts(
     *,
     callsite: str,
     post_asserts: list[Assertion],
-    post_assert_ranges: list[Optional[SourceRange]],
     input_names: "set[str]",
 ) -> None:
     """Stamp a spawner's node-level POST `asserts:` onto the CLONED CHILD END, in place.
@@ -150,18 +149,10 @@ def _lower_spawner_post_asserts(
         end_edges: the flow's edge list — synth producer edges are appended.
         callsite: the spawner id (== the clone namespace).
         post_asserts: the spawner's `${output}`-reading node-level asserts (may be empty).
-        post_assert_ranges: legacy positional ranges aligned with `post_asserts`; a
-            missing entry becomes `None`. Runtime diagnosis uses Assertion.origin.
         input_names: the spawner's declared call-input names (its param names).
     """
     if not post_asserts:
         return
-    # Preserve legacy positional alignment while the range fields remain.
-    child_assert_count = len(end.post_asserts)
-    end.post_assert_ranges = (
-        list(end.post_assert_ranges[:child_assert_count])
-        + [None] * max(0, child_assert_count - len(end.post_assert_ranges))
-    )
     start_ns = ns(callsite, START_ID)
     synth_for_input: dict[str, str] = {}       # input name -> allocated synth END param
     # Names ALREADY on the cloned END (survivors of the deep-copy: the child def's own lowered
@@ -204,18 +195,14 @@ def _lower_spawner_post_asserts(
             return ".".join([synth, *segs[1:]])
         return None                            # anything else — unchanged
 
-    for index, assertion in enumerate(post_asserts):
+    for assertion in post_asserts:
         lowered = rewrite_condition_refs(assertion.expression, _rename)
         end.post_asserts.append(replace(assertion, expression=lowered))
-        end.post_assert_ranges.append(
-            post_assert_ranges[index] if index < len(post_assert_ranges) else None
-        )
 
 
 def clone_child(child, callsite: str, record: dict, *,
                 origin_context: "tuple[OriginRef, ...]" = (),
                 post_asserts: "list[Assertion] | None" = None,
-                post_assert_ranges: "list[Optional[SourceRange]] | None" = None,
                 input_names: "set[str] | None" = None) -> Flow:
     """Splice a child `CompiledFlow`'s `START_ID..END_ID` at `callsite`. Every child node
     (incl. its `START_ID`/`END_ID`) is cloned deep-namespaced; the child `START_ID` is SEEDED with the
@@ -227,7 +214,7 @@ def clone_child(child, callsite: str, record: dict, *,
 
     `origin_context` is the enclosing spawner's ordered failure trace. It is prefixed to each
     clone's existing generated ancestry without deduplication. `post_asserts`/
-    `post_assert_ranges`/`input_names` (default empty) carry a SPAWNER's node-level POST `asserts:`
+    `input_names` (default empty) carry a SPAWNER's node-level POST `asserts:`
     — a `call` node may declare `asserts:` reading `${output}` (its committed output) and its
     declared inputs. They are LOWERED onto the cloned child END (via
     `_lower_spawner_post_asserts`) so they fire through the inherited `run` template, NOT a
@@ -302,7 +289,6 @@ def clone_child(child, callsite: str, record: dict, *,
         nodes[out_id], wiring.setdefault(out_id, {}), edges,
         callsite=callsite,
         post_asserts=post_asserts or [],
-        post_assert_ranges=post_assert_ranges or [],
         input_names=set(input_names or ()),
     )
     return Flow(nodes=nodes, edges=edges, wiring=wiring, start_id=start_ns, end_id=out_id)
@@ -323,7 +309,6 @@ def _producer_of(src: str) -> Optional[str]:
 def call_subgraph(child, callsite: str, record: dict, *,
                   origin_context: "tuple[OriginRef, ...]" = (),
                   post_asserts: "list[Assertion] | None" = None,
-                  post_assert_ranges: "list[Optional[SourceRange]] | None" = None,
                   input_names: "set[str] | None" = None) -> Flow:
     """The pure CALL builder: the self-describing fragment a CALL spawner grows into.
 
@@ -335,16 +320,16 @@ def call_subgraph(child, callsite: str, record: dict, *,
     and fire through the ordinary node path — boundary asserts in the cloned `StartNode.run()` (post
     coercion), post asserts on the cloned END via `eval_node` — exactly like the top-level flow.
 
-    `post_asserts`/`post_assert_ranges`/`input_names` carry the SPAWNER's OWN node-level POST `asserts:`
+    `post_asserts`/`input_names` carry the SPAWNER's OWN node-level POST `asserts:`
     (a `call` node's `asserts:` reading `${output}` + declared inputs). They are lowered onto the
     cloned child END by `clone_child`, so they fire through the SAME eval_node post-assert seam —
     NOT a bespoke redirect-commit site. `origin_context` is the spawner's outer-to-inner failure
     trace and is prefixed to every clone, including both child boundaries. The CALL node passes its
-    ordered assertion carriers, legacy positional ranges, and declared-input names; durable
-    `build_grow` uses the same inputs so a resumed run's rebuilt child END is identical."""
+    ordered assertion carriers and declared-input names; durable `build_grow` uses the same
+    inputs so a resumed run's rebuilt child END is identical."""
     cloned = clone_child(child, callsite=callsite, record=record,
                          origin_context=origin_context,
-                         post_asserts=post_asserts, post_assert_ranges=post_assert_ranges,
+                         post_asserts=post_asserts,
                          input_names=input_names)
     cloned.nodes[cloned.end_id].commit_as = callsite
     return Flow(nodes=cloned.nodes, edges=cloned.edges, wiring=cloned.wiring,
@@ -578,7 +563,6 @@ def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
                 record=dict(record),
                 origin_context=spawner.failure_trace(),
                 post_asserts=spawner.post_asserts,
-                post_assert_ranges=spawner.post_assert_ranges,
                 input_names={param.name for param in (spawner.params or [])},
             )
         case NodeKind.MAP:

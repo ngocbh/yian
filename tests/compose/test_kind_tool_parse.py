@@ -4,7 +4,7 @@ returns a runtime ToolNode with `inputs` wiring (the tool's sink surface) and st
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.tool import ToolDescriptor
 from agent_composer.compose.source import SourceDocument
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 _FLOW = """\
@@ -47,4 +47,4 @@ def test_tool_build_returns_tool_node_and_wires_inputs():
     assert node.tool_id == "http_get"
     # A tool's sink surface is the base's `inputs` map; the wiring carries those sources.
     assert wiring == {"url": "${input.url}"}
-    assert node.range == desc.range
+    assert result.node_range == desc.range

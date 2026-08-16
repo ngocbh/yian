@@ -28,7 +28,7 @@ from agent_composer.compose.parse.file import (
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceDocument
 from agent_composer.diagnostics import OriginRef
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 def _nodes_reader(text):

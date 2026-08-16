@@ -1,7 +1,7 @@
 from agent_composer.compile.expand import clone_child
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
 from agent_composer.compose.helpers.types import read_type
-from agent_composer.diagnostics import OriginRef, SourceRange
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import NodeKind, Output
 from agent_composer.nodes.contracts import Assertion, Binding, Parameter, ValueContract
 from agent_composer.nodes.end import EndNode
@@ -177,9 +177,7 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     end = child.nodes[END_ID]
     # Lower `${tail.output} != ''` onto END exactly as boundary synthesis does.
     origin = OriginRef("flow/asserts/0")
-    assertion_range = SourceRange(3, 1, 3, 30)
     end.post_asserts = [Assertion("${__assert_tail} != ''", "${tail.output} != ''", origin)]
-    end.post_assert_ranges = [assertion_range]
     end.params.append(Parameter(name="__assert_tail"))
     child.wiring[END_ID]["__assert_tail"] = Binding("${tail.output:-null}")
     child.edges.append(Edge(id=f"tail->{END_ID}#assert", from_="tail", to=END_ID,
@@ -191,7 +189,7 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     assert ce.post_asserts == [
         Assertion("${__assert_tail} != ''", "${tail.output} != ''", origin)
     ]
-    assert ce.post_assert_ranges == [assertion_range]
+    assert ce.post_asserts[0].origin == origin
     # the synth wiring feeding the param is re-namespaced under the callsite.
     assert cloned.wiring["each/__end__"]["__assert_tail"] == Binding(
         "${each/tail.output:-null}"
@@ -201,20 +199,23 @@ def test_clone_child_lowered_post_asserts_survive_clone():
                and e.input_group == "__assert_tail" for e in cloned.edges)
 
 
-def test_spawner_range_append_pads_spanless_child_assertions():
-    """A spawner range cannot slide onto an earlier source-free child assertion."""
+def test_spawner_assert_append_preserves_child_and_spawner_origins():
+    """Spawner lowering appends the semantic carrier without replacing child provenance."""
     child = _single()
     child_end = child.nodes[END_ID]
-    child_end.post_asserts = [Assertion("${output} != null", "child output exists")]
-    child_end.post_assert_ranges = []
-    spawner_range = SourceRange(20, 7, 20, 35)
+    child_origin = OriginRef("child/asserts/0")
+    spawner_origin = OriginRef("parent/nodes/call/asserts/0")
+    child_end.post_asserts = [
+        Assertion("${output} != null", "child output exists", child_origin)
+    ]
 
     cloned = clone_child(
         child,
         callsite="each",
         record={"topic": "ACME"},
-        post_asserts=[Assertion("${output} != null", "call output exists")],
-        post_assert_ranges=[spawner_range],
+        post_asserts=[
+            Assertion("${output} != null", "call output exists", spawner_origin)
+        ],
     )
     cloned_end = cloned.nodes[cloned.end_id]
 
@@ -222,7 +223,10 @@ def test_spawner_range_append_pads_spanless_child_assertions():
         "child output exists",
         "call output exists",
     ]
-    assert cloned_end.post_assert_ranges == [None, spawner_range]
+    assert [a.origin for a in cloned_end.post_asserts] == [
+        child_origin,
+        spawner_origin,
+    ]
 
 
 # --- firing contract: eval_node drives the node's `run` wrapper, which fires an END's post-assert

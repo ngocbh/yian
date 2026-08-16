@@ -23,14 +23,14 @@ START/END boundary nodes so it fires node-locally through `eval_node`:
 `${system.X}` is forbidden in a flow assert (ambient — no producer to draw an edge
 from). This module does NOT run the asserts — the boundary nodes fire them. Lowering
 replaces only each carrier's executable expression; START/END receive the same
-display/origin-bearing carriers and legacy aligned ranges.
+display/origin-bearing carriers.
 
 NODE-LOCAL (`validate_node_asserts` + `_POOL_HEADS`). A node assert is scoped to
 one node: a bare `${name}` is a declared input, `${output}`/`${output.field}` is
 the node's own output. It validates + classifies each PRE/POST and stamps
 `node.pre_asserts` / `node.post_asserts`. The build conductor optionally supplies
-the origin and legacy aligned range together from one retained item cursor, keyed by
-node id and authored list index; validation remains source-representation-neutral.
+the origin and validation range together from one retained item cursor, keyed by
+node id and authored list index; only the origin crosses into the semantic assertion.
 
 Imports flow DOWN only within the engine core (`compile.validation`, `expr`,
 `typesys.values`) plus two acknowledged validate-phase edges: `nodes` (Node/
@@ -78,8 +78,6 @@ class LoweredAsserts:
     - `synth_wiring`: `dict[synth_name -> ${...} source string wired into END]`. A
       producer ref uses `${pid.output:-null}` (the `:-null` keeps the edge optional so a
       skipped producer does not co-skip END); an input ref uses `${input.X}` (always present).
-    - `pre_ranges` / `post_ranges`: legacy `list[SourceRange | None]` metadata aligned
-      1:1 with `start_pre` / `end_post`. Runtime diagnosis uses each Assertion.origin.
     Each ordered `Assertion` owns both the lowered executable expression and stable
     author-facing display text. Rewrites preserve its opaque origin.
     """
@@ -88,8 +86,6 @@ class LoweredAsserts:
     end_post: list[Assertion] = field(default_factory=list)
     synth_params: list[Parameter] = field(default_factory=list)
     synth_wiring: dict = field(default_factory=dict)
-    pre_ranges: list = field(default_factory=list)
-    post_ranges: list = field(default_factory=list)
 
 
 def lower_flow_asserts(
@@ -215,7 +211,6 @@ def lower_flow_asserts(
 
             lowered = rewrite_condition_refs(expr, _pre_rename)
             result.start_pre.append(replace(assertion, expression=lowered))
-            result.pre_ranges.append(rng)  # ALWAYS append (may be None) to stay aligned with start_pre
             continue
 
         # 4. POST: turn each non-`output` ref into a synth END param, wired as an edge.
@@ -248,7 +243,6 @@ def lower_flow_asserts(
 
         lowered = rewrite_condition_refs(expr, _post_rename)
         result.end_post.append(replace(assertion, expression=lowered))
-        result.post_ranges.append(rng)  # ALWAYS append (may be None) to stay aligned with end_post
 
     return result
 
@@ -278,7 +272,7 @@ def validate_node_asserts(
     any node assert on a mapped call (a `MapNode`, `kind: map` — the per-node hook has no `${item}` scope).
     Classifies each PRE (no `${output}`) or POST (reads `${output}`) and stamps
     `node.pre_asserts` / `node.post_asserts`. ``assertion_site_at`` optionally supplies each
-    carrier's opaque origin and legacy aligned range from the same authored occurrence, keyed by
+    carrier's opaque origin and validation range from the same authored occurrence, keyed by
     node id and original authored index. Runs in the shared `_assemble`, so a `defs:`
     subflow's internal nodes get this too. Accumulates all errors into one `LoadError`, located
     at the first available exact assertion, offending field, or node range.
@@ -288,23 +282,18 @@ def validate_node_asserts(
     for nid, node in nodes.items():
         desc = descriptors.get(nid)
         asserts = list(getattr(desc, "asserts", None) or [])
-        # Preserve legacy positional ranges in lockstep with the pre/post classification.
-        # Runtime diagnosis uses the matching assertion carrier's opaque origin.
         aranges = list(getattr(desc, "assert_ranges", None) or [])
         if not asserts:
             continue
         descriptor_ranges = getattr(desc, "field_ranges", None)
         if not isinstance(descriptor_ranges, dict):
             descriptor_ranges = {}
-        node_ranges = getattr(node, "field_ranges", None)
-        if not isinstance(node_ranges, dict):
-            node_ranges = {}
 
         def field_range(kind: str, key: str) -> SourceRange | None:
-            """Return one descriptor-owned field range, then the built-node copy."""
-            return descriptor_ranges.get((kind, key)) or node_ranges.get((kind, key))
+            """Return one descriptor-owned field range."""
+            return descriptor_ranges.get((kind, key))
 
-        node_range = getattr(desc, "range", None) or getattr(node, "range", None)
+        node_range = getattr(desc, "range", None)
         asserts_range = field_range("field", "asserts") or node_range
         if node.binds_per_item:
             errors.append(
@@ -327,8 +316,6 @@ def validate_node_asserts(
             continue
         pre: list[Assertion] = []
         post: list[Assertion] = []
-        pre_r: list = []   # aligned with `pre`
-        post_r: list = []  # aligned with `post`
         for i, a in enumerate(asserts):
             site = assertion_site_at(nid, i) if assertion_site_at is not None else None
             if site is None:
@@ -416,14 +403,10 @@ def validate_node_asserts(
                     )
             if reads_output:
                 post.append(Assertion(expression=a, display=a, origin=origin))
-                post_r.append(rng)
             else:
                 pre.append(Assertion(expression=a, display=a, origin=origin))
-                pre_r.append(rng)
         node.pre_asserts = pre
         node.post_asserts = post
-        node.pre_assert_ranges = pre_r
-        node.post_assert_ranges = post_r
     if errors:
         first_range = next(
             (error_range for _, error_range in errors if error_range is not None),

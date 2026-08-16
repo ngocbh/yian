@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Optional
 
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.compose.nodes.bindings import map_binding_strings
 from agent_composer.compose.desugar.inline_calls import map_outputs_strings

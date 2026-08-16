@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compile.model import END_ID, START_ID
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.compose import LoadError
@@ -471,34 +471,35 @@ def test_assembled_edges_have_start_and_end():
 
 
 def _leaf(name="n", **inputs):
-    result = CodeDescriptor(id=name, code="m:f", inputs=inputs).build(BuildContext({}))
-    return result.node, result.wiring
+    return CodeDescriptor(id=name, code="m:f", inputs=inputs).build(BuildContext({}))
 
 
 def test_wiring_parity_accepts_matched_keys():
-    node, wiring = _leaf(x="${input.x}", y="${input.y}")
-    check_wiring_parity({"n": node}, {"n": wiring})  # params == wiring keys -> no raise
+    result = _leaf(x="${input.x}", y="${input.y}")
+    check_wiring_parity({"n": result}, {"n": result.wiring})  # no raise
 
 
 def test_wiring_parity_accepts_wait_reserved_until():
     result = WaitDescriptor(id="w", until="${input.t}").build(BuildContext({}))
-    node, wiring = result.node, result.wiring
-    check_wiring_parity({"w": node}, {"w": wiring})  # {"until"} reserved key accepted
+    check_wiring_parity({"w": result}, {"w": result.wiring})  # reserved key accepted
 
 
 def test_wiring_parity_rejects_orphan_source():
-    node, wiring = _leaf(x="${input.x}")
+    result = _leaf(x="${input.x}")
     with pytest.raises(LoadError, match="key parity"):
-        check_wiring_parity({"n": node}, {"n": {**wiring, "orphan": "${input.y}"}})
+        check_wiring_parity(
+            {"n": result},
+            {"n": {**result.wiring, "orphan": "${input.y}"}},
+        )
 
 
 def test_wiring_parity_rejects_missing_source():
-    node, _ = _leaf(x="${input.x}")  # node declares param x...
+    result = _leaf(x="${input.x}")  # node declares param x...
     with pytest.raises(LoadError, match="key parity"):
-        check_wiring_parity({"n": node}, {"n": {}})  # ...but the wiring has no entry for it
+        check_wiring_parity({"n": result}, {"n": {}})  # wiring has no entry
 
 
 def test_wiring_parity_rejects_node_absent_from_wiring():
-    node, _ = _leaf(x="${input.x}")
+    result = _leaf(x="${input.x}")
     with pytest.raises(LoadError, match="key parity"):
-        check_wiring_parity({"n": node}, {})  # whole node missing -> silent {} bind guarded
+        check_wiring_parity({"n": result}, {})  # whole node missing

@@ -12,7 +12,7 @@ from agent_composer.compose.source import (
     SourceCursor,
     SourceDocument,
 )
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 def test_document_preserves_constructed_keys_and_effective_collision_ranges():

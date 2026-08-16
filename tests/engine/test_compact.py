@@ -21,7 +21,7 @@ from agent_composer.compose.parse.file import (
     parse_source_document,
 )
 from agent_composer.compose.parse.nodes import parse_nodes
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 # --- a compact CODE flow runs end-to-end (auto-wire + output re-export) ------ #

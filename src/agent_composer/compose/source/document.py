@@ -24,7 +24,7 @@ from agent_composer.compose.source.common import (
     _SequenceDef,
 )
 from agent_composer.compose.source.cursor import SourceCursor
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 _MISSING = object()

@@ -160,8 +160,9 @@ attachment hook, and the sink derivations (`output_contract` / `sink_params` /
   descriptor hook above.
 - **Override `build`** — an instance method `build(self, ctx: BuildContext) -> BuildResult`
   that constructs `XxxNode(...)`, sets the output contract / params / wiring, and returns
-  `self._finish(node, wiring)` (which stamps `.origin` plus the legacy ranges and wraps a
-  `BuildResult`).
+  `self._finish(node, wiring)`. `_finish` stamps only the source-neutral `.origin`
+  on the semantic node; it copies the descriptor's header and field locations into
+  `BuildResult.node_range` / `field_ranges`.
   The inherited `self.output_contract(ctx.registry)` returns a `ValueContract | None`;
   assign that carrier directly to `node.output_contract`. Retain an existing carrier when
   re-exporting a child output; construct a new carrier only when the kind changes the semantic
@@ -176,7 +177,10 @@ attachment hook, and the sink derivations (`output_contract` / `sink_params` /
 `BuildResult.wiring` is still pre-IR Compose data and may remain raw. Final assembly
 canonicalizes source-backed ordinary input and reserved wiring entries with their value
 origins; the shared `CompiledFlow.from_parts` boundary normalizes any remaining raw wiring.
-Do not add a second normalization map to a descriptor.
+`BuildResult.node_range` and `field_ranges` are likewise Compose-only: post-build
+validators consume them, then assembly discards them before `CompiledFlow.from_parts`.
+Never stamp `range`, `field_ranges`, or assertion-range lists on `XxxNode`, and do not
+add a second normalization map to a descriptor.
 
 ## 4. `compose/nodes/__init__.py` — add to the `_DESCRIPTORS` tuple
 

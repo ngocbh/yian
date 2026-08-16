@@ -24,7 +24,8 @@ A node is a **pure function of its bound input record**. A kind implements
 post_asserts({**record, "output": value})`. Assert firing is **record-only** (no pool),
 so it preserves node purity, and it happens **exactly once** here in the node (not in
 `eval_node`). Both assertion lists contain ordered `Assertion` carriers: the wrapper
-evaluates `.expression` and reports/locates `.display`. `_run_impl` returns ONE of the closed sum:
+evaluates `.expression`, reports `.display`, and diagnoses failure through the exact
+carrier's `.origin`. `_run_impl` returns ONE of the closed sum:
 
 | Return | Meaning |
 |--------|---------|
@@ -209,7 +210,7 @@ spawner's own `post_asserts` (a `call` node's `asserts:`) are **lowered onto the
 fires through the child END's ordinary `run` wrapper — not re-checked at any commit site. Live
 growth and durable replay both pass the canonical seed persisted in `NodeExpandedRecord` through
 the same injected `compile.expand.build_grow`, so lowering is identical on resume. The moved
-assert's display/origin and temporary positional range stay aligned; its failure names the
+assert's display and origin stay together; its failure names the
 **child END id**, not the spawner.
 
 AGENT is now an ordinary non-spawner leaf. Its model/tool loop, including an
@@ -337,8 +338,8 @@ model made enforceable.
   likewise be manifest-backed; `skipped_output_target()` currently derives from
   `commit_as` or LOOP's `origin_id`. Diagnostic-only `exception_origin` and
   `failure_trace` project node/carrier origins and generated `origin_context`,
-  which remain identity-neutral alongside render-only ranges, comments, and
-  object identity. CODE's executable `code` text affects identity, while its
+  which remain identity-neutral alongside comments and object identity. CODE's
+  executable `code` text affects identity, while its
   whole-source and exact-line origins are diagnostic-only and do not. CASE handles
   and predicate expressions affect identity, while ordered predicate origins do not.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
@@ -385,9 +386,9 @@ compose + compile.expand + runtime <── package-root run.py
 `diagnostics.py` owns source-neutral `Failure`, `SourceRange`, opaque `OriginRef`,
 resolved `DiagnosticFrame` and `Diagnostic` presentation values, the
 `OriginResolver` protocol, and immutable exact-route `ResolverTable`. It imports
-only the standard library. `events.py`
-imports this leaf and temporarily re-exports `SourceRange` while existing
-consumers migrate.
+only the standard library. `events.py` imports the semantic diagnostics it uses
+but does not re-export `SourceRange`; Compose imports that coordinate directly
+from `diagnostics`.
 
 Arrows never reverse: a package imports only lower-level or peer packages. See the
 `structure` skill. An upward import means the code is in the wrong package (extract
@@ -454,11 +455,12 @@ Deeper cause chains are not followed. The normalized first path selects the exis
 
 `Node.pre_asserts` / `post_asserts` are likewise canonical ordered `Assertion`
 lists. Compose crosses raw YAML text into one carrier per authored flow/node list
-position. That item's retained cursor supplies both the carrier origin and the
-temporary positional range; source-order indexing keeps duplicate text distinct.
+position. That item's retained cursor supplies the carrier origin; source-order
+indexing keeps duplicate text distinct.
 Inline-call desugaring, flow lowering, child cloning/CALL relocation, and LOOP
 respawn replace only the executable expression or copy the carrier, so display and
-origin survive. START/END reuse the lowered flow carriers. The manifest projects
+origin survive. `Node.run` passes the failing carrier's origin to
+`failure_trace()`. START/END reuse the lowered flow carriers. The manifest projects
 `{expression, display}` and ignores origin. `Node.params` is
 an ordered exact `Parameter` list: `bind_params` reads its optional resolved
 contract, explicit default-presence bit, and string-coercion policy while the
@@ -652,8 +654,8 @@ Authored node headers, ordinary node-input keys and bound values, and source-bac
 MAP/WAIT wiring values, plus source-backed flow-output values and flow/node assertion
 occurrences, are registered under their complete lexical owner paths and carried by the
 semantic IR rather than a parallel map. Assertion paths include their authored list index,
-and each retained item cursor supplies both `Assertion.origin` and the aligned temporary
-range. Full roots and multi-node definitions retain a flow assertion cursor, while compact
+and each retained item cursor supplies `Assertion.origin`. Full roots and multi-node
+definitions retain a flow assertion cursor, while compact
 roots and flat single-node definitions project `asserts:` onto their synthesized node.
 Flow-output values are registered after rewrites on `FlowOutput.binding`; END reuses that
 binding, and output mapping keys are not origin sites. Generated compact-root and
@@ -665,8 +667,11 @@ leaves the resolver unset. At the physical-file boundary, the loader validates a
 lexically rebases canonical external children per alias, freezes the shared local catalog,
 and installs an exact `ComposedFlow.origin_resolver`; source-free graphs use `None`.
 
-After cursor-based extraction and parsing, descriptors and nodes carry the derived
-ranges needed by later phases; no phase reparses source fragments or inspects the
+After cursor-based extraction and parsing, descriptors carry derived ranges and
+`NodeDescriptor._finish()` copies them into Compose-only
+`BuildResult.node_range` / `field_ranges`. Post-build validators consume that
+metadata; assembly discards it before `CompiledFlow.from_parts`, so semantic nodes
+carry no YAML range fields. No phase reparses source fragments or inspects the
 private document graph. The default file resolver adds a separate successful
 `resolved Path -> ComposedFlow` cache, so aliases and diamond imports read, parse,
 and compile each external physical file once within a successful load graph.
@@ -802,10 +807,12 @@ never runtime ids, graph topology, or a text heuristic.
   flow returned by `load_flow` carries one complete source-neutral resolver (or `None` when
   source-free).
 - **Compose-owned ranges:** `diagnostics.SourceRange` remains the front end's
-  concrete presentation coordinate and is temporarily re-exported by `events`.
-  Compose still stamps legacy `Node.range`, `field_ranges`, and positional assert
-  range metadata while their carriers are being removed; runtime must never read
-  those fields. Exact runtime diagnosis comes only from semantic-carrier origins.
+  concrete presentation coordinate and is not re-exported by `events`.
+  `SourceCursor`, `NodeDescriptor`, and `BuildResult.node_range` / `field_ranges`
+  retain locations only inside Compose. Validators consume the build-result
+  metadata, and assembly drops it before `CompiledFlow`. Semantic `Node` has no
+  `range`, `field_ranges`, `pre_assert_ranges`, or `post_assert_ranges`; assertion
+  diagnosis uses the failed `Assertion.origin`.
 - **Resolution (CLI boundary):** `cli/run.py` passes `result.failure` to the loaded
   flow's `ComposedFlow.diagnose()` and renders only the resulting `Diagnostic`.
   Nested frames arrive already source-owned and outermost-to-innermost. Missing or

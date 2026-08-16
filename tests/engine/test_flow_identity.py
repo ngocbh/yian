@@ -150,11 +150,10 @@ def test_flow_fingerprint_is_stable_across_reloads():
     assert re.fullmatch(r"[0-9a-f]{64}", flow_fingerprint(first))
 
 
-def test_flow_fingerprint_ignores_comments_ranges_and_python_object_identity():
+def test_flow_fingerprint_ignores_comments_and_python_object_identity():
     plain = _compiled()
     moved = _compiled(_INLINE_FLOW_WITH_COMMENTS)
 
-    assert plain.nodes["step"].range != moved.nodes["step"].range
     assert plain.nodes["step"]._code is not moved.nodes["step"]._code
     assert flow_manifest(plain) == flow_manifest(moved)
     assert flow_fingerprint(plain) == flow_fingerprint(moved)

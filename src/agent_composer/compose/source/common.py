@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, TypeAlias
 
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 def _occurrence_key_token(value: Any) -> Any:

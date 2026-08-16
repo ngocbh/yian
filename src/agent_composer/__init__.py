@@ -16,9 +16,10 @@ Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never i
     _state.py + compile execution contracts  <-  runtime
     compose + compile.expand + runtime  <-  run.py
 
-`diagnostics.py` is the dependency-free source-neutral value spine; `events`
-imports it and temporarily re-exports `SourceRange`. `_state.py` is an internal
-dependency-free scheduler-state contract shared by compile and runtime.
+`diagnostics.py` is the dependency-free source-neutral value spine and owns
+`SourceRange`; `events` imports semantic failures from it but does not re-export
+that Compose-facing coordinate type. `_state.py` is an internal dependency-free
+scheduler-state contract shared by compile and runtime.
 Other leaves import nothing upward: `_state`, `typesys` (the typed value pool),
 `expr` (`${...}` evaluation), and `llm_clients` (provider client wrappers +
 `LLMConfig` — the AGENT node's model seam). `nodes` are the node kinds — spawners return canonical growth seeds and

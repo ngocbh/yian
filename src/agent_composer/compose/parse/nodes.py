@@ -7,13 +7,14 @@ The first cross-node assembly pass. Consumes a source cursor over the flow's
 
 Only the generic, kind-independent pre-checks live here (body-is-mapping, reserved node ids,
 the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own `parse`
-owns its field legality (allowed/required/asserts/env) and its `SourceRange` recording (each
-field tagged `("field", name)`). Two kind-blind enrichments run after every kind parse: each
-`inputs:` binding's own `SourceRange` is stamped into `field_ranges` tagged `("input", name)`
-(legacy Compose metadata keyed to avoid cross-namespace collisions); each `asserts:` list
-item's `SourceRange` is appended positionally to the descriptor's `assert_ranges`.
-Runtime diagnosis uses opaque semantic-carrier origins; source-order registration keeps
-duplicate assertions distinct.
+owns its field legality (allowed/required/asserts/env) and its descriptor-local
+`SourceRange` recording (each field tagged `("field", name)`). Two kind-blind enrichments
+run after every kind parse: each `inputs:` binding's own range is stamped into the
+descriptor's `field_ranges` under `("input", name)`, and each `asserts:` item range is
+appended positionally to its `assert_ranges`. This metadata remains inside Compose;
+`_finish()` copies node/field locations to `BuildResult` for validation, while runtime
+diagnosis uses only opaque semantic-carrier origins. Source-order origin registration keeps
+duplicate assertions distinct without an aligned range list on the semantic node.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
 
     The source is physical for a full graph, source-aligned for compact/def
     projections, or virtual for a programmatic/test mapping. Returns descriptors
-    in source order with ranges whenever an authored source exists.
+    in source order with Compose-only ranges whenever an authored source exists.
     """
     diagnostics = LoadDiagnostics.from_cursor(nodes_cursor)
     out: dict[str, Any] = {}
@@ -86,7 +87,7 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
             range=cursor.range_of("kind"),
         )
     desc = cls.parse(node_id, cursor)
-    # Legacy range enrichments retained on Compose-built nodes, keyed by `(kind, key)`
+    # Compose-only range enrichments retained on parsed descriptors, keyed by `(kind, key)`
     # rather than a bare name so namespaces cannot collide (the kind already stamped
     # its own fields as `("field", name)` in `cls.parse`):
     #   - each `inputs:` binding -> its own range, tagged `("input", name)` and distinct
@@ -95,8 +96,9 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
     #     `assert_ranges` (aligned 1:1 with the authored `asserts:` list). Asserts are located by
     #     INDEX, not by their (non-unique) text, so two identical asserts get distinct carets — hence
     #     they live in a list, NOT in `field_ranges`.
-    # Runtime diagnosis does not consume these ranges. Both no-op for a source-free cursor
-    # or a node without the field. `inputs:` is read AFTER
+    # Runtime diagnosis does not consume these ranges, and the semantic Node never receives
+    # them. Both no-op for a source-free cursor or a descriptor without the field.
+    # `inputs:` is read AFTER
     # `normalize_node_signature_cursor` has renamed the author's singular
     # `input:` key to plural.
     field_ranges = getattr(desc, "field_ranges", None)

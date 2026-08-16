@@ -19,7 +19,7 @@ rejecting them.
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
 `typesys` (TypeRegistry), `nodes.contracts` (Parameter/ValueContract),
 `compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError) and
-`compose.source` (SourceCursor) for parse navigation, `events` (SourceRange) — all
+`compose.source` (SourceCursor) for parse navigation, `diagnostics` (SourceRange) — all
 earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
 sibling kind or `nodes/__init__`. Every kind module imports it at module top level without
 cycling; `parse/file.py` re-exports it as the descriptor base type for its importers.
@@ -27,19 +27,18 @@ cycling; `parse/file.py` re-exports it as the descriptor base type for its impor
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
-from agent_composer.nodes.base import FieldRanges, Node
+from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.typesys.types import TypeRegistry
 from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.types import read_type
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.source import SourceCursor
-from agent_composer.diagnostics import DiagnosticFrame, OriginRef
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import DiagnosticFrame, OriginRef, SourceRange
 
 if TYPE_CHECKING:
     from agent_composer.compose.source.catalog import _SourceCatalogBuilder
@@ -65,11 +64,20 @@ class BuildContext:
 
 @dataclass(frozen=True)
 class BuildResult:
-    """The immutable product a node `.build()` returns — the built node + its wiring/edges."""
+    """A built node plus transient Compose-owned assembly metadata.
+
+    ``node_range`` and ``field_ranges`` exist only while Compose validates the
+    assembled graph. They are discarded before ``CompiledFlow`` construction.
+    """
 
     node: Node
     wiring: dict[str, Any]  # flow-owned {param -> source}
     edges: tuple[Edge, ...] = ()  # () for leaf/call/loop; case returns its own
+    node_range: SourceRange | None = field(default=None, compare=False)
+    field_ranges: dict[tuple[str, str], SourceRange] = field(
+        default_factory=dict,
+        compare=False,
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -143,13 +151,15 @@ class NodeDescriptor:
     outputs: Any = None
     origin: OriginRef | None = field(default=None, compare=False)
     range: Optional[SourceRange] = field(default=None, compare=False)
-    # `(kind, key) -> SourceRange` for each authored NAMED site, guarded against a bare-key
-    # lookup (see `FieldRanges`). Stamped here at parse; copied onto the runtime node by `_finish`.
-    field_ranges: FieldRanges = field(default_factory=FieldRanges, compare=False)
+    # `(kind, key) -> SourceRange` for each authored named site. Stamped here at parse and
+    # copied into the transient Compose-owned `BuildResult` by `_finish`.
+    field_ranges: dict[tuple[str, str], SourceRange] = field(
+        default_factory=dict,
+        compare=False,
+    )
     # Positional `asserts:` ranges — one entry per authored assert IN ORDER, aligned 1:1 with the
     # `asserts` list (`None` where no range exists). Stamped in `parse/nodes` via the cursor's
-    # `item_range_list`; split into the built node's `pre_assert_ranges`/`post_assert_ranges` (in
-    # lockstep with the pre/post classification) by `validate_node_asserts`. Kept OUT of
+    # `item_range_list` and consumed only by Compose's node-assert validator. Kept OUT of
     # `field_ranges` because an assert's text is not a unique key (two identical asserts must still
     # get distinct carets). `compare=False`, like the other render metadata. `[]` when none authored.
     assert_ranges: list[SourceRange | None] = field(default_factory=list, compare=False)
@@ -332,7 +342,7 @@ class NodeDescriptor:
         cls._check_keys(node_id, cursor)
         body = cursor._value_view()
         own_range = cursor.range
-        ranges: FieldRanges = FieldRanges()
+        ranges: dict[tuple[str, str], SourceRange] = {}
         kwargs: dict[str, Any] = {"id": node_id}
         for key in cls.allowed - NodeDescriptor.allowed:  # this kind's OWN keys only
             if key not in body:
@@ -433,20 +443,21 @@ class NodeDescriptor:
         raise NotImplementedError(f"{type(self).__name__} has no build")
 
     def _finish(self, node, wiring, edges=()) -> BuildResult:
-        """Stamp parse metadata onto a freshly-built `node` and wrap it in a `BuildResult`.
+        """Attach semantic provenance and return the Compose build product.
 
         The tail helper every `build` ends with — the ONE place source metadata stamps live, so
         they cannot drift across the per-kind builds: copies this descriptor's opaque `origin`
-        plus its legacy Compose range metadata onto the semantic node, then returns the
-        `BuildResult(node, wiring, edges)`. Runtime diagnosis consumes only the origin trace.
-        `edges` defaults to `()` (leaf/call/loop own no edges); `case` passes its data+control
-        edges.
-
-        The compatibility copy remains a `FieldRanges`, not a plain `dict`, so existing
-        Compose-side tuple-key checks remain explicit while the metadata still exists."""
+        onto the semantic node and retains its YAML ranges only in the transient
+        `BuildResult`. `edges` defaults to `()` (leaf/call/loop own no edges); `case` passes its
+        data+control edges.
+        """
         if self.origin is not None and not isinstance(self.origin, OriginRef):
             raise TypeError("node descriptor origin must be an OriginRef or None")
         node.origin = self.origin
-        node.range = self.range
-        node.field_ranges = FieldRanges(self.field_ranges)
-        return BuildResult(node=node, wiring=wiring, edges=tuple(edges))
+        return BuildResult(
+            node=node,
+            wiring=wiring,
+            edges=tuple(edges),
+            node_range=self.range,
+            field_ranges=dict(self.field_ranges),
+        )

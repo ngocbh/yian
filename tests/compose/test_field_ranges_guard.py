@@ -1,25 +1,13 @@
-"""Unit tests for the `FieldRanges` bare-key guard (#101).
+"""Tests for transient Compose-owned range metadata."""
 
-`node.field_ranges` is keyed by a `(kind, key)` tuple. A bare-string lookup can
-therefore never match — and because Compose validators often fall back (`or node.range`),
-it degrades to a caret on the wrong line instead of raising. That silence is what let two dead
-lookups survive both review and a fully green suite when #98 moved the map from string keys to
-tuples. `FieldRanges.get` refuses the wrong key shape so the mistake is loud at the first call.
+from agent_composer.compose.nodes.base import BuildContext
+from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.source import SourceDocument
 
-The type must also survive the copies: the descriptor stamps ranges at parse, and the compose
-builder's `_finish` rebuilds them onto the semantic node used by later Compose validators.
-Copying into a plain `dict` anywhere along that path would silently drop the guard
-exactly where it earns its keep, so `test_guard_survives_build` pins the end of that chain.
-"""
-
-import pytest
-
-from agent_composer.compose.loader import load_flow
-from agent_composer.nodes.base import FieldRanges
 
 _FLOW = """
-id: guard
-name: guard
+id: ranges
+name: ranges
 input:
   topic: str
 nodes:
@@ -33,60 +21,37 @@ output: ${n.output}
 """
 
 
-def test_bare_key_lookup_raises():
-    fr = FieldRanges({("field", "over"): "RANGE"})
-    with pytest.raises(TypeError, match="keyed by a .kind, key. tuple"):
-        fr.get("over")
+def test_descriptor_ranges_move_to_build_result_only() -> None:
+    """Building retains YAML ranges in Compose without stamping the semantic node."""
+    document = SourceDocument.parse(_FLOW)
+    descriptor = parse_nodes(document.root.child("nodes"))["n"]
+
+    result = descriptor.build(BuildContext({}))
+
+    assert type(descriptor.field_ranges) is dict
+    assert result.node_range is descriptor.range
+    assert result.field_ranges == descriptor.field_ranges
+    assert result.field_ranges is not descriptor.field_ranges
+    assert result.field_ranges[("input", "topic")].start_line == 10
+    assert not hasattr(result.node, "range")
+    assert not hasattr(result.node, "field_ranges")
 
 
-def test_bare_key_error_names_the_offending_key():
-    # The message must hand back a usable fix, not just complain.
-    fr = FieldRanges()
-    with pytest.raises(TypeError, match=r"\('field', 'over'\)"):
-        fr.get("over")
+def test_case_generated_input_range_stays_in_build_result() -> None:
+    """CASE adds synthetic parameter ranges to the same transient carrier."""
+    text = """
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: ${missing.output} > 0
+        then: done
+    else: done
+"""
+    document = SourceDocument.parse(text)
+    descriptor = parse_nodes(document.root.child("nodes"))["gate"]
 
+    result = descriptor.build(BuildContext({}))
 
-def test_tuple_lookup_still_works():
-    fr = FieldRanges({("field", "over"): "RANGE"})
-    assert fr.get(("field", "over")) == "RANGE"
-    assert fr.get(("field", "absent")) is None
-    assert fr.get(("field", "absent"), "fallback") == "fallback"
-    assert ("field", "over") in fr
-    assert ("field", "absent") not in fr
-
-
-def test_bare_key_membership_raises():
-    # Compatibility range lookups use `(kind, key)` tuples, so a bare key here would silently
-    # answer False — the same silent-miss bug `get` guards against.
-    fr = FieldRanges({("field", "over"): "RANGE"})
-    with pytest.raises(TypeError, match="keyed by a .kind, key. tuple"):
-        "over" in fr  # noqa: B015
-
-
-def test_copy_keeps_the_guard():
-    # `dict.copy` returns a PLAIN dict, which would launder the guard away silently.
-    fr = FieldRanges({("field", "over"): "RANGE"})
-    dup = fr.copy()
-    assert isinstance(dup, FieldRanges)
-    assert dup.get(("field", "over")) == "RANGE"
-    with pytest.raises(TypeError):
-        dup.get("over")
-
-
-def test_guard_survives_build():
-    # The end of the stamp -> copy -> lookup chain: a BUILT runtime node must still carry the
-    # guard, since `_finish` is where a plain-dict copy would silently drop it.
-    node = load_flow(_FLOW).compiled.nodes["n"]
-    assert isinstance(node.field_ranges, FieldRanges)
-    with pytest.raises(TypeError):
-        node.field_ranges.get("inputs")
-    assert node.field_ranges.get(("input", "topic")) is not None
-
-
-def test_guard_survives_build_on_the_start_boundary():
-    # The StartNode takes its map through a separate constructor path (`_boundary_field_ranges`
-    # -> `StartNode(field_ranges=...)`), so it needs its own pin — it is also the node whose
-    # `("input", name)` lookup was one of the two dead sites.
-    start = load_flow(_FLOW).compiled.nodes["__start__"]
-    assert isinstance(start.field_ranges, FieldRanges)
-    assert start.field_ranges.get(("input", "topic")) is not None
+    assert result.field_ranges[("input", "__r0")].start_line == 6
+    assert not hasattr(result.node, "field_ranges")

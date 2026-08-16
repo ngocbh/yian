@@ -13,8 +13,8 @@ Its notes form a "why" legend: one line per dependency edge inside a cyclic comp
 so the author sees which `${...}` reference closes the cycle.
 
 Imports flow down/peer only: `compile.model` (Edge + boundary ids), `compile.validation`
-(the shared Kahn check), `compose.helpers.errors`, `events` (SourceRange). Only the loader (and
-the compose package facade) import this back.
+(the shared Kahn check), `compose.helpers.errors`, and `diagnostics` (SourceRange). Only the
+loader (and the compose package facade) imports this back.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from __future__ import annotations
 from agent_composer.compile.model import END_ID, START_ID, Edge
 from agent_composer.compile.validation import FlowValidationError, _reject_cycles
 from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 def reject_cycles(

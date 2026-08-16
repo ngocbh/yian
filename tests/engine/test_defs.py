@@ -19,7 +19,7 @@ from agent_composer.compose import loader as compose_loader
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.source import document as source_document
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.run import run_flow
 from agent_composer.compose.parse.file import parse_file
@@ -441,26 +441,38 @@ def test_single_node_def_runs():
     assert res.output == "ACME"
 
 
-def test_single_node_def_projected_header_and_logic_ranges():
+def test_single_node_def_projected_header_and_logic_origins():
     loaded = load_flow(_SINGLE_NODE_DEF)
     node = loaded.compiled.nodes["go"].child.nodes["passthru"]
+    resolver = loaded.origin_resolver
+    assert resolver is not None
 
-    assert node.range.start_line == 7
-    assert node.field_ranges[("field", "code")].start_line == 9
+    assert node.origin is not None
+    assert node.code_origin is not None
+    assert resolver.resolve(node.origin).range.start_line == 7
+    assert resolver.resolve(node.code_origin).range.start_line == 9
 
 
-def test_single_node_def_generated_inputs_keep_declaration_ranges():
+def test_single_node_def_generated_inputs_keep_binding_origin():
     loaded = load_flow(_SINGLE_NODE_DEF)
-    ranges = loaded.compiled.nodes["go"].child.nodes["passthru"].field_ranges
+    child = loaded.compiled.nodes["go"].child
+    binding = child.wiring["passthru"]["topic"]
+    resolver = loaded.origin_resolver
 
-    assert ranges[("input", "topic")] == SourceRange(10, 21, 10, 24)
+    assert resolver is not None
+    assert binding.origin is not None
+    assert resolver.resolve(binding.origin).range == SourceRange(10, 21, 10, 24)
 
 
-def test_single_node_def_generated_output_keeps_authored_output_range():
+def test_single_node_def_generated_output_keeps_contract_origin():
     loaded = load_flow(_SINGLE_NODE_DEF)
-    ranges = loaded.compiled.nodes["go"].child.nodes["passthru"].field_ranges
+    node = loaded.compiled.nodes["go"].child.nodes["passthru"]
+    origin = node.output_contract.origins.default
+    resolver = loaded.origin_resolver
 
-    assert ranges[("field", "outputs")] == SourceRange(11, 13, 11, 16)
+    assert resolver is not None
+    assert origin is not None
+    assert resolver.resolve(origin).range == SourceRange(11, 13, 11, 16)
 
 
 _SINGLE_NODE_DEF_BADTYPE = """

@@ -92,14 +92,6 @@ asserts:
     }
 
     assert len(origins) == 4
-    assert start.post_assert_ranges == [
-        assertion_cursors.child(0).range,
-        assertion_cursors.child(1).range,
-    ]
-    assert end.post_assert_ranges == [
-        assertion_cursors.child(2).range,
-        assertion_cursors.child(3).range,
-    ]
 
 
 def test_alias_occurrences_mint_distinct_node_and_flow_assertion_origins():
@@ -301,7 +293,6 @@ asserts:
         expression="${output} >= 0",
         display="${output} >= 0",
     )
-    assert node.post_assert_ranges == [cursor.range]
 
 
 def test_duplicate_loop_assertions_keep_sites_when_the_driver_respawns():
@@ -345,10 +336,6 @@ output: ${drive.output}
         for index, assertion in enumerate(drive.post_asserts)
     }
     assert len(origins) == 2
-    assert drive.post_assert_ranges == [
-        cursors.child(0).range,
-        cursors.child(1).range,
-    ]
 
     respawned = drive.respawn(1)
 
@@ -357,8 +344,6 @@ output: ${drive.output}
     assert [assertion.origin for assertion in respawned.post_asserts] == [
         assertion.origin for assertion in drive.post_asserts
     ]
-    assert respawned.post_assert_ranges == drive.post_assert_ranges
-    assert respawned.post_assert_ranges is not drive.post_assert_ranges
 
 
 def test_def_boundary_and_call_relocation_reuse_authored_assertion_carriers():
@@ -415,16 +400,12 @@ output: ${invoke.output}
     _assert_assertion_site(catalog, start_assertion, child_asserts.child(0))
     _assert_assertion_site(catalog, end_assertion, child_asserts.child(1))
     call_origin = _assert_assertion_site(catalog, call_assertion, call_cursor)
-    assert child_start.post_assert_ranges == [child_asserts.child(0).range]
-    assert child_end.post_assert_ranges == [child_asserts.child(1).range]
-    assert invoke.post_assert_ranges == [call_cursor.range]
 
     cloned = call_subgraph(
         child,
         callsite="invoke",
         record={"n": 1},
         post_asserts=invoke.post_asserts,
-        post_assert_ranges=invoke.post_assert_ranges,
         input_names={parameter.name for parameter in invoke.params},
     )
     relocated_end = cloned.nodes[cloned.end_id]
@@ -435,7 +416,6 @@ output: ${invoke.output}
     assert relocated.display == call_assertion.display
     assert "${__assert_input_n}" in relocated.expression
     assert "${output}" in relocated.expression
-    assert relocated_end.post_assert_ranges[-1] == call_cursor.range
     assert catalog.resolve(relocated.origin) == catalog.resolve(call_origin)
 
 

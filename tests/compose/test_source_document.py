@@ -7,7 +7,7 @@ import yaml
 
 from agent_composer.compose.source import document as document_module
 from agent_composer.compose.source import SourceDocument, SourceSyntaxError
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 
 
 def test_document_has_private_retained_slots():

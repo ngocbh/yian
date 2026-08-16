@@ -22,7 +22,8 @@ from agent_composer.compose.loader import load_flow
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceCursor, SourceDocument
-from agent_composer.events import RunFailed, SourceRange
+from agent_composer.diagnostics import SourceRange
+from agent_composer.events import RunFailed
 from agent_composer.nodes.contracts import Parameter, ValueContract
 from agent_composer.run import run_flow
 from agent_composer.typesys.values import Type, ValueKind
@@ -1594,7 +1595,7 @@ def test_inline_child_scope_is_closed_and_redacts_private_identity(
     assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
-def test_eager_def_inline_call_uses_raw_ranges_and_shared_scope(monkeypatch):
+def test_eager_def_inline_call_uses_origin_and_shared_scope(monkeypatch):
     registrations = []
     resolutions = []
     original_register = compose_loader._CallableScope.register_private
@@ -1647,12 +1648,21 @@ output: ${invoke.output}
     expected_owner = ("def", "outer", "node", "wrapper", "inline")
     expected_flow_id = inline_flow_id(expected_owner)
     wrapper = loaded.compiled.nodes["invoke"].child.nodes["wrapper"]
-    wrapper_line = source.splitlines().index("      wrapper:") + 1
+    root, _document = _located_root(source)
+    wrapper_key_range = (
+        root.child("defs")
+        .child("outer")
+        .child("nodes")
+        .child("wrapper")
+        .key_range
+    )
     result = run_flow(loaded, {})
 
     assert wrapper.flow_id == expected_flow_id
     assert wrapper.child_inputs == []
-    assert wrapper.range.start_line == wrapper_line
+    assert wrapper.origin is not None
+    assert loaded.origin_resolver is not None
+    assert loaded.origin_resolver.resolve(wrapper.origin).range == wrapper_key_range
     assert len(registrations) == 1
     assert len(resolutions) == 1
     assert registrations[0] == (
@@ -2753,7 +2763,8 @@ output: ${broken.output}
     assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
-def test_inline_child_start_uses_outer_input_binding_ranges():
+@pytest.mark.parametrize("bad_input", ["value", "count"])
+def test_inline_wrapper_bad_input_uses_outer_binding_range(bad_input: str):
     source = """id: inline-child-input-ranges
 name: inline_child_input_ranges
 input:
@@ -2775,18 +2786,21 @@ nodes:
     output: ${echo.output}
 output: ${wrapper.output}
 """
-    root, _document = _located_root(source)
-    expected_ranges = (
-        root.child("nodes").child("wrapper").mapping_value_ranges("input")
+    source = source.replace(
+        f"${{input.{bad_input}}}",
+        "${missing.output}",
+        1,
     )
+    root, _document = _located_root(source)
+    expected_range = (
+        root.child("nodes").child("wrapper").mapping_value_ranges("input")
+    )[bad_input]
 
-    loaded = load_flow(source)
-    child_start = loaded.compiled.nodes["wrapper"].child.nodes[START_ID]
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
 
-    assert {
-        name: child_start.field_ranges[("input", name)]
-        for name in ("value", "count")
-    } == expected_ranges
+    assert "producer 'missing' has no available static type" in str(caught.value)
+    assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
 def test_inline_child_bad_output_uses_retained_output_range():

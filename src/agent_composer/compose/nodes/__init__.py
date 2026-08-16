@@ -16,7 +16,8 @@ per-kind isinstance ladder, now dissolved):
   no-op, and
 - **`build(ctx: BuildContext) -> BuildResult`** — a method that constructs the runtime `Node`
   (+ wiring, + any edges a `case` owns), stamping the descriptor's optional `.origin`
-  plus its legacy `.range`/`.field_ranges` onto it. The assembly conductor, not a
+  onto it and retaining concrete ranges only on the Compose-owned build result. The
+  assembly conductor, not a
   per-kind parser, assigns authored node-header origins and invokes the source hook
   before build. CODE alone also consumes the context's opaque Python filename and
   optional registered-origin presentation callable for load-time syntax errors; YAML

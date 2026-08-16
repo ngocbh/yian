@@ -62,7 +62,6 @@ def _assert_same_fragment(actual: Flow, expected: Flow) -> None:
         assert left.origin_id == right.origin_id
         assert left.origin_context == right.origin_context
         assert left.post_asserts == right.post_asserts
-        assert left.post_assert_ranges == right.post_assert_ranges
 
 
 def test_call_map_and_loop_return_seed_only():
@@ -171,7 +170,6 @@ def test_compile_builder_reconstructs_every_growth_kind():
         callsite=call.id,
         record=dict(call_grow.seed),
         post_asserts=call.post_asserts,
-        post_assert_ranges=call.post_assert_ranges,
         input_names={param.name for param in call.params or []},
     )
     _assert_same_fragment(build_grow(call, call_grow.seed), call_expected)

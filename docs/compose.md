@@ -30,9 +30,9 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ desugar_case_call_targets   │  After this, only core kinds remain.
   ├─ expand_case_outputs         ┘
   │
-  ├─ build (per kind, via KINDS) → a runtime NODE + its flow-owned WIRING;
-  │                                physical output contracts compile root/nested origins here
-  │                                (a case lowers in its own build, returning its edges)
+  ├─ build (per kind, via KINDS) → a runtime NODE + its flow-owned WIRING/EDGES;
+  │                                Compose-only node/field ranges stay on BuildResult
+  │                                (physical output contracts compile origins here)
   ├─ stamp node wiring       → ordinary Parameter key origins + ordinary/reserved
   │                             final Binding value origins
   │
@@ -45,6 +45,7 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ synthesize boundary    → START/END nodes, edges, and binding-preserving wiring
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
+  ├─ discard build locations → no SourceRange enters Node or CompiledFlow
   ▼
  CompiledFlow   (inside a ComposedFlow: + parameters, exact origin resolver)
 ```
@@ -59,8 +60,9 @@ Everything below just explains three of those words: **descriptor**, **build**, 
 `load_flow()` constructs each flow source document as one `SourceDocument`. That single
 safe construction keeps the semantic value and a compact private definition graph for
 YAML anchors, aliases, duplicate keys, and `<<:` merges. Source-aware parsing and inline
-extraction navigate `SourceCursor`s into that document; later passes use descriptors and
-nodes carrying derived ranges. No phase parses the flow text again.
+extraction navigate `SourceCursor`s into that document; later Compose passes use descriptors
+and `BuildResult` values carrying derived ranges. Those ranges are discarded before
+`CompiledFlow`. No phase parses the flow text again.
 
 Merge topology stays compact as identity-shared pair/arc ropes. Parent mappings reuse
 completed child summaries instead of rescanning inherited merge DAGs; explicit raw
@@ -114,8 +116,8 @@ scalar and every available exact literal constructed line, then carries only tho
 origins into `CodeNode`. CASE registers each positional `cases[N].when` and optional `on:`
 value, retaining only opaque origins through its lowering. It also indexes flow and node
 assertions by authored list order,
-deriving each `Assertion.origin` and its aligned temporary `SourceRange` from the same item
-cursor. Equal text at two positions is therefore two distinct source sites. Flow-output
+deriving each `Assertion.origin` from its retained item cursor. Equal text at two positions
+is therefore two distinct source sites. Flow-output
 registration happens after desugaring, so an authored occurrence locates the final
 `FlowOutput.binding` source. Output mapping keys stay origin-free. Without a retained source
 occurrence, Compose mints no origin and preserves any explicit programmatic origin.
@@ -144,7 +146,7 @@ The pipeline has two representations of a node, and the split matters:
 |---|---|---|
 | what | a frozen record of *what you wrote* | the runtime object the engine calls |
 | where | `compose/nodes/<kind>.py` | `nodes/<kind>/` |
-| carries | raw fields + ranges + optional header/kind origins | `run()`, contracts, optional header/kind origins |
+| carries | raw fields + ranges + optional header/kind origins | `run()`, contracts, optional header/kind origins; no YAML ranges |
 | lifetime | load-time only | lives through the whole run |
 
 `parse_nodes` produces descriptors; the desugar passes rewrite descriptors; `build`
@@ -195,18 +197,19 @@ ladder.
 
 ## Build: descriptor → node + wiring
 
-`build()` produces a `BuildResult` bundling **three** things, and the split is deliberate:
+`build()` produces a `BuildResult` with three semantic products plus Compose-only
+location metadata:
 
 ```python
 result = desc.build(BuildContext(registry=registry, resolver=resolver))
 node, wiring, edges = result.node, result.wiring, result.edges
+node_range, field_ranges = result.node_range, result.field_ranges
 ```
 
 - the **node** carries only what it needs to run: its canonical `output_contract`,
   its sink `params` (formal names plus optional input contracts/default policy), and
-  an optional source-neutral authored-context `origin`. It also retains temporary
-  `range`/`field_ranges` compatibility metadata that runtime diagnosis no longer reads.
-  Descriptors derive a
+  an optional source-neutral authored-context `origin`. It has no `range`,
+  `field_ranges`, `pre_assert_ranges`, or `post_assert_ranges`. Descriptors derive a
   `ValueContract` directly; consumers retain it and project `.type` only inside
   semantic type algorithms. CODE additionally carries the diagnostic-only whole-source
   `code_origin` and ordered exact `code_line_origins`. Inline CODE compiles one
@@ -220,6 +223,9 @@ node, wiring, edges = result.node, result.wiring, result.edges
   reusable and why the flow, not the node, owns the graph.
 - the **edges** are empty (`()`) for every kind EXCEPT `case`, which lowers to a
   `CaseNode` in its own `build()` and returns its data+control branch edges here.
+- **`node_range` / `field_ranges`** remain in Compose so post-build validators can
+  locate errors after a descriptor has produced its semantic node. Assembly drops
+  both before `CompiledFlow.from_parts`; compile and runtime never receive them.
 
 Leaf kinds (`agent`/`code`/`model`/`tool`) ignore `ctx.resolver`; `call`/`map`/`loop` use
 it to resolve the child flow they expand into. CODE alone also reads
@@ -275,10 +281,12 @@ generated and Python-built contracts stay source-free.
 Authored assertions cross into one ordered `Assertion` carrier per source occurrence.
 Flow assertions are carrierized during inline-call desugaring; node assertions are
 carrierized during validation. For physical YAML entries, assembly uses the retained
-list-item cursor as the single source of the opaque `OriginRef` and the temporary positional
-range; flow carrierization preserves an explicit programmatic origin rather than replacing
-it. Inline-call desugaring and flow lowering change only the executable expression, while
+list-item cursor as the single source of the opaque `OriginRef`; flow carrierization
+preserves an explicit programmatic origin rather than replacing it. Inline-call desugaring
+and flow lowering change only the executable expression, while
 child cloning, CALL relocation, and LOOP respawn retain the carrier's display and origin.
+When an assertion fails, `Node.run` diagnoses through that exact `Assertion.origin`;
+there is no positional range list on the node.
 Lowered flow carriers are reused on START/END. Full root flows and multi-node `defs:` retain a flow
 assertion cursor; compact roots and flat single-node defs project `asserts:` onto their
 synthesized node, so those assertions are node-local.

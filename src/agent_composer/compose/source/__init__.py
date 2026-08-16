@@ -16,7 +16,7 @@ stay private. Isolated location-free literals may be parsed separately without
 creating a document.
 
 Knows about:   PyYAML and the source-neutral contracts in ``diagnostics``;
-               ``SourceRange`` is temporarily re-exported through ``events``.
+               Compose imports ``SourceRange`` directly from that leaf.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run
                boundary, CLI modules, or provider SDKs.
 """

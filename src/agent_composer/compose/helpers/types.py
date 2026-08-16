@@ -24,7 +24,7 @@ from agent_composer.typesys.values import ValueKind
 from agent_composer.typesys.types import TypeRegistry
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 from agent_composer.compose.source import (
     SourceAccessError,
     SourceCursor,

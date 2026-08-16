@@ -16,7 +16,7 @@ from agent_composer.compose.nodes.case import CaseDescriptor
 from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.source.catalog import _scope_origin
 from agent_composer.diagnostics import OriginRef
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 from agent_composer.nodes.case import CaseNode
 from agent_composer.nodes.contracts import Binding
 from agent_composer.run import run_flow
@@ -172,8 +172,8 @@ def test_case_build_lowers_to_case_node_with_edges():
     ctl = {(e.from_, e.to, e.source_handle) for e in control}
     assert ("route", "hot", "hot") in ctl
     assert ("route", "cold", "default") in ctl
-    # `.range`/`.field_ranges` are stamped onto the built node via `_finish`.
-    assert isinstance(result.node.range, SourceRange)
+    # YAML coordinates remain on the Compose-only build product.
+    assert isinstance(result.node_range, SourceRange)
 
 
 def test_searched_case_origins_are_positional_and_select_the_failing_entry():

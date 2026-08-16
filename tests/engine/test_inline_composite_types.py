@@ -13,7 +13,7 @@ from agent_composer.compose.build.inline_inputs import (
     require_proven_type,
 )
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
-from agent_composer.events import SourceRange
+from agent_composer.diagnostics import SourceRange
 from agent_composer.typesys import canonical_type_label
 from agent_composer.typesys.values import Type, ValueKind
 

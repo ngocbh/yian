@@ -15,8 +15,8 @@ Two subtleties mirror the representation-neutral collector:
   `__rN`/`__on` SOURCES are classified, against the pool; mirrors the strict CASE check).
 
 Located parse metadata: each error anchors on the referencing field's `SourceRange`, read
-off the built node's `field_ranges` (the coarse per-field span — e.g. the node's `input:`
-mapping for an input-binding ref, its `prompt:` for a prompt ref).
+from the transient Compose `BuildResult` (the coarse per-field span — e.g. the node's
+`input:` mapping for an input-binding ref, its `prompt:` for a prompt ref).
 
 Imports flow down only: `compile.validation` (the leaf ref checker), `expr` (the binding
 parser), `nodes` (Node/AgentNode/WaitNode discrimination and `ValueContract`),
@@ -30,14 +30,14 @@ from typing import Any, Optional
 
 from agent_composer.compile.validation import _classify_path
 from agent_composer.compose.helpers.errors import LoadDiagnostics
-from agent_composer.events import SourceRange
+from agent_composer.compose.nodes.base import BuildResult
+from agent_composer.diagnostics import SourceRange
 from agent_composer.expr import (
     ExpressionError,
     expr_refs_of,
     prompt_refs,
 )
 from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import ValueContract, binding_source
 from agent_composer.nodes.wait import WaitNode
 
@@ -62,7 +62,7 @@ def _output_bindings(outputs: Any) -> list[Any]:
 
 
 def validate_references(
-    nodes: dict[str, Node],
+    build_results: dict[str, BuildResult],
     flow_inputs: "set[str]",
     producers: dict[str, ValueContract],
     outputs: Any,
@@ -73,8 +73,9 @@ def validate_references(
 ) -> None:
     """Validate every `${...}` reference site of a built flow.
 
-    `nodes` is the built node map — leaf runtime `Node`s AND desugared `CaseNode`s
-    (their `.inputs` carry the `__rN`/`__on` SOURCES, the reconciled `case` data refs).
+    `build_results` is the transient Compose build map — its nodes include leaf runtime
+    `Node`s and desugared `CaseNode`s (their wiring carries the `__rN`/`__on` sources), while
+    its range fields retain YAML locations only for this validation phase.
     `flow_inputs` is the `read_flow_inputs(...)` decl names (the `${input.X}` set);
     `producers` maps node id -> its exact `output_contract`. Only producers with a
     resolvable contract belong here; an absent producer contract stays lenient. The
@@ -82,8 +83,8 @@ def validate_references(
     leaving its origins attached to the untouched carrier. `outputs` is the raw flow
     `outputs:` section.
 
-    Each error anchors on the referencing site's `SourceRange`, resolved off the built node's
-    `field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
+    Each error anchors on the referencing site's `SourceRange`, resolved from its
+    `BuildResult.field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
     binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
     / `("field", "prompt")`), else the node header. `outputs_range` is the authored output
     value/block range when the caller retains it. The aggregate carries the first retained range.
@@ -93,7 +94,7 @@ def validate_references(
     verbatim — the per-node walk glue is the only loader-specific code.
     """
     diagnostics = diagnostics or LoadDiagnostics()
-    valid_targets = set(nodes)
+    valid_targets = set(build_results)
     # The representation-neutral leaf checker speaks Type. Project only at that boundary;
     # the canonical ValueContract carriers (and their origins) stay untouched here.
     for node_id, contract in producers.items():
@@ -133,14 +134,16 @@ def validate_references(
             if err is not None:
                 errors.append((f"{where}: {err}", rng))
 
-    for node_id, node in nodes.items():
-        franges = node.field_ranges
+    for node_id, result in build_results.items():
+        node = result.node
+        franges = result.field_ranges
+        node_range = result.node_range
         # Prompt scope: a strict AGENT prompt may interpolate ONLY this node's
         # declared inputs as bare `${name}` (or as a `${name}`-wrapped builtin-call arg);
         # a pool ref in a prompt is loud, and an unknown builtin / malformed span is
         # rejected here (via `prompt_refs`, the renderer's compile-time companion).
         if isinstance(node, AgentNode) and node.prompt:
-            prompt_rng = franges.get(("field", "prompt")) or node.range
+            prompt_rng = franges.get(("field", "prompt")) or node_range
             declared = {p.name for p in (node.params or [])}
             try:
                 refs = prompt_refs(node.prompt)
@@ -165,7 +168,7 @@ def validate_references(
         if node.binds_per_item:
             nwiring = flow_wiring.get(node_id, {})
             reserved = node.reserved_wiring_keys()
-            input_rng = franges.get(("field", "inputs")) or node.range
+            input_rng = franges.get(("field", "inputs")) or node_range
             for key in reserved:
                 # A reserved wiring key (`over`) is a KIND FIELD, so its range is tagged
                 # `("field", key)` — not the bare key, which would never match and would
@@ -194,7 +197,7 @@ def validate_references(
         # one for its synthetic params (a CASE `__rN` -> its `cases[N].when` line); the block range
         # is only the fallback (a spanless flow has no ranges at all). `wiring_ref_label` gives a
         # synthetic param the author-facing name it was hoisted from instead of leaking `__rN`.
-        input_rng = franges.get(("field", "inputs")) or node.range
+        input_rng = franges.get(("field", "inputs")) or node_range
         for param, src in flow_wiring.get(node_id, {}).items():
             scan(src, f"node {node_id!r} {node.wiring_ref_label(param)} from",
                  franges.get(("input", param)) or input_rng)

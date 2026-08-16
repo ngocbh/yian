@@ -1,0 +1,169 @@
+"""Integration tests for complete resolver installation at the Compose boundary."""
+
+from copy import deepcopy
+from dataclasses import replace
+
+import pytest
+
+from agent_composer.compile import iter_flow_origins
+from agent_composer.compile.manifest import flow_fingerprint
+from agent_composer.compose import ComposedFlow, load_flow
+from agent_composer.compose.helpers.errors import LoadError
+from agent_composer.diagnostics import OriginRef, ResolverTable
+
+
+_CHILD = """id: child
+name: child
+nodes:
+  worker:
+    kind: code
+    code: return 1
+    output: int
+output: ${worker.output}
+"""
+
+_PARENT = """id: parent
+name: parent
+nodes:
+  first:
+    kind: call
+    call: left
+  second:
+    kind: call
+    call: right
+output: ${second.output}
+uses:
+  left: child
+  right: child
+"""
+
+
+def _origins(flow) -> dict[str, OriginRef]:
+    """Return one canonical reachable origin per opaque key."""
+    return {origin.key: OriginRef(origin.key) for origin in iter_flow_origins(flow)}
+
+
+def test_load_flow_installs_an_exact_resolver_and_filters_unused_defs():
+    text = """id: complete-local
+name: complete-local
+input:
+  n: int
+defs:
+  unused:
+    kind: code
+    code: return 2
+    output: int
+nodes:
+  worker:
+    kind: code
+    code: return 1
+    output: int
+output: ${worker.output}
+asserts:
+  - ${input.n} >= 0
+  - ${worker.output} >= 0
+"""
+
+    loaded = load_flow(text)
+    origins = _origins(loaded.compiled)
+
+    assert isinstance(loaded.origin_resolver, ResolverTable)
+    assert {origin.key for origin in loaded.origin_resolver.origins} == set(origins)
+    assert all(
+        loaded.origin_resolver.resolve(origin) is not None
+        for origin in origins.values()
+    )
+    assert not hasattr(loaded, "_local_catalog")
+
+
+def test_source_free_load_has_no_resolver():
+    loaded = load_flow("id: empty\nname: empty\nnodes: {}\n")
+
+    assert _origins(loaded.compiled) == {}
+    assert loaded.origin_resolver is None
+
+
+def test_one_alias_reuses_one_rebased_child_for_multiple_calls():
+    child = load_flow(_CHILD)
+    text = _PARENT.replace("    call: right\n", "    call: left\n")
+
+    loaded = load_flow(text, child_resolver=lambda _path, _version=None: child)
+    first = loaded.compiled.nodes["first"].child
+    second = loaded.compiled.nodes["second"].child
+
+    assert first is second
+    assert _origins(first) == _origins(second)
+    assert all(
+        loaded.origin_resolver.resolve(origin) is not None
+        for origin in _origins(first).values()
+    )
+
+
+def test_two_aliases_rebase_canonical_child_without_mutating_it():
+    child = load_flow(_CHILD)
+    canonical_origins = _origins(child.compiled)
+    canonical_fingerprint = flow_fingerprint(child.compiled)
+
+    loaded = load_flow(
+        _PARENT,
+        child_resolver=lambda _path, _version=None: child,
+    )
+    first = loaded.compiled.nodes["first"].child
+    second = loaded.compiled.nodes["second"].child
+    first_origins = _origins(first)
+    second_origins = _origins(second)
+
+    assert first is not second
+    assert set(first_origins).isdisjoint(second_origins)
+    assert _origins(child.compiled) == canonical_origins
+    assert flow_fingerprint(first) == canonical_fingerprint
+    assert flow_fingerprint(second) == canonical_fingerprint
+    for origin in (*first_origins.values(), *second_origins.values()):
+        frame = loaded.origin_resolver.resolve(origin)
+        assert frame is not None
+        assert frame.text == _CHILD
+
+
+@pytest.mark.parametrize("replacement", [None, ResolverTable()])
+def test_originful_custom_child_requires_a_complete_resolver(replacement):
+    child = replace(load_flow(_CHILD), origin_resolver=replacement)
+
+    with pytest.raises(LoadError, match="origin resolver") as caught:
+        load_flow(
+            _PARENT,
+            child_resolver=lambda _path, _version=None: child,
+        )
+
+    assert caught.value.line is not None
+
+
+def test_source_free_custom_child_remains_source_free_when_embedded():
+    child = load_flow("id: empty-child\nname: empty-child\nnodes: {}\n")
+    parent = """id: empty-parent
+name: empty-parent
+nodes:
+  invoke:
+    kind: call
+    call: child
+uses:
+  child: empty-child
+"""
+
+    loaded = load_flow(
+        parent,
+        child_resolver=lambda _path, _version=None: child,
+    )
+    embedded = loaded.compiled.nodes["invoke"].child
+
+    assert _origins(embedded) == {}
+    assert loaded.origin_resolver is not None
+
+
+def test_resolver_metadata_is_immutable_copy_reused_and_equality_neutral():
+    loaded = load_flow(_CHILD)
+    copied = deepcopy(loaded)
+    replaced = replace(loaded, origin_resolver=ResolverTable())
+
+    assert copied.origin_resolver is loaded.origin_resolver
+    assert copied.compiled is not loaded.compiled
+    assert replaced == loaded

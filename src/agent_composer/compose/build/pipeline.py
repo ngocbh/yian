@@ -25,7 +25,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Optional, Protocol
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import OriginRef, OriginResolver
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges, Node
 from agent_composer.nodes.contracts import Parameter, ValueContract, as_binding
@@ -63,7 +63,7 @@ from agent_composer.compose.parse.nodes import (
     normalize_node_signature_cursor,
     parse_nodes,
 )
-from agent_composer.compose.source import SourceAccessError, SourceCatalog, SourceCursor
+from agent_composer.compose.source import SourceAccessError, SourceCursor
 from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.compose.helpers.types import read_flow_inputs
 from agent_composer.compose.validate.handles import check_case_handles
@@ -195,11 +195,12 @@ class ComposedFlow:
             `uses:` file; copied onto the built `CallNode`/`MapNode` as `child_source` so
             the CLI can box a frame for the child a call descends into. `None` only when a
             flow was assembled without a known source (defensive).
-        _local_catalog (`SourceCatalog`):
-            Immutable snapshot of source sites registered from this flow's physical
-            Compose document. This is compiler staging metadata, not yet the complete
-            resolver for embedded external flows; external origins must first be
-            lexically rebased into one returned-flow namespace.
+        origin_resolver (`OriginResolver`, *optional*, defaults to `None`):
+            Source-neutral authority for every reachable origin in a flow returned by
+            `load_flow`. `None` means the compiled graph is source-free. The private
+            assembly pipeline leaves this unset while one physical document is still
+            being built; the loader installs the exact immutable resolver before the
+            flow is returned or cached.
     """
 
     compiled: CompiledFlow
@@ -207,8 +208,8 @@ class ComposedFlow:
     name: Optional[str] = None
     description: Optional[str] = None
     source: Optional[SourceFrame] = None
-    _local_catalog: SourceCatalog = field(
-        default_factory=SourceCatalog,
+    origin_resolver: OriginResolver | None = field(
+        default=None,
         repr=False,
         compare=False,
     )
@@ -1125,5 +1126,4 @@ def _assemble(
         name=name,
         description=description,
         source=source,
-        _local_catalog=catalog_builder.freeze(),
     )

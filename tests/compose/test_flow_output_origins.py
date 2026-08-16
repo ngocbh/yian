@@ -6,8 +6,8 @@ from agent_composer.compile.model import END_ID, CompiledFlow, FlowOutput
 from agent_composer.compose import load_flow
 from agent_composer.compose.build.pipeline import _assemble
 from agent_composer.compose.loader import _CallableScope
-from agent_composer.compose.source import SourceCatalog, SourceCursor, SourceDocument
-from agent_composer.diagnostics import OriginRef
+from agent_composer.compose.source import SourceCursor, SourceDocument
+from agent_composer.diagnostics import OriginRef, OriginResolver
 from agent_composer.nodes.contracts import Binding
 
 
@@ -19,7 +19,7 @@ def _output(flow: CompiledFlow, name: str) -> FlowOutput:
 
 
 def _assert_output_site(
-    catalog: SourceCatalog,
+    catalog: OriginResolver,
     flow: CompiledFlow,
     name: str,
     cursor: SourceCursor,
@@ -54,7 +54,7 @@ output: ${worker.output}
     loaded = load_flow(text)
 
     _assert_output_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         loaded.compiled,
         "result",
         document.root.child("output"),
@@ -99,7 +99,8 @@ output:
     loaded = load_flow(text)
     named = loaded.compiled.nodes["named_call"].child
     inline = loaded.compiled.nodes["inline_call"].child
-    catalog = loaded._local_catalog
+    catalog = loaded.origin_resolver
+    assert catalog is not None
 
     origins = {
         _assert_output_site(
@@ -163,7 +164,7 @@ output:
     assert len(occurrences) == 2
     assert occurrences[0].range != occurrences[1].range
     _assert_output_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         loaded.compiled,
         "result",
         occurrences[1],
@@ -193,14 +194,14 @@ output:
     alias_cursor = output_cursor.child("alias")
 
     merged_origin = _assert_output_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         loaded.compiled,
         "merged",
         merged_cursor,
         source="${worker.output}",
     )
     alias_origin = _assert_output_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         loaded.compiled,
         "alias",
         alias_cursor,
@@ -252,14 +253,14 @@ output:
     output_cursor = document.root.child("output")
 
     call_origin = _assert_output_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         loaded.compiled,
         "via_call",
         output_cursor.child("via_call"),
         source="${__call_0.output}",
     )
     case_origin = _assert_output_site(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         loaded.compiled,
         "via_case",
         output_cursor.child("via_case"),
@@ -382,5 +383,5 @@ def test_physical_output_does_not_replace_an_explicit_programmatic_origin():
 
     output = _output(loaded.compiled, "result")
     assert output.binding.origin == explicit
-    assert loaded._local_catalog.resolve(explicit) is None
+    assert loaded.origin_resolver is None
     assert loaded.compiled.wiring[END_ID]["result"] is output.binding

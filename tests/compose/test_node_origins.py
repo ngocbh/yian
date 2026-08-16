@@ -10,8 +10,8 @@ from agent_composer.compose.build.pipeline import _assemble
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import _CallableScope
 from agent_composer.compose.parse.file import flow_nodes_cursor, parse_file
-from agent_composer.compose.source import SourceCatalog, SourceCursor, SourceDocument
-from agent_composer.diagnostics import OriginRef
+from agent_composer.compose.source import SourceCursor, SourceDocument
+from agent_composer.diagnostics import OriginRef, OriginResolver
 from agent_composer.nodes.base import Node
 
 
@@ -49,7 +49,7 @@ output:
 
 
 def _assert_header_origin(
-    catalog: SourceCatalog,
+    catalog: OriginResolver,
     node: Node,
     expected_cursor: SourceCursor,
 ) -> None:
@@ -66,9 +66,9 @@ def test_root_authored_node_origin_resolves_its_header():
     document = SourceDocument.parse(_SHARED_NODE_IDS)
     loaded = load_flow(_SHARED_NODE_IDS)
 
-    assert isinstance(loaded._local_catalog, SourceCatalog)
+    assert loaded.origin_resolver is not None
     _assert_header_origin(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         loaded.compiled.nodes["worker"],
         document.root.child("nodes").child("worker"),
     )
@@ -77,7 +77,8 @@ def test_root_authored_node_origin_resolves_its_header():
 def test_root_def_and_inline_same_node_id_have_distinct_resolvable_origins():
     document = SourceDocument.parse(_SHARED_NODE_IDS)
     loaded = load_flow(_SHARED_NODE_IDS)
-    catalog = loaded._local_catalog
+    catalog = loaded.origin_resolver
+    assert catalog is not None
 
     root_node = loaded.compiled.nodes["worker"]
     def_node = loaded.compiled.nodes["named_call"].child.nodes["worker"]
@@ -125,7 +126,7 @@ output: ${invoke.output}
     compact_node = loaded.compiled.nodes["invoke"].child.nodes["compact_worker"]
 
     _assert_header_origin(
-        loaded._local_catalog,
+        loaded.origin_resolver,
         compact_node,
         document.root.child("defs").child("compact_worker"),
     )
@@ -159,16 +160,16 @@ output: ${consumer.output}
     assert isinstance(nodes["consumer"].origin, OriginRef)
 
 
-def test_deepcopy_reuses_immutable_local_catalog():
+def test_deepcopy_reuses_immutable_origin_resolver():
     loaded = load_flow(_SHARED_NODE_IDS)
     copied = deepcopy(loaded)
 
-    assert copied._local_catalog is loaded._local_catalog
+    assert copied.origin_resolver is loaded.origin_resolver
     assert copied.compiled.nodes["worker"].origin == (
         loaded.compiled.nodes["worker"].origin
     )
-    assert copied._local_catalog.resolve(copied.compiled.nodes["worker"].origin) == (
-        loaded._local_catalog.resolve(loaded.compiled.nodes["worker"].origin)
+    assert copied.origin_resolver.resolve(copied.compiled.nodes["worker"].origin) == (
+        loaded.origin_resolver.resolve(loaded.compiled.nodes["worker"].origin)
     )
 
 
@@ -212,8 +213,10 @@ output: ${invoke.output}
 
     root_node = loaded.compiled.nodes["invoke"]
     child_node = root_node.child.nodes["child"]
-    assert loaded._local_catalog.resolve(root_node.origin) is not None
-    assert loaded._local_catalog.resolve(child_node.origin) is not None
+    catalog = scope.catalog_builder.freeze()
+    assert loaded.origin_resolver is None
+    assert catalog.resolve(root_node.origin) is not None
+    assert catalog.resolve(child_node.origin) is not None
 
 
 def test_failed_nested_def_build_rolls_back_origins_and_success_cache():
@@ -254,8 +257,10 @@ nodes: {}
     outer_node = retried.compiled.nodes["invoke"]
     inner_node = outer_node.child.nodes["worker"]
 
-    assert retried._local_catalog.resolve(outer_node.origin) is not None
-    assert retried._local_catalog.resolve(inner_node.origin) is not None
+    catalog = scope.catalog_builder.freeze()
+    assert retried.origin_resolver is None
+    assert catalog.resolve(outer_node.origin) is not None
+    assert catalog.resolve(inner_node.origin) is not None
 
 
 def test_failed_def_build_discards_inline_builder_closures_before_retry():

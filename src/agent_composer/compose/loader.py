@@ -32,6 +32,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from agent_composer.compile.origins import iter_flow_origins, rebase_flow_origins
+from agent_composer.diagnostics import (
+    DiagnosticFrame,
+    OriginRef,
+    OriginResolver,
+    ResolverTable,
+)
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges
 from agent_composer.typesys.values import TypeCheckError
@@ -57,10 +64,11 @@ from agent_composer.compose.parse.file import (
 )
 from agent_composer.compose.source import (
     SourceAccessError,
+    SourceCatalog,
     SourceCursor,
     SourceDocument,
 )
-from agent_composer.compose.source.catalog import _SourceCatalogBuilder
+from agent_composer.compose.source.catalog import _SourceCatalogBuilder, _scope_origin
 
 
 def _restore_node_surface(nodes):
@@ -316,6 +324,184 @@ def _check_version(child: "ComposedFlow", path: str, version: Optional[str]) -> 
         )
 
 
+def _distinct_origins(compiled) -> tuple[OriginRef, ...]:
+    """Return canonical reachable origins in first structural visit order.
+
+    Args:
+        compiled (`CompiledFlow`): Static graph whose provenance slots are walked.
+
+    Returns:
+        `tuple[OriginRef, ...]`: One exact base origin per distinct opaque key.
+    """
+    by_key: dict[str, OriginRef] = {}
+    for origin in iter_flow_origins(compiled):
+        canonical = OriginRef(origin.key)
+        by_key.setdefault(canonical.key, canonical)
+    return tuple(by_key.values())
+
+
+def _validate_external_child(alias: str, child: object) -> tuple[OriginRef, ...]:
+    """Validate one custom or cached child before lexical rebasing.
+
+    Args:
+        alias (`str`): Authored ``uses:`` alias selecting the child.
+        child (`object`): Value returned by the external child resolver.
+
+    Returns:
+        `tuple[OriginRef, ...]`: Canonical reachable child origins.
+
+    Raises:
+        `LoadError`:
+            Raised when the value is not a `ComposedFlow`, resolver presence does
+            not match provenance, or any reachable origin lacks a concrete frame.
+    """
+    if not isinstance(child, ComposedFlow):
+        raise LoadError(
+            f"uses: alias {alias!r} resolver returned "
+            f"{type(child).__name__}, expected ComposedFlow"
+        )
+    try:
+        origins = _distinct_origins(child.compiled)
+    except (TypeError, ValueError) as exc:
+        raise LoadError(
+            f"uses: alias {alias!r} returned an invalid compiled origin graph: {exc}"
+        ) from exc
+
+    resolver = child.origin_resolver
+    if not origins:
+        if resolver is not None:
+            raise LoadError(
+                f"uses: alias {alias!r} returned a source-free child with an "
+                "origin resolver"
+            )
+        return origins
+    if resolver is None:
+        raise LoadError(
+            f"uses: alias {alias!r} returned an originful child without an "
+            "origin resolver"
+        )
+    resolve = getattr(resolver, "resolve", None)
+    if not callable(resolve):
+        raise LoadError(
+            f"uses: alias {alias!r} child origin resolver does not implement resolve"
+        )
+
+    for origin in origins:
+        try:
+            frame = resolve(origin)
+        except Exception as exc:
+            raise LoadError(
+                f"uses: alias {alias!r} child origin resolver failed for "
+                f"{origin.key!r}: {exc}"
+            ) from exc
+        if not isinstance(frame, DiagnosticFrame):
+            detail = "no frame" if frame is None else type(frame).__name__
+            raise LoadError(
+                f"uses: alias {alias!r} child origin resolver returned {detail} "
+                f"for {origin.key!r}"
+            )
+    return origins
+
+
+def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
+    """Return one validated child copy scoped under its lexical alias.
+
+    Args:
+        alias (`str`): Authored ``uses:`` alias owning the returned view.
+        child (`object`): Canonical `ComposedFlow` returned by the host resolver.
+
+    Returns:
+        `ComposedFlow`: Independent alias-scoped child with an exact route table,
+        or `origin_resolver=None` when its compiled graph is source-free.
+
+    Raises:
+        `LoadError`: Raised when child validation or generic rebasing fails.
+    """
+    origins = _validate_external_child(alias, child)
+    assert isinstance(child, ComposedFlow)
+    try:
+        compiled, table = rebase_flow_origins(
+            child.compiled,
+            lambda origin: _scope_origin(alias, origin),
+            resolver=child.origin_resolver,
+        )
+    except (TypeError, ValueError) as exc:
+        raise LoadError(
+            f"uses: alias {alias!r} could not rebase child origins: {exc}"
+        ) from exc
+    if len(table) != len(origins):
+        raise LoadError(
+            f"uses: alias {alias!r} produced an incomplete rebased origin table"
+        )
+    return replace(
+        child,
+        compiled=compiled,
+        origin_resolver=table if origins else None,
+    )
+
+
+def _finalize_composed_flow(
+    staged: ComposedFlow,
+    local_catalog: SourceCatalog,
+    external_tables: tuple[ResolverTable, ...],
+) -> ComposedFlow:
+    """Install one exact resolver over a fully assembled physical file.
+
+    Args:
+        staged (`ComposedFlow`): Root assembly whose graph is complete but whose
+            public resolver is still unset.
+        local_catalog (`SourceCatalog`): Frozen authority for this document's sites.
+        external_tables (`tuple[ResolverTable, ...]`): Alias-scoped child
+            authorities, including eagerly loaded aliases that may be unreachable.
+
+    Returns:
+        `ComposedFlow`: Copy carrying exactly one route per reachable origin, or
+        `origin_resolver=None` when the root graph is source-free.
+
+    Raises:
+        `LoadError`: Raised for malformed graphs, missing or overlapping ownership,
+            or a selected authority that cannot produce a `DiagnosticFrame`.
+    """
+    try:
+        origins = _distinct_origins(staged.compiled)
+    except (TypeError, ValueError) as exc:
+        raise LoadError(f"invalid compiled origin graph: {exc}") from exc
+    if not origins:
+        return replace(staged, origin_resolver=None)
+
+    entries: list[tuple[OriginRef, OriginResolver, OriginRef]] = []
+    for origin in origins:
+        authorities: list[OriginResolver] = []
+        if origin in local_catalog:
+            authorities.append(local_catalog)
+        authorities.extend(table for table in external_tables if origin in table)
+        if not authorities:
+            raise LoadError(
+                f"reachable origin {origin.key!r} has no resolver route"
+            )
+        if len(authorities) != 1:
+            raise LoadError(
+                f"reachable origin {origin.key!r} has multiple resolver routes"
+            )
+        authority = authorities[0]
+        try:
+            frame = authority.resolve(origin)
+        except Exception as exc:
+            raise LoadError(
+                f"resolver route failed for origin {origin.key!r}: {exc}"
+            ) from exc
+        if not isinstance(frame, DiagnosticFrame):
+            detail = "no frame" if frame is None else type(frame).__name__
+            raise LoadError(
+                f"resolver route returned {detail} for origin {origin.key!r}"
+            )
+        entries.append((origin, authority, origin))
+    return replace(
+        staged,
+        origin_resolver=ResolverTable.from_entries(entries),
+    )
+
+
 def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
     """
     Build the default local file resolver for `uses:` references.
@@ -497,7 +683,7 @@ def _load_flow(
         field_ranges={},
     )
 
-    return _assemble(
+    staged = _assemble(
         inputs_section=f.inputs,
         nodes_cursor=flow_nodes_cursor(document, f.nodes),
         outputs_section=f.outputs,
@@ -526,6 +712,7 @@ def _load_flow(
             else None
         ),
     )
+    return callable_scope.finalize(staged)
 
 
 @dataclass(frozen=True)
@@ -605,6 +792,40 @@ class _CallableScope:
     def catalog_builder(self) -> _SourceCatalogBuilder:
         """Return this physical file's mutable origin registry."""
         return self._catalog_builder
+
+    def finalize(self, staged: ComposedFlow) -> ComposedFlow:
+        """Install the exact resolver for one completed physical-file root.
+
+        Args:
+            staged (`ComposedFlow`): Root graph assembled with its resolver unset.
+
+        Returns:
+            `ComposedFlow`: Final public/cache value with exact reachable routes.
+
+        Raises:
+            `LoadError`: Raised when an eager alias is missing its rebased table or
+                final reachable-origin ownership is incomplete or ambiguous.
+        """
+        tables: list[ResolverTable] = []
+        for alias in self._uses:
+            child = self._built.get(alias)
+            if child is None:
+                raise LoadError(
+                    f"uses: alias {alias!r} was not resolved before finalization"
+                )
+            resolver = child.origin_resolver
+            if resolver is None:
+                continue
+            if not isinstance(resolver, ResolverTable):
+                raise LoadError(
+                    f"uses: alias {alias!r} did not retain a rebased resolver table"
+                )
+            tables.append(resolver)
+        return _finalize_composed_flow(
+            staged,
+            self._catalog_builder.freeze(),
+            tuple(tables),
+        )
 
     def _build_transactionally(
         self,
@@ -741,8 +962,10 @@ class _CallableScope:
                     f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}) needs a search "
                     f"path or child_resolver to resolve (load with search_paths=[...])"
                 )
-            self._built[flow_id] = self._external(ref.path, ref.version)
-            return self._built[flow_id]
+            child = self._external(ref.path, ref.version)
+            loaded = _rebase_external_child(flow_id, child)
+            self._built[flow_id] = loaded
+            return loaded
         if flow_id.startswith(INLINE_FLOW_PREFIX):
             raise LoadError(
                 "compiler-generated callable with reserved prefix "

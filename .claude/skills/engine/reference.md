@@ -416,9 +416,16 @@ generated nodes default to `None`, and cloning preserves an existing value. It i
 manifest-neutral and unrelated to LOOP's execution-only `origin_id`.
 `CodeNode` additionally carries `code_origin`, the whole authored scalar fallback,
 and `code_line_origins`, an immutable tuple in exact constructed literal-line order.
-Quoted and folded scalars have no exact-line tuple; source-free nodes use `None`
-and `()`. These fields carry provenance only and do not change CODE execution or
-traceback framing.
+Quoted and folded scalars have no exact-line tuple. Direct source-free nodes default to
+`None` and `()`, while explicit programmatic carriers are valid and Compose preserves
+them when no physical site is available. Inline CODE compiles the ordinary unpadded
+wrapper and retains its recursive code-object tree. Its `exception_origin` walks
+outer-to-inner and keeps the deepest
+frame whose `f_code` is one of those objects by `is`; code-object equality, hash
+membership, and filenames are intentionally irrelevant. Wrapper line `n` maps to
+constructed slot `n - 2`, then falls back to the whole scalar and node. Failures after
+the authored body (such as serialization) use the whole scalar; reference mode keeps
+the base node fallback. Compose reuses the same selector for `SyntaxError.lineno`.
 `Node.pre_asserts` / `post_asserts` are likewise canonical ordered `Assertion`
 lists. Compose crosses raw YAML text into one carrier per authored flow/node list
 position. That item's retained cursor supplies both the carrier origin and the
@@ -553,13 +560,18 @@ replays that occurrence and reselects the range without storing coordinates in t
 site identity. Unavailable exact line registration leaves the path unreserved for a
 whole-scalar fallback; no YAML is reparsed or parallel range map created. The loader creates one builder per
 physical document and shares it through root, `defs:`, and inline-body assembly.
+The builder exposes one package-private read-only lookup for a registered site so
+CODE can present a syntax failure before finalization. It reads the current table and
+already-parsed document without copying or freezing it; the loader still performs the
+only successful-load freeze after the complete physical-file root is built.
 After the common header stamp, assembly calls the descriptor's immutable
 `with_source_origins(...)` hook while its located cursor is still available. The
 base hook is a no-op. CODE registers the whole `code:` value and, for a literal
 block only, each exact constructed line in order, then transfers those opaque
 references to `CodeNode`. Quoted and folded scalars keep only the whole-value
-fallback; source-free descriptors keep no CODE origins. The hook never retains a
-cursor, coordinates, or a parallel source map.
+fallback. Source-free descriptors mint no new Compose origins and preserve explicit
+programmatic carriers. The hook never retains a cursor, coordinates, or a parallel
+source map.
 Authored node headers, ordinary node-input keys and values, and source-backed reserved
 MAP/WAIT wiring values, plus source-backed flow-output values and flow/node assertion
 occurrences, are registered under their complete lexical owner paths and carried by the

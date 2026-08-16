@@ -199,7 +199,9 @@ node, wiring, edges = result.node, result.wiring, result.edges
   render-only `range`/`field_ranges` traceback bridge. Descriptors derive a
   `ValueContract` directly; consumers retain it and project `.type` only inside
   semantic type algorithms. CODE additionally carries the diagnostic-only whole-source
-  `code_origin` and ordered exact `code_line_origins`; these do not change execution.
+  `code_origin` and ordered exact `code_line_origins`. Inline CODE compiles one
+  unpadded wrapper and uses retained code-object identity to select the deepest
+  owned traceback line; filenames and structural equality never establish ownership.
 - the **wiring** is *flow-owned*: `{param → "${source}"}`. The node knows its parameter
   *names*; the flow knows where each one is *sourced from*. This is why a node is
   reusable and why the flow, not the node, owns the graph.
@@ -207,7 +209,12 @@ node, wiring, edges = result.node, result.wiring, result.edges
   `CaseNode` in its own `build()` and returns its data+control branch edges here.
 
 Leaf kinds (`agent`/`code`/`model`/`tool`) ignore `ctx.resolver`; `call`/`map`/`loop` use
-it to resolve the child flow they expand into.
+it to resolve the child flow they expand into. CODE alone also reads
+`ctx.source_file` as an opaque Python traceback label and the optional
+`ctx.resolve_origin` callable when presenting a load-time syntax failure. Assembly
+injects the current file catalog builder's registered-site lookup after every CODE
+origin is attached. That lookup replays the already-parsed document without freezing;
+the loader remains the single successful-load catalog freeze.
 
 After all descriptor desugars and builds, the conductor pairs each source-backed ordinary
 `input:` entry with those two carriers: its selecting key becomes `Parameter.origin`, and
@@ -220,6 +227,9 @@ programmatic origin remains intact, and source-backed projections inherit their 
 occurrence. CASE wiring, synthesized START/END boundary parameters, contracts, and runtime
 diagnostic consumption remain separate migration steps. CODE's extra origins enter
 the existing clone and external-rebase paths through its node-owned traversal/rewrite hooks.
+The same CODE-owned wrapped-line selector serves runtime tracebacks and Compose
+`SyntaxError.lineno`: exact literal line, whole scalar, then node header. Quoted and
+folded code has no exact line sites and therefore selects the whole scalar.
 
 Authored assertions cross into one ordered `Assertion` carrier per source occurrence.
 Flow assertions are carrierized during inline-call desugaring; node assertions are

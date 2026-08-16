@@ -46,7 +46,9 @@ Load errors cross the package boundary only as `LoadError(Diagnostic)`: Compose
 resolves each retained cursor/range against its owning document before raising,
 and definition/import context becomes ordered outer frames. The CLI receives no
 separate YAML text or coordinates for load failures. Runtime failure ranges on
-nodes remain a separate temporary bridge until their own cutover.
+most nodes remain a separate temporary bridge. Inline CODE is cut over: its node-owned
+hook selects exact line/whole-scalar origins from identity-owned Python frames; the CLI's
+general runtime diagnostic renderer remains a later migration.
 
 Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes`; nothing
 in the engine imports `compose`.

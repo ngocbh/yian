@@ -1,5 +1,5 @@
 # e27 — an inline CODE body that raises. RUNTIME: the node fails -> the run fails,
-# carrying the traceback (framed at the absolute YAML line) into the error. The inline
+# carrying an exact literal-line semantic origin plus the debugging traceback. The inline
 # analogue of e20 (the reference-mode raiser). The body has a (reachable) return so it
 # passes the has-`return` load gate, then raises at runtime.
 id: err-inline-raises

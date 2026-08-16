@@ -126,7 +126,9 @@ node-input keys and values, source-backed reserved MAP/WAIT wiring values, and s
 flow-output values directly on the canonical carriers. A kind-blind descriptor hook registers
 additional kind-owned sites while the cursor is available; CODE uses it for the whole
 `code:` scalar and exact literal constructed lines, then carries only opaque origins below
-Compose. Assembly also registers each authored
+Compose. After those registrations, CODE may resolve one load-time syntax site through the
+builder's package-private read-only lookup. That lookup replays the retained document without
+copying, freezing, or reparsing and never installs a resolver. Assembly also registers each authored
 flow/node assertion by source-order index; the same retained item cursor supplies both its
 `Assertion.origin` and aligned temporary range, so equal text at different positions stays
 distinct. Full roots and multi-node definitions retain flow assertion cursors and reuse
@@ -138,8 +140,8 @@ Generated compact-root and single-node-definition reexports have no authored bin
 occurrence and stay origin-free; their output declaration is reserved for contract-origin
 work. Without a retained occurrence, Compose mints no origin and preserves any explicit
 programmatic origin. Private assembly leaves the resolver unset while its shared catalog
-grows. The loader validates and lexically rebases external children per alias, freezes the
-catalog once at the physical-file boundary, and installs the exact
+grows. The loader validates and lexically rebases external children per alias, performs the
+only successful-load catalog freeze at the physical-file boundary, and installs the exact
 `ComposedFlow.origin_resolver`; source-free graphs use `None`.
 
 `compose/loader` owns the state whose lifetime is a load graph or one authored

@@ -165,9 +165,11 @@ attachment hook, and the sink derivations (`output_contract` / `sink_params` /
   re-exporting a child output; construct a new carrier only when the kind changes the semantic
   type (for example, MAP deriving `list[U]`). The authored `outputs:` field does not change.
   The one input is the immutable `BuildContext`: `ctx.registry` (the `TypeRegistry`),
-  `ctx.resolver` (the child-flow resolver — only call/map/loop read it), and the inline-CODE
-  traceback anchors `ctx.source_file`/`ctx.code_line`/`ctx.code_field_line` (only the CODE build
-  reads them). A leaf kind reads only `ctx.registry`.
+  `ctx.resolver` (the child-flow resolver — only call/map/loop read it), plus
+  `ctx.source_file` and optional `ctx.resolve_origin` (only CODE reads these, as an opaque
+  Python traceback label and a pre-finalization Compose presentation seam). Other leaf
+  kinds read only `ctx.registry`. Do not add positional line hints or parse source below
+  Compose; CODE maps wrapped lines through its source-neutral origin carriers.
 
 `BuildResult.wiring` is still pre-IR Compose data and may remain raw. Final assembly
 canonicalizes source-backed ordinary input and reserved wiring entries with their value

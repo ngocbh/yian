@@ -13,6 +13,7 @@ from agent_composer.compose.source import SourceCursor, SourceDocument
 from agent_composer.compose.source.catalog import _SourceCatalogBuilder, _scope_origin
 from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.code import CodeNode
+from agent_composer.run import run_flow
 
 
 _CODE_ORIGIN = OriginRef("/s:root/s:node/s:worker/s:field/s:code")
@@ -32,6 +33,59 @@ nodes:
       value = 1
       return value
 output: ${worker.output}
+"""
+
+_RUNTIME_FAILURE_ROOT = """\
+id: code-origin-failure
+name: code-origin-failure
+nodes:
+  worker:
+    kind: code
+    outputs: int
+    code: |-
+      marker = 1
+      raise RuntimeError("boom")
+      return marker
+output: ${worker.output}
+"""
+
+_RUNTIME_FAILURE_DEF = """\
+id: code-origin-def-failure
+name: code-origin-def-failure
+defs:
+  child:
+    nodes:
+      worker:
+        kind: code
+        outputs: int
+        code: |-
+          marker = 1
+          raise RuntimeError("boom")
+          return marker
+    output: ${worker.output}
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: ${invoke.output}
+"""
+
+_RUNTIME_FAILURE_INLINE = """\
+id: code-origin-inline-failure
+name: code-origin-inline-failure
+nodes:
+  invoke:
+    kind: call
+    nodes:
+      worker:
+        kind: code
+        outputs: int
+        code: |-
+          marker = 1
+          raise RuntimeError("boom")
+          return marker
+    output: ${worker.output}
+output: ${invoke.output}
 """
 
 
@@ -72,6 +126,87 @@ def _direct_code_descriptor(**origins):
     return CodeDescriptor(id="worker", code="return 1", **origins)
 
 
+def _assert_runtime_failure_uses_exact_code_line(loaded, node, code_cursor):
+    """Assert runtime failure and presentation select the authored raise line."""
+    result = run_flow(loaded, {})
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.trace[-1] == node.code_line_origins[1]
+    diagnostic = loaded.diagnose(result.failure)
+    scalar_source = code_cursor.scalar_source
+    assert scalar_source is not None
+    assert scalar_source.constructed_line_ranges is not None
+    assert diagnostic.frames[-1].range == scalar_source.constructed_line_ranges[1]
+
+
+def _root_runtime_failure_case():
+    """Return a failing root CODE occurrence and its retained cursor."""
+    document = SourceDocument.parse(_RUNTIME_FAILURE_ROOT, label="root.yaml")
+    loaded = load_flow(_RUNTIME_FAILURE_ROOT, source_label="root.yaml")
+    node = loaded.compiled.nodes["worker"]
+    cursor = document.root.child("nodes").child("worker").child("code")
+    return loaded, node, cursor
+
+
+def _def_runtime_failure_case():
+    """Return a failing named-def CODE occurrence and its retained cursor."""
+    document = SourceDocument.parse(_RUNTIME_FAILURE_DEF, label="def.yaml")
+    loaded = load_flow(_RUNTIME_FAILURE_DEF, source_label="def.yaml")
+    node = loaded.compiled.nodes["invoke"].child.nodes["worker"]
+    cursor = (
+        document.root.child("defs")
+        .child("child")
+        .child("nodes")
+        .child("worker")
+        .child("code")
+    )
+    return loaded, node, cursor
+
+
+def _inline_runtime_failure_case():
+    """Return a failing anonymous-child CODE occurrence and its retained cursor."""
+    document = SourceDocument.parse(_RUNTIME_FAILURE_INLINE, label="inline.yaml")
+    loaded = load_flow(_RUNTIME_FAILURE_INLINE, source_label="inline.yaml")
+    node = loaded.compiled.nodes["invoke"].child.nodes["worker"]
+    cursor = (
+        document.root.child("nodes")
+        .child("invoke")
+        .child("nodes")
+        .child("worker")
+        .child("code")
+    )
+    return loaded, node, cursor
+
+
+def _external_runtime_failure_case():
+    """Return a failing alias-rebased CODE occurrence and its child-file cursor."""
+    child_document = SourceDocument.parse(
+        _RUNTIME_FAILURE_ROOT,
+        label="child.yaml",
+    )
+    child = load_flow(_RUNTIME_FAILURE_ROOT, source_label="child.yaml")
+    parent = """\
+id: code-origin-external-failure
+name: code-origin-external-failure
+uses:
+  child_view: child
+nodes:
+  invoke:
+    kind: call
+    call: child_view
+output: ${invoke.output}
+"""
+    loaded = load_flow(
+        parent,
+        source_label="parent.yaml",
+        child_resolver=lambda _path, _version=None: child,
+    )
+    node = loaded.compiled.nodes["invoke"].child.nodes["worker"]
+    cursor = child_document.root.child("nodes").child("worker").child("code")
+    return loaded, node, cursor
+
+
 def test_literal_code_carries_whole_scalar_and_exact_constructed_lines():
     node, resolver = _worker(_LITERAL_FLOW)
 
@@ -85,6 +220,21 @@ def test_literal_code_carries_whole_scalar_and_exact_constructed_lines():
         SourceRange(8, 7, 8, 16),
         SourceRange(9, 7, 9, 19),
     )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(_root_runtime_failure_case, id="root"),
+        pytest.param(_def_runtime_failure_case, id="named-def"),
+        pytest.param(_inline_runtime_failure_case, id="inline-child"),
+        pytest.param(_external_runtime_failure_case, id="external-alias"),
+    ],
+)
+def test_runtime_failure_diagnoses_exact_line_across_composition_paths(case):
+    loaded, node, cursor = case()
+
+    _assert_runtime_failure_uses_exact_code_line(loaded, node, cursor)
 
 
 def test_compact_root_code_origins_retain_the_projected_authored_scalar():

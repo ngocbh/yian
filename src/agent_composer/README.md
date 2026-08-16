@@ -197,8 +197,15 @@ field. `code_origin` is the whole-`code:` fallback, while
 an exact literal block. Quoted and folded scalars carry only the whole fallback;
 source-free Python construction defaults to `None` and `()`. Compose transfers
 these origins from `CodeDescriptor` to `CodeNode`, and clones preserve them.
-They are provenance only: this carrier step does not change CODE execution or
-the current traceback-padding behavior.
+Inline CODE compiles the normal unpadded `def main(inputs):` wrapper once and
+retains its recursive module/function/lambda/comprehension code-object tree.
+`CodeNode.exception_origin()` walks an exception traceback outer-to-inner and
+selects the deepest frame whose code object is owned by identity (`is`), never by
+filename, equality, or hash membership. Wrapper line `n` selects authored slot
+`n - 2`; an unavailable slot, wrapper-only frame, or post-body serialization
+failure falls back to `code_origin`, then `Node.origin`. Reference mode keeps the
+base node-origin fallback. Compose applies the same line selector to load-time
+`SyntaxError.lineno` and reports `SyntaxError.msg`.
 
 `Node.pre_asserts` and `Node.post_asserts` are ordered `Assertion` lists. Parsed
 YAML remains raw text until the inline-call pass crosses each flow assertion into
@@ -541,8 +548,9 @@ canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and
 assertion identity includes executable and display text in list order while
 remaining origin/range-neutral. `expansion_digest` applies the same projection to
 dynamic fragments. CODE identity includes its executable `code` text but excludes
-`code_origin` and `code_line_origins`, so source formatting and origin rebasing
-cannot change program or expansion identity. `resolve_llm_cascade` returns a
+`code_origin`, `code_line_origins`, and the retained compiled/owned-code caches,
+so source formatting, origin rebasing, and Python object identity cannot change
+program or expansion identity. `resolve_llm_cascade` returns a
 complete map keyed by slash-separated static agent paths. The run boundary reads
 process provider/model defaults once at fresh-run initialization;
 `apply_effective_llm_map` restores the

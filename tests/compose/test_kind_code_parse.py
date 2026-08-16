@@ -1,15 +1,15 @@
-"""6.2 — the `code` kind handle: parse records the code body's range; build reconciles the
-inline `def main(inputs):` wrapper offset so an inline syntax slip frames at the YAML line.
-"""
+"""The CODE descriptor records source and resolves wrapped syntax lines by origin."""
 
 from dataclasses import replace
 
 import pytest
 
+from agent_composer.compose import load_flow
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.nodes.code import CodeDescriptor
 from agent_composer.compose.source import SourceDocument
+from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceRange
 
@@ -91,16 +91,56 @@ def test_code_build_frames_inline_syntax_error_at_yaml_line():
         "      return (\n"
     )
     reader = _reader_for(text, "broken")
-    desc = CodeDescriptor.parse("broken", reader)
+    builder = _SourceCatalogBuilder()
+    desc = CodeDescriptor.parse("broken", reader).with_source_origins(
+        reader,
+        site_path=("root", "node", "broken"),
+        catalog_builder=builder,
+    )
     with pytest.raises(LoadError) as ei:
         desc.build(
             BuildContext(
                 {},
                 source_file="flow.yaml",
+                resolve_origin=builder.resolve_registered,
                 diagnostics=LoadDiagnostics.from_cursor(reader),
             )
         )
-    # The padded compile frames the slip at its absolute YAML line (8), not body-relative.
+    # Wrapper line 2 selects the first exact constructed CODE line (YAML line 8).
     assert len(ei.value.diagnostic.frames) == 1
     assert ei.value.diagnostic.frames[0].range.start_line == 8
     assert ei.value.diagnostic.frames[0].text == text
+    assert ei.value.diagnostic.message == "node 'broken': '(' was never closed"
+
+
+@pytest.mark.parametrize(
+    "code_field",
+    [
+        '    code: "return (\\n"\n',
+        "    code: >-\n      return (\n",
+    ],
+    ids=["quoted", "folded"],
+)
+def test_nonliteral_syntax_error_uses_whole_code_scalar(code_field):
+    text = (
+        "id: syntax-fallback\n"
+        "name: syntax-fallback\n"
+        "nodes:\n"
+        "  broken:\n"
+        "    kind: code\n"
+        "    outputs: string\n"
+        f"{code_field}"
+        "output: ${broken.output}\n"
+    )
+    code_cursor = (
+        SourceDocument.parse(text, label="flow.yaml")
+        .root.child("nodes")
+        .child("broken")
+        .child("code")
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(text, source_label="flow.yaml")
+
+    assert caught.value.diagnostic.message == "node 'broken': '(' was never closed"
+    assert caught.value.diagnostic.frames[0].range == code_cursor.range

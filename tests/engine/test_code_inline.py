@@ -1,25 +1,39 @@
 """Unit tests for inline CODE — the in-process path of `CodeNode`.
 
 Inline mode: the author writes a **bare body** that reads the `inputs` dict and `return`s
-a value; `CodeNode` wraps it as `def main(inputs):`, compiles it (padded for absolute-YAML
-tracebacks), and calls `main(inputs)` **in-process**. These tests pin the mechanism at the
-node level (construction gates + `run`); the error *seeds* (`e27`-`e32`) pin the same
-behaviors end-to-end through `load_flow`/`run_flow`.
+a value; `CodeNode` wraps it as `def main(inputs):`, compiles it once, and calls
+`main(inputs)` **in-process**. These tests pin execution plus identity-owned traceback
+attribution; the error *seeds* (`e27`-`e32`) pin loading and running end-to-end.
 """
 
 import logging
+import textwrap
 from datetime import datetime, timezone
 
 import pytest
 
 from agent_composer.compose import LoadError, load_flow
+from agent_composer.diagnostics import OriginRef
 from agent_composer.run import run_flow
 from agent_composer.nodes.base import Output
-from agent_composer.nodes.code.node import CodeNode, classify_code_source
+from agent_composer.nodes.code.node import (
+    CodeNode,
+    classify_code_source,
+    select_inline_code_origin,
+)
 
 
 def _run(code: str, inputs: dict, **kw):
-    return CodeNode("n", code=code, code_line=2, **kw).run(inputs)
+    return CodeNode("n", code=code, **kw).run(inputs)
+
+
+def _failure_origin(node: CodeNode, inputs: dict) -> OriginRef | None:
+    """Run one CODE node and ask it to attribute the original exception."""
+    try:
+        node.run(inputs)
+    except Exception as exc:
+        return node.exception_origin(exc)
+    raise AssertionError("CODE node unexpectedly succeeded")
 
 
 # --- classification --------------------------------------------------------------------- #
@@ -68,18 +82,162 @@ def test_inline_body_that_prints_still_returns_value(capsys):
 
 def test_no_return_body_rejected_at_construction():
     with pytest.raises(ValueError, match="has no `return`"):
-        CodeNode("n", code="y = inputs['a'] + 1", code_line=2)
+        CodeNode("n", code="y = inputs['a'] + 1")
 
 
 def test_return_only_in_nested_def_still_rejected():
     # a helper's return is not main's — the gate must not descend into nested scopes.
     with pytest.raises(ValueError, match="has no `return`"):
-        CodeNode("n", code="def helper():\n    return 1", code_line=2)
+        CodeNode("n", code="def helper():\n    return 1")
 
 
 def test_syntax_error_rejected_at_construction():
     with pytest.raises(SyntaxError):
-        CodeNode("n", code="return (", code_line=2)
+        CodeNode("n", code="return (")
+
+
+# --- source-neutral exception attribution --------------------------------------------- #
+
+
+def test_wrapped_line_selector_uses_exact_whole_then_node_fallback():
+    whole = OriginRef("code")
+    lines = (OriginRef("line:0"), OriginRef("line:1"))
+    node = OriginRef("node")
+
+    assert select_inline_code_origin(
+        3,
+        code_origin=whole,
+        code_line_origins=lines,
+        node_origin=node,
+    ) is lines[1]
+    assert select_inline_code_origin(
+        1,
+        code_origin=whole,
+        code_line_origins=lines,
+        node_origin=node,
+    ) is whole
+    assert select_inline_code_origin(
+        4,
+        code_origin=whole,
+        code_line_origins=lines[:1],
+        node_origin=node,
+    ) is whole
+    assert select_inline_code_origin(
+        2,
+        code_origin=None,
+        code_line_origins=(),
+        node_origin=node,
+    ) is node
+    assert (
+        select_inline_code_origin(
+            True,
+            code_origin=None,
+            code_line_origins=(),
+            node_origin=None,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_line"),
+    [
+        (
+            "def helper():\n    raise RuntimeError('boom')\nhelper()\nreturn 0",
+            1,
+        ),
+        ("fail = lambda: 1 / 0\nreturn fail()", 0),
+        ("return [1 / value for value in inputs['values']]", 0),
+    ],
+    ids=["nested-helper", "lambda", "comprehension"],
+)
+def test_inline_exception_selects_deepest_owned_code_line(code, expected_line):
+    line_origins = tuple(
+        OriginRef(f"line:{index}") for index in range(len(code.splitlines()))
+    )
+    node = CodeNode(
+        "n",
+        code=code,
+        code_origin=OriginRef("code"),
+        code_line_origins=line_origins,
+    )
+
+    origin = _failure_origin(node, {"values": [0]})
+
+    assert origin is line_origins[expected_line]
+
+
+def test_structurally_equal_foreign_code_cannot_impersonate_owned_code():
+    code = (
+        "if inputs['foreign']:\n"
+        "    raise RuntimeError('boom')\n"
+        "return inputs['call']({'foreign': True})"
+    )
+    foreign_namespace: dict = {}
+    foreign_compiled = compile(
+        "def main(inputs):\n" + textwrap.indent(code, "    "),
+        "same.py",
+        "exec",
+    )
+    exec(foreign_compiled, foreign_namespace)
+    foreign_main = foreign_namespace["main"]
+    lines = tuple(OriginRef(f"line:{index}") for index in range(3))
+    node = CodeNode(
+        "n",
+        code=code,
+        source_file="same.py",
+        code_origin=OriginRef("code"),
+        code_line_origins=lines,
+    )
+    owned_main = next(
+        owned for owned in node._owned_code_objects if owned.co_name == "main"
+    )
+    assert foreign_main.__code__ is not owned_main
+    assert foreign_main.__code__ == owned_main
+    assert hash(foreign_main.__code__) == hash(owned_main)
+
+    origin = _failure_origin(
+        node,
+        {"foreign": False, "call": foreign_main},
+    )
+
+    assert origin is lines[2]
+
+
+def test_dynamic_same_filename_code_falls_back_to_owned_call_site():
+    foreign = compile("raise RuntimeError('boom')", "same.py", "exec")
+    code = "exec(inputs['foreign'], {})\nreturn 0"
+    lines = (OriginRef("line:0"), OriginRef("line:1"))
+    node = CodeNode(
+        "n",
+        code=code,
+        source_file="same.py",
+        code_origin=OriginRef("code"),
+        code_line_origins=lines,
+    )
+
+    assert _failure_origin(node, {"foreign": foreign}) is lines[0]
+
+
+def test_inline_non_owned_failure_uses_whole_code_origin():
+    whole = OriginRef("code")
+    node = CodeNode(
+        "n",
+        code="return object()",
+        code_origin=whole,
+        code_line_origins=(OriginRef("line:0"),),
+    )
+
+    assert _failure_origin(node, {}) is whole
+
+
+def test_reference_and_source_free_failures_keep_base_node_fallback():
+    reference = CodeNode("reference", code="tests.engine._compose_codefns:boom")
+    reference.origin = OriginRef("node:reference")
+    source_free = CodeNode("inline", code="raise RuntimeError('boom')\nreturn 0")
+
+    assert _failure_origin(reference, {}) is reference.origin
+    assert _failure_origin(source_free, {}) is None
 
 
 # --- deep serialize-once check (fails AT the node) -------------------------------------- #
@@ -136,7 +294,7 @@ def test_inline_flow_loads_and_runs():
     assert result.output == "r=3.0"
 
 
-def test_inline_raise_is_framed_at_the_yaml_line():
+def test_inline_raise_becomes_failed_run():
     flow = _INLINE_FLOW.replace(
         'return f"r={inputs[\'rating\']:.1f}"', 'raise RuntimeError("boom")\n      return ""'
     )

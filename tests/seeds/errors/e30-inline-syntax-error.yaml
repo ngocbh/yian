@@ -1,6 +1,6 @@
 # e30 — a malformed inline CODE body. COMPILE: the load-time compile() syntax gate raises
 # a located LoadError before any node runs (a syntax slip surfaces at LOAD, not mid-run).
-# Padding puts the frame on the real YAML line of the slip.
+# The shared wrapped-line origin selector puts the frame on the exact literal line.
 id: err-inline-syntax
 name: err_inline_syntax
 input:

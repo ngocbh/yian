@@ -39,6 +39,7 @@ import ast
 import importlib
 import re
 import textwrap
+from types import CodeType
 from typing import Callable, Iterator, Optional, cast
 
 from agent_composer.diagnostics import OriginRef
@@ -96,11 +97,80 @@ def _wrap_inline(code: str) -> str:
     """Wrap a bare inline body in the implicit `def main(inputs):` entrypoint.
 
     The author writes statements that read `inputs` and `return` a value; the engine
-    supplies the `def` header and indents the body under it. This is the (unpadded) form
-    used for the load-time AST checks; `run()` compiles a leading-newline-padded copy so
-    tracebacks report absolute YAML lines.
+    supplies the `def` header and indents the body under it. The synthesized header is
+    wrapper line 1, so authored line index zero is always wrapper line 2.
     """
     return "def main(inputs):\n" + textwrap.indent(code, "    ")
+
+
+def select_inline_code_origin(
+    lineno: object,
+    *,
+    code_origin: OriginRef | None,
+    code_line_origins: tuple[OriginRef, ...],
+    node_origin: OriginRef | None,
+) -> OriginRef | None:
+    """Select the finest source-neutral origin for one wrapped Python line.
+
+    Args:
+        lineno (`object`):
+            Candidate 1-based line in the synthesized ``def main(inputs):``
+            wrapper. Only an exact integer at line 2 or later can select an
+            authored line.
+        code_origin (`OriginRef | None`):
+            Whole authored ``code:`` scalar fallback.
+        code_line_origins (`tuple[OriginRef, ...]`):
+            Exact authored line origins in constructed-value order.
+        node_origin (`OriginRef | None`):
+            Authored node fallback when no CODE-specific origin exists.
+
+    Returns:
+        `OriginRef | None`:
+            Exact line origin, then whole-code origin, then node origin.
+
+    Raises:
+        TypeError:
+            Raised when an origin carrier has the wrong shape.
+    """
+    _validate_optional_origin(code_origin, "CODE source origin")
+    _validate_optional_origin(node_origin, "node origin")
+    if type(code_line_origins) is not tuple:
+        raise TypeError("CODE line origins must be a tuple")
+    for origin in code_line_origins:
+        if not isinstance(origin, OriginRef):
+            raise TypeError("CODE line origins must contain only OriginRef values")
+
+    line_index = lineno - 2 if type(lineno) is int else -1
+    if 0 <= line_index < len(code_line_origins):
+        return code_line_origins[line_index]
+    return code_origin if code_origin is not None else node_origin
+
+
+def _collect_code_objects(root: CodeType) -> tuple[CodeType, ...]:
+    """Return one compiled wrapper's recursive code-object tree by identity.
+
+    Code objects compare structurally, so equality-based containers cannot express
+    ownership. The retained tuple keeps every object alive, and duplicate/cycle
+    protection also uses ``is``.
+
+    Args:
+        root (`CodeType`): Compiled module wrapper.
+
+    Returns:
+        `tuple[CodeType, ...]`: Module, function, and nested code objects.
+    """
+    owned: list[CodeType] = []
+
+    def visit(candidate: CodeType) -> None:
+        if any(candidate is existing for existing in owned):
+            return
+        owned.append(candidate)
+        for constant in candidate.co_consts:
+            if isinstance(constant, CodeType):
+                visit(constant)
+
+    visit(root)
+    return tuple(owned)
 
 
 def _returns_in_scope(nodes) -> bool:
@@ -127,8 +197,8 @@ class CodeNode(Node):
     The one `code:` field is classified by shape at construction with
     `classify_code_source`, and the
     mode is stored, so `run` stays pure dispatch. Reference mode imports and calls the
-    function; inline mode wraps the bare body as `def main(inputs):`, compiles it (padded for
-    absolute-YAML-line tracebacks), and calls `main(inputs)`. Node purity is preserved — `run`
+    function; inline mode wraps the bare body as `def main(inputs):`, compiles it once,
+    and calls `main(inputs)`. Node purity is preserved — `run`
     returns `Output(value)` and never touches the pool. Inline runs are synchronous (no
     continuation state is created).
 
@@ -140,9 +210,6 @@ class CodeNode(Node):
         source_file (`str`, *optional*, defaults to `"<inline-code>"`):
             The flow's file label, used only in inline mode to frame tracebacks at the flow
             filename.
-        code_line (`int`, *optional*, defaults to `1`):
-            The 1-based YAML line where the inline `code:` block content begins, used only in
-            inline mode for absolute-YAML-line traceback framing (via leading-newline padding).
         code_origin (`OriginRef | None`, *optional*, defaults to `None`):
             Opaque authored identity for the whole ``code:`` scalar. Diagnostic-only.
         code_line_origins (`tuple[OriginRef, ...]`, *optional*, defaults to `()`):
@@ -165,7 +232,6 @@ class CodeNode(Node):
         *,
         code: str,
         source_file: str = "<inline-code>",
-        code_line: int = 1,
         code_origin: OriginRef | None = None,
         code_line_origins: tuple[OriginRef, ...] = (),
         title=None,
@@ -182,11 +248,10 @@ class CodeNode(Node):
         # inline mode — wrapped + gated at LOAD, so a syntax slip / missing return fails
         # before any node runs. `main` sees `inputs`; the author writes a bare body.
         wrapped = _wrap_inline(code)
-        # Compile the padded body once: the syntax gate AND the runnable code object. Padding
-        # puts the synthesized `def main` one line above the body's first YAML line, so every
-        # frame CPython emits numbers at the absolute YAML line (nothing parses the traceback).
-        padded = ("\n" * (code_line - 2) + wrapped) if code_line >= 2 else wrapped
-        self._code = compile(padded, source_file, "exec")  # SyntaxError -> located LoadError
+        # Compile the normal wrapper once for both the syntax gate and execution. Runtime
+        # attribution uses retained code-object identity rather than filename or equality.
+        self._code = compile(wrapped, source_file, "exec")
+        self._owned_code_objects = _collect_code_objects(self._code)
         # Require an explicit `return` — a value-producing node that never returns is almost
         # certainly a mistake (it would yield None). Scoped to `main`, not nested defs.
         main_fn = ast.parse(wrapped).body[0]
@@ -227,6 +292,41 @@ class CodeNode(Node):
         self.code_line_origins = tuple(
             cast(OriginRef, _map_origin(origin, mapper))
             for origin in self.code_line_origins
+        )
+
+    def exception_origin(self, exception: Exception) -> OriginRef | None:
+        """Return the deepest authored line owned by this inline compilation.
+
+        Traceback filenames and code-object equality are deliberately ignored:
+        separately compiled code can share both. Reference mode retains the base
+        node-origin behavior. Inline failures outside authored code, including the
+        serialize-once check, fall back to the whole ``code:`` scalar.
+
+        Args:
+            exception (`Exception`): Original node-body exception.
+
+        Returns:
+            `OriginRef | None`: Exact line, whole CODE scalar, node, or ``None``.
+        """
+        if self._mode == "reference":
+            return super().exception_origin(exception)
+
+        owned_lineno: int | None = None
+        traceback = exception.__traceback__
+        while traceback is not None:
+            frame_code = traceback.tb_frame.f_code
+            if any(
+                frame_code is owned_code
+                for owned_code in self._owned_code_objects
+            ):
+                owned_lineno = traceback.tb_lineno
+            traceback = traceback.tb_next
+
+        return select_inline_code_origin(
+            owned_lineno,
+            code_origin=self.code_origin,
+            code_line_origins=self.code_line_origins,
+            node_origin=self.origin,
         )
 
     def _run_impl(self, inputs: dict) -> Output:

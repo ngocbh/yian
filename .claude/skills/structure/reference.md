@@ -121,7 +121,7 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 |---|---|---|
 | PyYAML construction and the private YAML node/occurrence graph | `compose/source` | every other compose phase, `compile`, `runtime` |
 | Stable location-aware navigation, immutable projections, and whole/exact-literal provenance | public `SourceDocument` / `SourceCursor` / `ScalarSource` contracts from `compose/source` | private document slots, PyYAML nodes/tokens, or another parse |
-| Immutable document-local origin resolution, semantic constructed-line selection, exact ownership, and Compose-private typed key/scoping policy | public `SourceCatalog` plus its package-private builder/encoder in `compose/source` | stored coordinates, parallel range maps, another YAML parse, parsing an opaque child key, or a premature cross-file resolver |
+| Immutable document-local origin resolution, semantic constructed-line selection, exact ownership, pre-finalization registered-site lookup, and Compose-private typed key/scoping policy | public `SourceCatalog` plus its package-private builder/encoder in `compose/source` | stored coordinates, parallel range maps, another YAML parse, parsing an opaque child key, per-node snapshots, or a premature cross-file resolver |
 | Semantic descriptors and flow sections | `compose/nodes` and `compose/parse` consuming a document/cursor | another YAML construction pass or retained parser object |
 | Source-preserving inline extraction | `compose/desugar` projecting cursors | PyYAML and loader state |
 | Compiled-flow assembly and per-occurrence carrier stamping | `compose/build` consuming descriptors and retained cursor sources | PyYAML and concrete loader implementation |
@@ -139,7 +139,10 @@ threads it through root, definition, and inline-body assembly. The conductor sta
 authored node-header origins, ordinary node-input keys and values, and source-backed
 reserved MAP/WAIT wiring values directly on their canonical carriers. It invokes one
 kind-blind descriptor hook for extra semantic sites; CODE registers its whole scalar and
-exact literal constructed lines without retaining a cursor below Compose. It registers flow
+exact literal constructed lines without retaining a cursor below Compose. A CODE syntax
+failure may resolve one already-registered site through the builder's read-only lookup; this
+replays the retained document without copying, freezing, reparsing, or installing a resolver.
+The conductor registers flow
 and node assertion sites by authored source-order index, deriving each carrier origin and
 temporary positional range from the same retained item cursor. Duplicate text therefore
 remains occurrence-distinct; full roots and multi-node definitions retain flow assertion
@@ -152,7 +155,8 @@ flow-output values belong to `Binding`. Generated compact-root and single-node-d
 reexports remain origin-free because their output declaration is a contract site whose origin
 remains deferred. Without a retained occurrence, Compose mints no origin and preserves any
 explicit programmatic origin. Private assembly leaves resolver installation to the loader.
-At the physical-file boundary it freezes the shared local catalog, combines exact reachable
+At the physical-file boundary it performs the only successful-load freeze of the shared local
+catalog, combines exact reachable
 routes with lexically rebased alias tables, and sets `ComposedFlow.origin_resolver`; source-free
 graphs use `None`.
 

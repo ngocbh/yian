@@ -49,9 +49,12 @@ Hold this model whenever you design anything:
   hook for semantic sites beyond the common node header. Most descriptors keep
   the no-op default. CODE registers one whole-`code:` fallback plus an ordered
   tuple of exact literal-line origins, transfers only those opaque references to
-  `CodeNode`, and extends its local origin traversal/rewrite accordingly. These
-  fields are diagnostic-only and manifest-neutral; they do not change current
-  CODE execution or traceback framing.
+  `CodeNode`, and extends its local origin traversal/rewrite accordingly. Inline
+  CODE compiles an unpadded wrapper once, retains its recursive code objects, and
+  attributes the deepest traceback frame owned by identity (`is`), never filename
+  or structural equality. Wrapped lines map through the exact-line tuple, then the
+  whole scalar and node fallback. Compose uses that same selector for syntax errors.
+  The origins and retained code-object cache are manifest-neutral.
 - `diagnostics.ResolverTable` composes opaque namespaces through exact
   new-origin-to-delegate/old-origin routes without parsing keys or resolver
   fallback. `compile.rebase_flow_origins` maps each distinct reachable old key
@@ -382,9 +385,13 @@ After the common header stamp, assembly calls each descriptor's immutable
 `with_source_origins(...)` hook while its located cursor is still available. The
 default is a no-op. CODE uses the hook to register the whole `code:` value and,
 for literal blocks only, each exact constructed line in order; quoted and folded
-scalars keep only the whole-value fallback, and source-free descriptors keep no
-CODE origins. The hook returns opaque `OriginRef` carriers only and never retains
-the cursor, coordinates, or a parallel source map.
+scalars keep only the whole-value fallback. Source-free descriptors mint no new
+Compose origins but preserve explicit programmatic carriers. The hook returns opaque
+`OriginRef` carriers only and never retains
+the cursor, coordinates, or a parallel source map. CODE load-time syntax errors
+resolve those already-registered sites through the builder's package-private read
+seam; it does not reparse or freeze. The loader remains the sole successful-load
+catalog freeze.
 Inline extraction intentionally takes one graph-wide nodes snapshot before
 projection so unchanged aliases retain sharing; field navigation uses cursors or
 their package-private read-only view.

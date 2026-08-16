@@ -235,7 +235,7 @@ def test_e06_cross_flow_type_mismatch_is_loud():
         ("e16-bad-typedef-name.yaml", "shadows", 4),
         ("e17-case-nonexhaustive.yaml", "non-exhaustive", 13),
         # inline CODE load-time gates — all located at the `code:` content / field line.
-        ("e30-inline-syntax-error.yaml", "never closed", 15),   # padded compile -> real line
+        ("e30-inline-syntax-error.yaml", "never closed", 15),   # exact CODE line origin
         ("e31-inline-no-return.yaml", "must return a value", 15),  # has-`return` gate
         ("e32-malformed-code-ref.yaml", "did you mean", 15),    # reject bucket
     ],

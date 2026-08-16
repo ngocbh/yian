@@ -137,7 +137,7 @@ def test_wrapper_delegates_to_real_code_node_run_impl():
     longer shadows it), and the wrapper delegates to the kind's `_run_impl`."""
     from agent_composer.nodes.code import CodeNode
 
-    node = CodeNode("c", code="return inputs['v']", code_line=1)
+    node = CodeNode("c", code="return inputs['v']")
     # After the rename the kind defines no `run`, so `run` resolves to the base wrapper.
     assert type(node).run is Node.run
     result = node.run({"v": "hi"})

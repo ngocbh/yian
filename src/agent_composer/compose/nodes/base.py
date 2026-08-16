@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 from agent_composer.nodes.base import FieldRanges, Node
 from agent_composer.nodes.contracts import Parameter, ValueContract
@@ -38,7 +38,7 @@ from agent_composer.compile.model import Edge
 from agent_composer.compose.helpers.types import read_type
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.source import SourceCursor
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import DiagnosticFrame, OriginRef
 from agent_composer.events import SourceRange
 
 if TYPE_CHECKING:
@@ -47,13 +47,17 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class BuildContext:
-    """The immutable inputs a node `.build()` reads — the read-only build environment."""
+    """The immutable inputs a node `.build()` reads.
+
+    ``resolver`` resolves child flows for composites. ``resolve_origin`` is the
+    optional Compose-only presentation seam for an origin registered before file
+    finalization; source-free and direct programmatic builds leave it unset.
+    """
 
     registry: Any  # TypeRegistry (flow's read_typedefs map)
     resolver: Any = None  # ChildResolver | None (None for leaves)
-    source_file: str = "<inline-code>"  # flow file label — frames CODE tracebacks
-    code_line: int | None = None  # inline CODE content-start override
-    code_field_line: int | None = None  # inline CODE field-key override
+    source_file: str = "<inline-code>"  # opaque filename for Python tracebacks
+    resolve_origin: Callable[[OriginRef], DiagnosticFrame | None] | None = None
     diagnostics: LoadDiagnostics = field(default_factory=LoadDiagnostics)
 
 
@@ -390,9 +394,10 @@ class NodeDescriptor:
         (typically via `self._finish(node, wiring)`; `case` also passes `edges=`). Its one input
         is the immutable `BuildContext`: `ctx.registry` (the `TypeRegistry` for
         `output_contract`),
-        `ctx.resolver` (the child-flow resolver for call/map/loop), and the inline-CODE traceback
-        anchors `ctx.source_file`/`ctx.code_line`/`ctx.code_field_line` (only the CODE build reads
-        them). A leaf kind reads only `ctx.registry`; call/map/loop also read `ctx.resolver`.
+        `ctx.resolver` (the child-flow resolver for call/map/loop), the inline-CODE
+        traceback label `ctx.source_file`, and the optional Compose presentation seam
+        `ctx.resolve_origin` (only CODE reads the latter two). Other leaves read only
+        `ctx.registry`; call/map/loop also read `ctx.resolver`.
         """
         raise NotImplementedError(f"{type(self).__name__} has no build")
 

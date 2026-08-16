@@ -215,6 +215,7 @@ class SourceCatalog:
             source_range = (
                 line_ranges[site.selector.index]
                 if line_ranges is not None
+                and 0 <= site.selector.index
                 and site.selector.index < len(line_ranges)
                 else None
             )

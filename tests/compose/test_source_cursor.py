@@ -1214,6 +1214,9 @@ def test_scalar_source_maps_literal_content_at_eof():
         ("code: |\n", "", ()),
         ("code: |-\n", "", ()),
         ("code: |+\n", "", ()),
+        ("code: |", "", ()),
+        ("code: |-", "", ()),
+        ("code: |+", "", ()),
         (
             "code: |+\n\n\n",
             "\n\n",
@@ -1223,7 +1226,15 @@ def test_scalar_source_maps_literal_content_at_eof():
             ),
         ),
     ],
-    ids=["clip", "strip", "keep", "kept-blank-lines"],
+    ids=[
+        "clip",
+        "strip",
+        "keep",
+        "clip-at-eof",
+        "strip-at-eof",
+        "keep-at-eof",
+        "kept-blank-lines",
+    ],
 )
 def test_scalar_source_empty_literals_have_exact_line_cardinality(
     text,

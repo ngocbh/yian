@@ -388,7 +388,7 @@ def _literal_line_ranges(
             break
         index += 1
     if body_start is None:
-        return None
+        return () if value == "" else None
 
     physical_lines: list[tuple[str, int]] = []
     line_number = token.start_mark.line + 2

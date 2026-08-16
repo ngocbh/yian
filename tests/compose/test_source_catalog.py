@@ -11,7 +11,9 @@ from agent_composer.compose.source import (
 )
 from agent_composer.compose.source import document as source_document_module
 from agent_composer.compose.source.catalog import (
+    _ConstructedLine,
     _SourceCatalogBuilder,
+    _SourceSite,
     _scope_origin,
 )
 from agent_composer.diagnostics import DiagnosticFrame, OriginRef, SourceRange
@@ -483,6 +485,23 @@ def test_constructed_line_rejects_invalid_exact_integer_indices(index):
             cursor,
             index,
         )
+
+
+def test_constructed_line_resolution_rejects_a_malformed_negative_selector():
+    document = SourceDocument.parse("value: |-\n  first\n  second\n")
+    cursor = document.root.child("value")
+    origin = OriginRef("malformed")
+    catalog = SourceCatalog(
+        {
+            origin.key: _SourceSite(
+                document=document,
+                occurrence_path=cursor.path,
+                selector=_ConstructedLine(-1),
+            )
+        }
+    )
+
+    assert catalog.resolve(origin) is None
 
 
 def test_constructed_line_duplicate_detection_crosses_selector_kinds():

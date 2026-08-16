@@ -155,13 +155,23 @@ class CaseDescriptor(NodeDescriptor):
         super().__post_init__()
         if type(self.when_origins) is not tuple:
             raise TypeError("CASE predicate origins must be a tuple")
-        if self.when_origins and len(self.when_origins) != len(self.cases):
-            raise ValueError("CASE predicate origins must align with cases")
+        self._validate_origin_alignment()
         for origin in self.when_origins:
             if origin is not None and not isinstance(origin, OriginRef):
                 raise TypeError("CASE predicate origin must be an OriginRef or None")
         if self.on_origin is not None and not isinstance(self.on_origin, OriginRef):
             raise TypeError("CASE on origin must be an OriginRef or None")
+
+    def _validate_origin_alignment(self) -> None:
+        """Keep optional predicate origins aligned with a valid case sequence."""
+        if not self.when_origins:
+            return
+        if (
+            not isinstance(self.cases, Sequence)
+            or isinstance(self.cases, (str, bytes))
+            or len(self.when_origins) != len(self.cases)
+        ):
+            raise ValueError("CASE predicate origins must align with cases")
 
     @classmethod
     def parse(
@@ -212,11 +222,17 @@ class CaseDescriptor(NodeDescriptor):
         established build-time validation instead of changing error order.
         """
         cursor = self._normalize_cursor(cursor)
+        case_specs = (
+            self.cases
+            if isinstance(self.cases, Sequence)
+            and not isinstance(self.cases, (str, bytes))
+            else ()
+        )
         when_origins = (
-            list(self.when_origins) if self.when_origins else [None] * len(self.cases)
+            list(self.when_origins) if self.when_origins else [None] * len(case_specs)
         )
         cases_cursor = cursor.child("cases")
-        for index, case_spec in enumerate(self.cases):
+        for index, case_spec in enumerate(case_specs):
             if not isinstance(case_spec, Mapping):
                 continue
             item_cursor = cases_cursor.child(index)
@@ -256,6 +272,7 @@ class CaseDescriptor(NodeDescriptor):
         `check_case_exhaustive` validate pass (it needs the assembled producer types). `ctx` is
         unused (a case resolves nothing and reads no typedefs); it rides the shared contract.
         """
+        self._validate_origin_alignment()
         if self.on is not None:
             case_node, wiring, data_edges, control_edges, param_ranges, param_labels = (
                 _desugar_on(

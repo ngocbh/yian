@@ -263,6 +263,39 @@ def test_case_descriptor_rejects_misaligned_or_nonopaque_origins():
             when_origins=("flow.yaml:12",),  # type: ignore[arg-type]
         )
 
+    descriptor = CaseDescriptor(
+        id="gate",
+        cases=[{"when": "true", "then": "positive"}],
+        when_origins=(OriginRef("first"),),
+    )
+    descriptor.cases.append({"when": "false", "then": "negative"})
+    with pytest.raises(ValueError, match="must align"):
+        descriptor.build(BuildContext({}))
+
+
+@pytest.mark.parametrize("malformed_cases", ["null", "7"])
+def test_source_attachment_does_not_preempt_malformed_case_validation(
+    malformed_cases,
+):
+    """The origin hook stays inert for malformed shapes until the normal phases."""
+    text = f"""\
+id: malformed-case
+name: malformed-case
+uses:
+  child: absent
+nodes:
+  gate:
+    kind: case
+    cases: {malformed_cases}
+output: ${{gate.output}}
+    """
+
+    def fail_resolver(_path, _version=None):
+        raise RuntimeError("resolver reached")
+
+    with pytest.raises(RuntimeError, match="resolver reached"):
+        load_flow(text, child_resolver=fail_resolver)
+
 
 def test_named_definition_case_failure_keeps_child_predicate_origin():
     """Named child assembly and CALL growth retain the exact failing arm."""

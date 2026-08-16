@@ -250,6 +250,15 @@ distinct; failures outside predicate evaluation use the node fallback. The carri
 are diagnostic-only, participate in ordinary graph rebasing, and do not affect flow
 identity.
 
+AGENT also specializes `exception_origin(exc)` without adding a new carrier. A
+retry-exhausted Pydantic error is accepted only when exact traceback frames prove
+the generated structured-output schema performed the validation. The first error
+location keeps record fields, removes only the generated scalar/list wrapper, and
+selects the existing output contract's exact, nearest-ancestor, or root origin.
+Tool/provider validation errors, non-validation failures, and source-free contracts
+retain the node fallback. The exception, retry policy, and kind-blind runtime do not
+change.
+
 ## Why a closed match, on the right axis
 
 An earlier engine branched on node *kind* in many places. That dispatch is now fully

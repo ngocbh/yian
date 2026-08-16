@@ -56,8 +56,8 @@ def test_tuple_lookup_still_works():
 
 
 def test_bare_key_membership_raises():
-    # `("field", name) in fields` is a real lookup shape (the CLI's kind fallback), so a bare
-    # key here would silently answer False — the same silent-miss bug `get` guards against.
+    # Compatibility range lookups use `(kind, key)` tuples, so a bare key here would silently
+    # answer False — the same silent-miss bug `get` guards against.
     fr = FieldRanges({("field", "over"): "RANGE"})
     with pytest.raises(TypeError, match="keyed by a .kind, key. tuple"):
         "over" in fr  # noqa: B015

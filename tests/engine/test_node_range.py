@@ -40,7 +40,7 @@ def test_call_map_loop_nodes_carry_range(seed, node_id, want_field):
     assert isinstance(node.field_ranges[("field", want_field)], SourceRange)
 
 
-# A blocking flow whose successful records must exclude render-only node metadata.
+# A blocking flow whose successful records must exclude compatibility node metadata.
 _RANGE_FLOW = """
 id: f
 name: f
@@ -61,7 +61,7 @@ output: ${done.output}
 
 
 def test_node_range_does_not_ride_run_log(tmp_path: Path):
-    """Stamped render metadata must not ride the authoritative run log.
+    """Stamped compatibility metadata must not ride the authoritative run log.
 
     Recovery rebuilds topology from the supplied authored flow, so node ranges, field maps,
     and synthetic wiring labels are neither execution identity nor durable state. This stamps
@@ -70,7 +70,7 @@ def test_node_range_does_not_ride_run_log(tmp_path: Path):
     """
     path = tmp_path / "range-free.jsonl"
     loaded = load_flow(_RANGE_FLOW)
-    # Stamp render-only source metadata before RunStarted fingerprints and serializes.
+    # Stamp compatibility-only source metadata before RunStarted fingerprints and serializes.
     node = loaded.compiled.nodes["done"]
     node.range = SourceRange(4, 1, 6, 1)
     node.field_ranges[("field", "code")] = SourceRange(6, 5, 6, 40)
@@ -86,7 +86,7 @@ def test_node_range_does_not_ride_run_log(tmp_path: Path):
     assert res.output == "cancel"
 
     blob = path.read_text()
-    # The invariant: no render-only Node metadata leaked into authoritative records.
+    # The invariant: no compatibility-only Node metadata leaked into authoritative records.
     assert "field_ranges" not in blob
     assert "start_line" not in blob  # a serialized SourceRange would carry its fields
     assert "\"range\"" not in blob

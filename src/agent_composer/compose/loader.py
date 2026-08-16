@@ -4,9 +4,10 @@ The file-I/O front door: own one source document, build the typedefs registry, c
 call resolver, load every `defs:` callable, and hand the parsed sections to the
 post-parse conductor (`build.pipeline._assemble`, imported back here) which returns
 the `ComposedFlow`. This module owns root/def source projections, including routing the
-physical flow-assertion cursor for a full root or multi-node def. Compact roots and flat
-single-node defs instead project their `asserts:` onto the synthesized node, so they do not
-invent a parallel flow-assertion site. It also owns frame ranges, the resolver composition
+physical flow-input cursor for roots and both definition forms, plus the flow-assertion
+cursor for a full root or multi-node def. Compact roots and flat single-node defs instead
+project their `asserts:` onto the synthesized node, so they do not invent a parallel
+flow-assertion site. It also owns frame ranges, the resolver composition
 (`make_file_resolver`/`_CallableScope`), and the defs loaders
 (`_load_def`/`_load_single_node_def`) — not the assembly pipeline itself.
 
@@ -27,6 +28,7 @@ once per lexical `uses:` alias, and reuses that alias view at every callsite. Af
 root is assembled, this module freezes the one document catalog, filters local and alias
 authorities to the exact reachable keys, and installs `ComposedFlow.origin_resolver`.
 Source-free graphs carry `None`; private `_assemble` products keep the resolver unset.
+Final resolver routes include the START signature's parameter, contract, and default origins.
 
 Imports flow DOWN only: this module composes the compose package's own slices plus
 `typesys`/`compile`; nothing in the engine imports it back.

@@ -9,7 +9,11 @@ The LAST compose phase before the loader. Three modules:
   (build every node kind-blind -> type/exhaustiveness checks -> edge inference ->
   reference/assert validation -> boundary synthesis -> cycle/handle checks ->
   `CompiledFlow.from_parts`), plus `ComposedFlow` (the compiled+validated result) and the
-  flow `outputs:` parser. It stamps authored node-header origins, then invokes each
+  flow `outputs:` parser. Root and definition assembly pass their retained `input:` cursor
+  through the shared type reader: declaration keys own `Parameter.origin`, type values own
+  root/nested contract origins, and a packed default owns `default_origin`. Synthesized START
+  reuses those carriers; inferred inline signatures remain source-free. It stamps authored
+  node-header origins, then invokes each
   descriptor's immutable source-origin hook while its located cursor is available. CODE uses
   that hook for its whole `code:` value and ordered exact literal-line sites; other descriptors
   currently keep the no-op default. After attachment, the shared `BuildContext` exposes the
@@ -17,8 +21,8 @@ The LAST compose phase before the loader. Three modules:
   source-neutral line selector used at runtime. This neither reparses the document nor freezes
   the still-growing catalog. It also stamps source-backed ordinary `input:` keys and
   values, and source-backed reserved MAP/WAIT wiring values through the file-owned catalog
-  builder. Only ordinary input keys stamp `Parameter` origins; each of
-  those retained wiring values stamps its canonical `Binding`. It aligns retained assertion
+  builder. Ordinary authored node-input keys also stamp their sink `Parameter` origins; each
+  retained node-input value stamps its canonical `Binding`. It aligns retained assertion
   item cursors with source order. Flow desugaring receives an origin callback while the
   conductor derives its aligned temporary ranges from that same cursor sequence; node
   validation receives one site callback that returns origin and range together.
@@ -29,7 +33,8 @@ The LAST compose phase before the loader. Three modules:
   `FlowOutput.binding`; boundary synthesis reuses that exact binding, and output mapping
   keys stay origin-free. Generated compact-root and single-node-definition
   reexports remain origin-free because their authored output declaration is a contract site,
-  not a retained binding occurrence; contract-origin stamping remains deferred. The conductor
+  not a retained binding occurrence; authored node-output contract provenance remains a
+  separate migration. The conductor
   also associates retained inline bodies with their final descriptors, registers lazy
   builders through the loader-owned callable-scope seam, and uses one success-only
   descriptor cache for on-demand signature dependencies.

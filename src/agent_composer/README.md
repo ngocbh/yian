@@ -237,21 +237,30 @@ origin. An invalid authored default remains `binding.evaluate` and uses its
 default origin rather than the value-contract site.
 Parameter/default/contract origins do not affect manifest identity. Compose
 `input:` lowers directly into this same exact carrier shape; `ComposedFlow.input`
-and START use it without a parallel front-end declaration type. For an ordinary
-source-backed node input, final assembly puts the selecting-key origin on its
-`Parameter` and the value origin on its flow-owned `Binding`. Source-backed reserved
-wiring carries only the value origin on its canonical `Binding`: MAP `over:` and WAIT
-`until:` have no corresponding `Parameter`. A desugar may change `Binding.source`
-without moving that value origin. When no source occurrence is retained, Compose
-mints no origin and preserves any explicit programmatic origin; source-backed
-projections inherit their backing site. CASE wiring, synthesized flow-boundary
-parameters, contracts, and external rebasing remain outside this migration step.
+and START reuse the same carriers without a parallel front-end declaration type.
+`compose/helpers/types.py` is the one source-aware recursive type compiler. For
+each authored root or `defs:` flow input, its key owns `Parameter.origin`, its type
+value owns the `ContractOrigins` root and authored mapping/list-form record fields,
+and a packed `TYPE = default` owns `default_origin`. Scalar alias and list
+type expressions have no interior YAML occurrence, so nested failures fall back to
+the contract root. Python/source-free declarations and inferred inline-child
+parameters keep empty origins; external aliases use ordinary lexical graph rebasing.
+
+That declaration ownership is distinct from ordinary node-input wiring. Final
+assembly puts the selecting-key origin on the sink `Parameter` and the bound-value
+origin on its flow-owned `Binding`. Source-backed reserved wiring carries only the
+value origin on its canonical `Binding`: MAP `over:` and WAIT `until:` have no
+corresponding `Parameter`. A desugar may change `Binding.source` without moving that
+value origin. When no source occurrence is retained, Compose mints no origin and
+preserves any explicit programmatic origin; source-backed projections inherit their
+backing site.
 Source-backed bare and
 mapped flow-output values on root flows, multi-node definitions, and inline children stamp
 the final `FlowOutput.binding` after desugaring rewrites; the synthesized END boundary
 reuses that exact binding. Output mapping keys carry no origin. Compact-root and
 single-node-definition reexports are generated without an authored binding occurrence and
-remain origin-free; their authored output type is reserved for contract-origin work.
+remain origin-free. Authored node-output contract provenance is the remaining deferred
+contract work.
 
 `Node.output_contract` is the canonical compiled output declaration: exactly one
 `ValueContract`, or `None` when the output is unenforced. Runtime enforcement and
@@ -267,7 +276,8 @@ producer maps, and validators retain the carrier; algorithms that only compare o
 types project `.type` at their boundary. CALL and LOOP preserve a child's output
 contract, while MAP deliberately derives a new list contract. There is no parallel
 output-Type API: Python-authored nodes pass `output_contract=` explicitly.
-The authored `output:` / `outputs:` YAML syntax is unchanged.
+The authored `output:` / `outputs:` YAML syntax is unchanged; attaching source
+origins to authored node-output contracts remains deferred.
 
 ### Compiled origin traversal and rebasing
 
@@ -351,10 +361,17 @@ whole `code:` scalar and, when `ScalarSource` exposes an exact literal tuple,
 each constructed line under the node's lexical site path. It stores only the
 returned `OriginRef` values, never a cursor or coordinate map. The same path runs
 for roots, definitions, and inline children; virtual source produces no origins.
-Final assembly registers authored node headers, ordinary node-input keys and values,
-source-backed reserved MAP/WAIT wiring values, CODE source fields, assertions,
-and source-backed flow-output values directly on their canonical semantic
-carriers; it does not build a parallel location map. An assertion's semantic
+`compose/helpers/types.py` owns the sole source-aware recursive type compiler.
+Final assembly uses it for retained root/definition flow inputs: declaration keys
+stamp `Parameter.origin`, type values and authored mapping/list-form record fields
+populate `ContractOrigins`, and packed defaults stamp `default_origin`. START reuses
+those carriers. Scalar alias/list type expressions fall back to the contract root;
+Python/source-free declarations and inferred inline parameters remain source-free.
+Final assembly separately registers authored node headers, ordinary node-input keys
+and bound values, source-backed reserved MAP/WAIT wiring values, CODE source fields,
+assertions, and source-backed flow-output values directly on their canonical semantic
+carriers; it does not build a parallel location map. An ordinary node input's key
+belongs to its sink `Parameter`, while its value belongs to `Binding`. An assertion's semantic
 path includes its authored list index, and that item's cursor supplies both
 `Assertion.origin` and the aligned temporary range. Full root flows and
 multi-node definitions retain a flow assertion cursor; their lowered carriers
@@ -364,8 +381,8 @@ node-local. Flow outputs are stamped after rewrites on `FlowOutput.binding`, and
 END reuses that binding; mapping keys are not origin sites. For sites without
 retained occurrences, Compose mints no origin and preserves any explicit
 programmatic origin. Generated compact-root and single-node-definition reexports
-are such source-free output sites; the authored output type is a contract site
-whose origin remains deferred.
+are such source-free output sites. Authored node-output contract provenance is the
+remaining deferred contract work.
 At each `uses:` alias, the loader validates the canonical child's complete resolver,
 copies and rebases its compiled origin graph under a collision-free lexical key, and
 caches that alias view. The physical resolved-path cache remains canonical and is never

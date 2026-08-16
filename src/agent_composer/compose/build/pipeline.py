@@ -3,7 +3,8 @@
 `_assemble` is the pipeline shared by the top-level flow AND every in-file `defs:`
 callable:
 
-  flow parameters -> build every node kind-blind (`desc.build(ctx)`; a case lowers
+  flow parameters + authored parameter/contract/default origins -> build every node
+  kind-blind (`desc.build(ctx)`; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
   edges + append each case's own edges -> validate references + classify asserts
   -> attach authored assertion/output origins -> synthesize the START_ID/END_ID

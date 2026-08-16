@@ -121,9 +121,16 @@ Text-accepting parse conveniences delegate construction to `SourceDocument` befo
 doing semantic work; they do not own a second parser.
 
 One package-private catalog builder is shared across a physical document's root,
-definitions, and inline bodies. Assembly registers authored node headers, ordinary
-node-input keys and values, source-backed reserved MAP/WAIT wiring values, and source-backed
-flow-output values directly on the canonical carriers. A kind-blind descriptor hook registers
+definitions, and inline bodies. `compose/helpers/types.py` owns the one source-aware
+recursive type compiler. For retained root/definition flow inputs, declaration keys
+stamp `Parameter.origin`, type values and authored mapping/list-form record fields
+populate `ContractOrigins`, and packed defaults stamp `default_origin`; START reuses
+those carriers. Scalar alias/list type expressions fall back to the contract root.
+Python/source-free declarations and inferred inline parameters remain source-free;
+external aliases use the existing lexical graph rebasing. Assembly separately registers
+authored node headers, ordinary node-input keys and bound values, source-backed reserved
+MAP/WAIT wiring values, and source-backed flow-output values directly on the canonical
+carriers. A kind-blind descriptor hook registers
 additional kind-owned sites while the cursor is available; CODE uses it for the whole
 `code:` scalar and exact literal constructed lines, then carries only opaque origins below
 Compose. After those registrations, CODE may resolve one load-time syntax site through the
@@ -133,14 +140,16 @@ flow/node assertion by source-order index; the same retained item cursor supplie
 `Assertion.origin` and aligned temporary range, so equal text at different positions stays
 distinct. Full roots and multi-node definitions retain flow assertion cursors and reuse
 the lowered carriers on START/END. Compact roots and flat single-node definitions project
-their assertions onto the synthesized node instead. Only ordinary input keys belong to
-`Parameter`; ordinary, reserved, and flow-output values belong to `Binding`. Flow outputs
+their assertions onto the synthesized node instead. Flow-input declaration keys and ordinary
+node-input keys belong to `Parameter`; ordinary node-input, reserved, and flow-output bound
+values belong to `Binding`.
+Flow outputs
 are stamped after rewrites and reused by END; output mapping keys stay origin-free.
 Generated compact-root and single-node-definition reexports have no authored binding
-occurrence and stay origin-free; their output declaration is reserved for contract-origin
-work. Without a retained occurrence, Compose mints no origin and preserves any explicit
-programmatic origin. Private assembly leaves the resolver unset while its shared catalog
-grows. The loader validates and lexically rebases external children per alias, performs the
+occurrence and stay origin-free; authored node-output contract provenance is the remaining
+deferred contract work. Without a retained occurrence, Compose mints no origin and
+preserves any explicit programmatic origin. Private assembly leaves the resolver unset while
+its shared catalog grows. The loader validates and lexically rebases external children per alias, performs the
 only successful-load catalog freeze at the physical-file boundary, and installs the exact
 `ComposedFlow.origin_resolver`; source-free graphs use `None`.
 

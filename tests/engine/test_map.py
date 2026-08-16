@@ -114,7 +114,7 @@ def test_map_child_failure_fails_the_run():
     assert result.failure.node_id == "each#0/emit"
     assert result.failure.trace == (
         mapped.origin,
-        mapped.child.nodes["emit"].origin,
+        mapped.child.nodes["emit"].code_origin,
     )
 
 

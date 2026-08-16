@@ -40,23 +40,22 @@ nodes:
 output: ${wrapper.output}
 """
     flow = Path("inline-composite.yaml")
-    loaded = load_flow(source)
+    loaded = load_flow(source, source_label=flow.name)
     result = run_flow(loaded, {})
 
     assert result.status == "failed"
 
     wrapper = loaded.compiled.nodes["wrapper"]
-    child_source = wrapper.child_source
-    wrapper_line = loaded.source.node_ranges["wrapper"].start_line
-    code_line = child_source.field_ranges["boom"][("field", "code")].start_line
+    diagnostic = loaded.diagnose(result.failure)
+    assert [frame.range.start_line for frame in diagnostic.frames] == [4, 10]
 
     buf = _sink(monkeypatch)
-    _render_run_error(result, flow, source, loaded=loaded)
+    _render_run_error(result, loaded)
     output = buf.getvalue()
 
-    outer_frame = f"{flow.name}:{wrapper_line}"
-    inner_frame = f"inline body of node 'wrapper':{code_line}"
-    assert "call traceback (most recent call last):" in output
+    outer_frame = f"{flow.name}:4"
+    inner_frame = f"{flow.name}:10"
+    assert "source locations:" in output
     assert outer_frame in output
     assert inner_frame in output
     assert output.index(outer_frame) < output.index(inner_frame)

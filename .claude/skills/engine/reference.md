@@ -98,8 +98,8 @@ missing, malformed, or raising resolution atomically returns no frames plus
 exactly `Source presentation was unavailable.` `ComposedFlow.diagnose()` does
 not inspect the compiled graph or `SourceFrame`, and it does not parse or reparse
 YAML; resolution may delegate to the resolver's retained source document.
-The locator/range and `SourceFrame` CLI bridges below remain temporary current
-behavior.
+Runtime CLI failures use this method and the shared diagnostic renderer. The
+still-present locator/range and `SourceFrame` fields are unused migration residue.
 
 `Node.origin_context` is generated outer-to-inner spawner ancestry. It is empty
 on direct/static nodes, diagnostic-only, omitted from manifests/fingerprints/
@@ -432,8 +432,9 @@ outer-to-inner and keeps the deepest
 frame whose `f_code` is one of those objects by `is`; code-object equality, hash
 membership, and filenames are intentionally irrelevant. Wrapper line `n` maps to
 constructed slot `n - 2`, then falls back to the whole scalar and node. Failures after
-the authored body (such as serialization) use the whole scalar; reference mode keeps
-the base node fallback. Compose reuses the same selector for `SyntaxError.lineno`.
+the authored body (such as serialization) use the whole scalar; reference mode uses
+that scalar as its invocation site, then the base node fallback. Compose reuses the
+same selector for `SyntaxError.lineno`.
 `CaseNode` carries one optional origin on every ordered `Case`. Compose registers
 the exact indexed `cases[N].when` occurrences before lowering, so duplicate text
 remains distinct. `exception_origin` selects the active predicate from this node's
@@ -672,8 +673,9 @@ and compile each external physical file once within a successful load graph.
 `SourceFrame` is persistent render-only diagnostic metadata. The loader derives its
 node/field range maps from descriptors parsed over the existing cursors, stores the
 top frame on `ComposedFlow.source`, and gives composite nodes their child's frame as
-`child_source` for CLI tracebacks. It carries text and ranges, not parser state, and
-is not another source owner.
+`child_source`. Runtime diagnosis no longer reads either field; they are unused
+migration residue. The frame carries text and ranges, not parser state, and is not
+another source owner.
 
 ## Inline composite bodies (compose-only sugar)
 
@@ -830,26 +832,15 @@ never a text heuristic.
   it. Authored nodes and assertions
   carry opaque origins, and every
   flow returned by `load_flow` carries one complete source-neutral resolver (or `None` when
-  source-free). Runtime results retain the temporary locator/range path above, and CLI
-  runtime-failure rendering still consumes it. For assertions, Compose derives that
+  source-free). Runtime results retain the temporary locator/range path above, but CLI
+  runtime-failure rendering no longer consumes it. For assertions, Compose derives that
   temporary positional range and
   `Assertion.origin` from the same retained item cursor before rewrites preserve both.
-- **Resolution (CLI boundary):** `cli/run.py` reads the node id, message, and
-  debugging traceback directly from `result.failure`. The single-frame path prefers the
-  pre-resolved `result.range`. In a nested call traceback, `_walk_call_frames` places that
-  concrete range on the deepest current baked node that owns the exact locator site; an
-  unowned or stale range cannot be interpreted against child text. Other nested frames keep
-  current field/kind/header fallbacks. Only when the single-frame concrete range is absent
-  does `_resolve_range` map
-  `result.locator` itself, via
-  `_top_ranges` (the loaded flow's `SourceFrame` maps, or the defensive
-  `loader.top_frame_ranges(document)` fallback): a
-  `field` locator → that field's range, else `_node_range` (node-kind best field, e.g. a code
-  node's `code:`, → node HEADER range). The winning `SourceRange` is wrapped in
-  the canonical `Diagnostic(code, message, frames=(DiagnosticFrame(...), ...),
-  notes, node_id, cause_type, traceback)` and passed to `render_diagnostic`.
-  This direct construction is a compatibility bridge: the CLI does not yet use
-  `ComposedFlow.diagnose()` for runtime failures.
+- **Resolution (CLI boundary):** `cli/run.py` passes `result.failure` to the loaded
+  flow's `ComposedFlow.diagnose()` and renders only the resulting `Diagnostic`.
+  Nested frames arrive already source-owned and outermost-to-innermost. Missing or
+  broken resolution remains unlocated with the canonical note. The CLI does not
+  inspect runtime ids, graph topology, `result.locator/range`, or `SourceFrame`.
 - **Load diagnostics are already resolved.** Compose constructs
   `LoadError(Diagnostic(...))` from its retained `SourceDocument`/`SourceCursor`
   authority. Frames own their label, complete text, and range; nested definition
@@ -857,26 +848,12 @@ never a text heuristic.
   in authored order. The CLI renders `error.diagnostic` directly. Never restore
   separate load-error aliases, line maps, or section-line fallbacks, and never pass
   root YAML into the renderer.
-- **Cross-flow call traceback** — when a failure is inside a *called child*, its node id is
-  runtime-NAMESPACED (`gate/approve`, `outer/via/boom`, `gate#0/inner` for a map element).
-  A `call`/`map` node bakes its child flow's render-only **`SourceFrame`** (`compose/loader`:
-  label + source text + node→`SourceRange` / field→`SourceRange` maps, built by `_frame_ranges`
-  off descriptors parsed from the existing source cursors) onto `child_source` at load — for
-  a `defs:` child the text is the PARENT file (its projected node cursors retain absolute
-  parent-file ranges); for an
-  external `uses:` child it is that file's own text, label = its filename. The frame is frozen
-  and `__deepcopy__`-returns-self, so `clone_child`'s per-callsite deep-copy shares the one
-  instance and it is exempt from the node-purity scan (it carries raw `${...}` YAML, but is
-  metadata, not a wiring source). At error time `cli/run.py:_walk_call_frames` splits the
-  namespaced id and walks segment-by-segment through the baked IR (`node.child`/
-  `node.child_source`), collecting one frame per level; `_render_frame_stack` boxes them
-  stacked, most-recent-call-last (Python-traceback style), falling back to the single-frame
-  box when fewer than two frames resolve. The deepest current node that owns the
-  evaluator-resolved operation range uses it. Other call-chain frames anchor at the node
-  HEADER; when no node owns the range, the failing leaf uses its precise field / kind
-  fallback. A frame title names WHERE it lives: a top/external file frame is the filename
-  alone; a `defs:` frame is filename-qualified (`<file> defs:<name>`) since its nodes
-  physically live in that file.
+- **Cross-flow source frames** — compile-owned expansion copies the spawner's
+  complete `failure_trace()` into generated descendants. `ComposedFlow.diagnose()`
+  resolves that ordered ancestry through the composed origin table, so CALL, MAP,
+  LOOP, definitions, and external files require no runtime-id parsing or child-graph
+  walk. `SourceFrame`/`child_source` are still physically present only as unused
+  migration residue and must not acquire new consumers.
 
 ## Design-note template (step 3 of the workflow)
 

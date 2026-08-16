@@ -36,6 +36,20 @@ def _failure_origin(node: CodeNode, inputs: dict) -> OriginRef | None:
     raise AssertionError("CODE node unexpectedly succeeded")
 
 
+class _FalseyOriginRef(OriginRef):
+    """Valid origin whose truth value must not affect attribution."""
+
+    def __bool__(self):
+        return False
+
+
+class _RaisingTruthOriginRef(OriginRef):
+    """Valid origin that exposes accidental truth-value inspection."""
+
+    def __bool__(self):
+        raise AssertionError("origin truthiness must not be inspected")
+
+
 # --- classification --------------------------------------------------------------------- #
 
 
@@ -231,13 +245,39 @@ def test_inline_non_owned_failure_uses_whole_code_origin():
     assert _failure_origin(node, {}) is whole
 
 
-def test_reference_and_source_free_failures_keep_base_node_fallback():
-    reference = CodeNode("reference", code="tests.engine._compose_codefns:boom")
+def test_reference_failure_uses_code_then_node_fallback():
+    code_origin = OriginRef("code:reference")
+    reference = CodeNode(
+        "reference",
+        code="tests.engine._compose_codefns:boom",
+        code_origin=code_origin,
+    )
     reference.origin = OriginRef("node:reference")
+    without_code_origin = CodeNode(
+        "reference-fallback",
+        code="tests.engine._compose_codefns:boom",
+    )
+    without_code_origin.origin = OriginRef("node:reference-fallback")
     source_free = CodeNode("inline", code="raise RuntimeError('boom')\nreturn 0")
 
-    assert _failure_origin(reference, {}) is reference.origin
+    assert _failure_origin(reference, {}) is code_origin
+    assert _failure_origin(without_code_origin, {}) is without_code_origin.origin
     assert _failure_origin(source_free, {}) is None
+
+
+@pytest.mark.parametrize(
+    "code_origin",
+    (_FalseyOriginRef("falsey"), _RaisingTruthOriginRef("raising")),
+)
+def test_reference_failure_does_not_inspect_origin_truthiness(code_origin):
+    node = CodeNode(
+        "reference",
+        code="tests.engine._compose_codefns:boom",
+        code_origin=code_origin,
+    )
+    node.origin = OriginRef("node:reference")
+
+    assert _failure_origin(node, {}) is code_origin
 
 
 # --- deep serialize-once check (fails AT the node) -------------------------------------- #

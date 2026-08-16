@@ -107,13 +107,12 @@ same context. A LOOP respawn instead copies only the driver's outer
 `origin_context`, so the loop's own origin is appended exactly once when the
 next driver builds a failure. Evaluator, dispatcher, and terminal-unreachable
 failure producers remain kind-blind and call the same node-owned rule. Runtime
-results still retain their temporary `SourceSpan` locator and concrete range,
-while the CLI retains its `SourceFrame` graph walk until the remaining
-source-diagnostic cutover lands. During that bridge, the evaluator-resolved concrete
-range is authoritative at the deepest current baked node that owns its exact locator
-site. The source-frame walk supplies outer call context and keeps current
-locator/kind/header fallbacks when a range is caller-owned elsewhere in the chain or is
-stale after a source-only edit. Those bridges are not an alternative origin-resolution API.
+results still retain their temporary `SourceSpan` locator and concrete range, but
+the CLI no longer reads that bridge: runtime and load failures both reach the same
+`render_diagnostic()` through `ComposedFlow.diagnose()`. Missing or broken source
+resolution therefore stays unlocated instead of falling through to runtime-id or
+graph inference. The unused range and `SourceFrame` carriers remain only for the
+following deletion steps; they are not an alternative origin-resolution API.
 
 The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
 `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
@@ -203,8 +202,9 @@ retains its recursive module/function/lambda/comprehension code-object tree.
 selects the deepest frame whose code object is owned by identity (`is`), never by
 filename, equality, or hash membership. Wrapper line `n` selects authored slot
 `n - 2`; an unavailable slot, wrapper-only frame, or post-body serialization
-failure falls back to `code_origin`, then `Node.origin`. Reference mode keeps the
-base node-origin fallback. Compose applies the same line selector to load-time
+failure falls back to `code_origin`, then `Node.origin`. Reference mode uses the
+whole `code_origin` as its invocation site, then the node fallback. Compose applies
+the same line selector to load-time
 `SyntaxError.lineno` and reports `SyntaxError.msg`.
 
 CASE carries one optional origin on each ordered `Case`, identifying that exact
@@ -438,8 +438,9 @@ one alias reuse its view, while distinct aliases and diamond branches remain dis
 
 `SourceFrame` is persistent render-only diagnostic metadata on
 `ComposedFlow.source` and composite nodes' `child_source`. It carries source text
-and derived node/field range maps for CLI traceback rendering; it neither owns
-parsing nor exposes the private document graph.
+and derived node/field range maps, but the CLI no longer reads it; it remains only
+as deletion-ready migration residue. It neither owns parsing nor exposes the private
+document graph.
 
 ## Inline composite lowering
 

@@ -251,8 +251,9 @@ flow has a cycle involving ['a', 'b']; flows must be acyclic
 
 A failure that happens **while the flow runs** — a node raises, a `code` node
 returns the wrong type, an `:?` required reference is missing at its use site —
-is shown the same way as a compile error: a boxed `.yaml` frame, with the message
-below. The frame points at the **precise line the failure originates from** — the
+is shown like a compile error when authored source is available: boxed `.yaml`
+frames with the message below. The innermost frame points at the **precise line
+the failure originates from** — the
 input binding, the assert expression, the input declaration, a node's `output:`
 declaration — not just the node header. So a runtime error reads like a compile error: you see *exactly* where in
 the flow it broke, not an engine traceback:
@@ -271,17 +272,19 @@ $ ac run tests/seeds/errors/e07-required-missing.yaml --input topic=climate   # 
 as_of is required for the report
 ```
 
-When the exact line can't be pinned (e.g. a `code` callable that raises somewhere
-inside its body), the frame falls back to the **best line for the node's kind** —
-a code node's `code:` field — and then to the node header. A failure with no node
-behind it *and* no resolvable line prints the plain `run failed: <message>` line.
+Runtime failures carry an ordered trace of opaque authored origins. The loaded
+Compose front end resolves that trace through its source catalog, and the CLI sends
+the resulting diagnostic through the same renderer used for load errors. A referenced
+`code` callable therefore points at its `code:` scalar; inline code can point at the
+exact authored line that raised. The CLI does not infer a location from a runtime node
+id or fall back by node kind. If an origin cannot be presented, the semantic failure
+message remains available without a source frame.
 
-For a failure inside a called or mapped child flow, the CLI adds the outer call sites as
-a traceback of source frames. The deepest current node that owns the evaluator-resolved
-operation site keeps its exact range—such as a failing child `input:` binding or an
-intermediate caller assertion. If no current node owns a retained coordinate, as after a
-source-only edit, the walk uses that frame's current field, kind, or header fallback instead
-of applying the stale coordinate to unrelated child text.
+For a failure inside a CALL, MAP, or LOOP child flow, the ordered trace already
+contains the outer invocation sites followed by the precise child operation. The
+front end resolves each origin against the currently loaded source, so nested and
+external flows render in outermost-to-innermost order without walking the compiled
+child graph or reusing coordinates retained by the runtime.
 
 Failures with **no node behind them** are still boxed at their precise line: a
 false boundary/post `assert:` boxes the offending `asserts:` expression, an

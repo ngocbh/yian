@@ -343,8 +343,8 @@ corresponds to them; authored nodes inside retained inline bodies are stamped no
   synthesized `start`/`end` boundaries, and ordered node/boundary assertion carriers),
 - `input` — the canonical typed `Parameter` values. Authored defaults are
   validated at load; supplied values are checked when the boundary binds them,
-- `source` — a render-only `SourceFrame` (the text + per-node ranges) that lets a
-  runtime failure draw a caret back at your YAML, even across nested flow calls.
+- `source` — a legacy render-only `SourceFrame` retained only until its now-unused
+  graph/range bridge is deleted; runtime diagnosis does not read it.
 - `origin_resolver` — an immutable source-neutral resolver whose exact domain is the
   distinct origins reachable from `compiled`; `None` only for a source-free graph.
 - `diagnose(failure)` — the presentation-only boundary that resolves the complete

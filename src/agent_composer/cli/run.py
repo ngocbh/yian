@@ -473,86 +473,32 @@ def _render_traceback(tb: str) -> None:
     )
 
 
-def _render_run_error(
-    result: RunResult, flow: Path, text: str, loaded=None, engine_trace: bool = False
-) -> None:
-    """Print a runtime failure as a located `.yaml` frame at its PRECISE originating line.
+def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> None:
+    """Resolve and render one runtime failure through its authoring front end.
 
-    The result's `SourceSpan` locator names exactly where the run broke — an input
-    binding, an assert expression, or a field such as `output:`. Semantic
-    message, node identity, and traceback data come only from `RunResult.failure`,
-    so terminal recovery needs no invocation-local events.
+    ``Failure`` is the only semantic input. The loaded flow owns all source
+    projection through ``diagnose``; the CLI consumes the returned ``Diagnostic``
+    without inspecting runtime ids, graph topology, or YAML metadata. A missing
+    failure remains an unlocated defensive message. ``engine_trace`` adds the
+    canonical diagnostic's captured Python traceback below the ordinary renderer.
 
-    When the failing node id is RUNTIME-NAMESPACED (a node inside a called child, e.g.
-    `gate/approve`) and the loaded IR is available, the error renders a **call traceback**: a
-    boxed frame per descended level — the top-level `call` node, then each child (`defs:` or
-    external `uses:` file) — down to the failing leaf, most-recent-call-last
-    (`_walk_call_frames`). The deepest call-chain node whose current metadata owns the
-    evaluator-resolved `RunResult.range` uses it; other frames retain current locator, kind,
-    or header fallbacks. With fewer than two frames the renderer falls back to the
-    single-frame box, whose `SourceRange` is resolved by, in order:
-
-    1. the flow-level `RunResult.range` retained by the temporary presentation bridge;
-    2. else `_resolve_range`: a `kind=field` locator's field range, else the node's own range
-       (its kind fallback `code:` range, else the header), resolving a namespaced/clone id to
-       its owning top-level node;
-    3. else a plain `run <status>: <message>` line (no frame).
-
-    When `engine_trace` is set and a Python traceback was captured (a code/tool/agent raise),
-    it is boxed below for debugging."""
+    Args:
+        result (`RunResult`): Failed terminal run result to present.
+        loaded (`ComposedFlow`): Front-end authority that resolves the failure trace.
+        engine_trace (`bool`, *optional*, defaults to `False`): Whether to append
+            the captured Python traceback when one exists.
+    """
     failure = result.failure
-    span = result.locator
-    node_id = failure.node_id if failure is not None else None
-    if node_id is None and span is not None:
-        node_id = span.node
-    message = failure.message if failure is not None else "(no detail)"
-    tb = failure.traceback if failure is not None else None
-
-    # Multi-frame call traceback: when the failing id is namespaced (a node inside a called
-    # child) and we have the loaded IR, walk into the child(ren) and box a frame per level.
-    # The walk must never break error rendering -> any failure degrades to the single frame.
-    frames: list = []
-    if loaded is not None and node_id and "/" in node_id:
-        try:
-            frames = _walk_call_frames(
-                loaded,
-                node_id,
-                text,
-                flow.name,
-                span,
-                resolved_range=result.range,
-            )
-        except Exception:
-            frames = []
-    if len(frames) >= 2:
-        _render_frame_stack(frames, message)
-        if engine_trace and tb:
-            _render_traceback(tb)
-        return
-
-    # Span-aware single frame: box the concrete range already retained on the public result.
-    rng = result.range
-    # else resolve from the locator/node against the source ranges (kind=field precision, then
-    # the node's kind fallback / header), recomputed from the loaded IR or the text.
-    if rng is None:
-        rng = _resolve_range(span, node_id, loaded, text)
-
-    if rng is None:
-        err_console.print(f"[red]run {result.status}: {message}[/red]")
-    else:
-        code = failure.code if failure is not None else "node.execute"
-        render_diagnostic(
-            Diagnostic(
-                code=code,
-                message=message,
-                frames=(DiagnosticFrame(flow.name, text, rng),),
-                node_id=node_id,
-                cause_type=failure.cause_type if failure is not None else None,
-                traceback=tb,
-            )
+    if failure is None:
+        diagnostic = Diagnostic(
+            code="node.execute",
+            message="(no detail)",
         )
-    if engine_trace and tb:
-        _render_traceback(tb)
+    else:
+        diagnostic = loaded.diagnose(failure)
+    render_diagnostic(diagnostic)
+    if engine_trace and diagnostic.traceback:
+        _render_traceback(diagnostic.traceback)
 
 
 class _ProgressReporter:
@@ -1512,7 +1458,7 @@ def run(
         else:
             console.print(out)
     else:
-        # A node failure points at WHERE in the `.yaml` it raised (boxed frame), mirroring a
-        # compile error; a node-less failure (assert/input-coercion) prints the plain message.
-        _render_run_error(result, flow, text, loaded=loaded, engine_trace=engine_trace)
+        # The loaded front end projects authored origins to source frames; failures
+        # without presentable origins retain their semantic message.
+        _render_run_error(result, loaded, engine_trace=engine_trace)
         raise typer.Exit(code=1)

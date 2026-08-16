@@ -135,7 +135,8 @@ ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
   labelled with its canonical resolved type, a required (`*`)/optional mark, and
   any default. Optional/defaulted boolean and `Literal[...]` prompts offer an
   explicit omit/use-declared-default action; blank optional/defaulted free text does
-  the same. Omitted keys stay absent so START applies the exact authored default.
+  the same. Omitted keys stay absent so START applies an exact authored default when
+  present, while an optional input without one remains absent.
 - `HUMAN_INPUT` and an authored agent `ask_user` tool block inside the live node
   call while the CLI's main-thread broker collects the answer. `WAIT` likewise
   blocks a worker until its absolute UTC deadline and returns `None`. Each

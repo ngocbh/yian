@@ -52,6 +52,7 @@ from agent_composer.run import (
 )
 from agent_composer.events import NodeFailed
 from agent_composer.nodes.base import _HostStop
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.tools import install_ask_user
 from agent_composer.typesys import canonical_type_label
 from agent_composer.typesys.seeding import default_run_id
@@ -624,7 +625,7 @@ def _flow_banner(
     return Panel(body, border_style="cyan", expand=False)
 
 
-def _prompt_input(decl: Any, questionary: Any, style: Any) -> Any:
+def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
     """Ask for one declared input and return value, omission, or cancellation.
 
     ``_OMIT_INPUT`` is the non-required/default action and ``None`` is Questionary's
@@ -632,6 +633,15 @@ def _prompt_input(decl: Any, questionary: Any, style: Any) -> Any:
     and Literals use a select with omission preselected; other types use text, where
     non-required whitespace means omission. Every explicit value is returned unchanged
     for the ordinary run-boundary coercion and validation policy.
+
+    Args:
+        decl (`Parameter`): Canonical flow input declaration to present.
+        questionary (`Any`):
+            Lazily imported Questionary module used to build the widget.
+        style (`Any`): Shared Questionary style for the widget.
+
+    Returns:
+        `Any`: Explicit value, private omission sentinel, or ``None`` cancellation.
     """
     label = _input_label(decl)
     contract = getattr(decl, "contract", None)
@@ -660,7 +670,10 @@ def _prompt_input(decl: Any, questionary: Any, style: Any) -> Any:
 
     if typ is not None and typ.tags:  # a Literal[...] enum
         choices = [
-            questionary.Choice(tag, value=tag)
+            questionary.Choice(
+                tag if decl.required else f"Set value: {tag}",
+                value=tag,
+            )
             for tag in sorted(typ.tags)
         ]
         if decl.required:
@@ -690,7 +703,9 @@ def _prompt_input(decl: Any, questionary: Any, style: Any) -> Any:
     return value
 
 
-def _prompt_missing(decls: List[Any], have: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _prompt_missing(
+    decls: List[Parameter], have: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
     """Collect explicit overrides for each declared input not already supplied.
 
     Returns a dictionary containing only explicit values, or ``None`` if the user
@@ -698,7 +713,15 @@ def _prompt_missing(decls: List[Any], have: Dict[str, Any]) -> Optional[Dict[str
     actions to a private sentinel; this collector never applies flow defaults itself.
 
     Each prompt's label carries the input's type + a required/optional mark + default
-    (see `_input_label`)."""
+    (see `_input_label`).
+
+    Args:
+        decls (`list[Parameter]`): Canonical flow input declarations in prompt order.
+        have (`dict[str, Any]`): Values already supplied by JSON or repeatable flags.
+
+    Returns:
+        `dict[str, Any] | None`: Explicitly gathered overrides, or ``None`` on cancel.
+    """
     import questionary
 
     style = _q_style()

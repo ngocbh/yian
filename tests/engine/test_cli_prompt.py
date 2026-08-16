@@ -360,6 +360,29 @@ def test_prompt_collects_false_enum_and_text_overrides(monkeypatch):
     }
 
 
+def test_prompt_distinguishes_literal_values_from_omission_labels(monkeypatch):
+    collision = "↩ Use declared default"
+    fake = _FakeQuestionary({"mode": collision})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+    parameter = _parameter(
+        "mode",
+        Type(kind=ValueKind.STRING, tags=frozenset({collision, "ordinary"})),
+        has_default=True,
+        default="ordinary",
+    )
+
+    gathered = _prompt_missing([parameter], {})
+
+    assert gathered == {"mode": collision}
+    choices = fake.calls[0].choices
+    assert len({choice.title for choice in choices}) == len(choices)
+    assert any(
+        choice.title == f"Set value: {collision}" and choice.value == collision
+        for choice in choices
+    )
+
+
 def test_prompt_distinguishes_cancellation_from_omission(monkeypatch):
     fake = _FakeQuestionary({"flag": None})
     monkeypatch.setitem(sys.modules, "questionary", fake)

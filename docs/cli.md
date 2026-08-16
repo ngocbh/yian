@@ -93,14 +93,14 @@ resolved type:
   `↩ Use declared default`, followed by `True` and `False`,
 - a required `Literal[...]` → a select list of the allowed tags,
 - an optional/defaulted `Literal[...]` → the same list with the omit/default action
-  preselected,
+  preselected and each explicit tag labelled `Set value: ...`,
 - anything else → a free-text entry, initially blank.
 
 Choosing the omit/default action, or leaving optional/defaulted free text blank,
-does not submit a value. The key stays absent and START applies the exact validated
-default payload; the CLI never stringifies that payload into an override. A typed
-answer remains an ordinary explicit override and follows run-boundary coercion and
-validation.
+does not submit a value. The key stays absent: START applies the exact validated
+default payload when present, while an optional input without a default remains
+absent. The CLI never stringifies a default into an override. A typed answer remains
+an ordinary explicit override and follows run-boundary coercion and validation.
 
 Each prompt's label carries the input's canonical resolved **type**, a required
 (`*`) / `optional` mark, and any **default** — e.g. `topic (str) *`,
@@ -117,7 +117,7 @@ JSON. Cancelling a prompt cancels the run.
     The prompt needs a real terminal (TTY). In a non-interactive context
     (a CI job, a piped command, `srun` without a pty), supply every declared input
     via `--input` / `--inputs`; otherwise `ac` still attempts to prompt for a
-    missing optional/defaulted field. TTY-aware omission is tracked separately.
+    missing optional/defaulted field.
 
 ## Blocking interactions
 

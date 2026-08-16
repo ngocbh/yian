@@ -240,7 +240,7 @@ Parameter/default/contract origins do not affect manifest identity. Compose
 and START reuse the same carriers without a parallel front-end declaration type.
 `compose/helpers/types.py` is the one source-aware recursive type compiler. For
 each authored root or `defs:` flow input, its key owns `Parameter.origin`, its type
-value owns the `ContractOrigins` root and authored mapping/list-form record fields,
+value owns the `ContractOrigins` root and authored nested record fields,
 and a packed `TYPE = default` owns `default_origin`. Scalar alias and list
 type expressions have no interior YAML occurrence, so nested failures fall back to
 the contract root. Python/source-free declarations and inferred inline-child
@@ -363,7 +363,7 @@ returned `OriginRef` values, never a cursor or coordinate map. The same path run
 for roots, definitions, and inline children; virtual source produces no origins.
 `compose/helpers/types.py` owns the sole source-aware recursive type compiler.
 Final assembly uses it for retained root/definition flow inputs: declaration keys
-stamp `Parameter.origin`, type values and authored mapping/list-form record fields
+stamp `Parameter.origin`, type values and authored nested record fields
 populate `ContractOrigins`, and packed defaults stamp `default_origin`. START reuses
 those carriers. Scalar alias/list type expressions fall back to the contract root;
 Python/source-free declarations and inferred inline parameters remain source-free.

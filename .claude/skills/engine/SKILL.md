@@ -149,7 +149,7 @@ Hold this model whenever you design anything:
   coercion policy stay source-neutral, and rewrites preserve all origins.
   `compose/helpers/types.py` is the one source-aware recursive type compiler. For
   authored root/definition flow inputs, the declaration key owns `Parameter.origin`,
-  the type value and authored mapping/list-form record fields own `ContractOrigins`,
+  the type value and authored nested record fields own `ContractOrigins`,
   and a packed default owns `default_origin`; START reuses those exact carriers.
   Scalar alias/list type expressions fall back to the contract root. Python/source-free
   declarations and inferred inline parameters stay source-free, while external aliases
@@ -377,7 +377,7 @@ for whole-scalar fallback. One builder is
 shared by a physical document's root, definitions, and inline bodies.
 `compose/helpers/types.py` owns the sole source-aware recursive type compiler. For
 retained root/definition flow inputs it stamps the key on `Parameter.origin`, the type
-value and authored mapping/list-form record fields on `ContractOrigins`, and a packed
+value and authored nested record fields on `ContractOrigins`, and a packed
 default on `default_origin`; START reuses those carriers. Scalar alias/list expressions fall back
 to the root. Python/source-free and inferred inline parameters remain source-free.
 Assembly separately stamps authored node headers, ordinary node-input keys and bound

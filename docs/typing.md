@@ -96,7 +96,7 @@ resolves a parsed expr against it into a leaf `Type`.
 
 Compose compiles each authored root- or `defs:`-level flow input into a `Parameter`
 whose `origin` identifies the selecting key. Its `ValueContract` records the type value
-at the contract root and at each recursively authored record field, including list-form fields.
+at the contract root and at each recursively authored nested record field.
 For a packed declaration such as `count: "int = 3"`, `default_origin` is a distinct
 semantic key that resolves to the same scalar range as the contract root.
 

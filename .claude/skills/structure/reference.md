@@ -139,7 +139,7 @@ The loader creates one package-private catalog builder per physical document and
 threads it through root, definition, and inline-body assembly.
 `compose/helpers/types.py` owns the sole source-aware recursive type compiler. For
 retained root/definition flow inputs, declaration keys stamp `Parameter.origin`, type
-values and authored mapping/list-form record fields populate `ContractOrigins`, and
+values and authored nested record fields populate `ContractOrigins`, and
 packed defaults stamp `default_origin`; START reuses those carriers. Scalar alias/list
 type expressions fall back to the contract root. Python/source-free declarations and
 inferred inline parameters remain source-free; external aliases use existing lexical

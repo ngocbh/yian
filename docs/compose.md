@@ -236,7 +236,7 @@ folded code has no exact line sites and therefore selects the whole scalar.
 
 The source-aware flow-input reader separately compiles each root/def input declaration.
 The selecting key becomes `Parameter.origin`; the type value becomes the contract-root
-origin; and recursively authored record fields, including list-form fields, become nested
+origin; and recursively authored record fields become nested
 contract origins. A packed default receives a distinct `default_origin` key at that same scalar
 range. Boundary failures select an exact contract path, then an authored ancestor, the
 contract root, and finally the parameter key. Scalar aliases and scalar `list[...]`

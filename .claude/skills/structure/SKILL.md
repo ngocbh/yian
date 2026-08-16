@@ -123,7 +123,7 @@ doing semantic work; they do not own a second parser.
 One package-private catalog builder is shared across a physical document's root,
 definitions, and inline bodies. `compose/helpers/types.py` owns the one source-aware
 recursive type compiler. For retained root/definition flow inputs, declaration keys
-stamp `Parameter.origin`, type values and authored mapping/list-form record fields
+stamp `Parameter.origin`, type values and authored nested record fields
 populate `ContractOrigins`, and packed defaults stamp `default_origin`; START reuses
 those carriers. Scalar alias/list type expressions fall back to the contract root.
 Python/source-free declarations and inferred inline parameters remain source-free;

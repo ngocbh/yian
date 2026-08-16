@@ -449,7 +449,7 @@ directly into this exact `Parameter` shape; `ComposedFlow.input` and START use i
 without a parallel front-end carrier. `compose/helpers/types.py` is the one
 source-aware recursive type compiler. For authored root/definition flow inputs,
 the declaration key owns `Parameter.origin`; the type value and authored
-mapping/list-form record fields own root/nested `ContractOrigins`; and a packed
+nested record fields own root/nested `ContractOrigins`; and a packed
 default owns `default_origin`. START reuses those carriers. Scalar alias/list type expressions
 fall back to the root. Python/source-free declarations and inferred inline parameters
 remain source-free; external aliases use normal lexical rebasing. This is distinct
@@ -581,7 +581,7 @@ programmatic carriers. The hook never retains a cursor, coordinates, or a parall
 source map.
 `compose/helpers/types.py` owns the sole source-aware recursive type compiler. For
 retained root/definition flow inputs, declaration keys stamp `Parameter.origin`, type
-values and authored mapping/list-form record fields populate `ContractOrigins`, and packed
+values and authored nested record fields populate `ContractOrigins`, and packed
 defaults stamp `default_origin`; START reuses those carriers. Scalar alias/list type expressions
 fall back to the contract root. Python/source-free declarations and inferred inline
 parameters remain source-free.

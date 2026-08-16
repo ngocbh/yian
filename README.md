@@ -147,8 +147,8 @@ ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
   `None` type offers `Set null` (and omission when allowed) but no Enter action.
   String text `null` and a `Literal` tag named `null` remain ordinary strings.
   A structured editor still rejects root `null`—choose `Set null` instead—while
-  nested nullable JSON retains its normal validation. Cancelling any prompt
-  cancels the run.
+  nested null remains valid wherever the nested contract accepts it. Cancelling
+  any prompt cancels the run.
   Without a TTY, missing optional/defaulted declarations stay absent so START owns
   defaults and optional absence. Missing required declarations are rejected
   together as invalid CLI input (exit code `2`) before provider or run-log setup;

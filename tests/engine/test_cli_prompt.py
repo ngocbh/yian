@@ -1449,7 +1449,7 @@ def test_prompt_leaves_explicit_null_defaults_omitted_for_every_widget_kind(monk
     assert [call.kind for call in fake.calls] == ["select", "select", "select"]
 
 
-def test_prompt_treats_optional_whitespace_as_omission(monkeypatch):
+def test_prompt_returns_optional_whitespace_to_palette_then_omits(monkeypatch):
     fake = _FakeQuestionary(
         {
             "note": _WidgetResponses(

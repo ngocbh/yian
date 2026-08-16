@@ -100,7 +100,10 @@ def _read_type_and_sites(
         try:
             return type_for(node, registry), []
         except TypeCheckError as exc:
-            raise diagnostics.error(f"bad type expression {node!r}: {exc}") from exc
+            raise diagnostics.error(
+                f"bad type expression {node!r}: {exc}",
+                range=(cursor.range if cursor is not None else None),
+            ) from exc
 
     if isinstance(node, dict):
         return _read_record_type(
@@ -123,12 +126,13 @@ def _read_type_and_sites(
         # implementation while retaining the winning value occurrence.
         merged: dict[Any, tuple[Any, SourceCursor | None]] = {}
         for index, element in enumerate(node):
+            item_cursor = cursor.child(index) if cursor is not None else None
             if not (isinstance(element, dict) and len(element) == 1):
                 raise diagnostics.error(
-                    f"a list of fields must hold single-key maps, got {element!r}"
+                    f"a list of fields must hold single-key maps, got {element!r}",
+                    range=(item_cursor.range if item_cursor is not None else None),
                 )
             key, value = next(iter(element.items()))
-            item_cursor = cursor.child(index) if cursor is not None else None
             child_cursor = item_cursor.child(key) if item_cursor is not None else None
             merged[key] = (value, child_cursor)
 
@@ -143,7 +147,8 @@ def _read_type_and_sites(
         )
 
     raise diagnostics.error(
-        f"cannot read type from {node!r} (type {type(node).__name__})"
+        f"cannot read type from {node!r} (type {type(node).__name__})",
+        range=(cursor.range if cursor is not None else None),
     )
 
 

@@ -593,6 +593,58 @@ output: ${emit.output}
     assert frame.range == invalid_key.key_range
 
 
+def test_invalid_nested_output_type_reports_the_exact_value_site():
+    """A bad nested type expression retains its recursive source cursor."""
+    text = """\
+id: invalid-nested-output-type
+name: invalid-nested-output-type
+nodes:
+  emit:
+    kind: code
+    code: 'return {"profile": {"age": 7}}'
+    output:
+      profile:
+        age: DefinitelyNotAType
+output: ${emit.output}
+"""
+    document = SourceDocument.parse(text, label="invalid-type.yaml")
+    expected = (
+        document.root.child("nodes")
+        .child("emit")
+        .child("output")
+        .child("profile")
+        .child("age")
+    )
+
+    with pytest.raises(LoadError, match="bad type expression") as caught:
+        load_flow(text, source_label="invalid-type.yaml")
+
+    assert caught.value.diagnostic.frames[-1].range == expected.range
+
+
+def test_invalid_output_list_item_reports_the_exact_item_site():
+    """A malformed list-form record item retains its positional source cursor."""
+    text = """\
+id: invalid-output-list-item
+name: invalid-output-list-item
+nodes:
+  emit:
+    kind: code
+    code: 'return {"profile": 7}'
+    output:
+      - profile: int
+      - malformed
+output: ${emit.output}
+"""
+    document = SourceDocument.parse(text, label="invalid-list-item.yaml")
+    expected = document.root.child("nodes").child("emit").child("output").child(1)
+
+    with pytest.raises(LoadError, match="list of fields") as caught:
+        load_flow(text, source_label="invalid-list-item.yaml")
+
+    assert caught.value.diagnostic.frames[-1].range == expected.range
+
+
 def test_scalar_list_output_failure_falls_back_to_the_contract_root():
     """A nested failure inside one scalar type expression uses its root site."""
     text = """\

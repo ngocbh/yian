@@ -298,9 +298,9 @@ class CodeNode(Node):
         """Return the deepest authored line owned by this inline compilation.
 
         Traceback filenames and code-object equality are deliberately ignored:
-        separately compiled code can share both. Reference mode retains the base
-        node-origin behavior. Inline failures outside authored code, including the
-        serialize-once check, fall back to the whole ``code:`` scalar.
+        separately compiled code can share both. Reference mode attributes the
+        invocation to its whole ``code:`` scalar. Inline failures outside authored
+        code, including the serialize-once check, use that same scalar fallback.
 
         Args:
             exception (`Exception`): Original node-body exception.
@@ -309,7 +309,7 @@ class CodeNode(Node):
             `OriginRef | None`: Exact line, whole CODE scalar, node, or ``None``.
         """
         if self._mode == "reference":
-            return super().exception_origin(exception)
+            return self.code_origin or super().exception_origin(exception)
 
         owned_lineno: int | None = None
         traceback = exception.__traceback__

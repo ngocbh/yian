@@ -231,12 +231,23 @@ def test_inline_non_owned_failure_uses_whole_code_origin():
     assert _failure_origin(node, {}) is whole
 
 
-def test_reference_and_source_free_failures_keep_base_node_fallback():
-    reference = CodeNode("reference", code="tests.engine._compose_codefns:boom")
+def test_reference_failure_uses_code_then_node_fallback():
+    code_origin = OriginRef("code:reference")
+    reference = CodeNode(
+        "reference",
+        code="tests.engine._compose_codefns:boom",
+        code_origin=code_origin,
+    )
     reference.origin = OriginRef("node:reference")
+    without_code_origin = CodeNode(
+        "reference-fallback",
+        code="tests.engine._compose_codefns:boom",
+    )
+    without_code_origin.origin = OriginRef("node:reference-fallback")
     source_free = CodeNode("inline", code="raise RuntimeError('boom')\nreturn 0")
 
-    assert _failure_origin(reference, {}) is reference.origin
+    assert _failure_origin(reference, {}) is code_origin
+    assert _failure_origin(without_code_origin, {}) is without_code_origin.origin
     assert _failure_origin(source_free, {}) is None
 
 

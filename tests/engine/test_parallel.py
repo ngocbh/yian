@@ -6,12 +6,14 @@ Two things to prove:
 2. Independent branches actually overlap (the point of parallelism).
 """
 
+import threading
 import time
 
-from agent_composer.events import RunFailed, RunSucceeded
+from agent_composer.events import NodeRouted, NodeSucceeded, RunFailed, RunSucceeded
 from agent_composer.compile.model import END_ID, START_ID, Edge, CompiledFlow, NodeState, FlowOutput
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
+from agent_composer.runtime.log import NodeRoutedRecord
 from tests.engine._fakes import (
     BranchNode,
     FailNode,
@@ -109,6 +111,63 @@ def test_terminal_skipped_fails_under_workers():
     last = _run(_engine(g, num_workers=4))[-1]
     assert isinstance(last, RunFailed)
     assert last.failure.code == "graph.terminal_unreachable"
+
+
+def test_pooled_late_sibling_publishes_persisted_causal_terminal_failure():
+    release = threading.Event()
+
+    def wait_for_route(_inputs):
+        assert release.wait(timeout=2)
+        return {"output": "slow"}
+
+    graph = _graph(
+        [
+            BranchNode("gate", "a"),
+            RecordNode("a", []),
+            RecordNode("t", []),
+            FuncNode("slow", wait_for_route),
+        ],
+        [
+            (START_ID, "gate"),
+            (START_ID, "slow"),
+            ("gate", "a", "a"),
+            ("gate", "t", "t"),
+        ],
+        outputs=[FlowOutput("result", "${t.output}")],
+    )
+    engine = _engine(graph, num_workers=2)
+    events = []
+    latched = None
+
+    try:
+        for event in engine.run():
+            events.append(event)
+            if isinstance(event, NodeRouted):
+                assert event.node_id == "gate"
+                assert tuple(engine.state.in_flight) == ("slow",)
+                assert engine.state.result is None
+                latched = engine.state.terminal_unreachable_failure
+                assert latched is not None
+                assert latched.node_id == "gate"
+                route_records = [
+                    envelope.record
+                    for envelope in engine.log
+                    if isinstance(envelope.record, NodeRoutedRecord)
+                ]
+                assert len(route_records) == 1
+                assert route_records[0].terminal_failure == latched
+            elif isinstance(event, NodeSucceeded) and event.node_id == "a":
+                assert latched is not None
+                assert tuple(engine.state.in_flight) == ("slow",)
+                release.set()
+    finally:
+        release.set()
+
+    assert latched is not None
+    assert isinstance(events[-2], NodeSucceeded)
+    assert events[-2].node_id == "slow"
+    assert isinstance(events[-1], RunFailed)
+    assert events[-1].failure is latched
 
 
 def test_fan_out_actually_overlaps():

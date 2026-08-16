@@ -360,8 +360,9 @@ model made enforceable.
   (success-record preparation runs `canonical_typed` against the effective target's
   declared type on both ordinary and `commit_as` paths), **retry-catches** (a deviation
   is fed back and re-asked). A bare `str`/`Literal[...]` keeps the text path.
-  If retries exhaust with a Pydantic error, AGENT attributes it only when exact
-  generator and generated-schema validation frames prove ownership. It normalizes
+  If retries exhaust with a Pydantic error, or a native parser wraps one directly,
+  AGENT attributes it only when exact generator and generated-schema validation
+  frames prove ownership. It does not traverse deeper cause chains. It normalizes
   only the first location (record unchanged; remove scalar `value` / list `items`),
   validates the result against the expected `Type`, and asks the existing output
   contract for exact/ancestor/root provenance. Retry and exception identity stay
@@ -442,11 +443,12 @@ introduced their reference, while `on:` owns the generated `__on` binding. All o
 these carriers are diagnostic-only and manifest-neutral.
 
 `AgentNode` adds no local origin slot for structured output. Its
-`exception_origin` accepts only a retry-exhausted Pydantic error whose traceback
-contains the exact `_generate_native`/`_generate_fallback` frame and an exact
-`BaseModel.model_validate*`/constructor frame for that generated schema. The
-normalized first path selects the existing `ValueContract.origins`; absent or
-unowned paths use the node fallback.
+`exception_origin` accepts only a retry-exhausted Pydantic error, or its immediate
+native-parser cause, when the outer traceback contains the exact
+`_generate_native`/`_generate_fallback` frame and the validation traceback contains
+an exact `BaseModel.model_validate*`/constructor frame for that generated schema.
+Deeper cause chains are not followed. The normalized first path selects the existing
+`ValueContract.origins`; absent or unowned paths use the node fallback.
 
 `Node.pre_asserts` / `post_asserts` are likewise canonical ordered `Assertion`
 lists. Compose crosses raw YAML text into one carrier per authored flow/node list

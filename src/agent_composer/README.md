@@ -221,8 +221,9 @@ but remain diagnostic-only and manifest-neutral.
 AGENT adds no provenance carrier for structured output: it reuses the existing
 `ValueContract.origins` on `Node.output_contract`. After structured-generation
 retries are exhausted, `AgentNode.exception_origin()` accepts a Pydantic error
-only when its traceback proves both the exact native/fallback generator and the
-exact generated schema validation. It normalizes the first error location by
+or its directly wrapped native-parser cause only when tracebacks prove both the
+exact native/fallback generator and the exact generated schema validation. It
+does not traverse deeper cause chains. It normalizes the first error location by
 leaving record fields unchanged and removing only the generated scalar `value`
 or list `items` wrapper, validates that path against the expected `Type`, and
 selects `ContractOrigins.at()` (exact, nearest ancestor, then contract root).

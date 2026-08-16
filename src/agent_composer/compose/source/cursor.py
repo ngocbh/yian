@@ -183,7 +183,13 @@ class SourceCursor:
 
     @property
     def scalar_source(self) -> ScalarSource | None:
-        """Return physical provenance for an unchanged constructed string.
+        """Return source provenance for an unchanged constructed string.
+
+        Examples:
+            >>> from agent_composer.compose.source import SourceDocument
+            >>> cursor = SourceDocument.parse("code: |-\\n  pass\\n").root.child("code")
+            >>> cursor.scalar_source.constructed_line_ranges[0].start_line
+            2
 
         Returns:
             `ScalarSource | None`:

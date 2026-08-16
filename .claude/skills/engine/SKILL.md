@@ -346,10 +346,16 @@ virtual cursors are defensive source-free snapshots, and projected cursors retai
 explicitly selected physical child sources while changing a view. Descriptors and
 nodes carry derived ranges thereafter. Never reparse a source slice or mutate
 anchors/aliases/merges.
+An unchanged source-backed string cursor exposes `ScalarSource`: its whole range and,
+for literal `|` blocks, exact zero-based constructed-line ranges captured from the
+real block token during that same parse. Other scalar styles have no exact line tuple;
+virtual and value-changing cursors have no scalar provenance.
 `SourceCatalog` is Compose's immutable `OriginResolver`: its private builder maps
-typed semantic paths to opaque origins and retains document occurrences with explicit
-key/value anchors. Resolution replays an occurrence without reparsing or adding a
-parallel range map; virtual or unanchored cursors produce no origin. One builder is
+typed semantic paths to opaque origins and retains document occurrences with key/value
+anchors or semantic constructed-line indices. Resolution replays an occurrence and
+reselects the range without storing coordinates in the catalog site or origin,
+reparsing, or adding a parallel range map; unavailable exact lines leave the site free
+for whole-scalar fallback. One builder is
 shared by a physical document's root, definitions, and inline bodies. Assembly stamps
 authored node headers, ordinary node-input keys and values, source-backed reserved
 MAP/WAIT wiring values, source-backed flow-output values, and authored flow/node

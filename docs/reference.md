@@ -35,6 +35,16 @@ The run-loop primitives live in `agent_composer.run`.
 
 ::: agent_composer.run.resume_flow
 
+## Compose source provenance
+
+Compose owns immutable source views separately from the source-neutral engine.
+Literal string scalars can expose exact constructed-line ranges without another
+YAML parse; other scalar forms retain a whole-value fallback.
+
+::: agent_composer.compose.source.SourceCursor.scalar_source
+
+::: agent_composer.compose.source.ScalarSource
+
 ## Runtime authority
 
 The lower-level runtime surface is deliberately scoped to

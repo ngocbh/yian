@@ -308,12 +308,20 @@ mapping-key range when applicable); a virtual cursor is a defensive, source-free
 value snapshot; a projected cursor replaces or renames values while explicitly
 retaining the physical sources of selected children. Descriptors and nodes carry
 derived ranges afterward, so no phase reparses text or touches parser objects.
+For an unchanged source-backed string, `SourceCursor.scalar_source` returns immutable
+`ScalarSource` metadata: the whole scalar range and exact zero-based constructed-line
+ranges when the scalar is a literal `|` block. The document derives those ranges from
+the real block token during its existing parse. Other scalar styles expose the whole
+range but no exact line tuple; virtual and value-changing cursors expose no scalar
+provenance.
 
 `SourceCatalog` is Compose's immutable document-local `OriginResolver`. Its private
 builder maps typed semantic paths to opaque origins while retaining the physical
-document occurrence and an explicit key/value anchor. Resolution replays that
-occurrence into a `DiagnosticFrame`; it neither reparses YAML nor creates a parallel
-range map. Virtual or unanchored cursors produce no origin. One builder is shared by
+document occurrence and a key/value anchor or semantic constructed-line index.
+Resolution replays that occurrence and reselects the current range; line coordinates
+are never stored in the site identity. Unavailable exact line registration leaves the
+site free for a whole-scalar fallback. Resolution neither reparses YAML nor creates a
+parallel range map. Virtual or unanchored cursors produce no origin. One builder is shared by
 the root flow, its `defs:`, and its inline bodies. Private assembly leaves the public
 resolver unset; the loader freezes the builder once when the physical-file root is
 complete.

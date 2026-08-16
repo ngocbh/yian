@@ -529,15 +529,22 @@ Source-aware parsing and inline extraction use `SourceCursor`:
   explicitly supplied physical source for each selected child. Desugaring uses
   projections so occurrence-local changes never alter anchors, aliases, or merges.
 
+An unchanged source-backed string cursor also exposes immutable `ScalarSource` metadata:
+the whole scalar range and an optional zero-based tuple of exact constructed-line
+ranges. Literal `|` blocks derive that tuple from the scanner's real block token during
+the existing parse, including chomped and blank lines. Folded, quoted, and plain styles
+have no exact tuple; virtual and value-changing cursors have no scalar provenance.
+
 Inline-body extraction takes one graph-wide nodes snapshot before projection so
 unchanged aliases remain shared. Other source-aware field navigation uses cursors
 or their package-private read-only view.
 
 `SourceCatalog` is Compose's immutable `OriginResolver`. Its private builder maps
 typed semantic paths to opaque origins while retaining each physical document
-occurrence and an explicit key/value anchor. Resolution replays that occurrence
-into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and no
-YAML is reparsed or parallel range map created. The loader creates one builder per
+occurrence and a key/value anchor or semantic constructed-line index. Resolution
+replays that occurrence and reselects the range without storing coordinates in the
+site identity. Unavailable exact line registration leaves the path unreserved for a
+whole-scalar fallback; no YAML is reparsed or parallel range map created. The loader creates one builder per
 physical document and shares it through root, `defs:`, and inline-body assembly.
 Authored node headers, ordinary node-input keys and values, and source-backed reserved
 MAP/WAIT wiring values, plus source-backed flow-output values and flow/node assertion

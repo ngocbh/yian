@@ -15,7 +15,7 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
  text
   │
   ├─ SourceDocument.parse  → one safe construction + a private YAML definition graph
-  ├─ root SourceCursor     → occurrence-aware values, paths, and source ranges
+  ├─ root SourceCursor     → occurrence-aware values, paths, ranges, and scalar provenance
   ├─ parse_file            → the strict top-level ComposeFile
   ├─ read_typedefs         → the type registry (typedefs:)
   ├─ read_flow_inputs      → canonical Parameter values for input:
@@ -78,6 +78,14 @@ There are three cursor forms:
 - A **projected cursor** presents a rewritten mapping or sequence while explicitly
   retaining physical sources for the authored children. Generated children stay virtual.
 
+An unchanged source-backed string scalar also exposes an immutable `ScalarSource`: its whole
+range plus an optional zero-based tuple of constructed-line ranges. The tuple is exact for
+literal `|` blocks, including chomping, explicit indentation, blank lines, and normalized
+line breaks. Folded, quoted, and plain scalars explicitly provide no exact line tuple, so a
+consumer can use the whole range instead. Virtual and value-changing projected cursors
+provide no scalar provenance. The ranges come from the real block token during the same
+construction pass; anchors or tags before `|` therefore cannot shift the body mapping.
+
 The public source model is immutable: documents keep parser objects private, virtual and
 projected values are snapshotted, and cursor value reads use a stack-safe iterative copy
 while preserving alias and recursive-alias identity within each copy. Inline extraction
@@ -85,9 +93,11 @@ takes one whole-nodes snapshot before projection so unchanged alias siblings sta
 
 `SourceCatalog` is Compose's immutable implementation of `OriginResolver`. Its private
 builder maps deterministic typed semantic paths to opaque origins and retains each physical
-document occurrence plus an explicit key/value anchor. Resolution replays that occurrence
-into a `DiagnosticFrame`; virtual or unanchored cursors produce no origin, and no YAML is
-reparsed or parallel range map created. The loader shares one builder across a physical
+document occurrence plus a key/value anchor or semantic constructed-line index. Resolution
+replays that occurrence and selects its current range; coordinates never enter the opaque
+key. When exact scalar-line provenance is unavailable, line registration returns no origin
+so the consumer can register the whole scalar instead. No YAML is reparsed and no parallel
+range map is created. The loader shares one builder across a physical
 document's root, `defs:`, and inline bodies. Assembly registers authored node headers,
 ordinary node-input keys and values, source-backed reserved MAP/WAIT wiring values, and
 source-backed flow-output values on the canonical carriers themselves. It also indexes

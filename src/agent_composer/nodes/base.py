@@ -283,6 +283,11 @@ class Node(ABC):
             Opaque authored-source identity for this semantic node, or `None` for a
             source-free or generated node. This diagnostic value is unrelated to
             `origin_id`, which controls LOOP execution attribution.
+        origin_context (`tuple[OriginRef, ...]`):
+            Generated outer-to-inner authored ancestry for failures inside this
+            node. Directly constructed nodes always start with an empty tuple;
+            compile-owned expansion may derive a non-empty context from enclosing
+            spawners. This diagnostic value is not a local authored-origin carrier.
         env (`dict[str, Any]`):
             Author-supplied static per-node config (`{str -> literal}`), baked at build
             time from the flow-level `env:` default merged with the node's own `env:`
@@ -363,6 +368,10 @@ class Node(ABC):
         # Opaque source identity for diagnostics. Unlike `origin_id`, this has no
         # execution meaning and is absent on directly constructed/generated nodes.
         self.origin: OriginRef | None = origin
+        # Generated outer-to-inner failure ancestry. Direct construction never accepts
+        # or invents ancestry; compile-owned expansion derives it after authored origins
+        # have been rewritten. It therefore stays outside local origin traversal.
+        self.origin_context: tuple[OriginRef, ...] = ()
         # Author-supplied static per-node config, opaque to the engine core (kind-blind): a
         # plain `{str -> literal}` map baked at build time from the flow-level `env:` default
         # merged with this node's own `env:` (node override wins; see the compose builder). The
@@ -399,6 +408,42 @@ class Node(ABC):
         # order, first-failure-wins, located by position). `[]` for a node with no asserts.
         self.pre_assert_ranges: list[Optional["SourceRange"]] = []
         self.post_assert_ranges: list[Optional["SourceRange"]] = []
+
+    def failure_trace(
+        self,
+        operation_origin: OriginRef | None = None,
+    ) -> tuple[OriginRef, ...]:
+        """Return generated ancestry plus the best local failure origin.
+
+        ``operation_origin`` wins when present; otherwise the authored node
+        ``origin`` is used. When neither exists, only the generated ancestry is
+        returned. Order and duplicate origins are preserved.
+
+        Args:
+            operation_origin (`OriginRef | None`, *optional*, defaults to `None`):
+                More precise authored identity for the failing operation.
+
+        Raises:
+            TypeError:
+                Raised when ancestry is not an exact tuple or a selected value is
+                not an `OriginRef`.
+            ValueError:
+                Raised when an `OriginRef` subclass bypassed the canonical key
+                invariant.
+        """
+        if type(self.origin_context) is not tuple:
+            raise TypeError("node origin_context must be a tuple")
+        for origin in self.origin_context:
+            if not isinstance(origin, OriginRef):
+                raise TypeError("node origin_context item must be an OriginRef")
+            OriginRef(origin.key)
+
+        selected = operation_origin if operation_origin is not None else self.origin
+        _validate_optional_origin(selected, "failure operation origin")
+        if selected is None:
+            return self.origin_context
+        OriginRef(selected.key)
+        return self.origin_context + (selected,)
 
     def iter_local_origins(
         self,

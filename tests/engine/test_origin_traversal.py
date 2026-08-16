@@ -524,6 +524,33 @@ def test_source_free_python_graph_ignores_origin_refs_in_semantic_payloads() -> 
     assert rewritten.nodes["python"].env["ordinary"] == payload_origin
 
 
+def test_generated_origin_context_is_not_local_authored_provenance() -> None:
+    """Authored-origin traversal neither visits nor rewrites generated ancestry."""
+    node = Node("child", origin=_origin("child/node"))
+    node.origin_context = (_origin("outer/call"),)
+    flow = Flow(
+        nodes={"child": node},
+        edges=[],
+        wiring={"child": {}},
+        start_id="child",
+        end_id="child",
+    )
+    visited: list[OriginRef] = []
+
+    def mapper(origin: OriginRef) -> OriginRef:
+        visited.append(origin)
+        return _origin(f"mapped/{origin.key}")
+
+    assert list(iter_flow_origins(flow)) == [_origin("child/node")]
+
+    rewritten = rewrite_flow_origins(flow, mapper)
+
+    assert visited == [_origin("child/node")]
+    assert rewritten.nodes["child"].origin == _origin("mapped/child/node")
+    assert rewritten.nodes["child"].origin_context == (_origin("outer/call"),)
+    assert node.origin_context == (_origin("outer/call"),)
+
+
 def test_invalid_mutable_node_origin_fails_before_iteration_or_mapping() -> None:
     """A directly corrupted Python node cannot leak a non-origin through the API."""
     node = Node("invalid")

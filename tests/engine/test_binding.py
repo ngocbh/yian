@@ -278,6 +278,97 @@ def test_binding_errors_carry_stage_code_and_operation_origin() -> None:
     )
 
 
+def test_nested_input_contract_failure_selects_exact_then_ancestor_origin() -> None:
+    """Supplied values resolve their structural error path through the contract."""
+    exact_origin = OriginRef("contract:value/items/0/score")
+    items_origin = OriginRef("contract:value/items")
+    root_origin = OriginRef("contract:value")
+    score = Type.scalar(ValueKind.INTEGER)
+    item = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": score},
+        required=frozenset({"score"}),
+    )
+    value_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"items": Type(kind=ValueKind.LIST_OBJECT, element=item)},
+        required=frozenset({"items"}),
+    )
+    contract = ValueContract(
+        value_type,
+        ContractOrigins(
+            default=root_origin,
+            entries=(
+                (("items",), items_origin),
+                (("items", 0, "score"), exact_origin),
+            ),
+        ),
+    )
+    parameter = Parameter("value", contract=contract)
+
+    with pytest.raises(BindingError) as exact:
+        bind_params(
+            [parameter],
+            {"value": Binding({"items": [{"score": "bad"}]})},
+            _pool(),
+        )
+    assert exact.value.origin == exact_origin
+
+    with pytest.raises(BindingError) as ancestor:
+        bind_params(
+            [parameter],
+            {"value": Binding({"items": [{"score": 1}, {"score": "bad"}]})},
+            _pool(),
+        )
+    assert ancestor.value.origin == items_origin
+
+
+def test_nested_input_contract_fallback_preserves_default_precedence() -> None:
+    """Missing contract sites fall back, while authored defaults keep ownership."""
+    parameter_origin = OriginRef("parameter:value")
+    default_origin = OriginRef("default:value")
+    item = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": Type.scalar(ValueKind.INTEGER)},
+        required=frozenset({"score"}),
+    )
+    value_type = Type(kind=ValueKind.LIST_OBJECT, element=item)
+    source_free = ValueContract(value_type)
+
+    with pytest.raises(BindingError) as supplied:
+        bind_params(
+            [
+                Parameter(
+                    "value",
+                    contract=source_free,
+                    origin=parameter_origin,
+                )
+            ],
+            {"value": Binding([{"score": "bad"}])},
+            _pool(),
+        )
+    assert supplied.value.failure_code == "contract.input"
+    assert supplied.value.origin == parameter_origin
+
+    with pytest.raises(BindingError) as defaulted:
+        bind_params(
+            [
+                Parameter(
+                    "value",
+                    contract=source_free,
+                    has_default=True,
+                    default=[{"score": "bad"}],
+                    origin=parameter_origin,
+                    default_origin=default_origin,
+                )
+            ],
+            {},
+            _pool(),
+        )
+    assert defaulted.value.failure_code == "binding.evaluate"
+    assert defaulted.value.origin == default_origin
+
+
 def test_apply_defaults_marks_invalid_authored_default_as_binding_evaluation() -> None:
     """The wrapper's default backstop retains default-site semantics."""
     default_origin = OriginRef("default:x")

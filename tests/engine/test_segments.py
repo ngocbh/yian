@@ -257,3 +257,151 @@ def test_type_list_of_record():
     assert isinstance(seg, ListObjectValue) and len(seg.value) == 2
     with pytest.raises(TypeCheckError):
         build_value_as(lst, [{"value": "bad"}])
+
+
+def test_type_check_error_adds_only_a_valid_keyword_path() -> None:
+    """Structural context must not change the public ValueError surface."""
+    plain = TypeCheckError("bad", 7)
+    located = TypeCheckError("bad", 7, path=("items", 2, "score"))
+
+    assert plain.args == ("bad", 7)
+    assert plain.path == ()
+    assert located.args == plain.args
+    assert str(located) == str(plain)
+    assert located.path == ("items", 2, "score")
+
+    with pytest.raises(TypeError, match="tuple"):
+        TypeCheckError("bad", path=["items"])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="exact str or int"):
+        TypeCheckError("bad", path=(True,))
+
+
+def test_nested_type_failure_carries_the_contract_relative_path() -> None:
+    """Record and refined-list descent retains actual field names and indices."""
+    from agent_composer.typesys.values import Type
+
+    item = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": Type.scalar(ValueKind.INTEGER)},
+        required=frozenset({"score"}),
+    )
+    payload = Type(
+        kind=ValueKind.OBJECT,
+        fields={"items": Type(kind=ValueKind.LIST_OBJECT, element=item)},
+        required=frozenset({"items"}),
+    )
+    root = Type(
+        kind=ValueKind.OBJECT,
+        fields={"payload": payload},
+        required=frozenset({"payload"}),
+    )
+
+    with pytest.raises(TypeCheckError) as caught:
+        build_value_as(
+            root,
+            {"payload": {"items": [{"score": 1}, {"score": "bad"}]}},
+        )
+
+    assert caught.value.path == ("payload", "items", 1, "score")
+    assert str(caught.value) == "'bad' does not match declared type int"
+
+    with pytest.raises(TypeCheckError) as container:
+        build_value_as(root, {"payload": {"items": "not-a-list"}})
+    assert container.value.path == ("payload", "items")
+
+
+def test_flat_list_failure_carries_the_actual_element_index() -> None:
+    """A storage-kind-only list has the same index semantics as a refined list."""
+    with pytest.raises(TypeCheckError) as caught:
+        build_value_as(ValueKind.LIST_INTEGER, [1, "bad", 3])
+
+    assert caught.value.path == (1,)
+    assert str(caught.value) == "list element 'bad' is not int (declared list[int])"
+
+
+def test_record_shape_failures_choose_one_deterministic_field_path() -> None:
+    """Multi-field shape errors retain their message and select the first name."""
+    from agent_composer.typesys.values import Type
+
+    record = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "alpha": Type.scalar(ValueKind.INTEGER),
+            "beta": Type.scalar(ValueKind.INTEGER),
+        },
+        required=frozenset({"alpha", "beta"}),
+    )
+
+    with pytest.raises(TypeCheckError) as missing:
+        build_value_as(record, {})
+    assert missing.value.path == ("alpha",)
+    assert str(missing.value) == "record missing required fields: ['alpha', 'beta']"
+
+    with pytest.raises(TypeCheckError) as unknown:
+        build_value_as(record, {"alpha": 1, "beta": 2, "zeta": 3, "extra": 4})
+    assert unknown.value.path == ("extra",)
+    assert str(unknown.value) == "record has unknown fields: ['extra', 'zeta']"
+
+
+def test_record_non_string_key_keeps_the_record_path() -> None:
+    """Integer path segments remain unambiguously reserved for list indices."""
+    from agent_composer.typesys.values import Type
+
+    record = Type(
+        kind=ValueKind.OBJECT,
+        fields={"known": Type.scalar(ValueKind.INTEGER)},
+        required=frozenset({"known"}),
+    )
+    with pytest.raises(TypeCheckError) as caught:
+        build_value_as(record, {"known": 1, 10: "later", 2: "earlier"})
+
+    assert caught.value.path == ()
+    assert str(caught.value) == "record has unknown fields: [2, 10]"
+
+
+def test_record_uses_the_declared_name_for_equal_string_subclass_keys() -> None:
+    """A mapping-key subtype cannot introduce an invalid structural segment."""
+    from agent_composer.typesys.values import Type
+
+    class FieldName(str):
+        """Test-only key subtype equal to one declared field name."""
+
+    record = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": Type.scalar(ValueKind.INTEGER)},
+        required=frozenset({"score"}),
+    )
+    with pytest.raises(TypeCheckError) as caught:
+        build_value_as(record, {FieldName("score"): "bad"})
+
+    assert caught.value.path == ("score",)
+    assert type(caught.value.path[0]) is str
+
+
+def test_nullable_and_variant_failures_use_the_current_field_path() -> None:
+    """Nullable and variant refinements do not invent structural segments."""
+    from agent_composer.typesys.values import Type
+
+    record = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "note": Type(kind=ValueKind.STRING, nullable=True),
+            "decision": Type(
+                kind=ValueKind.STRING,
+                tags=frozenset({"accept", "reject"}),
+            ),
+        },
+        required=frozenset({"decision"}),
+    )
+
+    assert build_value_as(record, {"note": None, "decision": "accept"}).value == {
+        "note": None,
+        "decision": "accept",
+    }
+    with pytest.raises(TypeCheckError) as nullable:
+        build_value_as(record, {"note": 3, "decision": "accept"})
+    assert nullable.value.path == ("note",)
+
+    with pytest.raises(TypeCheckError) as variant:
+        build_value_as(record, {"note": "ok", "decision": "maybe"})
+    assert variant.value.path == ("decision",)

@@ -58,7 +58,12 @@ from agent_composer.runtime.log import (
     encode_record,
 )
 from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import ANY_VALUE_ADAPTER, Type, TypedValue
+from agent_composer.typesys.values import (
+    ANY_VALUE_ADAPTER,
+    Type,
+    TypeCheckError,
+    TypedValue,
+)
 
 
 MAX_TOTAL_NODES = 10_000
@@ -764,14 +769,17 @@ def prepare_node_succeeded(
         raise ValueError(f"success commit target {target!r} does not exist in the flow")
     target_node = state.flow.nodes[target]
     declared_type = _node_output_type(target_node)
+    output_contract = target_node.output_contract
     output_origin = (
-        target_node.output_contract.origins.default
-        if target_node.output_contract is not None
+        output_contract.origins.default
+        if output_contract is not None
         else None
     )
     try:
         value_wire, typed = canonical_typed(output, declared_type)
     except (TypeError, ValueError) as exc:
+        if isinstance(exc, TypeCheckError) and output_contract is not None:
+            output_origin = output_contract.origins.at(exc.path)
         _raise_node_data(exc, origin=output_origin)
     return _prepare_success_transition(
         state,

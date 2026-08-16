@@ -624,7 +624,21 @@ def _build_for_type(
     *,
     path: tuple[str | int, ...] = (),
 ) -> TypedValue:
-    """Validate one value while retaining its absolute contract-relative path."""
+    """Validate one value while retaining its absolute contract-relative path.
+
+    Args:
+        typ (`Type`): Structural type enforced at this recursive position.
+        value (`Any`): Plain value at ``path``.
+        path (`tuple[str | int, ...]`, *optional*, defaults to ``()``):
+            Field/index path from the checked contract root to ``value``.
+
+    Returns:
+        `TypedValue`: Value normalized for ``typ``'s storage kind.
+
+    Raises:
+        `TypeCheckError`: Value violates ``typ``; the error retains ``path`` or
+            the failing descendant path.
+    """
     # nullable (Optional[X]) — a None value is accepted as NoneValue
     if value is None and typ.nullable:
         return NoneValue()
@@ -709,7 +723,19 @@ def _build_scalar_or_list(
     *,
     path: tuple[str | int, ...],
 ) -> TypedValue:
-    """Validate one unrefined scalar/list at its contract-relative path."""
+    """Validate one unrefined scalar/list at its contract-relative path.
+
+    Args:
+        declared (`ValueKind`): Scalar or flat-list storage kind to enforce.
+        value (`Any`): Plain value at ``path``.
+        path (`tuple[str | int, ...]`): Field/index path from the contract root.
+
+    Returns:
+        `TypedValue`: Value normalized for ``declared``.
+
+    Raises:
+        `TypeCheckError`: Value or one flat-list element violates ``declared``.
+    """
     if declared.is_list():
         if not isinstance(value, (list, tuple)):
             raise TypeCheckError(

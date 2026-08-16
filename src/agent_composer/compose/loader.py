@@ -735,6 +735,7 @@ def _load_flow(
 
     staged = _assemble(
         inputs_section=f.inputs,
+        inputs_cursor=_source_child(root, "input"),
         nodes_cursor=flow_nodes_cursor(document, f.nodes),
         outputs_section=f.outputs,
         asserts_section=f.asserts,
@@ -1133,6 +1134,10 @@ def _load_def(
     try:
         return _assemble(
             inputs_section=body.get("inputs") or {},
+            inputs_cursor=(
+                _source_child(def_cursor, "input")
+                or _source_child(def_cursor, "inputs")
+            ),
             nodes_cursor=nodes_cursor,
             outputs_section=body.get("outputs"),
             asserts_section=body.get("asserts") or [],  # enforced at the child seam
@@ -1211,6 +1216,10 @@ def _load_single_node_def(
     try:
         return _assemble(
             inputs_section=param_types,
+            inputs_cursor=(
+                _source_child(def_cursor, "input")
+                or _source_child(def_cursor, "inputs")
+            ),
             nodes_cursor=nodes_cursor,
             outputs_section={"result": f"${{{name}.output}}"},  # single value re-export (node-first)
             asserts_section=[],

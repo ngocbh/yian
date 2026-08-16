@@ -85,8 +85,9 @@ vocabulary in a neutral leaf keeps both consumers from owning the other's contra
 
 Origin-bearing semantic carriers live in `nodes/contracts.py`; each enumerates
 and maps only its declared provenance slots. The base `Node` owns common local
-origins, and CALL/MAP/LOOP additionally own cached child-signature origins and
-expose their baked child through `origin_children()`.
+origins, CODE additionally owns its whole-source and exact-line origins, and
+CALL/MAP/LOOP additionally own cached child-signature origins and expose their
+baked child through `origin_children()`.
 
 `diagnostics.ResolverTable` owns source-neutral namespace composition at the
 lowest layer. Every public origin key has one exact delegate/old-origin route;
@@ -121,7 +122,7 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 | PyYAML construction and the private YAML node/occurrence graph | `compose/source` | every other compose phase, `compile`, `runtime` |
 | Stable location-aware navigation, immutable projections, and whole/exact-literal provenance | public `SourceDocument` / `SourceCursor` / `ScalarSource` contracts from `compose/source` | private document slots, PyYAML nodes/tokens, or another parse |
 | Immutable document-local origin resolution, semantic constructed-line selection, exact ownership, and Compose-private typed key/scoping policy | public `SourceCatalog` plus its package-private builder/encoder in `compose/source` | stored coordinates, parallel range maps, another YAML parse, parsing an opaque child key, or a premature cross-file resolver |
-| Semantic descriptors and flow sections | `compose/parse` consuming a document/cursor | another YAML construction pass |
+| Semantic descriptors and flow sections | `compose/nodes` and `compose/parse` consuming a document/cursor | another YAML construction pass or retained parser object |
 | Source-preserving inline extraction | `compose/desugar` projecting cursors | PyYAML and loader state |
 | Compiled-flow assembly and per-occurrence carrier stamping | `compose/build` consuming descriptors and retained cursor sources | PyYAML and concrete loader implementation |
 | Resolved-file reuse, cycles, and one file's callable namespace | `compose/loader` | `compile` and `runtime` |
@@ -129,13 +130,16 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 Only modules under `compose/source` may import PyYAML or traverse the retained
 parser graph. A text-accepting convenience in `compose/parse` must delegate the
 single construction to `SourceDocument`. Source-aware parsing and inline extraction
-navigate its cursors; descriptors and nodes carry derived ranges afterward. No phase
+navigate its cursors; descriptors and nodes carry derived ranges and source-neutral
+kind-owned origins afterward. No phase
 copies, renders, or reparses YAML to reconstruct source.
 
 The loader creates one package-private catalog builder per physical document and
 threads it through root, definition, and inline-body assembly. The conductor stamps
 authored node-header origins, ordinary node-input keys and values, and source-backed
-reserved MAP/WAIT wiring values directly on their canonical carriers. It registers flow
+reserved MAP/WAIT wiring values directly on their canonical carriers. It invokes one
+kind-blind descriptor hook for extra semantic sites; CODE registers its whole scalar and
+exact literal constructed lines without retaining a cursor below Compose. It registers flow
 and node assertion sites by authored source-order index, deriving each carrier origin and
 temporary positional range from the same retained item cursor. Duplicate text therefore
 remains occurrence-distinct; full roots and multi-node definitions retain flow assertion

@@ -21,6 +21,7 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ read_flow_inputs      → canonical Parameter values for input:
   ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered)
   ├─ stamp authored headers → optional Node origins in one document-local catalog
+  ├─ stamp kind-owned sites → descriptor hook; CODE whole scalar + exact literal lines
   │
   ├─ desugar_inline_calls        ┐  rewrite author sugar into core nodes and
   │                               │  carrierize flow assertions by source order.
@@ -100,13 +101,16 @@ so the consumer can register the whole scalar instead. No YAML is reparsed and n
 range map is created. The loader shares one builder across a physical
 document's root, `defs:`, and inline bodies. Assembly registers authored node headers,
 ordinary node-input keys and values, source-backed reserved MAP/WAIT wiring values, and
-source-backed flow-output values on the canonical carriers themselves. It also indexes
-flow and node assertions by authored list order, deriving each `Assertion.origin` and its
-aligned temporary `SourceRange` from the same item cursor. Equal text at two positions is
-therefore two distinct source sites. Flow-output registration happens after desugaring,
-so an authored occurrence locates the final `FlowOutput.binding` source. Output mapping
-keys stay origin-free. Without a retained source occurrence, Compose mints no origin and
-preserves any explicit programmatic origin.
+source-backed flow-output values on the canonical carriers themselves. After the common
+header is stamped, assembly also calls each descriptor's immutable
+`with_source_origins(...)` hook. The default is a no-op; CODE registers its whole `code:`
+scalar and every available exact literal constructed line, then carries only those opaque
+origins into `CodeNode`. It also indexes flow and node assertions by authored list order,
+deriving each `Assertion.origin` and its aligned temporary `SourceRange` from the same item
+cursor. Equal text at two positions is therefore two distinct source sites. Flow-output
+registration happens after desugaring, so an authored occurrence locates the final
+`FlowOutput.binding` source. Output mapping keys stay origin-free. Without a retained source
+occurrence, Compose mints no origin and preserves any explicit programmatic origin.
 Private assembly products leave their resolver unset while the shared physical-document
 catalog is still growing. At the file boundary, the loader freezes that catalog once,
 selects exactly one authority for every reachable origin, and installs an immutable
@@ -132,7 +136,7 @@ The pipeline has two representations of a node, and the split matters:
 |---|---|---|
 | what | a frozen record of *what you wrote* | the runtime object the engine calls |
 | where | `compose/nodes/<kind>.py` | `nodes/<kind>/` |
-| carries | raw fields + ranges + optional header origin | `run()`, contracts, optional origin |
+| carries | raw fields + ranges + optional header/kind origins | `run()`, contracts, optional header/kind origins |
 | lifetime | load-time only | lives through the whole run |
 
 `parse_nodes` produces descriptors; the desugar passes rewrite descriptors; `build`
@@ -151,6 +155,8 @@ clean and generic.
   contract; each kind carries:
   - **`parse(node_id, cursor)`** — a classmethod (the base template) that reads one node body,
     recording each field's `SourceRange`,
+  - **`with_source_origins(cursor, ...)`** — an immutable hook for kind-owned semantic
+    source sites; the default returns the descriptor unchanged,
   - **`build(ctx: BuildContext) -> BuildResult`** — a method that constructs the runtime
     `Node` + its flow-owned wiring (and, for a `case`, its own data+control edges). `ctx`
     carries the shared build inputs (`registry`, `resolver`, inline-CODE source hints).
@@ -192,7 +198,8 @@ node, wiring, edges = result.node, result.wiring, result.edges
   an optional source-neutral authored-context `origin`. It also retains the legacy
   render-only `range`/`field_ranges` traceback bridge. Descriptors derive a
   `ValueContract` directly; consumers retain it and project `.type` only inside
-  semantic type algorithms.
+  semantic type algorithms. CODE additionally carries the diagnostic-only whole-source
+  `code_origin` and ordered exact `code_line_origins`; these do not change execution.
 - the **wiring** is *flow-owned*: `{param → "${source}"}`. The node knows its parameter
   *names*; the flow knows where each one is *sourced from*. This is why a node is
   reusable and why the flow, not the node, owns the graph.
@@ -210,8 +217,9 @@ so they have no `Parameter.origin`. The final (possibly rewritten) payload stays
 `Binding.source`, so lowering does not detach provenance from the authored value. Entries
 without a retained source occurrence receive no new Compose origin; an explicit
 programmatic origin remains intact, and source-backed projections inherit their backing
-occurrence. CASE wiring, synthesized START/END boundary parameters, contracts, external
-rebasing, and runtime diagnostic consumption remain separate migration steps.
+occurrence. CASE wiring, synthesized START/END boundary parameters, contracts, and runtime
+diagnostic consumption remain separate migration steps. CODE's extra origins enter
+the existing clone and external-rebase paths through its node-owned traversal/rewrite hooks.
 
 Authored assertions cross into one ordered `Assertion` carrier per source occurrence.
 Flow assertions are carrierized during inline-call desugaring; node assertions are

@@ -1,8 +1,9 @@
 # Wiring a new authorable leaf node kind
 
 The Node subclass (from `node.py.template`) is only half the job — a kind also
-needs a `compose/nodes/<kind>.py` module (its descriptor, which carries `parse` +
-`build`) plus one entry in the `_DESCRIPTORS` tuple in `compose/nodes/__init__.py`,
+needs a `compose/nodes/<kind>.py` module (its descriptor, which carries `parse`,
+source-origin attachment, and `build`) plus one entry in the `_DESCRIPTORS` tuple
+in `compose/nodes/__init__.py`,
 so a flow author can write `kind: xxx` in YAML. This is the file-by-file checklist
 for an **authorable leaf** kind (one a flow names directly, like `code`/`tool`).
 
@@ -15,9 +16,10 @@ for an **authorable leaf** kind (one a flow names directly, like `code`/`tool`).
 > as authorable and must follow §2a; that requirement does not apply to ordinary
 > leaves.
 
-Use `code` (`compose/nodes/code.py`, the simplest real leaf) as the reference
-implementation throughout. Build bottom-up by dependency, **one test green before the
-next step** (CLAUDE.md).
+Use `tool` (`compose/nodes/tool.py`) as the simplest real leaf reference. Use
+`code` only when the new kind also needs semantic source sites beyond the common
+node header. Build bottom-up by dependency, **one test green before the next
+step** (CLAUDE.md).
 
 ## 1. `nodes/base.py` — add the closed-vocabulary tag
 
@@ -56,6 +58,10 @@ another output-Type field or compatibility property.
 origin when cloning, and never interpret it as execution state. Nodes expose only
 their local origin hooks; they never import `compile.rebase_flow_origins` or
 `diagnostics.ResolverTable`, because whole-graph rebasing belongs to `compile`.
+If a node adds kind-owned origin slots, validate them at construction and extend
+`iter_local_origins()` / `rewrite_local_origins()` explicitly in deterministic
+order. Do not discover provenance by reflection or include it in execution
+semantics or the manifest.
 `Node.origin_context` is separate generated outer-to-inner spawner ancestry. It
 starts empty on direct/static nodes and stays outside local origin traversal,
 rewriting, manifests, fingerprints, and expansion digests. Expected failure
@@ -117,9 +123,10 @@ This one module owns the kind's front-end handle: a frozen `XxxDescriptor` datac
 that **subclasses `NodeDescriptor`**. The base holds the common contract — the shared
 fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + `inputs`/`outputs` + the
 `origin`/`range`/`field_ranges` source metadata), the key-legality check, the template
-`parse(node_id, reader)` classmethod, and the sink derivations (`output_contract` /
-`sink_params` / `sink_wiring` / `_finish`). A leaf kind diverges only where it must.
-Copy `code.py`.
+`parse(node_id, cursor)` classmethod, the immutable `with_source_origins(...)`
+attachment hook, and the sink derivations (`output_contract` / `sink_params` /
+`sink_wiring` / `_finish`). A leaf kind diverges only where it must. Copy
+`tool.py`; consult `code.py` only for extra source-origin attachment.
 
 - Declare the kind's ClassVars at the top of the dataclass body:
   - `kind = "xxx"` — the surface string (drives the `KINDS`/`BINDING_FIELDS` keys).
@@ -132,15 +139,23 @@ Copy `code.py`.
 - Declare only the **kind-specific** dataclass fields (`inputs`/`outputs` come from the
   base). Give each a type; use `field(default_factory=...)` for mutable defaults.
 - **`parse` is inherited** — the base template checks key legality, reads the common
-  fields, and records each field's `SourceRange`. Override the `_normalize_reader` /
+  fields, and records each field's `SourceRange`. Override the `_normalize_cursor` /
   `_validate_fields` hooks only if the kind needs pre-normalization or extra checks
   (see `case.py` / `human_input.py` for examples). Most leaves need neither.
+- **`with_source_origins` is inherited as a no-op** — override
+  `with_source_origins(cursor, *, site_path, catalog_builder)` only when the kind
+  owns semantic source sites beyond the common node header. Return an immutable
+  replacement descriptor carrying only opaque `OriginRef` values. Register sites
+  while the located cursor exists; never retain the cursor, coordinates, or a
+  parallel source map. CODE is the reference: one whole-field fallback plus an
+  ordered tuple for exact literal lines.
 - The assembly conductor stamps `NodeDescriptor.origin` from the authored node-header
   occurrence after parsing. After desugaring/building, it also stamps source-backed wiring
   values directly on their canonical `Binding`: ordinary `input:` entries plus node-owned
   reserved fields (currently MAP `over:` and WAIT `until:`). Only an ordinary input's key
   stamps a matching `Parameter`; reserved wiring has no formal parameter. A kind must not
-  mint these origins or keep a parallel source map.
+  mint these common origins or keep a parallel source map; kind-owned sites use only the
+  descriptor hook above.
 - **Override `build`** — an instance method `build(self, ctx: BuildContext) -> BuildResult`
   that constructs `XxxNode(...)`, sets the output contract / params / wiring, and returns
   `self._finish(node, wiring)` (which stamps `.origin` plus the legacy ranges and wraps a
@@ -175,8 +190,9 @@ _DESCRIPTORS = (
 ```
 
 The shared dispatch (`parse/`, `build/pipeline.py::_assemble`'s build loop,
-`bindings.py`) looks the class up in `KINDS` and calls `cls.parse(...)` / `desc.build(...)`
-kind-blind — no isinstance branch to add.
+`bindings.py`) looks the class up in `KINDS` and calls `cls.parse(...)`,
+`desc.with_source_origins(...)`, and `desc.build(...)` kind-blind — no isinstance
+branch to add.
 
 ## 5. `compose/__init__.py` — re-export the descriptor
 
@@ -186,7 +202,9 @@ If anything outside `compose/` references `XxxDescriptor`, add it to the imports
 ## 6. `tests/engine/test_xxx.py` — prove it
 
 Copy `test_node.py.template`. At minimum: a direct `_run_impl()` unit test and one
-`load_flow` + `run_flow` end-to-end. For a spawner, also test its canonical seed
+`load_flow` + `run_flow` end-to-end. A kind with extra source-origin carriers also
+tests source-free defaults, deterministic traversal/rewrite, external rebasing,
+and manifest/fingerprint neutrality. For a spawner, also test its canonical seed
 and the matching `build_grow` arm (§2a). Run:
 
 ```bash
@@ -208,7 +226,7 @@ Close the tracking GitHub issue when the work lands, referencing the commit/PR
 | Enum tag | `nodes/base.py` | `class NodeKind` |
 | Node impl | `nodes/xxx/node.py` + `__init__.py` | new package |
 | Growth builder *(spawner only)* | `compile/expand.py` | `build_grow` closed match |
-| Descriptor (subclass `NodeDescriptor`) | `compose/nodes/xxx.py` | copy `code.py` |
+| Descriptor (`NodeDescriptor` subclass) | `compose/nodes/xxx.py` | copy `tool.py`; CODE for extra source sites |
 | Register | `compose/nodes/__init__.py` | `_DESCRIPTORS` tuple |
 | Re-export | `compose/__init__.py` | imports + `__all__` |
 | Test | `tests/engine/test_xxx.py` | new file |

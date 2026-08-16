@@ -191,6 +191,15 @@ diagnostic-only and excluded from manifests, fingerprints, and expansion
 digests. The legacy `range` fields remain the active render bridge while
 diagnostics migrate to origin resolution.
 
+CODE also owns two source-neutral diagnostic slots for its authored executable
+field. `code_origin` is the whole-`code:` fallback, while
+`code_line_origins` is an immutable tuple aligned with the constructed lines of
+an exact literal block. Quoted and folded scalars carry only the whole fallback;
+source-free Python construction defaults to `None` and `()`. Compose transfers
+these origins from `CodeDescriptor` to `CodeNode`, and clones preserve them.
+They are provenance only: this carrier step does not change CODE execution or
+the current traceback-padding behavior.
+
 `Node.pre_asserts` and `Node.post_asserts` are ordered `Assertion` lists. Parsed
 YAML remains raw text until the inline-call pass crosses each flow assertion into
 one carrier; node-local validation creates one fresh carrier per authored
@@ -256,10 +265,11 @@ The authored `output:` / `outputs:` YAML syntax is unchanged.
 ### Compiled origin traversal and rebasing
 
 Nodes own their provenance layout. The base `Node` enumerates and rewrites its
-node origin, output contract, parameters, and assertions; CALL/MAP/LOOP also own
-their cached `child_inputs` origins and expose the baked child through
-`origin_children()`. These hooks remain source-neutral and never import
-`compile`.
+node origin, output contract, parameters, and assertions. CODE extends those
+hooks with its whole-source fallback and ordered exact-line origins;
+CALL/MAP/LOOP also own their cached `child_inputs` origins and expose the baked
+child through `origin_children()`. These hooks remain source-neutral and never
+import `compile`.
 
 `compile.origins` joins those hooks with flow-owned wiring and declared outputs.
 `iter_flow_origins()` walks wiring, outputs, nodes, and static children in stable
@@ -306,8 +316,10 @@ Source-aware parsing and inline extraction navigate stable `SourceCursor` values
 A physical cursor combines a definition range with an occurrence path (and a
 mapping-key range when applicable); a virtual cursor is a defensive, source-free
 value snapshot; a projected cursor replaces or renames values while explicitly
-retaining the physical sources of selected children. Descriptors and nodes carry
-derived ranges afterward, so no phase reparses text or touches parser objects.
+retaining the physical sources of selected children. While the cursor is still
+available, a descriptor may attach opaque origins for kind-owned semantic sites;
+descriptors and nodes carry those origins plus derived ranges afterward. No phase
+reparses text or touches parser objects.
 For an unchanged source-backed string, `SourceCursor.scalar_source` returns immutable
 `ScalarSource` metadata: the whole scalar range and exact zero-based constructed-line
 ranges when the scalar is a literal `|` block. The document derives those ranges from
@@ -325,19 +337,28 @@ parallel range map. Virtual or unanchored cursors produce no origin. One builder
 the root flow, its `defs:`, and its inline bodies. Private assembly leaves the public
 resolver unset; the loader freezes the builder once when the physical-file root is
 complete.
+After the common node-header origin is stamped, assembly invokes
+`NodeDescriptor.with_source_origins(...)` on every normalized descriptor. The
+default is an immutable no-op. `CodeDescriptor` uses the hook to register the
+whole `code:` scalar and, when `ScalarSource` exposes an exact literal tuple,
+each constructed line under the node's lexical site path. It stores only the
+returned `OriginRef` values, never a cursor or coordinate map. The same path runs
+for roots, definitions, and inline children; virtual source produces no origins.
 Final assembly registers authored node headers, ordinary node-input keys and values,
-source-backed reserved MAP/WAIT wiring values, assertions, and source-backed flow-output
-values directly on their canonical semantic carriers; it does not build a parallel
-location map. An assertion's semantic path includes its authored list index, and that
-item's cursor supplies both `Assertion.origin` and the aligned temporary range. Full root
-flows and multi-node definitions retain a flow assertion cursor; their lowered carriers
-are reused by START/END. Compact roots and flat single-node definitions instead project
-their `asserts:` into the synthesized node, so those sites are node-local. Flow outputs
-are stamped after rewrites on `FlowOutput.binding`, and END reuses that binding; mapping
-keys are not origin sites. For sites without retained occurrences, Compose mints no origin
-and preserves any explicit programmatic origin. Generated compact-root and
-single-node-definition reexports are such source-free output sites; the authored output
-type is a contract site whose origin remains deferred.
+source-backed reserved MAP/WAIT wiring values, CODE source fields, assertions,
+and source-backed flow-output values directly on their canonical semantic
+carriers; it does not build a parallel location map. An assertion's semantic
+path includes its authored list index, and that item's cursor supplies both
+`Assertion.origin` and the aligned temporary range. Full root flows and
+multi-node definitions retain a flow assertion cursor; their lowered carriers
+are reused by START/END. Compact roots and flat single-node definitions instead
+project their `asserts:` into the synthesized node, so those sites are
+node-local. Flow outputs are stamped after rewrites on `FlowOutput.binding`, and
+END reuses that binding; mapping keys are not origin sites. For sites without
+retained occurrences, Compose mints no origin and preserves any explicit
+programmatic origin. Generated compact-root and single-node-definition reexports
+are such source-free output sites; the authored output type is a contract site
+whose origin remains deferred.
 At each `uses:` alias, the loader validates the canonical child's complete resolver,
 copies and rebases its compiled origin graph under a collision-free lexical key, and
 caches that alias view. The physical resolved-path cache remains canonical and is never
@@ -519,7 +540,10 @@ Compile also owns stable identity for the static program. `flow_manifest`
 canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and
 assertion identity includes executable and display text in list order while
 remaining origin/range-neutral. `expansion_digest` applies the same projection to
-dynamic fragments. `resolve_llm_cascade` returns a complete map keyed by
-slash-separated static agent paths. The run boundary reads process provider/model
-defaults once at fresh-run initialization; `apply_effective_llm_map` restores the
+dynamic fragments. CODE identity includes its executable `code` text but excludes
+`code_origin` and `code_line_origins`, so source formatting and origin rebasing
+cannot change program or expansion identity. `resolve_llm_cascade` returns a
+complete map keyed by slash-separated static agent paths. The run boundary reads
+process provider/model defaults once at fresh-run initialization;
+`apply_effective_llm_map` restores the
 recorded map during recovery without consulting the environment.

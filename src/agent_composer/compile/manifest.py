@@ -124,7 +124,10 @@ _IGNORED_KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
     # llm_config is always run-resolved; own_llm_config is the authored identity source.
     NodeKind.AGENT: frozenset({"llm_config"}),
     # _mode/ref are derived from code; _code is a process-local compiled-code cache.
-    NodeKind.CODE: frozenset({"_mode", "ref", "_code"}),
+    # CODE origins are diagnostic metadata resolved only by the authoring front end.
+    NodeKind.CODE: frozenset(
+        {"_mode", "ref", "_code", "code_origin", "code_line_origins"}
+    ),
     NodeKind.MODEL: frozenset(),
     NodeKind.TOOL: frozenset(),
     NodeKind.CASE: frozenset(),

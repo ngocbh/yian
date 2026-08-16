@@ -45,6 +45,13 @@ Hold this model whenever you design anything:
   and outputs, rewriting an isolated copy by identity and returning a finalized
   copy whose hash containers are rebuilt. Shared or cyclic graphs remain safe
   without a `NodeKind` branch.
+- Compose descriptors have a kind-blind `with_source_origins(...)` attachment
+  hook for semantic sites beyond the common node header. Most descriptors keep
+  the no-op default. CODE registers one whole-`code:` fallback plus an ordered
+  tuple of exact literal-line origins, transfers only those opaque references to
+  `CodeNode`, and extends its local origin traversal/rewrite accordingly. These
+  fields are diagnostic-only and manifest-neutral; they do not change current
+  CODE execution or traceback framing.
 - `diagnostics.ResolverTable` composes opaque namespaces through exact
   new-origin-to-delegate/old-origin routes without parsing keys or resolver
   fallback. `compile.rebase_flow_origins` maps each distinct reachable old key
@@ -371,6 +378,13 @@ their output declaration is reserved for contract-origin work. Private assembly 
 resolver unset while the shared catalog grows. The loader validates and lexically rebases
 each external alias view, then freezes the local catalog once and installs an exact
 `ComposedFlow.origin_resolver`; source-free graphs use `None`.
+After the common header stamp, assembly calls each descriptor's immutable
+`with_source_origins(...)` hook while its located cursor is still available. The
+default is a no-op. CODE uses the hook to register the whole `code:` value and,
+for literal blocks only, each exact constructed line in order; quoted and folded
+scalars keep only the whole-value fallback, and source-free descriptors keep no
+CODE origins. The hook returns opaque `OriginRef` carriers only and never retains
+the cursor, coordinates, or a parallel source map.
 Inline extraction intentionally takes one graph-wide nodes snapshot before
 projection so unchanged aliases retain sharing; field navigation uses cursors or
 their package-private read-only view.

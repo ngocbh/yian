@@ -276,6 +276,12 @@ inside its body), the frame falls back to the **best line for the node's kind** 
 a code node's `code:` field — and then to the node header. A failure with no node
 behind it *and* no resolvable line prints the plain `run failed: <message>` line.
 
+For a failure inside a called or mapped child flow, the CLI adds the outer call sites as
+a traceback of source frames. The innermost child frame keeps the evaluator's same precise
+operation range—such as the exact failing `input:` binding—rather than replacing it with
+the child's `code:` field or node header. Those coarser sites remain fallbacks only when the
+run did not resolve a concrete operation range.
+
 Failures with **no node behind them** are still boxed at their precise line: a
 false boundary/post `assert:` boxes the offending `asserts:` expression, an
 input that can't be coerced to its declared type boxes that input's declaration,

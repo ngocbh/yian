@@ -714,7 +714,9 @@ never a text heuristic.
   `Assertion.origin` from the same retained item cursor before rewrites preserve both.
 - **Resolution (CLI boundary):** `cli/run.py` reads the node id, message, and
   debugging traceback directly from `result.failure`, then prefers the
-  pre-resolved `result.range`. Only when it is absent does `_resolve_range` map
+  pre-resolved `result.range`. In a nested call traceback, that concrete range owns the
+  innermost frame while `_walk_call_frames` supplies outer call context. Only when the
+  concrete range is absent does `_resolve_range` map
   `result.locator` itself, via
   `_top_ranges` (the loaded flow's `SourceFrame` maps, or the defensive
   `loader.top_frame_ranges(document)` fallback): a
@@ -746,7 +748,8 @@ never a text heuristic.
   `node.child_source`), collecting one frame per level; `_render_frame_stack` boxes them
   stacked, most-recent-call-last (Python-traceback style), falling back to the single-frame
   box when fewer than two frames resolve. Each call-chain frame anchors at the node HEADER
-  line; the failing leaf at its precise field / kind-fallback line. A frame title names WHERE
+  line; the failing leaf first uses the evaluator-resolved concrete operation range, then its
+  precise field / kind-fallback line. A frame title names WHERE
   it lives: a top/external file frame is the filename alone, a `defs:` frame is
   filename-qualified (`<file> defs:<name>`) since its nodes physically live in that file.
 

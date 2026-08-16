@@ -160,7 +160,9 @@ ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
   CLI prints a **call traceback** — a stack of boxed frames most-recent-call-last, like a
   Python traceback: the top-level `call` node, then each child it descends into (an in-file
   `<file> defs:<name>` frame, or a frame titled by the external file's name), down to the
-  actual node that failed.
+  actual node that failed. The innermost frame preserves the same precise operation range as
+  a top-level failure, including the offending child `input:` binding; kind and node-header
+  ranges are fallbacks only when no precise range was resolved.
 
 ### Choosing a provider/model
 

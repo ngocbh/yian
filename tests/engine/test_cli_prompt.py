@@ -167,35 +167,83 @@ def test_input_label_supports_a_flat_list_contract():
 
 
 # --- _prompt_missing: header + labels via a fake questionary ------------------ #
+class _FakeChoice:
+    """Questionary-compatible display/value pair used by the prompt test double."""
+
+    def __init__(self, title, value=None, **_kwargs):
+        self.title = title
+        self.value = title if value is None else value
+
+
+_UNSCRIPTED = object()
+
+
 class _FakeQuestionary:
-    """Records the labels it is asked with; answers from `answers` (substr -> value)."""
+    """Record prompts and model Questionary's accepted-default return values.
+
+    ``answers`` maps a label substring to one explicit answer, including ``None``
+    for cancellation. An unscripted widget accepts its default; a select without
+    one accepts its first choice. Selecting a ``Choice`` returns its value.
+    """
 
     def __init__(self, answers):
         self.labels: list[str] = []
         self.text_defaults: list[str] = []
+        self.calls: list[SimpleNamespace] = []
         self._answers = answers
 
     def Style(self, spec):  # questionary.Style(...) — styling is irrelevant to the labels
         return None
 
-    def _resolve(self, label):
+    def Choice(self, title, value=None, **kwargs):
+        return _FakeChoice(title, value=value, **kwargs)
+
+    def _scripted(self, label):
         self.labels.append(label)
         for key, val in self._answers.items():
             if key in label:
                 return val
-        return ""
+        return _UNSCRIPTED
+
+    @staticmethod
+    def _choice_value(value):
+        return value.value if isinstance(value, _FakeChoice) else value
 
     def text(self, label, default="", **kwargs):
         self.text_defaults.append(default)
-        val = self._resolve(label)
+        scripted = self._scripted(label)
+        val = default if scripted is _UNSCRIPTED else scripted
+        self.calls.append(
+            SimpleNamespace(kind="text", label=label, default=default, choices=None)
+        )
         return SimpleNamespace(ask=lambda: val)
 
     def confirm(self, label, default=False, **kwargs):
-        val = self._resolve(label)
+        scripted = self._scripted(label)
+        val = default if scripted is _UNSCRIPTED else scripted
+        self.calls.append(
+            SimpleNamespace(kind="confirm", label=label, default=default, choices=None)
+        )
         return SimpleNamespace(ask=lambda: val)
 
-    def select(self, label, choices, **kwargs):
-        val = self._resolve(label)
+    def select(self, label, choices, default=None, **kwargs):
+        scripted = self._scripted(label)
+        selected = (
+            default
+            if scripted is _UNSCRIPTED and default is not None
+            else choices[0]
+            if scripted is _UNSCRIPTED
+            else scripted
+        )
+        val = self._choice_value(selected)
+        self.calls.append(
+            SimpleNamespace(
+                kind="select",
+                label=label,
+                default=default,
+                choices=list(choices),
+            )
+        )
         return SimpleNamespace(ask=lambda: val)
 
 
@@ -225,6 +273,147 @@ def test_prompt_skips_already_supplied(monkeypatch):
     gathered = _prompt_missing(_decls(), have)
     assert gathered == {}
     assert fake.labels == []          # no prompt issued
+
+
+def test_prompt_accepting_omission_preserves_start_owned_defaults(monkeypatch):
+    loaded = load_flow(
+        """
+id: prompt-defaults
+name: prompt-defaults
+input:
+  items: list[str] = [a, b]
+  mode: Literal["z", "a"] = z
+  flag: Optional[bool]
+nodes:
+  show:
+    kind: code
+    code: |-
+      return inputs
+    input:
+      items: ${input.items}
+      mode: ${input.mode}
+      flag: ${input.flag}
+    output: object
+output: ${show.output}
+"""
+    )
+    fake = _FakeQuestionary({})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _prompt_missing(loaded.input, {})
+
+    assert gathered == {}
+    result = run_flow(loaded, gathered)
+    assert result.status == "succeeded"
+    assert result.input == {}
+    assert result.output == {
+        "flag": None,
+        "items": ["a", "b"],
+        "mode": "z",
+    }
+
+    by_name = {
+        call.label.split(" ", 1)[0]: call
+        for call in fake.calls
+    }
+    assert by_name["items"].kind == "text"
+    assert by_name["items"].default == ""
+    for name in ("mode", "flag"):
+        call = by_name[name]
+        assert call.kind == "select"
+        assert isinstance(call.default, _FakeChoice)
+        assert call.default is call.choices[0]
+        assert call.default.value is not None
+    assert [choice.value for choice in by_name["flag"].choices[1:]] == [True, False]
+    assert [choice.value for choice in by_name["mode"].choices[1:]] == ["a", "z"]
+
+
+def test_prompt_collects_false_enum_and_text_overrides(monkeypatch):
+    fake = _FakeQuestionary(
+        {"flag": False, "mode": "slow", "note": "replacement"}
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+    parameters = [
+        _parameter("flag", Type(kind=ValueKind.BOOLEAN, nullable=True)),
+        _parameter(
+            "mode",
+            Type(kind=ValueKind.STRING, tags=frozenset({"fast", "slow"})),
+            has_default=True,
+            default="fast",
+        ),
+        _parameter(
+            "note",
+            Type.scalar(ValueKind.STRING),
+            has_default=True,
+            default="original",
+        ),
+    ]
+
+    gathered = _prompt_missing(parameters, {})
+
+    assert gathered == {
+        "flag": False,
+        "mode": "slow",
+        "note": "replacement",
+    }
+
+
+def test_prompt_distinguishes_literal_values_from_omission_labels(monkeypatch):
+    collision = "↩ Use declared default"
+    fake = _FakeQuestionary({"mode": collision})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+    parameter = _parameter(
+        "mode",
+        Type(kind=ValueKind.STRING, tags=frozenset({collision, "ordinary"})),
+        has_default=True,
+        default="ordinary",
+    )
+
+    gathered = _prompt_missing([parameter], {})
+
+    assert gathered == {"mode": collision}
+    choices = fake.calls[0].choices
+    assert len({choice.title for choice in choices}) == len(choices)
+    assert any(
+        choice.title == f"Set value: {collision}" and choice.value == collision
+        for choice in choices
+    )
+
+
+def test_prompt_distinguishes_cancellation_from_omission(monkeypatch):
+    fake = _FakeQuestionary({"flag": None})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _prompt_missing(
+        [_parameter("flag", Type(kind=ValueKind.BOOLEAN, nullable=True))],
+        {},
+    )
+
+    assert gathered is None
+
+
+def test_prompt_preserves_required_false_enum_and_blank_text(monkeypatch):
+    fake = _FakeQuestionary({"flag": False, "mode": "slow", "note": ""})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+    parameters = [
+        _parameter("flag", Type.scalar(ValueKind.BOOLEAN), required=True),
+        _parameter(
+            "mode",
+            Type(kind=ValueKind.STRING, tags=frozenset({"fast", "slow"})),
+            required=True,
+        ),
+        _parameter("note", Type.scalar(ValueKind.STRING), required=True),
+    ]
+
+    gathered = _prompt_missing(parameters, {})
+
+    assert gathered == {"flag": False, "mode": "slow", "note": ""}
+    assert [call.kind for call in fake.calls] == ["confirm", "select", "text"]
 
 
 def test_prompt_leaves_explicit_null_defaults_omitted_for_every_widget_kind(monkeypatch):
@@ -259,7 +448,20 @@ def test_prompt_leaves_explicit_null_defaults_omitted_for_every_widget_kind(monk
     gathered = _prompt_missing(parameters, {})
 
     assert gathered == {}
-    assert fake.text_defaults == ["", "", ""]
+    assert [call.kind for call in fake.calls] == ["text", "select", "select"]
+
+
+def test_prompt_treats_optional_whitespace_as_omission(monkeypatch):
+    fake = _FakeQuestionary({"note": "   "})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _prompt_missing(
+        [_parameter("note", Type(kind=ValueKind.STRING, nullable=True))],
+        {},
+    )
+
+    assert gathered == {}
 
 
 # --- _render_run_error: a runtime failure boxes the .yaml at the PRECISE line ------ #

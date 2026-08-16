@@ -429,9 +429,11 @@ agent `entry:`/`controls:` field or event-mode WAIT.
 ## Validate & run
 - **Quick validate** (loads + compiles, no model): `ac run <flow>.yaml` will load
   first; or from Python `load_flow(text, search_paths=[flow_dir])`.
-- **Run:** `ac run <flow>.yaml --input k=v [--inputs file.json]`. Missing required
-  inputs are prompted; `human_input` and `ask_user` requests are served by the
-  host while the run remains live. WAIT also remains in the live run.
+- **Run:** `ac run <flow>.yaml --input k=v [--inputs file.json]`. Every missing
+  declared input is prompted; optional/defaulted prompts can be omitted so START
+  applies an exact authored default when present or retains optional absence.
+  `human_input` and `ask_user` requests are served by the host while the run remains
+  live. WAIT also remains in the live run.
 - A flow with only `code`/`tool` nodes runs with **no provider**; any `agent` node
   needs a provider/model configured (see `docs/installation.md`).
 

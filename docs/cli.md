@@ -88,12 +88,19 @@ A flow with no `name`/`description`/`version` prints no banner.
 When a declared input is missing, `ac` prompts for it. The widget follows its
 resolved type:
 
-- a `bool` input → a yes/no confirm,
-- a `Literal[...]` enum → a select list of the allowed tags,
-- anything else → a free-text entry.
+- a required `bool` → a yes/no confirm,
+- an optional/defaulted `bool` → a select containing `↩ Omit input` or
+  `↩ Use declared default`, followed by `True` and `False`,
+- a required `Literal[...]` → a select list of the allowed tags,
+- an optional/defaulted `Literal[...]` → the same list with the omit/default action
+  preselected and each explicit tag labelled `Set value: ...`,
+- anything else → a free-text entry, initially blank.
 
-An explicit null default uses free text for every type: leaving it blank preserves
-the null default, while entering text supplies an ordinary boundary value.
+Choosing the omit/default action, or leaving optional/defaulted free text blank,
+does not submit a value. The key stays absent: START applies the exact validated
+default payload when present, while an optional input without a default remains
+absent. The CLI never stringifies a default into an override. A typed answer remains
+an ordinary explicit override and follows run-boundary coercion and validation.
 
 Each prompt's label carries the input's canonical resolved **type**, a required
 (`*`) / `optional` mark, and any **default** — e.g. `topic (str) *`,
@@ -102,14 +109,15 @@ ISO-8601 `date` / `datetime` scalars — whose accepted string form isn't obviou
 a label with no default also shows an **example** value (`e.g. 2026-05-21`,
 `e.g. 2026-05-21T14:30`); when a default is present it already shows the format,
 so the example is dropped. An explicit null default is shown as `[default: None]`.
-An optional free-text input left blank is skipped, so its default applies.
-Cancelling a prompt (Ctrl-C / Esc) cancels the run.
+Whitespace-only optional/defaulted free text is also omission. To supply explicit
+null, whitespace-only strings, or structured list/object values, use `--inputs`
+JSON. Cancelling a prompt cancels the run.
 
 !!! note
     The prompt needs a real terminal (TTY). In a non-interactive context
-    (a CI job, a piped command, `srun` without a pty) supply every required
-    input via `--input` / `--inputs` instead, or the command will fail before
-    execution.
+    (a CI job, a piped command, `srun` without a pty), supply every declared input
+    via `--input` / `--inputs`; otherwise `ac` still attempts to prompt for a
+    missing optional/defaulted field.
 
 ## Blocking interactions
 

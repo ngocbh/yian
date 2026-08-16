@@ -1,10 +1,12 @@
 """The `ac` command-line interface — a brokered host over the run boundary.
 
 `ac run FLOW.yaml` loads a Compose flow, gathers fresh inputs (flags first, then
-an interactive prompt for any missing required one), selects and reports a
-durable run-log path, and drives it to a terminal. ``--resume`` instead recovers
-an existing path without gathering fresh inputs or model configuration. The
-main thread owns terminal prompts/renders while a controller drives the flow;
+an interactive prompt for every missing declaration), selects and reports a
+durable run-log path, and drives it to a terminal. Optional/defaulted prompts can
+be omitted, leaving START to apply a declared default or retain optional absence.
+``--resume`` instead recovers an existing path without gathering fresh inputs or
+model configuration. The main thread owns terminal prompts/renders while a
+controller drives the flow;
 blocking HUMAN_INPUT/``ask_user`` calls cross that broker. WAIT remains live in
 its worker until its deadline. The CLI owns path policy, not engine scheduling
 or durable state-transition logic.

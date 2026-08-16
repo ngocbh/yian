@@ -333,7 +333,7 @@ Keys in use: `max_tool_iterations` (agent) — tool-calling loop turns before an
 ## Validate
 
 ```bash
-ac run <flow>.yaml --input k=v          # loads, then runs (prompts for missing required inputs)
+ac run <flow>.yaml --input k=v          # loads, then runs (prompts for each missing input; omission preserves defaults)
 ```
 From Python: `load_flow(text, search_paths=[flow_dir])` loads + compiles without a
 model. A flow with only `code`/`tool` nodes runs with no provider; any `agent` node

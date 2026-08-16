@@ -2,7 +2,8 @@
 
 Fresh inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`); any
 declared input still missing is prompted for interactively (required ones are
-starred). Fresh runs use a reported durable log under
+starred). Optional/defaulted prompts can be omitted so START retains ownership of
+any declared default or optional absence. Fresh runs use a reported durable log under
 ``~/.agent_composer/runs`` unless ``--log`` selects a new path. ``--resume``
 recovers an existing path without gathering fresh inputs or model configuration.
 
@@ -51,6 +52,7 @@ from agent_composer.run import (
 )
 from agent_composer.events import NodeFailed
 from agent_composer.nodes.base import _HostStop
+from agent_composer.nodes.contracts import Parameter
 from agent_composer.tools import install_ask_user
 from agent_composer.typesys import canonical_type_label
 from agent_composer.typesys.seeding import default_run_id
@@ -59,6 +61,9 @@ from agent_composer.typesys.values import ValueKind
 console = Console()
 err_console = Console(stderr=True)
 _DEFAULT_BROKER_EOF = object()
+# A prompt-local control result, distinct from Questionary's ``None`` cancellation.
+# It never crosses the CLI boundary; omitted keys stay absent so START applies defaults.
+_OMIT_INPUT = object()
 
 
 def _ensure_cwd_importable() -> None:
@@ -620,13 +625,103 @@ def _flow_banner(
     return Panel(body, border_style="cyan", expand=False)
 
 
-def _prompt_missing(decls: List[Any], have: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Prompt for each declared input not already supplied. Returns the gathered values,
-    or None if the user cancels (Ctrl-C / Esc). The widget follows the declared type: a
-    boolean is a confirm, a `Literal[...]` enum is a select, everything else is free text.
+def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
+    """Ask for one declared input and return value, omission, or cancellation.
+
+    ``_OMIT_INPUT`` is the non-required/default action and ``None`` is Questionary's
+    cancellation result. Required booleans use confirm; optional/defaulted booleans
+    and Literals use a select with omission preselected; other types use text, where
+    non-required whitespace means omission. Every explicit value is returned unchanged
+    for the ordinary run-boundary coercion and validation policy.
+
+    Args:
+        decl (`Parameter`): Canonical flow input declaration to present.
+        questionary (`Any`):
+            Lazily imported Questionary module used to build the widget.
+        style (`Any`): Shared Questionary style for the widget.
+
+    Returns:
+        `Any`: Explicit value, private omission sentinel, or ``None`` cancellation.
+    """
+    label = _input_label(decl)
+    contract = getattr(decl, "contract", None)
+    typ = None if contract is None else contract.type
+
+    if typ is not None and typ.kind == ValueKind.BOOLEAN:
+        if decl.required:
+            return questionary.confirm(
+                label, default=False, qmark="?", style=style
+            ).ask()
+        omission = questionary.Choice(
+            "↩ Use declared default" if decl.has_default else "↩ Omit input",
+            value=_OMIT_INPUT,
+        )
+        return questionary.select(
+            label,
+            choices=[
+                omission,
+                questionary.Choice("True", value=True),
+                questionary.Choice("False", value=False),
+            ],
+            default=omission,
+            qmark="?",
+            style=style,
+        ).ask()
+
+    if typ is not None and typ.tags:  # a Literal[...] enum
+        choices = [
+            questionary.Choice(
+                tag if decl.required else f"Set value: {tag}",
+                value=tag,
+            )
+            for tag in sorted(typ.tags)
+        ]
+        if decl.required:
+            return questionary.select(
+                label, choices=choices, qmark="?", style=style
+            ).ask()
+        omission = questionary.Choice(
+            "↩ Use declared default" if decl.has_default else "↩ Omit input",
+            value=_OMIT_INPUT,
+        )
+        return questionary.select(
+            label,
+            choices=[omission, *choices],
+            default=omission,
+            qmark="?",
+            style=style,
+        ).ask()
+
+    value = questionary.text(label, default="", qmark="?", style=style).ask()
+    if (
+        value is not None
+        and isinstance(value, str)
+        and value.strip() == ""
+        and not decl.required
+    ):
+        return _OMIT_INPUT
+    return value
+
+
+def _prompt_missing(
+    decls: List[Parameter], have: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Collect explicit overrides for each declared input not already supplied.
+
+    Returns a dictionary containing only explicit values, or ``None`` if the user
+    cancels. The per-input helper owns widget choice and translates use-default/omit
+    actions to a private sentinel; this collector never applies flow defaults itself.
 
     Each prompt's label carries the input's type + a required/optional mark + default
-    (see `_input_label`)."""
+    (see `_input_label`).
+
+    Args:
+        decls (`list[Parameter]`): Canonical flow input declarations in prompt order.
+        have (`dict[str, Any]`): Values already supplied by JSON or repeatable flags.
+
+    Returns:
+        `dict[str, Any] | None`: Explicitly gathered overrides, or ``None`` on cancel.
+    """
     import questionary
 
     style = _q_style()
@@ -634,31 +729,10 @@ def _prompt_missing(decls: List[Any], have: Dict[str, Any]) -> Optional[Dict[str
     for decl in decls:
         if decl.name in have:
             continue
-        label = _input_label(decl)
-        contract = getattr(decl, "contract", None)
-        typ = None if contract is None else contract.type
-        if decl.has_default and decl.default is None:
-            # Confirm/select widgets cannot represent "omit this parameter". Free
-            # text preserves the explicit null default on blank while still allowing
-            # a textual override that the ordinary boundary policy validates/coerces.
-            value = questionary.text(
-                label, default="", qmark="?", style=style
-            ).ask()
-        elif typ is not None and typ.kind == ValueKind.BOOLEAN:
-            value = questionary.confirm(
-                label, default=bool(decl.default), qmark="?", style=style
-            ).ask()
-        elif typ is not None and typ.tags:  # a Literal[...] enum
-            value = questionary.select(
-                label, choices=sorted(typ.tags), qmark="?", style=style
-            ).ask()
-        else:
-            default = "" if decl.default is None else str(decl.default)
-            value = questionary.text(label, default=default, qmark="?", style=style).ask()
-
-        if value is None:  # Ctrl-C / Esc
+        value = _prompt_input(decl, questionary, style)
+        if value is None:
             return None
-        if isinstance(value, str) and value.strip() == "" and not decl.required:
+        if value is _OMIT_INPUT:
             continue
         gathered[decl.name] = value
     return gathered

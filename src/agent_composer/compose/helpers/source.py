@@ -1,7 +1,7 @@
 """Parse-free source-location primitives for the Compose front end.
 
 The parse-independent slice of the loader's render-only source mapping: the
-`SourceFrame` carrier plus best-effort location-map helpers over an existing source cursor.
+`SourceFrame` carrier plus range helpers over an existing source cursor.
 They never parse or call `parse_nodes`/`parse_file`. Kept at the bottom
 of the ladder (`helpers <- parse`) so `parse/` can depend on it without a cycle; the
 frame-range helpers that DO call the parser (`_frame_ranges`, `top_frame_ranges`) stay in
@@ -45,30 +45,6 @@ def _boundary_field_ranges(root: SourceCursor) -> FieldRanges:
         return out
     except SourceAccessError:
         return FieldRanges()
-
-
-def _section_lines(root: SourceCursor) -> dict[str, int]:
-    """Map each top-level section key -> its 1-based header line (best-effort).
-
-    Replaces the retired `parser.section_lines`: locates a section-level error (a bad
-    `typedefs:`, an eager `uses:` failure, a dangling `outputs:`/`asserts:` ref) at the
-    section's header line. Derived from each section key's `SourceRange` on the supplied
-    cursor, consistent with the range-native front end — raw keys are
-    kept (`output`/`outputs` both surface; the loader coalesces). `{}` when the text is
-    absent or PyYAML can't compose it. Render metadata, never the error path — never raises.
-    """
-    try:
-        value = root._value_view()
-        if not isinstance(value, Mapping):
-            return {}
-        out: dict[str, int] = {}
-        for key in value:
-            rng = root.key_range_of(key)
-            if rng is not None:
-                out[str(key)] = rng.start_line
-        return out
-    except SourceAccessError:
-        return {}
 
 
 @dataclass(frozen=True)

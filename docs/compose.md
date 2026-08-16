@@ -302,7 +302,8 @@ the child's YAML frame instead of applying child coordinates to its parent file.
 Definition and import sites prepend outer context without mutating the inner failure,
 and a cycle uses authored-order peer frames. Source-free Python composition remains a
 valid unlocated diagnostic. No load-error renderer reparses YAML or receives source text
-separately.
+separately, and no parallel line-map or section-line fallback is threaded through later
+Compose phases.
 
 ---
 

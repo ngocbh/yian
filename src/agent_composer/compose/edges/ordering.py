@@ -9,7 +9,7 @@ a located `LoadError` (at the declaring node's `range`). Cycle rejection is the 
 job — these edges join the `reject_cycles` set.
 
 Located parse metadata: the unknown-target `LoadError` locates at the declaring node
-descriptor's `range` (no `node_lines` map).
+descriptor's `range`.
 
 Imports flow down/peer only: `compile.model` (Edge), `compose.parse.file` (NodeDescriptor),
 `compose.helpers.errors`. Only the loader imports this back.

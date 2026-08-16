@@ -479,6 +479,44 @@ def test_case_with_non_string_predicate_is_a_setup_fault() -> None:
         drive(CaseNode("case", [malformed]))
 
 
+def test_case_predicate_failure_selects_the_active_ordered_origin() -> None:
+    """The failing arm wins even when an earlier ordered predicate was evaluated."""
+    first_origin = OriginRef("case/0/when")
+    second_origin = OriginRef("case/1/when")
+    node = CaseNode(
+        "case",
+        [
+            Case("first", "1 == 2", origin=first_origin),
+            Case("second", "1 / 0 > 0", origin=second_origin),
+        ],
+    )
+    node.origin = OriginRef("case/node")
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.cause_type == "ExpressionError"
+    assert result.failure.trace == (second_origin,)
+
+
+def test_source_free_case_predicate_failure_falls_back_to_the_node_origin() -> None:
+    """A predicate without its own site retains the common node fallback."""
+    node_origin = OriginRef("case/node")
+    node = CaseNode("case", [Case("broken", "1 / 0 > 0")])
+    node.origin = node_origin
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.trace == (node_origin,)
+
+
+def test_case_rejects_a_non_origin_predicate_carrier() -> None:
+    """Python-authored CASE provenance must stay source-neutral."""
+    with pytest.raises(TypeError, match="CASE predicate origin"):
+        Case("branch", "true", origin="flow.yaml:12")  # type: ignore[arg-type]
+
+
 def test_malformed_assertion_carrier_is_an_ir_fault() -> None:
     """Unexpected wrapper-state faults are outside expected flow failure."""
     node = FuncNode("n", lambda _inputs: "never")

@@ -33,6 +33,7 @@ from agent_composer.diagnostics import (
 )
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.call import CallNode
+from agent_composer.nodes.case import Case, CaseNode
 from agent_composer.nodes.code import CodeNode
 from agent_composer.nodes.contracts import (
     Assertion,
@@ -281,6 +282,40 @@ def test_parameter_origins_follow_the_carriers_canonical_order() -> None:
         "parameter",
         "parameter/default",
     ]
+
+
+def test_case_predicate_origins_traverse_and_rewrite_by_arm_identity() -> None:
+    """Ordered CASE sites participate in graph rewrites without double-mapping aliases."""
+    shared = Case("first", "false", origin=_origin("case/shared"))
+    node = CaseNode(
+        "case",
+        [shared, shared, Case("second", "true", origin=_origin("case/second"))],
+    )
+    flow = Flow(
+        nodes={"case": node},
+        edges=[],
+        wiring={"case": {}},
+        start_id="case",
+        end_id="case",
+    )
+
+    assert [origin.key for origin in iter_flow_origins(flow)] == [
+        "case/shared",
+        "case/second",
+    ]
+
+    calls: list[str] = []
+    rewritten = rewrite_flow_origins(
+        flow,
+        lambda origin: (calls.append(origin.key) or _origin(f"mapped/{origin.key}")),
+    )
+
+    rewritten_cases = rewritten.nodes["case"].cases
+    assert rewritten_cases[0] is rewritten_cases[1]
+    assert rewritten_cases[0].origin == _origin("mapped/case/shared")
+    assert rewritten_cases[2].origin == _origin("mapped/case/second")
+    assert calls == ["case/shared", "case/second"]
+    assert shared.origin == _origin("case/shared")
 
 
 @pytest.mark.parametrize(

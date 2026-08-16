@@ -292,13 +292,24 @@ def test_alias_rebasing_does_not_mutate_the_canonical_path_cache(tmp_path):
     canonical = resolver("child")
     canonical_origins = _origin_keys(canonical.compiled)
     canonical_fingerprint = flow_fingerprint(canonical.compiled)
+    canonical_resolver = canonical.origin_resolver
+    assert canonical_resolver is not None
+    canonical_frames = {
+        origin.key: canonical_resolver.resolve(origin)
+        for origin in iter_flow_origins(canonical.compiled)
+    }
 
     loaded = load_flow(parent, child_resolver=resolver)
     embedded = loaded.compiled.nodes["a"].child
 
     assert resolver("child") is canonical
+    assert canonical.origin_resolver is canonical_resolver
     assert embedded is not canonical.compiled
     assert _origin_keys(canonical.compiled) == canonical_origins
+    assert {
+        origin.key: canonical.origin_resolver.resolve(origin)
+        for origin in iter_flow_origins(canonical.compiled)
+    } == canonical_frames
     assert _origin_keys(embedded).isdisjoint(canonical_origins)
     assert flow_fingerprint(embedded) == canonical_fingerprint
 

@@ -5,13 +5,14 @@ from dataclasses import replace
 
 import pytest
 
-from agent_composer.compile import iter_flow_origins
+from agent_composer.compile import iter_flow_origins, rewrite_flow_origins
 from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compose import ComposedFlow, load_flow
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.loader import _finalize_composed_flow
 from agent_composer.compose.source import SourceCatalog
 from agent_composer.diagnostics import OriginRef, ResolverTable
+from agent_composer.nodes.base import Node
 
 
 _CHILD = """id: child
@@ -37,6 +38,17 @@ output: ${second.output}
 uses:
   left: child
   right: child
+"""
+
+_ONE_ALIAS_PARENT = """id: parent
+name: parent
+nodes:
+  invoke:
+    kind: call
+    call: child_view
+output: ${invoke.output}
+uses:
+  child_view: child
 """
 
 
@@ -117,9 +129,12 @@ def test_two_aliases_rebase_canonical_child_without_mutating_it():
     second = loaded.compiled.nodes["second"].child
     first_origins = _origins(first)
     second_origins = _origins(second)
+    child_origins = set(first_origins) | set(second_origins)
+    parent_origins = set(_origins(loaded.compiled)) - child_origins
 
     assert first is not second
     assert set(first_origins).isdisjoint(second_origins)
+    assert parent_origins
     assert _origins(child.compiled) == canonical_origins
     assert flow_fingerprint(first) == canonical_fingerprint
     assert flow_fingerprint(second) == canonical_fingerprint
@@ -127,6 +142,37 @@ def test_two_aliases_rebase_canonical_child_without_mutating_it():
         frame = loaded.origin_resolver.resolve(origin)
         assert frame is not None
         assert frame.text == _CHILD
+    for key in parent_origins:
+        frame = loaded.origin_resolver.resolve(OriginRef(key))
+        assert frame is not None
+        assert frame.text == _PARENT
+
+
+def test_delimiter_heavy_alias_rebases_opaque_child_origins():
+    alias = "left/~: child"
+    parent = f"""id: parent
+name: parent
+nodes:
+  invoke:
+    kind: call
+    call: {alias!r}
+output: ${{invoke.output}}
+uses:
+  {alias!r}: child
+"""
+
+    loaded = load_flow(
+        parent,
+        child_resolver=lambda _path, _version=None: load_flow(_CHILD),
+    )
+    embedded = loaded.compiled.nodes["invoke"].child
+
+    assert loaded.origin_resolver is not None
+    assert _origins(embedded)
+    assert all(
+        loaded.origin_resolver.resolve(origin).text == _CHILD
+        for origin in _origins(embedded).values()
+    )
 
 
 @pytest.mark.parametrize("replacement", [None, ResolverTable()])
@@ -135,11 +181,12 @@ def test_originful_custom_child_requires_a_complete_resolver(replacement):
 
     with pytest.raises(LoadError, match="origin resolver") as caught:
         load_flow(
-            _PARENT,
+            _ONE_ALIAS_PARENT,
             child_resolver=lambda _path, _version=None: child,
         )
 
-    assert caught.value.line is not None
+    assert "alias 'child_view'" in str(caught.value)
+    assert caught.value.line == 8
 
 
 def test_custom_child_resolver_failure_is_wrapped_at_the_uses_boundary():
@@ -151,21 +198,96 @@ def test_custom_child_resolver_failure_is_wrapped_at_the_uses_boundary():
 
     with pytest.raises(LoadError, match="resolver exploded") as caught:
         load_flow(
-            _PARENT,
+            _ONE_ALIAS_PARENT,
             child_resolver=lambda _path, _version=None: child,
         )
 
-    assert caught.value.line is not None
+    assert "alias 'child_view'" in str(caught.value)
+    assert caught.value.line == 8
+
+
+def test_custom_child_resolver_descriptor_failure_is_wrapped_at_the_uses_boundary():
+    class BrokenResolver:
+        @property
+        def resolve(self):
+            raise RuntimeError("resolver getter exploded")
+
+    child = replace(load_flow(_CHILD), origin_resolver=BrokenResolver())
+
+    with pytest.raises(LoadError, match="resolver getter exploded") as caught:
+        load_flow(
+            _ONE_ALIAS_PARENT,
+            child_resolver=lambda _path, _version=None: child,
+        )
+
+    assert "alias 'child_view'" in str(caught.value)
+    assert caught.value.line == 8
+
+
+def test_custom_child_origin_hook_failure_is_wrapped_at_the_uses_boundary():
+    class BrokenOriginNode(Node):
+        """Node whose custom provenance hook fails at the injected boundary."""
+
+        def iter_local_origins(self, *, _seen_carriers=None):
+            """Raise the sentinel failure before yielding local origins."""
+            raise RuntimeError("origin hook exploded")
+
+    child = deepcopy(load_flow(_CHILD))
+    child.compiled.nodes["worker"] = BrokenOriginNode("worker")
+
+    with pytest.raises(LoadError, match="origin hook exploded") as caught:
+        load_flow(
+            _ONE_ALIAS_PARENT,
+            child_resolver=lambda _path, _version=None: child,
+        )
+
+    assert "alias 'child_view'" in str(caught.value)
+    assert caught.value.line == 8
+
+
+def test_custom_child_validation_preserves_exact_origin_subclasses():
+    class ChildOrigin(OriginRef):
+        pass
+
+    canonical = load_flow(_CHILD)
+    assert canonical.origin_resolver is not None
+    compiled = rewrite_flow_origins(
+        canonical.compiled,
+        lambda origin: ChildOrigin(origin.key),
+    )
+
+    class ExactResolver:
+        def resolve(self, origin):
+            if type(origin) is not ChildOrigin:
+                return None
+            return canonical.origin_resolver.resolve(OriginRef(origin.key))
+
+    child = replace(
+        canonical,
+        compiled=compiled,
+        origin_resolver=ExactResolver(),
+    )
+    loaded = load_flow(
+        _PARENT,
+        child_resolver=lambda _path, _version=None: child,
+    )
+
+    assert loaded.origin_resolver is not None
+    assert all(
+        loaded.origin_resolver.resolve(origin) is not None
+        for origin in iter_flow_origins(loaded.compiled)
+    )
 
 
 def test_external_resolver_must_return_a_composed_flow():
     with pytest.raises(LoadError, match="expected ComposedFlow") as caught:
         load_flow(
-            _PARENT,
+            _ONE_ALIAS_PARENT,
             child_resolver=lambda _path, _version=None: object(),
         )
 
-    assert caught.value.line is not None
+    assert "alias 'child_view'" in str(caught.value)
+    assert caught.value.line == 8
 
 
 def test_source_free_custom_child_rejects_an_origin_resolver():
@@ -176,11 +298,12 @@ def test_source_free_custom_child_rejects_an_origin_resolver():
 
     with pytest.raises(LoadError, match="source-free child") as caught:
         load_flow(
-            _PARENT,
+            _ONE_ALIAS_PARENT,
             child_resolver=lambda _path, _version=None: child,
         )
 
-    assert caught.value.line is not None
+    assert "alias 'child_view'" in str(caught.value)
+    assert caught.value.line == 8
 
 
 def test_source_free_custom_child_remains_source_free_when_embedded():
@@ -202,7 +325,10 @@ uses:
     embedded = loaded.compiled.nodes["invoke"].child
 
     assert _origins(embedded) == {}
-    assert loaded.origin_resolver is not None
+    assert isinstance(loaded.origin_resolver, ResolverTable)
+    assert {
+        origin.key for origin in loaded.origin_resolver.origins
+    } == set(_origins(loaded.compiled))
 
 
 def test_resolver_metadata_is_immutable_copy_reused_and_equality_neutral():

@@ -75,7 +75,7 @@ def test_callable_scope_eagerly_builds_defs_and_memoizes_resolution(monkeypatch)
     """One scope eagerly builds local defs and resolves each external alias once."""
     events = []
     local_child = object()
-    external_child = object()
+    external_child = load_flow("id: external\nname: external\nnodes: {}\n")
     registry = object()
     body = {"nodes": {}}
     seen_scopes = []
@@ -123,7 +123,8 @@ def test_callable_scope_eagerly_builds_defs_and_memoizes_resolution(monkeypatch)
         ("def", "local"),
         ("external", "library/child", "declared-v1"),
     ]
-    assert first is external_child
+    assert first is not external_child
+    assert first.compiled is not external_child.compiled
     assert second is first
 
 

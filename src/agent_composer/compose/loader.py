@@ -39,6 +39,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from agent_composer.compile.model import CompiledFlow
 from agent_composer.compile.origins import iter_flow_origins, rebase_flow_origins
 from agent_composer.diagnostics import (
     DiagnosticFrame,
@@ -331,19 +332,20 @@ def _check_version(child: "ComposedFlow", path: str, version: Optional[str]) -> 
         )
 
 
-def _distinct_origins(compiled) -> tuple[OriginRef, ...]:
-    """Return canonical reachable origins in first structural visit order.
+def _distinct_origins(compiled: CompiledFlow) -> tuple[OriginRef, ...]:
+    """Return distinct reachable origins in first structural visit order.
 
     Args:
         compiled (`CompiledFlow`): Static graph whose provenance slots are walked.
 
     Returns:
-        `tuple[OriginRef, ...]`: One exact base origin per distinct opaque key.
+        `tuple[OriginRef, ...]`:
+            The first exact origin object reached for each distinct opaque key.
     """
     by_key: dict[str, OriginRef] = {}
     for origin in iter_flow_origins(compiled):
         canonical = OriginRef(origin.key)
-        by_key.setdefault(canonical.key, canonical)
+        by_key.setdefault(canonical.key, origin)
     return tuple(by_key.values())
 
 
@@ -355,7 +357,8 @@ def _validate_external_child(alias: str, child: object) -> tuple[OriginRef, ...]
         child (`object`): Value returned by the external child resolver.
 
     Returns:
-        `tuple[OriginRef, ...]`: Canonical reachable child origins.
+        `tuple[OriginRef, ...]`:
+            The first exact reachable child origin for each distinct opaque key.
 
     Raises:
         `LoadError`:
@@ -369,7 +372,7 @@ def _validate_external_child(alias: str, child: object) -> tuple[OriginRef, ...]
         )
     try:
         origins = _distinct_origins(child.compiled)
-    except (TypeError, ValueError) as exc:
+    except Exception as exc:
         raise LoadError(
             f"uses: alias {alias!r} returned an invalid compiled origin graph: {exc}"
         ) from exc
@@ -387,7 +390,13 @@ def _validate_external_child(alias: str, child: object) -> tuple[OriginRef, ...]
             f"uses: alias {alias!r} returned an originful child without an "
             "origin resolver"
         )
-    resolve = getattr(resolver, "resolve", None)
+    try:
+        resolve = getattr(resolver, "resolve", None)
+    except Exception as exc:
+        raise LoadError(
+            f"uses: alias {alias!r} child origin resolver could not expose "
+            f"resolve: {exc}"
+        ) from exc
     if not callable(resolve):
         raise LoadError(
             f"uses: alias {alias!r} child origin resolver does not implement resolve"
@@ -432,7 +441,7 @@ def _rebase_external_child(alias: str, child: object) -> ComposedFlow:
             lambda origin: _scope_origin(alias, origin),
             resolver=child.origin_resolver,
         )
-    except (TypeError, ValueError) as exc:
+    except Exception as exc:
         raise LoadError(
             f"uses: alias {alias!r} could not rebase child origins: {exc}"
         ) from exc

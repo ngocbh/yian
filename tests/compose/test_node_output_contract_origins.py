@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+import agent_composer.llm_clients as llm_clients
 from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.compose.nodes.base import BuildContext
@@ -132,6 +133,67 @@ def test_nested_output_failure_selects_the_exact_contract_field():
         .child("age")
     )
     assert diagnostic.frames[-1].range == expected.range
+
+
+def test_agent_structured_failure_selects_exact_authored_output_field(monkeypatch):
+    """Retry-exhausted schema validation diagnoses its nested YAML declaration."""
+    text = """\
+id: agent-output-origin
+name: agent-output-origin
+nodes:
+  writer:
+    kind: agent
+    mode: plain
+    prompt: write a profile
+    retries: 0
+    llm_config:
+      provider: openai
+      model: gpt-4o
+    output:
+      profile:
+        age: int
+output: ${writer.output}
+"""
+
+    class _InvalidAgentModel:
+        """Return one response rejected by the generated record schema."""
+
+        def with_structured_output(self, schema):
+            class _Bound:
+                """Validate one deliberately invalid nested value."""
+
+                def invoke(self, _messages):
+                    return schema.model_validate(
+                        {"profile": {"age": "not-an-integer"}}
+                    )
+
+            return _Bound()
+
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _config: _InvalidAgentModel(),
+    )
+    document = SourceDocument.parse(text, label="agent-output.yaml")
+    loaded = load_flow(text, source_label="agent-output.yaml")
+    contract = _contract(loaded, "writer")
+    age_origin = dict(contract.origins.entries)[("profile", "age")]
+
+    result = run_flow(loaded, {})
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.code == "node.execute"
+    assert result.failure.cause_type == "ValidationError"
+    assert result.failure.trace[-1] == age_origin
+    expected = (
+        document.root.child("nodes")
+        .child("writer")
+        .child("output")
+        .child("profile")
+        .child("age")
+    )
+    assert loaded.diagnose(result.failure).frames[-1].range == expected.range
 
 
 def test_root_output_failure_selects_the_contract_root():

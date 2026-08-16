@@ -16,9 +16,12 @@ from pydantic import BaseModel
 
 import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.agent import AgentNode
+from agent_composer.nodes.contracts import ContractOrigins, ValueContract
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.typesys.pool import VariablePool
+from agent_composer.typesys.values import Type, ValueKind
 from agent_composer.llm_clients import LLMConfig
 
 
@@ -37,6 +40,28 @@ class _FakeChat:
     def invoke(self, messages):
         self.calls += 1
         return self._replies.pop(0)
+
+
+class _InvalidStructuredChat:
+    """Return one invalid generated value or raise one provider error."""
+
+    def __init__(self, *, payload=None, error=None):
+        self.payload = payload
+        self.error = error
+
+    def with_structured_output(self, schema):
+        payload = self.payload
+        error = self.error
+
+        class _Bound:
+            """One schema-bound invalid provider response."""
+
+            def invoke(self, _messages):
+                if error is not None:
+                    raise error
+                return schema.model_validate(payload)
+
+        return _Bound()
 
 
 def _ai_tool_call(name, args, call_id="1"):
@@ -212,6 +237,156 @@ def test_tool_calling_propagates_tool_exception_as_node_failure(monkeypatch):
     assert isinstance(event, EvaluationFailure)
     assert event.failure.cause_type == "RuntimeError"
     assert "cannot load ACME" in event.failure.message
+
+
+@pytest.mark.parametrize(
+    ("entries", "expected"),
+    [
+        (
+            (("profile", "age"), OriginRef("output/profile/age")),
+            OriginRef("output/profile/age"),
+        ),
+        (
+            (("profile",), OriginRef("output/profile")),
+            OriginRef("output/profile"),
+        ),
+    ],
+)
+def test_structured_failure_selects_exact_or_ancestor_output_origin(
+    monkeypatch,
+    entries,
+    expected,
+):
+    """Generated record errors reuse exact-to-ancestor contract lookup."""
+    typ = Type(
+        kind=ValueKind.OBJECT,
+        fields={
+            "profile": Type(
+                kind=ValueKind.OBJECT,
+                fields={"age": Type.scalar(ValueKind.INTEGER)},
+                required=frozenset({"age"}),
+            )
+        },
+        required=frozenset({"profile"}),
+    )
+    node = AgentNode(
+        "n",
+        mode="plain",
+        retries=0,
+        llm_config={"provider": "openai", "model": "gpt-4o"},
+    )
+    node.origin = OriginRef("node")
+    node.output_contract = ValueContract(
+        type=typ,
+        origins=ContractOrigins(
+            default=OriginRef("output"),
+            entries=(entries,),
+        ),
+    )
+    _patch_model(
+        monkeypatch,
+        _InvalidStructuredChat(payload={"profile": {"age": "bad"}}),
+    )
+
+    event = _run_node(node)
+
+    assert isinstance(event, EvaluationFailure)
+    assert event.failure.cause_type == "ValidationError"
+    assert event.failure.trace == (expected,)
+
+
+def test_structured_scalar_failure_selects_contract_root(monkeypatch):
+    """The generated scalar `value` wrapper maps to the output root."""
+    node = AgentNode(
+        "n",
+        mode="plain",
+        retries=0,
+        llm_config={"provider": "openai", "model": "gpt-4o"},
+    )
+    node.origin = OriginRef("node")
+    node.output_contract = ValueContract(
+        type=Type.scalar(ValueKind.INTEGER),
+        origins=ContractOrigins(default=OriginRef("output")),
+    )
+    _patch_model(monkeypatch, _InvalidStructuredChat(payload={"value": "bad"}))
+
+    event = _run_node(node)
+
+    assert isinstance(event, EvaluationFailure)
+    assert event.failure.trace == (OriginRef("output"),)
+
+
+def test_non_validation_structured_failure_keeps_node_origin(monkeypatch):
+    """Provider errors outside generated-schema validation keep common fallback."""
+    node = AgentNode(
+        "n",
+        mode="plain",
+        retries=0,
+        llm_config={"provider": "openai", "model": "gpt-4o"},
+    )
+    node.origin = OriginRef("node")
+    node.output_contract = ValueContract(
+        type=Type.scalar(ValueKind.INTEGER),
+        origins=ContractOrigins(default=OriginRef("output")),
+    )
+    _patch_model(
+        monkeypatch,
+        _InvalidStructuredChat(error=RuntimeError("provider failed")),
+    )
+
+    event = _run_node(node)
+
+    assert isinstance(event, EvaluationFailure)
+    assert event.failure.cause_type == "RuntimeError"
+    assert event.failure.trace == (OriginRef("node"),)
+
+
+def test_tool_validation_error_does_not_claim_scalar_output_origin(monkeypatch):
+    """A tool's wrapper-shaped Pydantic location remains a node-level failure."""
+
+    class ScalarWrapper(BaseModel):
+        """Deliberately collide with the generated scalar output schema title."""
+
+        value: int
+
+    monkeypatch.setitem(
+        tools_mod.TOOL_REGISTRY,
+        "scalar_wrapper",
+        _FakeTool(lambda args: args["value"], ScalarWrapper),
+    )
+    node = _node(tools=["scalar_wrapper"])
+    node.origin = OriginRef("node")
+    node.output_contract = ValueContract(
+        type=Type.scalar(ValueKind.INTEGER),
+        origins=ContractOrigins(default=OriginRef("output")),
+    )
+    _patch_model(
+        monkeypatch,
+        _FakeChat([_ai_tool_call("scalar_wrapper", {"value": "bad"})]),
+    )
+
+    event = _run_node(node)
+
+    assert isinstance(event, EvaluationFailure)
+    assert event.failure.cause_type == "ValidationError"
+    assert event.failure.trace == (OriginRef("node"),)
+
+
+def test_source_free_structured_failure_keeps_empty_trace(monkeypatch):
+    """Generated validation does not invent provenance for Python-authored agents."""
+    node = AgentNode(
+        "n",
+        mode="plain",
+        retries=0,
+        llm_config={"provider": "openai", "model": "gpt-4o"},
+    )
+    node.output_contract = ValueContract(type=Type.scalar(ValueKind.INTEGER))
+    _patch_model(monkeypatch, _InvalidStructuredChat(payload={"value": "bad"}))
+
+    event = _run_node(node)
+
+    assert isinstance(event, EvaluationFailure)
+    assert event.failure.trace == ()
 
 
 def test_tool_calling_cap_trips_when_bounded(monkeypatch):

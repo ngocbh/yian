@@ -701,18 +701,22 @@ def _input_control_choices(
     decl: Parameter,
     typ: Optional[Type],
     questionary: Any,
+    *,
+    include_enter: bool = False,
 ) -> tuple[List[Any], Optional[Any]]:
-    """Build fresh omission/null choices and the safe preselected control.
+    """Build fresh omission/null/enter choices and the safe default control.
 
     Questionary mutates choice shortcut state while constructing a widget, so this
     factory creates new choice objects for every prompt. Omission is available only
     to non-required parameters and remains the preselected action. Explicit null is
-    available only when the resolved contract accepts it.
+    available only when the resolved contract accepts it. When requested, Enter is
+    the fallback default for a required parameter.
 
     Args:
         decl (`Parameter`): Canonical declaration that owns omission/default policy.
         typ (`Type | None`): Resolved input contract, or ``None`` when untyped.
         questionary (`Any`): Questionary module used to construct fresh choices.
+        include_enter (`bool`): Whether to add the open-editor action.
 
     Returns:
         `tuple[list[Any], Any | None]`: Control choices and their default choice.
@@ -728,7 +732,75 @@ def _input_control_choices(
         default = omission
     if _accepts_null(typ):
         choices.append(questionary.Choice("Set null", value=_NULL_INPUT))
+    if include_enter:
+        enter = questionary.Choice("Enter value", value=_ENTER_INPUT)
+        choices.append(enter)
+        if default is None:
+            default = enter
     return choices, default
+
+
+def _prompt_open_value(
+    decl: Parameter,
+    typ: Optional[Type],
+    label: str,
+    questionary: Any,
+    style: Any,
+) -> Any:
+    """Run the scalar or structured text editor for one open input.
+
+    Structured editors validate JSON and return its native value; scalar editors
+    retain the raw answer for ordinary run-boundary coercion. An optional blank
+    answer becomes ``_OMIT_INPUT``, while ``None`` remains cancellation.
+
+    Args:
+        decl (`Parameter`): Canonical declaration that owns blank/required policy.
+        typ (`Type | None`): Resolved input contract, or ``None`` when untyped.
+        label (`str`): Fully rendered prompt label.
+        questionary (`Any`): Questionary module used to construct the editor.
+        style (`Any`): Shared Questionary style for the widget.
+
+    Returns:
+        `Any`: Native structured value, raw scalar value, ``_OMIT_INPUT`` for an
+        optional blank, or ``None`` for cancellation.
+    """
+    if typ is not None and (typ.kind.is_list() or typ.kind == ValueKind.OBJECT):
+        instruction = (
+            "Enter a JSON array" if typ.kind.is_list() else "Enter a JSON object"
+        )
+
+        def validate(raw: str) -> bool | str:
+            if not decl.required and raw.strip() == "":
+                return True
+            try:
+                _parse_structured_input(raw, typ)
+            except _StructuredInputError as exc:
+                return str(exc)
+            return True
+
+        value = questionary.text(
+            label,
+            default="",
+            instruction=instruction,
+            validate=validate,
+            qmark="?",
+            style=style,
+        ).ask()
+        if value is None:
+            return None
+        if value.strip() == "" and not decl.required:
+            return _OMIT_INPUT
+        return _parse_structured_input(value, typ)
+
+    value = questionary.text(label, default="", qmark="?", style=style).ask()
+    if (
+        value is not None
+        and isinstance(value, str)
+        and value.strip() == ""
+        and not decl.required
+    ):
+        return _OMIT_INPUT
+    return value
 
 
 def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
@@ -736,10 +808,11 @@ def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
 
     ``_OMIT_INPUT`` and ``_NULL_INPUT`` are explicit prompt controls; ``None`` remains
     Questionary's cancellation result. Required non-nullable booleans use confirm;
-    other booleans and Literals use selects with allowed controls. Lists and objects
-    use validated JSON text and return native values; remaining scalar types use
-    unchanged text for ordinary run-boundary coercion. Non-required whitespace means
-    omission in either text path.
+    other booleans and Literals use selects with allowed controls. Null-capable open
+    inputs first select omit, null, or ``_ENTER_INPUT``; Enter opens the existing text
+    editor, and an optional blank returns to a fresh action palette. Non-null-capable
+    lists/objects still use validated JSON directly, remaining scalars retain raw text,
+    and an optional blank in either direct editor returns omission.
 
     Args:
         decl (`Parameter`): Canonical flow input declaration to present.
@@ -748,7 +821,8 @@ def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
         style (`Any`): Shared Questionary style for the widget.
 
     Returns:
-        `Any`: Explicit value, private control sentinel, or ``None`` cancellation.
+        `Any`: Explicit value, ``_OMIT_INPUT``, ``_NULL_INPUT``, or ``None``
+        cancellation. ``_ENTER_INPUT`` is consumed locally and never returned.
     """
     label = _input_label(decl)
     contract = getattr(decl, "contract", None)
@@ -805,43 +879,39 @@ def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
             style=style,
         ).ask()
 
-    if typ is not None and (typ.kind.is_list() or typ.kind == ValueKind.OBJECT):
-        instruction = (
-            "Enter a JSON array" if typ.kind.is_list() else "Enter a JSON object"
-        )
+    if _accepts_null(typ):
+        while True:
+            controls, default = _input_control_choices(
+                decl,
+                typ,
+                questionary,
+                include_enter=True,
+            )
+            action = questionary.select(
+                label,
+                choices=controls,
+                default=default,
+                qmark="?",
+                style=style,
+            ).ask()
+            if action is None:
+                return None
+            if action is _OMIT_INPUT or action is _NULL_INPUT:
+                return action
+            if action is not _ENTER_INPUT:
+                raise RuntimeError("unexpected open-input prompt action")
+            value = _prompt_open_value(
+                decl,
+                typ,
+                label,
+                questionary,
+                style,
+            )
+            if value is _OMIT_INPUT:
+                continue
+            return value
 
-        def validate(raw: str) -> bool | str:
-            if not decl.required and raw.strip() == "":
-                return True
-            try:
-                _parse_structured_input(raw, typ)
-            except _StructuredInputError as exc:
-                return str(exc)
-            return True
-
-        value = questionary.text(
-            label,
-            default="",
-            instruction=instruction,
-            validate=validate,
-            qmark="?",
-            style=style,
-        ).ask()
-        if value is None:
-            return None
-        if value.strip() == "" and not decl.required:
-            return _OMIT_INPUT
-        return _parse_structured_input(value, typ)
-
-    value = questionary.text(label, default="", qmark="?", style=style).ask()
-    if (
-        value is not None
-        and isinstance(value, str)
-        and value.strip() == ""
-        and not decl.required
-    ):
-        return _OMIT_INPUT
-    return value
+    return _prompt_open_value(decl, typ, label, questionary, style)
 
 
 def _gather_missing_inputs(

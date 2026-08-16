@@ -101,6 +101,17 @@ class _InvalidCommitTargetNode(Node):
         return Output("done", commit_as=42)  # type: ignore[arg-type]
 
 
+class _ExplicitCommitNode(_ActionNode):
+    """Return one value with a result-owned success target."""
+
+    def __init__(self, node_id: str, action: Callable[[], Any], target: str) -> None:
+        super().__init__(node_id, action)
+        self._target = target
+
+    def _run_impl(self, inputs: dict[str, Any]) -> Output:
+        return Output(self._action(), commit_as=self._target)
+
+
 class _GrowNode(Node):
     """Return one seed-first expansion through the raw-outcome arm."""
 
@@ -595,18 +606,54 @@ def test_nested_output_failure_uses_the_exact_contract_origin(
     assert failures[0].trace == (score_origin,)
 
 
+def test_non_type_output_failure_uses_the_contract_default_origin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Canonical JSON rejection has no value path and retains the root fallback."""
+    root_origin = OriginRef("nodes/work/output")
+    unrelated_origin = OriginRef("nodes/work/output/unrelated")
+    node = _ActionNode(
+        "work",
+        lambda: float("nan"),
+        output_contract=ValueContract(
+            Type.scalar(ValueKind.NUMBER),
+            ContractOrigins(
+                default=root_origin,
+                entries=((("unrelated",), unrelated_origin),),
+            ),
+        ),
+    )
+    state, log = _initialized(_flow([node]), num_workers=0)
+    failures = _capture_semantic_failures(monkeypatch)
+
+    list(_dispatcher(state, log, num_workers=0).run())
+
+    assert len(failures) == 1
+    assert failures[0].code == "contract.output"
+    assert failures[0].cause_type == "ValueError"
+    assert failures[0].trace == (root_origin,)
+
+
+@pytest.mark.parametrize("explicit", [False, True], ids=("baked", "result"))
 def test_redirected_output_uses_effective_target_contract_origin(
     monkeypatch: pytest.MonkeyPatch,
+    explicit: bool,
 ):
     producer_origin = OriginRef("nodes/producer")
     contract_origin = OriginRef("nodes/target/output")
     items_origin = OriginRef("nodes/target/output/items")
-    producer = _ActionNode(
-        "producer",
-        lambda: {"items": [{"score": 1}, {"score": "bad"}]},
-        origin=producer_origin,
+
+    def action() -> dict[str, list[dict[str, int | str]]]:
+        """Return one invalid value for the selected target contract."""
+        return {"items": [{"score": 1}, {"score": "bad"}]}
+
+    producer = (
+        _ExplicitCommitNode("producer", action, "target")
+        if explicit
+        else _ActionNode("producer", action, origin=producer_origin)
     )
-    producer.commit_as = "target"
+    producer.origin = producer_origin
+    producer.commit_as = "absent" if explicit else "target"
     flow = _flow([producer])
     item_type = Type(
         kind=ValueKind.OBJECT,

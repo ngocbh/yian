@@ -88,7 +88,11 @@ class LoopNode(Node):
         self.max_iters = max_iters
         self.iteration = iteration
         # The compiled `L` sets origin_id == self.id (uniform); a clone `L~k` carries the origin.
-        self.origin_id = origin_id or node_id
+        self.origin_id: str = origin_id or node_id
+
+    def skipped_output_target(self) -> str:
+        """Return the compiled loop origin that receives a stopped driver output."""
+        return self.origin_id
 
     def iter_local_origins(
         self,

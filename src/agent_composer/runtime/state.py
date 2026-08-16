@@ -2833,11 +2833,12 @@ def _prepare_route_delta(
     state: RunState,
     record: NodeRoutedRecord,
 ) -> tuple[_RouteDelta, dict[str, NodeState]]:
-    """Validate one route and return its frozen delta plus transient edge overlay."""
+    """Validate one route and return its redirect-aware frozen skip closure."""
     _validate_route_record(state, record)
     edge_updates: dict[str, NodeState] = {}
     skipped_node_ids: list[str] = []
     skipped_nodes: set[str] = set()
+    propagated_targets: set[str] = {record.node_id}
     newly_ready_ids: list[str] = []
     newly_ready: set[str] = set()
     joins: dict[str, _JoinScratch] = {}
@@ -2910,7 +2911,11 @@ def _prepare_route_delta(
 
         skipped_nodes.add(head)
         skipped_node_ids.append(head)
-        children = _route_outgoing(state, head, edge_updates)
+        target = _skipped_output_target(state, head)
+        if target in propagated_targets:
+            continue
+        propagated_targets.add(target)
+        children = _route_outgoing(state, target, edge_updates)
         for child in reversed(children):
             work.append((child, NodeState.SKIPPED))
 
@@ -2924,6 +2929,31 @@ def _prepare_route_delta(
         ),
         edge_updates,
     )
+
+
+def _skipped_output_target(state: RunState, node_id: str) -> str:
+    """Return one skipped node's validated logical output target.
+
+    The hook is node-owned so CALL/MAP's baked completion redirect and LOOP's
+    origin redirect remain outside the kind-blind reducer.  Its result is
+    topology authority, not node-produced data; malformed setup therefore
+    escapes as a raw host/graph error.
+    """
+    node = state.flow.nodes[node_id]
+    target = node.skipped_output_target()
+    if type(target) is not str:
+        raise TypeError(
+            f"node {node_id!r} skipped output target must be a string"
+        )
+    if not target:
+        raise ValueError(
+            f"node {node_id!r} skipped output target must be non-empty"
+        )
+    if target not in state.flow.nodes:
+        raise ValueError(
+            f"node {node_id!r} skipped output target {target!r} does not exist"
+        )
+    return target
 
 
 def _prepare_terminal_delta(

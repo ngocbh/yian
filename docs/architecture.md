@@ -79,6 +79,8 @@ The output is a **`ComposedFlow`**: a `CompiledFlow` (the static topology) plus 
 canonical typed `input:` parameters, the `asserts`, a render-only *source frame*, and
 an optional complete `origin_resolver`. Source-free graphs use `None`; every Compose-
 owned origin reachable from an originful graph has one exact diagnostic-frame route.
+`ComposedFlow.diagnose(failure)` is the authoring-front-end boundary that resolves
+the complete trace through that authority into presentation-only `Diagnostic` data.
 
 The loader owns one `SourceDocument` for each flow source document. Source-aware parsing
 and inline extraction reuse cursors into it; later passes use descriptors and nodes that

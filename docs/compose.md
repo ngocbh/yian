@@ -277,6 +277,12 @@ corresponds to them; authored nodes inside retained inline bodies are stamped no
   runtime failure draw a caret back at your YAML, even across nested flow calls.
 - `origin_resolver` — an immutable source-neutral resolver whose exact domain is the
   distinct origins reachable from `compiled`; `None` only for a source-free graph.
+- `diagnose(failure)` — the presentation-only boundary that resolves the complete
+  ordered failure trace through that authority into a canonical `Diagnostic`.
+
+Diagnosis is atomic: an unresolved non-empty trace yields no partial frames and
+retains the failure's code, message, node, and debug fields in an unlocated
+diagnostic.
 
 External physical files remain canonical in the resolved-path cache. Their alias views
 rewrite origin keys on copies and retain exact resolver routes back through the canonical

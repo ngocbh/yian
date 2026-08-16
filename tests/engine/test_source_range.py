@@ -1,7 +1,7 @@
 from dataclasses import FrozenInstanceError
 import pytest
 from agent_composer.diagnostics import SourceRange
-from agent_composer.events import Diagnostic, SourceRange as EventSourceRange
+from agent_composer.events import SourceRange as EventSourceRange
 
 
 def test_source_range_is_frozen_1based():
@@ -13,12 +13,6 @@ def test_source_range_is_frozen_1based():
 
 def test_events_temporarily_reexports_the_same_source_range_class():
     assert EventSourceRange is SourceRange
-
-
-def test_diagnostic_holds_primary_and_notes():
-    pr = SourceRange(1, 1, 1, 4)
-    d = Diagnostic(severity="error", message="boom", primary=pr, notes=())
-    assert d.severity == "error" and d.primary is pr and d.notes == ()
 
 
 # --------------------------------------------------------------------------- #
@@ -77,7 +71,15 @@ def test_covered_lines_zero_width_caret_still_marks_its_line():
     assert SourceRange(5, 5, 5, 5).covered_lines(_YAML) == [5]
 
 
-def test_covered_lines_out_of_bounds_end_does_not_raise():
-    # Defensive: a range past EOF reads as blank and drops the line, never IndexErrors.
-    assert SourceRange(9, 3, 99, 1).covered_lines(_YAML) == list(range(9, 99))
+def test_covered_lines_out_of_bounds_end_does_not_raise() -> None:
+    """A range past EOF includes the available tail without invented lines."""
+    assert SourceRange(9, 3, 99, 1).covered_lines(_YAML) == [9, 10]
     assert SourceRange(3, 1, 3, 1).covered_lines("") == [3]
+
+
+def test_covered_lines_large_end_is_bounded_by_source_size() -> None:
+    """Mark allocation scales with retained source rather than a stale coordinate."""
+    source = "first\nsecond\n"
+
+    assert SourceRange(1, 1, 100_000, 1).covered_lines(source) == [1, 2]
+    assert SourceRange(100_000, 1, 200_000, 1).covered_lines(source) == [100_000]

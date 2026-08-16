@@ -14,6 +14,7 @@ import pytest
 
 import agent_composer.diagnostics as diagnostics
 from agent_composer.diagnostics import (
+    Diagnostic,
     DiagnosticFrame,
     FAILURE_CODES,
     Failure,
@@ -38,6 +39,41 @@ EXPECTED_FAILURE_CODES = frozenset(
         "graph.terminal_unreachable",
     }
 )
+
+
+def test_diagnostic_has_one_frozen_presentation_shape() -> None:
+    """Resolved presentation data is immutable and owns every source frame."""
+    frame = DiagnosticFrame(
+        label="flow.yaml",
+        text="nodes:\n",
+        range=SourceRange(1, 1, 1, 7),
+        note="outer context",
+    )
+    diagnostic = Diagnostic(
+        code="node.execute",
+        message="boom",
+        frames=(frame,),
+        notes=("try another value",),
+        node_id="work",
+        cause_type="ValueError",
+        traceback="Traceback ...",
+    )
+
+    assert "Diagnostic" in diagnostics.__all__
+    assert [field.name for field in fields(Diagnostic)] == [
+        "code",
+        "message",
+        "frames",
+        "notes",
+        "node_id",
+        "cause_type",
+        "traceback",
+    ]
+    assert diagnostic.frames == (frame,)
+    assert diagnostic.notes == ("try another value",)
+    assert not hasattr(diagnostic, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        diagnostic.message = "changed"  # type: ignore[misc]
 
 
 def test_failure_has_one_closed_source_neutral_shape() -> None:
@@ -471,7 +507,7 @@ def test_public_diagnostics_import_does_not_load_engine_or_yaml_layers() -> None
     source_root = Path(__file__).parents[2] / "src"
     script = """
 import sys
-from agent_composer.diagnostics import FAILURE_CODES, DiagnosticFrame, Failure, FailureCode, OriginRef, OriginResolver, ResolverTable, SourceRange
+from agent_composer.diagnostics import Diagnostic, FAILURE_CODES, DiagnosticFrame, Failure, FailureCode, OriginRef, OriginResolver, ResolverTable, SourceRange
 
 loaded_project_modules = sorted(
     name

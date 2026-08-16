@@ -78,12 +78,24 @@ class SourceRange:
             zero-width caret, `start == end`, still marks its own line).
         """
         lines = source_text.splitlines()
-        last = self.end_line
-        # Text on `end_line` before the exclusive end. Out-of-bounds (a range past EOF) reads as
-        # blank and drops the line — defensive, not expected.
-        prefix = lines[last - 1][: self.end_col - 1] if 0 < last <= len(lines) else ""
-        if not prefix.strip():
-            last -= 1
+        line_count = len(lines)
+        if not 1 <= self.start_line <= line_count:
+            return [self.start_line]
+
+        if self.end_line > line_count:
+            # A stale range may extend beyond the retained source. The available
+            # tail is still real context, but nonexistent line numbers are not.
+            last = line_count
+        else:
+            last = self.end_line
+            prefix = (
+                lines[last - 1][: self.end_col - 1]
+                if 0 < last <= line_count
+                else ""
+            )
+            if not prefix.strip():
+                last -= 1
+        last = min(last, line_count)
         return list(range(self.start_line, max(last, self.start_line) + 1))
 
 
@@ -166,6 +178,30 @@ class DiagnosticFrame:
     text: str
     range: SourceRange
     note: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Diagnostic:
+    """One immutable presentation-ready diagnostic.
+
+    Attributes:
+        code (`str`): Stable semantic or load-time category.
+        message (`str`): Human-readable failure detail.
+        frames (`tuple[DiagnosticFrame, ...]`): Resolved source context ordered
+            outermost to innermost.
+        notes (`tuple[str, ...]`): Presentation context not tied to one frame.
+        node_id (`str | None`): Optional runtime execution identity.
+        cause_type (`str | None`): Optional exception class name for debugging.
+        traceback (`str | None`): Optional opaque Python traceback text.
+    """
+
+    code: str
+    message: str
+    frames: tuple[DiagnosticFrame, ...] = ()
+    notes: tuple[str, ...] = ()
+    node_id: str | None = None
+    cause_type: str | None = None
+    traceback: str | None = None
 
 
 class OriginResolver(Protocol):
@@ -381,6 +417,7 @@ class ResolverTable:
 
 
 __all__ = [
+    "Diagnostic",
     "DiagnosticFrame",
     "FAILURE_CODES",
     "Failure",

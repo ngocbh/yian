@@ -22,7 +22,7 @@ These names are exported from the top-level `agent_composer` package:
 | `load_flow` | parse + compile + validate Compose-YAML into a `ComposedFlow` |
 | `run_flow` | drive a `ComposedFlow` to a terminal, returning a `RunResult` |
 | `Failure` | immutable semantic failure (`code`, message, node, origin trace, debug cause) |
-| `ComposedFlow` | a compiled, validated flow plus its optional complete `origin_resolver` |
+| `ComposedFlow` | a compiled, validated flow with an optional resolver and `diagnose(failure)` |
 | `CompiledFlow` | the compiled flow IR (`loaded.compiled`) |
 | `VariablePool` | the typed value pool |
 | `evaluate_when` | evaluate a boolean `when:`/assert expression |
@@ -99,6 +99,33 @@ Temporary `result.locator` / `result.range` fields preserve precise YAML framing
 there are no `error`, `error_type`, or standalone `traceback` aliases.
 Host-control, callback, log I/O, and internal reducer errors propagate after the
 engine has drained active workers and released the boundary-owned log.
+
+## Diagnosing a failed run
+
+```python
+from agent_composer.diagnostics import Diagnostic
+
+if result.failure is not None:
+    diagnostic: Diagnostic = loaded.diagnose(result.failure)
+    print(diagnostic.message)
+    for frame in diagnostic.frames:
+        print(frame.label, frame.range.start_line)
+```
+
+`ComposedFlow.diagnose(failure) -> Diagnostic` is the Compose front end's source
+resolution seam. It copies the failure's `code`, `message`, `node_id`,
+`cause_type`, and `traceback`, then resolves every opaque trace origin in its
+existing outermost-to-innermost order. Duplicate origins remain duplicate
+frames. An empty trace produces an unlocated diagnostic without a warning. If a
+non-empty trace cannot be resolved completely, diagnosis returns no frames and
+the single note `Source presentation was unavailable.` rather than exposing a
+partial source stack or replacing the semantic failure.
+
+`Diagnostic` is defined in `agent_composer.diagnostics`; it is not currently a
+package-root `agent_composer` export. The CLI still renders runtime failures
+through the temporary `RunResult.locator` / `range` and `SourceFrame` bridge, so
+library callers should use `loaded.diagnose(...)` directly when they want the
+canonical origin-based presentation value.
 
 ## Authoritative run logs
 

@@ -74,6 +74,34 @@ class Failure:
     traceback: str | None = None
 ```
 
+Resolved presentation has a separate immutable product in the same leaf:
+
+```python
+@dataclass(frozen=True, slots=True)
+class Diagnostic:
+    code: str
+    message: str
+    frames: tuple[DiagnosticFrame, ...] = ()
+    notes: tuple[str, ...] = ()
+    node_id: str | None = None
+    cause_type: str | None = None
+    traceback: str | None = None
+```
+
+`Diagnostic` is presentation-only; it neither drives execution nor resolves its
+own frames. `ComposedFlow.diagnose(failure)` is Compose's sole
+authoring-front-end failure resolution seam. It copies `code`, `message`,
+`node_id`, `cause_type`, and `traceback`, resolves the entire trace in supplied
+outermost-to-innermost order, and preserves duplicate origins. An empty trace is
+unlocated without a note. For a non-empty trace, an absent resolver or any
+missing, malformed, or raising resolution atomically returns no frames plus
+exactly `Source presentation was unavailable.` `ComposedFlow.diagnose()` does
+not inspect the compiled graph or `SourceFrame`, and it does not parse or reparse
+YAML; resolution may delegate to the resolver's retained source document.
+Runtime currently supplies at most one trace origin;
+nested outer context is not yet implemented. The locator/range and
+`SourceFrame` CLI bridges below remain temporary current behavior.
+
 The trace is authored identity ordered outermost to innermost; its final item is
 the most precise available operation, while `node_id` remains runtime execution
 identity. The closed plain-string codes are `binding.evaluate`,
@@ -324,8 +352,9 @@ compose + compile.expand + runtime <── package-root run.py
 ```
 
 `diagnostics.py` owns source-neutral `Failure`, `SourceRange`, opaque `OriginRef`,
-resolved `DiagnosticFrame`, the `OriginResolver` protocol, and immutable
-exact-route `ResolverTable`. It imports only the standard library. `events.py`
+resolved `DiagnosticFrame` and `Diagnostic` presentation values, the
+`OriginResolver` protocol, and immutable exact-route `ResolverTable`. It imports
+only the standard library. `events.py`
 imports this leaf and temporarily re-exports `SourceRange` while existing
 consumers migrate.
 
@@ -666,8 +695,11 @@ never a text heuristic.
   `_top_ranges` (the loaded flow's `SourceFrame` maps, or the defensive
   `loader.top_frame_ranges(document)` fallback): a
   `field` locator → that field's range, else `_node_range` (node-kind best field, e.g. a code
-  node's `code:`, → node HEADER range). The winning `SourceRange` is boxed via a
-  **`Diagnostic`** (severity + message + primary range + notes) through `render_diagnostic`.
+  node's `code:`, → node HEADER range). The winning `SourceRange` is wrapped in
+  the canonical `Diagnostic(code, message, frames=(DiagnosticFrame(...), ...),
+  notes, node_id, cause_type, traceback)` and passed to `render_diagnostic`.
+  This direct construction is a compatibility bridge: the CLI does not yet use
+  `ComposedFlow.diagnose()` for runtime failures.
 - **Cross-flow call traceback** — when a failure is inside a *called child*, its node id is
   runtime-NAMESPACED (`gate/approve`, `outer/via/boom`, `gate#0/inner` for a map element).
   A `call`/`map` node bakes its child flow's render-only **`SourceFrame`** (`compose/loader`:

@@ -1,19 +1,11 @@
-"""Tests for `render_diagnostic` — the single Step-8 CLI error renderer.
-
-`render_diagnostic` funnels every compile/run error through one path: it boxes the
-`Diagnostic.primary` `SourceRange` in the flow source and prints the message, with any
-`notes` (the outer call-traceback frames of a nested `call`/`map` failure, innermost last)
-stacked above under a "call traceback" header. These tests capture `err_console` output and
-assert the boxed line + message (single-range case) and the stacked header + notes + primary
-(notes case).
-"""
+"""Tests for the format-neutral diagnostic CLI renderer."""
 
 from __future__ import annotations
 
 import re
 
 from agent_composer.cli.run import err_console, render_diagnostic
-from agent_composer.events import Diagnostic, SourceRange
+from agent_composer.diagnostics import Diagnostic, DiagnosticFrame, SourceRange
 
 _SOURCE = """\
 id: f
@@ -39,64 +31,122 @@ def _marked(out: str) -> list[int]:
     return [int(n) for n in re.findall(r"❱\s+(\d+)", out)]
 
 
-def test_render_diagnostic_boxes_range():
-    # A Diagnostic whose primary points at line 5 (`kind: code`) boxes that line and prints
-    # the message.
+def test_render_diagnostic_boxes_one_frame() -> None:
+    """One resolved frame supplies its own source, label, and exact mark."""
     diag = Diagnostic(
-        severity="error",
+        code="compose.load",
         message="bad thing happened",
-        primary=SourceRange(start_line=5, start_col=5, end_line=5, end_col=15),
+        frames=(
+            DiagnosticFrame(
+                label="flow.yaml",
+                text=_SOURCE,
+                range=SourceRange(
+                    start_line=5,
+                    start_col=5,
+                    end_line=5,
+                    end_col=15,
+                ),
+            ),
+        ),
     )
     with err_console.capture() as cap:
-        render_diagnostic(diag, _SOURCE, title="flow.yaml")
+        render_diagnostic(diag)
     out = cap.get()
     assert "bad thing happened" in out
+    assert "flow.yaml:5" in out
     assert "kind: code" in out  # line 5 is inside the boxed source window
     assert _marked(out) == [5]  # ...and it is the line actually highlighted
 
 
-def test_render_diagnostic_block_range_stops_before_the_next_field():
+def test_render_diagnostic_block_range_stops_before_the_next_field() -> None:
     # `input:`'s value is a block MAPPING (line 7), so PyYAML ends it at the start of the next
     # token — `output:` on line 8, column 5. The end is EXCLUSIVE and line 8 holds only
     # indentation before column 5, so the span covers line 7 alone. Reading `end_line` directly
     # would highlight `output: str`, a different field.
     diag = Diagnostic(
-        severity="error",
+        code="compose.load",
         message="bad ref",
-        primary=SourceRange(start_line=7, start_col=7, end_line=8, end_col=5),
+        frames=(
+            DiagnosticFrame(
+                label="flow.yaml",
+                text=_SOURCE,
+                range=SourceRange(
+                    start_line=7,
+                    start_col=7,
+                    end_line=8,
+                    end_col=5,
+                ),
+            ),
+        ),
     )
     with err_console.capture() as cap:
-        render_diagnostic(diag, _SOURCE, title="flow.yaml")
+        render_diagnostic(diag)
     assert _marked(cap.get()) == [7]
 
 
-def test_render_diagnostic_multi_line_block_keeps_its_content_lines():
+def test_render_diagnostic_multi_line_block_keeps_its_content_lines() -> None:
     # The complement — a span genuinely covering several lines still marks them all. `nodes:`
     # opens on 3 and its block runs through 9, ending at 10:1 (`output:` at column 1). Line 10
     # is excluded; 3-9 are not.
     diag = Diagnostic(
-        severity="error",
+        code="compose.load",
         message="bad node",
-        primary=SourceRange(start_line=4, start_col=3, end_line=10, end_col=1),
+        frames=(
+            DiagnosticFrame(
+                label="flow.yaml",
+                text=_SOURCE,
+                range=SourceRange(
+                    start_line=4,
+                    start_col=3,
+                    end_line=10,
+                    end_col=1,
+                ),
+            ),
+        ),
     )
     with err_console.capture() as cap:
-        render_diagnostic(diag, _SOURCE, title="flow.yaml")
+        render_diagnostic(diag)
     assert _marked(cap.get()) == [4, 5, 6, 7, 8, 9]
 
 
-def test_render_diagnostic_renders_notes_as_stack():
-    # Notes (outer call frames) render as a stacked "call traceback" header + the frames,
-    # then the primary box + message below.
+def test_render_diagnostic_renders_ordered_frames_and_context_notes() -> None:
+    """Resolved frames retain tuple order and both note channels stay visible."""
+    child_source = "nodes:\n  leaf:\n    kind: code\n"
     diag = Diagnostic(
-        severity="error",
+        code="node.execute",
         message="leaf failed",
-        primary=SourceRange(start_line=9, start_col=5, end_line=9, end_col=40),
-        notes=("in call gate (flow.yaml:4)", "in call inner (child.yaml:3)"),
+        frames=(
+            DiagnosticFrame(
+                label="root.yaml",
+                text=_SOURCE,
+                range=SourceRange(4, 3, 4, 8),
+                note="while invoking child",
+            ),
+            DiagnosticFrame(
+                label="child.yaml",
+                text=child_source,
+                range=SourceRange(2, 3, 2, 8),
+                note="inside leaf",
+            ),
+        ),
+        notes=("check the child input",),
     )
     with err_console.capture() as cap:
-        render_diagnostic(diag, _SOURCE, title="flow.yaml")
+        render_diagnostic(diag)
     out = cap.get()
-    assert "call traceback (most recent call last):" in out
-    assert "in call gate (flow.yaml:4)" in out
-    assert "in call inner (child.yaml:3)" in out
-    assert "leaf failed" in out
+    assert "source context (outermost first):" in out
+    assert out.index("root.yaml:4") < out.index("child.yaml:2") < out.index("leaf failed")
+    assert "while invoking child" in out
+    assert "inside leaf" in out
+    assert "check the child input" in out
+    assert _marked(out) == [4, 2]
+
+
+def test_render_diagnostic_unlocated_message_needs_no_source_context() -> None:
+    """A source-free diagnostic preserves its message without inventing a label."""
+    diag = Diagnostic(code="node.execute", message="unchanged failure message")
+
+    with err_console.capture() as cap:
+        render_diagnostic(diag)
+
+    assert cap.get().strip() == "unchanged failure message"

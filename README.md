@@ -240,6 +240,14 @@ Failed runs return `result.failure`, an immutable `Failure` also exported from
 display; node identity, opaque origin trace, and optional debugging cause stay
 on that same value rather than parallel error fields.
 
+Library callers can resolve that opaque trace with
+`loaded.diagnose(result.failure)`, which returns the canonical presentation-only
+`Diagnostic` defined in `agent_composer.diagnostics` (it is not a package-root
+export). The method copies `code`, `message`, `node_id`, `cause_type`, and
+`traceback`, then resolves the complete trace atomically. The CLI still uses its
+temporary locator/range and `SourceFrame` rendering bridge during the remaining
+diagnostics migration.
+
 `loaded.origin_resolver` is the source-neutral authority for every origin reachable
 from the compiled Compose graph. It is `None` only when that graph is source-free;
 otherwise it resolves local, nested, and external-file origins to diagnostic frames.

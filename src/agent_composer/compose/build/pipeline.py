@@ -25,7 +25,13 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Optional, Protocol
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
-from agent_composer.diagnostics import OriginRef, OriginResolver
+from agent_composer.diagnostics import (
+    Diagnostic,
+    DiagnosticFrame,
+    Failure,
+    OriginRef,
+    OriginResolver,
+)
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges, Node
 from agent_composer.nodes.contracts import Parameter, ValueContract, as_binding
@@ -73,6 +79,8 @@ from agent_composer.compose.validate.asserts import validate_node_asserts
 # `FlowOutput`, `terminal_output` returns the bare resolved value, so the name
 # only labels the carrier.
 _SINGLE_OUTPUT_NAME = "result"
+
+_PRESENTATION_UNAVAILABLE_NOTE = "Source presentation was unavailable."
 
 
 @dataclass(frozen=True)
@@ -227,6 +235,100 @@ class ComposedFlow:
                     "compiled START params must contain exact Parameter values"
                 )
         return parameters
+
+    def diagnose(self, failure: Failure) -> Diagnostic:
+        """Resolve one semantic failure through this flow's source authority.
+
+        Resolution is presentation-only. A missing, incomplete, malformed, or
+        failing resolver produces an unlocated diagnostic without changing the
+        semantic failure fields.
+
+        Args:
+            failure (`Failure`):
+                Valid source-neutral failure whose trace is ordered outermost to
+                innermost.
+
+        Returns:
+            `Diagnostic`:
+                The unchanged semantic fields plus every resolved frame in trace
+                order, or no frames and one generic note when presentation is
+                unavailable.
+
+        Raises:
+            TypeError: Raised when `failure` is not a `Failure`.
+        """
+        if not isinstance(failure, Failure):
+            raise TypeError("diagnose requires a Failure")
+
+        diagnostic = Diagnostic(
+            code=failure.code,
+            message=failure.message,
+            node_id=failure.node_id,
+            cause_type=failure.cause_type,
+            traceback=failure.traceback,
+        )
+        if not failure.trace:
+            return diagnostic
+
+        unavailable = replace(
+            diagnostic,
+            notes=(_PRESENTATION_UNAVAILABLE_NOTE,),
+        )
+        resolver = self.origin_resolver
+        if resolver is None:
+            return unavailable
+
+        frames: list[DiagnosticFrame] = []
+        for origin in failure.trace:
+            try:
+                frame = resolver.resolve(origin)
+                if not isinstance(frame, DiagnosticFrame):
+                    return unavailable
+
+                label = frame.label
+                text = frame.text
+                source_range = frame.range
+                note = frame.note
+                if (
+                    type(label) is not str
+                    or type(text) is not str
+                    or (note is not None and type(note) is not str)
+                    or not isinstance(source_range, SourceRange)
+                ):
+                    return unavailable
+
+                coordinates = (
+                    source_range.start_line,
+                    source_range.start_col,
+                    source_range.end_line,
+                    source_range.end_col,
+                )
+                if any(
+                    type(coordinate) is not int or coordinate <= 0
+                    for coordinate in coordinates
+                ):
+                    return unavailable
+                start_line, start_col, end_line, end_col = coordinates
+                if (end_line, end_col) < (start_line, start_col):
+                    return unavailable
+
+                frames.append(
+                    DiagnosticFrame(
+                        label=label,
+                        text=text,
+                        range=SourceRange(
+                            start_line,
+                            start_col,
+                            end_line,
+                            end_col,
+                        ),
+                        note=note,
+                    )
+                )
+            except Exception:
+                return unavailable
+
+        return replace(diagnostic, frames=tuple(frames))
 
 
 class _PrivateRegistrar(Protocol):

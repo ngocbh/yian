@@ -76,6 +76,18 @@ Hold this model whenever you design anything:
   `graph.terminal_unreachable` failure on its `NodeRoutedRecord`; replay
   structurally revalidates the route and restores that recorded value, while an
   explicit node failure wins immediately.
+- `diagnostics.Diagnostic(code, message, frames, notes, node_id, cause_type,
+  traceback)` is frozen, resolved presentation-only data. For Compose-authored
+  flows, `ComposedFlow.diagnose(failure)` is the sole authoring-front-end failure
+  resolution seam: it copies `code`, `message`, `node_id`, `cause_type`, and
+  `traceback`, resolves the complete trace in existing
+  outermost-to-innermost order, and preserves duplicate origins. Empty traces
+  remain unlocated without a warning. A missing, incomplete, malformed, or
+  raising resolver for a non-empty trace discards every frame and adds exactly
+  `Source presentation was unavailable.` Runtime traces currently contain zero
+  or one origin; nested outer context is not implemented. Keep the temporary
+  runtime locator/range and CLI `SourceFrame` graph-walk bridges accurate until
+  their later cutover; do not route new origin resolution around `diagnose()`.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;
@@ -278,9 +290,10 @@ The package-root `run.py` sits above compose and runtime and wires cross-layer
 capabilities: notably it owns log lifecycle/recovery and injects compile's
 `build_grow` into the kind-blind runtime.
 
-`diagnostics.Failure` owns semantic failure identity and
-`diagnostics.ResolverTable` owns immutable exact resolver routing; neither knows
-a source format or runtime state. `compile/origins.py` owns the
+`diagnostics.Failure` owns semantic failure identity, `diagnostics.Diagnostic`
+owns resolved presentation data, and `diagnostics.ResolverTable` owns immutable
+exact resolver routing; none knows a source format or runtime state.
+`compile/origins.py` owns the
 representation-neutral whole-graph walk: it visits flow-owned wiring and
 outputs, delegates node-local slots and children to node hooks, and deep-copies
 before rewriting. Its rebasing operation precomputes one mapping per distinct

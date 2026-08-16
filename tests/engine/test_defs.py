@@ -789,6 +789,35 @@ def test_nullable_source_to_defaulted_child_input_is_strict():
         load_flow(_NULLABLE_TO_DEFAULTED)
 
 
+_NULLABLE_LIST_TO_STRICT_CHILD = """
+id: nullable-list-strict-child
+name: nullable_list_strict_child
+input:
+  items: list[Optional[int]]
+defs:
+  child:
+    kind: code
+    code: |
+      return inputs["items"]
+    input:
+      items: list[int]
+    output: list[int]
+nodes:
+  go:
+    kind: call
+    call: child
+    input:
+      items: ${input.items}
+output: ${go.output}
+"""
+
+
+def test_nullable_list_element_source_to_strict_child_is_rejected():
+    """Element nullability is rejected at load, before an actual null can run."""
+    with pytest.raises(LoadError, match="call node 'go'.*binding 'items'"):
+        load_flow(_NULLABLE_LIST_TO_STRICT_CHILD)
+
+
 _NULLABLE_WITH_LITERAL_ESCAPE = """
 id: nok
 name: nok

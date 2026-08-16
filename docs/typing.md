@@ -91,7 +91,9 @@ the element's ordinary values; a bare or non-nullable specialized list still
 rejects it. The existing `LIST_ANY` and explicit `None`-element semantics remain
 unchanged. A nullable specialized list retains its `LIST_*` discriminator and
 carrier, so `AnyValue` and `VariablePool` round-trips preserve null items without
-lowering it to `LIST_ANY`.
+lowering it to `LIST_ANY`. Cross-flow compatibility applies the same structural
+check recursively: a strict element source may fill a nullable element sink, but
+not the reverse.
 
 Authors write types as Python-typing strings; `parse_type` parses them via Python's own
 `ast` (so the vocabulary *is* typing: `list[X]`, `Optional[X]`, `Literal[...]`, a bare

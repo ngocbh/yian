@@ -169,7 +169,9 @@ For a refined specialized list, `Type.element.nullable` permits `None` alongside
 the element's ordinary values; a bare or non-nullable specialized list still
 rejects it. Existing `LIST_ANY` and explicit `None`-element semantics remain
 unchanged. The nullable specialized list retains its `LIST_*` discriminator and
-carrier through canonical value, pool, and run-record round-trips.
+carrier through canonical value, pool, and run-record round-trips. Cross-flow
+compatibility recursively applies the same nullable-source-to-strict-sink rule
+to list elements.
 
 All origins are optional, so Python-authored values default to source-free and
 may supply an opaque origin explicitly. The carriers are frozen only at their

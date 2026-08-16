@@ -127,6 +127,7 @@ Contract:
   proven fields and carry any root/intermediate nullability into the result.
   An optional proven element `Type` admits actual null list items; a specialized
   list keeps its storage discriminator and round-trips those items as `None`.
+  Cross-flow bindings accept strict-to-nullable elements but reject the reverse.
   Unsupported whole-value computations, empty/heterogeneous lists, producers
   without an available static output type, or incomplete list element types fail
   at the authored binding; use a typed named `defs:` body as the escape hatch.

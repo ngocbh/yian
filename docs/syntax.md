@@ -151,7 +151,9 @@ default for a non-nullable type is invalid, as is an empty `=`.
 
 Typed storage for `list[Optional[X]]` accepts actual null items because its
 refined element type is nullable. When `X` has a specialized list storage kind,
-those items remain `None` without lowering that kind to `list[Any]`.
+those items remain `None` without lowering that kind to `list[Any]`. Cross-flow
+bindings compare element contracts too: `list[X]` may fill
+`list[Optional[X]]`, but the nullable source cannot fill the strict sink.
 
 The default RHS is a YAML literal validated against the declared type while the
 flow loads. Stored defaults are never string-coerced: write `int = 30`, not

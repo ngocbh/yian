@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from agent_composer.compile.model import Edge
+from agent_composer.compile.validation import types_compatible
 from agent_composer.nodes.case import DEFAULT_HANDLE
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.edges.data import infer_data_edges
@@ -21,6 +22,7 @@ from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceDocument
 from agent_composer.compose.validate.handles import check_case_handles
+from agent_composer.typesys import Type, ValueKind
 
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
@@ -80,6 +82,46 @@ def test_e02_cycle_carries_dependency_legend():
 def test_acyclic_seed_passes_cycle_check():
     node_ids, edges, _ = _build("01-structured-agent.yaml")
     reject_cycles(edges, node_ids)  # no raise
+
+
+# --------------------------------------------------------------------------- #
+# recursive type compatibility
+# --------------------------------------------------------------------------- #
+
+
+def test_list_element_compatibility_preserves_nullable_direction() -> None:
+    """A source list may narrow but cannot widen the sink's element contract."""
+    strict_element = Type.scalar(ValueKind.INTEGER)
+    nullable_element = Type(kind=ValueKind.INTEGER, nullable=True)
+    strict = Type(kind=ValueKind.LIST_INTEGER, element=strict_element)
+    nullable = Type(kind=ValueKind.LIST_INTEGER, element=nullable_element)
+
+    assert types_compatible(strict, nullable) is True
+    assert types_compatible(nullable, nullable) is True
+    assert types_compatible(nullable, strict) is False
+
+
+def test_bare_list_compatibility_uses_its_storage_element_contract() -> None:
+    """Bare specialized lists stay strict while bare LIST_ANY stays unconstrained."""
+    strict_element = Type.scalar(ValueKind.INTEGER)
+    nullable_element = Type(kind=ValueKind.INTEGER, nullable=True)
+    bare_integer = Type(kind=ValueKind.LIST_INTEGER)
+    strict_integer = Type(
+        kind=ValueKind.LIST_INTEGER,
+        element=strict_element,
+    )
+    nullable_integer = Type(
+        kind=ValueKind.LIST_INTEGER,
+        element=nullable_element,
+    )
+    bare_any = Type(kind=ValueKind.LIST_ANY)
+    refined_any = Type(kind=ValueKind.LIST_ANY, element=strict_element)
+
+    assert types_compatible(bare_integer, nullable_integer) is True
+    assert types_compatible(strict_integer, bare_integer) is True
+    assert types_compatible(nullable_integer, bare_integer) is False
+    assert types_compatible(refined_any, bare_any) is True
+    assert types_compatible(bare_any, refined_any) is False
 
 
 def test_case_seed_passes_cycle_check():

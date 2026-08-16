@@ -309,6 +309,8 @@ model made enforceable.
   non-nullable specialized lists still reject it, while existing `LIST_ANY` and
   explicit `None`-element semantics remain unchanged. The specialized `LIST_*`
   discriminator and carrier preserve `None` across canonical round-trips.
+  Cross-flow compatibility recursively applies the nullable-source-to-strict-sink
+  rule to list elements.
 - **Append-only durable authority** — `RunStartedRecord` captures complete initial
   state/configuration, every dispatched node gets a `NodeStartedRecord`, and every
   accepted outcome gets exactly one success/route/expansion/failure record. A prefix

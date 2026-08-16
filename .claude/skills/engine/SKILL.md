@@ -93,6 +93,12 @@ Hold this model whenever you design anything:
   replay restores it even when current origins were rebased. Keep the temporary
   runtime locator/range and CLI `SourceFrame` graph-walk bridges accurate until
   their later cutover; do not route new origin resolution around `diagnose()`.
+- **Compose load boundary:** `LoadError` carries exactly one already-resolved
+  `Diagnostic`. Compose owns the source label/text/range and builds every frame
+  before raising; definition/import context is prepended immutably. A load-error
+  renderer consumes only `error.diagnostic` and never receives YAML text or a
+  path separately. This is distinct from runtime `Failure.trace`, which resolves
+  through `ComposedFlow.diagnose()`.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;

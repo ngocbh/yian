@@ -645,9 +645,16 @@ def load_flow(
 
     Example:
         ```python
+        from pathlib import Path
+
         from agent_composer import load_flow
 
-        loaded = load_flow(open("hello.yaml").read(), search_paths=["."])
+        path = Path("hello.yaml")
+        loaded = load_flow(
+            path.read_text(),
+            search_paths=[path.parent],
+            source_label=path.name,
+        )
         ```
     """
     if type(source_label) is not str:

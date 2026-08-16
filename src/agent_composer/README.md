@@ -85,6 +85,13 @@ missing, incomplete, malformed, or raising resolver for a non-empty trace yields
 no frames and exactly the generic note `Source presentation was unavailable.`;
 semantic and debug fields remain unchanged.
 
+Compose load failures use the same presentation product directly. A
+`LoadError` contains exactly one `Diagnostic`; a Compose-owned factory resolves
+retained document/cursor ranges into source-owning frames before the exception
+crosses the front-end boundary. Definition and import wrappers create a new
+diagnostic with outer context prepended. They never mutate an inner error or ask
+the CLI to combine coordinates with separately supplied source text.
+
 Every node builds failures through one source-neutral rule:
 `Node.failure_trace(operation_origin=None)` returns its generated, outermost-to-
 innermost `origin_context` followed by the supplied operation origin, or by the

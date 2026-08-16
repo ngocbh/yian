@@ -724,6 +724,12 @@ never a text heuristic.
   notes, node_id, cause_type, traceback)` and passed to `render_diagnostic`.
   This direct construction is a compatibility bridge: the CLI does not yet use
   `ComposedFlow.diagnose()` for runtime failures.
+- **Load diagnostics are already resolved.** Compose constructs
+  `LoadError(Diagnostic(...))` from its retained `SourceDocument`/`SourceCursor`
+  authority. Frames own their label, complete text, and range; nested definition
+  and import sites prepend fresh outer frames, while a cycle supplies peer frames
+  in authored order. The CLI renders `error.diagnostic` directly. Never restore
+  separate load-error line/range aliases or pass root YAML into the renderer.
 - **Cross-flow call traceback** — when a failure is inside a *called child*, its node id is
   runtime-NAMESPACED (`gate/approve`, `outer/via/boom`, `gate#0/inner` for a map element).
   A `call`/`map` node bakes its child flow's render-only **`SourceFrame`** (`compose/loader`:

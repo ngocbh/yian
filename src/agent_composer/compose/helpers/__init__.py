@@ -7,8 +7,8 @@ here so the layering is legible: `helpers` imports the engine core (`typesys` / 
 down into it.
 
 Modules:
-  - `errors`      the `LoadError` carried by every load-path failure (message + optional
-                  `SourceRange`), the one exception type the CLI boxes as a diagnostic.
+  - `errors`      the document-owned diagnostic factory plus `LoadError`, whose one
+                  canonical `Diagnostic` is ready for direct boundary rendering.
   - `source`      `SourceFrame` + parse-free location helpers over an existing
                   `SourceCursor`; render-only metadata, never a YAML parser. Its boundary
                   field map covers inputs only—assertion origin/range pairs come from one

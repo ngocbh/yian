@@ -228,12 +228,24 @@ The [`examples/`](examples/) directory ships a few generic flows:
 ## Use it as a library
 
 ```python
+from pathlib import Path
+
 from agent_composer import load_flow, run_flow
 
-loaded = load_flow(open("hello.yaml").read(), search_paths=["."])
+path = Path("hello.yaml")
+loaded = load_flow(
+    path.read_text(),
+    search_paths=[path.parent],
+    source_label=path.name,
+)
 result = run_flow(loaded, {"name": "Ada"})
 print(result.status, result.output)
 ```
+
+`source_label` gives load-time diagnostics ownership of the text they frame.
+`LoadError.diagnostic` is a canonical `Diagnostic`, including ordered source
+frames for definitions and imported files; callers never need to combine an
+error range with separately retained YAML text.
 
 Failed runs return `result.failure`, an immutable `Failure` also exported from
 `agent_composer`. Use its stable `code` for control flow and `message` for
@@ -244,9 +256,10 @@ Library callers can resolve that opaque trace with
 `loaded.diagnose(result.failure)`, which returns the canonical presentation-only
 `Diagnostic` defined in `agent_composer.diagnostics` (it is not a package-root
 export). The method copies `code`, `message`, `node_id`, `cause_type`, and
-`traceback`, then resolves the complete trace atomically. The CLI still uses its
-temporary locator/range and `SourceFrame` rendering bridge during the remaining
-diagnostics migration.
+`traceback`, then resolves the complete trace atomically. Runtime failures still
+use their temporary locator/range and `SourceFrame` rendering bridge during the
+remaining diagnostics migration; load failures already cross the boundary as a
+fully owned `Diagnostic`.
 
 `loaded.origin_resolver` is the source-neutral authority for every origin reachable
 from the compiled Compose graph. It is `None` only when that graph is source-free;

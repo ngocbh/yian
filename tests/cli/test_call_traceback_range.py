@@ -18,9 +18,57 @@ from rich.console import Console
 import agent_composer.cli.run as climod
 from agent_composer.cli.run import _render_run_error
 from agent_composer.compose.loader import load_flow
-from agent_composer.run import run_flow
+from agent_composer.run import RunResult, run_flow
 
 _ERRORS = Path(__file__).resolve().parents[1] / "seeds" / "errors"
+
+_CALL_INPUT_FAILURE = """id: nested-binding
+name: nested_binding
+defs:
+  inner:
+    input:
+      maybe: Optional[str]
+    nodes:
+      leaf:
+        kind: code
+        input:
+          okay: literal
+          bad: ${input.maybe:?"missing nested value"}
+        output: str
+        code: tests.engine._compose_codefns:echo
+    output: ${leaf.output}
+nodes:
+  invoke:
+    kind: call
+    call: inner
+    input: {}
+output: ${invoke.output}
+"""
+
+_MAP_INPUT_FAILURE = """id: nested-map-binding
+name: nested_map_binding
+defs:
+  inner:
+    input:
+      maybe: Optional[str]
+    nodes:
+      leaf:
+        kind: code
+        input:
+          okay: literal
+          bad: ${input.maybe:?"missing mapped value"}
+        output: str
+        code: tests.engine._compose_codefns:echo
+    output: ${leaf.output}
+nodes:
+  invoke:
+    kind: map
+    call: inner
+    over: ${[1]}
+    input:
+      maybe: null
+output: ${invoke.output}
+"""
 
 
 def _sink(monkeypatch) -> StringIO:
@@ -29,6 +77,18 @@ def _sink(monkeypatch) -> StringIO:
         climod, "err_console", Console(file=buf, force_terminal=False, width=100)
     )
     return buf
+
+
+def _render(source: str, monkeypatch) -> tuple[str, RunResult]:
+    """Run and render one in-file nested failure against its retained source."""
+    flow = Path("nested.yaml")
+    loaded = load_flow(source, source_label=flow.name)
+    result = run_flow(loaded, {})
+    assert result.status == "failed"
+
+    buf = _sink(monkeypatch)
+    _render_run_error(result, flow, source, loaded=loaded)
+    return buf.getvalue(), result
 
 
 def test_nested_call_error_frames_at_child_range(monkeypatch):
@@ -54,3 +114,29 @@ def test_nested_call_error_frames_at_child_range(monkeypatch):
     assert "call traceback (most recent call last):" in out
     assert f"defs:inner:{boom_code_line}" in out
     assert boom_code_line == 20
+
+
+def test_nested_call_input_failure_uses_resolved_child_range(monkeypatch):
+    out, result = _render(_CALL_INPUT_FAILURE, monkeypatch)
+
+    assert result.failure is not None
+    assert result.failure.node_id == "invoke/leaf"
+    assert result.locator is not None
+    assert (result.locator.kind, result.locator.key) == ("input", "bad")
+    assert result.range is not None and result.range.start_line == 12
+    assert "nested.yaml:17" in out
+    assert "nested.yaml defs:inner:12" in out
+    assert "nested.yaml defs:inner:14" not in out
+
+
+def test_nested_map_input_failure_uses_resolved_child_range(monkeypatch):
+    out, result = _render(_MAP_INPUT_FAILURE, monkeypatch)
+
+    assert result.failure is not None
+    assert result.failure.node_id == "invoke#0/leaf"
+    assert result.locator is not None
+    assert (result.locator.kind, result.locator.key) == ("input", "bad")
+    assert result.range is not None and result.range.start_line == 12
+    assert "nested.yaml:17" in out
+    assert "nested.yaml defs:inner:12" in out
+    assert "nested.yaml defs:inner:14" not in out

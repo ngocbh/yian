@@ -257,8 +257,15 @@ def _last_segment(node_id: Optional[str]) -> Optional[str]:
     return _strip_clone_suffix(node_id.split("/")[-1])
 
 
-def _walk_call_frames(loaded, node_id: str, top_text: str, top_label: str,
-                      span: Optional[SourceSpan]):
+def _walk_call_frames(
+    loaded,
+    node_id: str,
+    top_text: str,
+    top_label: str,
+    span: Optional[SourceSpan],
+    *,
+    resolved_range: Optional[SourceRange] = None,
+) -> list[tuple[str, str, SourceRange]]:
     """Walk a namespaced runtime node id through the baked IR, one source frame per segment.
 
     A runtime failure inside a called child surfaces with a NAMESPACED id (`gate/approve` =
@@ -273,11 +280,28 @@ def _walk_call_frames(loaded, node_id: str, top_text: str, top_label: str,
     live in that file. A segment with NO recorded range (a synthetic `__start__`/`__end__`/`__ask…`
     runtime segment, or a collapsed compact single-node def) is SKIPPED — its frame is dropped, the
     frames collected so far kept. Descent stops at the first segment that is not a call/map
-    with a baked child (the leaf), or when a segment can't be resolved. For the LAST segment a
-    `kind=field` locator (e.g. an `output:` coercion) is preferred, else the node's kind
-    fallback field (e.g. a code node's `code:`), else its body range (the node header). Never
+    with a baked child (the leaf), or when a segment can't be resolved. For the LAST segment,
+    the evaluator's already-resolved range is preferred regardless of locator kind. Without
+    one, a `kind=field` locator (e.g. an `output:` coercion) is tried, then the node's kind
+    fallback field (e.g. a code node's `code:`), then its body range (the node header). Never
     raises — the caller treats any failure as "no multi-frame stack" and falls back to the
-    single-frame path."""
+    single-frame path.
+
+    Args:
+        loaded:
+            Compiled flow whose call nodes retain child flows and source frames.
+        node_id (`str`): Runtime-namespaced failing node identity.
+        top_text (`str`): Complete source text for the root flow.
+        top_label (`str`): Display label for the root source.
+        span (`SourceSpan | None`): Symbolic fallback location, when retained.
+        resolved_range (`SourceRange | None`, *optional*, defaults to `None`):
+            Concrete failing-operation range already resolved by evaluation. Its coordinates
+            belong to the final node's retained source frame.
+
+    Returns:
+        `list[tuple[str, str, SourceRange]]`:
+            Located frames ordered from the outermost call to the failing node.
+    """
     segments = [_strip_clone_suffix(seg) for seg in node_id.split("/")]
     nodes = loaded.compiled.nodes
     # Both the top frame and each descended child read ranges off a render-only `SourceFrame`:
@@ -297,8 +321,10 @@ def _walk_call_frames(loaded, node_id: str, top_text: str, top_label: str,
         rng: Optional[SourceRange] = None
         fields = field_ranges.get(seg, {})
         if is_last:
-            # precise field locator (e.g. `output:` for a coercion / type mismatch)
-            if span is not None and span.kind == "field" and span_leaf == seg:
+            # The evaluator resolves every locator kind once. Preserve that precision in the
+            # innermost child frame instead of re-deriving only selected locator kinds here.
+            rng = resolved_range
+            if rng is None and span is not None and span.kind == "field" and span_leaf == seg:
                 rng = _field_range(fields, span.key)
             if rng is None:  # else the node's kind fallback (e.g. a code node's `code:`)
                 for fname in _KIND_FALLBACK_FIELDS:
@@ -339,7 +365,7 @@ def _render_frame_stack(frames, message: str) -> None:
     (outermost `call` first, the failing leaf last), then the error message in red. Each
     frame carries a `SourceRange`; the box anchors on its `start_line` (one line per frame,
     like a Python traceback), which for a call-chain node is its header line and for the failing
-    leaf its precise field / kind-fallback line."""
+    leaf its resolved operation range or best available fallback."""
     err_console.print(Text("call traceback (most recent call last):", style="red bold"))
     for label, ftext, rng in frames:
         _render_frame_box(ftext, [rng.start_line], label)
@@ -392,7 +418,7 @@ def _render_run_error(
     """Print a runtime failure as a located `.yaml` frame at its PRECISE originating line.
 
     The result's `SourceSpan` locator names exactly where the run broke — an input
-    binding, an assert expr, an input decl, or an `output:` coercion. Semantic
+    binding, an assert expression, or a field such as `output:`. Semantic
     message, node identity, and traceback data come only from `RunResult.failure`,
     so terminal recovery renders identically without invocation-local events.
 
@@ -400,8 +426,9 @@ def _render_run_error(
     `gate/approve`) and the loaded IR is available, the error renders a **call traceback**: a
     boxed frame per descended level — the top-level `call` node, then each child (`defs:` or
     external `uses:` file) — down to the failing leaf, most-recent-call-last
-    (`_walk_call_frames`). With fewer than two frames it falls back to the single-frame box,
-    whose `SourceRange` is resolved by, in order:
+    (`_walk_call_frames`). The final child frame first uses the evaluator-resolved
+    `RunResult.range`, then locator and node fallbacks. With fewer than two frames it falls
+    back to the single-frame box, whose `SourceRange` is resolved by, in order:
 
     1. the flow-level `RunResult.range` retained by the temporary presentation bridge;
     2. else `_resolve_range`: a `kind=field` locator's field range, else the node's own range
@@ -425,7 +452,14 @@ def _render_run_error(
     frames: list = []
     if loaded is not None and node_id and "/" in node_id:
         try:
-            frames = _walk_call_frames(loaded, node_id, text, flow.name, span)
+            frames = _walk_call_frames(
+                loaded,
+                node_id,
+                text,
+                flow.name,
+                span,
+                resolved_range=result.range,
+            )
         except Exception:
             frames = []
     if len(frames) >= 2:

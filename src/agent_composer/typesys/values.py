@@ -210,29 +210,31 @@ class ListAnyValue(TypedValue):
     value: list[Any]
 
 
+# Refined `Type.element` contracts decide whether None is legal before these
+# storage carriers are built; their annotations must preserve that accepted value.
 class ListStringValue(TypedValue):
     kind: Literal[ValueKind.LIST_STRING] = ValueKind.LIST_STRING
-    value: list[str]
+    value: list[Optional[str]]
 
 
 class ListIntegerValue(TypedValue):
     kind: Literal[ValueKind.LIST_INTEGER] = ValueKind.LIST_INTEGER
-    value: list[int]
+    value: list[Optional[int]]
 
 
 class ListNumberValue(TypedValue):
     kind: Literal[ValueKind.LIST_NUMBER] = ValueKind.LIST_NUMBER
-    value: list[float]
+    value: list[Optional[float]]
 
 
 class ListBooleanValue(TypedValue):
     kind: Literal[ValueKind.LIST_BOOLEAN] = ValueKind.LIST_BOOLEAN
-    value: list[bool]
+    value: list[Optional[bool]]
 
 
 class ListObjectValue(TypedValue):
     kind: Literal[ValueKind.LIST_OBJECT] = ValueKind.LIST_OBJECT
-    value: list[dict[str, Any]]
+    value: list[Optional[dict[str, Any]]]
 
 
 # Discriminated union — `kind` selects the subclass on validate, which is

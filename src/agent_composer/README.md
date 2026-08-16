@@ -165,6 +165,12 @@ one responsibility:
 | `ValueContract` | one recursive semantic `Type` plus nested origin selection |
 | `ContractOrigins` | immutable root/nested origin lookup for a value contract |
 
+For a refined list, `Type.element.nullable` alone decides whether a `None`
+element satisfies the contract; bare and non-nullable list contracts still
+reject it. The specialized `LIST_*` discriminator and carrier remain unchanged,
+and canonical value, pool, and run-record round-trips preserve `None` under that
+same kind.
+
 All origins are optional, so Python-authored values default to source-free and
 may supply an opaque origin explicitly. The carriers are frozen only at their
 fields: arbitrary binding/default payloads are retained by identity.

@@ -15,10 +15,14 @@ from agent_composer.typesys.values import (
     FileValue,
     IntegerValue,
     ListAnyValue,
+    ListBooleanValue,
+    ListIntegerValue,
     ListNumberValue,
+    ListObjectValue,
     ListStringValue,
     NumberValue,
     ObjectValue,
+    Type,
     TypeCheckError,
     ValueKind,
     StringValue,
@@ -89,6 +93,62 @@ def test_with_type_typed_list_validates_elements():
     assert isinstance(seg, ListStringValue)
     with pytest.raises(TypeCheckError):
         build_value_as(ValueKind.LIST_STRING, ["ACME", 3])
+
+
+_SPECIALIZED_LIST_CASES = (
+    (ValueKind.LIST_STRING, ValueKind.STRING, "alpha", ListStringValue),
+    (ValueKind.LIST_INTEGER, ValueKind.INTEGER, 7, ListIntegerValue),
+    (ValueKind.LIST_NUMBER, ValueKind.NUMBER, 1.5, ListNumberValue),
+    (ValueKind.LIST_BOOLEAN, ValueKind.BOOLEAN, True, ListBooleanValue),
+    (ValueKind.LIST_OBJECT, ValueKind.OBJECT, {"name": "alpha"}, ListObjectValue),
+)
+
+
+@pytest.mark.parametrize(
+    "list_kind, element_kind, valid_value, carrier_type",
+    _SPECIALIZED_LIST_CASES,
+    ids=("str", "int", "float", "bool", "object"),
+)
+def test_nullable_refined_specialized_list_preserves_its_carrier(
+    list_kind, element_kind, valid_value, carrier_type
+):
+    declared = Type(
+        kind=list_kind,
+        element=Type(kind=element_kind, nullable=True),
+    )
+
+    segment = build_value_as(declared, [valid_value, None])
+
+    assert type(segment) is carrier_type
+    assert segment.kind is list_kind
+    assert segment.value == [valid_value, None]
+
+    restored = ANY_VALUE_ADAPTER.validate_json(
+        ANY_VALUE_ADAPTER.dump_json(segment),
+        strict=True,
+    )
+    assert type(restored) is carrier_type
+    assert restored.kind is list_kind
+    assert restored.value == [valid_value, None]
+
+
+@pytest.mark.parametrize(
+    "list_kind, element_kind, valid_value, _carrier_type",
+    _SPECIALIZED_LIST_CASES,
+    ids=("str", "int", "float", "bool", "object"),
+)
+def test_specialized_list_rejects_none_without_nullable_refinement(
+    list_kind, element_kind, valid_value, _carrier_type
+):
+    refined = Type(kind=list_kind, element=Type.scalar(element_kind))
+
+    with pytest.raises(TypeCheckError) as refined_error:
+        build_value_as(refined, [valid_value, None])
+    assert refined_error.value.path == (1,)
+
+    with pytest.raises(TypeCheckError) as bare_kind_error:
+        build_value_as(list_kind, [valid_value, None])
+    assert bare_kind_error.value.path == (1,)
 
 
 # --- lossless serialization (the run-record primitive) ---------------------- #

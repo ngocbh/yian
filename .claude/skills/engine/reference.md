@@ -305,6 +305,10 @@ model made enforceable.
   composes over a use-case-specific feature.
 - **Node never writes the pool** (purity); **typed, losslessly-serializable state**
   (`TypedValue` / `VariablePool` — the basis for canonical record payloads + `${...}` refs).
+  For refined lists, `Type.element.nullable` alone governs semantic admission of
+  `None`; bare and non-nullable list contracts still reject it. The specialized
+  `LIST_*` discriminator and carrier remain unchanged and preserve `None` across
+  canonical round-trips.
 - **Append-only durable authority** — `RunStartedRecord` captures complete initial
   state/configuration, every dispatched node gets a `NodeStartedRecord`, and every
   accepted outcome gets exactly one success/route/expansion/failure record. A prefix

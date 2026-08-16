@@ -86,6 +86,12 @@ dataclass whose `kind` is the storage tag, with optional refining fields:
 | **typed list** | `kind=LIST_*`, `element=<Type>` |
 | **Optional[X]** | X's `Type` with `nullable=True` |
 
+For a refined list, `Type.element.nullable` controls whether `None` is
+semantically admitted; bare and non-nullable list contracts still reject it.
+The specialized `LIST_*` discriminator and carrier remain unchanged and retain
+`None`, so `AnyValue` and `VariablePool` round-trips preserve null items without
+lowering the list to `LIST_ANY`.
+
 Authors write types as Python-typing strings; `parse_type` parses them via Python's own
 `ast` (so the vocabulary *is* typing: `list[X]`, `Optional[X]`, `Literal[...]`, a bare
 PascalCase registry name). `Union[...]` is rejected — model a tagged union as a

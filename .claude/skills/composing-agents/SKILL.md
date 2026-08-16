@@ -325,11 +325,12 @@ parameters and child-node outputs inside. Run-global `${system.today}`,
 `${system.now}`, and `${system.run_id}` remain available. Types are inferred
 strictly from YAML null/bool/int/float/string values, structural containers, or
 direct typed refs; refs preserve structure/nullability, and only a lone
-whole-value `${item...}` lazily requires a proven `over:` element type. Actual
-null elements of `list[Optional[record]]` remain a typed-storage limitation
-(issue #128), although nullable intermediate fields work. If inference cannot
-prove a type, write a named `defs:` child with an explicit signature. Strings
-nested in literal containers stay literal and are not reference-scanned. Other
+whole-value `${item...}` lazily requires a proven `over:` element type. An actual
+null list item is admitted only when that refined element type is nullable; the
+specialized list storage kind and `None` survive lossless round-trips. If
+inference cannot prove a type, write a named `defs:` child with an explicit
+signature. Strings nested in literal containers stay literal and are not
+reference-scanned. Other
 fields keep their outer-node meaning (LOOP drivers, `env:`, and CALL/LOOP
 asserts; MAP asserts remain invalid); `parallel:` remains accepted but inert.
 Inline child flow configuration is not a separate surface, and `llm_config:`

@@ -11,7 +11,12 @@ import pytest
 
 from agent_composer.compile.model import START_ID
 from agent_composer.typesys.pool import VariablePool
-from agent_composer.typesys.values import TypeCheckError, ValueKind
+from agent_composer.typesys.values import (
+    ListObjectValue,
+    Type,
+    TypeCheckError,
+    ValueKind,
+)
 
 
 def test_set_and_get():
@@ -124,3 +129,22 @@ def test_full_pool_round_trip():
     assert back.resolve("input", ["as_of_date"]) == "2026-06-05"  # store[START_ID] survives dumps/loads
     # types survived: flag is still a real bool, not int
     assert back.get("flag_node") is True
+
+
+def test_pool_round_trip_preserves_nullable_specialized_list_elements():
+    row = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": Type.scalar(ValueKind.NUMBER)},
+        required=frozenset({"score"}),
+        nullable=True,
+    )
+    rows = Type(kind=ValueKind.LIST_OBJECT, element=row)
+    pool = VariablePool()
+    pool.set("rows", [{"score": 0.9}, None], declared=rows)
+
+    restored = VariablePool.loads(pool.dumps())
+
+    stored = restored.get_value("rows")
+    assert type(stored) is ListObjectValue
+    assert stored.kind is ValueKind.LIST_OBJECT
+    assert restored.get("rows") == [{"score": 0.9}, None]

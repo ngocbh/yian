@@ -173,6 +173,17 @@ nodes:
 output: ${twice.output}
 """
 
+_NULLABLE_LIST_FLOW = """
+id: lifecycle_nullable_list
+name: lifecycle_nullable_list
+input:
+  items: list[Optional[int]]
+output: list[Optional[int]]
+kind: code
+code: |
+  return inputs["items"]
+"""
+
 _FAILURE_FLOW = """
 id: lifecycle-failure
 name: lifecycle_failure
@@ -521,6 +532,47 @@ def test_fresh_durable_success_returns_path_and_releases_the_lock(tmp_path: Path
     records = _durable_records(path)
     assert isinstance(records[0], RunStartedRecord)
     assert isinstance(records[-1], NodeSucceededRecord)
+
+
+def test_nullable_specialized_list_survives_durable_run_and_terminal_resume(
+    tmp_path: Path,
+) -> None:
+    """Retain nullable element typing across fresh execution and silent replay."""
+    path = tmp_path / "nullable-list.jsonl"
+    inputs = {"items": [1, None, 3]}
+
+    fresh = run_module.run_flow(
+        load_flow(_NULLABLE_LIST_FLOW),
+        inputs,
+        log=path,
+        run_id=_RUN_ID,
+    )
+
+    assert fresh.status == "succeeded"
+    assert fresh.output == [1, None, 3]
+    records = _durable_records(path)
+    success = next(
+        record
+        for record in records
+        if isinstance(record, NodeSucceededRecord)
+        and record.node_id == "lifecycle_nullable_list"
+    )
+    assert success == NodeSucceededRecord(
+        node_id="lifecycle_nullable_list",
+        commit_target="lifecycle_nullable_list",
+        value={"kind": "list[int]", "value": [1, None, 3]},
+    )
+    before = path.read_bytes()
+
+    resumed = run_module.resume_flow(
+        load_flow(_NULLABLE_LIST_FLOW),
+        log=path,
+    )
+
+    assert resumed.status == fresh.status
+    assert resumed.output == fresh.output
+    assert resumed.events == []
+    assert path.read_bytes() == before
 
 
 def test_fresh_memory_flow_failure_returns_durable_diagnostics() -> None:

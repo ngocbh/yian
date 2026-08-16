@@ -2131,6 +2131,7 @@ output: ${each.output}
     )
 
     items = [
+        None,
         {"detail": None},
         {"detail": {"name": "ready"}},
     ]
@@ -2138,6 +2139,7 @@ output: ${each.output}
 
     assert result.status == "succeeded"
     assert result.output == [
+        {"row": None, "name": None},
         {"row": {"detail": None}, "name": None},
         {
             "row": {"detail": {"name": "ready"}},

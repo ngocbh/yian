@@ -12,3 +12,12 @@
   --md-primary-fg-color--dark:  #00264d;
   --md-accent-fg-color:         #4f8fd6;
 }
+
+/* Preserve readable labels in relationship-heavy diagrams on narrow pages. */
+.md-typeset .mermaid-scroll {
+  overflow-x: auto;
+}
+
+.md-typeset .mermaid-scroll > .mermaid {
+  min-width: 1280px;
+}

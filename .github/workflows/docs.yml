@@ -1,0 +1,141 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install documentation dependencies
+        run: python -m pip install -e ".[docs]"
+
+      - name: Install pinned Mermaid validator
+        env:
+          MERMAID_TOOLS: ${{ runner.temp }}/mermaid-tools
+        run: |
+          npm install --prefix "$MERMAID_TOOLS" --no-save --no-package-lock \
+            mermaid@11.16.1 \
+            @mermaid-js/mermaid-cli@11.16.0
+
+      - name: Validate tracked Mermaid diagrams
+        shell: bash
+        env:
+          MERMAID_TOOLS: ${{ runner.temp }}/mermaid-tools
+        run: |
+          output_root="$RUNNER_TEMP/mermaid-output"
+          puppeteer_config="$RUNNER_TEMP/puppeteer.json"
+          printf '%s\n' '{"args":["--no-sandbox"]}' >"$puppeteer_config"
+          diagram_documents=0
+          while IFS= read -r -d '' path; do
+            if grep -Eq '^[[:space:]]*(`{3,}|~{3,})[[:space:]]*mermaid([[:space:]]|$)' "$path"; then
+              diagram_documents=$((diagram_documents + 1))
+              output="$output_root/${path%.md}.md"
+              mkdir -p "$(dirname "$output")"
+              "$MERMAID_TOOLS/node_modules/.bin/mmdc" \
+                --quiet \
+                --puppeteerConfigFile "$puppeteer_config" \
+                --input "$path" \
+                --output "$output"
+            fi
+          done < <(git ls-files -z -- '*.md')
+          if (( diagram_documents == 0 )); then
+            echo "No tracked Mermaid documents found" >&2
+            exit 1
+          fi
+
+      - name: Build documentation
+        run: mkdocs build --strict
+
+      - name: Verify Mermaid runtime pin
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          html = Path("site/architecture/index.html").read_text()
+          mermaid = "https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js"
+          initialize = "mermaid.initialize({ startOnLoad: false })"
+          material = "assets/javascripts/bundle."
+          scroller = 'className = "mermaid-scroll"'
+          assert mermaid in html, "architecture page does not load pinned Mermaid runtime"
+          assert html.index(mermaid) < html.index(initialize) < html.index(material), (
+              "Mermaid auto-render must be disabled before Material loads"
+          )
+          assert html.index(material) < html.index(scroller), "Scroller must subscribe after Material"
+          PY
+
+      - name: Exercise Mermaid in Material
+        shell: bash
+        env:
+          MERMAID_TOOLS: ${{ runner.temp }}/mermaid-tools
+        run: |
+          python -m http.server 8000 --bind 127.0.0.1 --directory site \
+            >"$RUNNER_TEMP/docs-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in {1..50}; do
+            if curl --fail --silent http://127.0.0.1:8000/architecture/ >/dev/null; then
+              break
+            fi
+            if (( attempt == 50 )); then
+              cat "$RUNNER_TEMP/docs-server.log" >&2
+              exit 1
+            fi
+            sleep 0.1
+          done
+          node --input-type=module <<'JS'
+          import assert from "node:assert/strict"
+          import path from "node:path"
+          import { createRequire } from "node:module"
+
+          const require = createRequire(path.join(process.env.MERMAID_TOOLS, "package.json"))
+          const puppeteer = require("puppeteer")
+          const browser = await puppeteer.launch({
+            headless: true,
+            args: ["--no-sandbox"]
+          })
+          try {
+            const page = await browser.newPage()
+            await page.setViewport({ width: 1440, height: 900 })
+            await page.goto("http://127.0.0.1:8000/architecture/", {
+              waitUntil: "networkidle0"
+            })
+            await page.waitForFunction(
+              () => document.querySelectorAll(".mermaid-scroll > div.mermaid").length === 3
+            )
+            const diagrams = await page.evaluate(() =>
+              [...document.querySelectorAll(".mermaid-scroll")].map(scroller => ({
+                hostTag: scroller.firstElementChild.tagName,
+                hostWidth: scroller.firstElementChild.getBoundingClientRect().width,
+                viewportWidth: scroller.clientWidth,
+                scrollWidth: scroller.scrollWidth
+              }))
+            )
+            assert.equal(diagrams.length, 3)
+            for (const diagram of diagrams) {
+              assert.equal(diagram.hostTag, "DIV")
+              assert.ok(diagram.hostWidth >= 1280)
+              assert.ok(diagram.scrollWidth >= diagram.hostWidth)
+              assert.ok(diagram.viewportWidth < diagram.scrollWidth)
+            }
+          } finally {
+            await browser.close()
+          }
+          JS

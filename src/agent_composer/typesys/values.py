@@ -26,7 +26,35 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 
 class TypeCheckError(ValueError):
-    """A value cannot be wrapped in a TypedValue, or violates a declared type."""
+    """A value violates a declared type at one source-neutral structural path.
+
+    ``path`` is relative to the checked type: strings name record fields and
+    integers are actual list indices. Type-language errors and root mismatches
+    use the empty path. Positional ``ValueError`` arguments remain unrestricted
+    so adding structural context does not change existing messages or ``args``.
+
+    Args:
+        *args (`object`): Positional arguments retained by ``ValueError``.
+        path (`tuple[str | int, ...]`, *optional*, defaults to ``()``):
+            Immutable record-field/list-index path to the rejected value.
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        path: tuple[str | int, ...] = (),
+    ) -> None:
+        """Retain one validated contract-relative path without changing args."""
+        if type(path) is not tuple:
+            raise TypeError("type-check error path must be a tuple")
+        for segment in path:
+            if type(segment) not in (str, int):
+                raise TypeError(
+                    "type-check error path segment must be an exact str or int, "
+                    f"got {type(segment).__name__}"
+                )
+        super().__init__(*args)
+        self.path = path
 
 
 # --------------------------------------------------------------------------- #
@@ -590,7 +618,13 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
     return _build_for_type(typ, value)
 
 
-def _build_for_type(typ: Type, value: Any) -> TypedValue:
+def _build_for_type(
+    typ: Type,
+    value: Any,
+    *,
+    path: tuple[str | int, ...] = (),
+) -> TypedValue:
+    """Validate one value while retaining its absolute contract-relative path."""
     # nullable (Optional[X]) — a None value is accepted as NoneValue
     if value is None and typ.nullable:
         return NoneValue()
@@ -598,53 +632,105 @@ def _build_for_type(typ: Type, value: Any) -> TypedValue:
     # variant — a tag-constrained string
     if typ.tags is not None:
         if not isinstance(value, str) or value not in typ.tags:
-            raise TypeCheckError(f"{value!r} is not a member of variant {sorted(typ.tags)}")
+            raise TypeCheckError(
+                f"{value!r} is not a member of variant {sorted(typ.tags)}",
+                path=path,
+            )
         return StringValue(value=value)
 
     # record — an object with declared field types (closed: all required, no unknowns)
     if typ.fields is not None:
         if not isinstance(value, dict):
-            raise TypeCheckError(f"{value!r} is not an object for a record type")
+            raise TypeCheckError(
+                f"{value!r} is not an object for a record type",
+                path=path,
+            )
         required = typ.required or frozenset()
         missing = required - value.keys()
         if missing:
-            raise TypeCheckError(f"record missing required fields: {sorted(missing)}")
+            ordered_missing = sorted(missing)
+            raise TypeCheckError(
+                f"record missing required fields: {ordered_missing}",
+                path=path + (ordered_missing[0],),
+            )
         unknown = value.keys() - typ.fields.keys()
         if unknown:
-            raise TypeCheckError(f"record has unknown fields: {sorted(unknown)}")
+            all_string_keys = all(type(name) is str for name in unknown)
+            ordered_unknown = (
+                sorted(unknown)
+                if all_string_keys
+                else sorted(
+                    unknown,
+                    key=lambda name: (type(name).__qualname__, repr(name)),
+                )
+            )
+            unknown_path = (
+                path + (ordered_unknown[0],)
+                if all_string_keys
+                else path
+            )
+            raise TypeCheckError(
+                f"record has unknown fields: {ordered_unknown}",
+                path=unknown_path,
+            )
         for fname, fval in value.items():
-            _build_for_type(typ.fields[fname], fval)  # validates each field, raises on mismatch
+            _build_for_type(
+                typ.fields[fname],
+                fval,
+                path=path + (fname,),
+            )
         return ObjectValue(value=value)
 
     # list with a known element typ (incl. List[record])
     if typ.kind.is_list() and typ.element is not None:
         if not isinstance(value, (list, tuple)):
             raise TypeCheckError(
-                f"{value!r} is not a list for declared {typ.kind.value}"
+                f"{value!r} is not a list for declared {typ.kind.value}",
+                path=path,
             )
-        items = [_build_for_type(typ.element, item).to_object() for item in value]
+        items = [
+            _build_for_type(
+                typ.element,
+                item,
+                path=path + (index,),
+            ).to_object()
+            for index, item in enumerate(value)
+        ]
         return _LIST_VALUE_CLASS[typ.kind](value=items)
 
     # plain scalar / flat list — the original behavior
-    return _build_scalar_or_list(typ.kind, value)
+    return _build_scalar_or_list(typ.kind, value, path=path)
 
 
-def _build_scalar_or_list(declared: ValueKind, value: Any) -> TypedValue:
+def _build_scalar_or_list(
+    declared: ValueKind,
+    value: Any,
+    *,
+    path: tuple[str | int, ...],
+) -> TypedValue:
+    """Validate one unrefined scalar/list at its contract-relative path."""
     if declared.is_list():
         if not isinstance(value, (list, tuple)):
-            raise TypeCheckError(f"{value!r} is not a list for declared {declared.value}")
+            raise TypeCheckError(
+                f"{value!r} is not a list for declared {declared.value}",
+                path=path,
+            )
         items = list(value)
         element = declared.element_kind
         if element is not None:
-            for item in items:
+            for index, item in enumerate(items):
                 if not _scalar_matches(element, item):
                     raise TypeCheckError(
                         f"list element {item!r} is not {element.value} "
-                        f"(declared {declared.value})"
+                        f"(declared {declared.value})",
+                        path=path + (index,),
                     )
             items = [_coerce_scalar(element, item) for item in items]
         return _LIST_VALUE_CLASS[declared](value=items)
 
     if not _scalar_matches(declared, value):
-        raise TypeCheckError(f"{value!r} does not match declared type {declared.value}")
+        raise TypeCheckError(
+            f"{value!r} does not match declared type {declared.value}",
+            path=path,
+        )
     return _SCALAR_VALUE_CLASS[declared](value=_coerce_scalar(declared, value))

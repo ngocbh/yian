@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 import agent_composer.cli.run as climod
 from agent_composer.cli.run import _ProgressReporter
 from agent_composer.compile.model import END_ID, START_ID
+from agent_composer.diagnostics import Failure
 from agent_composer.run import RunResult
 from agent_composer.events import NodeFailed, NodeRouted, NodeStarted, NodeSucceeded
 
@@ -39,7 +40,16 @@ def test_success_renders_check():
 def test_failure_renders_cross_and_error():
     reporter, buf = _sink_reporter()
     reporter.handle(NodeStarted("verdict"))
-    reporter.handle(NodeFailed("verdict", error="boom", error_type="ValueError"))
+    reporter.handle(
+        NodeFailed(
+            Failure(
+                code="node.execute",
+                message="boom",
+                node_id="verdict",
+                cause_type="ValueError",
+            )
+        )
+    )
     out = buf.getvalue()
     assert "✗ verdict" in out
     assert "boom" in out

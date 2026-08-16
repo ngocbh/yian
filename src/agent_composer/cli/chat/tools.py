@@ -125,7 +125,8 @@ def run_flow(
             )
     if result.status == "succeeded":
         return f"OUTPUT: {result.output}"
-    return f"FAILED: {result.error}"
+    detail = result.failure.message if result.failure is not None else "(no detail)"
+    return f"FAILED: {detail}"
 
 
 @register_tool("write_flow")

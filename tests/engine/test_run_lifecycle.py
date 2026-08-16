@@ -431,10 +431,9 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
         "run_id",
         "log",
         "output",
-        "error",
+        "failure",
         "locator",
         "range",
-        "traceback",
         "events",
     ]
 
@@ -454,7 +453,7 @@ def test_fresh_memory_success_returns_current_segment_and_canonical_input() -> N
     assert result.status == "succeeded"
     assert result.input == {"n": 4}
     assert result.output == 8
-    assert result.error is None
+    assert result.failure is None
     assert result.run_id == _RUN_ID
     assert result.log is None
     assert result.events == seen
@@ -494,12 +493,18 @@ def test_fresh_memory_flow_failure_returns_durable_diagnostics() -> None:
     assert result.status == "failed"
     assert result.input == {}
     assert result.output is None
-    assert result.error == "boom"
-    assert result.traceback is not None and "ValueError: boom" in result.traceback
+    assert result.failure is not None
+    assert result.failure.code == "node.execute"
+    assert result.failure.node_id == "fail"
+    assert result.failure.message == "boom"
+    assert result.failure.traceback is not None
+    assert "ValueError: boom" in result.failure.traceback
     assert result.run_id == _RUN_ID
     assert result.log is None
-    assert any(isinstance(event, NodeFailed) for event in result.events)
+    node_failure = next(event for event in result.events if isinstance(event, NodeFailed))
+    assert node_failure.failure is result.failure
     assert isinstance(result.events[-1], RunFailed)
+    assert result.events[-1].failure is result.failure
 
 
 def test_fresh_flow_failure_is_a_result_and_releases_the_lock(tmp_path: Path) -> None:
@@ -516,13 +521,21 @@ def test_fresh_flow_failure_is_a_result_and_releases_the_lock(tmp_path: Path) ->
     assert result.status == "failed"
     assert result.input == {}
     assert result.output is None
-    assert result.error == "boom"
-    assert result.traceback is not None and "ValueError: boom" in result.traceback
+    assert result.failure is not None
+    assert result.failure.code == "node.execute"
+    assert result.failure.node_id == "fail"
+    assert result.failure.message == "boom"
+    assert result.failure.traceback is not None
+    assert "ValueError: boom" in result.failure.traceback
     assert result.run_id == _RUN_ID
     assert result.log == path
-    assert any(isinstance(event, NodeFailed) for event in result.events)
+    node_failure = next(event for event in result.events if isinstance(event, NodeFailed))
+    assert node_failure.failure is result.failure
     assert isinstance(result.events[-1], RunFailed)
-    assert isinstance(_durable_records(path)[-1], NodeFailedRecord)
+    assert result.events[-1].failure is result.failure
+    durable_failure = _durable_records(path)[-1]
+    assert isinstance(durable_failure, NodeFailedRecord)
+    assert durable_failure.failure == result.failure
 
 
 @pytest.mark.parametrize(
@@ -578,8 +591,7 @@ def test_terminal_resume_is_read_only_silent_and_unlocks(
 
     assert resumed.status == expected_status == fresh.status
     assert resumed.output == expected_output == fresh.output
-    assert resumed.error == fresh.error
-    assert resumed.traceback == fresh.traceback
+    assert resumed.failure == fresh.failure
     assert resumed.input == fresh.input
     assert resumed.run_id == _RUN_ID
     assert resumed.log == path
@@ -601,7 +613,7 @@ def test_terminal_resume_preserves_located_failure_diagnostics(tmp_path: Path) -
     before = path.read_bytes()
 
     assert fresh.status == "failed"
-    assert fresh.error
+    assert fresh.failure is not None
     assert fresh.locator is not None
     assert fresh.range is not None
 
@@ -612,10 +624,9 @@ def test_terminal_resume_preserves_located_failure_diagnostics(tmp_path: Path) -
 
     assert resumed.status == "failed"
     assert resumed.input == fresh.input == {"window": "soon"}
-    assert resumed.error == fresh.error
+    assert resumed.failure == fresh.failure
     assert resumed.locator == fresh.locator
     assert resumed.range == fresh.range
-    assert resumed.traceback == fresh.traceback
     assert resumed.events == []
     assert path.read_bytes() == before
     _durable_records(path)

@@ -23,6 +23,7 @@ import pytest
 import agent_composer.cli.run as run_cli
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose import load_flow
+from agent_composer.diagnostics import Failure
 from agent_composer.events import NodeStarted
 from agent_composer.nodes.base import _HostStop
 from agent_composer.run import RunResult
@@ -611,7 +612,7 @@ def test_failed_result_wins_over_sibling_prompt_host_stop() -> None:
         status="failed",
         run_id="controller-test",
         log=None,
-        error="boom",
+        failure=Failure("node.execute", "boom", "work"),
     )
 
     def prompt(request):
@@ -685,7 +686,8 @@ def test_real_pooled_failure_wakes_prompt_and_joins_every_engine_worker(
     )
 
     assert observed.status == "failed"
-    assert observed.error == "pooled primary failure"
+    assert observed.failure is not None
+    assert observed.failure.message == "pooled primary failure"
     assert prompt_released.is_set()
     assert not any(
         thread.name.startswith(("ac-worker-", "ac-controller"))

@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from agent_composer.compile.model import CompiledFlow
     from agent_composer.compile.validation import FlowValidationError
     from agent_composer.compose import ComposedFlow, LoadError, load_flow
+    from agent_composer.diagnostics import Failure
     from agent_composer.expr.expressions import ExpressionError, evaluate_when
     from agent_composer.run import run_flow
     from agent_composer.typesys.pool import VariablePool
@@ -58,6 +59,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "agent_composer.compile.validation",
         "FlowValidationError",
     ),
+    "Failure": ("agent_composer.diagnostics", "Failure"),
     "LoadError": ("agent_composer.compose", "LoadError"),
     "ComposedFlow": ("agent_composer.compose", "ComposedFlow"),
     "CompiledFlow": ("agent_composer.compile.model", "CompiledFlow"),
@@ -70,6 +72,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
 __all__ = [
     "ExpressionError",
     "FlowValidationError",
+    "Failure",
     "LoadError",
     "ComposedFlow",
     "CompiledFlow",

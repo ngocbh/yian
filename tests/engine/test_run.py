@@ -122,7 +122,7 @@ def _has_node_output(result) -> bool:
 def test_code_flow_runs_to_declared_output():
     loaded = load_flow(_PLAN_FLOW)
     result = run_flow(loaded, {"topic": "ACME"})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == {"rating": "plan for ACME", "score": 0.9}
 
 
@@ -139,7 +139,7 @@ def test_leaf_binds_from_flow_wiring():
     assert [p.name for p in parameters] == ["topic"]
     assert parameters[0].origin is not None
     result = run_flow(loaded, {"topic": "ACME"})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == {"rating": "plan for ACME", "score": 0.9}
 
 
@@ -152,7 +152,7 @@ def test_leaf_binds_from_flow_wiring():
 def test_coalesce_output_resolves_taken_branch_positive():
     loaded = load_flow(_CASE_FLOW)
     result = run_flow(loaded, {"topic": "BETA", "seed": 0.7})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == "pro case for BETA"
 
 
@@ -163,14 +163,14 @@ def test_case_gate_binds_from_flow_wiring():
     assert loaded.compiled.wiring["gate"] == {"__r0": Binding("${score.output}")}
     assert [p.name for p in loaded.compiled.nodes["gate"].params] == ["__r0"]
     result = run_flow(loaded, {"topic": "BETA", "seed": 0.7})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == "pro case for BETA"
 
 
 def test_coalesce_output_resolves_taken_branch_cautious():
     loaded = load_flow(_CASE_FLOW)
     result = run_flow(loaded, {"topic": "BETA", "seed": 0.2})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == "cautious note for BETA"
 
 
@@ -195,7 +195,8 @@ def test_input_type_mismatch_fails_at_boundary():
     loaded = load_flow(_CASE_FLOW)
     result = run_flow(loaded, {"topic": "BETA", "seed": "high"})
     assert result.status == "failed"
-    msg = result.error or ""
+    assert result.failure is not None
+    msg = result.failure.message
     assert "input 'seed'" in msg          # names the offending input
     assert "does not match declared type float" in msg  # the precise reason + declared scalar
     assert "high" in msg                  # the offending value
@@ -207,7 +208,7 @@ def test_coercible_string_input_passes_boundary():
     # "0.7" coerces to float 0.7 -> passes enforcement and runs to success.
     loaded = load_flow(_CASE_FLOW)
     result = run_flow(loaded, {"topic": "BETA", "seed": "0.7"})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == "pro case for BETA"
 
 
@@ -220,7 +221,8 @@ def test_boundary_assert_false_fails_before_any_node_runs():
     loaded = load_flow(_ASSERT_FLOW)
     result = run_flow(loaded, {"topic": "ACME", "seed": -1.0})
     assert result.status == "failed"
-    assert "assert failed" in (result.error or "")
+    assert result.failure is not None
+    assert "assert failed" in result.failure.message
     # the engine never ran: no node produced a value (no NodeSucceeded event).
     assert not _has_node_output(result)
 
@@ -239,7 +241,8 @@ def test_post_terminal_assert_false_flips_succeeded_to_failed():
     loaded = load_flow(flow)
     result = run_flow(loaded, {"topic": "ACME", "seed": 1.0})
     assert result.status == "failed"
-    assert "assert failed" in (result.error or "")
+    assert result.failure is not None
+    assert "assert failed" in result.failure.message
     # the run DID reach the node (the assert fired post-terminal, not at the boundary).
     assert _has_node_output(result)
 
@@ -252,7 +255,7 @@ def test_post_terminal_assert_false_flips_succeeded_to_failed():
 def test_all_asserts_true_succeeds():
     loaded = load_flow(_ASSERT_FLOW)
     result = run_flow(loaded, {"topic": "ACME", "seed": 1.0})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == {"rating": "plan for ACME", "score": 0.9}
 
 
@@ -280,12 +283,12 @@ output: ${echo.output}
 def test_run_id_host_override_resolves():
     loaded = load_flow(_RUN_ID_FLOW)
     result = run_flow(loaded, {"topic": "ACME"}, run_id="rid-123")
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert result.output == "rid-123"
 
 
 def test_run_id_minted_when_omitted():
     loaded = load_flow(_RUN_ID_FLOW)
     result = run_flow(loaded, {"topic": "ACME"})
-    assert result.status == "succeeded", result.error
+    assert result.status == "succeeded", result.failure
     assert isinstance(result.output, str) and result.output  # a fresh non-empty id

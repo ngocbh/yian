@@ -505,6 +505,7 @@ import agent_composer
 expected = [
     "ExpressionError",
     "FlowValidationError",
+    "Failure",
     "LoadError",
     "ComposedFlow",
     "CompiledFlow",

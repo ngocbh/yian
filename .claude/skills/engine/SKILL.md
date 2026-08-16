@@ -55,6 +55,12 @@ Hold this model whenever you design anything:
   or structural equality. Wrapped lines map through the exact-line tuple, then the
   whole scalar and node fallback. Compose uses that same selector for syntax errors.
   The origins and retained code-object cache are manifest-neutral.
+- CASE registers every indexed `cases[N].when` plus optional `on:` site before
+  lowering. Each ordered `Case` retains its predicate origin; generated wiring
+  bindings retain the source occurrence that produced them. `CaseNode` attributes
+  a predicate exception by its own `_run_impl` frame and active `Case` identity,
+  with node fallback outside predicate evaluation. Extend CASE's local origin
+  traversal/rewrite for these carriers; they remain manifest-neutral.
 - `diagnostics.ResolverTable` composes opaque namespaces through exact
   new-origin-to-delegate/old-origin routes without parsing keys or resolver
   fallback. `compile.rebase_flow_origins` maps each distinct reachable old key
@@ -159,7 +165,10 @@ Hold this model whenever you design anything:
   final assembly stamps its key on the sink `Parameter` and its bound value on the
   corresponding `Binding`. Source-backed reserved MAP `over:`
   and WAIT `until:` values are stamped only on their `Binding` because they have no
-  formal parameter. Supplied contract failures select
+  formal parameter. CASE's kind-owned lowering stamps each generated searched
+  `Binding` with the first predicate origin that introduced the reference, or stamps
+  `__on` from `on:`; its generated `Parameter` carriers remain source-free.
+  Supplied contract failures select
   `Parameter.contract.origins.at(TypeCheckError.path)` before the parameter
   fallback; default failures keep default-site ownership. Never add a parallel
   source map.
@@ -427,6 +436,11 @@ the cursor, coordinates, or a parallel source map. CODE load-time syntax errors
 resolve those already-registered sites through the builder's package-private read
 seam; it does not reparse or freeze. The loader remains the sole successful-load
 catalog freeze.
+CASE uses the hook to register each indexed `cases[N].when` and optional `on:`
+value. Lowering transfers predicate origins to ordered `Case` carriers and transfers
+the first owning predicate (or `on:`) origin to generated input `Binding` carriers;
+generated `Parameter` values remain source-free.
+
 Inline extraction intentionally takes one graph-wide nodes snapshot before
 projection so unchanged aliases retain sharing; field navigation uses cursors or
 their package-private read-only view.

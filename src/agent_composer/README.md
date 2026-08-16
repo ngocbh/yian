@@ -207,6 +207,17 @@ failure falls back to `code_origin`, then `Node.origin`. Reference mode keeps th
 base node-origin fallback. Compose applies the same line selector to load-time
 `SyntaxError.lineno` and reports `SyntaxError.msg`.
 
+CASE carries one optional origin on each ordered `Case`, identifying that exact
+`cases[N].when` occurrence even when predicate text is duplicated. Compose
+registers those indexed sites before lowering and preserves the origin on the
+rewritten predicate; searched CASE also assigns each generated input `Binding`
+the origin of the first predicate that introduced its reference, while `on:`
+owns the generated `__on` binding origin. `CaseNode.exception_origin()` locates
+its own active `_run_impl` frame by code-object and node identity, then selects
+the active `Case` by identity. Failures outside predicate evaluation fall back
+to `Node.origin`. These origins participate in ordinary traversal and rebasing,
+but remain diagnostic-only and manifest-neutral.
+
 `Node.pre_asserts` and `Node.post_asserts` are ordered `Assertion` lists. Parsed
 YAML remains raw text until the inline-call pass crosses each flow assertion into
 one carrier; node-local validation creates one fresh carrier per authored
@@ -291,7 +302,8 @@ remain source-free.
 
 Nodes own their provenance layout. The base `Node` enumerates and rewrites its
 node origin, output contract, parameters, and assertions. CODE extends those
-hooks with its whole-source fallback and ordered exact-line origins;
+hooks with its whole-source fallback and ordered exact-line origins; CASE
+extends them with its ordered predicate origins;
 CALL/MAP/LOOP also own their cached `child_inputs` origins and expose the baked
 child through `origin_children()`. These hooks remain source-neutral and never
 import `compile`.
@@ -369,6 +381,9 @@ whole `code:` scalar and, when `ScalarSource` exposes an exact literal tuple,
 each constructed line under the node's lexical site path. It stores only the
 returned `OriginRef` values, never a cursor or coordinate map. The same path runs
 for roots, definitions, and inline children; virtual source produces no origins.
+`CaseDescriptor` uses the same hook for each indexed `cases[N].when` and optional
+`on:` value, then transfers those origins to the ordered `Case` values and
+lowering-generated `Binding` values.
 `compose/helpers/types.py` owns the sole source-aware recursive type compiler.
 Final assembly uses it for retained root/definition flow inputs: declaration keys
 stamp `Parameter.origin`, type values and authored nested record fields
@@ -383,8 +398,9 @@ their own node cursors. External child views rebase the resulting root/nested or
 Virtual/generated declarations and direct Python descriptor builds remain source-free.
 Final assembly separately registers authored node headers, ordinary node-input keys
 and bound values, source-backed reserved MAP/WAIT wiring values, CODE source fields,
-assertions, and source-backed flow-output values directly on their canonical semantic
-carriers; it does not build a parallel location map. An ordinary node input's key
+CASE predicate/`on:` sites, assertions, and source-backed flow-output values directly
+on their canonical semantic carriers; it does not build a parallel location map. An
+ordinary node input's key
 belongs to its sink `Parameter`, while its value belongs to `Binding`. An assertion's semantic
 path includes its authored list index, and that item's cursor supplies both
 `Assertion.origin` and the aligned temporary range. Full root flows and
@@ -582,8 +598,9 @@ assertion identity includes executable and display text in list order while
 remaining origin/range-neutral. `expansion_digest` applies the same projection to
 dynamic fragments. CODE identity includes its executable `code` text but excludes
 `code_origin`, `code_line_origins`, and the retained compiled/owned-code caches,
-so source formatting, origin rebasing, and Python object identity cannot change
-program or expansion identity. `resolve_llm_cascade` returns a
+while CASE identity includes predicate handle/expression semantics but excludes
+each predicate origin. Thus source formatting, origin rebasing, and Python object
+identity cannot change program or expansion identity. `resolve_llm_cascade` returns a
 complete map keyed by slash-separated static agent paths. The run boundary reads
 process provider/model defaults once at fresh-run initialization;
 `apply_effective_llm_map` restores the

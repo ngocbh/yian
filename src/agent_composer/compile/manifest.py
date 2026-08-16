@@ -22,6 +22,7 @@ from urllib.parse import unquote_plus
 from lark import Token, Tree
 
 from agent_composer.compile.model import CompiledFlow, Edge, Flow, FlowOutput
+from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError, expr_refs, scan_template
 from agent_composer.expr.template import Literal, Span
 from agent_composer.nodes.agent import AgentNode
@@ -177,7 +178,8 @@ _VALUE_CONTRACT_CANONICAL_FIELDS = frozenset({"type"})
 _VALUE_CONTRACT_IGNORED_FIELDS = frozenset({"origins"})
 _CONTRACT_ORIGINS_IGNORED_FIELDS = frozenset({"default", "entries"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
-_CASE_FIELDS = frozenset({"handle", "when"})
+_CASE_CANONICAL_FIELDS = frozenset({"handle", "when"})
+_CASE_IGNORED_FIELDS = frozenset({"origin"})
 
 # Config secrets are intentionally absent from identity. Exact names and high-confidence
 # compound suffixes are credentials in every config spelling. Generic auth/token/signature
@@ -1478,8 +1480,13 @@ def _case_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, An
     """Canonicalize one ordered CASE arm."""
     if type(value) is not Case:
         raise TypeError(f"{path}: expected Case, got {type(value).__name__}")
-    _check_fields(value, _CASE_FIELDS, path)
-    return {"handle": value.handle, "when": _canonical_value(value.when, ctx, f"{path}.when")}
+    _check_fields(value, _CASE_CANONICAL_FIELDS | _CASE_IGNORED_FIELDS, path)
+    if value.origin is not None and not isinstance(value.origin, OriginRef):
+        raise TypeError(f"{path}.origin: expected OriginRef or None")
+    return {
+        "handle": value.handle,
+        "when": _canonical_value(value.when, ctx, f"{path}.when"),
+    }
 
 
 def _node_manifest(

@@ -15,8 +15,9 @@ The LAST compose phase before the loader. Three modules:
   reuses those carriers; inferred inline signatures remain source-free. It stamps authored
   node-header origins, then invokes each
   descriptor's immutable source-origin hook while its located cursor is available. CODE uses
-  that hook for its whole `code:` value and ordered exact literal-line sites; other descriptors
-  currently keep the no-op default. The shared `BuildContext` exposes the builder's read-only
+  that hook for its whole `code:` value and ordered exact literal-line sites; CASE uses it for
+  indexed predicates and optional `on:` provenance; other descriptors keep the no-op default.
+  The shared `BuildContext` exposes the builder's read-only
   registered-site lookup so a CODE syntax error can resolve the same source-neutral line
   selector used at runtime. It also carries an optional Compose-owned output-contract reader:
   `(node_id, output_spec) -> ValueContract | None`. `NodeDescriptor.output_contract()` invokes

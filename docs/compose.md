@@ -22,7 +22,7 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                          contract origins for root/def input:
   ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered)
   ├─ stamp authored headers → optional Node origins in one document-local catalog
-  ├─ stamp kind-owned sites → descriptor hook; CODE whole scalar + exact literal lines
+  ├─ stamp kind-owned sites → descriptor hook; CODE scalar/lines + CASE predicates/`on:`
   │
   ├─ desugar_inline_calls        ┐  rewrite author sugar into core nodes and
   │                               │  carrierize flow assertions by source order.
@@ -104,13 +104,16 @@ range map is created. The loader shares one builder across a physical
 document's root, `defs:`, and inline bodies. Assembly registers authored node headers,
 root/def flow-input keys and recursive type values, physical node-output contract roots and
 nested fields, ordinary node-input keys and values, source-backed reserved MAP/WAIT wiring
-values, and source-backed flow-output values on the canonical carriers themselves. A packed
+values, CODE source fields, indexed CASE predicates and `on:`, and source-backed
+flow-output values on the canonical carriers themselves. A packed
 flow-input default receives its own semantic key, even though it resolves to the same scalar
 range as the contract root. After the common header is stamped, assembly also calls each
 descriptor's immutable
 `with_source_origins(...)` hook. The default is a no-op; CODE registers its whole `code:`
 scalar and every available exact literal constructed line, then carries only those opaque
-origins into `CodeNode`. It also indexes flow and node assertions by authored list order,
+origins into `CodeNode`. CASE registers each positional `cases[N].when` and optional `on:`
+value, retaining only opaque origins through its lowering. It also indexes flow and node
+assertions by authored list order,
 deriving each `Assertion.origin` and its aligned temporary `SourceRange` from the same item
 cursor. Equal text at two positions is therefore two distinct source sites. Flow-output
 registration happens after desugaring, so an authored occurrence locates the final
@@ -208,6 +211,9 @@ node, wiring, edges = result.node, result.wiring, result.edges
   `code_origin` and ordered exact `code_line_origins`. Inline CODE compiles one
   unpadded wrapper and uses retained code-object identity to select the deepest
   owned traceback line; filenames and structural equality never establish ownership.
+  CASE additionally carries one diagnostic-only origin on each ordered `Case`.
+  `CaseNode.exception_origin()` selects the active predicate by exact `_run_impl`,
+  node, and `Case` identity, then falls back to the node origin.
 - the **wiring** is *flow-owned*: `{param → "${source}"}`. The node knows its parameter
   *names*; the flow knows where each one is *sourced from*. This is why a node is
   reusable and why the flow, not the node, owns the graph.
@@ -241,9 +247,11 @@ so they have no `Parameter.origin`. The final (possibly rewritten) payload stays
 `Binding.source`, so lowering does not detach provenance from the authored value. Entries
 without a retained source occurrence receive no new Compose origin; an explicit
 programmatic origin remains intact, and source-backed projections inherit their backing
-occurrence. CASE wiring remains a separate migration step.
-CODE's extra origins enter
-the existing clone and external-rebase paths through its node-owned traversal/rewrite hooks.
+occurrence. CASE lowering assigns each searched generated `Binding` the first predicate
+origin that introduced its reference; the `on:` origin belongs to the generated `__on`
+binding, while synthetic `Parameter` values stay source-free. Ordered predicate origins
+and these bindings enter ordinary clone and external-rebase paths through existing carrier
+hooks. CODE's extra origins enter the same paths through its node-owned traversal/rewrite hooks.
 The same CODE-owned wrapped-line selector serves runtime tracebacks and Compose
 `SyntaxError.lineno`: exact literal line, whole scalar, then node header. Quoted and
 folded code has no exact line sites and therefore selects the whole scalar.

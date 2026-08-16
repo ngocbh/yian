@@ -17,9 +17,9 @@ for an **authorable leaf** kind (one a flow names directly, like `code`/`tool`).
 > leaves.
 
 Use `tool` (`compose/nodes/tool.py`) as the simplest real leaf reference. Use
-`code` only when the new kind also needs semantic source sites beyond the common
-node header. Build bottom-up by dependency, **one test green before the next
-step** (CLAUDE.md).
+`code` for scalar/line semantic source sites and `case` for indexed repeated sites
+that survive lowering beyond the common node header. Build bottom-up by dependency,
+**one test green before the next step** (CLAUDE.md).
 
 ## 1. `nodes/base.py` — add the closed-vocabulary tag
 
@@ -60,8 +60,9 @@ their local origin hooks; they never import `compile.rebase_flow_origins` or
 `diagnostics.ResolverTable`, because whole-graph rebasing belongs to `compile`.
 If a node adds kind-owned origin slots, validate them at construction and extend
 `iter_local_origins()` / `rewrite_local_origins()` explicitly in deterministic
-order. Do not discover provenance by reflection or include it in execution
-semantics or the manifest.
+order. Ordered semantic carriers keep positional identity, and traversal/rewrite
+must preserve aliases with the shared carrier identity guard. Do not discover
+provenance by reflection or include it in execution semantics or the manifest.
 `Node.origin_context` is separate generated outer-to-inner spawner ancestry. It
 starts empty on direct/static nodes and stays outside local origin traversal,
 rewriting, manifests, fingerprints, and expansion digests. Expected failure
@@ -147,8 +148,9 @@ attachment hook, and the sink derivations (`output_contract` / `sink_params` /
   owns semantic source sites beyond the common node header. Return an immutable
   replacement descriptor carrying only opaque `OriginRef` values. Register sites
   while the located cursor exists; never retain the cursor, coordinates, or a
-  parallel source map. CODE is the reference: one whole-field fallback plus an
-  ordered tuple for exact literal lines.
+  parallel source map. CODE demonstrates a whole-field fallback plus ordered exact
+  literal lines; CASE demonstrates indexed repeated fields transferred through a
+  lowering to ordered semantic carriers and generated bindings.
 - The assembly conductor stamps `NodeDescriptor.origin` from the authored node-header
   occurrence after parsing. After desugaring/building, it also stamps source-backed wiring
   values directly on their canonical `Binding`: ordinary `input:` entries plus node-owned
@@ -206,7 +208,9 @@ If anything outside `compose/` references `XxxDescriptor`, add it to the imports
 Copy `test_node.py.template`. At minimum: a direct `_run_impl()` unit test and one
 `load_flow` + `run_flow` end-to-end. A kind with extra source-origin carriers also
 tests source-free defaults, deterministic traversal/rewrite, external rebasing,
-and manifest/fingerprint neutrality. For a spawner, also test its canonical seed
+and manifest/fingerprint neutrality. For ordered or lowered sites, also test duplicate
+positional identity, exact failure selection and fallback, formatting relocation, and
+survival through any target/binding desugar. For a spawner, also test its canonical seed
 and the matching `build_grow` arm (§2a). Run:
 
 ```bash
@@ -228,7 +232,7 @@ Close the tracking GitHub issue when the work lands, referencing the commit/PR
 | Enum tag | `nodes/base.py` | `class NodeKind` |
 | Node impl | `nodes/xxx/node.py` + `__init__.py` | new package |
 | Growth builder *(spawner only)* | `compile/expand.py` | `build_grow` closed match |
-| Descriptor (`NodeDescriptor` subclass) | `compose/nodes/xxx.py` | copy `tool.py`; CODE for extra source sites |
+| Descriptor (`NodeDescriptor` subclass) | `compose/nodes/xxx.py` | copy `tool.py`; CODE/CASE for extra source sites |
 | Register | `compose/nodes/__init__.py` | `_DESCRIPTORS` tuple |
 | Re-export | `compose/__init__.py` | imports + `__all__` |
 | Test | `tests/engine/test_xxx.py` | new file |

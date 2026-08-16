@@ -1,11 +1,11 @@
 """kind=case — the branch-routing node's descriptor + parse/build handle.
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `case` node's frozen
-`CaseDescriptor`. It inherits the template `parse` from `NodeDescriptor` (which records each
-field's `SourceRange`), overriding only the `_normalize_cursor` hook — case is the sole kind
-whose surface carries a key YAML 1.1 coerces (`on:`->`True`), so it undoes that coercion before
-the template's key-legality check runs. Registered into `KINDS`/`BINDING_FIELDS` at import so the
-shared dispatch routes here.
+`CaseDescriptor`. Its `parse` wraps the `NodeDescriptor` template to retain positional
+`cases[N].when`/`then` ranges, while `_normalize_cursor` handles the sole author key that
+YAML 1.1 coerces (`on:` -> `True`). Its immutable source-origin hook registers each indexed
+predicate and optional `on:` site before lowering. Registered into `KINDS`/`BINDING_FIELDS`
+at import so the shared dispatch routes here.
 
 Unlike the leaf kinds, a `case` LOWERS in its own `.build()`: pattern-match compilation (the
 OCaml analogue of lowering `match e with | p -> e1 | _ -> e2` to nested conditionals). A `case`
@@ -40,9 +40,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from agent_composer.compile.model import Edge
+from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import (
     ExpressionError,
     binding_co_skips,
@@ -50,12 +51,15 @@ from agent_composer.expr import (
     expr_refs_of,
     rewrite_condition_refs,
 )
-from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.case import DEFAULT_HANDLE, Case, CaseNode
-from agent_composer.nodes.contracts import binding_source
+from agent_composer.nodes.contracts import Binding, Parameter, binding_source
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.source import SourceCursor
+
+if TYPE_CHECKING:
+    from agent_composer.compose.source.catalog import _SourceCatalogBuilder
+    from agent_composer.events import SourceRange
 
 # YAML 1.1 (PyYAML `safe_load`) coerces the bare key `on:` to the boolean `True` (likewise
 # `off`/`yes`/`no`). The case-node surface key `on:` is the only such key in any node body, so
@@ -102,10 +106,12 @@ class CaseDescriptor(NodeDescriptor):
     inputs-bearing `CaseNode`). `else_` is the `else:` fallback.
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
-    `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor`.
-    It overrides ONLY the `_normalize_cursor` hook (to undo the `on:`->`True` YAML coercion
-    before key legality runs); its field legality is otherwise the default allowed/required key
-    check plus the default asserts-list check. Only the case-specific fields are declared here.
+    `range`/`field_ranges` parse metadata) and delegates common parsing to `NodeDescriptor`.
+    Its `parse` wrapper captures positional predicate/target ranges; `_normalize_cursor`
+    undoes the `on:`->`True` YAML coercion before key legality runs; and
+    `with_source_origins` attaches indexed predicate and optional `on:` origins. Field
+    legality otherwise uses the default allowed/required-key and asserts-list checks.
+    Only the case-specific fields are declared here.
 
     Class attrs: `kind="case"`; `allowed` adds `cases`/`else`/`on` to the commons; `required`
     is `{"cases"}`; `binding_fields=()` — a `case` carries CONDITIONS (`on:` + each `when:`),
@@ -140,6 +146,34 @@ class CaseDescriptor(NodeDescriptor):
     then_ranges: list[Optional[SourceRange]] = field(
         default_factory=list, compare=False
     )
+    # Source-neutral sites follow the same positional identity as the legacy ranges.
+    # An empty tuple means direct/source-free construction; otherwise it aligns 1:1
+    # with `cases`. `on_origin` belongs to the generated `__on` binding, not a Case.
+    when_origins: tuple[OriginRef | None, ...] = field(default=(), compare=False)
+    on_origin: OriginRef | None = field(default=None, compare=False)
+
+    def __post_init__(self) -> None:
+        """Reject mutable, misaligned, or non-opaque CASE provenance."""
+        super().__post_init__()
+        if type(self.when_origins) is not tuple:
+            raise TypeError("CASE predicate origins must be a tuple")
+        self._validate_origin_alignment()
+        for origin in self.when_origins:
+            if origin is not None and not isinstance(origin, OriginRef):
+                raise TypeError("CASE predicate origin must be an OriginRef or None")
+        if self.on_origin is not None and not isinstance(self.on_origin, OriginRef):
+            raise TypeError("CASE on origin must be an OriginRef or None")
+
+    def _validate_origin_alignment(self) -> None:
+        """Keep optional predicate origins aligned with a valid case sequence."""
+        if not self.when_origins:
+            return
+        if (
+            not isinstance(self.cases, Sequence)
+            or isinstance(self.cases, (str, bytes))
+            or len(self.when_origins) != len(self.cases)
+        ):
+            raise ValueError("CASE predicate origins must align with cases")
 
     @classmethod
     def parse(
@@ -176,6 +210,58 @@ class CaseDescriptor(NodeDescriptor):
         names = _normalized_key_names(cursor)
         return cursor.renamed(names) if names else cursor
 
+    def with_source_origins(
+        self,
+        cursor: SourceCursor,
+        *,
+        site_path: tuple[str | int, ...],
+        catalog_builder: "_SourceCatalogBuilder",
+    ) -> "CaseDescriptor":
+        """Attach each physical predicate and optional ``on:`` binding site.
+
+        Predicate sites are indexed, so duplicate expression text remains
+        distinct. Missing/malformed entries retain ``None`` and continue to the
+        established build-time validation instead of changing error order.
+        """
+        cursor = self._normalize_cursor(cursor)
+        case_specs = (
+            self.cases
+            if isinstance(self.cases, Sequence)
+            and not isinstance(self.cases, (str, bytes))
+            else ()
+        )
+        when_origins = (
+            list(self.when_origins) if self.when_origins else [None] * len(case_specs)
+        )
+        cases_cursor = cursor.child("cases")
+        for index, case_spec in enumerate(case_specs):
+            if not isinstance(case_spec, Mapping):
+                continue
+            item_cursor = cases_cursor.child(index)
+            if not item_cursor.has("when"):
+                continue
+            registered = catalog_builder.register(
+                (*site_path, "case", index, "when"),
+                item_cursor.child("when"),
+            )
+            if registered is not None:
+                when_origins[index] = registered
+
+        on_origin = self.on_origin
+        if self.on is not None and cursor.has("on"):
+            registered = catalog_builder.register(
+                (*site_path, "field", "on"),
+                cursor.child("on"),
+            )
+            if registered is not None:
+                on_origin = registered
+
+        return replace(
+            self,
+            when_origins=tuple(when_origins),
+            on_origin=on_origin,
+        )
+
     def build(self, ctx: BuildContext) -> BuildResult:
         """Lower this `case` to a strict `CaseNode` + its control + data edges.
 
@@ -188,6 +274,7 @@ class CaseDescriptor(NodeDescriptor):
         `check_case_exhaustive` validate pass (it needs the assembled producer types). `ctx` is
         unused (a case resolves nothing and reads no typedefs); it rides the shared contract.
         """
+        self._validate_origin_alignment()
         if self.on is not None:
             case_node, wiring, data_edges, control_edges, param_ranges, param_labels = (
                 _desugar_on(
@@ -360,6 +447,7 @@ def _desugar_on(
             Case(
                 handle=then,
                 when=f"${{__on}} == {_quote(value, diagnostics, range=when_range or desc.range)}",
+                origin=(desc.when_origins[index] if desc.when_origins else None),
             )
         )
         handle_targets.append((then, then))
@@ -367,7 +455,13 @@ def _desugar_on(
         handle_targets.append((DEFAULT_HANDLE, desc.else_))
     node = CaseNode(desc.id, cases, title=desc.node_name)
     node.params = [Parameter(name="__on")]
-    wiring = {"__on": desc.on}
+    wiring = {
+        "__on": (
+            desc.on
+            if desc.on_origin is None
+            else Binding(desc.on, origin=desc.on_origin)
+        )
+    }
     on_rng = desc.field_ranges.get(("field", "on"))  # the `on:` value's own range
     param_ranges = {("input", "__on"): on_rng} if on_rng is not None else {}
     return (
@@ -421,7 +515,12 @@ def _desugar_searched(
                 ref_to_local[ref] = local
                 local_case_index[local] = ci
 
-    wiring = {local: f"${{{ref}}}" for ref, local in ref_to_local.items()}
+    wiring: dict[str, Any] = {}
+    for ref, local in ref_to_local.items():
+        source = f"${{{ref}}}"
+        case_index = local_case_index[local]
+        origin = desc.when_origins[case_index] if desc.when_origins else None
+        wiring[local] = source if origin is None else Binding(source, origin=origin)
 
     cases: list[Case] = []
     handle_targets: list[tuple[str, str]] = []
@@ -438,7 +537,13 @@ def _desugar_searched(
                 ),
             )
         rewritten = _rewrite_when(when, ref_to_local)
-        cases.append(Case(handle=then, when=rewritten))
+        cases.append(
+            Case(
+                handle=then,
+                when=rewritten,
+                origin=(desc.when_origins[index] if desc.when_origins else None),
+            )
+        )
         handle_targets.append((then, then))
     if desc.else_ is not None:
         handle_targets.append((DEFAULT_HANDLE, desc.else_))

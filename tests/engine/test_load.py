@@ -215,7 +215,11 @@ def test_seed18_route_desugars_case_on_with_else():
     assert isinstance(route, CaseNode)
     # on-form: one __on param wired to the stance ref (the source lives on flow.wiring).
     assert [p.name for p in route.params] == ["__on"]
-    assert flow.wiring["route"] == {"__on": Binding("${synth.output.stance}")}
+    on_binding = flow.wiring["route"]["__on"]
+    assert isinstance(on_binding, Binding)
+    assert on_binding.source == "${synth.output.stance}"
+    assert on_binding.origin is not None
+    assert on_binding.origin not in {case.origin for case in route.cases}
     out = {(e.to, e.source_handle) for e in flow.outgoing("route")}
     assert ("pro_note", "pro_note") in out
     assert ("con_note", "con_note") in out

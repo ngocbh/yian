@@ -8,6 +8,8 @@ synth composer genuinely SHARES the gate's inputs verbatim and so correctly inhe
 gate's `.range`/`field_ranges`.
 """
 
+from dataclasses import replace
+
 import pytest
 
 from agent_composer.compose.desugar.adaptive_questions import desugar_adaptive_questions
@@ -25,6 +27,7 @@ from agent_composer.compose.parse.file import (
 )
 from agent_composer.compose.parse.nodes import parse_nodes
 from agent_composer.compose.source import SourceDocument
+from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceRange
 
 
@@ -202,7 +205,9 @@ def test_desugar_case_call_targets_locate_at_their_target_line():
         "output: ${route.output}\n"
     )
     descriptors = parse_nodes(_nodes_reader(text))
-    host = descriptors["route"]
+    predicate_origin = OriginRef("case/0/when")
+    host = replace(descriptors["route"], when_origins=(predicate_origin,))
+    descriptors["route"] = host
     new_descriptors = desugar_case_call_targets(descriptors, _synth_id_gen())
     synth = [d for nid, d in new_descriptors.items() if nid.startswith("__call_")]
     assert len(synth) == 1
@@ -213,6 +218,7 @@ def test_desugar_case_call_targets_locate_at_their_target_line():
     )  # the `then:` line, not the case header
     assert call_desc.range != host.range
     assert call_desc.field_ranges == {}  # owns no authored fields
+    assert new_descriptors["route"].when_origins == (predicate_origin,)
 
 
 def _case_gate() -> CaseDescriptor:

@@ -243,6 +243,13 @@ The wrapped line chooses an exact literal-line origin, then the whole `code:` sc
 and node fallback. Filenames and structurally equal code objects never establish
 ownership; reference-mode CODE keeps the base node-origin behavior.
 
+CASE implements the same hook for ordered predicates. Each compiled `Case` carries
+the origin of its exact `cases[N].when` occurrence. The hook identifies this node's
+active `_run_impl` frame and `Case` by identity, so duplicate predicate text remains
+distinct; failures outside predicate evaluation use the node fallback. The carriers
+are diagnostic-only, participate in ordinary graph rebasing, and do not affect flow
+identity.
+
 ## Why a closed match, on the right axis
 
 An earlier engine branched on node *kind* in many places. That dispatch is now fully

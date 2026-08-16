@@ -26,9 +26,10 @@ YAML document, located cursors, and immutable occurrence-backed origin catalogs;
 assembly stamps authored flow-input parameter/contract/default sites, node headers,
 ordinary node-input keys and values, and
 source-backed reserved MAP/WAIT wiring values on their canonical carriers. After each
-common header stamp, assembly makes one kind-blind descriptor-hook call; CODE uses it to
-carry the whole `code:` value plus ordered exact literal-line origins, while other
-descriptors use the no-op default. Separately, its `BuildContext` contract reader selects
+common header stamp, assembly makes one kind-blind descriptor-hook call. CODE uses it to
+carry the whole `code:` value plus ordered exact literal-line origins; CASE uses it for
+indexed predicates and optional `on:` provenance; other descriptors use the no-op default.
+Separately, its `BuildContext` contract reader selects
 the normalized physical node `output:` cursor and delegates the same recursive contract
 compiler from the leaf's established build position; a virtual/missing site falls back to
 the source-free reader without moving validation order. It creates one
@@ -62,9 +63,10 @@ Load errors cross the package boundary only as `LoadError(Diagnostic)`: Compose
 resolves each retained cursor/range against its owning document before raising,
 and definition/import context becomes ordered outer frames. The CLI receives no
 separate YAML text or coordinates for load failures. Runtime failure ranges on
-most nodes remain a separate temporary bridge. Inline CODE is cut over: its node-owned
-hook selects exact line/whole-scalar origins from identity-owned Python frames; the CLI's
-general runtime diagnostic renderer remains a later migration.
+most nodes remain a separate temporary bridge. Inline CODE and CASE predicates are cut
+over: their node-owned hooks select exact line/whole-scalar or active-predicate origins
+from identity-owned frames; the CLI's general runtime diagnostic renderer remains a later
+migration.
 
 Imports flow DOWN only: this package imports `typesys` / `expr` / `nodes`; nothing
 in the engine imports `compose`.

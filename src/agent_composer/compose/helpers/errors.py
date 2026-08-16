@@ -221,9 +221,37 @@ class LoadDiagnostics:
 class LoadError(ValueError):
     """A Compose flow cannot be loaded, expressed as one canonical diagnostic."""
 
+    __slots__ = ("_diagnostic",)
+
+    _RUNTIME_ATTRIBUTES = frozenset(
+        {
+            "__cause__",
+            "__context__",
+            "__notes__",
+            "__suppress_context__",
+            "__traceback__",
+        }
+    )
+
     def __init__(self, diagnostic: Diagnostic):
         """Retain the immutable diagnostic as the exception's only payload."""
         if not isinstance(diagnostic, Diagnostic):
             raise TypeError("LoadError requires a Diagnostic")
-        self.diagnostic = diagnostic
-        super().__init__(diagnostic.message)
+        object.__setattr__(self, "_diagnostic", diagnostic)
+        super().__init__(diagnostic)
+
+    @property
+    def diagnostic(self) -> Diagnostic:
+        """Return the immutable, presentation-ready failure payload."""
+        return self._diagnostic
+
+    def __str__(self) -> str:
+        """Return the diagnostic message without duplicating it in exception state."""
+        return self._diagnostic.message
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Allow traceback machinery while rejecting payload enrichment or replacement."""
+        if name in self._RUNTIME_ATTRIBUTES:
+            super().__setattr__(name, value)
+            return
+        raise AttributeError("LoadError payload is immutable")

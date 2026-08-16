@@ -1,5 +1,8 @@
 """Canonical diagnostic construction at the Compose load boundary."""
 
+import copy
+import pickle
+
 import pytest
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
@@ -13,11 +16,44 @@ def test_load_error_preserves_one_canonical_diagnostic() -> None:
     error = LoadError(diagnostic)
 
     assert error.diagnostic is diagnostic
+    assert error.args == (diagnostic,)
     assert str(error) == "broken"
     assert all(
         not hasattr(error, name)
         for name in ("line", "lines", "range", "notes")
     )
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("diagnostic", Diagnostic(code="compose.load", message="replacement")),
+        ("_diagnostic", Diagnostic(code="compose.load", message="replacement")),
+        ("line", 7),
+        ("lines", [7]),
+        ("range", object()),
+        ("notes", ["replacement"]),
+        ("other", "enrichment"),
+    ],
+)
+def test_load_error_rejects_payload_mutation(
+    name: str,
+    value: object,
+) -> None:
+    error = LoadError(Diagnostic(code="compose.load", message="broken"))
+
+    with pytest.raises(AttributeError, match="payload is immutable"):
+        setattr(error, name, value)
+
+
+def test_load_error_copy_and_pickle_reconstruct_from_the_diagnostic() -> None:
+    diagnostic = Diagnostic(code="compose.load", message="broken")
+    error = LoadError(diagnostic)
+
+    for reconstructed in (copy.deepcopy(error), pickle.loads(pickle.dumps(error))):
+        assert reconstructed.diagnostic == diagnostic
+        assert reconstructed.args == (reconstructed.diagnostic,)
+        assert str(reconstructed) == "broken"
 
 
 def test_load_error_rejects_non_diagnostic_payloads() -> None:

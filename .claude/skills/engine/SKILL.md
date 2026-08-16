@@ -150,7 +150,8 @@ fold, continuation, effect, functor), use it.
 
 When borrowing runtime mechanics from any prior worker engine, **borrow** the
 correctness-critical parts (single-writer dispatcher, 3-state edge join,
-outputs-before-successors, recursive skip-flood, recorded starts and outcomes,
+outputs-before-successors, redirect-aware recursive skip-flood, recorded starts
+and outcomes,
 append-before-apply transitions, and one reducer path for live execution and
 historical replay) and **drop** scale/framework baggage (external DBs, dynamic
 worker scaling, plugin registries/metaclasses, heavy layering, multi-tenancy) —
@@ -181,7 +182,8 @@ Most are just the functional model (above) made enforceable:
   that composes over a use-case-specific feature. If a real flow can't be
   expressed, that's an engine gap — fix the primitive, don't special-case the flow.
 - **Node never writes the pool** *(purity)* — it returns outputs; the engine binds
-  them under `(node_id, key)`, like an immutable `let`. No node mutates shared state.
+  them under the resolved logical target, like an immutable `let`. No node
+  mutates shared state.
 - **Typed, losslessly-serializable state** *(the type system)* —
   `TypedValue` / `VariablePool`; the basis for canonical run-record payloads and
   `${...}` references.
@@ -212,7 +214,14 @@ Most are just the functional model (above) made enforceable:
   closed worker-result and run-record sums and on node-owned traits/hooks
   (`is_spawner`, `binds_per_item`,
   `bind_reserved`, `reserved_wiring_keys`, `validate_execution_setup`,
-  `exception_origin`, `grow_depth_delta`, `is_loop`, `needs_stop_event`). A
+  `exception_origin`, `grow_depth_delta`, `is_loop`, `needs_stop_event`,
+  `skipped_output_target`). `skipped_output_target()` is pure, deterministic
+  topology authority derived only from manifest-backed node state. Its base
+  behavior is baked `commit_as` or the physical id; LOOP returns its origin to
+  mirror dynamic `Output.commit_as`, which otherwise affects success only. A
+  redirected target must have one unfinished physical owner and be an inert expanded
+  spawner or no-incoming placeholder, never executable or already committed;
+  every target out-edge must still be unknown. A
   ratchet test (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion`
   dispatch count at 0. A separate layer ratchet forbids `nodes -> compile` and
   `runtime -> compile.expand`: nodes describe seeds, compile constructs fragments,

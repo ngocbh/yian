@@ -28,9 +28,27 @@ evaluates `.expression` and reports/locates `.display`. `_run_impl` returns ONE 
 
 | Return | Meaning |
 |--------|---------|
-| `Output(value)` | the one produced value. The dispatcher prepares a canonical `NodeSucceededRecord`; after append, the reducer writes it under the resolved commit target and fires that target's out-edges. Optional `Output(value, commit_as=<id>)` chooses another target; `None` uses the node's baked redirect or its own id. |
-| `Route(handle)` | a routing-only outcome (a CASE picks an out-edge `handle`); carries no value and writes no pool entry. The dispatcher records the handle, then the reducer takes the selected edge, skip-floods its siblings, and derives `NodeRouted`. |
+| `Output(value)` | the one produced value. The dispatcher prepares a canonical `NodeSucceededRecord`; after append, the reducer writes it under the resolved success target and fires that target's out-edges. Optional `Output(value, commit_as=<id>)` chooses another success target; `None` uses the node's baked redirect or its own id. |
+| `Route(handle)` | a routing-only outcome (a CASE picks an out-edge `handle`); carries no value and writes no pool entry. The dispatcher records the handle, then the reducer takes the selected edge, skip-floods its siblings through their logical output targets, and derives `NodeRouted`. |
 | `Grow(seed, prune)` | describe one deterministic graph expansion without constructing it. `seed` is the kind-shaped but runtime-opaque builder input (CALL record, MAP records, or LOOP carried record/index); `prune` names ids to retire in the same step. Compile-owned `build_grow(spawner, seed)` constructs the self-describing `Flow`; the dispatcher prepares a `NodeExpandedRecord`, then the reducer applies the generic splice. The canonical seed is persisted for replay. Only spawner kinds (`is_spawner`) may return it. |
+
+Success and absence resolve their logical output boundaries through distinct
+carriers. Success resolves `Output.commit_as`, then baked `Node.commit_as`, then
+the physical id. A result-carried redirect is unavailable when the node is
+skipped, so it affects success only unless the node's
+`skipped_output_target()` hook mirrors it. The base hook returns baked
+`commit_as` or id; LOOP returns manifest-backed `origin_id` to mirror its STOP
+output. The hook is pure and deterministic, derives only from manifest-backed
+execution state, and returns an existing node id.
+
+A redirect is an exclusive single-owner contract, not an OR join: one unfinished
+physical node may redirect to a logical target, and the target must be inert—an
+expanded spawner or an unknown placeholder with no incoming work, never ready,
+in flight, or already committed; all of its outgoing edges must still be unknown. The
+reducer validates this topology before mutation, marks the physical node
+skipped, deduplicates logical targets, and traverses the logical target's
+outgoing adjacency. Settled expansion residue is inert and no longer owns a
+future output.
 
 A streaming kind is a generator that yields `StreamChunk` and *returns* a
 `NodeResult`. **Failure is not a variant** — a node `raise`s and the engine
@@ -119,6 +137,7 @@ base `Node`; a kind overrides only what it needs.
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
 | `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `_run_impl` → baked child on call/map/loop; complete predicates on case |
 | `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin |
+| `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
 | `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
@@ -129,9 +148,11 @@ consumed by `compile.origins`, not by the engine core.
 
 The rest of the splice (add subgraph, enforce `MAX_TOTAL_NODES`, mint one uniform `NodeExpandedRecord`,
 finish/mark the spawner, apply the origin `commit_as` to the derived terminal, schedule the
-subgraph's `start_id`) is
-uniform. Success-path routing (CASE branch/skip,
-subflow commit-under-spawner) rides node-result data (`Route.handle`, `Output.commit_as`). A
+subgraph's `start_id`) is uniform. A generated terminal's baked `Node.commit_as`
+redirects both paths: success resolves it after `Output.commit_as`, while the
+inherited `skipped_output_target()` propagates absence through the same spawner
+anchor. CASE selection still rides `Route.handle`; dynamic `Output.commit_as`
+redirects only success unless a node-owned hook mirrors it. A
 spawner's own `post_asserts` (a `call` node's `asserts:`) are **lowered onto the cloned child
 `END`** at grow time (`expand._lower_spawner_post_asserts`): `${output}` stays; a declared input
 `${X}` becomes a synth END param wired off the cloned child START's coerced output, so the assert
@@ -177,7 +198,7 @@ plumbing; re-add when real serving lands.
 | `RunResumedRecord` | ordered unfinished starts to retry plus the selected worker count |
 | `NodeStartedRecord` | move the exact ready head into the ordered in-flight set before evaluation/submission |
 | `NodeSucceededRecord` | commit one canonical typed value under an already-resolved target |
-| `NodeRoutedRecord` | select one named outgoing handle and derive its skip closure |
+| `NodeRoutedRecord` | select one named outgoing handle and derive its redirect-aware skip closure |
 | `NodeExpandedRecord` | rebuild and verify one canonical seed/digest, then splice its fragment |
 | `NodeFailedRecord` | make the run terminal-failed with its captured diagnostic |
 
@@ -210,7 +231,8 @@ reducer, and either returns an already-terminal result unchanged or appends one
 
 When borrowing runtime mechanics from a prior worker engine: **borrow** the
 correctness-critical parts (single-writer dispatcher, 3-state edge join,
-outputs-before-successors, recursive skip-flood, recorded starts and outcomes,
+outputs-before-successors, redirect-aware recursive skip-flood, recorded starts
+and outcomes,
 append-before-apply transitions, and one reducer path for live execution and replay);
 **drop** scale/framework baggage (external DBs, dynamic worker scaling, plugin
 registries, heavy layering, multi-tenancy).
@@ -260,8 +282,10 @@ model made enforceable.
   canonicalizes execution semantics, `flow_fingerprint` hashes it, and
   `expansion_digest` covers an expanded fragment's entry/end ids and topology.
   Assertion expression/display/order/multiplicity and an output contract's semantic
-  `Type` affect identity; node/carrier origins and render-only ranges, comments, and
-  object identity do not.
+  `Type` affect identity. Every field consulted by an execution hook must likewise
+  be manifest-backed; `skipped_output_target()` currently derives from `commit_as`
+  or LOOP's `origin_id`. Node/carrier origins and render-only ranges, comments,
+  and object identity do not affect identity.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
   core dispatches on worker-result/run-record variants + node-owned traits/hooks, never on
   `node.kind` (ratchet: census 0).

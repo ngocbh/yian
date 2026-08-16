@@ -2079,6 +2079,16 @@ def _prepare_growth_topology(
         for node_id in state.in_flight
         if node_id != record.spawner_id and node_id not in prune_ids
     )
+    _validate_final_redirects(
+        nodes=final_nodes,
+        node_state=node_state,
+        edge_state=edge_state,
+        pool_store=pool_store,
+        ready=ready,
+        in_flight=in_flight,
+        incoming=incoming,
+        outgoing=outgoing,
+    )
 
     delta = _GrowthDelta(
         spawner_id=record.spawner_id,
@@ -2258,6 +2268,15 @@ def _validate_growth_fragment_data(
                         f"{target!r} does not exist"
                     )
                 )
+        skipped_target = node.skipped_output_target()
+        try:
+            _validate_skipped_output_target(
+                combined_nodes,
+                node_id,
+                skipped_target,
+            )
+        except (TypeError, ValueError) as exc:
+            _raise_growth_rejected(exc)
         wiring = fragment.wiring[node_id]
         if type(wiring) is not dict or any(type(key) is not str for key in wiring):
             _raise_growth_rejected(
@@ -2657,6 +2676,22 @@ def _validate_prune_dependencies_data(
                     f"{node.origin_id!r}"
                 )
             )
+        skipped_target = node.skipped_output_target()
+        try:
+            _validate_skipped_output_target(
+                combined_nodes,
+                node_id,
+                skipped_target,
+            )
+        except (TypeError, ValueError) as exc:
+            _raise_growth_rejected(exc)
+        if skipped_target in prune_ids:
+            _raise_growth_rejected(
+                ValueError(
+                    f"surviving node {node_id!r} has pruned skipped output target "
+                    f"{skipped_target!r}"
+                )
+            )
         for source in combined_wiring.get(node_id, {}).values():
             source = binding_source(source)
             if not isinstance(source, str):
@@ -2833,11 +2868,13 @@ def _prepare_route_delta(
     state: RunState,
     record: NodeRoutedRecord,
 ) -> tuple[_RouteDelta, dict[str, NodeState]]:
-    """Validate one route and return its frozen delta plus transient edge overlay."""
+    """Validate one route and return its redirect-aware frozen skip closure."""
     _validate_route_record(state, record)
     edge_updates: dict[str, NodeState] = {}
     skipped_node_ids: list[str] = []
     skipped_nodes: set[str] = set()
+    propagated_targets: set[str] = {record.node_id}
+    redirect_owners: dict[str, tuple[str, ...]] | None = None
     newly_ready_ids: list[str] = []
     newly_ready: set[str] = set()
     joins: dict[str, _JoinScratch] = {}
@@ -2910,7 +2947,23 @@ def _prepare_route_delta(
 
         skipped_nodes.add(head)
         skipped_node_ids.append(head)
-        children = _route_outgoing(state, head, edge_updates)
+        target = _skipped_output_target(state, head)
+        if target != head:
+            if redirect_owners is None:
+                redirect_owners = _skipped_output_owners(state)
+            _require_unambiguous_redirect(
+                owner_id=head,
+                target=target,
+                owners=redirect_owners.get(target, ()),
+                has_committed_value=target in state.pool.store,
+                disposition=state.node_state.get(target),
+                is_executable=target in state.ready or target in state.in_flight,
+                has_incoming=bool(state.flow.incoming(target)),
+            )
+        if target in propagated_targets:
+            continue
+        propagated_targets.add(target)
+        children = _route_outgoing(state, target, edge_updates)
         for child in reversed(children):
             work.append((child, NodeState.SKIPPED))
 
@@ -2924,6 +2977,155 @@ def _prepare_route_delta(
         ),
         edge_updates,
     )
+
+
+def _skipped_output_target(state: RunState, node_id: str) -> str:
+    """Return one skipped node's validated logical output target.
+
+    The hook is node-owned so CALL/MAP's baked completion redirect and LOOP's
+    origin redirect remain outside the kind-blind reducer.  Its result is
+    topology authority, not node-produced data; malformed setup therefore
+    escapes as a raw host/graph error.
+    """
+    target = state.flow.nodes[node_id].skipped_output_target()
+    return _validate_skipped_output_target(state.flow.nodes, node_id, target)
+
+
+def _validate_skipped_output_target(
+    nodes: dict[str, Node],
+    node_id: str,
+    target: Any,
+) -> str:
+    """Validate one hook result against an exact topology node mapping."""
+    if type(target) is not str:
+        raise TypeError(
+            f"node {node_id!r} skipped output target must be a string"
+        )
+    if not target:
+        raise ValueError(
+            f"node {node_id!r} skipped output target must be non-empty"
+        )
+    if target not in nodes:
+        raise ValueError(
+            f"node {node_id!r} skipped output target {target!r} does not exist"
+        )
+    return target
+
+
+def _validate_final_redirects(
+    *,
+    nodes: dict[str, Node],
+    node_state: dict[str, NodeState],
+    edge_state: dict[str, NodeState],
+    pool_store: dict[str, TypedValue],
+    ready: tuple[str, ...],
+    in_flight: tuple[str, ...],
+    incoming: dict[str, list[Edge]],
+    outgoing: dict[str, list[Edge]],
+) -> None:
+    """Require every final growth redirect to have one inert logical anchor."""
+    mutable: dict[str, list[str]] = {}
+    for node_id, node in nodes.items():
+        if node_state.get(node_id) is not NodeState.UNKNOWN:
+            continue
+        target = node.skipped_output_target()
+        try:
+            target = _validate_skipped_output_target(nodes, node_id, target)
+        except (TypeError, ValueError) as exc:
+            _raise_growth_rejected(exc)
+        if target == node_id:
+            continue
+        mutable.setdefault(target, []).append(node_id)
+    for target, owner_ids in mutable.items():
+        owner_id = owner_ids[0]
+        try:
+            _require_unambiguous_redirect(
+                owner_id=owner_id,
+                target=target,
+                owners=tuple(owner_ids),
+                has_committed_value=target in pool_store,
+                disposition=node_state.get(target),
+                is_executable=target in ready or target in in_flight,
+                has_incoming=bool(incoming.get(target, ())),
+            )
+        except ValueError as exc:
+            _raise_growth_rejected(exc)
+        for edge in outgoing.get(target, ()):
+            if edge_state.get(edge.id) is not NodeState.UNKNOWN:
+                _raise_growth_rejected(
+                    ValueError(
+                        f"logical output target {target!r} has a settled outgoing "
+                        f"edge {edge.id!r}"
+                    )
+                )
+
+
+def _skipped_output_owners(state: RunState) -> dict[str, tuple[str, ...]]:
+    """Index unfinished logical-output redirects in stable node order.
+
+    Settled dynamic residue cannot produce another value and is ignored.
+    Ordinary nodes target themselves and are not redirect owners.  The scan is
+    paid only when a route actually skips a redirected completion; it keeps the
+    common sparse skip path unchanged while rejecting ambiguous multi-writer
+    topology before any edge is settled.
+    """
+    mutable: dict[str, list[str]] = {}
+    for node_id in state.flow.nodes:
+        if state.node_state.get(node_id) is not NodeState.UNKNOWN:
+            continue
+        target = _skipped_output_target(state, node_id)
+        if target == node_id:
+            continue
+        mutable.setdefault(target, []).append(node_id)
+    return {target: tuple(owner_ids) for target, owner_ids in mutable.items()}
+
+
+def _require_unambiguous_redirect(
+    *,
+    owner_id: str,
+    target: str,
+    owners: tuple[str, ...],
+    has_committed_value: bool,
+    disposition: Any,
+    is_executable: bool,
+    has_incoming: bool,
+) -> None:
+    """Require one inert logical anchor to have one unfinished redirect owner.
+
+    Skip means the logical output is absent.  That conclusion is sound only
+    when no sibling physical completion or executable anchor can still produce
+    the same value.  Supporting several producers would require a distinct OR
+    join and multi-writer contract; ``commit_as`` intentionally remains a
+    single-owner redirect instead.
+    """
+    if owners != (owner_id,):
+        raise ValueError(
+            f"logical output target {target!r} has multiple skipped output "
+            f"owners: {owners!r}"
+        )
+    if has_committed_value:
+        raise ValueError(
+            f"logical output target {target!r} already has a committed value"
+        )
+    if type(disposition) is not NodeState:
+        raise ValueError(
+            f"logical output target {target!r} has an invalid disposition"
+        )
+    if is_executable:
+        raise ValueError(
+            f"logical output target {target!r} is also executable"
+        )
+    if disposition is NodeState.UNKNOWN:
+        if has_incoming:
+            raise ValueError(
+                f"logical output target {target!r} is also executable"
+            )
+        return
+    if disposition is not NodeState.EXPANDED:
+        raise ValueError(
+            f"logical output target {target!r} must be an expanded spawner "
+            "or inert placeholder"
+        )
 
 
 def _prepare_terminal_delta(

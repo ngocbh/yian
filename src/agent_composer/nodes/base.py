@@ -485,6 +485,17 @@ class Node(ABC):
         """
         return self.origin
 
+    def skipped_output_target(self) -> str:
+        """Return the node whose successors observe this node's absent output.
+
+        Successful output commits under the baked ``commit_as`` redirect when
+        present and otherwise under this node's own ID.  Route skip propagation
+        follows the same logical boundary so generated completion nodes do not
+        strand their parent's outgoing edges.  Kinds whose output target is
+        selected by other node-owned state override this hook.
+        """
+        return self.id if self.commit_as is None else self.commit_as
+
     def validate_execution_setup(self) -> None:
         """Reject malformed node-owned execution setup before entering the body stage.
 

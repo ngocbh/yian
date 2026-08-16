@@ -3,7 +3,7 @@
 > Phase 2 of the [lifecycle](architecture.md). The [front end](compose.md) produced a
 > typed graph; the engine *interprets* it. The core (`runtime/engine.py` +
 > `runtime/eval_node.py`) is **kind-blind**: it branches on the closed `NodeResult`
-> sum and on node-owned traits, never on a node's `NodeKind`. The node side of the same
+> sum and on node-owned traits/hooks, never on a node's `NodeKind`. The node side of the same
 > contract is in [Nodes](nodes.md).
 
 ## Two actors, one narrow contract
@@ -75,8 +75,8 @@ vocabulary the engine branches on:
 
 ```python
 NodeResult =
-  | Output(value, commit_as=None)   # "here is my result"    → bind it, unlock dependents
-  | Route(handle)                   # "route only, no value" → take this branch, skip siblings
+  | Output(value, commit_as=None)   # "here is my result"    → bind at its success target
+  | Route(handle)                   # "route only, no value" → branch + redirect-aware skip
   | Grow(seed, prune=∅)             # "I'm really a subflow"  → build + splice more nodes
 ```
 
@@ -96,6 +96,29 @@ and only selects a live out-edge. `Grow` is how a node that *is really a subflow
 expands. Failure is not a `NodeResult`: `eval_node` turns an exception into an
 `EvaluationFailure`, which the dispatcher prepares as a `NodeFailedRecord`.
 
+### Logical output redirects
+
+A successful `Output` resolves an explicit result-carried `commit_as`, then the
+node's baked `commit_as`, then its physical id. Result-carried `Output.commit_as`
+exists only on success; it does not by itself redirect absence. When a route
+skip reaches a physical node, the reducer instead calls the pure, deterministic
+`Node.skipped_output_target()` hook. The base implementation returns baked
+`commit_as` or the node id. LOOP overrides it with its manifest-backed
+`origin_id`, mirroring the dynamic `Output(commit_as=origin_id)` returned when it
+stops. Any other dynamic success redirect must be mirrored explicitly by this
+hook if skipping the node should advance the same logical boundary.
+
+The hook returns an existing logical target and derives only from execution
+state represented in the flow manifest. A redirect is exclusive ownership, not
+an OR join or multi-writer rule: exactly one unfinished physical node may
+redirect to a target, and that target must be an inert anchor—an expanded
+spawner or an unknown placeholder with no incoming work, never ready, in flight,
+or already committed.
+All of the anchor's outgoing edges must still be unknown. The reducer validates
+those rules before mutation, marks the physical node skipped, deduplicates
+logical targets, and skip-floods the target's outgoing edges. Settled expansion
+residue is inert and no longer owns a future logical output.
+
 ## Growth: a node that is really a subflow
 
 `call`, `map`, and `loop` are not single steps — each *is a smaller flow*. A spawner
@@ -108,7 +131,9 @@ One convention unifies all three constructed fragments: **the subgraph is a
 well-formed sub-flow with a single `__start__` and `__end__`**. The engine schedules
 the `start`, and the builder bakes `commit_as=<spawner id>` onto the terminal — so
 however many inner nodes run, downstream sees one clean output committed under the
-spawner's id. Runtime may consume `compile.model` topology but never imports
+spawner's id. The terminal's inherited `skipped_output_target()` follows that
+same baked redirect when its output is absent. Runtime may consume
+`compile.model` topology but never imports
 `compile.expand`.
 
 The splice carries a few extra concerns (stamp recursion depth, loop bookkeeping),
@@ -169,13 +194,14 @@ before the run boundary releases the log.
 | The engine sees | Meaning |
 |---|---|
 | matching `RunState` + `RunLog` | reducer projection and append-only authority, already initialized to the same sequence |
-| `node.id`, `node.params` | where to store output; input *names* (the flow owns their sources) |
+| `node.id`, `node.params` | physical execution identity; input *names* (the flow owns their sources) |
 | `node.pre_asserts` / `node.post_asserts` | conditions the base `run` template checks around the body |
 | `node.run(inputs, **caps) → NodeResult` | the shared template the engine drives |
 | `node._run_impl(inputs, **caps) → NodeResult` | the one kind-specific body step |
 | `node.is_spawner` | may it return `Grow`? |
 | read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event` |
 | growth traits | `grow_depth_delta`, `is_loop` |
+| `node.skipped_output_target()` | logical output whose successors observe this physical node's absence |
 
 That is the complete list — a small set of traits/hooks plus the run/body pair. No `NodeKind` is
 visible to the engine.

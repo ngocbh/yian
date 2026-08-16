@@ -27,8 +27,18 @@ leaf needs no engine change — its behavior is entirely in its own `_run_impl`.
 spawner additionally owns its growth traits/hooks (`is_spawner`,
 `grow_depth_delta`, `is_loop`) and the compile interpretation described in §2a.
 The other node-owned capability traits/hooks (`binds_per_item`, `bind_reserved`,
-`reserved_wiring_keys`, `needs_stop_event`) remain available to either shape. The base `Node.run` is a concrete
-template method that fires the node's asserts around `_run_impl`; do not override it.
+`reserved_wiring_keys`, `needs_stop_event`, `skipped_output_target`) remain
+available to either shape. The base `Node.run` is a concrete template method that
+fires the node's asserts around `_run_impl`; do not override it.
+`skipped_output_target()` is a pure, deterministic topology hook: ordinary nodes
+inherit baked `commit_as` or their own id. A result-carried `Output.commit_as`
+redirects success only. If absence must cross that same boundary, override the
+hook using only execution state represented in the flow manifest, as LOOP does
+with `origin_id`; return an existing node id. The redirect must have exactly one
+unfinished physical owner and an inert target—an expanded spawner or an unknown
+placeholder with no incoming work, never ready, in flight, or already committed, and with
+every outgoing edge still unknown. Do not model an OR join or multiple writers
+with this hook.
 Programmatic assertions are ordered `Assertion(expression, display, origin)`
 carriers, never raw strings or a side text map.
 Every non-`None` programmatic node signature is an exact `list` of exact
@@ -69,6 +79,10 @@ must preserve the layer boundary:
   `compile`.
 - Set `is_spawner = True` and only the node-owned growth traits the generic splice
   needs (`grow_depth_delta` or `is_loop`).
+- When a builder bakes `commit_as` onto a generated terminal, its inherited
+  `skipped_output_target()` must send absence through the same inert spawner
+  anchor. Test both terminal success and a skipped terminal settling the
+  spawner's successors.
 - Add the kind-aware interpretation to the closed match in
   `compile/expand.py::build_grow(spawner, canonical_seed)`. It validates the seed
   and returns one deterministic, self-contained `Flow` fragment.

@@ -122,7 +122,7 @@ classification is structural too:
 
 | Result rejected during preparation | Code | Best current origin |
 |---|---|---|
-| `Output` | `contract.output` | effective target contract root, then executing node |
+| `Output` | `contract.output` | effective target contract path/ancestor/default, then executing node |
 | `Route` | `contract.route` | executing node |
 | `Grow` | `contract.growth` | executing node |
 
@@ -426,7 +426,12 @@ contract, explicit default-presence bit, and string-coercion policy while the
 flow owns the corresponding `Binding` sources. Parameter/default/contract
 origins are manifest-neutral. A bound null shadows a default but still undergoes
 contract validation, so it is accepted only when the parameter is untyped or its
-contract accepts null (a nullable or `None`-kind type). Compose `input:` crosses
+contract accepts null (a nullable or `None`-kind type). `TypeCheckError.path` is
+relative to that contract and contains record names plus actual list indices.
+Supplied-value rejection resolves it through `ContractOrigins.at()` (exact,
+nearest ancestor, then default) before the parameter fallback; an invalid
+authored default remains binding evaluation and keeps its default-site origin.
+Compose `input:` crosses
 directly into this exact `Parameter` shape; `ComposedFlow.input` and START use it
 without a parallel front-end carrier. For ordinary source-backed node inputs, final
 assembly stamps the selecting key on `Parameter.origin` and the value on the
@@ -435,7 +440,7 @@ wiring receives a `Binding.origin` only; neither field is a formal `Parameter`.
 Desugaring may replace `Binding.source` but retains that value origin. Without a retained
 source occurrence, Compose mints no origin and preserves any explicit programmatic origin;
 source-backed projections inherit their backing site. CASE wiring, synthesized boundary
-parameters, contracts, external rebasing, and runtime diagnostic consumption are deferred.
+parameters, contracts, and external rebasing are deferred.
 Source-backed bare/mapped root, multi-node-definition, and inline-child
 output values stamp the final `FlowOutput.binding` after rewrites, and the synthesized END
 boundary reuses that exact binding. Output mapping keys receive no origin. Compact-root and
@@ -447,7 +452,10 @@ remain origin-free; their authored output type is reserved for contract-origin w
 validation and structured agent generation read `output_contract.type`; growth
 clones retain the carrier so its origins survive lexical rewrites. Manifests encode
 the semantic type but deliberately omit `ContractOrigins`, keeping provenance
-changes identity-neutral.
+changes identity-neutral. Live output validation resolves a `TypeCheckError.path`
+through the effective commit target's contract; non-type canonicalization uses
+the contract default. The structural path is consumed before `Failure` and never
+enters the durable record schema.
 
 Compose output derivation, builders, producer maps, and `ChildSignature.output`
 retain exact `ValueContract` carriers. Reference, assert, CASE, CALL, and LOOP
@@ -670,9 +678,11 @@ never a text heuristic.
   available. `eval_node` fills a temporary locator's missing node id via
   `replace(loc, node=node.id)`;
   dispatcher preparation assigns `contract.output`, `contract.route`, or
-  `contract.growth` from the result arm. Output uses the effective target
-  contract's root origin when available and otherwise the executing node origin;
-  route and growth use the executing node origin. Schema-2 output rejection
+  `contract.growth` from the result arm. Output type rejection resolves the
+  structural error path through the effective target contract's exact,
+  nearest-ancestor, or default origin, then falls back to the executing node;
+  other canonicalization errors use the contract default. Route and growth use
+  the executing node origin. Schema-2 output rejection
   retains the cause type inside `Failure` and the fallback `field` span
   (`key="output"`) beside it.
 - **Concrete range (when resolved at the failure site):** ALONGSIDE the symbolic `locator`, a

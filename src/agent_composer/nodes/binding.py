@@ -262,7 +262,7 @@ def bind_params(
                         origin = p.default_origin or p.origin
                     else:
                         failure_code = "contract.input"
-                        origin = p.contract.origins.at(()) or p.origin
+                        origin = p.contract.origins.at(exc.path) or p.origin
                     raise BindingError(
                         f"input {p.name!r}: {exc}",
                         failure_code=failure_code,

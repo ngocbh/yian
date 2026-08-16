@@ -563,24 +563,70 @@ def test_invalid_raw_output_constructs_contract_failure_with_operation_origin(
     assert isinstance(tuple(log)[-1].record, NodeFailedRecord)
 
 
+def test_nested_output_failure_uses_the_exact_contract_origin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    root_origin = OriginRef("nodes/work/output")
+    score_origin = OriginRef("nodes/work/output/items/0/score")
+    item_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": Type.scalar(ValueKind.INTEGER)},
+        required=frozenset({"score"}),
+    )
+    output_type = Type(kind=ValueKind.LIST_OBJECT, element=item_type)
+    node = _ActionNode(
+        "work",
+        lambda: [{"score": "bad"}],
+        output_contract=ValueContract(
+            output_type,
+            ContractOrigins(
+                default=root_origin,
+                entries=(((0, "score"), score_origin),),
+            ),
+        ),
+    )
+    state, log = _initialized(_flow([node]), num_workers=0)
+    failures = _capture_semantic_failures(monkeypatch)
+
+    list(_dispatcher(state, log, num_workers=0).run())
+
+    assert len(failures) == 1
+    assert failures[0].code == "contract.output"
+    assert failures[0].trace == (score_origin,)
+
+
 def test_redirected_output_uses_effective_target_contract_origin(
     monkeypatch: pytest.MonkeyPatch,
 ):
     producer_origin = OriginRef("nodes/producer")
     contract_origin = OriginRef("nodes/target/output")
+    items_origin = OriginRef("nodes/target/output/items")
     producer = _ActionNode(
         "producer",
-        lambda: "not-an-int",
+        lambda: {"items": [{"score": 1}, {"score": "bad"}]},
         origin=producer_origin,
     )
     producer.commit_as = "target"
     flow = _flow([producer])
+    item_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"score": Type.scalar(ValueKind.INTEGER)},
+        required=frozenset({"score"}),
+    )
+    output_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"items": Type(kind=ValueKind.LIST_OBJECT, element=item_type)},
+        required=frozenset({"items"}),
+    )
     flow.nodes["target"] = _ActionNode(
         "target",
-        lambda: 1,
+        lambda: {"items": [{"score": 1}]},
         output_contract=ValueContract(
-            Type.scalar(ValueKind.INTEGER),
-            ContractOrigins(default=contract_origin),
+            output_type,
+            ContractOrigins(
+                default=contract_origin,
+                entries=((("items",), items_origin),),
+            ),
         ),
     )
     state, log = _initialized(flow, num_workers=0)
@@ -591,7 +637,7 @@ def test_redirected_output_uses_effective_target_contract_origin(
     assert len(failures) == 1
     assert failures[0].code == "contract.output"
     assert failures[0].node_id == "producer"
-    assert failures[0].trace == (contract_origin,)
+    assert failures[0].trace == (items_origin,)
 
 
 def test_malformed_compiled_output_contract_remains_a_host_failure():

@@ -130,10 +130,12 @@ escape this expected-failure sum.
 The dispatcher assigns the next three codes structurally from the closed result
 sum: rejected `Output`, `Route`, and `Grow` data become `contract.output`,
 `contract.route`, and `contract.growth`. Output rejection uses the effective
-target contract's root origin when present, then the executing node origin;
-route and growth use the executing node origin. The trace is empty only when
-generated ancestry is empty and neither the operation nor node fallback supplies
-a local origin. Unsupported growth kinds and arbitrary builder, compiler,
+target contract origin selected by the rejected value's structural
+`TypeCheckError.path` (exact site, nearest ancestor, then contract default), then
+the executing node origin. Non-type canonicalization failures use the contract
+default. Route and growth use the executing node origin. The trace is empty only
+when generated ancestry is empty and neither the operation nor node fallback
+supplies a local origin. Unsupported growth kinds and arbitrary builder, compiler,
 spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
 faults escape rather than becoming flow failures.
 
@@ -212,6 +214,11 @@ defaults without replacing their authored payload, and coerces supplied strings
 only when the parameter opts in. A bound null shadows a default but still passes
 through contract validation, so it is accepted only when the parameter is untyped
 or its contract accepts null (a nullable or `None`-kind type).
+`TypeCheckError.path` contains only contract-relative record names and actual list
+indices. A supplied-value rejection resolves that path through `ContractOrigins`
+(exact, nearest ancestor, then default) before falling back to the parameter
+origin. An invalid authored default remains `binding.evaluate` and uses its
+default origin rather than the value-contract site.
 Parameter/default/contract origins do not affect manifest identity. Compose
 `input:` lowers directly into this same exact carrier shape; `ComposedFlow.input`
 and START use it without a parallel front-end declaration type. For an ordinary
@@ -222,8 +229,8 @@ wiring carries only the value origin on its canonical `Binding`: MAP `over:` and
 without moving that value origin. When no source occurrence is retained, Compose
 mints no origin and preserves any explicit programmatic origin; source-backed
 projections inherit their backing site. CASE wiring, synthesized flow-boundary
-parameters, contracts, external rebasing, and runtime diagnostic consumption
-remain outside this migration step. Source-backed bare and
+parameters, contracts, and external rebasing remain outside this migration step.
+Source-backed bare and
 mapped flow-output values on root flows, multi-node definitions, and inline children stamp
 the final `FlowOutput.binding` after desugaring rewrites; the synthesized END boundary
 reuses that exact binding. Output mapping keys carry no origin. Compact-root and
@@ -233,9 +240,11 @@ remain origin-free; their authored output type is reserved for contract-origin w
 `Node.output_contract` is the canonical compiled output declaration: exactly one
 `ValueContract`, or `None` when the output is unenforced. Runtime enforcement and
 node-owned structured generation project its semantic `.type`; nested origins remain
-attached to the same carrier for diagnostics. The manifest projects only that semantic
-type, so changing or rebasing contract origins does not change flow or expansion
-identity.
+attached to the same carrier for diagnostics. A live type rejection resolves its
+contract-relative structural path through those origins; redirected output uses the
+effective commit target's contract. The path is consumed before `Failure` construction
+and is not part of the run-record wire. The manifest projects only the semantic type,
+so changing or rebasing contract origins does not change flow or expansion identity.
 
 Compose descriptors derive `ValueContract` directly. Builders, child signatures,
 producer maps, and validators retain the carrier; algorithms that only compare or walk

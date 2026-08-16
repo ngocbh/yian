@@ -66,6 +66,11 @@ build_value_as(declared, v)  → wrap v as `declared`, RAISE on mismatch (check)
 `build_value_as` is the declared-type check used by both `VariablePool.set` and the
 run log's `canonical_typed` success-record boundary. It raises `TypeCheckError` on a
 mismatch; the only coercion is widening (`int` fills a `float` slot).
+`TypeCheckError.path` is an immutable tuple relative to the declared type: string
+segments name record fields and integer segments are actual list indices. Root or
+container mismatches use `()`. The message and ordinary `ValueError.args` stay
+unchanged, while input/output boundaries use the path to select the exact or
+nearest authored contract origin before recording a failure.
 
 ## `Type` — structure beyond the bare tag
 

@@ -61,10 +61,15 @@ Hold this model whenever you design anything:
   `binding.evaluate`, `contract.input`, `assertion.failed`, `node.execute`, and
   `contract.node_result` by operation stage. The dispatcher assigns
   `contract.output`, `contract.route`, and `contract.growth` from the closed
-  `Output`, `Route`, and `Grow` arms, never from an exception class. Output uses
-  the effective target contract's root origin when available and otherwise the
-  executing node origin; route and growth use the executing node origin. Both
-  paths feed one schema-2 `NodeFailedRecord(failure, locator, range)` boundary;
+  `Output`, `Route`, and `Grow` arms, never from an exception class. A
+  `TypeCheckError.path` is a contract-relative tuple of record names and actual
+  list indices. Supplied-input and output type rejection resolve it through
+  `ContractOrigins` (exact, nearest ancestor, then default); output uses the
+  effective commit target's contract. Missing contract provenance falls back to
+  the parameter or executing node, while invalid defaults retain their default
+  origin. Non-type output canonicalization uses the contract default. Route and
+  growth use the executing node origin. All paths feed one schema-2
+  `NodeFailedRecord(failure, locator, range)` boundary;
   reducer state, `NodeFailed`, `RunFailed`, and `RunResult.failure` retain that
   same semantic authority without flattened aliases. That durable boundary
   collapses any valid `OriginRef` subclass to exact `OriginRef(key)`, because
@@ -135,7 +140,10 @@ Hold this model whenever you design anything:
   Compose assembly stamps an ordinary authored `input:` key on its `Parameter`
   and its value on the corresponding `Binding`. Source-backed reserved MAP `over:`
   and WAIT `until:` values are stamped only on their `Binding` because they have no
-  formal parameter. Never add a parallel source map.
+  formal parameter. Supplied contract failures select
+  `Parameter.contract.origins.at(TypeCheckError.path)` before the parameter
+  fallback; default failures keep default-site ownership. Never add a parallel
+  source map.
 - Compiled `Node.output_contract` has one shape: an exact `ValueContract`, or
   `None` for an unenforced output. Runtime and node behavior project `.type`, while
   manifests exclude `.origins`. Compose descriptors, child signatures, producer

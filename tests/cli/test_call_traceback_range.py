@@ -14,9 +14,41 @@ from agent_composer.diagnostics import SourceRange
 from agent_composer.events import SourceSpan
 from agent_composer.nodes.base import Node
 from agent_composer.run import RunResult, run_flow
-from tests.engine.test_loop_run import NESTED_CALL_LOOP_MAXED
 
 _ERRORS = Path(__file__).resolve().parents[1] / "seeds" / "errors"
+
+_NESTED_CALL_LOOP_MAXED = """
+id: nested-call-loop-maxed
+name: nested_call_loop_maxed
+defs:
+  keep:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        code: 'return {"n": inputs["n"]}'
+        input:
+          n: ${input.n}
+        output:
+          n: int
+    output: ${step.output}
+  runaway:
+    nodes:
+      repeat:
+        kind: loop
+        call: keep
+        input:
+          n: 0
+        while: "true"
+        max: 1
+    output: ${repeat.output}
+nodes:
+  outer:
+    kind: call
+    call: runaway
+output: ${outer.output}
+"""
 
 _CALL_INPUT_FAILURE = """id: nested-binding
 name: nested_binding
@@ -278,7 +310,7 @@ def test_nested_caller_assert_range_stays_with_owning_call_frame(monkeypatch):
 
 def test_nested_loop_failure_renders_ordered_catalog_frames(monkeypatch):
     """A respawned LOOP id needs no clone parsing to locate its authored frames."""
-    loaded = load_flow(NESTED_CALL_LOOP_MAXED, source_label="nested-loop.yaml")
+    loaded = load_flow(_NESTED_CALL_LOOP_MAXED, source_label="nested-loop.yaml")
     result = run_flow(loaded, {})
     assert result.status == "failed"
 

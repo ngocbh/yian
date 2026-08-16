@@ -4,8 +4,10 @@ At run start the CLI prints a `_flow_banner` (name/description/version); each pr
 label carries the input's declared `type`, a required (`*`) / `optional` mark, and any
 default (`_input_label`). `_gather_missing_inputs` covers both non-TTY omission/error
 policy and an interactive path with fake `questionary`, so prompt labels are observable
-without a real TTY. Structural text prompts accept recursively validated JSON arrays and
-objects, while scalar text and `--input` flag values retain their string-valued boundary.
+without a real TTY. The prompt tests keep explicit values, `Set null`, omission/default,
+and cancellation distinct across finite, open, and null-only types. They also cover the
+nullable open-value palette, blank-to-palette loop, literal string/tag `null`, and typed
+JSON validation; scalar text and `--input` values retain their string-valued boundary.
 A runtime failure (`_render_run_error`) boxes the `.yaml` at the node that raised,
 mirroring the compile-error frame.
 """
@@ -193,12 +195,28 @@ class _Attempts:
     values: tuple[object, ...]
 
 
+@dataclass(frozen=True)
+class _WidgetResponses:
+    """Ordered answers supplied to consecutive widgets with the same label."""
+
+    values: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class _SelectTitle:
+    """Select one production choice by its exact visible title."""
+
+    title: str
+
+
 class _FakeQuestionary:
     """Record prompts and model Questionary's accepted-default return values.
 
     ``answers`` maps a label substring to one explicit answer, including ``None``
-    for cancellation. An unscripted widget accepts its default; a select without
-    one accepts its first choice. Selecting a ``Choice`` returns its value.
+    for cancellation, or to ordered `_WidgetResponses` for repeated widgets. An
+    unscripted widget accepts its default; a select without one accepts its first
+    choice. `_SelectTitle` resolves one real production choice by title, and
+    selecting a ``Choice`` returns its value.
 
     A text answer may instead be an `_Attempts` carrier. The fake feeds its ordered
     raw values only to the production validator, records each literal ``True`` or
@@ -211,6 +229,7 @@ class _FakeQuestionary:
         self.text_defaults: list[str] = []
         self.calls: list[SimpleNamespace] = []
         self._answers = answers
+        self._response_indexes: dict[str, int] = {}
 
     def Style(self, spec):  # questionary.Style(...) — styling is irrelevant to the labels
         return None
@@ -222,6 +241,14 @@ class _FakeQuestionary:
         self.labels.append(label)
         for key, val in self._answers.items():
             if key in label:
+                if isinstance(val, _WidgetResponses):
+                    index = self._response_indexes.get(key, 0)
+                    if index >= len(val.values):
+                        raise AssertionError(
+                            f"no scripted widget response remains for {key!r}"
+                        )
+                    self._response_indexes[key] = index + 1
+                    return val.values[index]
                 return val
         return _UNSCRIPTED
 
@@ -282,6 +309,17 @@ class _FakeQuestionary:
             if scripted is _UNSCRIPTED
             else scripted
         )
+        if isinstance(selected, _SelectTitle):
+            matches = [
+                choice
+                for choice in choices
+                if getattr(choice, "title", choice) == selected.title
+            ]
+            if len(matches) != 1:
+                raise AssertionError(
+                    f"expected one choice titled {selected.title!r}, got {len(matches)}"
+                )
+            selected = matches[0]
         val = self._choice_value(selected)
         self.calls.append(
             SimpleNamespace(
@@ -537,8 +575,40 @@ def test_structured_prompt_cancellation_bypasses_validation(monkeypatch):
     assert fake.calls[0].verdicts == []
 
 
-def test_structured_prompt_rejects_textual_null_then_retries(monkeypatch):
-    fake = _FakeQuestionary({"items": _Attempts(("null", "[null]"))})
+@pytest.mark.parametrize(
+    ("typ", "valid_raw", "expected", "message", "instruction"),
+    [
+        (
+            Type(kind=ValueKind.LIST_ANY, nullable=True),
+            "[null]",
+            [None],
+            "Expected a JSON array",
+            "Enter a JSON array",
+        ),
+        (
+            Type(kind=ValueKind.OBJECT, nullable=True),
+            '{"value": null}',
+            {"value": None},
+            "Expected a JSON object",
+            "Enter a JSON object",
+        ),
+    ],
+)
+def test_nullable_structured_enter_rejects_textual_null_then_returns_native(
+    monkeypatch,
+    typ,
+    valid_raw,
+    expected,
+    message,
+    instruction,
+):
+    fake = _FakeQuestionary(
+        {
+            "items": _WidgetResponses(
+                (_SelectTitle("Enter value"), _Attempts(("null", valid_raw)))
+            )
+        }
+    )
     monkeypatch.setitem(sys.modules, "questionary", fake)
     _sink(monkeypatch)
 
@@ -546,6 +616,303 @@ def test_structured_prompt_rejects_textual_null_then_retries(monkeypatch):
         [
             _parameter(
                 "items",
+                typ,
+                required=True,
+            )
+        ],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {"items": expected}
+    assert [call.kind for call in fake.calls] == ["select", "text"]
+    assert fake.calls[0].default.title == "Enter value"
+    assert fake.calls[1].instruction == instruction
+    assert fake.calls[1].verdicts == [message, True]
+
+
+def test_nullable_open_scalar_enter_preserves_literal_null(monkeypatch):
+    fake = _FakeQuestionary(
+        {
+            "note": _WidgetResponses(
+                (_SelectTitle("Enter value"), "null")
+            )
+        }
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter("note", Type(kind=ValueKind.STRING, nullable=True))],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {"note": "null"}
+    assert gathered["note"] is not climod._ENTER_INPUT
+    assert [call.kind for call in fake.calls] == ["select", "text"]
+    assert fake.calls[0].default.title == "↩ Omit input"
+
+
+@pytest.mark.parametrize(
+    "typ",
+    [
+        Type(kind=ValueKind.STRING, nullable=True),
+        Type(kind=ValueKind.LIST_ANY, nullable=True),
+        Type(kind=ValueKind.OBJECT, nullable=True),
+    ],
+)
+def test_nullable_open_prompt_cancellation_at_action(monkeypatch, typ):
+    fake = _FakeQuestionary({"value": None})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter("value", typ)],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered is None
+    assert [call.kind for call in fake.calls] == ["select"]
+
+
+@pytest.mark.parametrize(
+    "typ",
+    [
+        Type(kind=ValueKind.STRING, nullable=True),
+        Type(kind=ValueKind.LIST_ANY, nullable=True),
+        Type(kind=ValueKind.OBJECT, nullable=True),
+    ],
+)
+def test_nullable_open_prompt_cancellation_in_editor(monkeypatch, typ):
+    fake = _FakeQuestionary(
+        {
+            "value": _WidgetResponses(
+                (_SelectTitle("Enter value"), None)
+            )
+        }
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter("value", typ)],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered is None
+    assert [call.kind for call in fake.calls] == ["select", "text"]
+    if typ.kind.is_list() or typ.kind is ValueKind.OBJECT:
+        assert fake.calls[1].verdicts == []
+
+
+@pytest.mark.parametrize(
+    "typ",
+    [
+        Type(kind=ValueKind.STRING, nullable=True),
+        Type(kind=ValueKind.LIST_ANY, nullable=True),
+        Type(kind=ValueKind.OBJECT, nullable=True),
+    ],
+)
+def test_nullable_open_blank_can_return_to_omit(monkeypatch, typ):
+    fake = _FakeQuestionary(
+        {
+            "value": _WidgetResponses(
+                (
+                    _SelectTitle("Enter value"),
+                    "   ",
+                    _SelectTitle("↩ Omit input"),
+                )
+            )
+        }
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter("value", typ)],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {}
+    assert [call.kind for call in fake.calls] == ["select", "text", "select"]
+
+
+@pytest.mark.parametrize(
+    "typ",
+    [
+        Type(kind=ValueKind.STRING, nullable=True),
+        Type(kind=ValueKind.LIST_ANY, nullable=True),
+        Type(kind=ValueKind.OBJECT, nullable=True),
+    ],
+)
+def test_nullable_open_blank_can_return_to_set_null(monkeypatch, typ):
+    fake = _FakeQuestionary(
+        {
+            "value": _WidgetResponses(
+                (
+                    _SelectTitle("Enter value"),
+                    "   ",
+                    _SelectTitle("Set null"),
+                )
+            )
+        }
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter("value", typ)],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {"value": None}
+    assert [call.kind for call in fake.calls] == ["select", "text", "select"]
+
+
+@pytest.mark.parametrize(
+    ("typ", "raw", "expected"),
+    [
+        (Type(kind=ValueKind.STRING, nullable=True), "ready", "ready"),
+        (Type(kind=ValueKind.LIST_ANY, nullable=True), "[1]", [1]),
+        (Type(kind=ValueKind.OBJECT, nullable=True), "{}", {}),
+    ],
+)
+def test_nullable_open_blank_can_reenter_real_value(monkeypatch, typ, raw, expected):
+    fake = _FakeQuestionary(
+        {
+            "value": _WidgetResponses(
+                (
+                    _SelectTitle("Enter value"),
+                    "   ",
+                    _SelectTitle("Enter value"),
+                    raw,
+                )
+            )
+        }
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter("value", typ)],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {"value": expected}
+    assert [call.kind for call in fake.calls] == [
+        "select",
+        "text",
+        "select",
+        "text",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("typ", "required"),
+    [
+        (Type(kind=ValueKind.STRING, nullable=True), False),
+        (Type(kind=ValueKind.LIST_ANY, nullable=True), False),
+        (Type(kind=ValueKind.OBJECT, nullable=True), False),
+        (Type(kind=ValueKind.STRING, nullable=True), True),
+    ],
+)
+def test_nullable_open_set_null_does_not_open_editor(monkeypatch, typ, required):
+    fake = _FakeQuestionary({"value": _SelectTitle("Set null")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter("value", typ, required=required)],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {"value": None}
+    assert [call.kind for call in fake.calls] == ["select"]
+
+
+def test_nullable_open_repeated_palettes_use_fresh_choices(monkeypatch):
+    fake = _FakeQuestionary(
+        {
+            "value": _WidgetResponses(
+                (
+                    _SelectTitle("Enter value"),
+                    " ",
+                    _SelectTitle("Set null"),
+                )
+            )
+        }
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter("value", Type(kind=ValueKind.STRING, nullable=True))],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {"value": None}
+    palettes = [call for call in fake.calls if call.kind == "select"]
+    assert len(palettes) == 2
+    for title in ("↩ Omit input", "Set null", "Enter value"):
+        first = next(choice for choice in palettes[0].choices if choice.title == title)
+        second = next(choice for choice in palettes[1].choices if choice.title == title)
+        assert first is not second
+
+
+def test_required_nullable_scalar_editor_preserves_blank(monkeypatch):
+    fake = _FakeQuestionary(
+        {
+            "value": _WidgetResponses(
+                (_SelectTitle("Enter value"), "")
+            )
+        }
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [
+            _parameter(
+                "value",
+                Type(kind=ValueKind.STRING, nullable=True),
+                required=True,
+            )
+        ],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {"value": ""}
+    assert [call.kind for call in fake.calls] == ["select", "text"]
+    assert fake.calls[0].default.title == "Enter value"
+
+
+def test_required_nullable_structured_editor_retries_blank(monkeypatch):
+    fake = _FakeQuestionary(
+        {
+            "value": _WidgetResponses(
+                (
+                    _SelectTitle("Enter value"),
+                    _Attempts((" ", "[]")),
+                )
+            )
+        }
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [
+            _parameter(
+                "value",
                 Type(kind=ValueKind.LIST_ANY, nullable=True),
                 required=True,
             )
@@ -554,8 +921,47 @@ def test_structured_prompt_rejects_textual_null_then_retries(monkeypatch):
         prompt_available=True,
     )
 
-    assert gathered == {"items": [None]}
-    assert fake.calls[0].verdicts == ["Expected a JSON array", True]
+    assert gathered == {"value": []}
+    assert [call.kind for call in fake.calls] == ["select", "text"]
+    assert fake.calls[0].default.title == "Enter value"
+    assert fake.calls[1].verdicts == [
+        "Invalid JSON at line 1, column 2: Expecting value",
+        True,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("typ", "raw", "default"),
+    [
+        (Type.scalar(ValueKind.STRING), "   ", "fallback"),
+        (Type.scalar(ValueKind.LIST_ANY), "   ", [1]),
+    ],
+)
+def test_nonnullable_defaulted_open_blank_stays_direct_omission(
+    monkeypatch,
+    typ,
+    raw,
+    default,
+):
+    fake = _FakeQuestionary({"value": raw})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [
+            _parameter(
+                "value",
+                typ,
+                has_default=True,
+                default=default,
+            )
+        ],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {}
+    assert [call.kind for call in fake.calls] == ["text"]
 
 
 def test_prompt_labels_carry_marks(monkeypatch):
@@ -713,7 +1119,13 @@ output: ${show.output}
         assert isinstance(call.default, _FakeChoice)
         assert call.default is call.choices[0]
         assert call.default.value is not None
-    assert [choice.value for choice in by_name["flag"].choices[1:]] == [True, False]
+    assert [choice.title for choice in by_name["flag"].choices] == [
+        "↩ Omit input",
+        "Set null",
+        "True",
+        "False",
+    ]
+    assert [choice.value for choice in by_name["flag"].choices[-2:]] == [True, False]
     assert [choice.value for choice in by_name["mode"].choices[1:]] == ["a", "z"]
 
 
@@ -746,6 +1158,251 @@ def test_prompt_collects_false_enum_and_text_overrides(monkeypatch):
         "mode": "slow",
         "note": "replacement",
     }
+
+
+@pytest.mark.parametrize(
+    ("name", "typ", "required"),
+    [
+        ("flag", Type(kind=ValueKind.BOOLEAN, nullable=True), False),
+        ("required_flag", Type(kind=ValueKind.BOOLEAN, nullable=True), True),
+        (
+            "mode",
+            Type(
+                kind=ValueKind.STRING,
+                tags=frozenset({"fast", "null"}),
+                nullable=True,
+            ),
+            False,
+        ),
+        (
+            "required_mode",
+            Type(
+                kind=ValueKind.STRING,
+                tags=frozenset({"fast", "null"}),
+                nullable=True,
+            ),
+            True,
+        ),
+        ("nothing", Type.scalar(ValueKind.NONE), True),
+        ("optional_nothing", Type(kind=ValueKind.NONE, nullable=True), False),
+    ],
+)
+def test_finite_prompt_set_null_gathers_present_none(
+    monkeypatch,
+    name,
+    typ,
+    required,
+):
+    fake = _FakeQuestionary({name: _SelectTitle("Set null")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter(name, typ, required=required)],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {name: None}
+    assert [call.kind for call in fake.calls] == ["select"]
+    assert "Set null" in [choice.title for choice in fake.calls[0].choices]
+
+
+@pytest.mark.parametrize(
+    ("parameter", "expected_titles"),
+    [
+        (
+            _parameter("nothing", Type.scalar(ValueKind.NONE), required=True),
+            ["Set null"],
+        ),
+        (
+            _parameter("optional_nothing", Type(kind=ValueKind.NONE, nullable=True)),
+            ["↩ Omit input", "Set null"],
+        ),
+        (
+            _parameter(
+                "default_nothing",
+                Type(kind=ValueKind.NONE, nullable=True),
+                has_default=True,
+                default=None,
+            ),
+            ["↩ Use declared default", "Set null"],
+        ),
+    ],
+)
+def test_null_only_prompt_offers_controls_but_no_value_editor(
+    monkeypatch,
+    parameter,
+    expected_titles,
+):
+    fake = _FakeQuestionary({parameter.name: _SelectTitle("Set null")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert gathered == {parameter.name: None}
+    assert [choice.title for choice in fake.calls[0].choices] == expected_titles
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        _parameter(
+            "flag",
+            Type(kind=ValueKind.BOOLEAN, nullable=True),
+            has_default=True,
+            default=True,
+        ),
+        _parameter(
+            "mode",
+            Type(
+                kind=ValueKind.STRING,
+                tags=frozenset({"fast", "null"}),
+                nullable=True,
+            ),
+            has_default=True,
+            default="fast",
+        ),
+        _parameter(
+            "nothing",
+            Type(kind=ValueKind.NONE, nullable=True),
+            has_default=True,
+            default=None,
+        ),
+    ],
+)
+def test_nullable_finite_prompt_omission_stays_absent(monkeypatch, parameter):
+    fake = _FakeQuestionary({parameter.name: _SelectTitle("↩ Use declared default")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert gathered == {}
+
+
+def test_nullable_literal_distinguishes_null_tag_from_set_null(monkeypatch):
+    fake = _FakeQuestionary({"mode": _SelectTitle("Set value: null")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+    parameter = _parameter(
+        "mode",
+        Type(
+            kind=ValueKind.STRING,
+            tags=frozenset({"null", "other"}),
+            nullable=True,
+        ),
+        has_default=True,
+        default="other",
+    )
+
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert gathered == {"mode": "null"}
+    choices = fake.calls[0].choices
+    assert [choice.title for choice in choices].count("Set null") == 1
+    assert [choice.title for choice in choices].count("Set value: null") == 1
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        _parameter(
+            "flag",
+            Type.scalar(ValueKind.BOOLEAN),
+            has_default=True,
+            default=True,
+        ),
+        _parameter(
+            "mode",
+            Type(kind=ValueKind.STRING, tags=frozenset({"fast", "slow"})),
+            has_default=True,
+            default="fast",
+        ),
+    ],
+)
+def test_nonnullable_finite_default_does_not_offer_set_null(monkeypatch, parameter):
+    fake = _FakeQuestionary({})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert gathered == {}
+    assert "Set null" not in [choice.title for choice in fake.calls[0].choices]
+
+
+@pytest.mark.parametrize(
+    ("parameter", "expected", "default_title"),
+    [
+        (
+            _parameter(
+                "flag",
+                Type(kind=ValueKind.BOOLEAN, nullable=True),
+                required=True,
+            ),
+            False,
+            "False",
+        ),
+        (
+            _parameter(
+                "mode",
+                Type(
+                    kind=ValueKind.STRING,
+                    tags=frozenset({"null", "alpha"}),
+                    nullable=True,
+                ),
+                required=True,
+            ),
+            "alpha",
+            "Set value: alpha",
+        ),
+        (
+            _parameter("nothing", Type.scalar(ValueKind.NONE), required=True),
+            None,
+            "Set null",
+        ),
+    ],
+)
+def test_required_null_capable_prompt_preserves_safe_default(
+    monkeypatch,
+    parameter,
+    expected,
+    default_title,
+):
+    fake = _FakeQuestionary({})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert gathered == {parameter.name: expected}
+    call = fake.calls[0]
+    assert call.kind == "select"
+    assert call.default.title == default_title
+
+
+def test_prompt_controls_are_fresh_for_each_widget(monkeypatch):
+    fake = _FakeQuestionary({"flag": _SelectTitle("Set null")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+    parameter = _parameter(
+        "flag",
+        Type(kind=ValueKind.BOOLEAN, nullable=True),
+    )
+
+    first = _gather_missing_inputs([parameter], {}, prompt_available=True)
+    second = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert first == second == {"flag": None}
+    first_choices, second_choices = (call.choices for call in fake.calls)
+    for title in ("↩ Omit input", "Set null"):
+        first_choice = next(choice for choice in first_choices if choice.title == title)
+        second_choice = next(
+            choice for choice in second_choices if choice.title == title
+        )
+        assert first_choice is not second_choice
 
 
 def test_prompt_distinguishes_literal_values_from_omission_labels(monkeypatch):
@@ -837,11 +1494,21 @@ def test_prompt_leaves_explicit_null_defaults_omitted_for_every_widget_kind(monk
     gathered = _gather_missing_inputs(parameters, {}, prompt_available=True)
 
     assert gathered == {}
-    assert [call.kind for call in fake.calls] == ["text", "select", "select"]
+    assert [call.kind for call in fake.calls] == ["select", "select", "select"]
 
 
-def test_prompt_treats_optional_whitespace_as_omission(monkeypatch):
-    fake = _FakeQuestionary({"note": "   "})
+def test_prompt_returns_optional_whitespace_to_palette_then_omits(monkeypatch):
+    fake = _FakeQuestionary(
+        {
+            "note": _WidgetResponses(
+                (
+                    _SelectTitle("Enter value"),
+                    "   ",
+                    _SelectTitle("↩ Omit input"),
+                )
+            )
+        }
+    )
     monkeypatch.setitem(sys.modules, "questionary", fake)
     _sink(monkeypatch)
 
@@ -852,6 +1519,7 @@ def test_prompt_treats_optional_whitespace_as_omission(monkeypatch):
     )
 
     assert gathered == {}
+    assert [call.kind for call in fake.calls] == ["select", "text", "select"]
 
 
 # --- _render_run_error: a runtime failure boxes the .yaml at the PRECISE line ------ #

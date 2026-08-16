@@ -93,27 +93,39 @@ A flow with no `name`/`description`/`version` prints no banner.
 When stdin is an interactive TTY, `ac` prompts for each declared input still
 missing. The widget follows its resolved type:
 
-- a required `bool` → a yes/no confirm,
-- an optional/defaulted `bool` → a select containing `↩ Omit input` or
-  `↩ Use declared default`, followed by `True` and `False`,
-- a required `Literal[...]` → a select list of the allowed tags,
-- an optional/defaulted `Literal[...]` → the same list with the omit/default action
-  preselected and each explicit tag labelled `Set value: ...`,
-- a resolved list type → a text entry for a JSON array,
-- a resolved object or record type → a text entry for a JSON object,
-- any other scalar → the existing free-text entry, initially blank.
+- a required non-nullable `bool` → a yes/no confirm,
+- any other `bool` → one select containing omit/default when allowed, `Set null`
+  when nullable, and `True` / `False`,
+- a `Literal[...]` → one select containing its tags plus omit/default and
+  `Set null` when applicable; explicit tags in a nullable/omittable select are
+  labelled `Set value: ...`,
+- a null-only `None` → omit/default when allowed plus `Set null`, with no value
+  editor,
+- a null-capable open scalar, list, object, or record → an action palette with
+  omit/default when allowed, `Set null`, and `Enter value`,
+- a non-null-capable list → a direct JSON-array text editor,
+- a non-null-capable object or record → a direct JSON-object text editor,
+- any other non-null-capable scalar → the existing free-text editor.
 
-List/object answers are parsed as JSON and validated recursively against the
-complete resolved type, including list elements and record fields. Invalid JSON,
-the wrong root shape, or a nested type mismatch is shown inside the prompt and the
-same question remains open for correction. Scalar, `Literal[...]`, and boolean
-answers keep their existing widgets and run-boundary behavior.
+`Enter value` opens the existing scalar editor or the typed JSON editor. List/object
+answers are parsed as JSON and validated recursively against the complete resolved
+type, including list elements and record fields. Invalid JSON, the wrong root shape,
+or a nested type mismatch is shown inside the editor and the same question remains
+open for correction.
 
-Choosing the omit/default action, or leaving optional/defaulted free text blank,
-does not submit a value. The key stays absent: START applies the exact validated
-default payload when present, while an optional input without a default remains
-absent. The CLI never stringifies a default into an override. A typed answer remains
-an ordinary explicit override and follows run-boundary coercion and validation.
+Across initial prompts, the CLI keeps four outcome meanings distinct: an explicit
+value; `Set null`; omit/use-default; and cancellation. Each widget offers only the
+outcomes allowed by its declaration. `Set null` submits a present `None`, so it shadows
+a declared default and undergoes normal type validation. Omission keeps the key absent:
+START applies the exact validated default payload when present, while an optional input
+without a default remains absent. Cancelling at either the action palette or editor
+cancels the run.
+
+For a null-capable open input, optional blank/whitespace after `Enter value` returns
+to a fresh action palette; it does **not** silently choose omission. A direct
+non-null-capable optional/defaulted text or JSON editor retains the old behavior:
+blank/whitespace omits the key. The CLI never stringifies a default into an override.
+Any explicit typed answer follows ordinary run-boundary coercion and validation.
 
 Each prompt's label carries the input's canonical resolved **type**, a required
 (`*`) / `optional` mark, and any **default** — e.g. `topic (str) *`,
@@ -122,22 +134,23 @@ ISO-8601 `date` / `datetime` scalars — whose accepted string form isn't obviou
 a label with no default also shows an **example** value (`e.g. 2026-05-21`,
 `e.g. 2026-05-21T14:30`); when a default is present it already shows the format,
 so the example is dropped. An explicit null default is shown as `[default: None]`.
-Whitespace-only optional/defaulted text, including a list/object JSON prompt, is
-also omission. Cancelling any prompt still cancels the run. Textual root `null`
-is never an explicit-null action: a list/object prompt rejects it, while scalar
-prompts retain their ordinary text behavior. Use `--inputs` JSON to supply explicit
-null, and use it as well for structured values in a non-interactive run.
-Whitespace-only string values also require an explicit input source rather than an
-omitted prompt.
+
+The text `null` in a string editor and a `Literal` tag named `null` remain ordinary
+strings, distinct from `Set null`. A structured editor still rejects root JSON
+`null`; choose the palette's `Set null` action instead. Nested JSON null remains
+valid exactly where the nested contract accepts it. To supply explicit null or a
+native list/object without a TTY, use `--inputs`; `--input` remains a string/scalar
+surface. An optional whitespace-only string value likewise needs an explicit input
+source rather than the prompt's blank path.
 
 !!! note
     Initial input prompts need a real terminal (TTY). In a non-interactive context
     (a CI job, a piped command, `srun` without a pty), missing optional/defaulted
     declarations stay absent so START applies defaults or retains optional absence.
     If required declarations are missing, `ac` reports all of them and exits with
-    code `2` before provider or run-log setup. Required list/object inputs must be
-    supplied through `--inputs`; ordinary required scalars may use `--input` or
-    `--inputs`.
+    code `2` before provider or run-log setup. Native list/object values and explicit
+    null must be supplied through `--inputs`; ordinary required scalars may use
+    `--input` or `--inputs`.
 
 ## Blocking interactions
 

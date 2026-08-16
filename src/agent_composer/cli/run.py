@@ -2,11 +2,15 @@
 
 Fresh inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`). On
 an interactive stdin, every declaration still missing is prompted for (required ones
-are starred); optional/defaulted prompts can be omitted so START retains ownership of
-any declared default or optional absence. List and object prompts accept JSON text,
-validate the complete declared structure before accepting it, and return native values.
-Without an interactive stdin, omittable declarations stay absent and missing required
-declarations are rejected together.
+are starred). Initial prompts keep four outcomes distinct: an explicit value, `Set null`
+when the contract accepts it, omit/use-default when allowed, and cancellation. Nullable
+boolean/Literal selects embed `Set null`. Nullable open scalars/lists/objects first offer
+those actions plus `Enter value`; an optional blank in the editor returns to that palette,
+while a direct non-nullable optional editor still uses blank as omission. List/object
+editors validate typed JSON, including nested nulls, but reject root `null`; the null-only
+`None` type has `Set null` and no editor. Without an interactive stdin, omittable
+declarations stay absent, missing required declarations are rejected together, and native
+structures or explicit null come from `--inputs`.
 Fresh runs use a reported durable log under ``~/.agent_composer/runs`` unless
 ``--log`` selects a new path. ``--resume`` recovers an existing path without gathering
 fresh inputs or model configuration.
@@ -70,9 +74,11 @@ from agent_composer.typesys.values import ValueKind
 console = Console()
 err_console = Console(stderr=True)
 _DEFAULT_BROKER_EOF = object()
-# A prompt-local control result, distinct from Questionary's ``None`` cancellation.
-# It never crosses the CLI boundary; omitted keys stay absent so START applies defaults.
+# Prompt-local controls, distinct from Questionary's ``None`` cancellation. The
+# collector translates them before the run boundary; no sentinel reaches START.
 _OMIT_INPUT = object()
+_NULL_INPUT = object()
+_ENTER_INPUT = object()
 
 
 def _ensure_cwd_importable() -> None:
@@ -690,74 +696,78 @@ def _parse_structured_input(
     return parsed
 
 
-def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
-    """Ask for one declared input and return value, omission, or cancellation.
+def _accepts_null(typ: Optional[Type]) -> bool:
+    """Return whether a resolved input contract accepts an explicit null."""
+    return typ is not None and (typ.nullable or typ.kind is ValueKind.NONE)
 
-    ``_OMIT_INPUT`` is the non-required/default action and ``None`` is Questionary's
-    cancellation result. Required booleans use confirm; optional/defaulted booleans
-    and Literals use a select with omission preselected. Lists and objects use validated
-    JSON text and return native values; remaining scalar types use unchanged text for
-    ordinary run-boundary coercion. Non-required whitespace means omission in either
-    text path.
+
+def _input_control_choices(
+    decl: Parameter,
+    typ: Optional[Type],
+    questionary: Any,
+    *,
+    include_enter: bool = False,
+) -> tuple[List[Any], Optional[Any]]:
+    """Build fresh omission/null/enter choices and the safe default control.
+
+    Questionary mutates choice shortcut state while constructing a widget, so this
+    factory creates new choice objects for every prompt. Omission is available only
+    to non-required parameters and remains the preselected action. Explicit null is
+    available only when the resolved contract accepts it. When requested, Enter is
+    the fallback default for a required parameter.
 
     Args:
-        decl (`Parameter`): Canonical flow input declaration to present.
-        questionary (`Any`):
-            Lazily imported Questionary module used to build the widget.
+        decl (`Parameter`): Canonical declaration that owns omission/default policy.
+        typ (`Type | None`): Resolved input contract, or ``None`` when untyped.
+        questionary (`Any`): Questionary module used to construct fresh choices.
+        include_enter (`bool`): Whether to add the open-editor action.
+
+    Returns:
+        `tuple[list[Any], Any | None]`: Control choices and their default choice.
+    """
+    choices: List[Any] = []
+    default = None
+    if not decl.required:
+        omission = questionary.Choice(
+            "↩ Use declared default" if decl.has_default else "↩ Omit input",
+            value=_OMIT_INPUT,
+        )
+        choices.append(omission)
+        default = omission
+    if _accepts_null(typ):
+        choices.append(questionary.Choice("Set null", value=_NULL_INPUT))
+    if include_enter:
+        enter = questionary.Choice("Enter value", value=_ENTER_INPUT)
+        choices.append(enter)
+        if default is None:
+            default = enter
+    return choices, default
+
+
+def _prompt_open_value(
+    decl: Parameter,
+    typ: Optional[Type],
+    label: str,
+    questionary: Any,
+    style: Any,
+) -> Any:
+    """Run the scalar or structured text editor for one open input.
+
+    Structured editors validate JSON and return its native value; scalar editors
+    retain the raw answer for ordinary run-boundary coercion. An optional blank
+    answer becomes ``_OMIT_INPUT``, while ``None`` remains cancellation.
+
+    Args:
+        decl (`Parameter`): Canonical declaration that owns blank/required policy.
+        typ (`Type | None`): Resolved input contract, or ``None`` when untyped.
+        label (`str`): Fully rendered prompt label.
+        questionary (`Any`): Questionary module used to construct the editor.
         style (`Any`): Shared Questionary style for the widget.
 
     Returns:
-        `Any`: Explicit value, private omission sentinel, or ``None`` cancellation.
+        `Any`: Native structured value, raw scalar value, ``_OMIT_INPUT`` for an
+        optional blank, or ``None`` for cancellation.
     """
-    label = _input_label(decl)
-    contract = getattr(decl, "contract", None)
-    typ = None if contract is None else contract.type
-
-    if typ is not None and typ.kind == ValueKind.BOOLEAN:
-        if decl.required:
-            return questionary.confirm(
-                label, default=False, qmark="?", style=style
-            ).ask()
-        omission = questionary.Choice(
-            "↩ Use declared default" if decl.has_default else "↩ Omit input",
-            value=_OMIT_INPUT,
-        )
-        return questionary.select(
-            label,
-            choices=[
-                omission,
-                questionary.Choice("True", value=True),
-                questionary.Choice("False", value=False),
-            ],
-            default=omission,
-            qmark="?",
-            style=style,
-        ).ask()
-
-    if typ is not None and typ.tags:  # a Literal[...] enum
-        choices = [
-            questionary.Choice(
-                tag if decl.required else f"Set value: {tag}",
-                value=tag,
-            )
-            for tag in sorted(typ.tags)
-        ]
-        if decl.required:
-            return questionary.select(
-                label, choices=choices, qmark="?", style=style
-            ).ask()
-        omission = questionary.Choice(
-            "↩ Use declared default" if decl.has_default else "↩ Omit input",
-            value=_OMIT_INPUT,
-        )
-        return questionary.select(
-            label,
-            choices=[omission, *choices],
-            default=omission,
-            qmark="?",
-            style=style,
-        ).ask()
-
     if typ is not None and (typ.kind.is_list() or typ.kind == ValueKind.OBJECT):
         instruction = (
             "Enter a JSON array" if typ.kind.is_list() else "Enter a JSON object"
@@ -797,6 +807,117 @@ def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
     return value
 
 
+def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
+    """Ask for one declared input and return value, null, omission, or cancellation.
+
+    ``_OMIT_INPUT`` and ``_NULL_INPUT`` are explicit prompt controls; ``None`` remains
+    Questionary's cancellation result. Required non-nullable booleans use confirm;
+    other booleans and Literals use selects with allowed controls. Null-capable open
+    inputs first select omit, null, or ``_ENTER_INPUT``; Enter opens the existing text
+    editor, and an optional blank returns to a fresh action palette. Non-null-capable
+    lists/objects still use validated JSON directly, remaining scalars retain raw text,
+    and an optional blank in either direct editor returns omission.
+
+    Args:
+        decl (`Parameter`): Canonical flow input declaration to present.
+        questionary (`Any`):
+            Lazily imported Questionary module used to build the widget.
+        style (`Any`): Shared Questionary style for the widget.
+
+    Returns:
+        `Any`: Explicit value, ``_OMIT_INPUT``, ``_NULL_INPUT``, or ``None``
+        cancellation. ``_ENTER_INPUT`` is consumed locally and never returned.
+    """
+    label = _input_label(decl)
+    contract = getattr(decl, "contract", None)
+    typ = None if contract is None else contract.type
+
+    if typ is not None and typ.kind == ValueKind.BOOLEAN:
+        null_capable = _accepts_null(typ)
+        if decl.required and not null_capable:
+            return questionary.confirm(
+                label, default=False, qmark="?", style=style
+            ).ask()
+        controls, default = _input_control_choices(decl, typ, questionary)
+        true_choice = questionary.Choice("True", value=True)
+        false_choice = questionary.Choice("False", value=False)
+        if decl.required:
+            default = false_choice
+        return questionary.select(
+            label,
+            choices=[*controls, true_choice, false_choice],
+            default=default,
+            qmark="?",
+            style=style,
+        ).ask()
+
+    if typ is not None and typ.tags:  # a Literal[...] enum
+        null_capable = _accepts_null(typ)
+        values = [
+            questionary.Choice(
+                (tag if decl.required and not null_capable else f"Set value: {tag}"),
+                value=tag,
+            )
+            for tag in sorted(typ.tags)
+        ]
+        controls, default = _input_control_choices(decl, typ, questionary)
+        if decl.required and null_capable:
+            default = values[0]
+        return questionary.select(
+            label,
+            choices=[*controls, *values],
+            default=default,
+            qmark="?",
+            style=style,
+        ).ask()
+
+    if typ is not None and typ.kind is ValueKind.NONE:
+        controls, default = _input_control_choices(decl, typ, questionary)
+        if default is None:
+            default = controls[0]
+        return questionary.select(
+            label,
+            choices=controls,
+            default=default,
+            qmark="?",
+            style=style,
+        ).ask()
+
+    if _accepts_null(typ):
+        while True:
+            controls, default = _input_control_choices(
+                decl,
+                typ,
+                questionary,
+                include_enter=True,
+            )
+            action = questionary.select(
+                label,
+                choices=controls,
+                default=default,
+                qmark="?",
+                style=style,
+            ).ask()
+            if action is None:
+                return None
+            if action is _OMIT_INPUT or action is _NULL_INPUT:
+                return action
+            if action is not _ENTER_INPUT:
+                raise RuntimeError("unexpected open-input prompt action")
+            value = _prompt_open_value(
+                decl,
+                typ,
+                label,
+                questionary,
+                style,
+            )
+            if value is _OMIT_INPUT:
+                continue
+            return value
+
+    return _prompt_open_value(decl, typ, label, questionary, style)
+
+
 def _gather_missing_inputs(
     decls: List[Parameter],
     have: Dict[str, Any],
@@ -808,7 +929,7 @@ def _gather_missing_inputs(
     Missing optional/defaulted declarations stay absent when no prompt is available,
     leaving START to apply defaults and optional absence. Missing required declarations
     are rejected together. With an available prompt, the per-input helper owns widget
-    choice and translates use-default/omit actions to a private sentinel; this collector
+    choice; this collector translates private controls to absence or present null and
     never applies flow defaults itself.
 
     Each prompt's label carries the input's type + a required/optional mark + default
@@ -855,6 +976,9 @@ def _gather_missing_inputs(
         if value is None:
             return None
         if value is _OMIT_INPUT:
+            continue
+        if value is _NULL_INPUT:
+            gathered[decl.name] = None
             continue
         gathered[decl.name] = value
     return gathered

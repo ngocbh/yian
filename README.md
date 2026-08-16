@@ -129,24 +129,31 @@ ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
   list/object values and explicit `null`.
 - Repeatable `--input k=v` flags override individual JSON keys. This is a
   string/scalar surface: values are coerced, where supported, against scalar
-  input types; stored defaults are not coerced. Use `--inputs` for list/object
-  values or explicit null.
+  input types; stored defaults are not coerced. It does not parse list/object
+  JSON or explicit null, so use `--inputs` for those values outside an
+  interactive prompt.
 - At run start a boxed **banner** (to stderr) names the flow being run — its
   `name`, `version`, and `description` — unless `--quiet`.
 - With an interactive stdin (TTY), each declared input still missing is
   **prompted interactively**. Each prompt is labelled with its canonical resolved
-  type, a required (`*`)/optional mark, and any default. Optional/defaulted boolean
-  and `Literal[...]` prompts offer an explicit omit/use-declared-default action;
-  blank optional/defaulted free text does the same, and other scalar prompts keep
-  their existing text/coercion behavior. Resolved list/object prompts accept JSON
-  text, validate the complete declared type, and show invalid JSON or type errors
-  inline until corrected. Cancelling still cancels the run; textual root `null` is
-  not an explicit-null action, so use `--inputs` for that value.
+  type, a required (`*`)/optional mark, and any default. The four outcomes are an
+  explicit value, `Set null` when the type accepts null, omit/use-default when
+  allowed, and cancellation. Nullable boolean and `Literal[...]` prompts embed
+  `Set null` in their value select. Null-capable open scalar/list/object prompts
+  first show omit/default (when allowed), `Set null`, and `Enter value`; Enter
+  opens the existing scalar or typed-JSON editor. An optional blank there returns
+  to the palette instead of silently omitting, while a non-null-capable direct
+  optional/defaulted text editor still treats blank as omission. The null-only
+  `None` type offers `Set null` (and omission when allowed) but no Enter action.
+  String text `null` and a `Literal` tag named `null` remain ordinary strings.
+  A structured editor still rejects root `null`—choose `Set null` instead—while
+  nested null remains valid wherever the nested contract accepts it. Cancelling
+  any prompt cancels the run.
   Without a TTY, missing optional/defaulted declarations stay absent so START owns
   defaults and optional absence. Missing required declarations are rejected
   together as invalid CLI input (exit code `2`) before provider or run-log setup;
-  list/object values require `--inputs`, while scalars may use `--input` or
-  `--inputs`.
+  native list/object values and explicit null require `--inputs`, while ordinary
+  scalars may use `--input` or `--inputs`.
 - `HUMAN_INPUT` and an authored agent `ask_user` tool are separate live-run
   interactions, unchanged by the initial-input omission policy. They block inside
   the live node call while the CLI's main-thread broker reads the answer from the

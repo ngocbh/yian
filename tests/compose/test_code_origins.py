@@ -9,8 +9,8 @@ from agent_composer.compile.expand import clone_child
 from agent_composer.compile.manifest import flow_fingerprint, flow_manifest
 from agent_composer.compose import load_flow
 from agent_composer.compose.nodes.code import CodeDescriptor
-from agent_composer.compose.source import SourceDocument
-from agent_composer.compose.source.catalog import _scope_origin
+from agent_composer.compose.source import SourceCursor, SourceDocument
+from agent_composer.compose.source.catalog import _SourceCatalogBuilder, _scope_origin
 from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.nodes.code import CodeNode
 
@@ -155,6 +155,55 @@ def test_source_free_code_accepts_empty_origin_carriers():
     assert node.code_origin is None
     assert node.code_line_origins == ()
     assert list(node.iter_local_origins()) == []
+
+
+def test_source_free_attachment_preserves_explicit_code_origins():
+    code_origin = OriginRef("programmatic/code")
+    line_origins = (OriginRef("programmatic/line/0"),)
+    descriptor = CodeDescriptor(
+        id="worker",
+        code="return 1",
+        code_origin=code_origin,
+        code_line_origins=line_origins,
+    )
+
+    attached = descriptor.with_source_origins(
+        SourceCursor.virtual({"kind": "code", "code": "return 1"}),
+        site_path=("root", "node", "worker"),
+        catalog_builder=_SourceCatalogBuilder(),
+    )
+
+    assert attached.code_origin is code_origin
+    assert attached.code_line_origins is line_origins
+
+
+def test_changed_projection_keeps_explicit_lines_without_claiming_exact_yaml_lines():
+    text = "node:\n  kind: code\n  code: |-\n    return 1\n"
+    node_cursor = SourceDocument.parse(text).root.child("node")
+    projected = node_cursor.project_mapping(
+        {
+            "kind": ("code", node_cursor.child("kind")),
+            "code": ("return 2", node_cursor.child("code")),
+        }
+    )
+    explicit_line = OriginRef("programmatic/line/0")
+    descriptor = CodeDescriptor(
+        id="worker",
+        code="return 2",
+        code_origin=OriginRef("programmatic/code"),
+        code_line_origins=(explicit_line,),
+    )
+    builder = _SourceCatalogBuilder()
+
+    attached = descriptor.with_source_origins(
+        projected,
+        site_path=("root", "node", "worker"),
+        catalog_builder=builder,
+    )
+
+    assert attached.code_origin == _CODE_ORIGIN
+    assert attached.code_line_origins == (explicit_line,)
+    assert builder.freeze().resolve(attached.code_origin) is not None
 
 
 def test_code_origins_participate_in_local_traversal_and_rewrite():

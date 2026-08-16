@@ -82,9 +82,11 @@ class CodeDescriptor(NodeDescriptor):
     ) -> "CodeDescriptor":
         """Attach the whole ``code:`` scalar and exact literal-line origins.
 
-        Folded, quoted, projected-with-a-changed-value, and source-free scalars
-        retain only the whole-value fallback. Exact literal block lines are stored
-        in constructed-value order, independent of physical YAML coordinates.
+        Folded, quoted, and projected-with-a-changed-value scalars provide only a
+        whole-value Compose site; source-free scalars provide none. Exact literal
+        block lines are stored in constructed-value order, independent of physical
+        YAML coordinates. A slot for which Compose cannot register a source site
+        preserves any explicit programmatic origin already carried by the descriptor.
 
         Args:
             cursor (`SourceCursor`): Normalized authored CODE node occurrence.
@@ -96,9 +98,14 @@ class CodeDescriptor(NodeDescriptor):
         """
         code_cursor = cursor.child("code")
         field_path = (*site_path, "field", "code")
-        code_origin = catalog_builder.register(field_path, code_cursor)
+        registered_code_origin = catalog_builder.register(field_path, code_cursor)
+        code_origin = (
+            self.code_origin
+            if registered_code_origin is None
+            else registered_code_origin
+        )
 
-        line_origins: list[OriginRef] = []
+        code_line_origins = self.code_line_origins
         scalar_source = code_cursor.scalar_source
         line_ranges = (
             scalar_source.constructed_line_ranges
@@ -106,6 +113,7 @@ class CodeDescriptor(NodeDescriptor):
             else None
         )
         if line_ranges is not None:
+            registered_line_origins: list[OriginRef] = []
             for index in range(len(line_ranges)):
                 origin = catalog_builder.register_constructed_line(
                     (*field_path, "line", index),
@@ -113,14 +121,15 @@ class CodeDescriptor(NodeDescriptor):
                     index,
                 )
                 if origin is None:
-                    line_origins.clear()
                     break
-                line_origins.append(origin)
+                registered_line_origins.append(origin)
+            else:
+                code_line_origins = tuple(registered_line_origins)
 
         return replace(
             self,
             code_origin=code_origin,
-            code_line_origins=tuple(line_origins),
+            code_line_origins=code_line_origins,
         )
 
     def build(self, ctx: BuildContext) -> BuildResult:

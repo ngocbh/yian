@@ -273,6 +273,36 @@ def _state_snapshot(state: RunState) -> tuple[Any, ...]:
     )
 
 
+def _replay(
+    flow: CompiledFlow,
+    source: MemoryRunLog,
+) -> tuple[RunState, MemoryRunLog]:
+    """Fold one live prefix through the same public reducer preparation APIs."""
+    records = tuple(envelope.record for envelope in source)
+    started = records[0]
+    assert isinstance(started, RunStartedRecord)
+    state = RunState(flow)
+    log = MemoryRunLog(_RUN_ID)
+    commit_prepared(
+        log,
+        state,
+        prepare_run_started(
+            state,
+            RunStartData(
+                run_id=_RUN_ID,
+                flow_fingerprint=started.flow_fingerprint,
+                initial_pool=decode_pool(started.initial_pool),
+                start_wiring_override=started.start_wiring_override,
+                effective_llm_by_static_path=started.effective_llm_by_static_path,
+                num_workers=started.num_workers,
+            ),
+        ),
+    )
+    for record in records[1:]:
+        commit_prepared(log, state, prepare_record(state, record))
+    return state, log
+
+
 def test_required_call_child_end_redirect_skips_parent_output_path() -> None:
     state, log = _router_in_flight(_call_redirect_flow())
 
@@ -323,3 +353,66 @@ def test_malformed_skipped_output_target_leaves_state_unchanged() -> None:
 
     assert _state_snapshot(state) == before
     assert log.next_sequence == sequence
+
+
+def test_map_collector_redirects_skipped_output_to_spawner() -> None:
+    state, log = _router_in_flight(_map_redirect_flow())
+
+    commit_prepared(log, state, prepare_node_routed(state, "router", "default"))
+
+    assert state.node_state["map#0/__end__"] is NodeState.SKIPPED
+    assert state.edge_state["map-child-collector"] is NodeState.SKIPPED
+    assert state.node_state["map/__end__"] is NodeState.SKIPPED
+    assert state.node_state["map"] is NodeState.UNKNOWN
+    assert state.edge_state["map-end"] is NodeState.SKIPPED
+    assert state.node_state[END_ID] is NodeState.SKIPPED
+
+
+def test_loop_driver_redirects_skipped_output_to_origin() -> None:
+    state, log = _router_in_flight(_loop_redirect_flow())
+
+    commit_prepared(log, state, prepare_node_routed(state, "router", "default"))
+
+    assert state.node_state["loop#0/__end__"] is NodeState.SKIPPED
+    assert state.edge_state["loop-body-driver"] is NodeState.SKIPPED
+    assert state.node_state["loop~1"] is NodeState.SKIPPED
+    assert state.node_state["loop"] is NodeState.UNKNOWN
+    assert state.edge_state["loop-end"] is NodeState.SKIPPED
+    assert state.node_state[END_ID] is NodeState.SKIPPED
+
+
+def test_nested_redirects_propagate_to_the_top_level_end() -> None:
+    state, log = _router_in_flight(_nested_call_redirect_flow())
+
+    commit_prepared(log, state, prepare_node_routed(state, "router", "default"))
+
+    assert state.node_state["outer/inner/__end__"] is NodeState.SKIPPED
+    assert state.node_state["outer/inner"] is NodeState.UNKNOWN
+    assert state.edge_state["inner-call-outer-end"] is NodeState.SKIPPED
+    assert state.node_state["outer/__end__"] is NodeState.SKIPPED
+    assert state.node_state["outer"] is NodeState.UNKNOWN
+    assert state.edge_state["outer-call-end"] is NodeState.SKIPPED
+    assert state.node_state[END_ID] is NodeState.SKIPPED
+
+
+def test_redirected_skip_replays_without_a_terminal_record() -> None:
+    live_state, live_log = _router_in_flight(_nested_call_redirect_flow())
+    commit_prepared(
+        live_log,
+        live_state,
+        prepare_node_routed(live_state, "router", "default"),
+    )
+
+    record_types = [type(envelope.record) for envelope in live_log]
+    assert record_types == [
+        RunStartedRecord,
+        NodeStartedRecord,
+        NodeSucceededRecord,
+        NodeStartedRecord,
+        NodeRoutedRecord,
+    ]
+
+    replay_state, replay_log = _replay(_nested_call_redirect_flow(), live_log)
+
+    assert _state_snapshot(replay_state) == _state_snapshot(live_state)
+    assert tuple(replay_log) == tuple(live_log)

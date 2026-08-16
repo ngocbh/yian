@@ -170,8 +170,9 @@ class SourceCatalog:
 
         Args:
             origin (`OriginRef`):
-                Opaque identity minted by this catalog's builder or a later
-                Compose rebasing pass.
+                Opaque local identity minted by this catalog's builder. A scoped
+                child identity must first route back to its local identity through
+                a `ResolverTable`.
 
         Returns:
             `DiagnosticFrame | None`:

@@ -68,6 +68,16 @@ def test_nested_scoped_origin_treats_the_previous_key_as_one_opaque_segment():
     assert nested != _scope_origin("outer~alias", OriginRef("old/~key"))
 
 
+def test_scoped_origin_escaping_prevents_segment_boundary_spoofing():
+    assert _scope_origin(
+        "a/s:origin/s:b",
+        OriginRef("c"),
+    ) != _scope_origin(
+        "a",
+        OriginRef("b/s:origin/s:c"),
+    )
+
+
 @pytest.mark.parametrize(
     ("alias", "origin", "error"),
     [
@@ -80,6 +90,15 @@ def test_nested_scoped_origin_treats_the_previous_key_as_one_opaque_segment():
 def test_scoped_origin_rejects_invalid_aliases_and_origins(alias, origin, error):
     with pytest.raises(error):
         _scope_origin(alias, origin)
+
+
+def test_scoped_origin_revalidates_origin_subclass_keys():
+    class InvalidOrigin(OriginRef):
+        def __post_init__(self) -> None:
+            pass
+
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        _scope_origin("child", InvalidOrigin(""))
 
 
 @pytest.mark.parametrize(

@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode, SequenceNode
+from yaml.tokens import ScalarToken
 
 from agent_composer.compose.source.common import (
     OccurrencePath,
@@ -126,7 +127,19 @@ class _DocumentLoader(yaml.SafeLoader):
         self._mapping_states: dict[MappingNode, _WorkingPairs | _PairSequence] = {}
         self._sequence_values: dict[_PairSequence, dict[Any, Any]] = {}
         self._forced_string_nodes: set[yaml.Node] = set()
+        self._block_scalar_tokens: dict[int, ScalarToken] = {}
         super().__init__(stream)
+
+    def scan_block_scalar(self, style: str) -> ScalarToken:
+        """Scan once while retaining the real block-indicator token.
+
+        A composed scalar node can start at an anchor or tag before the block
+        indicator, so its start mark cannot identify the physical body.
+        """
+
+        token = super().scan_block_scalar(style)
+        self._block_scalar_tokens[token.end_mark.index] = token
+        return token
 
     def construct_object(self, node: yaml.Node, deep: bool = False) -> Any:
         """Construct normally while retaining a temporary node/value identity map."""
@@ -317,10 +330,125 @@ def _mark_to_range(node: yaml.Node | None) -> SourceRange | None:
     )
 
 
+_YAML_LINE_BREAKS = frozenset(("\r", "\n", "\x85", "\u2028", "\u2029"))
+_CONSTRUCTED_LINE_BREAKS = frozenset(("\n", "\u2028", "\u2029"))
+
+
+def _line_break_end(text: str, index: int, limit: int) -> int | None:
+    """Return the offset after one YAML line break, if present."""
+
+    character = text[index]
+    if character not in _YAML_LINE_BREAKS:
+        return None
+    if character == "\r" and index + 1 < limit and text[index + 1] == "\n":
+        return index + 2
+    return index + 1
+
+
+def _constructed_lines(value: str) -> tuple[str, ...]:
+    """Split a block scalar into content lines without a phantom final line."""
+
+    lines: list[str] = []
+    start = 0
+    for index, character in enumerate(value):
+        if character in _CONSTRUCTED_LINE_BREAKS:
+            lines.append(value[start:index])
+            start = index + 1
+    if start < len(value):
+        lines.append(value[start:])
+    return tuple(lines)
+
+
+def _literal_line_ranges(
+    text: str,
+    token: ScalarToken | None,
+    value: Any,
+) -> tuple[SourceRange, ...] | None:
+    """Conservatively align one constructed literal to authored content lines."""
+
+    if (
+        token is None
+        or token.style != "|"
+        or type(value) is not str
+        or token.value != value
+    ):
+        return None
+
+    token_start = token.start_mark.index
+    token_end = token.end_mark.index
+    if not 0 <= token_start < token_end <= len(text):
+        return None
+
+    body_start = None
+    index = token_start
+    while index < token_end:
+        break_end = _line_break_end(text, index, token_end)
+        if break_end is not None:
+            body_start = break_end
+            break
+        index += 1
+    if body_start is None:
+        return () if value == "" else None
+
+    physical_lines: list[tuple[str, int]] = []
+    line_number = token.start_mark.line + 2
+    index = body_start
+    while index < token_end:
+        line_start = index
+        while index < token_end:
+            break_end = _line_break_end(text, index, token_end)
+            if break_end is not None:
+                break
+            index += 1
+        physical_lines.append((text[line_start:index], line_number))
+        if index < token_end:
+            index = break_end
+        line_number += 1
+
+    constructed_lines = _constructed_lines(value)
+    if len(constructed_lines) > len(physical_lines):
+        return None
+
+    ranges: list[SourceRange] = []
+    structural_indent = None
+    for constructed, (physical, source_line) in zip(
+        constructed_lines,
+        physical_lines,
+    ):
+        if not physical.endswith(constructed):
+            return None
+        prefix_length = len(physical) - len(constructed)
+        if any(character != " " for character in physical[:prefix_length]):
+            return None
+        if constructed:
+            if structural_indent is None:
+                structural_indent = prefix_length
+            elif prefix_length != structural_indent:
+                return None
+        ranges.append(
+            SourceRange(
+                source_line,
+                prefix_length + 1,
+                source_line,
+                len(physical) + 1,
+            )
+        )
+
+    if any(
+        any(character != " " for character in physical)
+        for physical, _ in physical_lines[len(constructed_lines) :]
+    ):
+        return None
+    return tuple(ranges)
+
+
 def _build_definitions(
     root_node: yaml.Node | None,
     root_value: Any,
     node_values: dict[int, Any],
+    *,
+    text: str,
+    block_scalar_tokens: dict[int, ScalarToken],
     mapping_values: dict[int, dict[Any, Any]] | None = None,
     pair_sequences: dict[int, _PairSequence] | None = None,
 ) -> tuple[tuple[_Definition, ...], int]:
@@ -334,6 +462,10 @@ def _build_definitions(
             Constructed value aligned with ``root_node``.
         node_values (`dict[int, Any]`):
             Exact constructed value for each YAML-node identity.
+        text (`str`):
+            Original document text retained by the source document.
+        block_scalar_tokens (`dict[int, ScalarToken]`):
+            Block tokens from the existing scanner pass, keyed by end offset.
         mapping_values (`dict[int, dict[Any, Any]] | None`, *optional*):
             Effective mapping values retained by the document loader, keyed by
             YAML-node identity. Absent for non-mapping nodes.
@@ -347,7 +479,7 @@ def _build_definitions(
     """
 
     if root_node is None:
-        return (_ScalarDef(root_value, None, None),), 0
+        return (_ScalarDef(root_value, None, None, None),), 0
 
     definitions: list[_Definition | None] = []
     ids: dict[int, int] = {}
@@ -509,6 +641,11 @@ def _build_definitions(
                 value=value,
                 range=source_range,
                 raw=(node.value if isinstance(node, yaml.ScalarNode) else None),
+                constructed_line_ranges=_literal_line_ranges(
+                    text,
+                    block_scalar_tokens.get(node.end_mark.index),
+                    value,
+                ),
             )
         return definition_id
 
@@ -611,6 +748,8 @@ class SourceDocument:
                 root_node,
                 value,
                 loader._source_values,
+                text=text,
+                block_scalar_tokens=loader._block_scalar_tokens,
                 mapping_values={
                     id(node): mapping
                     for node, mapping in loader._effective_mappings.items()
@@ -630,6 +769,7 @@ class SourceDocument:
                 loader._mapping_states = {}
                 loader._sequence_values = {}
                 loader._forced_string_nodes = set()
+                loader._block_scalar_tokens = {}
                 loader.dispose()
 
         return cls(

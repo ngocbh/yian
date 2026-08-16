@@ -9,6 +9,7 @@ from typing import Any, TYPE_CHECKING
 
 from agent_composer.compose.source.common import (
     OccurrencePath,
+    ScalarSource,
     SourceAccessError,
     _ArcSequence,
     _KeyIndex,
@@ -179,6 +180,36 @@ class SourceCursor:
         if self._document is None or self._definition is None:
             return None
         return self._document._definitions[self._definition].range
+
+    @property
+    def scalar_source(self) -> ScalarSource | None:
+        """Return source provenance for an unchanged constructed string.
+
+        Examples:
+            >>> from agent_composer.compose.source import SourceDocument
+            >>> cursor = SourceDocument.parse("code: |-\\n  pass\\n").root.child("code")
+            >>> cursor.scalar_source.constructed_line_ranges[0].start_line
+            2
+
+        Returns:
+            `ScalarSource | None`:
+                Whole-scalar fallback plus optional exact literal-line ranges.
+                Virtual, non-string, and value-changing cursors return ``None``.
+        """
+
+        definition = self._source_scalar_definition()
+        if (
+            definition is None
+            or definition.range is None
+            or type(definition.value) is not str
+            or type(self._value) is not str
+            or self._value != definition.value
+        ):
+            return None
+        return ScalarSource(
+            range=definition.range,
+            constructed_line_ranges=definition.constructed_line_ranges,
+        )
 
     @property
     def key_range(self) -> SourceRange | None:

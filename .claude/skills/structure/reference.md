@@ -119,8 +119,8 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 | Responsibility | Owner | Must not leak to |
 |---|---|---|
 | PyYAML construction and the private YAML node/occurrence graph | `compose/source` | every other compose phase, `compile`, `runtime` |
-| Stable location-aware navigation and immutable projections | public `SourceDocument` / `SourceCursor` contracts from `compose/source` | private document slots or PyYAML nodes |
-| Immutable document-local origin resolution, exact ownership, and Compose-private typed key/scoping policy | public `SourceCatalog` plus its package-private builder/encoder in `compose/source` | parallel range maps, another YAML parse, parsing an opaque child key, or a premature cross-file resolver |
+| Stable location-aware navigation, immutable projections, and whole/exact-literal provenance | public `SourceDocument` / `SourceCursor` / `ScalarSource` contracts from `compose/source` | private document slots, PyYAML nodes/tokens, or another parse |
+| Immutable document-local origin resolution, semantic constructed-line selection, exact ownership, and Compose-private typed key/scoping policy | public `SourceCatalog` plus its package-private builder/encoder in `compose/source` | stored coordinates, parallel range maps, another YAML parse, parsing an opaque child key, or a premature cross-file resolver |
 | Semantic descriptors and flow sections | `compose/parse` consuming a document/cursor | another YAML construction pass |
 | Source-preserving inline extraction | `compose/desugar` projecting cursors | PyYAML and loader state |
 | Compiled-flow assembly and per-occurrence carrier stamping | `compose/build` consuming descriptors and retained cursor sources | PyYAML and concrete loader implementation |

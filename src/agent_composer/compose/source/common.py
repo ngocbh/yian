@@ -63,6 +63,25 @@ OccurrencePath: TypeAlias = tuple[_MapStep | _SeqStep, ...]
 
 
 @dataclass(frozen=True, slots=True)
+class ScalarSource:
+    """Source provenance for one unchanged constructed string scalar.
+
+    Attributes:
+        range (`SourceRange`):
+            Whole authored scalar range used when exact line selection is
+            unavailable.
+        constructed_line_ranges (`tuple[SourceRange, ...] | None`):
+            Zero-based ranges of constructed line contents for a literal block
+            scalar. ``None`` means the scalar has physical source but its
+            constructed lines cannot be selected exactly; ``()`` means an
+            exactly mapped scalar with no constructed lines.
+    """
+
+    range: SourceRange
+    constructed_line_ranges: tuple[SourceRange, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
 class _PathLink:
     """One lazily materialized occurrence-path link."""
 
@@ -141,6 +160,7 @@ class _ScalarDef:
     value: Any = field(repr=False, compare=False)
     range: SourceRange | None
     raw: str | None
+    constructed_line_ranges: tuple[SourceRange, ...] | None
 
 
 @dataclass(frozen=True, slots=True)

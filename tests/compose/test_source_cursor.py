@@ -1,6 +1,7 @@
 """Tests for immutable, occurrence-aware YAML source cursors."""
 
 from collections.abc import Mapping, Sequence, Set
+from dataclasses import FrozenInstanceError
 from datetime import date, datetime, timedelta, timezone, tzinfo
 
 import pytest
@@ -1057,3 +1058,228 @@ def test_projected_mutation_cannot_change_overlay():
 
     assert projected.value == {"source": {"nested": [1]}}
     assert base.value == {"source": "original"}
+
+
+def test_scalar_source_view_is_public_and_immutable():
+    from agent_composer.compose.source import ScalarSource
+
+    cursor = SourceDocument.parse("code: |-\n  first\n").root.child("code")
+
+    source = cursor.scalar_source
+
+    assert isinstance(source, ScalarSource)
+    assert source.range == cursor.range
+    assert source.constructed_line_ranges == (
+        SourceRange(2, 3, 2, 8),
+    )
+    with pytest.raises(FrozenInstanceError):
+        source.range = None
+
+
+@pytest.mark.parametrize(
+    ("text", "value", "expected_ranges"),
+    [
+        (
+            "code: |\n  alpha\n  beta\n",
+            "alpha\nbeta\n",
+            (
+                SourceRange(2, 3, 2, 8),
+                SourceRange(3, 3, 3, 7),
+            ),
+        ),
+        (
+            "code: |-\n  alpha\n  beta\n",
+            "alpha\nbeta",
+            (
+                SourceRange(2, 3, 2, 8),
+                SourceRange(3, 3, 3, 7),
+            ),
+        ),
+        (
+            "code: |+\n  alpha\n  beta\n\n\n",
+            "alpha\nbeta\n\n\n",
+            (
+                SourceRange(2, 3, 2, 8),
+                SourceRange(3, 3, 3, 7),
+                SourceRange(4, 1, 4, 1),
+                SourceRange(5, 1, 5, 1),
+            ),
+        ),
+    ],
+    ids=["clip", "strip", "keep"],
+)
+def test_scalar_source_literal_chomping_maps_constructed_lines(
+    text,
+    value,
+    expected_ranges,
+):
+    cursor = SourceDocument.parse(text).root.child("code")
+
+    source = cursor.scalar_source
+
+    assert cursor.value == value
+    assert source is not None
+    assert source.range == cursor.range
+    assert source.constructed_line_ranges == expected_ranges
+
+
+def test_scalar_source_explicit_indent_keeps_constructed_leading_spaces():
+    cursor = SourceDocument.parse(
+        "code: |2-\n"
+        "    first\n"
+        "      second\n"
+    ).root.child("code")
+
+    source = cursor.scalar_source
+
+    assert cursor.value == "  first\n    second"
+    assert source is not None
+    assert source.constructed_line_ranges == (
+        SourceRange(2, 3, 2, 10),
+        SourceRange(3, 3, 3, 13),
+    )
+
+
+def test_scalar_source_maps_leading_interior_and_trailing_blank_lines():
+    cursor = SourceDocument.parse(
+        "code: |+\n"
+        "\n"
+        "  first\n"
+        "  \n"
+        "  second\n"
+        "\n"
+    ).root.child("code")
+
+    source = cursor.scalar_source
+
+    assert cursor.value == "\nfirst\n\nsecond\n\n"
+    assert source is not None
+    assert source.constructed_line_ranges == (
+        SourceRange(2, 1, 2, 1),
+        SourceRange(3, 3, 3, 8),
+        SourceRange(4, 3, 4, 3),
+        SourceRange(5, 3, 5, 9),
+        SourceRange(6, 1, 6, 1),
+    )
+
+
+def test_scalar_source_normalizes_crlf_without_losing_physical_lines():
+    cursor = SourceDocument.parse(
+        "code: |-\r\n"
+        "  first\r\n"
+        "  second\r\n"
+    ).root.child("code")
+
+    source = cursor.scalar_source
+
+    assert cursor.value == "first\nsecond"
+    assert source is not None
+    assert source.constructed_line_ranges == (
+        SourceRange(2, 3, 2, 8),
+        SourceRange(3, 3, 3, 9),
+    )
+
+
+def test_scalar_source_uses_literal_token_after_anchored_tagged_header():
+    cursor = SourceDocument.parse(
+        "code: &shared # fake | indicator\n"
+        "  !!str |-\n"
+        "    first\n"
+    ).root.child("code")
+
+    source = cursor.scalar_source
+
+    assert cursor.value == "first"
+    assert source is not None
+    assert source.constructed_line_ranges == (
+        SourceRange(3, 5, 3, 10),
+    )
+
+
+def test_scalar_source_maps_literal_content_at_eof():
+    cursor = SourceDocument.parse("code: |-\n  final").root.child("code")
+
+    source = cursor.scalar_source
+
+    assert cursor.value == "final"
+    assert source is not None
+    assert source.constructed_line_ranges == (
+        SourceRange(2, 3, 2, 8),
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "value", "expected_ranges"),
+    [
+        ("code: |\n", "", ()),
+        ("code: |-\n", "", ()),
+        ("code: |+\n", "", ()),
+        ("code: |", "", ()),
+        ("code: |-", "", ()),
+        ("code: |+", "", ()),
+        (
+            "code: |+\n\n\n",
+            "\n\n",
+            (
+                SourceRange(2, 1, 2, 1),
+                SourceRange(3, 1, 3, 1),
+            ),
+        ),
+    ],
+    ids=[
+        "clip",
+        "strip",
+        "keep",
+        "clip-at-eof",
+        "strip-at-eof",
+        "keep-at-eof",
+        "kept-blank-lines",
+    ],
+)
+def test_scalar_source_empty_literals_have_exact_line_cardinality(
+    text,
+    value,
+    expected_ranges,
+):
+    cursor = SourceDocument.parse(text).root.child("code")
+
+    source = cursor.scalar_source
+
+    assert cursor.value == value
+    assert source is not None
+    assert source.constructed_line_ranges == expected_ranges
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "code: >-\n  first\n  second\n",
+        'code: "first\\nsecond"\n',
+        "code: first\n  second\n",
+    ],
+    ids=["folded", "quoted", "plain"],
+)
+def test_scalar_source_nonliteral_multiline_uses_whole_range_fallback(text):
+    cursor = SourceDocument.parse(text).root.child("code")
+
+    source = cursor.scalar_source
+
+    assert source is not None
+    assert source.range == cursor.range
+    assert source.constructed_line_ranges is None
+
+
+def test_scalar_source_projection_requires_the_constructed_value_to_be_unchanged():
+    cursor = SourceDocument.parse("code: |-\n  first\n  second\n").root.child(
+        "code"
+    )
+
+    unchanged = cursor.with_value("first\nsecond")
+    changed = cursor.with_value("first\nchanged")
+
+    assert unchanged.scalar_source == cursor.scalar_source
+    assert changed.scalar_source is None
+
+
+def test_scalar_source_virtual_string_has_no_provenance():
+    assert SourceCursor.virtual("first\nsecond").scalar_source is None

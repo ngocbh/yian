@@ -25,7 +25,35 @@ from agent_composer.nodes.start import StartNode
 START_ID = StartNode.ID
 END_ID = EndNode.ID
 
-__all__ = ["START_ID", "END_ID", "NodeState", "Edge", "FlowOutput", "Flow", "CompiledFlow"]
+__all__ = [
+    "START_ID",
+    "END_ID",
+    "NodeState",
+    "GrowthRejected",
+    "Edge",
+    "FlowOutput",
+    "Flow",
+    "CompiledFlow",
+]
+
+
+class GrowthRejected(Exception):
+    """Mark expected node-produced growth data rejected before durability.
+
+    Compile and runtime raise this contract only around explicit growth-shape or
+    growth-policy rejection. Arbitrary builder, compiler, and host exceptions stay
+    outside it so the dispatcher can preserve their identity.
+
+    Attributes:
+        original (`Exception`): The exact typed rejection used for diagnostic data.
+    """
+
+    def __init__(self, original: Exception) -> None:
+        """Retain the exact growth rejection for semantic failure construction."""
+        if not isinstance(original, Exception):
+            raise TypeError("GrowthRejected original must be an Exception")
+        super().__init__(str(original))
+        self.original = original
 
 
 @dataclass(frozen=True)

@@ -107,18 +107,16 @@ same context. A LOOP respawn instead copies only the driver's outer
 `origin_context`, so the loop's own origin is appended exactly once when the
 next driver builds a failure. Evaluator, dispatcher, and terminal-unreachable
 failure producers remain kind-blind and call the same node-owned rule. Runtime
-results still retain their temporary `SourceSpan` locator and concrete range, but
-the CLI no longer reads that bridge: runtime and load failures both reach the same
+results expose only the canonical `Failure`; runtime and load failures both reach the same
 `render_diagnostic()` through `ComposedFlow.diagnose()`. Missing or broken source
 resolution therefore stays unlocated instead of falling through to runtime-id or
-graph inference. Temporary runtime locator/range values remain compatibility
-metadata only; they are not an alternative origin-resolution API.
+graph inference.
 
 The closed codes are `binding.evaluate`, `contract.input`, `assertion.failed`,
 `node.execute`, `contract.node_result`, `contract.output`, `contract.route`,
 `contract.growth`, and `graph.terminal_unreachable`. They cover expected
-flow-owned rejection. `EvaluationFailure` owns one `Failure` plus temporary
-locator/range presentation metadata. The evaluator assigns its first five codes by
+flow-owned rejection. `EvaluationFailure` owns exactly one `Failure`. The evaluator
+assigns its first five codes by
 operation stage: expression/default/required binding, supplied-input contracts,
 base-wrapper assertions, node execution, and result validation. Each producer
 passes its best operation origin, if any, through `Node.failure_trace()`; the
@@ -138,14 +136,13 @@ supplies a local origin. Unsupported growth kinds and arbitrary builder, compile
 spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
 faults escape rather than becoming flow failures.
 
-At the schema-2 boundary, every trace item becomes an exact base
+At the schema-3 boundary, every trace item becomes an exact base
 `OriginRef(key)`: front-end-specific subclasses are valid in memory, but class
 identity is intentionally absent from the single-key wire. The reducer carries
 that canonical immutable `Failure` through `NodeFailed`, terminal `RunFailed`,
 and `RunResult.failure` without flattened aliases; live carriers share the same
-object, while recovery reconstructs an equal canonical value. `locator` and
-`range` remain adjacent temporary YAML presentation metadata until operation
-origins provide equivalent precision. A route that first skip-floods END latches
+object, while recovery reconstructs an equal canonical value. A route that first
+skip-floods END latches
 `graph.terminal_unreachable` with the causal router and its `failure_trace()`. That
 `NodeRoutedRecord` persists the derived failure; replay structurally revalidates
 the route and restores the recorded value, including its complete trace, even if
@@ -235,7 +232,7 @@ unchanged.
 YAML remains raw text until the inline-call pass crosses each flow assertion into
 one carrier; node-local validation creates one fresh carrier per authored
 occurrence. Compose indexes those occurrences by source order and derives both
-the carrier's opaque `OriginRef` and its temporary positional `SourceRange` from the
+the carrier's opaque `OriginRef` and its legacy aligned `SourceRange` from the
 same retained item cursor, so equal assertion text at two positions remains two
 distinct sites. Flow carrierization preserves an explicit programmatic origin
 instead of replacing it. Inline-call desugaring and flow/CALL lowering replace only
@@ -244,7 +241,7 @@ instead of replacing it. Inline-call desugaring and flow/CALL lowering replace o
 the lowered flow carriers.
 `Node.run` evaluates the expression and reports the display text. Manifests
 include expression, display, order, and duplicate count, while excluding origin
-and the temporary positional range bridge.
+and the legacy aligned range metadata, which runtime ignores.
 
 `Node.params` has one compiled shape too: an ordered list of exact `Parameter`
 carriers (or `None` for a directly constructed no-input node). The flow still owns each
@@ -502,7 +499,7 @@ targets, and floods the target's outgoing edges.
 Failure is a `raise`, not another result variant. `eval_node` structurally turns
 expected binding, assertion, body, and result rejection into
 `EvaluationFailure(Failure)`. Result preparation constructs the same canonical
-value for expected output, route, and growth rejection. Schema 2 carries that
+value for expected output, route, and growth rejection. Schema 3 carries that
 value unchanged through the durable record, reducer, observer events, and public
 result. Host control, stream callbacks, unexpected binder faults, malformed
 setup, and arbitrary host/compiler faults escape. A streaming kind may yield
@@ -533,9 +530,9 @@ RunStartedRecord | RunResumedRecord | NodeStartedRecord |
 NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord
 ```
 
-The exact wire version is schema 2. `NodeFailedRecord` contains one nested
-`Failure` plus temporary locator/range compatibility metadata; schema 1 is rejected rather
-than migrated. Terminal success remains derived from the END value. The first
+The exact wire version is schema 3. `NodeFailedRecord` contains exactly one nested
+`Failure`; earlier schemas are rejected rather than migrated. Terminal success
+remains derived from the END value. The first
 route whose skip closure reaches END persists its causal `Failure` on that
 `NodeRoutedRecord`; replay revalidates the route before restoring it, and no
 additional terminal record is written.

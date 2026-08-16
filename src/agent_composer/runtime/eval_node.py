@@ -28,11 +28,11 @@ import inspect
 import threading
 import traceback as _tb
 from collections.abc import Callable, Generator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, TypeAlias
 
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
-from agent_composer.events import SourceRange, SourceSpan, StreamChunk
+from agent_composer.events import StreamChunk
 from agent_composer.nodes.base import (
     Grow,
     Node,
@@ -52,13 +52,10 @@ from agent_composer.typesys.pool import VariablePool
 class EvaluationFailure:
     """One raw node-evaluation failure for durable dispatcher preparation.
 
-    ``failure`` is the sole semantic and presentation authority. ``locator`` and
-    ``range`` retain temporary compatibility metadata pending removal.
+    ``failure`` is the sole semantic and presentation authority.
     """
 
     failure: Failure
-    locator: SourceSpan | None = None
-    range: SourceRange | None = None
 
 
 def _evaluation_failure(
@@ -69,13 +66,7 @@ def _evaluation_failure(
     origin: OriginRef | None = None,
     traceback_text: str | None = None,
 ) -> EvaluationFailure:
-    """Build one semantic failure plus temporary compatibility metadata."""
-    locator = getattr(exception, "locator", None)
-    if locator is not None and locator.node is None:
-        locator = replace(locator, node=node.id)
-    range_ = getattr(exception, "range", None)
-    if range_ is None and locator is not None:
-        range_ = node.field_ranges.get((locator.kind, locator.key))
+    """Build one semantic failure with its canonical opaque origin trace."""
     return EvaluationFailure(
         failure=Failure(
             code=code,
@@ -85,8 +76,6 @@ def _evaluation_failure(
             cause_type=type(exception).__name__,
             traceback=(traceback_text if traceback_text is not None else _tb.format_exc()),
         ),
-        locator=locator,
-        range=range_,
     )
 
 

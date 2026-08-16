@@ -290,16 +290,16 @@ def test_runtime_error_gallery(filename, inputs, substr):
     assert substr in result.failure.message
 
 
-def test_flow_input_type_failure_carries_range():
-    # e08: `window` is declared `int` on line 20; a non-coercible run value fails the boundary
-    # type check. The flow-level RunFailed/RunResult carries a concrete `range` boxing the
-    # failing input decl line (resolved from the StartNode's per-input-decl field_ranges).
+def test_flow_input_type_failure_origin_resolves_to_declaration():
+    # e08: `window` is declared `int` on line 20; its contract origin resolves there after
+    # execution without a parallel runtime coordinate.
+    loaded = load_flow((_ERRORS / "e08-input-type-mismatch.yaml").read_text())
     result = run_flow(
-        load_flow((_ERRORS / "e08-input-type-mismatch.yaml").read_text()),
+        loaded,
         {"topic": "X", "window": "soon"},
     )
     assert result.status == "failed"
-    assert result.range is not None and result.range.start_line == 20
+    assert loaded.diagnose(result.failure).frames[-1].range.start_line == 20
 
 
 def test_invalid_authored_default_carries_input_range():
@@ -323,17 +323,15 @@ output: ${echo.output}
     assert _only_error_range(caught.value).start_line == 4
 
 
-def test_false_boundary_assert_carries_range():
-    # e18: the flow-level `asserts:` item `input.window > 0` is on line 15; window <= 0 makes it
-    # false before any node runs. The RunResult carries a concrete `range` boxing that assert
-    # line — resolved BY POSITION off the StartNode's `pre_assert_ranges` (asserts are not in
-    # `field_ranges`: identical assert text is not a unique key, so they are located by index).
+def test_false_boundary_assert_origin_resolves_to_assertion():
+    # e18: the flow-level `asserts:` item is on line 15; its occurrence origin resolves there.
+    loaded = load_flow((_ERRORS / "e18-false-boundary-assert.yaml").read_text())
     result = run_flow(
-        load_flow((_ERRORS / "e18-false-boundary-assert.yaml").read_text()),
+        loaded,
         {"window": -5},
     )
     assert result.status == "failed"
-    assert result.range is not None and result.range.start_line == 15
+    assert loaded.diagnose(result.failure).frames[-1].range.start_line == 15
 
 
 def test_bad_input_ref_locates_the_offending_entry():
@@ -378,10 +376,10 @@ def test_duplicate_asserts_caret_at_first_occurrence():
     # e34 (#88 case 1): two IDENTICAL post-asserts on lines 12 and 13; both fail (output is 1, not
     # < 0). Asserts are located BY POSITION, so the caret points at the FIRST occurrence (line 12) —
     # the old text-keyed field_ranges collapsed identical items last-wins and would box line 13.
-    result = run_flow(load_flow((_ERRORS / "e34-dup-assert.yaml").read_text()), {})
+    loaded = load_flow((_ERRORS / "e34-dup-assert.yaml").read_text())
+    result = run_flow(loaded, {})
     assert result.status == "failed"
-    assert result.locator is not None and result.locator.kind == "assert"
-    assert result.range is not None and result.range.start_line == 12
+    assert loaded.diagnose(result.failure).frames[-1].range.start_line == 12
 
 
 def test_input_named_like_a_field_does_not_collide():
@@ -430,24 +428,15 @@ def test_agent_controls_field_is_retired_and_located():
     assert _only_error_range(err).start_line == 14
 
 
-def test_structured_output_legacy_range_is_none_but_origin_is_exact():
-    # The temporary locator remains whole-field and its singular/plural range lookup
-    # misses. Canonical diagnosis independently selects the exact failing contract path.
+def test_structured_output_origin_is_exact():
+    # Canonical diagnosis selects the exact failing contract path without runtime coordinates.
     flow = _ERRORS / "e41-structured-output-no-range.yaml"
     loaded = load_flow(flow.read_text(), source_label=flow.name)
     result = run_flow(loaded, {})
     assert result.status == "failed"
     assert "does not match declared type int" in result.failure.message
     assert "score" not in result.failure.message  # the failing field is never named
-    assert result.locator is not None
-    assert result.locator.kind == "field" and result.locator.key == "output"  # not `score`
-    assert result.range is None  # temporary singular/plural compatibility drift
-    assert loaded.diagnose(result.failure).frames[-1].range.start_line == 35
-
-    # The range the legacy funnel would need is present under the plural key.
-    node = loaded.compiled.nodes["calc"]
-    assert node.field_ranges.get(("field", "output")) is None      # what the funnel asks for
-    assert node.field_ranges.get(("field", "outputs")) is not None  # what is actually stored
+    assert loaded.diagnose(result.failure).frames[-1].range.start_line == 13
 
 
 def test_synth_node_locates_at_its_call_directive_line():

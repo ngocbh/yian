@@ -10,7 +10,7 @@
 # FIXED (#106): the CASE desugar captures each `cases[N].when` range (positionally) at parse and
 # stamps `("input","__rN")` -> that range, plus a `cases[N].when` LABEL, onto the built node. So the
 # ref-scan resolves the caret to L36 and names the author's construct instead of the synthetic
-# local. The STAMP (a recorded range) and the LOCATOR (what the failure says) finally meet.
+# local. The recorded range and author-facing error label remain aligned.
 #
 # (A CASE node also has no `inputs:` field — its keys are `cases`/`else`/`on` — so the block-range
 # fallback `franges.get(("field","inputs"))` always missed; the per-`__rN` stamp now wins ahead of

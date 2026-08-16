@@ -93,8 +93,8 @@ Hold this model whenever you design anything:
   effective commit target's contract. Missing contract provenance falls back to
   the parameter or executing node, while invalid defaults retain their default
   origin. Non-type output canonicalization uses the contract default. Route and
-  growth use the executing node origin. All paths feed one schema-2
-  `NodeFailedRecord(failure, locator, range)` boundary;
+  growth use the executing node origin. All paths feed one schema-3
+  `NodeFailedRecord(failure)` boundary;
   reducer state, `NodeFailed`, `RunFailed`, and `RunResult.failure` retain that
   same semantic authority without flattened aliases. That durable boundary
   collapses any valid `OriginRef` subclass to exact `OriginRef(key)`, because
@@ -122,7 +122,7 @@ Hold this model whenever you design anything:
   rule without a kind branch. Durable records preserve the complete trace, and
   replay restores it even when current origins were rebased. Runtime CLI failures
   must call `ComposedFlow.diagnose()` and pass its result to the shared diagnostic
-  renderer; never infer source from runtime ids, graph topology, or locator/range.
+  renderer; never infer source from runtime ids or graph topology.
   `ComposedFlow` stores no parallel source snapshot.
 - **Compose load boundary:** `LoadError` carries exactly one already-resolved
   `Diagnostic`. Compose owns the source label/text/range and builds every frame

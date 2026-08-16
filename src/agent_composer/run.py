@@ -33,8 +33,6 @@ from agent_composer.diagnostics import Failure
 from agent_composer.events import (
     RunFailed,
     RunSucceeded,
-    SourceRange,
-    SourceSpan,
     StreamChunk,
 )
 from agent_composer.nodes.binding import coerce_inputs
@@ -69,7 +67,7 @@ class RunResult:
 
     ``events`` contains only observers committed during this invocation.  A
     terminal recovery is therefore silent and returns an empty event list while
-    preserving the original canonical input, output, and failure diagnostics.
+    preserving the original canonical input, output, and semantic failure.
 
     Attributes:
         input (`dict[str, Any]`):
@@ -84,10 +82,6 @@ class RunResult:
             Terminal flow value on success.
         failure (`Failure | None`):
             Canonical terminal failure on failure; otherwise `None`.
-        locator (`SourceSpan | None`):
-            Symbolic source location for a failed flow.
-        range (`SourceRange | None`):
-            Resolved source range for a failed flow.
         events (`list[Any]`):
             Post-durable observers from this fresh or resume segment only.
     """
@@ -98,8 +92,6 @@ class RunResult:
     log: Path | None
     output: Any = None
     failure: Failure | None = None
-    locator: SourceSpan | None = None
-    range: SourceRange | None = None
     events: list[Any] = field(default_factory=list)
 
 
@@ -486,8 +478,6 @@ def _result_from_state(
             run_id=_required_state_run_id(state),
             log=path,
             failure=terminal.failure,
-            locator=terminal.locator,
-            range=terminal.range,
             events=events,
         )
     raise RuntimeError("engine returned without deriving a terminal run result")

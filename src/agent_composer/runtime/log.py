@@ -117,7 +117,7 @@ class NodeExpandedRecord:
 
 @dataclass(frozen=True, slots=True)
 class NodeFailedRecord:
-    """Make a run terminal-failed with the captured node diagnostic."""
+    """Make a run terminal-failed with the captured semantic failure."""
 
     failure: Failure
 

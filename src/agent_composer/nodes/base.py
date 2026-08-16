@@ -9,7 +9,7 @@ inputs (the read boundary) and hands it a record. Narrow effects enter through t
 capabilities: MAP receives `bind_item`, and a cooperatively blocking node may receive
 `stop_event`. Failure is **not** a variant — a
 failing node `raise`s; expected evaluator rejection becomes a canonical
-`EvaluationFailure(Failure)` retained by the schema-2 failure record. A streaming
+`EvaluationFailure(Failure)` retained by the schema-3 failure record. A streaming
 kind is a generator that yields `StreamChunk` and *returns* its `NodeResult` (drained
 by `_drain_node_generator`).
 
@@ -43,23 +43,21 @@ if TYPE_CHECKING:
 
 
 class FieldRanges(dict):
-    """`node.field_ranges` — the render-only `(kind, key) -> SourceRange` map, guarded.
+    """Legacy Compose `(kind, key) -> SourceRange` metadata with guarded keys.
 
     A plain dict whose `get` REFUSES a bare key. The map is keyed by the location's
-    `(SourceSpan.kind, key)` tuple, so a bare-string lookup can never match — it would
-    silently return `None`, and every caller falls back (`or node.range`), turning a typo
-    into a caret that points at the wrong line rather than an error. That silence is what
+    `(kind, key)` tuple, so a bare-string lookup can never match — it would
+    silently return `None`, and Compose validators often fall back (`or node.range`),
+    turning a typo into a caret that points at the wrong line rather than an error. That silence is what
     let two dead lookups survive both review and a green test suite when the map moved from
     string keys to tuples. Refusing the wrong shape makes the mistake loud at the first call.
 
     Keys: `("input", name)` a node or flow-boundary input · `("field", name)` a kind
     field (`code`/`over`/`until`/`inputs`/`env`/...).
-    Asserts are deliberately absent (their text is not a unique identity — they are located
-    by position; see `pre_assert_ranges`).
+    Asserts are deliberately absent because their text is not a unique identity.
 
-    NOTE the type must survive copies: the compose builder's `_finish` rebuilds this onto the
-    runtime node, and copying it into a plain `dict` would silently drop the guard exactly
-    where lookups happen — hence `copy` is overridden too.
+    NOTE the type must survive Compose-side copies: copying it into a plain `dict`
+    would silently drop the guard exactly where validation lookups happen.
 
     Only the SILENT misses are guarded (`get`, `in`) plus `copy` (which would launder the type).
     `fr[key]` needs no guard: a bare key already raises `KeyError` loudly.
@@ -172,14 +170,10 @@ class _HostStop(Exception):
 
 class NodeAssertFailed(Exception):
     """A node-local `asserts:` clause evaluated false (or errored) — raised by a node's own
-    `run()` template around its kind body (including StartNode after coercion). Carries
-    render-only diagnostics so the run boundary can surface a precise caret:
+    `run()` template around its kind body (including StartNode after coercion).
 
-    - `locator` (`Optional[SourceSpan]`): the failing assert's locator (`node`, `kind="assert"`,
-      `key=<display text>`), or `None`.
-    - `range` (`Optional[SourceRange]`): the authored assertion occurrence's YAML range, or `None`.
-    - `assertion` (`Optional[Assertion]`): the exact wrapper-owned assertion carrier, or
-      `None` when the exception was raised outside that wrapper.
+    `assertion` is the exact wrapper-owned semantic carrier, or `None` when the
+    exception was raised outside that wrapper.
 
     Only the base wrapper's structurally marked instance becomes ``assertion.failed``.
     The same exception class raised by node code remains ``node.execute``.
@@ -190,14 +184,10 @@ class NodeAssertFailed(Exception):
         message: str,
         *,
         assertion: Assertion | None = None,
-        locator: Any = None,
-        range: Any = None,
     ) -> None:
-        """Retain the assertion plus legacy locator/range compatibility fields."""
+        """Retain the assertion that classified this wrapper-owned failure."""
         super().__init__(message)
         self.assertion = assertion
-        self.locator = locator
-        self.range = range
 
 
 class _NodeBodyError(Exception):
@@ -379,15 +369,15 @@ class Node(ABC):
         # (e.g. AGENT reads `max_tool_iterations`); unknown keys are carried but ignored. `{}`
         # for a node that declares no `env:` and inherits no flow default.
         self.env: dict[str, Any] = {}
-        # Render-only source-location metadata, populated by the compose builder (never by hand)
-        # and NEVER serialized: run records store no topology objects, so replay rebuilds these
-        # from the authored flow rather than round-tripping them. Purely for diagnostics.
+        # Legacy Compose source-location metadata, populated by the front end and never
+        # serialized. Compose validators still read the named ranges while building; runtime
+        # failure production and presentation use only opaque origins and never read them.
         # `self.range`: this node's own `SourceRange` in the flow YAML (the whole node block); None
         #   for a fake / directly-constructed node with no known source.
         # `self.field_ranges`: `FieldRanges[(kind, key) -> SourceRange]` for the node's individual
         #   authored NAMED sites — a bad input binding (`("input", name)`), a flow input decl
         #   input, or a kind field (`("field", name)`). Keyed by the location's
-        #   `(SourceSpan.kind, key)` so keys across namespaces never collide; a bare-key lookup
+        #   `(kind, key)` so keys across namespaces never collide; a bare-key lookup
         #   raises rather than missing silently (see `FieldRanges`). Asserts are NOT here (their
         #   text is not a unique identity) — they are located by position, below. Empty when no
         #   per-field spans are recorded.
@@ -399,13 +389,10 @@ class Node(ABC):
         #   populated by the desugar that mints the param. Empty for every authored param (the
         #   default label below reproduces the plain `input '<param>'` text).
         self.wiring_labels: dict[str, str] = {}
-        # Positional assert-range lists, aligned 1:1 with `pre_asserts` / `post_asserts` (an entry
-        # is None where no span exists — a spanless / in-memory flow). Populated by the loader:
-        # `validate_node_asserts` splits the descriptor's authored `assert_ranges` in lockstep with
-        # the pre/post classification, and the boundary sets the lowered flow-assert ranges. The
-        # `run` wrapper resolves a failing assert's caret by INDEX here — never by assertion text
-        # — so two identical assert texts get their own distinct carets (Python's model: evaluate in
-        # order, first-failure-wins, located by position). `[]` for a node with no asserts.
+        # Legacy positional assert-range lists, aligned 1:1 with `pre_asserts` /
+        # `post_asserts`. The loader and expansion paths still preserve them, but the run
+        # wrapper uses each Assertion.origin and never reads these ranges. `[]` for a node
+        # with no asserts.
         self.pre_assert_ranges: list[Optional["SourceRange"]] = []
         self.post_assert_ranges: list[Optional["SourceRange"]] = []
 
@@ -601,8 +588,6 @@ class Node(ABC):
         are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
         Expected rejection is a `raise`, not a result variant; the evaluator classifies
         its structural stage before the dispatcher records the canonical `Failure`."""
-        from agent_composer.events import SourceSpan
-
         params = self.params if self.params is not None else []
         if type(params) is not list:
             raise TypeError(
@@ -621,22 +606,20 @@ class Node(ABC):
                 raise
             raise _BindingStageError(exc) from exc
         self.validate_execution_setup()
-        # Fire pre-asserts IN ORDER, first-failure-wins, and locate the failure BY POSITION:
-        # the failing assert's own `SourceRange` is `pre_assert_ranges[i]`, not a lookup keyed by
-        # assertion text — so two identical asserts get distinct carets. The range list is
-        # aligned 1:1 with `pre_asserts`; a shorter list (spanless flow) or a None entry -> no range.
-        bad_i = next(
-            (i for i, a in enumerate(self.pre_asserts)
-             if not self._assert_holds(a.expression, inputs)), None
+        # Fire pre-asserts IN ORDER, first-failure-wins. The assertion carrier supplies the
+        # canonical operation origin used by the evaluator's failure trace.
+        bad = next(
+            (
+                assertion
+                for assertion in self.pre_asserts
+                if not self._assert_holds(assertion.expression, inputs)
+            ),
+            None,
         )
-        if bad_i is not None:
-            bad = self.pre_asserts[bad_i]
-            rng = self.pre_assert_ranges[bad_i] if bad_i < len(self.pre_assert_ranges) else None
+        if bad is not None:
             failure = NodeAssertFailed(
                 f"node {self.id!r} pre-assert failed: {bad.display}",
                 assertion=bad,
-                locator=SourceSpan(self.id, "assert", bad.display),
-                range=rng,
             )
             if classify_body_errors:
                 try:
@@ -664,18 +647,18 @@ class Node(ABC):
         # returns a generator today.
         if isinstance(result, Output) and self.post_asserts:
             post_record = {**post_input, "output": result.value}
-            bad_i = next(
-                (i for i, a in enumerate(self.post_asserts)
-                 if not self._assert_holds(a.expression, post_record)), None
+            bad = next(
+                (
+                    assertion
+                    for assertion in self.post_asserts
+                    if not self._assert_holds(assertion.expression, post_record)
+                ),
+                None,
             )
-            if bad_i is not None:
-                bad = self.post_asserts[bad_i]
-                rng = self.post_assert_ranges[bad_i] if bad_i < len(self.post_assert_ranges) else None
+            if bad is not None:
                 failure = NodeAssertFailed(
                     f"node {self.id!r} post-assert failed: {bad.display}",
                     assertion=bad,
-                    locator=SourceSpan(self.id, "assert", bad.display),
-                    range=rng,
                 )
                 if classify_body_errors:
                     try:

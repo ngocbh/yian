@@ -31,8 +31,8 @@ class StartNode(Node):
         params (`list[Parameter]`, *optional*, defaults to `None`):
             The flow's canonical semantic input signature.
         field_ranges (`dict`, *optional*, defaults to `None`):
-            Render-only named boundary field ranges used to locate input declaration failures.
-            Flow assertions use the separate positional range bridge. `None` for a spanless flow.
+            Legacy Compose-owned input declaration ranges. Runtime diagnosis uses
+            parameter origins. `None` for a spanless flow.
         title (`str`, *optional*, defaults to `None`):
             Display title.
     """
@@ -67,13 +67,9 @@ class StartNode(Node):
                     f"got {type(parameter).__name__}"
                 )
         self.params = parameters
-        # Render-only per-boundary-field source ranges: the flow's `input:` decls, keyed
-        # `("input", name)` like every other named site. The loader stamps these so binding can
-        # attach a precise `range` to a boundary type failure — the flow-boundary twin of a body
-        # node's per-field ranges. Empty for a spanless / in-memory flow. (Flow-level `asserts:`
-        # are NOT here: their text is not a unique identity, so they are located by position via
-        # `pre_assert_ranges`/`post_assert_ranges`.) Rewrapped as `FieldRanges` so the bare-key
-        # guard survives a caller passing a plain dict.
+        # Legacy Compose-owned per-boundary-field ranges, keyed `("input", name)`.
+        # Runtime diagnosis resolves the matching Parameter origin and never reads this map.
+        # Rewrapped as `FieldRanges` while the compatibility metadata remains.
         if field_ranges:
             self.field_ranges = FieldRanges(field_ranges)
     def _run_impl(self, inputs: dict) -> Output:

@@ -28,8 +28,6 @@ from agent_composer.events import (
     NodeSucceeded,
     RunFailed,
     RunSucceeded,
-    SourceRange,
-    SourceSpan,
 )
 from agent_composer.nodes.base import Grow, Node, NodeKind
 from agent_composer.nodes.code import CodeNode
@@ -2595,36 +2593,20 @@ def test_failure_is_terminal_and_preserves_diagnostics():
         cause_type="NodeAssertFailed",
         traceback="Traceback (most recent call last):\n  boom",
     )
-    locator = SourceSpan(node="failing", kind="assert", key="${value > 0}")
-    source_range = SourceRange(
-        start_line=11,
-        start_col=7,
-        end_line=11,
-        end_col=19,
-    )
     pool_before = encode_pool(state.pool)
     edges_before = dict(state.edge_state)
     ready_before = tuple(state.ready)
     sequence_before = state.next_sequence
 
-    prepared = prepare_node_failed(
-        state,
-        failure,
-        locator=locator,
-        range=source_range,
-    )
+    prepared = prepare_node_failed(state, failure)
 
-    expected_record = NodeFailedRecord(
-        failure=failure,
-        locator=locator,
-        range=source_range,
-    )
+    expected_record = NodeFailedRecord(failure=failure)
     authority = prepared.record.failure
-    expected_result = RunFailed(authority, locator=locator, range=source_range)
+    expected_result = RunFailed(authority)
     assert prepared.record == expected_record
-    assert prepared._plan.delta.failure is authority
+    assert prepared._plan.failure is authority
     assert prepared.observers == (
-        NodeFailed(authority, locator=locator, range=source_range),
+        NodeFailed(authority),
         expected_result,
     )
     assert prepared.observers[0].failure is authority
@@ -2637,7 +2619,7 @@ def test_failure_is_terminal_and_preserves_diagnostics():
     observers = commit_prepared(log, state, prepared)
 
     assert observers == (
-        NodeFailed(authority, locator=locator, range=source_range),
+        NodeFailed(authority),
         expected_result,
     )
     assert state.result == expected_result
@@ -2671,7 +2653,7 @@ def test_failure_transition_canonicalizes_origin_subclass_for_wire():
 
     assert failure.trace == (OriginRef("special-failure-site"),)
     assert type(failure.trace[0]) is OriginRef
-    assert failure is prepared._plan.delta.failure
+    assert failure is prepared._plan.failure
     assert prepared.observers[0].failure is failure
     assert prepared.observers[1].failure is failure
 
@@ -2696,8 +2678,6 @@ def test_failure_record_replay_reconstructs_identical_state():
                 cause_type="ValueError",
                 traceback="trace",
             ),
-            locator=SourceSpan(node="failing", kind="field", key="code"),
-            range=SourceRange(4, 3, 5, 1),
         ),
     )
     records = tuple(envelope.record for envelope in live_log)
@@ -2749,12 +2729,6 @@ def test_failure_requires_exact_diagnostic_carriers_before_append():
             state,
             Failure("node.execute", "boom", None),
         ),
-        lambda: prepare_node_failed(state, _node_failure("failing"), locator={}),
-        lambda: prepare_node_failed(
-            state,
-            _node_failure("failing"),
-            range=(1, 1, 1, 2),
-        ),
     )
     before = _state_snapshot(state)
 
@@ -2805,15 +2779,14 @@ def test_failure_requires_initialized_nonterminal_unknown_state():
     assert _state_snapshot(state) == before
 
 
-def test_failure_replay_rejects_noncanonical_diagnostic_carriers():
+def test_failure_replay_rejects_a_non_failure_authority():
     state, log = _failure_in_flight()
     before = _state_snapshot(state)
     record = NodeFailedRecord(
-        failure=_node_failure("failing"),
-        locator={"node": "failing", "kind": "field", "key": "code"},  # type: ignore[arg-type]
+        failure=object(),  # type: ignore[arg-type]
     )
 
-    with pytest.raises(TypeError, match="locator"):
+    with pytest.raises(TypeError, match="failure"):
         prepare_record(state, record)
 
     assert _state_snapshot(state) == before

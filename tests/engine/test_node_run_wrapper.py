@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from agent_composer.diagnostics import OriginRef, SourceRange
+from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import (
     Node,
     NodeAssertFailed,
@@ -89,15 +89,17 @@ def test_post_assert_failure_on_output_raises():
 def test_assertion_evaluates_expression_and_reports_display():
     """Display text is presentation-only; it is neither parsed nor evaluated."""
     node = _ImplNode("n", value=None)
-    node.pre_asserts = [
-        Assertion("${__assert_calc} > 100", "authored text that is not an expression")
-    ]
+    assertion = Assertion(
+        "${__assert_calc} > 100",
+        "authored text that is not an expression",
+    )
+    node.pre_asserts = [assertion]
 
     with pytest.raises(NodeAssertFailed) as excinfo:
         node.run({"__assert_calc": 5})
 
     assert "authored text that is not an expression" in str(excinfo.value)
-    assert excinfo.value.locator.key == "authored text that is not an expression"
+    assert excinfo.value.assertion is assertion
 
 
 def test_assertion_display_is_not_evaluated_when_expression_holds():
@@ -108,19 +110,17 @@ def test_assertion_display_is_not_evaluated_when_expression_holds():
     assert node.run({"x": 1}) == Output(None)
 
 
-def test_duplicate_assertions_fail_at_the_first_occurrence_range():
-    """Equal carrier values retain list-order and positional first-failure semantics."""
+def test_duplicate_assertions_retain_first_occurrence_origin():
+    """Equal text retains list order and the first authored semantic origin."""
     node = _ImplNode("n", value=None)
-    assertion = Assertion("1 == 2", "must hold")
-    first = SourceRange(4, 7, 4, 18)
-    second = SourceRange(5, 7, 5, 18)
-    node.pre_asserts = [assertion, assertion]
-    node.pre_assert_ranges = [first, second]
+    first = Assertion("1 == 2", "must hold", OriginRef("assert:first"))
+    second = Assertion("1 == 2", "must hold", OriginRef("assert:second"))
+    node.pre_asserts = [first, second]
 
     with pytest.raises(NodeAssertFailed) as caught:
         node.run({})
 
-    assert caught.value.range == first
+    assert caught.value.assertion is first
 
 
 # The inherited base

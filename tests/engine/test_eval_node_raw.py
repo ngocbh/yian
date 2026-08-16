@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_composer.events import SourceRange, SourceSpan, StreamChunk
+from agent_composer.events import StreamChunk
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import (
     Grow,
@@ -105,23 +105,15 @@ def test_raw_failure_is_frozen_slotted_and_preserves_diagnostics():
     node = FuncNode("work", lambda inputs: inputs)
     node.params = [Parameter(name="required", required=True)]
     node._wiring_src = {}
-    expected_range = SourceRange(7, 5, 7, 13)
-    node.field_ranges[("input", "required")] = expected_range
 
     result = _raw(node)
 
     assert isinstance(result, EvaluationFailure)
     assert result.failure.node_id == "work"
     assert result.failure.cause_type == "BindingError"
-    assert result.locator == SourceSpan("work", "input", "required")
-    assert result.range == expected_range
     assert result.failure.traceback is not None
     assert "BindingError" in result.failure.traceback
-    assert [field.name for field in fields(EvaluationFailure)] == [
-        "failure",
-        "locator",
-        "range",
-    ]
+    assert [field.name for field in fields(EvaluationFailure)] == ["failure"]
     assert not any(
         hasattr(result, alias)
         for alias in ("node_id", "error", "error_type", "traceback")

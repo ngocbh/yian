@@ -159,8 +159,7 @@ spawner kind means setting traits on its node; the core never gains a branch. De
 
 Node evaluation may raise (a failed assert, a bad LLM response); the engine catches the
 exception at the evaluation boundary. The dispatcher then prepares and commits a
-schema-2 `NodeFailedRecord` carrying one nested, immutable `Failure` plus temporary
-source `locator`/`range` presentation metadata. Only after the record is appended
+schema-3 `NodeFailedRecord` carrying one nested, immutable `Failure`. Only after the record is appended
 does the reducer expose that same `Failure` through `NodeFailed`, terminal
 `RunFailed`, and `RunResult.failure`. There are no flattened error, type, node, or
 traceback aliases. The single-key wire canonicalizes any valid front-end
@@ -181,8 +180,7 @@ to that context; it omits only an absent local suffix and preserves order and
 duplicates. Evaluator, dispatcher, and terminal-unreachable failure producers
 all use this node-owned rule without a kind branch. Durable replay restores the
 recorded complete trace even when the current graph carries rebased origins.
-Runtime results retain temporary locator/range fields for the remaining cleanup,
-but the CLI ignores them: it renders `loaded.diagnose(result.failure)` through the
+The CLI renders `loaded.diagnose(result.failure)` through the
 same `render_diagnostic` path used for load failures. Failed presentation remains
 unlocated rather than triggering runtime-id or graph inference.
 

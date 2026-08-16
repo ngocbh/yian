@@ -1,14 +1,14 @@
 """Unit tests for the `FieldRanges` bare-key guard (#101).
 
-`node.field_ranges` is keyed by the location's `(SourceSpan.kind, key)` tuple. A bare-string
-lookup can therefore never match — and because every caller falls back (`or node.range`), it
-degrades to a caret on the wrong line instead of raising. That silence is what let two dead
+`node.field_ranges` is keyed by a `(kind, key)` tuple. A bare-string lookup can
+therefore never match — and because Compose validators often fall back (`or node.range`),
+it degrades to a caret on the wrong line instead of raising. That silence is what let two dead
 lookups survive both review and a fully green suite when #98 moved the map from string keys to
 tuples. `FieldRanges.get` refuses the wrong key shape so the mistake is loud at the first call.
 
 The type must also survive the copies: the descriptor stamps ranges at parse, and the compose
-builder's `_finish` rebuilds them onto the runtime node — which is where the lookups actually
-happen. Copying into a plain `dict` anywhere along that path would silently drop the guard
+builder's `_finish` rebuilds them onto the semantic node used by later Compose validators.
+Copying into a plain `dict` anywhere along that path would silently drop the guard
 exactly where it earns its keep, so `test_guard_survives_build` pins the end of that chain.
 """
 

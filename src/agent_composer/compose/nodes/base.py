@@ -436,15 +436,14 @@ class NodeDescriptor:
         """Stamp parse metadata onto a freshly-built `node` and wrap it in a `BuildResult`.
 
         The tail helper every `build` ends with — the ONE place source metadata stamps live, so
-        they cannot drift across the per-kind builds: copies this descriptor's opaque `origin`,
-        `range`, and a COPY of its `field_ranges` onto the runtime node (so diagnostics after
-        build still resolve to the source), then returns the `BuildResult(node, wiring, edges)`.
+        they cannot drift across the per-kind builds: copies this descriptor's opaque `origin`
+        plus its legacy Compose range metadata onto the semantic node, then returns the
+        `BuildResult(node, wiring, edges)`. Runtime diagnosis consumes only the origin trace.
         `edges` defaults to `()` (leaf/call/loop own no edges); `case` passes its data+control
         edges.
 
-        The copy is a `FieldRanges`, not a plain `dict` — the runtime node is where the lookups
-        actually happen, so copying into a bare dict would drop the bare-key guard precisely
-        where it earns its keep."""
+        The compatibility copy remains a `FieldRanges`, not a plain `dict`, so existing
+        Compose-side tuple-key checks remain explicit while the metadata still exists."""
         if self.origin is not None and not isinstance(self.origin, OriginRef):
             raise TypeError("node descriptor origin must be an OriginRef or None")
         node.origin = self.origin

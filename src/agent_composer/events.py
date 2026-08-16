@@ -15,38 +15,13 @@ low-level observer module separate from the serialized record vocabulary in
 """
 
 from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
-from agent_composer.diagnostics import Failure, SourceRange
+from agent_composer.diagnostics import Failure, SourceRange as _SourceRange
 
-# --------------------------------------------------------------------------- #
-# Temporary source-location compatibility metadata
-# --------------------------------------------------------------------------- #
-
-
-@dataclass(frozen=True)
-class SourceSpan:
-    """A legacy pointer to a sub-location in a flow's YAML.
-
-    Produced at the site a runtime failure originates from (binding knows the input
-    key; an assert carries its author-facing display) and retained beside the
-    canonical `Failure` for compatibility. Presentation resolves `Failure.trace`
-    instead.
-
-    Attributes:
-        node (`str | None`):
-            The node id the failure belongs to; `None` for a flow-level location
-            (a boundary/post assert, a flow input).
-        kind (`Literal["input", "assert", "field"]`):
-            Symbolic family: an input parameter, assertion display, or node field.
-        key (`str`):
-            The discriminator within that family — the input name, the assertion's
-            stable display text, or the field name.
-    """
-
-    node: Optional[str]
-    kind: Literal["input", "assert", "field"]
-    key: str
+# Compose still imports this source-neutral value through the observer module while
+# semantic-node source metadata is being moved fully behind the front-end boundary.
+SourceRange = _SourceRange
 
 
 # --------------------------------------------------------------------------- #
@@ -104,13 +79,9 @@ class NodeSkipped:
 
 @dataclass
 class NodeFailed:
-    """A node failed with one canonical semantic diagnostic."""
+    """A node failed with one canonical semantic failure."""
 
     failure: Failure
-    # Temporary compatibility metadata; None for source-free failures.
-    locator: Optional[SourceSpan] = None
-    # Concrete range resolved at the failure site when available.
-    range: Optional[SourceRange] = None
 
 
 @dataclass
@@ -155,7 +126,3 @@ class RunFailed:
     """The run ended on a node failure or an unreachable terminal output."""
 
     failure: Failure
-    # Same temporary compatibility metadata as the originating NodeFailedRecord.
-    locator: Optional[SourceSpan] = None
-    # Concrete authored range, or None when only an opaque origin is known.
-    range: Optional[SourceRange] = None

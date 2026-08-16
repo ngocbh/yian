@@ -32,8 +32,6 @@ from agent_composer.events import (
     RunResumed,
     RunStarted,
     RunSucceeded,
-    SourceRange,
-    SourceSpan,
 )
 from agent_composer.expr import ExpressionError, expr_refs_of
 from agent_composer.nodes.base import Grow, Node
@@ -402,7 +400,7 @@ class _RouteApply:
 
 @dataclass(frozen=True, slots=True)
 class _FailurePlan:
-    """Opaque authority anchors and one immutable terminal-failure delta."""
+    """Opaque authority anchors and one immutable canonical failure."""
 
     originating_state: RunState
     originating_flow: CompiledFlow
@@ -411,16 +409,7 @@ class _FailurePlan:
     start_node_identity: int
     end_id: str
     end_node_identity: int | None
-    delta: _FailureDelta
-
-
-@dataclass(frozen=True, slots=True)
-class _FailureDelta:
-    """One canonical failure authority plus temporary presentation metadata."""
-
     failure: Failure
-    locator: SourceSpan | None
-    range: SourceRange | None
 
 
 @dataclass(slots=True)
@@ -919,9 +908,6 @@ def prepare_expanded(
 def prepare_node_failed(
     state: RunState,
     failure: Failure,
-    *,
-    locator: SourceSpan | None = None,
-    range: SourceRange | None = None,
 ) -> PreparedTransition:
     """Prepare one terminal node failure with its canonical durable authority.
 
@@ -931,17 +917,13 @@ def prepare_node_failed(
         failure (`Failure`):
             Immutable semantic failure whose non-empty ``node_id`` identifies
             the executing node.
-        locator (`SourceSpan | None`, *optional*):
-            Symbolic source location retained alongside the failure.
-        range (`SourceRange | None`, *optional*):
-            Concrete source range retained alongside the failure.
     Returns:
         `PreparedTransition`:
             Canonical ``NodeFailedRecord`` and detached append-before-apply plan.
 
     Raises:
         `TypeError`:
-            The failure or a presentation carrier has the wrong exact type.
+            The failure has the wrong exact type.
         `ValueError`:
             State or the executing node is not eligible to fail.
     """
@@ -949,11 +931,7 @@ def prepare_node_failed(
         raise TypeError("prepare_node_failed expects a RunState")
     if type(failure) is not Failure:
         raise TypeError("prepare_node_failed expects a Failure")
-    record = NodeFailedRecord(
-        failure=failure,
-        locator=locator,
-        range=range,
-    )
+    record = NodeFailedRecord(failure=failure)
     _require_initialized_nonterminal(state)
     return _prepare_failure_transition(state, record)
 
@@ -1303,7 +1281,7 @@ def _prepare_failure_transition(
     if canonical_record != record_for_wire:
         raise ValueError("NodeFailedRecord is not in canonical wire form")
 
-    delta = _failure_delta(canonical_record)
+    failure = canonical_record.failure
     start_id = state.flow.start_id
     end_id = state.flow.end_id
     plan = _FailurePlan(
@@ -1316,14 +1294,14 @@ def _prepare_failure_transition(
         end_node_identity=(
             id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
         ),
-        delta=delta,
+        failure=failure,
     )
     return PreparedTransition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
         _plan=plan,
-        observers=_failure_observers(delta),
+        observers=_failure_observers(failure),
     )
 
 
@@ -1725,13 +1703,12 @@ def _commit_failure(
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
-    delta = plan.delta
-    if prepared.record != _failure_record(delta):
-        raise ValueError("failure record and prevalidated delta disagree")
-    node_id = delta.failure.node_id
+    if prepared.record.failure is not plan.failure:
+        raise ValueError("failure record and prevalidated authority disagree")
+    node_id = plan.failure.node_id
     if type(node_id) is not str or not node_id:
         raise ValueError("failure plan has no executing node")
-    apply = _materialize_failure(delta)
+    apply = _materialize_failure(plan.failure)
 
     _append_and_verify(log, prepared)
     state.node_state[node_id] = NodeState.TAKEN
@@ -2798,10 +2775,6 @@ def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
         raise TypeError("NodeFailedRecord failure node_id must be a string")
     if not node_id:
         raise ValueError("NodeFailedRecord failure node_id must be non-empty")
-    if record.locator is not None and type(record.locator) is not SourceSpan:
-        raise TypeError("NodeFailedRecord locator must be a SourceSpan or None")
-    if record.range is not None and type(record.range) is not SourceRange:
-        raise TypeError("NodeFailedRecord range must be a SourceRange or None")
     _require_failing_node(state, node_id)
 
 
@@ -3832,49 +3805,19 @@ def _materialize_terminal(delta: _TerminalDelta) -> _TerminalApply:
     )
 
 
-def _failure_delta(record: NodeFailedRecord) -> _FailureDelta:
-    """Retain one canonical Failure and copy temporary presentation metadata."""
-    return _FailureDelta(
-        failure=record.failure,
-        locator=_copy_source_span(record.locator),
-        range=_copy_source_range(record.range),
-    )
-
-
-def _failure_record(delta: _FailureDelta) -> NodeFailedRecord:
-    """Construct one durable carrier around the same immutable Failure."""
-    return NodeFailedRecord(
-        failure=delta.failure,
-        locator=_copy_source_span(delta.locator),
-        range=_copy_source_range(delta.range),
-    )
-
-
-def _failure_observers(delta: _FailureDelta) -> tuple[Any, ...]:
+def _failure_observers(failure: Failure) -> tuple[Any, ...]:
     """Construct ordered observers sharing one immutable Failure authority."""
     return (
-        NodeFailed(
-            failure=delta.failure,
-            locator=_copy_source_span(delta.locator),
-            range=_copy_source_range(delta.range),
-        ),
-        RunFailed(
-            failure=delta.failure,
-            locator=_copy_source_span(delta.locator),
-            range=_copy_source_range(delta.range),
-        ),
+        NodeFailed(failure=failure),
+        RunFailed(failure=failure),
     )
 
 
-def _materialize_failure(delta: _FailureDelta) -> _FailureApply:
+def _materialize_failure(failure: Failure) -> _FailureApply:
     """Materialize detached state and callback values before durable append."""
     return _FailureApply(
-        result=RunFailed(
-            failure=delta.failure,
-            locator=_copy_source_span(delta.locator),
-            range=_copy_source_range(delta.range),
-        ),
-        observers=_failure_observers(delta),
+        result=RunFailed(failure=failure),
+        observers=_failure_observers(failure),
     )
 
 
@@ -3924,25 +3867,6 @@ def _materialize_growth(plan: _GrowthPlan) -> _GrowthApply:
             for node_id, wiring in topology.wiring_overrides
         },
         observers=(_growth_observer(record),),
-    )
-
-
-def _copy_source_span(locator: SourceSpan | None) -> SourceSpan | None:
-    """Return an independent immutable symbolic source locator."""
-    if locator is None:
-        return None
-    return SourceSpan(node=locator.node, kind=locator.kind, key=locator.key)
-
-
-def _copy_source_range(range: SourceRange | None) -> SourceRange | None:
-    """Return an independent immutable concrete source range."""
-    if range is None:
-        return None
-    return SourceRange(
-        start_line=range.start_line,
-        start_col=range.start_col,
-        end_line=range.end_line,
-        end_col=range.end_col,
     )
 
 

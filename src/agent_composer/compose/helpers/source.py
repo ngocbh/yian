@@ -17,13 +17,12 @@ from agent_composer.compose.source import SourceAccessError, SourceCursor
 def _boundary_field_ranges(root: SourceCursor) -> FieldRanges:
     """The flow-boundary source map stamped onto the top-level StartNode's `field_ranges`.
 
-    Keys: each top-level `input:`/`inputs:` decl name, tagged `("input", name)` -> its
-    declaration value `SourceRange`. (The boundary input-coercion failure carries a
-    `SourceSpan(kind="input", key=name)` locator, so the runtime funnel resolves the caret by
-    that `(kind, key)`.) Flow-level `asserts:` are NOT here: assembly derives their ranges
-    and origins from the retained assertion cursor. Empty for a spanless / in-memory flow —
-    best-effort, boundary errors there fall back to the node range. This
-    compatibility metadata projection never raises."""
+    Keys: each top-level `input:`/`inputs:` declaration name, tagged
+    `("input", name)` -> its declaration value `SourceRange`. This is legacy
+    Compose metadata retained on the synthesized boundary; runtime diagnosis uses
+    each parameter's opaque origin instead. Flow-level `asserts:` are not here:
+    assembly derives their ranges and origins from the retained assertion cursor.
+    Empty for a spanless/in-memory flow. This compatibility projection never raises."""
     try:
         value = root._value_view()
         if not isinstance(value, Mapping):

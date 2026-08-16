@@ -150,15 +150,13 @@ def _lower_spawner_post_asserts(
         end_edges: the flow's edge list — synth producer edges are appended.
         callsite: the spawner id (== the clone namespace).
         post_asserts: the spawner's `${output}`-reading node-level asserts (may be empty).
-        post_assert_ranges: temporary positional diagnostic ranges aligned with
-            `post_asserts`; a missing entry becomes `None`.
+        post_assert_ranges: legacy positional ranges aligned with `post_asserts`; a
+            missing entry becomes `None`. Runtime diagnosis uses Assertion.origin.
         input_names: the spawner's declared call-input names (its param names).
     """
     if not post_asserts:
         return
-    # A source-free child may legitimately carry fewer range entries than assertions. Pad/truncate
-    # the bridge to the existing child assertions before appending spawner metadata, otherwise the
-    # first spawner range could be mistaken for an earlier child assertion's range.
+    # Preserve legacy positional alignment while the range fields remain.
     child_assert_count = len(end.post_asserts)
     end.post_assert_ranges = (
         list(end.post_assert_ranges[:child_assert_count])
@@ -342,7 +340,7 @@ def call_subgraph(child, callsite: str, record: dict, *,
     cloned child END by `clone_child`, so they fire through the SAME eval_node post-assert seam —
     NOT a bespoke redirect-commit site. `origin_context` is the spawner's outer-to-inner failure
     trace and is prefixed to every clone, including both child boundaries. The CALL node passes its
-    ordered assertion carriers, temporary positional ranges, and declared-input names; durable
+    ordered assertion carriers, legacy positional ranges, and declared-input names; durable
     `build_grow` uses the same inputs so a resumed run's rebuilt child END is identical."""
     cloned = clone_child(child, callsite=callsite, record=record,
                          origin_context=origin_context,

@@ -103,9 +103,7 @@ def test_output_post_assert_violating_fails_on_child_end():
     assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
     assert "post-assert" in res.failure.message.lower()
     # The failing node id identifies the cloned CHILD END (callsite + end id), NOT the spawner.
-    loc = res.locator
-    assert loc is not None and loc.kind == "assert"
-    assert loc.node == "callee/__end__"
+    assert res.failure.node_id == "callee/__end__"
 
 
 # =========================================================================== #
@@ -154,7 +152,7 @@ def test_declared_input_post_assert_violating_fails():
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
     assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
-    assert res.locator is not None and res.locator.node == "callee/__end__"
+    assert res.failure.node_id == "callee/__end__"
 
 
 # =========================================================================== #
@@ -370,7 +368,7 @@ def test_collision_case_run_violating_spawner_assert_fails_on_child_end():
     failed = [e for e in res.events if isinstance(e, RunFailed)]
     assert failed and failed[0].failure.cause_type == "NodeAssertFailed"
     assert "post-assert" in res.failure.message.lower()
-    assert res.locator is not None and res.locator.node == "callee/__end__"
+    assert res.failure.node_id == "callee/__end__"
 
 
 # =========================================================================== #

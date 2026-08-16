@@ -37,7 +37,7 @@ The LAST compose phase before the loader. Three modules:
   builder. Ordinary authored node-input keys also stamp their sink `Parameter` origins; each
   retained node-input value stamps its canonical `Binding`. It aligns retained assertion
   item cursors with source order. Flow desugaring receives an origin callback while the
-  conductor derives its aligned temporary ranges from that same cursor sequence; node
+  conductor derives its legacy aligned ranges from that same cursor sequence; node
   validation receives one site callback that returns origin and range together.
   Full root and multi-node-definition flow assertions are then reused by START/END, while
   compact-root and flat single-node-definition assertions stay node-local through their

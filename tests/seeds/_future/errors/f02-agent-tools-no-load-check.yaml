@@ -4,16 +4,15 @@
 # NOT a duplicate of e23: that pins a TOOL node's `tool_id:`, which IS checked. This is an AGENT
 # node's `tools:` LIST, which is not. The unknown id survives compile and only surfaces at run time,
 # from `resolve_tools` (`tools/registry.py:62`) called deep inside the mode
-# (`nodes/agent/modes/tool_calling.py:93`) — as a bare `ValueError`, carrying NO locator, so the
-# caret degrades to the node header / kind fallback. Reaching it also requires live model creds,
+# (`nodes/agent/modes/tool_calling.py:93`) — as an unclassified `ValueError` with no
+# canonical Failure or diagnostic origin. Reaching it also requires live model creds,
 # which is why this seed asserts nothing.
 #
 # WHY IT'S HERE: same lesson as f01, one shape over. #88's container table lists `tools:` as a
 # sequence we "never descended into," implying an easy win. But a stamp for ("tools", 1) would have
-# nothing to ask for it — there is no load-time check to carry a locator, and the runtime failure
-# doesn't mint one. Two halves missing, not one.
+# nothing to ask for it — there is no load-time check or semantic origin carrier.
 #
-#   CURRENT:  loads OK. At run: bare ValueError from inside the agent mode, no locator, no range.
+#   CURRENT:  loads OK. At run: unclassified ValueError from inside the agent mode.
 #   EXPECTED: a load-time check naming the unknown id, located at its own `tools:` entry.
 id: fut-agent-tools-no-load-check
 name: fut_agent_tools_no_load_check

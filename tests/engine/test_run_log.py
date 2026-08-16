@@ -440,11 +440,12 @@ def test_jsonl_resume_rejects_a_corrupt_complete_line_and_releases_lock(
     "contents",
     [
         _wire_line(schema=1),
+        _wire_line(schema=2),
         _wire_line(seq=1),
         _wire_line(run_id="first", seq=0)
         + _wire_line(run_id="second", seq=1, node_id="other"),
     ],
-    ids=["schema", "sequence", "run-id"],
+    ids=["schema-1", "schema-2", "sequence", "run-id"],
 )
 def test_jsonl_resume_rejects_identity_mismatches_and_releases_lock(
     tmp_path: Path, contents: bytes

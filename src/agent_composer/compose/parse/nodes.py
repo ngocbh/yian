@@ -10,10 +10,10 @@ the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own 
 owns its field legality (allowed/required/asserts/env) and its `SourceRange` recording (each
 field tagged `("field", name)`). Two kind-blind enrichments run after every kind parse: each
 `inputs:` binding's own `SourceRange` is stamped into `field_ranges` tagged `("input", name)`
-(so the runtime resolves a failure caret by the location's `(kind, key)`, never a bare name that
-could collide across namespaces); each `asserts:` list item's `SourceRange` is appended
-POSITIONALLY to the descriptor's `assert_ranges` (asserts are located by index, not by their
-non-unique text, so they are a list — never keyed into `field_ranges`).
+(legacy Compose metadata keyed to avoid cross-namespace collisions); each `asserts:` list
+item's `SourceRange` is appended positionally to the descriptor's `assert_ranges`.
+Runtime diagnosis uses opaque semantic-carrier origins; source-order registration keeps
+duplicate assertions distinct.
 """
 
 from __future__ import annotations
@@ -86,16 +86,17 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
             range=cursor.range_of("kind"),
         )
     desc = cls.parse(node_id, cursor)
-    # Kind-blind range enrichments, keyed the way the runtime failure funnel resolves them — by the
-    # location's `(SourceSpan.kind, key)`, never by a bare name — so keys across namespaces cannot
-    # collide (the kind already stamped its own fields as `("field", name)` in `cls.parse`):
-    #   - each `inputs:` binding -> its own range, tagged `("input", name)` (a binding failure's
-    #     `input` locator carries the param name as its key); distinct from a like-named field.
+    # Legacy range enrichments retained on Compose-built nodes, keyed by `(kind, key)`
+    # rather than a bare name so namespaces cannot collide (the kind already stamped
+    # its own fields as `("field", name)` in `cls.parse`):
+    #   - each `inputs:` binding -> its own range, tagged `("input", name)` and distinct
+    #     from a like-named field.
     #   - each `asserts:` list item -> its POSITIONAL range, appended to the descriptor's
     #     `assert_ranges` (aligned 1:1 with the authored `asserts:` list). Asserts are located by
     #     INDEX, not by their (non-unique) text, so two identical asserts get distinct carets — hence
     #     they live in a list, NOT in `field_ranges`.
-    # Both no-op for a source-free cursor or a node without the field. `inputs:` is read AFTER
+    # Runtime diagnosis does not consume these ranges. Both no-op for a source-free cursor
+    # or a node without the field. `inputs:` is read AFTER
     # `normalize_node_signature_cursor` has renamed the author's singular
     # `input:` key to plural.
     field_ranges = getattr(desc, "field_ranges", None)

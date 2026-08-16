@@ -30,6 +30,9 @@ _SourceSitePath: TypeAlias = tuple[str | int, ...]
 
 _Anchor: TypeAlias = Literal["value", "key"]
 
+_SCOPED_ORIGIN_PREFIX = "@scope"
+"""Domain marker that keeps rebased keys outside document-local site keys."""
+
 
 def _escape_segment(value: str) -> str:
     """Escape one string segment using JSON Pointer's collision-free rules.
@@ -78,6 +81,42 @@ def _encode_site_path(path: _SourceSitePath) -> str:
                 f"got {type(segment).__name__}"
             )
     return "/" + "/".join(encoded)
+
+
+def _scope_origin(alias: str, origin: OriginRef) -> OriginRef:
+    """Return one Compose origin rebased under a lexical ``uses:`` alias.
+
+    The previous opaque key is encoded as one string segment; it is never parsed.
+    The reserved prefix cannot overlap document-local keys, which always begin
+    with ``/``. Applying this function repeatedly therefore composes namespaces
+    without losing the boundary between aliases or nested keys.
+
+    Args:
+        alias (`str`):
+            Exact non-empty authored ``uses:`` alias that owns the child view.
+        origin (`OriginRef`):
+            Child identity to scope. Its complete key remains opaque.
+
+    Returns:
+        `OriginRef`:
+            Deterministic alias-scoped identity.
+
+    Raises:
+        TypeError:
+            Raised when ``alias`` is not an exact string or ``origin`` is not an
+            `OriginRef`.
+        ValueError:
+            Raised when ``alias`` or the origin key is empty or otherwise invalid.
+    """
+    if type(alias) is not str:
+        raise TypeError("origin scope alias must be an exact string")
+    if not alias:
+        raise ValueError("origin scope alias cannot be empty")
+    if not isinstance(origin, OriginRef):
+        raise TypeError("origin scope requires an OriginRef")
+    old_key = OriginRef(origin.key).key
+    scoped_path = _encode_site_path(("uses", alias, "origin", old_key))
+    return OriginRef(_SCOPED_ORIGIN_PREFIX + scoped_path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,8 +170,9 @@ class SourceCatalog:
 
         Args:
             origin (`OriginRef`):
-                Opaque identity minted by this catalog's builder or a later
-                Compose rebasing pass.
+                Opaque local identity minted by this catalog's builder. A scoped
+                child identity must first route back to its local identity through
+                a `ResolverTable`.
 
         Returns:
             `DiagnosticFrame | None`:
@@ -159,6 +199,28 @@ class SourceCatalog:
             label=site.document.label,
             text=site.document.text,
             range=source_range,
+        )
+
+    def __contains__(self, origin: object) -> bool:
+        """Return whether one exact opaque origin belongs to this catalog.
+
+        Membership reads only the immutable key table. It does not replay the
+        retained source occurrence or resolve a diagnostic frame.
+
+        Args:
+            origin (`object`):
+                Candidate identity; non-`OriginRef` and malformed values are absent.
+
+        Returns:
+            `bool`:
+                `True` exactly when the candidate key was registered in this
+                catalog snapshot.
+        """
+        return (
+            isinstance(origin, OriginRef)
+            and type(origin.key) is str
+            and bool(origin.key)
+            and origin.key in self._sites
         )
 
     def __deepcopy__(self, memo: dict[int, object]) -> SourceCatalog:

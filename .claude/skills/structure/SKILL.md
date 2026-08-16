@@ -107,8 +107,11 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 `compose/source` exclusively owns PyYAML and the private constructed YAML graph.
 It constructs each physical document once as a `SourceDocument` and exposes
 stable `SourceCursor` navigation plus immutable `SourceCatalog` resolution of
-opaque origins; no other compose package may import PyYAML, inspect private graph
-slots, or reconstruct source by dumping and reparsing it.
+opaque origins. Its catalog module owns both typed document-local key encoding
+and the package-private lexical `uses:` key scope; scoped child keys stay opaque,
+and exact membership does not replay source. No other compose package may import
+PyYAML, inspect private graph slots, or reconstruct source by dumping and
+reparsing it.
 Source-aware parsing and inline extraction consume documents/cursors through that
 public interface; descriptors and nodes carry derived ranges afterward.
 Text-accepting parse conveniences delegate construction to `SourceDocument` before

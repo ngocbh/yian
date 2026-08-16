@@ -10,7 +10,10 @@ from agent_composer.compose.source import (
     SourceDocument,
 )
 from agent_composer.compose.source import document as source_document_module
-from agent_composer.compose.source.catalog import _SourceCatalogBuilder
+from agent_composer.compose.source.catalog import (
+    _SourceCatalogBuilder,
+    _scope_origin,
+)
 from agent_composer.diagnostics import DiagnosticFrame, OriginRef, SourceRange
 
 
@@ -33,6 +36,69 @@ def test_site_keys_are_typed_escaped_and_deterministic():
     assert all(isinstance(origin, OriginRef) for origin in first)
     assert all(origin.key for origin in first if origin is not None)
     assert len({origin.key for origin in first if origin is not None}) == len(paths)
+
+
+def test_scoped_origin_keys_are_domain_separated_injective_and_deterministic():
+    aliases = ("child", "a/b", "a~1b", "@scope", "子")
+    old_keys = ("local", "/s:root/s:node", "a/b", "a~1b", "@scope/s:uses")
+
+    first = [
+        _scope_origin(alias, OriginRef(old_key))
+        for alias in aliases
+        for old_key in old_keys
+    ]
+    second = [
+        _scope_origin(alias, OriginRef(old_key))
+        for alias in aliases
+        for old_key in old_keys
+    ]
+
+    assert first == second
+    assert len({origin.key for origin in first}) == len(aliases) * len(old_keys)
+    assert all(origin.key.startswith("@scope/") for origin in first)
+    assert all(not origin.key.startswith("/") for origin in first)
+
+
+def test_nested_scoped_origin_treats_the_previous_key_as_one_opaque_segment():
+    inner = _scope_origin("inner/alias", OriginRef("old/~key"))
+    nested = _scope_origin("outer~alias", inner)
+
+    assert nested == _scope_origin("outer~alias", OriginRef(inner.key))
+    assert nested != _scope_origin("outer/inner", OriginRef("old/~key"))
+    assert nested != _scope_origin("outer~alias", OriginRef("old/~key"))
+
+
+def test_scoped_origin_escaping_prevents_segment_boundary_spoofing():
+    assert _scope_origin(
+        "a/s:origin/s:b",
+        OriginRef("c"),
+    ) != _scope_origin(
+        "a",
+        OriginRef("b/s:origin/s:c"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("alias", "origin", "error"),
+    [
+        ("", OriginRef("old"), ValueError),
+        (None, OriginRef("old"), TypeError),
+        (type("Alias", (str,), {})("child"), OriginRef("old"), TypeError),
+        ("child", "old", TypeError),
+    ],
+)
+def test_scoped_origin_rejects_invalid_aliases_and_origins(alias, origin, error):
+    with pytest.raises(error):
+        _scope_origin(alias, origin)
+
+
+def test_scoped_origin_revalidates_origin_subclass_keys():
+    class InvalidOrigin(OriginRef):
+        def __post_init__(self) -> None:
+            pass
+
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        _scope_origin("child", InvalidOrigin(""))
 
 
 @pytest.mark.parametrize(
@@ -245,6 +311,31 @@ def test_freeze_isolates_snapshots_and_deepcopy_reuses_catalog():
     assert second_snapshot.resolve(first_origin) is not None
     assert second_snapshot.resolve(second_origin) is not None
     assert deepcopy(first_snapshot) is first_snapshot
+
+
+def test_catalog_membership_is_exact_and_snapshot_isolated(monkeypatch):
+    root = SourceDocument.parse(
+        "first: one\n"
+        "second: two\n"
+    ).root
+    builder = _SourceCatalogBuilder()
+    first_origin = builder.register(("first",), root.child("first"))
+    first_snapshot = builder.freeze()
+    second_origin = builder.register(("second",), root.child("second"))
+    second_snapshot = builder.freeze()
+
+    def unexpected_resolve(*_args, **_kwargs):
+        raise AssertionError("membership must not replay a source occurrence")
+
+    monkeypatch.setattr(SourceCatalog, "resolve", unexpected_resolve)
+
+    assert first_origin in first_snapshot
+    assert OriginRef(first_origin.key) in first_snapshot
+    assert second_origin not in first_snapshot
+    assert first_origin in second_snapshot
+    assert second_origin in second_snapshot
+    assert OriginRef("unknown") not in second_snapshot
+    assert "not-an-origin" not in second_snapshot
 
 
 def test_failed_builder_transaction_releases_registered_site_keys():

@@ -375,3 +375,261 @@ def test_resolution_does_not_reparse_source(monkeypatch):
     assert catalog.resolve(origin) is not None
     assert catalog.resolve(origin) is not None
     assert parse_count == 1
+
+
+def test_constructed_line_literal_registers_zero_based_exact_frames():
+    text = "code: |-\r\n  first\r\n\r\n  second\r\n"
+    document = SourceDocument.parse(text, label="literal.yaml")
+    cursor = document.root.child("code")
+    builder = _SourceCatalogBuilder()
+
+    origins = [
+        builder.register_constructed_line(("code", "line", index), cursor, index)
+        for index in range(3)
+    ]
+    catalog = builder.freeze()
+
+    assert [catalog.resolve(origin) for origin in origins] == [
+        DiagnosticFrame(
+            label="literal.yaml",
+            text=text,
+            range=SourceRange(2, 3, 2, 8),
+        ),
+        DiagnosticFrame(
+            label="literal.yaml",
+            text=text,
+            range=SourceRange(3, 1, 3, 1),
+        ),
+        DiagnosticFrame(
+            label="literal.yaml",
+            text=text,
+            range=SourceRange(4, 3, 4, 9),
+        ),
+    ]
+
+
+def test_constructed_line_unchanged_projection_retains_literal_provenance():
+    text = "code: |-\n  first\n  second\n"
+    cursor = SourceDocument.parse(text, label="projected.yaml").root.child("code")
+    unchanged = cursor.with_value(cursor.value)
+    builder = _SourceCatalogBuilder()
+
+    origin = builder.register_constructed_line(
+        ("projected", "code", "line", 1),
+        unchanged,
+        1,
+    )
+
+    assert builder.freeze().resolve(origin) == DiagnosticFrame(
+        label="projected.yaml",
+        text=text,
+        range=SourceRange(3, 3, 3, 9),
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "replacement"),
+    [
+        ("value: >-\n  first\n  second\n", None),
+        ('value: "first\\nsecond"\n', None),
+        ("value: first\n  second\n", None),
+        (None, "first\nsecond"),
+        ("value: |-\n  first\n  second\n", "changed\nvalue"),
+    ],
+    ids=["folded", "quoted", "plain-multiline", "virtual", "changed"],
+)
+def test_constructed_line_unavailable_does_not_reserve_site(text, replacement):
+    if text is None:
+        cursor = SourceCursor.virtual(replacement)
+    else:
+        cursor = SourceDocument.parse(text).root.child("value")
+        if replacement is not None:
+            cursor = cursor.with_value(replacement)
+    builder = _SourceCatalogBuilder()
+    site_path = ("value", "line", 0)
+
+    assert builder.register_constructed_line(site_path, cursor, 0) is None
+
+    whole_origin = builder.register(site_path, cursor)
+    if whole_origin is None:
+        fallback = SourceDocument.parse("fallback: located\n").root.child("fallback")
+        whole_origin = builder.register(site_path, fallback)
+    assert builder.freeze().resolve(whole_origin) is not None
+
+
+@pytest.mark.parametrize("index", [True, "0", 0.0, None])
+def test_constructed_line_rejects_non_exact_integer_indices(index):
+    cursor = SourceDocument.parse("value: |-\n  first\n  second\n").root.child(
+        "value"
+    )
+
+    with pytest.raises(TypeError):
+        _SourceCatalogBuilder().register_constructed_line(
+            ("value", "bad-index"),
+            cursor,
+            index,
+        )
+
+
+@pytest.mark.parametrize("index", [-1, 2], ids=["negative", "out-of-range"])
+def test_constructed_line_rejects_invalid_exact_integer_indices(index):
+    cursor = SourceDocument.parse("value: |-\n  first\n  second\n").root.child(
+        "value"
+    )
+
+    with pytest.raises(ValueError):
+        _SourceCatalogBuilder().register_constructed_line(
+            ("value", "bad-index"),
+            cursor,
+            index,
+        )
+
+
+def test_constructed_line_duplicate_detection_crosses_selector_kinds():
+    cursor = SourceDocument.parse("value: |-\n  first\n  second\n").root.child(
+        "value"
+    )
+    folded = SourceDocument.parse("value: >-\n  first\n  second\n").root.child(
+        "value"
+    )
+    site_path = ("value", "site")
+    line_first = _SourceCatalogBuilder()
+    line_first.register_constructed_line(site_path, cursor, 0)
+
+    with pytest.raises(ValueError):
+        line_first.register(site_path, cursor)
+    with pytest.raises(ValueError):
+        line_first.register_constructed_line(site_path, cursor, 1)
+    with pytest.raises(ValueError):
+        line_first.register_constructed_line(site_path, folded, 0)
+
+    whole_first = _SourceCatalogBuilder()
+    whole_first.register(site_path, cursor)
+    with pytest.raises(ValueError):
+        whole_first.register_constructed_line(site_path, cursor, 0)
+
+
+def test_constructed_line_transactions_freeze_and_deepcopy_are_stable():
+    cursor = SourceDocument.parse("value: |-\n  first\n  second\n").root.child(
+        "value"
+    )
+    builder = _SourceCatalogBuilder()
+    first_origin = builder.register_constructed_line(("line", 0), cursor, 0)
+    first_snapshot = builder.freeze()
+    rolled_back_origin = None
+
+    with pytest.raises(RuntimeError, match="construction failed"):
+        with builder.transaction():
+            rolled_back_origin = builder.register_constructed_line(
+                ("line", 1),
+                cursor,
+                1,
+            )
+            raise RuntimeError("construction failed")
+
+    assert first_snapshot.resolve(first_origin) is not None
+    assert first_snapshot.resolve(rolled_back_origin) is None
+
+    retried_origin = builder.register_constructed_line(("line", 1), cursor, 1)
+    second_snapshot = builder.freeze()
+
+    assert retried_origin == rolled_back_origin
+    assert first_snapshot.resolve(retried_origin) is None
+    assert second_snapshot.resolve(first_origin) is not None
+    assert second_snapshot.resolve(retried_origin) is not None
+    assert deepcopy(first_snapshot) is first_snapshot
+    assert deepcopy(second_snapshot) is second_snapshot
+
+
+def test_constructed_line_alias_occurrences_replay_the_shared_definition():
+    text = (
+        "shared: &code |-\n"
+        "  first\n"
+        "  second\n"
+        "left: *code\n"
+        "right: *code\n"
+    )
+    root = SourceDocument.parse(text, label="aliases.yaml").root
+    builder = _SourceCatalogBuilder()
+
+    left = builder.register_constructed_line(
+        ("aliases", "left", "line", 1),
+        root.child("left"),
+        1,
+    )
+    right = builder.register_constructed_line(
+        ("aliases", "right", "line", 0),
+        root.child("right"),
+        0,
+    )
+    catalog = builder.freeze()
+
+    assert catalog.resolve(left).range == SourceRange(3, 3, 3, 9)
+    assert catalog.resolve(right).range == SourceRange(2, 3, 2, 8)
+
+
+def test_constructed_line_keys_survive_formatting_while_frames_move():
+    first_text = "wrapper:\n  code: |-\n    first\n    second\n"
+    second_text = "# shifted\nwrapper:\n    code: |-\n      first\n      second\n"
+    first_cursor = SourceDocument.parse(
+        first_text,
+        label="first.yaml",
+    ).root.child("wrapper").child("code")
+    second_cursor = SourceDocument.parse(
+        second_text,
+        label="second.yaml",
+    ).root.child("wrapper").child("code")
+    site_path = ("nodes", "worker", "code", "line", 1)
+    first_builder = _SourceCatalogBuilder()
+    second_builder = _SourceCatalogBuilder()
+
+    first_origin = first_builder.register_constructed_line(
+        site_path,
+        first_cursor,
+        1,
+    )
+    second_origin = second_builder.register_constructed_line(
+        site_path,
+        second_cursor,
+        1,
+    )
+
+    assert first_origin == second_origin
+    assert first_builder.freeze().resolve(first_origin) == DiagnosticFrame(
+        label="first.yaml",
+        text=first_text,
+        range=SourceRange(4, 5, 4, 11),
+    )
+    assert second_builder.freeze().resolve(second_origin) == DiagnosticFrame(
+        label="second.yaml",
+        text=second_text,
+        range=SourceRange(5, 7, 5, 13),
+    )
+
+
+def test_constructed_line_resolution_does_not_reparse_source(monkeypatch):
+    parse_count = 0
+    original_init = source_document_module._DocumentLoader.__init__
+
+    def counting_init(loader, stream):
+        nonlocal parse_count
+        parse_count += 1
+        original_init(loader, stream)
+
+    monkeypatch.setattr(
+        source_document_module._DocumentLoader,
+        "__init__",
+        counting_init,
+    )
+    document = SourceDocument.parse("value: |-\n  first\n  second\n")
+    builder = _SourceCatalogBuilder()
+    origin = builder.register_constructed_line(
+        ("value", "line", 1),
+        document.root.child("value"),
+        1,
+    )
+    catalog = builder.freeze()
+
+    assert catalog.resolve(origin) is not None
+    assert catalog.resolve(origin) is not None
+    assert parse_count == 1

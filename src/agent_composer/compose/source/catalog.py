@@ -30,6 +30,16 @@ _SourceSitePath: TypeAlias = tuple[str | int, ...]
 
 _Anchor: TypeAlias = Literal["value", "key"]
 
+
+@dataclass(frozen=True, slots=True)
+class _ConstructedLine:
+    """One zero-based line selector within a constructed scalar value."""
+
+    index: int
+
+
+_SiteSelector: TypeAlias = _Anchor | _ConstructedLine
+
 _SCOPED_ORIGIN_PREFIX = "@scope"
 """Domain marker that keeps rebased keys outside document-local site keys."""
 
@@ -128,14 +138,13 @@ class _SourceSite:
             Retained single-parse document that owns the occurrence.
         occurrence_path (`OccurrencePath`):
             Finite physical path replayed from the document root.
-        anchor (`Literal["value", "key"]`):
-            Whether the diagnostic selects the occurrence value or its mapping
-            key.
+        selector (`Literal["value", "key"] | _ConstructedLine`):
+            Whole occurrence anchor or semantic constructed-line selector.
     """
 
     document: SourceDocument
     occurrence_path: OccurrencePath
-    anchor: _Anchor
+    selector: _SiteSelector
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +201,23 @@ class SourceCatalog:
             return None
 
         cursor = site.document._resolve_occurrence(site.occurrence_path)
-        source_range = cursor.range if site.anchor == "value" else cursor.key_range
+        if site.selector == "value":
+            source_range = cursor.range
+        elif site.selector == "key":
+            source_range = cursor.key_range
+        else:
+            scalar_source = cursor.scalar_source
+            line_ranges = (
+                scalar_source.constructed_line_ranges
+                if scalar_source is not None
+                else None
+            )
+            source_range = (
+                line_ranges[site.selector.index]
+                if line_ranges is not None
+                and site.selector.index < len(line_ranges)
+                else None
+            )
         if source_range is None:
             return None
         return DiagnosticFrame(
@@ -297,7 +322,83 @@ class _SourceCatalogBuilder:
         self._sites[key] = _SourceSite(
             document=document,
             occurrence_path=cursor.path,
-            anchor=anchor,
+            selector=anchor,
+        )
+        return OriginRef(key)
+
+    def register_constructed_line(
+        self,
+        site_path: _SourceSitePath,
+        cursor: SourceCursor,
+        index: int,
+    ) -> OriginRef | None:
+        """Register one exact constructed literal line by semantic index.
+
+        Unchanged literal block scalars retain exact line ranges. Other scalar
+        styles, virtual cursors, and value-changing projections return ``None``
+        without reserving the path so the caller can register a whole-value
+        fallback. A successful site retains the semantic index rather than an
+        absolute coordinate.
+
+        Args:
+            site_path (`tuple[str | int, ...]`):
+                Non-empty local semantic path used only to mint the opaque key.
+            cursor (`SourceCursor`):
+                Candidate scalar occurrence.
+            index (`int`):
+                Exact nonnegative zero-based constructed-line index.
+
+        Returns:
+            `OriginRef | None`:
+                Registered opaque identity, or ``None`` when exact scalar-line
+                provenance is unavailable.
+
+        Raises:
+            `TypeError`:
+                Raised for an invalid cursor, path, or index type.
+            `ValueError`:
+                Raised for an empty path or negative/out-of-range exact index.
+            `SourceAccessError`:
+                Raised when ``site_path`` is already registered.
+        """
+
+        key = _encode_site_path(site_path)
+        if not isinstance(cursor, SourceCursor):
+            raise TypeError("source catalog registration requires a SourceCursor")
+        if type(index) is not int:
+            raise TypeError("constructed line index must be an exact integer")
+        if index < 0:
+            raise SourceAccessError(
+                "constructed line index must be non-negative",
+                cursor.range,
+            )
+        if key in self._sites:
+            raise SourceAccessError(
+                f"duplicate source catalog site {site_path!r}",
+                cursor.range,
+            )
+
+        scalar_source = cursor.scalar_source
+        line_ranges = (
+            scalar_source.constructed_line_ranges
+            if scalar_source is not None
+            else None
+        )
+        if line_ranges is None:
+            return None
+        if index >= len(line_ranges):
+            raise SourceAccessError(
+                f"constructed line index {index} is out of range",
+                scalar_source.range,
+            )
+
+        document = cursor.document
+        if document is None:
+            return None
+        self._sites[key] = _SourceSite(
+            document=document,
+            occurrence_path=cursor.path,
+            selector=_ConstructedLine(index),
         )
         return OriginRef(key)
 

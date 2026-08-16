@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError, create_model
 
 from agent_composer.nodes.agent.structured import (
+    _is_contract_path,
     _structured_validation_path,
     generate_structured,
 )
@@ -135,24 +136,16 @@ def _validation_error(typ, payload, *, native=True):
     return caught.value
 
 
-def _manual_validation_error(typ, *, title=None, location=()):
-    """Return an exhausted native error with a controlled title and location."""
+def _foreign_same_title_error(typ):
+    """Return a provider-model error whose title collides with the output schema."""
 
     class _Invalid:
         def with_structured_output(self, schema):
+            foreign_schema = create_model(schema.__name__, value=(int, ...))
+
             class _Bound:
                 def invoke(self, _messages):
-                    raise ValidationError.from_exception_data(
-                        title or schema.__name__,
-                        [
-                            {
-                                "type": "value_error",
-                                "loc": location,
-                                "input": {},
-                                "ctx": {"error": ValueError("invalid")},
-                            }
-                        ],
-                    )
+                    return foreign_schema.model_validate({"value": "bad"})
 
             return _Bound()
 
@@ -223,17 +216,32 @@ def test_structured_validation_path_uses_first_pydantic_error():
 def test_structured_validation_path_preserves_owned_root_location():
     """A generated model-level failure selects the contract root."""
     typ = Type.scalar(ValueKind.INTEGER)
-    error = _manual_validation_error(typ)
+    error = _validation_error(typ, "not-an-object")
 
     assert _structured_validation_path(error, typ) == ()
 
 
-def test_structured_validation_path_rejects_foreign_schema_in_owned_frame():
-    """Frame provenance alone cannot turn a provider validation model into output."""
+def test_structured_validation_path_rejects_same_title_foreign_schema():
+    """A provider model named like the wrapper lacks exact schema identity."""
     typ = Type.scalar(ValueKind.INTEGER)
-    error = _manual_validation_error(typ, title="ProviderConfig", location=("value",))
+    error = _foreign_same_title_error(typ)
 
     assert _structured_validation_path(error, typ) is None
+
+
+def test_contract_path_validation_rejects_foreign_location_shapes():
+    """Unknown fields, scalar tails, and non-index list paths are not contract paths."""
+    record = Type(
+        kind=ValueKind.OBJECT,
+        fields={"age": Type.scalar(ValueKind.INTEGER)},
+    )
+    listed = Type(kind=ValueKind.LIST_OBJECT, element=record)
+
+    assert not _is_contract_path(("unknown",), record)
+    assert not _is_contract_path(("foreign",), Type.scalar(ValueKind.INTEGER))
+    assert not _is_contract_path(("age",), listed)
+    assert not _is_contract_path((-1, "age"), listed)
+    assert not _is_contract_path((0, "unknown"), listed)
 
 
 def test_structured_validation_path_rejects_unowned_pydantic_errors():

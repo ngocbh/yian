@@ -3,7 +3,8 @@
 `_assemble` is the pipeline shared by the top-level flow AND every in-file `defs:`
 callable:
 
-  flow parameters -> build every node kind-blind (`desc.build(ctx)`; a case lowers
+  flow parameters + authored parameter/contract/default origins -> build every node
+  kind-blind (`desc.build(ctx)`; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
   edges + append each case's own edges -> validate references + classify asserts
   -> attach authored assertion/output origins -> synthesize the START_ID/END_ID
@@ -71,7 +72,10 @@ from agent_composer.compose.parse.nodes import (
 )
 from agent_composer.compose.source import SourceAccessError, SourceCursor
 from agent_composer.compose.source.catalog import _SourceCatalogBuilder
-from agent_composer.compose.helpers.types import read_flow_inputs
+from agent_composer.compose.helpers.types import (
+    read_flow_inputs,
+    read_source_flow_inputs,
+)
 from agent_composer.compose.validate.handles import check_case_handles
 from agent_composer.compose.validate.asserts import validate_node_asserts
 
@@ -711,6 +715,7 @@ def _assemble(
     *,
     inputs_section: Optional[dict] = None,
     input_parameters: Optional[list[Parameter]] = None,
+    inputs_cursor: SourceCursor | None = None,
     nodes_cursor: SourceCursor,
     outputs_section,
     asserts_section: list,
@@ -740,7 +745,9 @@ def _assemble(
 
     Exactly one input representation is required: `inputs_section` is the authored
     mapping that still needs parsing, while `input_parameters` carries parameters already
-    resolved by an earlier compiler pass. `scope` owns composite call resolution
+    resolved by an earlier compiler pass. `inputs_cursor` is the optional retained
+    occurrence for the authored mapping; when present, input parameters and their
+    recursive contracts compile opaque origins from it. `scope` owns composite call resolution
     (defs-first) and private child registration; `registry` is the file's
     `read_typedefs(...)`. Retained ranges and `nodes_cursor` own diagnostic locations; after
     the common header stamp each descriptor may immutably attach kind-owned opaque origins.
@@ -760,6 +767,8 @@ def _assemble(
         raise ValueError(
             "_assemble requires exactly one of inputs_section or input_parameters"
         )
+    if input_parameters is not None and inputs_cursor is not None:
+        raise ValueError("pre-resolved input parameters cannot carry an inputs cursor")
 
     diagnostics = LoadDiagnostics.from_cursor(nodes_cursor)
 
@@ -831,20 +840,29 @@ def _assemble(
     # authored locations come from semantic origins. Inert for reference-mode CODE.
     flow_label = source.label if source is not None else "<inline-code>"
     if inputs_section is not None:
-        input_ranges = {
-            name: (
-                boundary_field_ranges.get(("input", name))
-                if boundary_field_ranges is not None
-                else None
+        if inputs_cursor is not None:
+            inputs = read_source_flow_inputs(
+                inputs_cursor.with_value(inputs_section),
+                registry,
+                site_path=owner,
+                catalog_builder=catalog_builder,
+                diagnostics=diagnostics,
             )
-            for name in inputs_section
-        }
-        inputs = read_flow_inputs(
-            inputs_section,
-            registry,
-            input_ranges,
-            diagnostics=diagnostics,
-        )
+        else:
+            input_ranges = {
+                name: (
+                    boundary_field_ranges.get(("input", name))
+                    if boundary_field_ranges is not None
+                    else None
+                )
+                for name in inputs_section
+            }
+            inputs = read_flow_inputs(
+                inputs_section,
+                registry,
+                input_ranges,
+                diagnostics=diagnostics,
+            )
     else:
         assert input_parameters is not None
         inputs = list(input_parameters)

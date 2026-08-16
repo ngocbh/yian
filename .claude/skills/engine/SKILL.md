@@ -133,8 +133,8 @@ Hold this model whenever you design anything:
   values into an already-constructed flow. Compose stamps source-backed bare/mapped
   root, multi-node-definition, and inline-child output values on the final binding after
   rewrites, and END reuses that exact carrier; output mapping keys stay origin-free.
-  Generated compact-root and single-node-definition reexports remain origin-free because
-  their authored output declaration is reserved for contract-origin work.
+  Generated compact-root and single-node-definition reexports remain origin-free;
+  authored node-output contract provenance is the remaining deferred contract work.
 - Compiled node assertions also have one shape: ordered `Assertion` carriers.
   Compose creates one carrier per authored flow/node list position and derives
   its `.origin` (`OriginRef`) plus the temporary positional range from the same retained item
@@ -146,9 +146,16 @@ Hold this model whenever you design anything:
   lists are a temporary compatibility bridge, not the provenance authority.
 - Compiled `Node.params` has one shape: ordered exact `Parameter` carriers. The
   flow owns their `Binding` sources; parameter contracts/default presence/
-  coercion policy stay source-neutral, and rewrites preserve all origins. Final
-  Compose assembly stamps an ordinary authored `input:` key on its `Parameter`
-  and its value on the corresponding `Binding`. Source-backed reserved MAP `over:`
+  coercion policy stay source-neutral, and rewrites preserve all origins.
+  `compose/helpers/types.py` is the one source-aware recursive type compiler. For
+  authored root/definition flow inputs, the declaration key owns `Parameter.origin`,
+  the type value and authored nested record fields own `ContractOrigins`,
+  and a packed default owns `default_origin`; START reuses those exact carriers.
+  Scalar alias/list type expressions fall back to the contract root. Python/source-free
+  declarations and inferred inline parameters stay source-free, while external aliases
+  use ordinary lexical rebasing. Keep that separate from ordinary node-input wiring:
+  final assembly stamps its key on the sink `Parameter` and its bound value on the
+  corresponding `Binding`. Source-backed reserved MAP `over:`
   and WAIT `until:` values are stamped only on their `Binding` because they have no
   formal parameter. Supplied contract failures select
   `Parameter.contract.origins.at(TypeCheckError.path)` before the parameter
@@ -159,7 +166,8 @@ Hold this model whenever you design anything:
   manifests exclude `.origins`. Compose descriptors, child signatures, producer
   maps, and validators retain the contract and project `.type` only inside type
   algorithms. Python-authored nodes pass `output_contract=`; there is no parallel
-  output-Type API. Authored `output:` / `outputs:` syntax stays unchanged.
+  output-Type API. Authored `output:` / `outputs:` syntax stays unchanged; authored
+  node-output contract origins remain deferred.
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
   it does not rewrite the graph at runtime.
 
@@ -366,8 +374,14 @@ anchors or semantic constructed-line indices. Resolution replays an occurrence a
 reselects the range without storing coordinates in the catalog site or origin,
 reparsing, or adding a parallel range map; unavailable exact lines leave the site free
 for whole-scalar fallback. One builder is
-shared by a physical document's root, definitions, and inline bodies. Assembly stamps
-authored node headers, ordinary node-input keys and values, source-backed reserved
+shared by a physical document's root, definitions, and inline bodies.
+`compose/helpers/types.py` owns the sole source-aware recursive type compiler. For
+retained root/definition flow inputs it stamps the key on `Parameter.origin`, the type
+value and authored nested record fields on `ContractOrigins`, and a packed
+default on `default_origin`; START reuses those carriers. Scalar alias/list expressions fall back
+to the root. Python/source-free and inferred inline parameters remain source-free.
+Assembly separately stamps authored node headers, ordinary node-input keys and bound
+values, source-backed reserved
 MAP/WAIT wiring values, source-backed flow-output values, and authored flow/node
 assertions directly on their canonical carriers. Assertion sites are indexed by source
 order; one retained item cursor supplies both `Assertion.origin` and its aligned temporary
@@ -377,7 +391,7 @@ their assertions onto the synthesized node, where they remain node-local. Flow-o
 values are stamped after rewrites on `FlowOutput.binding`; END reuses that binding and
 output mapping keys remain origin-free. Generated compact-root and
 single-node-definition reexports have no authored binding occurrence and stay origin-free;
-their output declaration is reserved for contract-origin work. Private assembly keeps the
+authored node-output contract provenance remains deferred. Private assembly keeps the
 resolver unset while the shared catalog grows. The loader validates and lexically rebases
 each external alias view, then freezes the local catalog once and installs an exact
 `ComposedFlow.origin_resolver`; source-free graphs use `None`.

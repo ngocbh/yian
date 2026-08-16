@@ -92,6 +92,23 @@ PascalCase registry name). `Union[...]` is rejected — model a tagged union as 
 discriminated record. `read_typedefs` builds the per-flow `TypeRegistry`, `resolve_type`
 resolves a parsed expr against it into a leaf `Type`.
 
+## Authored contract origins
+
+Compose compiles each authored root- or `defs:`-level flow input into a `Parameter`
+whose `origin` identifies the selecting key. Its `ValueContract` records the type value
+at the contract root and at each recursively authored nested record field.
+For a packed declaration such as `count: "int = 3"`, `default_origin` is a distinct
+semantic key that resolves to the same scalar range as the contract root.
+
+When a boundary check reports a `TypeCheckError.path`, origin selection tries that exact
+contract path, then its nearest authored ancestor, the contract root, and finally the
+parameter key. A scalar typedef reference or scalar `list[...]` spelling has no separately
+authored nested sites, so nested failures fall back to its root. Generated and Python-built
+contracts, including inferred inline-flow signatures, remain source-free. External-flow
+views rebase authored contract origins through the same resolver mechanism as other
+origins. Node-output contract origins are deferred to
+[#215](https://github.com/ngocbh/agent-composer/issues/215).
+
 ## `VariablePool` — the run's typed memory
 
 The runtime state primitive the engine owns. Narrow by design:

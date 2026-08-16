@@ -446,19 +446,26 @@ nearest ancestor, then default) before the parameter fallback; an invalid
 authored default remains binding evaluation and keeps its default-site origin.
 Compose `input:` crosses
 directly into this exact `Parameter` shape; `ComposedFlow.input` and START use it
-without a parallel front-end carrier. For ordinary source-backed node inputs, final
-assembly stamps the selecting key on `Parameter.origin` and the value on the
-corresponding `Binding.origin`. Source-backed reserved MAP `over:` and WAIT `until:`
+without a parallel front-end carrier. `compose/helpers/types.py` is the one
+source-aware recursive type compiler. For authored root/definition flow inputs,
+the declaration key owns `Parameter.origin`; the type value and authored
+nested record fields own root/nested `ContractOrigins`; and a packed
+default owns `default_origin`. START reuses those carriers. Scalar alias/list type expressions
+fall back to the root. Python/source-free declarations and inferred inline parameters
+remain source-free; external aliases use normal lexical rebasing. This is distinct
+from ordinary source-backed node inputs: final assembly stamps their selecting key
+on the sink `Parameter.origin` and their value on the corresponding `Binding.origin`.
+Source-backed reserved MAP `over:` and WAIT `until:`
 wiring receives a `Binding.origin` only; neither field is a formal `Parameter`.
 Desugaring may replace `Binding.source` but retains that value origin. Without a retained
 source occurrence, Compose mints no origin and preserves any explicit programmatic origin;
-source-backed projections inherit their backing site. CASE wiring, synthesized boundary
-parameters, contracts, and external rebasing are deferred.
+source-backed projections inherit their backing site.
 Source-backed bare/mapped root, multi-node-definition, and inline-child
 output values stamp the final `FlowOutput.binding` after rewrites, and the synthesized END
 boundary reuses that exact binding. Output mapping keys receive no origin. Compact-root and
 single-node-definition reexports are generated without an authored binding occurrence and
-remain origin-free; their authored output type is reserved for contract-origin work.
+remain origin-free. Authored node-output contract provenance is the remaining deferred
+contract work.
 
 `Node.output_contract` is the sole stored output declaration: an exact
 `ValueContract`, or `None` for an unenforced output. Runtime success/replay
@@ -476,7 +483,7 @@ algorithms project `.type` only at the point where a semantic type is required.
 Whole direct references preserve contract identity; nested references rebase their
 origin paths. Python-authored nodes pass `output_contract=`; there is no
 parallel output-Type compatibility API. The authored `output:` / `outputs:` YAML
-surface is unchanged.
+surface is unchanged; authored node-output contract origins remain deferred.
 
 ### Compiled origin graph operations
 
@@ -572,7 +579,13 @@ references to `CodeNode`. Quoted and folded scalars keep only the whole-value
 fallback. Source-free descriptors mint no new Compose origins and preserve explicit
 programmatic carriers. The hook never retains a cursor, coordinates, or a parallel
 source map.
-Authored node headers, ordinary node-input keys and values, and source-backed reserved
+`compose/helpers/types.py` owns the sole source-aware recursive type compiler. For
+retained root/definition flow inputs, declaration keys stamp `Parameter.origin`, type
+values and authored nested record fields populate `ContractOrigins`, and packed
+defaults stamp `default_origin`; START reuses those carriers. Scalar alias/list type expressions
+fall back to the contract root. Python/source-free declarations and inferred inline
+parameters remain source-free.
+Authored node headers, ordinary node-input keys and bound values, and source-backed reserved
 MAP/WAIT wiring values, plus source-backed flow-output values and flow/node assertion
 occurrences, are registered under their complete lexical owner paths and carried by the
 semantic IR rather than a parallel map. Assertion paths include their authored list index,
@@ -582,7 +595,7 @@ roots and flat single-node definitions project `asserts:` onto their synthesized
 Flow-output values are registered after rewrites on `FlowOutput.binding`; END reuses that
 binding, and output mapping keys are not origin sites. Generated compact-root and
 single-node-definition reexports stay origin-free because their output declaration is a
-contract site whose origin remains deferred. Without a retained source occurrence,
+node-output contract site whose provenance remains deferred. Without a retained source occurrence,
 Compose mints no origin and preserves any explicit programmatic origin. Private assembly
 leaves the resolver unset. At the physical-file boundary, the loader validates and
 lexically rebases canonical external children per alias, freezes the shared local catalog,

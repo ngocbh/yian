@@ -50,6 +50,18 @@ def _parameter_type(parameter: Parameter) -> Type:
     return parameter.contract.type
 
 
+def _parameter_semantics(parameter: Parameter) -> tuple:
+    """Return signature semantics while excluding diagnostic-only origins."""
+    return (
+        parameter.name,
+        _parameter_type(parameter),
+        parameter.required,
+        parameter.has_default,
+        parameter.default,
+        parameter.coerce_strings,
+    )
+
+
 def _mapping_snapshot(
     cursor: SourceCursor,
 ) -> tuple[tuple[object, SourceRange | None, SourceRange | None, object], ...]:
@@ -1517,8 +1529,10 @@ output:
 
     named = loaded.compiled.nodes["named_call"]
     inline = loaded.compiled.nodes["inline_call"]
-    assert named.child_inputs == inline.child_inputs
-    assert named.output_contract == inline.output_contract
+    assert [_parameter_semantics(p) for p in named.child_inputs] == [
+        _parameter_semantics(p) for p in inline.child_inputs
+    ]
+    assert named.output_contract.type == inline.output_contract.type
     assert set(named.child.nodes) - {START_ID, END_ID} == {"echo", "pack"}
     assert set(inline.child.nodes) - {START_ID, END_ID} == {"echo", "pack"}
 
@@ -2046,8 +2060,8 @@ output: ${each.output}
 
     monkeypatch.setattr(
         compose_pipeline,
-        "read_flow_inputs",
-        lambda _mapping, _registry, _ranges, *, diagnostics=None: [
+        "read_source_flow_inputs",
+        lambda _cursor, _registry, *, site_path, catalog_builder, diagnostics=None: [
             _parameter("items", Type(kind=ValueKind.LIST_ANY))
         ],
     )

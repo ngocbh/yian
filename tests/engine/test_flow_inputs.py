@@ -95,6 +95,7 @@ def test_number_default_retains_compatible_integer_payload():
     [
         ("list[", "bad type expression"),
         ({"field": 3}, "cannot read type"),
+        ([{"field": "int"}], "declaration must be a type string or a record map"),
         (3, "declaration must be a type string or a record map"),
     ],
 )
@@ -170,6 +171,9 @@ def test_reader_returns_only_exact_parameter_carriers():
     decls = read_flow_inputs({"topic": "str"}, {})
     assert all(type(d) is Parameter for d in decls)
     assert all(type(d.contract) is ValueContract for d in decls)
+    assert all(d.origin is None and d.default_origin is None for d in decls)
+    assert all(not d.contract.origins.entries for d in decls)
+    assert all(d.contract.origins.default is None for d in decls)
 
 
 def test_bool_coercion_truthy_and_falsy():

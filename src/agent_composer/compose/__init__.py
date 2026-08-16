@@ -1,9 +1,12 @@
 """The Compose-YAML loader.
 
-Reads Compose-shaped YAML flows into the engine's runtime model. The source side
-of a node's `outputs:` / a flow's `inputs:` is read directly into one
-`ValueContract` whose recursive `Type` (see `types.read_type`) replaces the old flat
-`list[IOField]`; nested records are native.
+Reads Compose-shaped YAML flows into the engine's runtime model. One recursive
+type reader turns a node's `output:` / a flow's `input:` into a `ValueContract`
+whose `Type` replaces the old flat `list[IOField]`; nested records are native.
+For retained root/definition flow signatures, the same traversal compiles the
+parameter key, contract root/nested values, and packed default into opaque origins.
+Source-free callers and generated inline signatures keep empty origin carriers;
+authored node-output contract provenance remains a separate migration.
 
 Organized along two axes: the per-node-kind axis lives in `nodes/<kind>.py`
 (each owns its descriptor + `parse` + immutable source-origin attachment +
@@ -13,7 +16,8 @@ in the ordered phases `parse/ -> desugar/ -> edges/ -> validate/ -> build/`. The
 points (`parse/nodes.py`, the loader's conductor loop, `nodes/bindings.py`) dispatch through
 `KINDS` kind-blind — there is no per-kind isinstance ladder. `source/` owns the one-pass
 YAML document, located cursors, and immutable occurrence-backed origin catalogs;
-assembly stamps authored node headers, ordinary node-input keys and values, and
+assembly stamps authored flow-input parameter/contract/default sites, node headers,
+ordinary node-input keys and values, and
 source-backed reserved MAP/WAIT wiring values on their canonical carriers. After each
 common header stamp, assembly makes one kind-blind descriptor-hook call; CODE uses it to
 carry the whole `code:` value plus ordered exact literal-line origins, while other
@@ -26,8 +30,8 @@ assertions onto the synthesized node. Assembly also stamps source-backed bare/ma
 multi-node-definition, and inline-child output values on the final `FlowOutput.binding`
 after rewrites; END reuses that binding, while output mapping keys stay origin-free.
 Generated compact-root and single-node-definition reexports have no authored binding
-occurrence and remain origin-free; their output declaration is reserved for contract-origin
-work. Without a retained occurrence, Compose mints no origin and preserves any explicit
+occurrence and remain origin-free; authored node-output contract origins are still deferred.
+Without a retained occurrence, Compose mints no origin and preserves any explicit
 programmatic origin. Private assembly keeps the resolver unset while the shared catalog
 grows. At the physical-file boundary the loader rebases external alias views, filters exact
 reachable routes, and installs `ComposedFlow.origin_resolver`; source-free graphs use

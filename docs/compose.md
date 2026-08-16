@@ -18,7 +18,8 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ root SourceCursor     → occurrence-aware values, paths, ranges, and scalar provenance
   ├─ parse_file            → the strict top-level ComposeFile
   ├─ read_typedefs         → the type registry (typedefs:)
-  ├─ read_flow_inputs      → canonical Parameter values for input:
+  ├─ read_flow_inputs      → canonical Parameter values + recursive authored
+  │                          contract origins for root/def input:
   ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered)
   ├─ stamp authored headers → optional Node origins in one document-local catalog
   ├─ stamp kind-owned sites → descriptor hook; CODE whole scalar + exact literal lines
@@ -100,8 +101,10 @@ key. When exact scalar-line provenance is unavailable, line registration returns
 so the consumer can register the whole scalar instead. No YAML is reparsed and no parallel
 range map is created. The loader shares one builder across a physical
 document's root, `defs:`, and inline bodies. Assembly registers authored node headers,
-ordinary node-input keys and values, source-backed reserved MAP/WAIT wiring values, and
-source-backed flow-output values on the canonical carriers themselves. After the common
+root/def flow-input keys and recursive type values, ordinary node-input keys and values,
+source-backed reserved MAP/WAIT wiring values, and source-backed flow-output values on the
+canonical carriers themselves. A packed flow-input default receives its own semantic key,
+even though it resolves to the same scalar range as the contract root. After the common
 header is stamped, assembly also calls each descriptor's immutable
 `with_source_origins(...)` hook. The default is a no-op; CODE registers its whole `code:`
 scalar and every available exact literal constructed line, then carries only those opaque
@@ -224,12 +227,23 @@ so they have no `Parameter.origin`. The final (possibly rewritten) payload stays
 `Binding.source`, so lowering does not detach provenance from the authored value. Entries
 without a retained source occurrence receive no new Compose origin; an explicit
 programmatic origin remains intact, and source-backed projections inherit their backing
-occurrence. CASE wiring, synthesized START/END boundary parameters, contracts, and runtime
-diagnostic consumption remain separate migration steps. CODE's extra origins enter
+occurrence. CASE wiring and node-output contracts remain separate migration steps.
+CODE's extra origins enter
 the existing clone and external-rebase paths through its node-owned traversal/rewrite hooks.
 The same CODE-owned wrapped-line selector serves runtime tracebacks and Compose
 `SyntaxError.lineno`: exact literal line, whole scalar, then node header. Quoted and
 folded code has no exact line sites and therefore selects the whole scalar.
+
+The source-aware flow-input reader separately compiles each root/def input declaration.
+The selecting key becomes `Parameter.origin`; the type value becomes the contract-root
+origin; and recursively authored record fields become nested
+contract origins. A packed default receives a distinct `default_origin` key at that same scalar
+range. Boundary failures select an exact contract path, then an authored ancestor, the
+contract root, and finally the parameter key. Scalar aliases and scalar `list[...]`
+spellings expose only a root site. Generated or Python-built contracts and inferred inline
+signatures stay source-free, while external aliases use the existing origin-rebasing path.
+Node-output contract origins remain deferred to
+[#215](https://github.com/ngocbh/agent-composer/issues/215).
 
 Authored assertions cross into one ordered `Assertion` carrier per source occurrence.
 Flow assertions are carrierized during inline-call desugaring; node assertions are
@@ -247,7 +261,8 @@ children stamp the final `FlowOutput.binding` after output rewrites. The synthes
 boundary reuses that exact binding. Output mapping keys do not carry origins. Compact root
 flows and single-node defs generate a reexport rather than retaining an authored binding
 occurrence, so that generated binding stays origin-free; their authored `output:` value is
-the output contract and is reserved for separate contract-origin work.
+the output contract and remains reserved for
+[#215](https://github.com/ngocbh/agent-composer/issues/215).
 
 ---
 

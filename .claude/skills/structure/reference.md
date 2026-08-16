@@ -122,6 +122,7 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 | PyYAML construction and the private YAML node/occurrence graph | `compose/source` | every other compose phase, `compile`, `runtime` |
 | Stable location-aware navigation, immutable projections, and whole/exact-literal provenance | public `SourceDocument` / `SourceCursor` / `ScalarSource` contracts from `compose/source` | private document slots, PyYAML nodes/tokens, or another parse |
 | Immutable document-local origin resolution, semantic constructed-line selection, exact ownership, pre-finalization registered-site lookup, and Compose-private typed key/scoping policy | public `SourceCatalog` plus its package-private builder/encoder in `compose/source` | stored coordinates, parallel range maps, another YAML parse, parsing an opaque child key, per-node snapshots, or a premature cross-file resolver |
+| Source-free and cursor-aware recursive type/contract compilation | `compose/helpers/types.py` | cursor/catalog/YAML concepts below Compose or a duplicated type-shape traversal |
 | Semantic descriptors and flow sections | `compose/nodes` and `compose/parse` consuming a document/cursor | another YAML construction pass or retained parser object |
 | Source-preserving inline extraction | `compose/desugar` projecting cursors | PyYAML and loader state |
 | Compiled-flow assembly and per-occurrence carrier stamping | `compose/build` consuming descriptors and retained cursor sources | PyYAML and concrete loader implementation |
@@ -135,26 +136,35 @@ kind-owned origins afterward. No phase
 copies, renders, or reparses YAML to reconstruct source.
 
 The loader creates one package-private catalog builder per physical document and
-threads it through root, definition, and inline-body assembly. The conductor stamps
-authored node-header origins, ordinary node-input keys and values, and source-backed
-reserved MAP/WAIT wiring values directly on their canonical carriers. It invokes one
+threads it through root, definition, and inline-body assembly.
+`compose/helpers/types.py` owns the sole source-aware recursive type compiler. For
+retained root/definition flow inputs, declaration keys stamp `Parameter.origin`, type
+values and authored nested record fields populate `ContractOrigins`, and
+packed defaults stamp `default_origin`; START reuses those carriers. Scalar alias/list
+type expressions fall back to the contract root. Python/source-free declarations and
+inferred inline parameters remain source-free; external aliases use existing lexical
+graph rebasing. The conductor separately stamps authored node-header origins, ordinary
+node-input keys and bound values, and source-backed reserved MAP/WAIT wiring values directly
+on their canonical carriers. It invokes one
 kind-blind descriptor hook for extra semantic sites; CODE registers its whole scalar and
 exact literal constructed lines without retaining a cursor below Compose. A CODE syntax
 failure may resolve one already-registered site through the builder's read-only lookup; this
 replays the retained document without copying, freezing, reparsing, or installing a resolver.
-The conductor registers flow
-and node assertion sites by authored source-order index, deriving each carrier origin and
+The conductor registers flow and node assertion sites by authored source-order index,
+deriving each carrier origin and
 temporary positional range from the same retained item cursor. Duplicate text therefore
 remains occurrence-distinct; full roots and multi-node definitions retain flow assertion
 cursors and reuse their lowered carriers on START/END, while compact roots and flat
 single-node definitions project assertions onto their synthesized node. It also stamps
 source-backed bare/mapped root, multi-node-definition, and inline-child output values on the
 final `FlowOutput.binding` after rewrites; END reuses that binding, and output mapping keys
-stay origin-free. Only ordinary input keys belong to `Parameter`; ordinary, reserved, and
-flow-output values belong to `Binding`. Generated compact-root and single-node-definition
+stay origin-free. Flow-input declaration keys and ordinary node-input keys belong to
+`Parameter`; ordinary node-input, reserved, and flow-output bound values belong to `Binding`.
+Generated compact-root and single-node-definition
 reexports remain origin-free because their output declaration is a contract site whose origin
-remains deferred. Without a retained occurrence, Compose mints no origin and preserves any
-explicit programmatic origin. Private assembly leaves resolver installation to the loader.
+remains deferred only for authored node-output contract provenance. Without a retained
+occurrence, Compose mints no origin and preserves any explicit programmatic origin. Private
+assembly leaves resolver installation to the loader.
 At the physical-file boundary it performs the only successful-load freeze of the shared local
 catalog, combines exact reachable
 routes with lexically rebased alias tables, and sets `ComposedFlow.origin_resolver`; source-free

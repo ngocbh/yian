@@ -13,8 +13,10 @@ Modules:
                   `SourceCursor`; render-only metadata, never a YAML parser. Its boundary
                   field map covers inputs only—assertion origin/range pairs come from one
                   retained item cursor in the build conductor, not a helper-side map.
-  - `types`       `read_type` / `read_flow_inputs`: the `outputs:`/`inputs:` source
-                  side read into recursive `Type` / `Parameter` values.
+  - `types`       one recursive type-shape reader: `read_type` / `read_flow_inputs`
+                  are source-free, while `read_value_contract` /
+                  `read_source_flow_inputs` compile retained declaration cursors into
+                  `Parameter` / `ValueContract` carriers containing only opaque origins.
   - `uses`        `UsesRef` / `parse_uses_ref`: the `uses:` child-flow reference parser.
 
 The sibling `compose.source` package exclusively owns YAML parsing and its private

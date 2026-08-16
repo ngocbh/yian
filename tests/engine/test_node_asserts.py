@@ -37,14 +37,21 @@ output: ${{x.output}}
 """
 
 
+def _assertion_text(assertions: list[Assertion]) -> list[tuple[str, str]]:
+    """Project carriers onto the executable and authored text under test here."""
+    return [(assertion.expression, assertion.display) for assertion in assertions]
+
+
 # ---------- classify + stamp ----------
 
 
 def test_node_asserts_classify_pre_and_post():
     loaded = load_flow(_flow(["${output} >= 0", "${n} >= 0"]))
     x = loaded.compiled.nodes["x"]
-    assert x.post_asserts == [Assertion("${output} >= 0", "${output} >= 0")]
-    assert x.pre_asserts == [Assertion("${n} >= 0", "${n} >= 0")]
+    assert _assertion_text(x.post_asserts) == [
+        ("${output} >= 0", "${output} >= 0")
+    ]
+    assert _assertion_text(x.pre_asserts) == [("${n} >= 0", "${n} >= 0")]
 
 
 def test_node_assert_field_walk_uses_the_canonical_output_contract():
@@ -80,8 +87,8 @@ def test_node_asserts_classify_same_across_spellings(pre, post):
     # so the bare / mixed / whole-span spellings must classify identically: a `${n}`-only
     # (input) assert is pre, an `${output}`-reading assert is post.
     x = load_flow(_flow([post, pre])).compiled.nodes["x"]
-    assert x.post_asserts == [Assertion(post, post)]
-    assert x.pre_asserts == [Assertion(pre, pre)]
+    assert _assertion_text(x.post_asserts) == [(post, post)]
+    assert _assertion_text(x.pre_asserts) == [(pre, pre)]
 
 
 def test_duplicate_node_asserts_are_distinct_ordered_occurrences():
@@ -89,8 +96,11 @@ def test_duplicate_node_asserts_are_distinct_ordered_occurrences():
     text = "${n} >= 0"
     x = load_flow(_flow([text, text])).compiled.nodes["x"]
 
-    assert x.pre_asserts == [Assertion(text, text), Assertion(text, text)]
+    assert _assertion_text(x.pre_asserts) == [(text, text), (text, text)]
     assert x.pre_asserts[0] is not x.pre_asserts[1]
+    assert x.pre_asserts[0].origin is not None
+    assert x.pre_asserts[1].origin is not None
+    assert x.pre_asserts[0].origin != x.pre_asserts[1].origin
     assert len(x.pre_assert_ranges) == 2
 
 

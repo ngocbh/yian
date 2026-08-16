@@ -38,8 +38,10 @@ this back.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import Callable
 
 from agent_composer.compile.validation import _classify_path, _walk_record_fields
+from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.expr.template import flow_call_callees_in_spans
@@ -254,6 +256,10 @@ def validate_node_asserts(
     nodes: dict[str, Node],
     descriptors: dict,
     node_lines: "dict[str, int] | None" = None,
+    assertion_site_at: Callable[
+        [str, int],
+        tuple[OriginRef | None, SourceRange | None] | None,
+    ] | None = None,
 ) -> None:
     """Validate + classify + stamp each node's `asserts:` — the per-node contract.
 
@@ -264,7 +270,9 @@ def validate_node_asserts(
     `${call}`, `${output.field}` on a non-record output, a declared input named `output`, and
     any node assert on a mapped call (a `MapNode`, `kind: map` — the per-node hook has no `${item}` scope).
     Classifies each PRE (no `${output}`) or POST (reads `${output}`) and stamps
-    `node.pre_asserts` / `node.post_asserts`. Runs in the shared `_assemble`, so a `defs:`
+    `node.pre_asserts` / `node.post_asserts`. ``assertion_site_at`` optionally supplies each
+    carrier's opaque origin and temporary range from the same authored occurrence, keyed by
+    node id and original authored index. Runs in the shared `_assemble`, so a `defs:`
     subflow's internal nodes get this too. Accumulates all errors into one `LoadError`.
     """
     lines = node_lines or {}
@@ -346,12 +354,17 @@ def validate_node_asserts(
                     errors.append((
                         f"node {nid!r} assert: ${{{ref}}} is not a declared input or `${{output}}`",
                         line))
-            rng = aranges[i] if i < len(aranges) else None
+            site = assertion_site_at(nid, i) if assertion_site_at is not None else None
+            if site is None:
+                origin = None
+                rng = aranges[i] if i < len(aranges) else None
+            else:
+                origin, rng = site
             if reads_output:
-                post.append(Assertion(expression=a, display=a))
+                post.append(Assertion(expression=a, display=a, origin=origin))
                 post_r.append(rng)
             else:
-                pre.append(Assertion(expression=a, display=a))
+                pre.append(Assertion(expression=a, display=a, origin=origin))
                 pre_r.append(rng)
         node.pre_asserts = pre
         node.post_asserts = post

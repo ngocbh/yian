@@ -22,6 +22,7 @@ from dataclasses import dataclass, field, replace
 from typing import Callable, Optional, Protocol
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
+from agent_composer.diagnostics import OriginRef
 from agent_composer.events import SourceRange
 from agent_composer.nodes.base import FieldRanges, Node
 from agent_composer.nodes.contracts import Parameter, ValueContract, as_binding
@@ -306,6 +307,71 @@ def _register_inline_bodies(
     return associated
 
 
+def _assertion_cursors(
+    assertions: list,
+    asserts_cursor: SourceCursor | None,
+) -> tuple[SourceCursor | None, ...]:
+    """Align one retained assertion sequence with its semantic source order.
+
+    Args:
+        assertions (`list`):
+            Raw or carrierized assertion values in authored order.
+        asserts_cursor (`SourceCursor | None`):
+            Retained authored sequence, or ``None`` for a generated/source-free list.
+
+    Returns:
+        `tuple[SourceCursor | None, ...]`:
+            One item cursor per assertion. Source-free lists contain ``None`` entries.
+
+    Raises:
+        `LoadError`:
+            Raised when the retained sequence does not align with the semantic list.
+    """
+    if asserts_cursor is None:
+        return (None,) * len(assertions)
+    try:
+        cursors = asserts_cursor.children()
+    except SourceAccessError as exc:
+        raise LoadError(str(exc), range=exc.range) from exc
+    if len(cursors) != len(assertions):
+        raise LoadError(
+            "retained assertion cursor does not align with semantic assertions",
+            range=asserts_cursor.range,
+        )
+    return cursors
+
+
+def _register_assertion_origin(
+    cursor: SourceCursor | None,
+    site_path: tuple[str | int, ...],
+    catalog_builder: _SourceCatalogBuilder,
+) -> OriginRef | None:
+    """Register one authored assertion item without exposing source to consumers.
+
+    Args:
+        cursor (`SourceCursor | None`):
+            Authored list-item cursor, or ``None`` for a source-free assertion.
+        site_path (`tuple[str | int, ...]`):
+            Complete lexical semantic path for the assertion occurrence.
+        catalog_builder (`_SourceCatalogBuilder`):
+            File-owned origin catalog builder shared by all lexical children.
+
+    Returns:
+        `OriginRef | None`:
+            Opaque registered origin, or ``None`` when no physical site exists.
+
+    Raises:
+        `LoadError`:
+            Raised when the catalog site collides with another registration.
+    """
+    if cursor is None:
+        return None
+    try:
+        return catalog_builder.register(site_path, cursor)
+    except SourceAccessError as exc:
+        raise LoadError(str(exc), range=exc.range) from exc
+
+
 def _stamp_node_wiring_origins(
     descriptors: dict[str, NodeDescriptor],
     nodes_cursor: SourceCursor,
@@ -539,7 +605,7 @@ def _assemble(
     flow_env: Optional[dict] = None,
     source: Optional[SourceFrame] = None,
     boundary_field_ranges: Optional[dict] = None,
-    boundary_assert_ranges: Optional[list] = None,
+    asserts_cursor: SourceCursor | None = None,
     outputs_range: Optional[SourceRange] = None,
     outputs_cursor: SourceCursor | None = None,
 ) -> ComposedFlow:
@@ -560,8 +626,9 @@ def _assemble(
     top-level section key -> its 1-based header line; located descriptors refresh node lines
     after inline lowering, including inside a nested def.
     `owner` is this flow's complete lexical path and seeds stable identities for anonymous
-    children. `boundary_field_ranges`/`boundary_assert_ranges` locate synthesized boundary
-    behavior; `outputs_range` is the retained authored codomain range when one exists,
+    children. `boundary_field_ranges` locates synthesized boundary-input behavior;
+    `asserts_cursor` is the single authority for each flow assertion's temporary range and
+    durable origin. `outputs_range` is the retained authored codomain range when one exists,
     while `outputs_cursor` retains each physically authored output binding occurrence.
     `scope.catalog_builder` is the one registry shared by every assembly originating
     from this physical document, so root, definitions, and inline bodies mint
@@ -574,6 +641,9 @@ def _assemble(
             "_assemble requires exactly one of inputs_section or input_parameters"
         )
 
+    # Inline-body extraction masks child-only fields for descriptor parsing. Assertion
+    # provenance still belongs to the unmodified authored occurrence tree.
+    authored_nodes_cursor = nodes_cursor
     try:
         nodes_cursor, inline_bodies = extract_inline_bodies(
             nodes_cursor,
@@ -581,6 +651,46 @@ def _assemble(
         )
     except SourceAccessError as exc:
         raise LoadError(str(exc), range=exc.range) from exc
+
+    catalog_builder = scope.catalog_builder
+    flow_assertion_cursors = _assertion_cursors(asserts_section, asserts_cursor)
+    flow_assertion_ranges = [
+        cursor.range if cursor is not None else None
+        for cursor in flow_assertion_cursors
+    ]
+
+    def flow_assertion_origin_at(index: int) -> OriginRef | None:
+        """Return the registered origin for one authored flow assertion."""
+        return _register_assertion_origin(
+            flow_assertion_cursors[index],
+            (*owner, "assert", index),
+            catalog_builder,
+        )
+
+    def node_assertion_site_at(
+        node_id: str,
+        index: int,
+    ) -> tuple[OriginRef | None, SourceRange | None] | None:
+        """Return the origin and range from one authored assertion cursor."""
+        try:
+            if not authored_nodes_cursor.has(node_id):
+                return None
+            node_cursor = normalize_node_signature_cursor(
+                authored_nodes_cursor.child(node_id)
+            )
+            if not node_cursor.has("asserts"):
+                return None
+            cursor = node_cursor.child("asserts").child(index)
+        except SourceAccessError as exc:
+            raise LoadError(str(exc), range=exc.range) from exc
+        return (
+            _register_assertion_origin(
+                cursor,
+                (*owner, "node", node_id, "assert", index),
+                catalog_builder,
+            ),
+            cursor.range,
+        )
 
     # The flow's file label frames inline-CODE tracebacks; each inline node's content start
     # line is derived from its recorded `code:` range in the CODE build. Inert for reference-mode CODE.
@@ -614,7 +724,6 @@ def _assemble(
     }
     flow_inputs = {parameter.name for parameter in inputs}
     descriptors = parse_nodes(nodes_cursor)
-    catalog_builder = scope.catalog_builder
     try:
         descriptors = {
             node_id: replace(
@@ -677,8 +786,13 @@ def _assemble(
     # nodes as ordinary `call` nodes (build/edges/validate/DAG run unchanged).
     mint = _synth_id_gen()  # ONE synth-id minter shared by both inline-call desugars (no collision)
     descriptors, outputs_section, asserts_section = desugar_inline_calls(
-        descriptors, outputs_section, asserts_section=asserts_section,
-        outputs_line=s_lines.get("output") or s_lines.get("outputs"), asserts_line=s_lines.get("asserts"), next_id=mint,
+        descriptors,
+        outputs_section,
+        asserts_section=asserts_section,
+        outputs_line=s_lines.get("output") or s_lines.get("outputs"),
+        asserts_line=s_lines.get("asserts"),
+        assertion_origin_at=flow_assertion_origin_at,
+        next_id=mint,
     )
 
     # Lower each `human_input` `adaptive_questions:` block into a synth composer agent
@@ -948,16 +1062,21 @@ def _assemble(
     validate_human_questions(nodes, node_lines=n_lines)
     # Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post +
     # stamp onto each built leaf/call node. Shared by defs (a def's internal nodes too).
-    validate_node_asserts(nodes_built, descriptors, n_lines)
+    validate_node_asserts(
+        nodes_built,
+        descriptors,
+        n_lines,
+        assertion_site_at=node_assertion_site_at,
+    )
     # Lower the flow-level `asserts:` into node-local asserts stamped on the synthesized
     # START/END. Fires uniformly via eval_node — a cross-node post
     # assert's `${producer.output}` becomes a real END input edge, so it survives child cloning.
-    # `boundary_assert_ranges` is the POSITIONAL flow-`asserts:` source list (aligned 1:1 with the
-    # authored asserts), so each lowered START/END assert and each bad-ref `LoadError` carets by
-    # index — never by (non-unique) text; `None`/`[]` when spanless.
+    # `flow_assertion_ranges` comes from the same item cursors as each origin and stays aligned
+    # 1:1 with the authored assertions, so lowered START/END asserts and bad-ref errors locate by
+    # index — never by non-unique text. Source-free assertions carry `None`.
     lowered = lower_flow_asserts(
         asserts_section, flow_inputs, set(descriptors), producers,
-        assert_ranges=boundary_assert_ranges,
+        assert_ranges=flow_assertion_ranges,
     )
 
     # Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in

@@ -44,7 +44,6 @@ from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.helpers.uses import parse_uses_ref
 from agent_composer.compose.helpers.source import (
     SourceFrame,
-    _boundary_assert_ranges,
     _boundary_field_ranges,
     _section_lines,
 )
@@ -514,7 +513,11 @@ def _load_flow(
         flow_env=f.env,
         source=source,
         boundary_field_ranges=_boundary_field_ranges(root),
-        boundary_assert_ranges=_boundary_assert_ranges(root),
+        asserts_cursor=(
+            root.child("asserts")
+            if root.has("nodes") and root.has("asserts")
+            else None
+        ),
         outputs_cursor=(
             root.child("output")
             if root.has("nodes") and root.has("output")
@@ -824,6 +827,7 @@ def _load_def(
                 if def_cursor is not None
                 else None
             ),
+            asserts_cursor=_source_child(def_cursor, "asserts"),
             outputs_cursor=(
                 _source_child(def_cursor, "output")
                 or _source_child(def_cursor, "outputs")

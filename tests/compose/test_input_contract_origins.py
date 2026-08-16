@@ -257,6 +257,44 @@ nodes: {}
     assert caught.value.diagnostic.frames[-1].range == expected.key_range
 
 
+@pytest.mark.parametrize("key", ["true", "null", "1.5", "''"])
+@pytest.mark.parametrize("compact", [False, True], ids=["multi-node", "compact"])
+def test_invalid_definition_input_name_is_a_located_load_error(
+    key: str,
+    compact: bool,
+):
+    """Invalid nested signature keys never escape the Compose error boundary."""
+    body = (
+        f"""    kind: code
+    code: tests.engine._compose_codefns:echo_x
+    input:
+      {key}: int
+    output: int
+"""
+        if compact
+        else f"""    input:
+      {key}: int
+    nodes: {{}}
+"""
+    )
+    text = f"""\
+id: invalid-definition-input
+name: invalid-definition-input
+defs:
+  child:
+{body}nodes: {{}}
+"""
+    document = SourceDocument.parse(text)
+    input_cursor = document.root.child("defs").child("child").child("input")
+    invalid_name = next(iter(input_cursor.value))
+
+    with pytest.raises(LoadError, match="flow input names") as caught:
+        load_flow(text)
+
+    expected = input_cursor.child(invalid_name)
+    assert caught.value.diagnostic.frames[-1].range == expected.key_range
+
+
 @pytest.mark.parametrize("empty", ["null", "[]", "false", "0", "''"])
 def test_falsy_definition_input_keeps_existing_empty_normalization(empty: str):
     """Located compilation preserves the loader's established empty-def shorthand."""

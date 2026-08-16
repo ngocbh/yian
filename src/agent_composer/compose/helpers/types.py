@@ -368,6 +368,11 @@ def read_source_flow_inputs(
     try:
         for name, value in mapping.items():
             declaration_cursor = cursor.child(name)
+            if type(name) is not str or not name:
+                raise diagnostics.error(
+                    "flow input names must be non-empty strings",
+                    range=declaration_cursor.key_range or declaration_cursor.range,
+                )
             parameter_path = (*site_path, "input", name)
             parameter_origin = catalog_builder.register(
                 (*parameter_path, "parameter"),

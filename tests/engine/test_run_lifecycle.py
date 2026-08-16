@@ -691,7 +691,6 @@ def test_terminal_resume_preserves_recorded_trace_across_origin_rebase(
         version=loaded.version,
         name=loaded.name,
         description=loaded.description,
-        source=loaded.source,
         origin_resolver=resolver,
     )
     assert flow_fingerprint(rebased.compiled) == flow_fingerprint(loaded.compiled)

@@ -559,7 +559,6 @@ def test_composite_builders_preserve_or_deliberately_wrap_child_contract() -> No
     )
     child = SimpleNamespace(
         input=[],
-        source=None,
         compiled=SimpleNamespace(
             nodes={"producer": Node("producer", output_contract=contract)},
             outputs=[FlowOutput("result", "${producer.output}")],

@@ -8,7 +8,6 @@ import pytest
 
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.compose import ComposedFlow, load_flow
-from agent_composer.compose.helpers.source import SourceFrame
 from agent_composer.compose.source import SourceDocument
 from agent_composer.diagnostics import (
     Diagnostic,
@@ -27,12 +26,10 @@ def _composed_flow(
     resolver: OriginResolver | None,
     *,
     compiled: object | None = None,
-    source: object | None = None,
 ) -> ComposedFlow:
     """Construct a minimal Compose boundary around a test resolver."""
     return ComposedFlow(
         compiled=cast(CompiledFlow, compiled if compiled is not None else object()),
-        source=cast(SourceFrame, source),
         origin_resolver=resolver,
     )
 
@@ -328,7 +325,7 @@ def test_diagnose_frame_control_exception_propagates() -> None:
 def test_diagnose_reads_only_failure_and_resolver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Diagnosis never inspects compiled/source objects or reparses YAML."""
+    """Diagnosis never inspects the compiled graph or reparses YAML."""
 
     class ForbiddenSurface:
         def __getattribute__(self, name: str) -> object:
@@ -353,7 +350,6 @@ def test_diagnose_reads_only_failure_and_resolver(
     diagnostic = _composed_flow(
         ResolveOnly(),
         compiled=ForbiddenSurface(),
-        source=ForbiddenSurface(),
     ).diagnose(_failure(origin))
 
     assert diagnostic.frames == (frame,)

@@ -22,10 +22,11 @@ Only the loader (and the compose package root re-export) import this back.
 from __future__ import annotations
 
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+from agent_composer.events import SourceRange
 from agent_composer.expr import ExpressionError, expr_refs_of
-from agent_composer.compose.nodes.bindings import keyless, map_binding_strings
+from agent_composer.compose.nodes.bindings import map_binding_strings
 from agent_composer.compose.desugar.inline_calls import map_outputs_strings
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.compose.parse.file import CaseDescriptor
@@ -48,6 +49,8 @@ def expand_case_outputs(
     node_lines: "dict[str, int] | None" = None,
     outputs_line: "int | None" = None,
     asserts_line: "int | None" = None,
+    outputs_range: Optional[SourceRange] = None,
+    assertion_range_at: Optional[Callable[[int], Optional[SourceRange]]] = None,
 ) -> tuple:
     """Expand every `${<case>.output}` binding ref to a coalesce over the case's branch
     targets, returning `(new_descriptors, new_outputs)`.
@@ -56,34 +59,108 @@ def expand_case_outputs(
     the flow `outputs:` bindings; rewrites a clean whole-span case-output ref to the
     branch coalesce. Rejects (located `LoadError`) a case-value ref in a non-clean
     binding position, or in a `case` condition (`on:`/`when:`) or an `assert` — those are
-    not bindings. A flow with no `case` node returns its inputs unchanged."""
+    not bindings. Descriptor field/item ranges are preferred; ``outputs_range`` and
+    ``assertion_range_at`` locate section-owned sites. Legacy lines are used only when no
+    range exists. A flow with no `case` node returns its inputs unchanged."""
     case_ids = {nid for nid, d in descriptors.items() if isinstance(d, CaseDescriptor)}
     if not case_ids:
         return descriptors, outputs_section  # fast path
     lines = node_lines or {}
     targets = _case_leaf_targets(descriptors, case_ids)
 
-    new_descriptors = {
-        nid: map_binding_strings(
-            d, keyless(_expander(case_ids, targets, f"node {nid!r}", lines.get(nid)))
-        )
-        for nid, d in descriptors.items()
-    }
+    new_descriptors = {}
+    for nid, descriptor in descriptors.items():
+        def expand_binding(key: str, value: str, *, _descriptor=descriptor, _nid=nid) -> str:
+            binding_range = _binding_range(_descriptor, key)
+            return _expander(
+                case_ids,
+                targets,
+                f"node {_nid!r}",
+                None if binding_range is not None else lines.get(_nid),
+                range=binding_range,
+            )(value)
+
+        new_descriptors[nid] = map_binding_strings(descriptor, expand_binding)
+
     new_outputs = map_outputs_strings(
-        outputs_section, _expander(case_ids, targets, "flow outputs", outputs_line)
+        outputs_section,
+        _expander(
+            case_ids,
+            targets,
+            "flow outputs",
+            None if outputs_range is not None else outputs_line,
+            range=outputs_range,
+        ),
     )
 
     # A case value in a condition / assert (not a binding) is unsupported — loud.
     for nid, d in descriptors.items():
         if isinstance(d, CaseDescriptor):
-            conds = ([d.on] if d.on is not None else []) + [c.get("when") for c in d.cases]
-            _reject_case_refs(conds, case_ids, f"case node {nid!r} condition", lines.get(nid))
-    _reject_case_refs(asserts_section, case_ids, "assert", asserts_line)
+            if d.on is not None:
+                condition_range = _field_range(d, "on")
+                _reject_case_refs(
+                    [d.on],
+                    case_ids,
+                    f"case node {nid!r} condition",
+                    None if condition_range is not None else lines.get(nid),
+                    range=condition_range,
+                )
+            for index, case in enumerate(d.cases):
+                condition_range = _when_range(d, index)
+                _reject_case_refs(
+                    [case.get("when")],
+                    case_ids,
+                    f"case node {nid!r} condition",
+                    None if condition_range is not None else lines.get(nid),
+                    range=condition_range,
+                )
+    for index, assertion in enumerate(asserts_section or []):
+        assertion_range = (
+            assertion_range_at(index) if assertion_range_at is not None else None
+        )
+        _reject_case_refs(
+            [assertion],
+            case_ids,
+            "assert",
+            None if assertion_range is not None else asserts_line,
+            range=assertion_range,
+        )
 
     return new_descriptors, new_outputs
 
 
-def _expander(case_ids: set, targets: dict, host: str, line: Optional[int]):
+def _binding_range(descriptor: Any, key: str) -> Optional[SourceRange]:
+    """Return the narrowest available range for a descriptor binding."""
+    field_ranges = getattr(descriptor, "field_ranges", None) or {}
+    return (
+        field_ranges.get(("input", key))
+        or field_ranges.get(("field", key))
+        or getattr(descriptor, "range", None)
+    )
+
+
+def _field_range(descriptor: Any, name: str) -> Optional[SourceRange]:
+    """Return a scalar field's range, falling back to its descriptor range."""
+    field_ranges = getattr(descriptor, "field_ranges", None) or {}
+    return field_ranges.get(("field", name)) or getattr(descriptor, "range", None)
+
+
+def _when_range(descriptor: Any, index: int) -> Optional[SourceRange]:
+    """Return a case item's positional `when:` range with progressively coarser fallbacks."""
+    when_ranges = getattr(descriptor, "when_ranges", None) or []
+    if index < len(when_ranges) and when_ranges[index] is not None:
+        return when_ranges[index]
+    return _field_range(descriptor, "cases")
+
+
+def _expander(
+    case_ids: set,
+    targets: dict,
+    host: str,
+    line: Optional[int],
+    *,
+    range: Optional[SourceRange] = None,
+):
     """A `value -> value` binding transform: expand a clean WHOLE-SPAN case-output ref to
     the branch coalesce; reject a case ref in any non-clean position. Scans TOP-LEVEL
     `${…}` spans only — a case ref NESTED inside an enclosing span (e.g. a `:-` default
@@ -106,7 +183,16 @@ def _expander(case_ids: set, targets: dict, host: str, line: Optional[int]):
                 if j is None:  # unbalanced ${ — leave the rest for the binding parser
                     out.append(value[i:])
                     break
-                out.append(_expand_span(value[i + 2 : j], case_ids, targets, host, line))
+                out.append(
+                    _expand_span(
+                        value[i + 2 : j],
+                        case_ids,
+                        targets,
+                        host,
+                        None if range is not None else line,
+                        range=range,
+                    )
+                )
                 i = j + 1
             else:
                 out.append(value[i])
@@ -117,7 +203,13 @@ def _expander(case_ids: set, targets: dict, host: str, line: Optional[int]):
 
 
 def _expand_span(
-    interior: str, case_ids: set, targets: dict, host: str, line: Optional[int]
+    interior: str,
+    case_ids: set,
+    targets: dict,
+    host: str,
+    line: Optional[int],
+    *,
+    range: Optional[SourceRange] = None,
 ) -> str:
     """One TOP-LEVEL `${…}` span (its interior) -> the replacement `${…}` text.
 
@@ -137,11 +229,18 @@ def _expand_span(
                 raise LoadError(
                     f"{host}: ${{{cid}.output}} — case {cid!r} has no resolvable branch value "
                     f"(a case needs a `then:` or `else:`, and its targets must not form a cycle)",
-                    line=line,
+                    range=range,
+                    line=None if range is not None else line,
                 )
             # Emit the NEW node-first branch coalesce.
             return "${" + " | ".join(f"{t}.output{suffix}" for t in leaves) + "}"
-    _reject_case_refs(["${" + interior + "}"], case_ids, host, line)  # non-clean read -> loud
+    _reject_case_refs(
+        ["${" + interior + "}"],
+        case_ids,
+        host,
+        None if range is not None else line,
+        range=range,
+    )  # non-clean read -> loud
     return "${" + interior + "}"
 
 
@@ -166,7 +265,14 @@ def _span_end(s: str, start: int) -> Optional[int]:
     return None
 
 
-def _reject_case_refs(strings, case_ids: set, where: str, line: Optional[int]) -> None:
+def _reject_case_refs(
+    strings,
+    case_ids: set,
+    where: str,
+    line: Optional[int],
+    *,
+    range: Optional[SourceRange] = None,
+) -> None:
     """Raise a located `LoadError` if any string reads a `${<case>.output}` value
     (`<case>` a case node id) — the floor for the non-clean / condition / assert
     positions where the value-case is not supported."""
@@ -189,7 +295,8 @@ def _reject_case_refs(strings, case_ids: set, where: str, line: Optional[int]) -
                     f"{where}: ${{{case_id}.output}} (a case value) is only supported as a "
                     f"whole single reference in a binding — not in a coalesce / default / "
                     f"condition / assert (only the `then:/else: call(...)` value form is supported)",
-                    line=line,
+                    range=range,
+                    line=None if range is not None else line,
                 )
 
 

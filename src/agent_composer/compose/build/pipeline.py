@@ -782,6 +782,10 @@ def _assemble(
             catalog_builder,
         )
 
+    def flow_assertion_range_at(index: int) -> SourceRange | None:
+        """Return one authored flow assertion's retained positional range."""
+        return flow_assertion_ranges[index]
+
     def node_assertion_site_at(
         node_id: str,
         index: int,
@@ -906,6 +910,8 @@ def _assemble(
         asserts_section=asserts_section,
         outputs_line=s_lines.get("output") or s_lines.get("outputs"),
         asserts_line=s_lines.get("asserts"),
+        outputs_range=outputs_range,
+        assertion_range_at=flow_assertion_range_at,
         assertion_origin_at=flow_assertion_origin_at,
         next_id=mint,
     )
@@ -931,6 +937,8 @@ def _assemble(
         node_lines=n_lines,
         outputs_line=s_lines.get("output") or s_lines.get("outputs"),
         asserts_line=s_lines.get("asserts"),
+        outputs_range=outputs_range,
+        assertion_range_at=flow_assertion_range_at,
     )
 
     descriptor_cache: _DescriptorBuildCache | None = None

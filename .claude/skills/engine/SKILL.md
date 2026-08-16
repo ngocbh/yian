@@ -47,9 +47,10 @@ Hold this model whenever you design anything:
   without a `NodeKind` branch.
 - `diagnostics.ResolverTable` composes opaque namespaces through exact
   new-origin-to-delegate/old-origin routes without parsing keys or resolver
-  fallback. `compile.rebase_flow_origins` maps each distinct reachable old origin
+  fallback. `compile.rebase_flow_origins` maps each distinct reachable old key
   once and returns the rewritten graph with its exact table; source-free graphs
-  need no resolver. Lexical key construction remains a front-end responsibility.
+  must carry no resolver. Lexical key construction remains a front-end
+  responsibility.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;

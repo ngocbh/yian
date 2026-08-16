@@ -173,18 +173,18 @@ they contain an `OriginRef`. Origins remain excluded from manifests,
 fingerprints, and expansion digests.
 
 `diagnostics.ResolverTable` composes opaque namespaces without owning any source
-format. Each public origin routes to exactly one delegate resolver and one origin
-in that delegate's namespace. Duplicate public origins are rejected; unknown
-origins return `None`; and the selected delegate's result or exception passes
-through unchanged. The table never parses keys or introduces resolver precedence.
+format. Each public origin key routes to exactly one delegate resolver and one origin
+in that delegate's namespace. Duplicate public keys are rejected; unknown
+origins return `None`; delegate exceptions propagate; and malformed delegate
+results are rejected. The table never parses keys or introduces resolver precedence.
 
 `rebase_flow_origins(flow, mapper, resolver=...)` pairs a pure graph rewrite with
 those exact routes. It preserves first structural-visit order while deduplicating
-reachable old origins by equality, calls `mapper` once per distinct old origin,
-and rejects collisions between distinct mapped origins before rewriting through
+reachable old origins by their opaque key, calls `mapper` once per distinct old key,
+and rejects collisions between distinct mapped keys before rewriting through
 the precomputed map. The result is an independent graph of the same concrete type
 plus a table containing only its reachable routes. An originful graph requires a
-resolver; a source-free graph accepts `None` and returns an empty table. The
+resolver; a source-free graph requires `None` and returns an empty table. The
 operation defines no lexical key policy and knows nothing about Compose or YAML.
 
 ## One-pass source ownership

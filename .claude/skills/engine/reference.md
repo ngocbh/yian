@@ -352,17 +352,18 @@ carriers remain distinct occurrences. Neither operation inspects binding
 sources, parameter defaults, node environments, or render metadata.
 
 `diagnostics.ResolverTable` is an immutable collision-safe routing value. Each
-public `OriginRef` selects exactly one `(delegate resolver, old OriginRef)` pair;
-construction and merge reject duplicate public origins, unknown origins return
-`None`, and delegate results or exceptions pass through. It does not parse keys,
-try resolvers in order, or add fallback precedence.
+public `OriginRef.key` selects exactly one `(delegate resolver, old OriginRef)`
+pair; construction and merge reject duplicate public keys, unknown origins return
+`None`, delegate exceptions propagate, and malformed delegate results are
+rejected. It does not parse keys, try resolvers in order, or add fallback
+precedence.
 
 `compile.origins.rebase_flow_origins(flow, mapper, resolver=...)` first
-ordered-deduplicates reachable old origins by equality. It calls `mapper` once
-per distinct old origin, rejects collisions between distinct mapped origins, and
+ordered-deduplicates reachable old origins by opaque key. It calls `mapper` once
+per distinct old key, rejects collisions between distinct mapped keys, and
 uses that precomputed mapping to return an independent same-type graph plus a
 table containing exactly its reachable routes. An originful graph requires an
-`OriginResolver`; a source-free graph accepts `None` and returns an empty table.
+`OriginResolver`; a source-free graph requires `None` and returns an empty table.
 Traversal and rewriting preserve their existing alias/cycle guarantees.
 
 Origin changes remain manifest-, fingerprint-, and expansion-digest-neutral.

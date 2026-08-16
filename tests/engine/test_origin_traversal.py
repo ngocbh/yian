@@ -690,10 +690,14 @@ def test_rewriting_origins_preserves_manifest_and_stable_identity() -> None:
 
 
 def test_rebase_maps_equal_origins_once_and_routes_the_exact_old_identity() -> None:
-    """Equal refs share one new key and one exact route across distinct carriers."""
+    """Equal keys share one new identity and route across distinct carrier classes."""
     old = _origin("opaque/~and/slash")
     binding = Binding(1, old)
-    node = Node("only", origin=_origin("opaque/~and/slash"))
+
+    class DerivedOrigin(OriginRef):
+        """Distinct Python class that retains the same opaque key contract."""
+
+    node = Node("only", origin=DerivedOrigin("opaque/~and/slash"))
     flow = Flow(
         nodes={"only": node},
         edges=[],
@@ -821,6 +825,34 @@ def test_rebase_rejects_invalid_mapper_results(invalid: Any) -> None:
         )
 
 
+def test_rebase_revalidates_origin_subclass_keys() -> None:
+    """Subclass overrides cannot introduce an empty old or mapped opaque key."""
+
+    class InvalidOrigin(OriginRef):
+        def __post_init__(self) -> None:
+            pass
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return None
+
+    invalid = InvalidOrigin("")
+    flow = Flow(
+        nodes={"only": Node("only", origin=invalid)},
+        edges=[],
+        wiring={"only": {}},
+        start_id="only",
+        end_id="only",
+    )
+
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        rebase_flow_origins(flow, lambda origin: origin, resolver=Resolver())
+
+    flow.nodes["only"].origin = _origin("valid")
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        rebase_flow_origins(flow, lambda _origin: invalid, resolver=Resolver())
+
+
 def test_rebase_source_free_graph_returns_an_independent_copy_and_empty_table() -> None:
     """Python-built graphs need no front-end resolver when no origins are present."""
     node = Node("python")
@@ -841,6 +873,12 @@ def test_rebase_source_free_graph_returns_an_independent_copy_and_empty_table() 
     assert rebased.nodes["python"] is not node
     assert list(iter_flow_origins(rebased)) == []
     assert len(table) == 0
+
+    with pytest.raises(
+        ValueError,
+        match="source-free flow cannot have an origin resolver",
+    ):
+        rebase_flow_origins(flow, unexpected, resolver=ResolverTable())
 
 
 def test_rebase_retains_a_deliberate_child_cycle() -> None:

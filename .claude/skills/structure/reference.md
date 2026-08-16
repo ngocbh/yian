@@ -89,8 +89,8 @@ origins, and CALL/MAP/LOOP additionally own cached child-signature origins and
 expose their baked child through `origin_children()`.
 
 `diagnostics.ResolverTable` owns source-neutral namespace composition at the
-lowest layer. Every public origin has one exact delegate/old-origin route;
-duplicates fail instead of gaining precedence, and keys remain opaque.
+lowest layer. Every public origin key has one exact delegate/old-origin route;
+duplicate keys fail instead of gaining precedence, and keys remain opaque.
 
 `compile/origins.py` owns the graph-wide operation because `compile` already owns
 `Flow` wiring and `CompiledFlow.outputs`. It combines the node hooks with
@@ -101,11 +101,12 @@ cycles without a `nodes -> compile` back-edge,
 reflection, or `NodeKind` dispatch. Semantic payloads remain opaque, and origin
 changes do not affect manifests or fingerprints.
 
-Its `rebase_flow_origins` operation ordered-deduplicates reachable old origins,
-precomputes one collision-free mapped origin per old identity, and returns the
+Its `rebase_flow_origins` operation ordered-deduplicates reachable old origins by
+opaque key, precomputes one collision-free mapped origin per old key, and returns the
 same-type graph copy plus a `ResolverTable` containing exactly those routes. An
-origin-free graph needs no resolver. Neither layer defines lexical key encoding;
-installing a complete returned-flow resolver remains higher front-end work.
+origin-free graph must carry no resolver. Neither layer defines lexical key
+encoding; installing a complete returned-flow resolver remains higher front-end
+work.
 
 ## Compose front-end ownership: source once, project thereafter
 

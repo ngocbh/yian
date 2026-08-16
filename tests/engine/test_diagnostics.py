@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import ast
 import copy
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 import subprocess
 import sys
+from typing import NamedTuple
 
 import pytest
 
@@ -101,9 +102,15 @@ def test_resolver_table_routes_each_new_origin_to_one_exact_delegate_origin() ->
     second = Resolver("second", second_frame)
     first_new = OriginRef("call/a")
     second_new = OriginRef("call/b")
+
+    class Entry(NamedTuple):
+        new: OriginRef
+        delegate: OriginResolver
+        old: OriginRef
+
     table = ResolverTable.from_entries(
         [
-            (first_new, first, OriginRef("local")),
+            Entry(first_new, first, OriginRef("local")),
             (second_new, second, OriginRef("local")),
         ]
     )
@@ -164,15 +171,40 @@ def test_resolver_table_rejects_duplicate_routes_before_information_is_lost() ->
     new = OriginRef("same")
     old = OriginRef("old")
 
+    class DerivedOrigin(OriginRef):
+        """Distinct Python class that still names the same opaque identity."""
+
     with pytest.raises(ValueError, match="duplicate resolver table origin 'same'"):
         ResolverTable.from_entries(
-            [(new, resolver, old), (new, resolver, old)]
+            [(new, resolver, old), (DerivedOrigin("same"), resolver, old)]
         )
 
     first = ResolverTable.from_entries([(new, resolver, old)])
     second = ResolverTable.from_entries([(new, resolver, old)])
     with pytest.raises(ValueError, match="duplicate resolver table origin 'same'"):
         ResolverTable.merge(first, second)
+
+
+def test_resolver_table_revalidates_subclass_keys_before_routing() -> None:
+    """A subclass cannot bypass the canonical origin key invariant."""
+
+    class InvalidOrigin(OriginRef):
+        def __post_init__(self) -> None:
+            pass
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return None
+
+    invalid = InvalidOrigin("")
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        ResolverTable.from_entries(
+            [(invalid, Resolver(), OriginRef("old"))]
+        )
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        ResolverTable.from_entries(
+            [(OriginRef("new"), Resolver(), invalid)]
+        )
 
 
 def test_resolver_table_is_defensive_immutable_and_propagates_delegate_failures() -> None:
@@ -187,8 +219,33 @@ def test_resolver_table_is_defensive_immutable_and_propagates_delegate_failures(
     entries.clear()
 
     assert len(table) == 1
+    assert copy.copy(table) is table
     assert copy.deepcopy(table) is table
+    with pytest.raises(AttributeError, match="immutable"):
+        table._targets = {}  # type: ignore[attr-defined]
+    with pytest.raises(AttributeError, match="immutable"):
+        del table._targets  # type: ignore[attr-defined]
+    with pytest.raises(TypeError, match="dataclass"):
+        replace(table)
     with pytest.raises(RuntimeError, match="cannot resolve old"):
+        table.resolve(OriginRef("new"))
+
+
+def test_resolver_table_rejects_delegate_results_outside_the_protocol() -> None:
+    """A structural delegate must still return one diagnostic frame or `None`."""
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return "not-a-frame"  # type: ignore[return-value]
+
+    table = ResolverTable.from_entries(
+        [(OriginRef("new"), Resolver(), OriginRef("old"))]
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="delegate must return a DiagnosticFrame or None",
+    ):
         table.resolve(OriginRef("new"))
 
 
@@ -212,6 +269,16 @@ def test_resolver_table_is_defensive_immutable_and_propagates_delegate_failures(
                 [(OriginRef("new"), ResolverTable(), "old")]  # type: ignore[list-item]
             ),
             "old origin must be an OriginRef",
+        ),
+        (
+            lambda: ResolverTable.from_entries(
+                [(OriginRef("new"), ResolverTable())]  # type: ignore[list-item]
+            ),
+            "entry must be a three-item tuple",
+        ),
+        (
+            lambda: ResolverTable({}),  # type: ignore[call-arg]
+            "positional argument",
         ),
         (
             lambda: ResolverTable.merge(ResolverTable(), object()),  # type: ignore[arg-type]

@@ -9,7 +9,7 @@ derivation preserves those carriers and projects `.type` only inside type algori
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, TypeAlias
+from typing import Any, Callable, Iterator, TypeAlias, cast
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.typesys import Type
@@ -77,6 +77,10 @@ class Binding:
         origin = _map_origin(self.origin, mapper)
         return Binding(source=self.source, origin=origin)
 
+    def iter_origins(self) -> Iterator[OriginRef]:
+        """Yield this binding's present origin."""
+        yield from _iter_origin_carrier(self, set())
+
 
 @dataclass(frozen=True)
 class Assertion:
@@ -104,6 +108,10 @@ class Assertion:
             display=self.display,
             origin=origin,
         )
+
+    def iter_origins(self) -> Iterator[OriginRef]:
+        """Yield this assertion's present origin."""
+        yield from _iter_origin_carrier(self, set())
 
 
 @dataclass(frozen=True)
@@ -167,6 +175,10 @@ class ContractOrigins:
         entries = tuple((path, _map_origin(origin, mapper)) for path, origin in self.entries)
         return ContractOrigins(default=default, entries=entries)
 
+    def iter_origins(self) -> Iterator[OriginRef]:
+        """Yield the default then nested origins in canonical path order."""
+        yield from _iter_origin_carrier(self, set())
+
 
 @dataclass(frozen=True)
 class ValueContract:
@@ -190,6 +202,10 @@ class ValueContract:
     def map_origins(self, mapper: _OriginMapper) -> ValueContract:
         """Return this contract with nested origins transformed, retaining its type."""
         return ValueContract(type=self.type, origins=self.origins.map_origins(mapper))
+
+    def iter_origins(self) -> Iterator[OriginRef]:
+        """Yield this contract's root and nested origins in canonical order."""
+        yield from _iter_origin_carrier(self, set())
 
 
 @dataclass(frozen=True)
@@ -250,6 +266,118 @@ class Parameter:
             origin=origin,
             default_origin=default_origin,
         )
+
+    def iter_origins(self) -> Iterator[OriginRef]:
+        """Yield contract, declaration, then default origins in stable order."""
+        yield from _iter_origin_carrier(self, set())
+
+
+_OriginCarrier: TypeAlias = (
+    Binding | Assertion | ContractOrigins | ValueContract | Parameter
+)
+
+
+def _iter_origin_carrier(
+    carrier: _OriginCarrier,
+    seen: set[int],
+) -> Iterator[OriginRef]:
+    """Yield one frozen carrier graph once, preserving its semantic origin order."""
+    identity = id(carrier)
+    if identity in seen:
+        return
+    seen.add(identity)
+
+    if isinstance(carrier, Binding):
+        _validate_optional_origin(carrier.origin, "binding origin")
+        if carrier.origin is not None:
+            yield carrier.origin
+        return
+    if isinstance(carrier, Assertion):
+        _validate_optional_origin(carrier.origin, "assertion origin")
+        if carrier.origin is not None:
+            yield carrier.origin
+        return
+    if isinstance(carrier, ContractOrigins):
+        _validate_optional_origin(carrier.default, "contract default origin")
+        if carrier.default is not None:
+            yield carrier.default
+        for _, origin in carrier.entries:
+            if not isinstance(origin, OriginRef):
+                raise TypeError("contract entry origin must be an OriginRef")
+            yield origin
+        return
+    if isinstance(carrier, ValueContract):
+        yield from _iter_origin_carrier(carrier.origins, seen)
+        return
+    if isinstance(carrier, Parameter):
+        if carrier.contract is not None:
+            yield from _iter_origin_carrier(carrier.contract, seen)
+        _validate_optional_origin(carrier.origin, "parameter origin")
+        _validate_optional_origin(carrier.default_origin, "parameter default origin")
+        if carrier.origin is not None:
+            yield carrier.origin
+        if carrier.default_origin is not None:
+            yield carrier.default_origin
+        return
+    raise TypeError(f"unsupported origin carrier: {type(carrier).__name__}")
+
+
+def _rewrite_origin_carrier(
+    carrier: _OriginCarrier,
+    mapper: _OriginMapper,
+    seen: set[int],
+) -> None:
+    """Rewrite one carrier in a private copy without replacing its identity."""
+    identity = id(carrier)
+    if identity in seen:
+        return
+    seen.add(identity)
+
+    # Public carriers remain frozen. Bypassing their generated setter only on the
+    # unreachable private copy preserves payload back-references to these objects.
+    if isinstance(carrier, Binding):
+        object.__setattr__(
+            carrier,
+            "origin",
+            _map_origin(carrier.origin, mapper),
+        )
+    elif isinstance(carrier, Assertion):
+        object.__setattr__(
+            carrier,
+            "origin",
+            _map_origin(carrier.origin, mapper),
+        )
+    elif isinstance(carrier, ContractOrigins):
+        object.__setattr__(
+            carrier,
+            "default",
+            _map_origin(carrier.default, mapper),
+        )
+        object.__setattr__(
+            carrier,
+            "entries",
+            tuple(
+                (path, cast(OriginRef, _map_origin(origin, mapper)))
+                for path, origin in carrier.entries
+            ),
+        )
+    elif isinstance(carrier, ValueContract):
+        _rewrite_origin_carrier(carrier.origins, mapper, seen)
+    elif isinstance(carrier, Parameter):
+        if carrier.contract is not None:
+            _rewrite_origin_carrier(carrier.contract, mapper, seen)
+        object.__setattr__(
+            carrier,
+            "origin",
+            _map_origin(carrier.origin, mapper),
+        )
+        object.__setattr__(
+            carrier,
+            "default_origin",
+            _map_origin(carrier.default_origin, mapper),
+        )
+    else:
+        raise TypeError(f"unsupported origin carrier: {type(carrier).__name__}")
 
 
 def as_binding(value: Any) -> Binding:

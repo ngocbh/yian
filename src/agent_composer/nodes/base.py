@@ -21,13 +21,21 @@ from abc import ABC
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, ClassVar, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Iterator, Optional, Union
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.binding import apply_defaults
-from agent_composer.nodes.contracts import Assertion, Parameter, ValueContract
+from agent_composer.nodes.contracts import (
+    Assertion,
+    Parameter,
+    ValueContract,
+    _iter_origin_carrier,
+    _map_origin,
+    _rewrite_origin_carrier,
+    _validate_optional_origin,
+)
 
 if TYPE_CHECKING:
     from agent_composer.events import SourceRange
@@ -343,6 +351,83 @@ class Node(ABC):
         # order, first-failure-wins, located by position). `[]` for a node with no asserts.
         self.pre_assert_ranges: list[Optional["SourceRange"]] = []
         self.post_assert_ranges: list[Optional["SourceRange"]] = []
+
+    def iter_local_origins(
+        self,
+        *,
+        _seen_carriers: Optional[set[int]] = None,
+    ) -> Iterator[OriginRef]:
+        """Yield this node's source-neutral origins without following child flows.
+
+        Args:
+            _seen_carriers (`set[int]`, *optional*, defaults to `None`):
+                Shared identities already visited by a graph traversal. `None`
+                starts an independent local traversal.
+
+        Yields:
+            `OriginRef`:
+                Present node, output-contract, parameter, and assertion origins
+                in deterministic structural order. Shared frozen carriers yield
+                once per traversal.
+        """
+        seen = _seen_carriers if _seen_carriers is not None else set()
+        _validate_optional_origin(self.origin, "node origin")
+        if self.origin is not None:
+            yield self.origin
+        if self.output_contract is not None:
+            yield from _iter_origin_carrier(self.output_contract, seen)
+        if self.params is not None:
+            for parameter in self.params:
+                yield from _iter_origin_carrier(parameter, seen)
+        for assertion in self.pre_asserts:
+            yield from _iter_origin_carrier(assertion, seen)
+        for assertion in self.post_asserts:
+            yield from _iter_origin_carrier(assertion, seen)
+
+    def rewrite_local_origins(
+        self,
+        mapper: Callable[[OriginRef], OriginRef],
+        *,
+        _seen_carriers: Optional[set[int]] = None,
+    ) -> None:
+        """Rewrite this node's local origins while retaining carrier aliases.
+
+        This mutating hook is for a compile-owned private graph copy. Public graph
+        rewriting copies the complete root before invoking it, so an authored graph
+        is never changed in place.
+
+        Args:
+            mapper (`Callable[[OriginRef], OriginRef]`):
+                Pure transform for each present origin. It must return an
+                `OriginRef`; exceptions propagate.
+            _seen_carriers (`set[int]`, *optional*, defaults to `None`):
+                Graph-wide carrier identities already rewritten. `None` starts
+                an independent local rewrite.
+
+        Raises:
+            TypeError:
+                Raised when `mapper` returns a value other than `OriginRef`.
+        """
+        seen = _seen_carriers if _seen_carriers is not None else set()
+        _validate_optional_origin(self.origin, "node origin")
+        self.origin = _map_origin(self.origin, mapper)
+        if self.output_contract is not None:
+            _rewrite_origin_carrier(self.output_contract, mapper, seen)
+        if self.params is not None:
+            for parameter in self.params:
+                _rewrite_origin_carrier(parameter, mapper, seen)
+        for assertion in self.pre_asserts:
+            _rewrite_origin_carrier(assertion, mapper, seen)
+        for assertion in self.post_asserts:
+            _rewrite_origin_carrier(assertion, mapper, seen)
+
+    def origin_children(self) -> tuple[Any, ...]:
+        """Return static child flows whose origins belong to this node.
+
+        The base node has no child. Higher-order node packages override this
+        without importing the compile layer that owns traversal.
+        """
+        return ()
 
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Template method: fill declared defaults for omitted inputs, fire pre-asserts

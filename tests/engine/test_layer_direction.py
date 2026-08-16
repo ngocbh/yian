@@ -120,6 +120,17 @@ def test_semantic_contracts_import_only_their_declared_project_leaves() -> None:
     )
 
 
+def test_compile_never_imports_front_end_or_runtime() -> None:
+    """Compile owns source-neutral graph transforms, not loading or execution."""
+    violations = []
+    for forbidden in ("agent_composer.compose", "agent_composer.runtime"):
+        violations.extend(_forbidden_imports(PACKAGE_ROOT / "compile", forbidden))
+    assert not violations, (
+        "compile must stay representation-neutral and execution-free:\n"
+        + "\n".join(violations)
+    )
+
+
 def test_checkpoint_era_suspension_package_is_deleted() -> None:
     """Keep durable lifecycle authority in runtime logs, not a parallel package."""
     assert not (PACKAGE_ROOT / "suspension").exists()

@@ -414,6 +414,28 @@ def test_parse_structured_input_does_not_hide_validator_faults(monkeypatch):
     assert captured.value is fault
 
 
+def test_structured_prompt_does_not_turn_plain_value_error_into_a_verdict(monkeypatch):
+    fault = ValueError("validator implementation failed")
+
+    def fail(_typ, _value):
+        raise fault
+
+    fake = _FakeQuestionary({"items": _Attempts(("[]",))})
+    monkeypatch.setattr(climod, "build_value_as", fail)
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    with pytest.raises(ValueError) as captured:
+        _gather_missing_inputs(
+            [_parameter("items", Type.scalar(ValueKind.LIST_ANY), required=True)],
+            {},
+            prompt_available=True,
+        )
+
+    assert captured.value is fault
+    assert fake.calls[0].verdicts == []
+
+
 def test_parse_kv_keeps_structured_looking_values_as_strings():
     parsed = _parse_kv(["items=[1, 2]", 'profile={"count": 2}'])
 

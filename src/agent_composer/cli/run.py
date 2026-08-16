@@ -634,6 +634,10 @@ def _flow_banner(
     return Panel(body, border_style="cyan", expand=False)
 
 
+class _StructuredInputError(ValueError):
+    """An expected user-value rejection from a structured text prompt."""
+
+
 def _parse_structured_input(
     raw: str,
     typ: Type,
@@ -654,22 +658,23 @@ def _parse_structured_input(
         `list[Any] | dict[str, Any]`: The native JSON array or object.
 
     Raises:
-        `ValueError`: JSON syntax, root shape, or recursive contract rejection.
+        `_StructuredInputError`: JSON syntax, root shape, or recursive contract
+            rejection. This remains a ``ValueError`` for direct callers.
         `TypeError`: ``typ`` is not a list or object contract.
     """
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(
+        raise _StructuredInputError(
             f"Invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
         ) from None
 
     if typ.kind.is_list():
         if not isinstance(parsed, list):
-            raise ValueError("Expected a JSON array")
+            raise _StructuredInputError("Expected a JSON array")
     elif typ.kind == ValueKind.OBJECT:
         if not isinstance(parsed, dict):
-            raise ValueError("Expected a JSON object")
+            raise _StructuredInputError("Expected a JSON object")
     else:
         raise TypeError("structured prompt type must be a list or object")
 
@@ -680,7 +685,7 @@ def _parse_structured_input(
             f"[{segment}]" if type(segment) is int else f"[{json.dumps(segment)}]"
             for segment in exc.path
         )
-        raise ValueError(f"{path}: {exc}") from None
+        raise _StructuredInputError(f"{path}: {exc}") from None
 
     return parsed
 
@@ -763,7 +768,7 @@ def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
                 return True
             try:
                 _parse_structured_input(raw, typ)
-            except ValueError as exc:
+            except _StructuredInputError as exc:
                 return str(exc)
             return True
 

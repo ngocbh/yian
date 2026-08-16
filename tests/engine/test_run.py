@@ -160,8 +160,12 @@ def test_case_gate_binds_from_flow_wiring():
     # a case's desugared CaseNode binds its __rN inputs from
     # flow.wiring (the sources relocated off the node); the gate carries only param names.
     loaded = load_flow(_CASE_FLOW)
-    assert loaded.compiled.wiring["gate"] == {"__r0": Binding("${score.output}")}
-    assert [p.name for p in loaded.compiled.nodes["gate"].params] == ["__r0"]
+    gate = loaded.compiled.nodes["gate"]
+    binding = loaded.compiled.wiring["gate"]["__r0"]
+    assert isinstance(binding, Binding)
+    assert binding.source == "${score.output}"
+    assert binding.origin == gate.cases[0].origin
+    assert [p.name for p in gate.params] == ["__r0"]
     result = run_flow(loaded, {"topic": "BETA", "seed": 0.7})
     assert result.status == "succeeded", result.failure
     assert result.output == "pro case for BETA"

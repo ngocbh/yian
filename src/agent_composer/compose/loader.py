@@ -21,8 +21,15 @@ are name/arity- and type-checked against it) AND bakes the callable's compiled f
 in-file defs loads resolver-free; a `call` to a non-def callable without a resolver is
 loud. `run_flow` stays resolver-free.
 
+Source resolution follows the same two cache boundaries. A physical-file cache entry is
+canonical and complete. `_CallableScope` validates it, copies/rebases its compiled origins
+once per lexical `uses:` alias, and reuses that alias view at every callsite. After the
+root is assembled, this module freezes the one document catalog, filters local and alias
+authorities to the exact reachable keys, and installs `ComposedFlow.origin_resolver`.
+Source-free graphs carry `None`; private `_assemble` products keep the resolver unset.
+
 Imports flow DOWN only: this module composes the compose package's own slices plus
-`typesys`/`compile.model`; nothing in the engine imports it back.
+`typesys`/`compile`; nothing in the engine imports it back.
 """
 
 from __future__ import annotations

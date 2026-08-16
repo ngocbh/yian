@@ -21,7 +21,7 @@ These names are exported from the top-level `agent_composer` package:
 |------|------------|
 | `load_flow` | parse + compile + validate Compose-YAML into a `ComposedFlow` |
 | `run_flow` | drive a `ComposedFlow` to a terminal, returning a `RunResult` |
-| `ComposedFlow` | a compiled, validated flow ready to run |
+| `ComposedFlow` | a compiled, validated flow plus its optional complete `origin_resolver` |
 | `CompiledFlow` | the compiled flow IR (`loaded.compiled`) |
 | `VariablePool` | the typed value pool |
 | `evaluate_when` | evaluate a boolean `when:`/assert expression |
@@ -51,6 +51,11 @@ default. Pass `search_paths` so that a flow's `call:` / `uses:` references resol
 relative to the flow file's directory — typically `search_paths=[flow_dir]`.
 Raises `LoadError` / `FlowValidationError` on a bad flow (compile-time errors
 surface here, not at run time).
+
+The returned `ComposedFlow.origin_resolver` has one exact route for every
+reachable source origin. It is `None` only for a source-free graph. External
+files remain canonical in the path cache; each `uses:` alias embeds a rebased
+copy whose routes still resolve to the original file.
 
 ## `run_flow`
 

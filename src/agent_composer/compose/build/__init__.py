@@ -27,8 +27,9 @@ The LAST compose phase before the loader. Three modules:
   also associates retained inline bodies with their final descriptors, registers lazy
   builders through the loader-owned callable-scope seam, and uses one success-only
   descriptor cache for on-demand signature dependencies.
-  `ComposedFlow._local_catalog` is a frozen document-local staging snapshot, not a
-  complete resolver for embedded external flows.
+  Private assembly leaves `ComposedFlow.origin_resolver` unset because the shared
+  document catalog may still grow. The loader alone freezes and composes the exact
+  returned-flow resolver after the physical-file root is complete.
 - `inline_inputs.py` — strict structural type inference for parameters of generated
   inline-composite child flows. It distinguishes top-level binding strings from nested
   literal strings, walks nullable record paths, proves MAP item types only on demand,

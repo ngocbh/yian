@@ -146,21 +146,24 @@ final `FlowOutput.binding` after rewrites; END reuses that binding, and output m
 stay origin-free. Only ordinary input keys belong to `Parameter`; ordinary, reserved, and
 flow-output values belong to `Binding`. Generated compact-root and single-node-definition
 reexports remain origin-free because their output declaration is a contract site whose origin
-remains deferred. It then
-freezes a snapshot on each `ComposedFlow._local_catalog`; without a retained occurrence,
-Compose mints no origin and preserves any explicit programmatic origin. The private field cannot
-stand in for a returned-flow resolver until external
-child origins are rebased into the caller's lexical namespace.
+remains deferred. Without a retained occurrence, Compose mints no origin and preserves any
+explicit programmatic origin. Private assembly leaves resolver installation to the loader.
+At the physical-file boundary it freezes the shared local catalog, combines exact reachable
+routes with lexically rebased alias tables, and sets `ComposedFlow.origin_resolver`; source-free
+graphs use `None`.
 
 The loader owns two intentionally separate caches:
 
 - `_LoadCtx.flows` is keyed by resolved absolute path, shared across one external
   load graph, and populated only after a child has compiled successfully. It
-  makes aliases and diamond imports reuse the same physical source load.
+  makes aliases and diamond imports reuse the same canonical, fully resolved
+  physical flow.
 - `_CallableScope._built` is keyed by file-local callable name and memoizes every
   successful compiler-private child, authored `defs:` flow, and resolved `uses:`
-  alias. Defs load eagerly before the parent and uses resolve eagerly during
-  assembly; only compiler-private builders stay lazy. `_in_progress` rejects
+  alias view. A `uses:` view is a rebased copy; repeated calls through that alias
+  reuse it without mutating the path cache. Defs load eagerly before the parent,
+  and uses resolve eagerly during assembly; only compiler-private builders stay
+  lazy. `_in_progress` rejects
   recursive private/def construction, while `_LoadCtx.loading` guards recursive
   external-file resolution. A failed callable attempt removes every private builder,
   nested cache entry, and catalog site added by that attempt before it can be retried.

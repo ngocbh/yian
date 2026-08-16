@@ -23,10 +23,11 @@ multi-node-definition, and inline-child output values on the final `FlowOutput.b
 after rewrites; END reuses that binding, while output mapping keys stay origin-free.
 Generated compact-root and single-node-definition reexports have no authored binding
 occurrence and remain origin-free; their output declaration is reserved for contract-origin
-work. Assembly retains a private document-local catalog snapshot on each `ComposedFlow`.
-Without a retained occurrence, Compose mints no origin and preserves any explicit
-programmatic origin. The snapshot is not yet a complete cross-file resolver;
-`parse/file.py` consumes the document (`parse_file`).
+work. Without a retained occurrence, Compose mints no origin and preserves any explicit
+programmatic origin. Private assembly keeps the resolver unset while the shared catalog
+grows. At the physical-file boundary the loader rebases external alias views, filters exact
+reachable routes, and installs `ComposedFlow.origin_resolver`; source-free graphs use
+`None`. `parse/file.py` consumes the document (`parse_file`).
 The loader also owns each file's callable scope:
 authored `defs:`/`uses:` plus a resolver-private, lazy cache for inline CALL/MAP/LOOP
 children lowered by `desugar/` and assembled by `build/`.

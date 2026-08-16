@@ -43,7 +43,7 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
   ▼
- CompiledFlow   (returned inside a ComposedFlow: + parameters, source frame, local catalog)
+ CompiledFlow   (inside a ComposedFlow: + parameters, source frame, exact origin resolver)
 ```
 
 Everything below just explains three of those words: **descriptor**, **build**, and
@@ -97,14 +97,20 @@ therefore two distinct source sites. Flow-output registration happens after desu
 so an authored occurrence locates the final `FlowOutput.binding` source. Output mapping
 keys stay origin-free. Without a retained source occurrence, Compose mints no origin and
 preserves any explicit programmatic origin.
-Each assembled `ComposedFlow` receives a frozen snapshot as private
-`_local_catalog` staging metadata. It is deliberately not a public, complete resolver yet:
-cached external-child origins still need lexical rebasing.
+Private assembly products leave their resolver unset while the shared physical-document
+catalog is still growing. At the file boundary, the loader freezes that catalog once,
+selects exactly one authority for every reachable origin, and installs an immutable
+`ResolverTable` as `ComposedFlow.origin_resolver`. Source-free graphs use `None`; unused
+defs and eagerly resolved but uncalled aliases contribute no public routes.
 
 External `uses:` resolution adds one reuse boundary. During a load graph, successfully
 compiled external flows are cached by resolved absolute path. A repeated alias or diamond
-dependency therefore reuses the same `ComposedFlow`; it does not reread, reparse, or
-recompile that physical file. Only successfully compiled flows enter the cache.
+dependency therefore reuses the same canonical `ComposedFlow`; it does not reread,
+reparse, or recompile that physical file. The file-local callable scope validates that
+canonical child's resolver and creates one immutable, lexically rebased view per `uses:`
+alias before CALL/MAP/LOOP bake the child graph. Repeated calls through one alias reuse its
+view; distinct aliases and diamond branches receive disjoint origin keys. Only successfully
+compiled, complete flows enter the physical cache.
 
 ---
 
@@ -269,10 +275,13 @@ corresponds to them; authored nodes inside retained inline bodies are stamped no
   validated at load; supplied values are checked when the boundary binds them,
 - `source` — a render-only `SourceFrame` (the text + per-node ranges) that lets a
   runtime failure draw a caret back at your YAML, even across nested flow calls.
+- `origin_resolver` — an immutable source-neutral resolver whose exact domain is the
+  distinct origins reachable from `compiled`; `None` only for a source-free graph.
 
-Internally, `_local_catalog` retains the immutable document-local origin snapshot used
-while the source-neutral IR migration proceeds. The underscore is intentional: it cannot
-resolve origins embedded from external files until lexical rebasing is implemented.
+External physical files remain canonical in the resolved-path cache. Their alias views
+rewrite origin keys on copies and retain exact resolver routes back through the canonical
+child, so the returned parent owns one complete namespace without mutating or reparsing a
+cached graph.
 
 Hand it to [`run_flow()`](engine.md) and the interpreter takes over.
 

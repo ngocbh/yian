@@ -54,4 +54,4 @@ def test_child_end_record_scoped_post_assert_fires_via_synth_param():
     pool.set("each/tail", "")
     failed = drive(_end_with_tail_assert(), pool)
     assert isinstance(failed, EvaluationFailure)
-    assert "post-assert" in failed.error
+    assert "post-assert" in failed.failure.message

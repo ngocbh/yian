@@ -356,7 +356,7 @@ def test_ask_user_requires_an_explicit_authored_grant(monkeypatch):
         event = _drive(AgentNode("agent", prompt="go", tools=[], mode="tool_calling"))
 
     assert isinstance(event, EvaluationFailure)
-    assert "not granted" in event.error
+    assert "not granted" in event.failure.message
     assert handled == []
 
 
@@ -442,8 +442,8 @@ def test_post_assert_fires_after_blocking_ask(monkeypatch):
         event = _drive(node)
 
     assert isinstance(event, EvaluationFailure)
-    assert event.error_type == "NodeAssertFailed"
-    assert "post-assert" in event.error.lower()
+    assert event.failure.cause_type == "NodeAssertFailed"
+    assert "post-assert" in event.failure.message.lower()
 
 
 def test_agent_has_no_continuation_or_engine_llm_cap_surface():

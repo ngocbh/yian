@@ -18,6 +18,7 @@ from agent_composer.runtime.log import (
     NodeStartedRecord,
     RecordEnvelope,
     RunStartedRecord,
+    SCHEMA_VERSION,
     encode_pool,
 )
 from agent_composer.runtime.state import (
@@ -171,7 +172,12 @@ def test_run_started_preparation_is_immutable_and_commit_restores_complete_state
 
     assert observers == (RunStarted(),)
     assert tuple(log) == (
-        RecordEnvelope(schema=1, run_id=_RUN_ID, seq=0, record=prepared.record),
+        RecordEnvelope(
+            schema=SCHEMA_VERSION,
+            run_id=_RUN_ID,
+            seq=0,
+            record=prepared.record,
+        ),
     )
     assert state.run_id == _RUN_ID
     assert state.flow_fingerprint == _FINGERPRINT
@@ -552,16 +558,26 @@ class _RetainingMismatchedLog(MemoryRunLog):
 @pytest.mark.parametrize(
     "result",
     [
-        lambda record: RecordEnvelope(schema=1, run_id="other", seq=0, record=record),
-        lambda record: RecordEnvelope(schema=1, run_id=_RUN_ID, seq=1, record=record),
         lambda record: RecordEnvelope(
-            schema=1,
+            schema=SCHEMA_VERSION,
+            run_id="other",
+            seq=0,
+            record=record,
+        ),
+        lambda record: RecordEnvelope(
+            schema=SCHEMA_VERSION,
+            run_id=_RUN_ID,
+            seq=1,
+            record=record,
+        ),
+        lambda record: RecordEnvelope(
+            schema=SCHEMA_VERSION,
             run_id=_RUN_ID,
             seq=0,
             record=NodeStartedRecord(node_id="different"),
         ),
         lambda record: RecordEnvelope(
-            schema=1,
+            schema=SCHEMA_VERSION,
             run_id=_RUN_ID,
             seq=0,
             record=record,
@@ -597,6 +613,11 @@ def test_mismatched_append_return_leaves_the_advanced_log_as_recovery_authority(
     assert log.next_sequence == 1
     retained = tuple(log)
     assert retained == (
-        RecordEnvelope(schema=1, run_id=_RUN_ID, seq=0, record=prepared.record),
+        RecordEnvelope(
+            schema=SCHEMA_VERSION,
+            run_id=_RUN_ID,
+            seq=0,
+            record=prepared.record,
+        ),
     )
     assert isinstance(retained[0].record, RunStartedRecord)

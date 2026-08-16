@@ -240,4 +240,4 @@ def test_eval_node_fires_via_wrapper_positive_control():
 
     result = drive(node)
     assert isinstance(result, EvaluationFailure)
-    assert "post-assert" in result.error
+    assert "post-assert" in result.failure.message

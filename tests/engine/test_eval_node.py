@@ -87,7 +87,7 @@ def test_binding_failure_returns_diagnostic_evaluation_failure():
     assert isinstance(result, EvaluationFailure)
     assert result.failure.code == "binding.evaluate"
     assert result.failure.trace == (node.origin,)
-    assert result.error_type == "BindingError"
+    assert result.failure.cause_type == "BindingError"
 
 
 def test_binding_carrier_resolves_at_the_node_read_boundary():
@@ -151,7 +151,10 @@ def test_node_raise_returns_evaluation_failure():
     assert isinstance(result, EvaluationFailure)
     assert result.failure.code == "node.execute"
     assert result.failure.trace == (node.origin,)
-    assert (result.error, result.error_type) == ("boom", "RuntimeError")
+    assert (result.failure.message, result.failure.cause_type) == (
+        "boom",
+        "RuntimeError",
+    )
 
 
 def test_routing_returns_route_without_output_value():
@@ -201,8 +204,8 @@ def test_non_spawner_grow_returns_clear_evaluation_failure():
     assert isinstance(result, EvaluationFailure)
     assert result.failure.code == "contract.node_result"
     assert result.failure.trace == (node.origin,)
-    assert result.error_type == "RuntimeError"
-    assert "Grow" in result.error and "spawner" in result.error
+    assert result.failure.cause_type == "RuntimeError"
+    assert "Grow" in result.failure.message and "spawner" in result.failure.message
 
 
 def test_malformed_result_context_is_an_ir_fault() -> None:
@@ -220,8 +223,8 @@ def test_bad_return_type_returns_clear_evaluation_failure():
     assert isinstance(result, EvaluationFailure)
     assert result.failure.code == "contract.node_result"
     assert result.failure.trace == ()
-    assert result.error_type == "RuntimeError"
-    assert "not a NodeResult" in result.error
+    assert result.failure.cause_type == "RuntimeError"
+    assert "not a NodeResult" in result.failure.message
 
 
 def test_post_assert_isolated_from_node_input_mutation():
@@ -493,7 +496,7 @@ def test_map_over_not_a_list_message_is_byte_identical():
         result = drive(node, pool)
 
         assert isinstance(result, EvaluationFailure)
-        assert result.error == MAP_OVER_NOT_LIST_FMT.format(
+        assert result.failure.message == MAP_OVER_NOT_LIST_FMT.format(
             id="m",
             src=raw_source,
         )

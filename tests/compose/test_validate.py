@@ -80,7 +80,6 @@ def test_reject_cycles_diag_has_range():
         reject_cycles(
             edges,
             {"a", "b"},
-            node_lines={"a": 9, "b": 3},
             node_ranges={"a": ra, "b": rb},
             diagnostics=_range_diagnostics(),
         )
@@ -307,7 +306,6 @@ def test_check_ref_map_types_moved():
             producers,
             {},
             wiring,
-            {"c": 99},
             diagnostics=_range_diagnostics(),
         )
     assert "child expects" in str(exc.value)
@@ -341,7 +339,6 @@ def test_check_loop_type_contract_moved():
             producers,
             {},
             wiring,
-            {"lp": 99},
             diagnostics=_range_diagnostics(),
         )
     assert "carried field" in str(exc.value)
@@ -375,7 +372,6 @@ def test_check_wiring_parity_moved():
         check_wiring_parity(
             {"n": node},
             {"n": {**wiring, "orphan": "${input.y}"}},
-            {"n": 99},
             diagnostics=_range_diagnostics(),
         )
     assert "key parity" in str(exc.value)
@@ -397,7 +393,6 @@ def test_validate_human_questions_diag_has_range():
     with pytest.raises(LoadError) as exc:
         validate_human_questions(
             {"ask": node},
-            node_lines={"ask": 99},
             diagnostics=_range_diagnostics(),
         )
     assert "questions" in str(exc.value)

@@ -22,7 +22,6 @@ from agent_composer.nodes.base import Node
 
 def validate_human_questions(
     nodes: dict[str, Node],
-    node_lines: "dict[str, int] | None" = None,
     *,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
@@ -32,10 +31,9 @@ def validate_human_questions(
       re-raised as a located LoadError.
     - A ref-form questions_input -> the name MUST be one of the node's declared inputs
       (mirrors the AGENT prompt-scope rule); otherwise LoadError with a hint.
-    Legacy (no questions) gates pass through. Each error anchors on the gate's `questions:`
+    Gates without questions pass through. Each error anchors on the gate's `questions:`
     field range (`field_ranges[("field", "questions")]`, else the node's own range).
-    `node_lines` is accepted for transitional caller compatibility but is not location
-    authority. Accumulates all errors into one LoadError.
+    Accumulates all errors into one LoadError.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     from agent_composer.nodes.human_input.node import HumanInputNode

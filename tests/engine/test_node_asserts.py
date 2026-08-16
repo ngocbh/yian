@@ -206,7 +206,6 @@ def test_node_assert_aggregate_uses_first_available_range():
         validate_node_asserts(
             nodes,
             descriptors,
-            node_lines={"first": 4, "later": 20},
             diagnostics=_range_diagnostics(),
         )
 

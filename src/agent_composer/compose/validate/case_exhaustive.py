@@ -29,7 +29,6 @@ from agent_composer.compose.parse.file import CaseDescriptor
 def check_case_exhaustive(
     descriptors,
     producers: dict[str, ValueContract],
-    node_lines=None,
     *,
     diagnostics: LoadDiagnostics | None = None,
 ):
@@ -38,8 +37,7 @@ def check_case_exhaustive(
 
     `descriptors` is the flow's `{node_id -> NodeDescriptor}`; `producers` maps producer-node
     id -> its exact `ValueContract` (whose semantic type drives the dotted-field walk).
-    The descriptor's own range is authoritative; `node_lines` remains only for
-    transitional caller compatibility.
+    The descriptor's own range is authoritative.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     for producer_id, contract in producers.items():

@@ -31,7 +31,6 @@ def check_loop_type_contract(
     producers: dict[str, ValueContract],
     flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
-    node_lines: Optional[dict] = None,
     *,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
@@ -47,8 +46,7 @@ def check_loop_type_contract(
     literal/coalesce/opaque seed source, or an opaque body output field, stays lenient
     (skipped). Loud + located at the loop node's `input:` mapping range
     (`field_ranges[("field", "inputs")]`, else the node's own range) on a
-    same-names/different-TYPES mismatch. `node_lines` is accepted for transitional caller
-    compatibility but is not location authority."""
+    same-names/different-TYPES mismatch."""
     diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),

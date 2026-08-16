@@ -21,7 +21,6 @@ from agent_composer.events import SourceRange
 def check_wiring_parity(
     nodes: dict,
     flow_wiring: dict[str, dict[str, Any]],
-    node_lines: Optional[dict] = None,
     *,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
@@ -33,8 +32,7 @@ def check_wiring_parity(
     param) and turns an orphan source (a wiring key with no param), a missing source (a param with no
     wiring), or a node absent from `flow.wiring` entirely (silent {} bind -> lost input) into a
     located `LoadError`, anchored on the node's `input:` mapping range (`field_ranges[("field", "inputs")]`,
-    else the node's own range). `node_lines` is accepted for transitional caller compatibility
-    but is not location authority. Engine bind-time
+    else the node's own range). Engine bind-time
     reserved keys (the mapped-call `over` / WAIT `until` the eval_node seam pre-resolves) are never
     author wiring and do not appear here."""
     diagnostics = diagnostics or LoadDiagnostics()

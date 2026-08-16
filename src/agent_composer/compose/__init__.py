@@ -5,8 +5,15 @@ type reader turns a node's `output:` / a flow's `input:` into a `ValueContract`
 whose `Type` replaces the old flat `list[IOField]`; nested records are native.
 For retained root/definition flow signatures, the same traversal compiles the
 parameter key, contract root/nested values, and packed default into opaque origins.
-Source-free callers and generated inline signatures keep empty origin carriers;
-authored node-output contract provenance remains a separate migration.
+For authored node outputs, assembly injects an optional Compose-owned reader through
+`BuildContext`; each authored-output leaf invokes it only at its existing contract
+build step, after any earlier kind-owned validation. The contract default owns the
+physical declaration root, nested record paths own their exact values, and
+unrepresented scalar alias/list interiors fall back through the nearest authored
+ancestor to that root. Compact roots project top-level `output:` onto the
+synthesized node, and flat definitions use the equivalent source-aligned projection.
+Source-free callers and generated contracts without an authorable type occurrence keep
+empty origin carriers; external alias views use ordinary lexical graph rebasing.
 
 Organized along two axes: the per-node-kind axis lives in `nodes/<kind>.py`
 (each owns its descriptor + `parse` + immutable source-origin attachment +
@@ -21,7 +28,10 @@ ordinary node-input keys and values, and
 source-backed reserved MAP/WAIT wiring values on their canonical carriers. After each
 common header stamp, assembly makes one kind-blind descriptor-hook call; CODE uses it to
 carry the whole `code:` value plus ordered exact literal-line origins, while other
-descriptors use the no-op default. It creates one
+descriptors use the no-op default. Separately, its `BuildContext` contract reader selects
+the normalized physical node `output:` cursor and delegates the same recursive contract
+compiler from the leaf's established build position; a virtual/missing site falls back to
+the source-free reader without moving validation order. It creates one
 `Assertion` per authored flow/node list position, deriving the carrier origin and temporary
 range from the same retained item cursor; source-order indexing keeps duplicate text
 distinct. Full roots and multi-node definitions retain flow assertion cursors and reuse the
@@ -30,7 +40,9 @@ assertions onto the synthesized node. Assembly also stamps source-backed bare/ma
 multi-node-definition, and inline-child output values on the final `FlowOutput.binding`
 after rewrites; END reuses that binding, while output mapping keys stay origin-free.
 Generated compact-root and single-node-definition reexports have no authored binding
-occurrence and remain origin-free; authored node-output contract origins are still deferred.
+occurrence and remain origin-free. That binding rule is distinct from the authored
+`output:` contract site: its synthesized leaf retains root/nested contract origins through
+the compact or flat-definition projection.
 Without a retained occurrence, Compose mints no origin and preserves any explicit
 programmatic origin. Private assembly keeps the resolver unset while the shared catalog
 grows. At the physical-file boundary the loader rebases external alias views, filters exact

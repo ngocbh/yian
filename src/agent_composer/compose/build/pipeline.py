@@ -4,10 +4,11 @@
 callable:
 
   flow parameters + authored parameter/contract/default origins -> build every node
-  kind-blind (`desc.build(ctx)`; a case lowers
+  kind-blind (`desc.build(ctx)`; physical node-output contracts compile at their
+  existing leaf-owned build position; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
   edges + append each case's own edges -> validate references + classify asserts
-  -> attach authored assertion/output origins -> synthesize the START_ID/END_ID
+  -> attach authored assertion/flow-output binding origins -> synthesize the START_ID/END_ID
   boundary over ALL edges -> reject cycles + check if/else handles ->
   CompiledFlow.from_parts. One retained assertion item cursor supplies both its
   carrier origin and aligned temporary range; rewrites preserve the carrier fields
@@ -23,7 +24,7 @@ from here. It imports NOTHING from `loader.py` (that would be a back-edge).
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Callable, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput
 from agent_composer.diagnostics import (
@@ -75,6 +76,7 @@ from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.compose.helpers.types import (
     read_flow_inputs,
     read_source_flow_inputs,
+    read_value_contract,
 )
 from agent_composer.compose.validate.handles import check_case_handles
 from agent_composer.compose.validate.asserts import validate_node_asserts
@@ -737,17 +739,21 @@ def _assemble(
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
 
-      flow parameters -> build every node kind-blind (`desc.build(ctx)`; a case lowers
+      flow parameters -> build every node kind-blind (`desc.build(ctx)`; physical
+      node-output contracts compile at their existing leaf-owned position; a case lowers
       in its own build) -> cross-flow type check + case exhaustiveness -> infer data
       edges + append each case's own edges -> validate references + classify asserts
-      -> attach authored output origins -> synthesize roots/terminals -> reject cycles
+      -> attach authored flow-output binding origins -> synthesize roots/terminals -> reject cycles
       + check if/else handles -> CompiledFlow.from_parts.
 
     Exactly one input representation is required: `inputs_section` is the authored
     mapping that still needs parsing, while `input_parameters` carries parameters already
     resolved by an earlier compiler pass. `inputs_cursor` is the optional retained
     occurrence for the authored mapping; when present, input parameters and their
-    recursive contracts compile opaque origins from it. `scope` owns composite call resolution
+    recursive contracts compile opaque origins from it. A Compose-owned callable in
+    `BuildContext` compiles a physical node `output:` cursor into its canonical contract
+    only when the leaf reaches its established output-contract step; source-free builds
+    use the descriptor's ordinary type reader. `scope` owns composite call resolution
     (defs-first) and private child registration; `registry` is the file's
     `read_typedefs(...)`. Retained ranges and `nodes_cursor` own diagnostic locations; after
     the common header stamp each descriptor may immutably attach kind-owned opaque origins.
@@ -835,6 +841,41 @@ def _assemble(
             ),
             cursor.range,
         )
+
+    def read_authored_node_output(
+        node_id: str,
+        output_spec: Any,
+    ) -> ValueContract | None:
+        """Compile one physical node-output declaration at its build position.
+
+        Args:
+            node_id (`str`): Node whose normalized declaration should be selected.
+            output_spec (`Any`): Semantic type shape already retained by its descriptor.
+
+        Returns:
+            `ValueContract | None`: Located contract, or ``None`` for a virtual site.
+
+        Raises:
+            `LoadError`: Raised when source traversal or type compilation fails.
+        """
+        try:
+            if not nodes_cursor.has(node_id):
+                return None
+            node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
+            if not node_cursor.has("outputs"):
+                return None
+            output_cursor = node_cursor.child("outputs")
+            if output_cursor.range is None:
+                return None
+            return read_value_contract(
+                output_cursor.with_value(output_spec),
+                registry,
+                site_path=(*owner, "node", node_id, "output", "contract"),
+                catalog_builder=catalog_builder,
+                diagnostics=diagnostics,
+            )
+        except SourceAccessError as exc:
+            raise diagnostics.error(str(exc), range=exc.range) from exc
 
     # Inline CODE retains the flow label only as an opaque Python traceback filename;
     # authored locations come from semantic origins. Inert for reference-mode CODE.
@@ -1124,6 +1165,7 @@ def _assemble(
         source_file=flow_label,
         resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
+        output_contract_reader=read_authored_node_output,
     )
     descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base)
     build_results = descriptor_cache.build_in_source_order()

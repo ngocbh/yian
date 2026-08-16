@@ -16,6 +16,7 @@ def test_build_context_defaults():
     assert ctx.resolver is None
     assert ctx.source_file == "<inline-code>"
     assert ctx.resolve_origin is None
+    assert ctx.output_contract_reader is None
 
 
 def test_build_result_defaults():

@@ -156,7 +156,7 @@ class AgentDescriptor(NodeDescriptor):
         node.output_contract = (
             override
             if override is not None
-            else self.output_contract(ctx.registry, ctx.diagnostics)
+            else self.output_contract(ctx)
         )
         node.params = self.sink_params()
         wiring = self.sink_wiring()

@@ -96,18 +96,29 @@ resolves a parsed expr against it into a leaf `Type`.
 
 Compose compiles each authored root- or `defs:`-level flow input into a `Parameter`
 whose `origin` identifies the selecting key. Its `ValueContract` records the type value
-at the contract root and at each recursively authored nested record field.
+at the contract root and at each recursively authored nested record field. A physical
+node `output:` declaration populates the same root/nested `ContractOrigins` on the
+node's canonical `ValueContract`. Compose reads that retained cursor at the descriptor's
+existing per-kind build position, so source compilation does not move ahead of
+kind-owned validation.
 For a packed declaration such as `count: "int = 3"`, `default_origin` is a distinct
 semantic key that resolves to the same scalar range as the contract root.
 
 When a boundary check reports a `TypeCheckError.path`, origin selection tries that exact
-contract path, then its nearest authored ancestor, the contract root, and finally the
-parameter key. A scalar typedef reference or scalar `list[...]` spelling has no separately
-authored nested sites, so nested failures fall back to its root. Generated and Python-built
-contracts, including inferred inline-flow signatures, remain source-free. External-flow
-views rebase authored contract origins through the same resolver mechanism as other
-origins. Node-output contract origins are deferred to
-[#215](https://github.com/ngocbh/agent-composer/issues/215).
+contract path, then its nearest authored ancestor and the contract root. An input failure
+then falls back to the parameter key; an output failure uses the effective commit target's
+contract and finally the executing node. A scalar typedef reference or scalar `list[...]`
+spelling has no separately authored nested sites, so nested failures fall back to its root.
+Full and compact root flows, both `defs:` forms, and inline children retain physical node
+output sites; external-flow views rebase those origins through the same resolver mechanism
+as other origins. Generated and Python-built contracts, including inferred inline-flow
+signatures, remain source-free.
+
+Node-output contract provenance is distinct from flow-output binding provenance. The former
+describes the type declaration on `Node.output_contract`; the latter describes the value
+expression on `FlowOutput.binding`. A compact root or flat single-node definition therefore
+has authored contract origins even though its generated flow-output reexport remains
+origin-free.
 
 ## `VariablePool` — the run's typed memory
 

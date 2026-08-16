@@ -302,8 +302,8 @@ def flow_nodes_cursor(
 
     A full flow already owns a physical ``nodes:`` mapping. A compact flow has
     one synthesized node instead: its header is aligned with the authored
-    ``id:`` key, unchanged logic fields retain their top-level sources, and
-    generated input/output fields remain explicitly virtual.
+    ``id:`` key, unchanged logic fields and the authored output contract retain
+    their top-level sources, and generated input bindings remain virtual.
     """
 
     root = document.root
@@ -319,7 +319,9 @@ def flow_nodes_cursor(
     entries: dict[Any, tuple[Any, SourceCursor | None]] = {}
     for key, value in node_body.items():
         source = None
-        if key not in ("inputs", "outputs") and root.has(key):
+        if key == "outputs" and root.has("output"):
+            source = root.child("output")
+        elif key not in ("inputs", "outputs") and root.has(key):
             source = root.child(key)
         entries[key] = (value, source)
 

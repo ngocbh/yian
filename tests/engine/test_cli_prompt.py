@@ -193,12 +193,20 @@ class _Attempts:
     values: tuple[object, ...]
 
 
+@dataclass(frozen=True)
+class _SelectTitle:
+    """Select one production choice by its exact visible title."""
+
+    title: str
+
+
 class _FakeQuestionary:
     """Record prompts and model Questionary's accepted-default return values.
 
     ``answers`` maps a label substring to one explicit answer, including ``None``
     for cancellation. An unscripted widget accepts its default; a select without
-    one accepts its first choice. Selecting a ``Choice`` returns its value.
+    one accepts its first choice. `_SelectTitle` resolves one real production choice
+    by title, and selecting a ``Choice`` returns its value.
 
     A text answer may instead be an `_Attempts` carrier. The fake feeds its ordered
     raw values only to the production validator, records each literal ``True`` or
@@ -282,6 +290,17 @@ class _FakeQuestionary:
             if scripted is _UNSCRIPTED
             else scripted
         )
+        if isinstance(selected, _SelectTitle):
+            matches = [
+                choice
+                for choice in choices
+                if getattr(choice, "title", choice) == selected.title
+            ]
+            if len(matches) != 1:
+                raise AssertionError(
+                    f"expected one choice titled {selected.title!r}, got {len(matches)}"
+                )
+            selected = matches[0]
         val = self._choice_value(selected)
         self.calls.append(
             SimpleNamespace(
@@ -713,7 +732,13 @@ output: ${show.output}
         assert isinstance(call.default, _FakeChoice)
         assert call.default is call.choices[0]
         assert call.default.value is not None
-    assert [choice.value for choice in by_name["flag"].choices[1:]] == [True, False]
+    assert [choice.title for choice in by_name["flag"].choices] == [
+        "↩ Omit input",
+        "Set null",
+        "True",
+        "False",
+    ]
+    assert [choice.value for choice in by_name["flag"].choices[-2:]] == [True, False]
     assert [choice.value for choice in by_name["mode"].choices[1:]] == ["a", "z"]
 
 
@@ -746,6 +771,204 @@ def test_prompt_collects_false_enum_and_text_overrides(monkeypatch):
         "mode": "slow",
         "note": "replacement",
     }
+
+
+@pytest.mark.parametrize(
+    ("name", "typ", "required"),
+    [
+        ("flag", Type(kind=ValueKind.BOOLEAN, nullable=True), False),
+        (
+            "mode",
+            Type(
+                kind=ValueKind.STRING,
+                tags=frozenset({"fast", "null"}),
+                nullable=True,
+            ),
+            False,
+        ),
+        ("nothing", Type.scalar(ValueKind.NONE), True),
+        ("optional_nothing", Type(kind=ValueKind.NONE, nullable=True), False),
+    ],
+)
+def test_finite_prompt_set_null_gathers_present_none(
+    monkeypatch,
+    name,
+    typ,
+    required,
+):
+    fake = _FakeQuestionary({name: _SelectTitle("Set null")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter(name, typ, required=required)],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {name: None}
+    assert [call.kind for call in fake.calls] == ["select"]
+    assert "Set null" in [choice.title for choice in fake.calls[0].choices]
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        _parameter(
+            "flag",
+            Type(kind=ValueKind.BOOLEAN, nullable=True),
+            has_default=True,
+            default=True,
+        ),
+        _parameter(
+            "mode",
+            Type(
+                kind=ValueKind.STRING,
+                tags=frozenset({"fast", "null"}),
+                nullable=True,
+            ),
+            has_default=True,
+            default="fast",
+        ),
+        _parameter(
+            "nothing",
+            Type(kind=ValueKind.NONE, nullable=True),
+            has_default=True,
+            default=None,
+        ),
+    ],
+)
+def test_nullable_finite_prompt_omission_stays_absent(monkeypatch, parameter):
+    fake = _FakeQuestionary({parameter.name: _SelectTitle("↩ Use declared default")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert gathered == {}
+
+
+def test_nullable_literal_distinguishes_null_tag_from_set_null(monkeypatch):
+    fake = _FakeQuestionary({"mode": _SelectTitle("Set value: null")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+    parameter = _parameter(
+        "mode",
+        Type(
+            kind=ValueKind.STRING,
+            tags=frozenset({"null", "other"}),
+            nullable=True,
+        ),
+        has_default=True,
+        default="other",
+    )
+
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert gathered == {"mode": "null"}
+    choices = fake.calls[0].choices
+    assert [choice.title for choice in choices].count("Set null") == 1
+    assert [choice.title for choice in choices].count("Set value: null") == 1
+
+
+@pytest.mark.parametrize(
+    "parameter",
+    [
+        _parameter(
+            "flag",
+            Type.scalar(ValueKind.BOOLEAN),
+            has_default=True,
+            default=True,
+        ),
+        _parameter(
+            "mode",
+            Type(kind=ValueKind.STRING, tags=frozenset({"fast", "slow"})),
+            has_default=True,
+            default="fast",
+        ),
+    ],
+)
+def test_nonnullable_finite_default_does_not_offer_set_null(monkeypatch, parameter):
+    fake = _FakeQuestionary({})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert gathered == {}
+    assert "Set null" not in [choice.title for choice in fake.calls[0].choices]
+
+
+@pytest.mark.parametrize(
+    ("parameter", "expected", "default_title"),
+    [
+        (
+            _parameter(
+                "flag",
+                Type(kind=ValueKind.BOOLEAN, nullable=True),
+                required=True,
+            ),
+            False,
+            "False",
+        ),
+        (
+            _parameter(
+                "mode",
+                Type(
+                    kind=ValueKind.STRING,
+                    tags=frozenset({"null", "alpha"}),
+                    nullable=True,
+                ),
+                required=True,
+            ),
+            "alpha",
+            "Set value: alpha",
+        ),
+        (
+            _parameter("nothing", Type.scalar(ValueKind.NONE), required=True),
+            None,
+            "Set null",
+        ),
+    ],
+)
+def test_required_null_capable_prompt_preserves_safe_default(
+    monkeypatch,
+    parameter,
+    expected,
+    default_title,
+):
+    fake = _FakeQuestionary({})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert gathered == {parameter.name: expected}
+    call = fake.calls[0]
+    assert call.kind == "select"
+    assert call.default.title == default_title
+
+
+def test_prompt_controls_are_fresh_for_each_widget(monkeypatch):
+    fake = _FakeQuestionary({"flag": _SelectTitle("Set null")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+    parameter = _parameter(
+        "flag",
+        Type(kind=ValueKind.BOOLEAN, nullable=True),
+    )
+
+    first = _gather_missing_inputs([parameter], {}, prompt_available=True)
+    second = _gather_missing_inputs([parameter], {}, prompt_available=True)
+
+    assert first == second == {"flag": None}
+    first_choices, second_choices = (call.choices for call in fake.calls)
+    for title in ("↩ Omit input", "Set null"):
+        first_choice = next(choice for choice in first_choices if choice.title == title)
+        second_choice = next(
+            choice for choice in second_choices if choice.title == title
+        )
+        assert first_choice is not second_choice
 
 
 def test_prompt_distinguishes_literal_values_from_omission_labels(monkeypatch):

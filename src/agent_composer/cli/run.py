@@ -70,9 +70,11 @@ from agent_composer.typesys.values import ValueKind
 console = Console()
 err_console = Console(stderr=True)
 _DEFAULT_BROKER_EOF = object()
-# A prompt-local control result, distinct from Questionary's ``None`` cancellation.
-# It never crosses the CLI boundary; omitted keys stay absent so START applies defaults.
+# Prompt-local controls, distinct from Questionary's ``None`` cancellation. The
+# collector translates them before the run boundary; no sentinel reaches START.
 _OMIT_INPUT = object()
+_NULL_INPUT = object()
+_ENTER_INPUT = object()
 
 
 def _ensure_cwd_importable() -> None:
@@ -690,15 +692,54 @@ def _parse_structured_input(
     return parsed
 
 
-def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
-    """Ask for one declared input and return value, omission, or cancellation.
+def _accepts_null(typ: Optional[Type]) -> bool:
+    """Return whether a resolved input contract accepts an explicit null."""
+    return typ is not None and (typ.nullable or typ.kind is ValueKind.NONE)
 
-    ``_OMIT_INPUT`` is the non-required/default action and ``None`` is Questionary's
-    cancellation result. Required booleans use confirm; optional/defaulted booleans
-    and Literals use a select with omission preselected. Lists and objects use validated
-    JSON text and return native values; remaining scalar types use unchanged text for
-    ordinary run-boundary coercion. Non-required whitespace means omission in either
-    text path.
+
+def _input_control_choices(
+    decl: Parameter,
+    typ: Optional[Type],
+    questionary: Any,
+) -> tuple[List[Any], Optional[Any]]:
+    """Build fresh omission/null choices and the safe preselected control.
+
+    Questionary mutates choice shortcut state while constructing a widget, so this
+    factory creates new choice objects for every prompt. Omission is available only
+    to non-required parameters and remains the preselected action. Explicit null is
+    available only when the resolved contract accepts it.
+
+    Args:
+        decl (`Parameter`): Canonical declaration that owns omission/default policy.
+        typ (`Type | None`): Resolved input contract, or ``None`` when untyped.
+        questionary (`Any`): Questionary module used to construct fresh choices.
+
+    Returns:
+        `tuple[list[Any], Any | None]`: Control choices and their default choice.
+    """
+    choices: List[Any] = []
+    default = None
+    if not decl.required:
+        omission = questionary.Choice(
+            "↩ Use declared default" if decl.has_default else "↩ Omit input",
+            value=_OMIT_INPUT,
+        )
+        choices.append(omission)
+        default = omission
+    if _accepts_null(typ):
+        choices.append(questionary.Choice("Set null", value=_NULL_INPUT))
+    return choices, default
+
+
+def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
+    """Ask for one declared input and return value, null, omission, or cancellation.
+
+    ``_OMIT_INPUT`` and ``_NULL_INPUT`` are explicit prompt controls; ``None`` remains
+    Questionary's cancellation result. Required non-nullable booleans use confirm;
+    other booleans and Literals use selects with allowed controls. Lists and objects
+    use validated JSON text and return native values; remaining scalar types use
+    unchanged text for ordinary run-boundary coercion. Non-required whitespace means
+    omission in either text path.
 
     Args:
         decl (`Parameter`): Canonical flow input declaration to present.
@@ -707,53 +748,59 @@ def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
         style (`Any`): Shared Questionary style for the widget.
 
     Returns:
-        `Any`: Explicit value, private omission sentinel, or ``None`` cancellation.
+        `Any`: Explicit value, private control sentinel, or ``None`` cancellation.
     """
     label = _input_label(decl)
     contract = getattr(decl, "contract", None)
     typ = None if contract is None else contract.type
 
     if typ is not None and typ.kind == ValueKind.BOOLEAN:
-        if decl.required:
+        null_capable = _accepts_null(typ)
+        if decl.required and not null_capable:
             return questionary.confirm(
                 label, default=False, qmark="?", style=style
             ).ask()
-        omission = questionary.Choice(
-            "↩ Use declared default" if decl.has_default else "↩ Omit input",
-            value=_OMIT_INPUT,
-        )
+        controls, default = _input_control_choices(decl, typ, questionary)
+        true_choice = questionary.Choice("True", value=True)
+        false_choice = questionary.Choice("False", value=False)
+        if decl.required:
+            default = false_choice
         return questionary.select(
             label,
-            choices=[
-                omission,
-                questionary.Choice("True", value=True),
-                questionary.Choice("False", value=False),
-            ],
-            default=omission,
+            choices=[*controls, true_choice, false_choice],
+            default=default,
             qmark="?",
             style=style,
         ).ask()
 
     if typ is not None and typ.tags:  # a Literal[...] enum
-        choices = [
+        null_capable = _accepts_null(typ)
+        values = [
             questionary.Choice(
-                tag if decl.required else f"Set value: {tag}",
+                (tag if decl.required and not null_capable else f"Set value: {tag}"),
                 value=tag,
             )
             for tag in sorted(typ.tags)
         ]
-        if decl.required:
-            return questionary.select(
-                label, choices=choices, qmark="?", style=style
-            ).ask()
-        omission = questionary.Choice(
-            "↩ Use declared default" if decl.has_default else "↩ Omit input",
-            value=_OMIT_INPUT,
-        )
+        controls, default = _input_control_choices(decl, typ, questionary)
+        if decl.required and null_capable:
+            default = values[0]
         return questionary.select(
             label,
-            choices=[omission, *choices],
-            default=omission,
+            choices=[*controls, *values],
+            default=default,
+            qmark="?",
+            style=style,
+        ).ask()
+
+    if typ is not None and typ.kind is ValueKind.NONE:
+        controls, default = _input_control_choices(decl, typ, questionary)
+        if default is None:
+            default = controls[0]
+        return questionary.select(
+            label,
+            choices=controls,
+            default=default,
             qmark="?",
             style=style,
         ).ask()
@@ -808,7 +855,7 @@ def _gather_missing_inputs(
     Missing optional/defaulted declarations stay absent when no prompt is available,
     leaving START to apply defaults and optional absence. Missing required declarations
     are rejected together. With an available prompt, the per-input helper owns widget
-    choice and translates use-default/omit actions to a private sentinel; this collector
+    choice; this collector translates private controls to absence or present null and
     never applies flow defaults itself.
 
     Each prompt's label carries the input's type + a required/optional mark + default
@@ -855,6 +902,9 @@ def _gather_missing_inputs(
         if value is None:
             return None
         if value is _OMIT_INPUT:
+            continue
+        if value is _NULL_INPUT:
+            gathered[decl.name] = None
             continue
         gathered[decl.name] = value
     return gathered

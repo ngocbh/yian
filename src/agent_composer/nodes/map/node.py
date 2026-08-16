@@ -54,9 +54,6 @@ class MapNode(Node):
             The baked child flow (stamped at load); a `None` child raises at run time.
         child_inputs (`list[Parameter]`, *optional*, defaults to `None`):
             The child's canonical parameters, read by compile validation.
-        child_source (`Any`, *optional*, defaults to `None`):
-            The child flow's render-only `SourceFrame` (label + node-line maps). Carried
-            for the CLI's nested-error traceback only; `run` ignores it entirely.
         title (`str`, *optional*, defaults to `None`):
             Display title.
     """
@@ -69,15 +66,13 @@ class MapNode(Node):
     def __init__(self, node_id: str, *, flow_id: str, parallel: bool = False,
                  flow_version: Optional[int] = None, child: Any = None,
                  child_inputs: Optional[list[Parameter]] = None,
-                 child_source: Any = None, title: Optional[str] = None) -> None:
+                 title: Optional[str] = None) -> None:
         super().__init__(node_id, title=title)
         self.flow_id = flow_id
         self.flow_version = flow_version
         self.parallel = parallel    # inert (the engine's num_workers)
         self.child = child
         self.child_inputs = child_inputs or []
-        # Render-only: the child's SourceFrame for the CLI error traceback. `run` never reads it.
-        self.child_source = child_source
 
     def iter_local_origins(
         self,

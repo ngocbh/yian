@@ -288,6 +288,7 @@ def test_python_carriers_singular() -> None:
     assert isinstance(ComposedFlow.input, property)
     assert "input" not in ComposedFlow.__dataclass_fields__
     assert "inputs" not in ComposedFlow.__dataclass_fields__
+    assert "source" not in ComposedFlow.__dataclass_fields__
     assert "input" in RunResult.__dataclass_fields__
     assert "inputs" not in RunResult.__dataclass_fields__
 

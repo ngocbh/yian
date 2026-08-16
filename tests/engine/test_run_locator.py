@@ -48,8 +48,9 @@ def test_boundary_assert_sets_assert_locator():
 
 def test_code_wrong_type_output_sets_field_locator():
     # A CODE node whose returned value fails its declared `output:` Type is rejected at the
-    # typed write boundary. The failure surfaces as a node-less RunFailed; its locator points
-    # at the node's `output:` field so the CLI boxes the declaration, not a plain message.
+    # typed write boundary. The failure surfaces as a node-less RunFailed; its temporary
+    # compatibility locator still identifies the node's `output:` field. Compose presentation
+    # instead resolves the failure's canonical origin trace.
     text = (_ERRORS / "e21-code-wrong-type.yaml").read_text()
     result = run_flow(load_flow(text), {"topic": "X"})
     assert result.status == "failed"

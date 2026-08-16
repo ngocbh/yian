@@ -120,8 +120,9 @@ immutable `result.failure`; a successful flow returns `status="succeeded"` with
 `failure=None`. Inspect `failure.code` for program logic and `failure.message` for
 display. `failure.node_id`, `failure.trace`, `failure.cause_type`, and
 `failure.traceback` retain execution, authored-source, and debugging context.
-Temporary `result.locator` / `result.range` fields preserve precise YAML framing;
-there are no `error`, `error_type`, or standalone `traceback` aliases.
+Temporary `result.locator` / `result.range` fields remain compatibility metadata;
+canonical presentation resolves `failure.trace` through `ComposedFlow.diagnose()`.
+There are no `error`, `error_type`, or standalone `traceback` aliases.
 Host-control, callback, log I/O, and internal reducer errors propagate after the
 engine has drained active workers and released the boundary-owned log.
 
@@ -304,8 +305,8 @@ The terminal outcome of a fresh or recovered run has exactly these fields:
 | `log` | durable JSONL `Path`, or `None` for a process-local fresh run |
 | `output` | terminal flow value on success; otherwise `None` |
 | `failure` | canonical `Failure` on failure; otherwise `None` |
-| `locator` | symbolic source location for a failed flow, when available |
-| `range` | resolved source range for a failed flow, when available |
+| `locator` | temporary symbolic failure location retained for compatibility |
+| `range` | temporary concrete failure range retained for compatibility |
 | `events` | post-durable observer events published during this call only |
 
 ## Next

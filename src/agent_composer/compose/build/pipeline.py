@@ -35,7 +35,7 @@ from agent_composer.diagnostics import (
     OriginResolver,
 )
 from agent_composer.events import SourceRange
-from agent_composer.nodes.base import FieldRanges, Node
+from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import Parameter, ValueContract, as_binding
 from agent_composer.typesys.values import Type
 from agent_composer.compose.validate.asserts import lower_flow_asserts
@@ -66,7 +66,6 @@ from agent_composer.compose.edges.ordering import infer_ordering_edges
 from agent_composer.compose.validate.call_types import check_ref_map_types
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose.validate.wiring_parity import check_wiring_parity
-from agent_composer.compose.helpers.source import SourceFrame
 from agent_composer.compose.parse.nodes import (
     normalize_node_signature_cursor,
     parse_nodes,
@@ -209,12 +208,6 @@ class ComposedFlow:
         description (`str`, *optional*, defaults to `None`):
             The flow's declared `description:`, or `None` if absent — human-facing
             metadata (e.g. the CLI's interactive-prompt header).
-        source (`SourceFrame`, *optional*, defaults to `None`):
-            Render-only source-location metadata for THIS flow (its own text + node-line
-            maps). Set for the top-level flow, each `defs:` callable, and each external
-            `uses:` file; copied onto the built `CallNode`/`MapNode` as `child_source` so
-            the CLI can box a frame for the child a call descends into. `None` only when a
-            flow was assembled without a known source (defensive).
         origin_resolver (`OriginResolver`, *optional*, defaults to `None`):
             Source-neutral authority for every reachable origin in a flow returned by
             `load_flow`. `None` means the compiled graph is source-free. The private
@@ -227,7 +220,6 @@ class ComposedFlow:
     version: Optional[str] = None
     name: Optional[str] = None
     description: Optional[str] = None
-    source: Optional[SourceFrame] = None
     origin_resolver: OriginResolver | None = field(
         default=None,
         repr=False,
@@ -730,7 +722,6 @@ def _assemble(
     description: Optional[str] = None,
     flow_llm_config: Optional[dict] = None,
     flow_env: Optional[dict] = None,
-    source: Optional[SourceFrame] = None,
     boundary_field_ranges: Optional[dict] = None,
     asserts_cursor: SourceCursor | None = None,
     outputs_range: Optional[SourceRange] = None,
@@ -877,9 +868,10 @@ def _assemble(
         except SourceAccessError as exc:
             raise diagnostics.error(str(exc), range=exc.range) from exc
 
-    # Inline CODE retains the flow label only as an opaque Python traceback filename;
-    # authored locations come from semantic origins. Inert for reference-mode CODE.
-    flow_label = source.label if source is not None else "<inline-code>"
+    # Inline CODE receives the owning document label only as an opaque Python
+    # traceback filename; authored locations come from semantic origins. Inert for
+    # reference-mode CODE.
+    flow_label = diagnostics.label or "<inline-code>"
     if inputs_section is not None:
         if inputs_cursor is not None:
             inputs = read_source_flow_inputs(
@@ -944,23 +936,6 @@ def _assemble(
         descriptors = located_descriptors
     except SourceAccessError as exc:
         raise diagnostics.error(str(exc), range=exc.range) from exc
-
-    parsed_node_ranges = {
-        node_id: descriptor.range
-        for node_id, descriptor in descriptors.items()
-        if descriptor.range is not None
-    }
-    parsed_field_ranges = {
-        node_id: FieldRanges(descriptor.field_ranges)
-        for node_id, descriptor in descriptors.items()
-        if descriptor.field_ranges
-    }
-    if source is not None:
-        source = replace(
-            source,
-            node_ranges=parsed_node_ranges,
-            field_ranges=parsed_field_ranges,
-        )
 
     # A `uses:` alias shares the callable namespace, so it must not collide with a node
     # id (the resolver only sees a bare name; the author conflates them). Checked here, where
@@ -1120,13 +1095,6 @@ def _assemble(
                 )
             )
 
-        label = descriptor.child_label or f"inline body of node {body.node_id!r}"
-        child_source = SourceFrame(
-            label=label,
-            text=source.text if source is not None else "",
-            node_ranges={},
-            field_ranges={},
-        )
         return _assemble(
             input_parameters=child_inputs,
             nodes_cursor=body.nodes_cursor,
@@ -1137,7 +1105,6 @@ def _assemble(
             owner=body.owner,
             flow_llm_config={},
             flow_env={},
-            source=child_source,
             boundary_field_ranges={
                 ("input", name): binding_range
                 for name, binding_range in body.input_ranges.items()
@@ -1344,5 +1311,4 @@ def _assemble(
         version=version,
         name=name,
         description=description,
-        source=source,
     )

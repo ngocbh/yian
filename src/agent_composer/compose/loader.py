@@ -7,7 +7,7 @@ the `ComposedFlow`. This module owns root/def source projections, including rout
 physical flow-input cursor for roots and both definition forms, plus the flow-assertion
 cursor for a full root or multi-node def. Compact roots and flat single-node defs instead
 project their `asserts:` onto the synthesized node, so they do not invent a parallel
-flow-assertion site. It also owns frame ranges, the resolver composition
+flow-assertion site. It also owns resolver composition
 (`make_file_resolver`/`_CallableScope`), and the defs loaders
 (`_load_def`/`_load_single_node_def`) — not the assembly pipeline itself.
 
@@ -49,23 +49,14 @@ from agent_composer.diagnostics import (
     OriginResolver,
     ResolverTable,
 )
-from agent_composer.events import SourceRange
-from agent_composer.nodes.base import FieldRanges
 from agent_composer.typesys.values import TypeCheckError
 from agent_composer.typesys.types import read_typedefs
 from agent_composer.compose.build.pipeline import _assemble, ComposedFlow
-from agent_composer.compose.desugar.inline_bodies import (
-    INLINE_FLOW_PREFIX,
-    extract_inline_bodies,
-)
+from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.helpers.uses import parse_uses_ref
-from agent_composer.compose.helpers.source import (
-    SourceFrame,
-    _boundary_field_ranges,
-)
-from agent_composer.compose.parse.nodes import parse_nodes
+from agent_composer.compose.helpers.source import _boundary_field_ranges
 from agent_composer.compose.parse.file import (
     flow_nodes_cursor,
     parse_file,
@@ -188,63 +179,6 @@ def _single_node_def_cursor(
 
     body_cursor = def_cursor.project_mapping(body_entries)
     return def_cursor.project_mapping({name: (node_body, body_cursor)})
-
-
-def _frame_ranges(
-    cursor: SourceCursor,
-) -> tuple[dict[str, SourceRange], dict[str, FieldRanges]]:
-    """The `(node_ranges, field_ranges)` a `SourceFrame` carries, from a best-effort parse.
-
-    Runs `parse_nodes(cursor)` and pulls each descriptor's own `.range`/`.field_ranges` — the
-    render-only location maps the CLI's call-traceback boxes. A virtual compact cursor yields
-    empty maps; a malformed `nodes:` (which the build path rejects with
-    its own located error) is swallowed here to empty maps — this is render metadata, never the
-    error path, so it must not raise.
-    """
-    try:
-        descriptors = parse_nodes(cursor)
-    except (LoadError, SourceAccessError):
-        return {}, {}
-    node_ranges: dict[str, SourceRange] = {}
-    # `node_id -> FieldRanges` — the OUTER map is keyed by a bare node id (correct: that is not
-    # a locator); each INNER map keeps its `(kind, key)` guard, since the CLI renderer looks up
-    # through it and is where a bare-key lookup would silently miss.
-    field_ranges: dict[str, FieldRanges] = {}
-    for nid, desc in descriptors.items():
-        rng = getattr(desc, "range", None)
-        if rng is not None:
-            node_ranges[nid] = rng
-        fr = getattr(desc, "field_ranges", None)
-        if fr:
-            field_ranges[nid] = FieldRanges(fr)
-    return node_ranges, field_ranges
-
-
-def top_frame_ranges(
-    source: SourceDocument | SourceCursor,
-) -> tuple[dict[str, SourceRange], dict[str, FieldRanges]]:
-    """Best-effort top-frame ranges from an existing source document or root cursor.
-
-    The `(node_id -> header `SourceRange`, node_id -> {field -> `SourceRange`})` maps a
-    `ComposedFlow.source` already carries, derived without reparsing for the CLI's defensive
-    error-rendering path. Empty maps for a source-free cursor or invalid semantic shape:
-    this is render metadata, never the error path, so it must not raise.
-    """
-    document = source if isinstance(source, SourceDocument) else source.document
-    if document is None:
-        return {}, {}
-    try:
-        cf = parse_file(document)
-    except (LoadError, SourceAccessError):
-        return {}, {}
-    try:
-        lowered, _inline_bodies = extract_inline_bodies(
-            flow_nodes_cursor(document, cf.nodes),
-            owner=("root",),
-        )
-    except (LoadError, SourceAccessError):
-        return {}, {}
-    return _frame_ranges(lowered)
 
 
 # A multi-node `defs:` callable is a sub-flow inline: the same sections as a top-level
@@ -587,11 +521,6 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
                 child = _load_flow(child_document, None, [cand.parent], ctx)
             finally:
                 ctx.loading.discard(cand)
-            # Relabel the external child's frame to its filename BEFORE caching, so every
-            # diamond-reuse cache-hit also returns the filename label (not the file's own
-            # `name:`). The label is value-stable across sites (same abs-path -> same name).
-            if child.source is not None:
-                child = replace(child, source=replace(child.source, label=cand.name))
             ctx.flows[cand] = child
             _check_version(child, path, version)
             return child
@@ -671,7 +600,6 @@ def _load_flow(
     ctx: "_LoadCtx",
 ) -> ComposedFlow:
     root = document.root
-    text = document.text
     diagnostics = LoadDiagnostics.from_document(document)
     f = parse_file(document)
     _reject_authored_private_callable_names(root, f.defs, f.uses)
@@ -725,16 +653,6 @@ def _load_flow(
     )
     callable_scope.eager_load_defs()
 
-    # Render-only source frame for THIS flow: copied onto child call/map nodes for the
-    # nested-error traceback. For an external file (loaded via make_file_resolver) the
-    # label is relabeled to the filename in `resolve`.
-    source = SourceFrame(
-        label=f.name or "<flow>",
-        text=text,
-        node_ranges={},
-        field_ranges={},
-    )
-
     staged = _assemble(
         inputs_section=f.inputs,
         inputs_cursor=_source_child(root, "input"),
@@ -750,7 +668,6 @@ def _load_flow(
         description=f.description,
         flow_llm_config=f.llm_config,
         flow_env=f.env,
-        source=source,
         boundary_field_ranges=_boundary_field_ranges(root),
         asserts_cursor=(
             root.child("asserts")
@@ -1087,8 +1004,7 @@ def _load_def(
     Supports both a multi-node sub-flow (`{inputs?, nodes, outputs?, asserts?}`)
     and a flat single-node body (`{kind, ...}`). Both share the file's typedef
     registry and callable scope. ``def_cursor`` is the occurrence-local authored
-    body: it retains absolute locations, and `_assemble` derives the def's
-    `SourceFrame` from its lowered descriptors.
+    body: it retains absolute locations used by assembly and source diagnosis.
     """
     diagnostics = scope.diagnostics
     if not isinstance(body, dict):
@@ -1122,17 +1038,6 @@ def _load_def(
             ),
         )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
-    source_text = (
-        def_cursor.document.text
-        if def_cursor is not None and def_cursor.document is not None
-        else ""
-    )
-    source = SourceFrame(
-        label="defs:" + name,
-        text=source_text,
-        node_ranges={},
-        field_ranges={},
-    )
     try:
         return _assemble(
             inputs_section=body.get("inputs") or {},
@@ -1148,7 +1053,6 @@ def _load_def(
             owner=("def", name),
             flow_llm_config=body.get("llm_config") or {},
             flow_env=body.get("env") or {},
-            source=source,
             boundary_field_ranges=(
                 _boundary_field_ranges(def_cursor)
                 if def_cursor is not None
@@ -1204,17 +1108,6 @@ def _load_single_node_def(
     nodes_cursor = _single_node_def_cursor(name, body, def_cursor)
     output_source = _source_child(def_cursor, "output")
     output_range = output_source.range if output_source is not None else None
-    source_text = (
-        def_cursor.document.text
-        if def_cursor is not None and def_cursor.document is not None
-        else ""
-    )
-    source = SourceFrame(
-        label="defs:" + name,
-        text=source_text,
-        node_ranges={},
-        field_ranges={},
-    )
     try:
         return _assemble(
             inputs_section=param_types,
@@ -1228,7 +1121,6 @@ def _load_single_node_def(
             registry=registry,
             scope=scope,
             owner=("def", name),
-            source=source,
             boundary_field_ranges=(
                 _boundary_field_ranges(def_cursor)
                 if def_cursor is not None

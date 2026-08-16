@@ -43,8 +43,8 @@ class BindingError(ValueError):
 
     ``failure_code`` distinguishes expression/default/required evaluation from a
     supplied value violating its input contract. ``origin`` is the most precise
-    currently available authored operation. ``locator`` remains a temporary
-    presentation bridge until all runtime diagnostics resolve opaque origins.
+    available authored operation. ``locator`` remains temporary compatibility
+    metadata; canonical presentation resolves the failure's origin trace.
     """
 
     def __init__(

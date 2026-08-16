@@ -178,6 +178,8 @@ At the physical-file boundary it performs the only successful-load freeze of the
 catalog, combines exact reachable
 routes with lexically rebased alias tables, and sets `ComposedFlow.origin_resolver`; source-free
 graphs use `None`.
+The returned flow stores no parallel source text, label, or range snapshot;
+runtime presentation reaches authored documents only through that resolver.
 
 The loader owns two intentionally separate caches:
 

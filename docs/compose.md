@@ -46,7 +46,7 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ reject_cycles          → the graph is a DAG
   ├─ check_case_handles     → every branch has a home
   ▼
- CompiledFlow   (inside a ComposedFlow: + parameters, source frame, exact origin resolver)
+ CompiledFlow   (inside a ComposedFlow: + parameters, exact origin resolver)
 ```
 
 Everything below just explains three of those words: **descriptor**, **build**, and
@@ -204,8 +204,9 @@ node, wiring, edges = result.node, result.wiring, result.edges
 
 - the **node** carries only what it needs to run: its canonical `output_contract`,
   its sink `params` (formal names plus optional input contracts/default policy), and
-  an optional source-neutral authored-context `origin`. It also retains the legacy
-  render-only `range`/`field_ranges` traceback bridge. Descriptors derive a
+  an optional source-neutral authored-context `origin`. It also retains temporary
+  `range`/`field_ranges` compatibility metadata that runtime diagnosis no longer reads.
+  Descriptors derive a
   `ValueContract` directly; consumers retain it and project `.type` only inside
   semantic type algorithms. CODE additionally carries the diagnostic-only whole-source
   `code_origin` and ordered exact `code_line_origins`. Inline CODE compiles one
@@ -343,8 +344,6 @@ corresponds to them; authored nodes inside retained inline bodies are stamped no
   synthesized `start`/`end` boundaries, and ordered node/boundary assertion carriers),
 - `input` — the canonical typed `Parameter` values. Authored defaults are
   validated at load; supplied values are checked when the boundary binds them,
-- `source` — a legacy render-only `SourceFrame` retained only until its now-unused
-  graph/range bridge is deleted; runtime diagnosis does not read it.
 - `origin_resolver` — an immutable source-neutral resolver whose exact domain is the
   distinct origins reachable from `compiled`; `None` only for a source-free graph.
 - `diagnose(failure)` — the presentation-only boundary that resolves the complete
@@ -352,7 +351,7 @@ corresponds to them; authored nodes inside retained inline bodies are stamped no
 
 Diagnosis is atomic: an unresolved non-empty trace yields no partial frames and
 retains the failure's code, message, node, and debug fields in an unlocated
-diagnostic.
+diagnostic. `ComposedFlow` retains no parallel source-text or range snapshot.
 
 External physical files remain canonical in the resolved-path cache. Their alias views
 rewrite origin keys on copies and retain exact resolver routes back through the canonical

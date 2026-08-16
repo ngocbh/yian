@@ -10,7 +10,7 @@ shared dispatch routes here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Optional
 
 from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.nodes.contracts import ValueContract
@@ -102,7 +102,6 @@ class LoopDescriptor(NodeDescriptor):
             flow_version=None,
             child=child.compiled,
             child_inputs=sig.inputs,
-            child_source=child.source,  # render-only; the CLI nested-error traceback
             title=self.node_name,
         )
         node.params = self.sink_params()

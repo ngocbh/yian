@@ -8,11 +8,8 @@ from pathlib import Path
 from rich.console import Console
 
 import agent_composer.cli.run as climod
-from agent_composer.cli.run import _node_owns_resolved_range, _render_run_error
+from agent_composer.cli.run import _render_run_error
 from agent_composer.compose.loader import load_flow
-from agent_composer.diagnostics import SourceRange
-from agent_composer.events import SourceSpan
-from agent_composer.nodes.base import Node
 from agent_composer.run import RunResult, run_flow
 
 _ERRORS = Path(__file__).resolve().parents[1] / "seeds" / "errors"
@@ -181,19 +178,6 @@ def _render(source: str, monkeypatch) -> tuple[str, RunResult]:
     buf = _sink(monkeypatch)
     _render_run_error(result, loaded)
     return buf.getvalue(), result
-
-
-def test_assert_range_requires_an_aligned_assertion_site() -> None:
-    """A coincident node-header range cannot own an unmatched assertion locator."""
-    range_ = SourceRange(8, 3, 8, 9)
-    node = Node("leaf")
-    node.range = range_
-
-    assert not _node_owns_resolved_range(
-        node,
-        SourceSpan("outer/leaf", "assert", "${output} > 0"),
-        range_,
-    )
 
 
 def test_nested_call_error_frames_at_child_range(monkeypatch):

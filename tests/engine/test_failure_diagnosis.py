@@ -8,7 +8,6 @@ import pytest
 
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.compose import ComposedFlow, load_flow
-from agent_composer.compose.helpers.source import SourceFrame
 from agent_composer.compose.source import SourceDocument
 from agent_composer.diagnostics import (
     Diagnostic,
@@ -18,6 +17,7 @@ from agent_composer.diagnostics import (
     OriginResolver,
     SourceRange,
 )
+from agent_composer.run import run_flow
 
 
 _UNAVAILABLE_NOTE = ("Source presentation was unavailable.",)
@@ -27,12 +27,10 @@ def _composed_flow(
     resolver: OriginResolver | None,
     *,
     compiled: object | None = None,
-    source: object | None = None,
 ) -> ComposedFlow:
     """Construct a minimal Compose boundary around a test resolver."""
     return ComposedFlow(
         compiled=cast(CompiledFlow, compiled if compiled is not None else object()),
-        source=cast(SourceFrame, source),
         origin_resolver=resolver,
     )
 
@@ -328,7 +326,7 @@ def test_diagnose_frame_control_exception_propagates() -> None:
 def test_diagnose_reads_only_failure_and_resolver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Diagnosis never inspects compiled/source objects or reparses YAML."""
+    """Diagnosis never inspects the compiled graph or reparses YAML."""
 
     class ForbiddenSurface:
         def __getattribute__(self, name: str) -> object:
@@ -353,7 +351,6 @@ def test_diagnose_reads_only_failure_and_resolver(
     diagnostic = _composed_flow(
         ResolveOnly(),
         compiled=ForbiddenSurface(),
-        source=ForbiddenSurface(),
     ).diagnose(_failure(origin))
 
     assert diagnostic.frames == (frame,)
@@ -393,3 +390,146 @@ output: ${work.output}
         ),
     )
     assert diagnostic.notes == ()
+
+
+_INLINE_FAILURES = {
+    "map": """\
+id: inline-map-failure
+name: inline_map_failure
+nodes:
+  outer:
+    kind: map
+    over: [item]
+    input:
+      value: ${item}
+    nodes:
+      fail:
+        kind: code
+        code: |
+          raise RuntimeError("boom")
+          return inputs["value"]
+        input:
+          value: ${input.value}
+        output: str
+    output: ${fail.output}
+output: ${outer.output}
+""",
+    "loop": """\
+id: inline-loop-failure
+name: inline_loop_failure
+nodes:
+  outer:
+    kind: loop
+    times: 1
+    input:
+      n: 0
+    nodes:
+      fail:
+        kind: code
+        code: |
+          raise RuntimeError("boom")
+          return {"n": inputs["n"]}
+        input:
+          n: ${input.n}
+        output:
+          n: int
+    output: ${fail.output}
+output: ${outer.output}
+""",
+}
+
+
+@pytest.mark.parametrize("kind", ("map", "loop"))
+def test_inline_composite_failure_resolves_catalog_frames(kind: str) -> None:
+    """Inline MAP/LOOP diagnostics need no child source snapshot."""
+    label = f"inline-{kind}.yaml"
+    loaded = load_flow(_INLINE_FAILURES[kind], source_label=label)
+
+    result = run_flow(loaded, {})
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.traceback is not None
+    assert label in result.failure.traceback
+    diagnostic = loaded.diagnose(result.failure)
+    assert len(diagnostic.frames) == 2
+    assert [frame.label for frame in diagnostic.frames] == [label, label]
+    assert "outer:" in diagnostic.frames[0].text
+    assert 'raise RuntimeError("boom")' in diagnostic.frames[1].text
+
+
+_EXTERNAL_FAILING_CHILD = """\
+id: failing-child
+name: failing_child
+input:
+  n: int
+nodes:
+  fail:
+    kind: code
+    code: |
+      raise RuntimeError("boom")
+      return {"n": inputs["n"]}
+    input:
+      n: ${input.n}
+    output:
+      n: int
+output: ${fail.output}
+"""
+
+_EXTERNAL_PARENTS = {
+    "map": """\
+id: external-map-failure
+name: external_map_failure
+uses:
+  child: failing-child
+nodes:
+  outer:
+    kind: map
+    call: child
+    over: [0]
+    input:
+      n: ${item}
+output: ${outer.output}
+""",
+    "loop": """\
+id: external-loop-failure
+name: external_loop_failure
+uses:
+  child: failing-child
+nodes:
+  outer:
+    kind: loop
+    call: child
+    times: 1
+    input:
+      n: 0
+output: ${outer.output}
+""",
+}
+
+
+@pytest.mark.parametrize("kind", ("map", "loop"))
+def test_external_composite_failure_resolves_each_document(kind: str) -> None:
+    """External MAP/LOOP diagnostics resolve parent and child catalogs in order."""
+    child = load_flow(_EXTERNAL_FAILING_CHILD, source_label="child.yaml")
+    parent_label = f"external-{kind}.yaml"
+    loaded = load_flow(
+        _EXTERNAL_PARENTS[kind],
+        child_resolver=lambda _flow_id, _version: child,
+        source_label=parent_label,
+    )
+
+    result = run_flow(loaded, {})
+
+    assert result.status == "failed"
+    assert result.failure is not None
+    assert result.failure.traceback is not None
+    assert "child.yaml" in result.failure.traceback
+    diagnostic = loaded.diagnose(result.failure)
+    assert len(diagnostic.frames) == 2
+    assert [frame.label for frame in diagnostic.frames] == [
+        parent_label,
+        "child.yaml",
+    ]
+    assert diagnostic.frames[0].text == _EXTERNAL_PARENTS[kind]
+    assert diagnostic.frames[1].text == _EXTERNAL_FAILING_CHILD

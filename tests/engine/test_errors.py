@@ -430,25 +430,22 @@ def test_agent_controls_field_is_retired_and_located():
     assert _only_error_range(err).start_line == 14
 
 
-def test_structured_output_failure_names_whole_field_and_range_is_none():
-    # e41: TWO defects in one run.
-    # (1) granularity — `score:` is bad, `claim:` is fine, but the locator names the WHOLE field and
-    #     the message never says `score`. A stamp for ("outputs","score") would go unused.
-    # (2) the funnel misses entirely -> range=None. engine.py:472 mints key="output" (SINGULAR);
-    #     field_ranges is keyed "outputs" (PLURAL, post-signature normalization), so
-    #     eval_node.py:149's .get(("field","output")) misses on EVERY output-validation failure.
-    #     The CLI hides it via _FIELD_KEY_ALIAS — but a LIBRARY CALLER gets range=None. That is
-    #     #81's opening complaint, live.
-    result = run_flow(load_flow((_ERRORS / "e41-structured-output-no-range.yaml").read_text()), {})
+def test_structured_output_legacy_range_is_none_but_origin_is_exact():
+    # The temporary locator remains whole-field and its singular/plural range lookup
+    # misses. Canonical diagnosis independently selects the exact failing contract path.
+    flow = _ERRORS / "e41-structured-output-no-range.yaml"
+    loaded = load_flow(flow.read_text(), source_label=flow.name)
+    result = run_flow(loaded, {})
     assert result.status == "failed"
     assert "does not match declared type int" in result.failure.message
     assert "score" not in result.failure.message  # the failing field is never named
     assert result.locator is not None
     assert result.locator.kind == "field" and result.locator.key == "output"  # not `score`
-    assert result.range is None  # the singular/plural drift; the CLI recovers via the alias
+    assert result.range is None  # temporary singular/plural compatibility drift
+    assert loaded.diagnose(result.failure).frames[-1].range.start_line == 35
 
-    # the range the funnel SHOULD have found is present under the plural key
-    node = load_flow((_ERRORS / "e41-structured-output-no-range.yaml").read_text()).compiled.nodes["calc"]
+    # The range the legacy funnel would need is present under the plural key.
+    node = loaded.compiled.nodes["calc"]
     assert node.field_ranges.get(("field", "output")) is None      # what the funnel asks for
     assert node.field_ranges.get(("field", "outputs")) is not None  # what is actually stored
 

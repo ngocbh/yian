@@ -96,10 +96,10 @@ outermost-to-innermost order, and preserves duplicate origins. An empty trace is
 unlocated without a note. For a non-empty trace, an absent resolver or any
 missing, malformed, or raising resolution atomically returns no frames plus
 exactly `Source presentation was unavailable.` `ComposedFlow.diagnose()` does
-not inspect the compiled graph or `SourceFrame`, and it does not parse or reparse
-YAML; resolution may delegate to the resolver's retained source document.
-Runtime CLI failures use this method and the shared diagnostic renderer. The
-still-present locator/range and `SourceFrame` fields are unused migration residue.
+not inspect the compiled graph, and it does not parse or reparse YAML; resolution
+may delegate to the resolver's retained source document. `ComposedFlow` carries no
+source snapshot. Runtime CLI failures use this method and the shared diagnostic
+renderer. The still-present runtime locator/range fields are unused migration residue.
 
 `Node.origin_context` is generated outer-to-inner spawner ancestry. It is empty
 on direct/static nodes, diagnostic-only, omitted from manifests/fingerprints/
@@ -670,12 +670,9 @@ private document graph. The default file resolver adds a separate successful
 `resolved Path -> ComposedFlow` cache, so aliases and diamond imports read, parse,
 and compile each external physical file once within a successful load graph.
 
-`SourceFrame` is persistent render-only diagnostic metadata. The loader derives its
-node/field range maps from descriptors parsed over the existing cursors, stores the
-top frame on `ComposedFlow.source`, and gives composite nodes their child's frame as
-`child_source`. Runtime diagnosis no longer reads either field; they are unused
-migration residue. The frame carries text and ranges, not parser state, and is not
-another source owner.
+`ComposedFlow` retains no parallel source-text/range carrier. Runtime source
+presentation is reachable only through its exact `origin_resolver`; load errors
+leave Compose as already-resolved diagnostics.
 
 ## Inline composite bodies (compose-only sugar)
 
@@ -818,12 +815,12 @@ never a text heuristic.
   `RunFailed.range` (all default `None`; the flow twin is the boundary node's resolved range —
   `StartNode.field_ranges[("input", name)]` for a flow input failure,
   `StartNode.post_assert_ranges` / `EndNode.post_assert_ranges` for a boundary / post assert).
-  Output-type failures occur after evaluation, so their durable failure may carry only the
-  symbolic `field` locator; the CLI resolves it from the supplied flow when no concrete range
-  was recorded.
+  Output-type failures occur after evaluation, so their legacy locator/range may be coarse or
+  absent. The canonical `Failure.trace` selects the output contract's exact path origin, and
+  CLI presentation resolves only that trace.
 - **Runtime boundary:** evaluator and dispatcher rejection construct one
-  canonical `Failure`; schema-2 records retain it together with the temporary
-  locator/range presentation bridge. `_FailureDelta`, `NodeFailed`, `RunFailed`,
+  canonical `Failure`; schema-2 records retain it together with temporary
+  locator/range compatibility metadata. `_FailureDelta`, `NodeFailed`, `RunFailed`,
   and `RunResult.failure` carry no semantic aliases. The first route whose skip
   closure reaches END latches `graph.terminal_unreachable` with that router and
   its `failure_trace()` on the causal `NodeRoutedRecord`; recovery structurally
@@ -840,7 +837,7 @@ never a text heuristic.
   flow's `ComposedFlow.diagnose()` and renders only the resulting `Diagnostic`.
   Nested frames arrive already source-owned and outermost-to-innermost. Missing or
   broken resolution remains unlocated with the canonical note. The CLI does not
-  inspect runtime ids, graph topology, `result.locator/range`, or `SourceFrame`.
+  inspect runtime ids, graph topology, or `result.locator/range`.
 - **Load diagnostics are already resolved.** Compose constructs
   `LoadError(Diagnostic(...))` from its retained `SourceDocument`/`SourceCursor`
   authority. Frames own their label, complete text, and range; nested definition
@@ -852,8 +849,7 @@ never a text heuristic.
   complete `failure_trace()` into generated descendants. `ComposedFlow.diagnose()`
   resolves that ordered ancestry through the composed origin table, so CALL, MAP,
   LOOP, definitions, and external files require no runtime-id parsing or child-graph
-  walk. `SourceFrame`/`child_source` are still physically present only as unused
-  migration residue and must not acquire new consumers.
+  walk or parallel source snapshot.
 
 ## Design-note template (step 3 of the workflow)
 

@@ -1,10 +1,10 @@
 # e26 — a CODE callable that raises THREE levels deep (call -> def -> def).
 #
-# RUNTIME: the leaf `boom` node fails with a runtime-namespaced id `outer/mid/boom` — node
-# `boom` in def `deep`, called from def `middle`, called from the top-level `outer:` call.
-# The CLI call-traceback must box THREE stacked frames: `outer:` (this file), then the
-# `via:` call line inside `defs:middle`, then the `boom` `code:` line inside `defs:deep`.
-# CODE-only -> runs locally, no model.
+# RUNTIME: the leaf `boom` node fails with runtime id `outer/mid/boom`. Its ordered
+# origin trace resolves to THREE frames: `outer:`, the `via:` CALL site inside
+# `defs:middle`, and the `boom` `code:` scalar inside `defs:deep`. CODE-only.
+# Frame order comes from the trace itself, without parsing the runtime id or
+# descending through baked children.
 id: err-three-level-raise
 name: err_three_level_raise
 input:

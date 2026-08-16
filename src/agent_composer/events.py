@@ -20,25 +20,25 @@ from typing import Any, Literal, Optional
 from agent_composer.diagnostics import Failure, SourceRange
 
 # --------------------------------------------------------------------------- #
-# Source location (for precise error framing)
+# Temporary source-location compatibility metadata
 # --------------------------------------------------------------------------- #
 
 
 @dataclass(frozen=True)
 class SourceSpan:
-    """A pointer to a sub-location in a flow's YAML, for precise error framing.
+    """A legacy pointer to a sub-location in a flow's YAML.
 
     Produced at the site a runtime failure originates from (binding knows the input
     key; an assert carries its author-facing display) and retained beside the
-    canonical `Failure`; the CLI resolves it through the authored source maps.
+    canonical `Failure` for compatibility. Presentation resolves `Failure.trace`
+    instead.
 
     Attributes:
         node (`str | None`):
             The node id the failure belongs to; `None` for a flow-level location
             (a boundary/post assert, a flow input).
         kind (`Literal["input", "assert", "field"]`):
-            Which family of sub-line to resolve against — an input parameter, an
-            assertion display, or a node field (the kind fallback).
+            Symbolic family: an input parameter, assertion display, or node field.
         key (`str`):
             The discriminator within that family — the input name, the assertion's
             stable display text, or the field name.
@@ -107,7 +107,7 @@ class NodeFailed:
     """A node failed with one canonical semantic diagnostic."""
 
     failure: Failure
-    # Temporary YAML presentation bridge; None for source-free failures.
+    # Temporary compatibility metadata; None for source-free failures.
     locator: Optional[SourceSpan] = None
     # Concrete range resolved at the failure site when available.
     range: Optional[SourceRange] = None
@@ -155,7 +155,7 @@ class RunFailed:
     """The run ended on a node failure or an unreachable terminal output."""
 
     failure: Failure
-    # Same temporary presentation bridge as the originating NodeFailedRecord.
+    # Same temporary compatibility metadata as the originating NodeFailedRecord.
     locator: Optional[SourceSpan] = None
     # Concrete authored range, or None when only an opaque origin is known.
     range: Optional[SourceRange] = None

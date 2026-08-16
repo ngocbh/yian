@@ -751,8 +751,9 @@ def _assemble(
     while `outputs_cursor` retains each physically authored output binding occurrence.
     `scope.catalog_builder` is the one registry shared by every assembly originating
     from this physical document, so root, definitions, and inline bodies mint
-    collision-free local origins under `owner`. Inline-CODE traceback anchors are
-    derived from each descriptor's own `code:` range. `_assemble` performs one
+    collision-free local origins under `owner`. After kind-owned attachment, CODE may
+    present a syntax failure through the builder's registered-site lookup without
+    freezing the catalog. `_assemble` performs one
     construction attempt; retriable callable attempts run through
     `_CallableScope.resolve`, while a failed top-level load discards its scope."""
     if (inputs_section is None) == (input_parameters is None):
@@ -826,8 +827,8 @@ def _assemble(
             cursor.range,
         )
 
-    # The flow's file label frames inline-CODE tracebacks; each inline node's content start
-    # line is derived from its recorded `code:` range in the CODE build. Inert for reference-mode CODE.
+    # Inline CODE retains the flow label only as an opaque Python traceback filename;
+    # authored locations come from semantic origins. Inert for reference-mode CODE.
     flow_label = source.label if source is not None else "<inline-code>"
     if inputs_section is not None:
         input_ranges = {

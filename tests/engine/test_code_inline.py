@@ -294,7 +294,7 @@ def test_inline_flow_loads_and_runs():
     assert result.output == "r=3.0"
 
 
-def test_inline_raise_is_framed_at_the_yaml_line():
+def test_inline_raise_becomes_failed_run():
     flow = _INLINE_FLOW.replace(
         'return f"r={inputs[\'rating\']:.1f}"', 'raise RuntimeError("boom")\n      return ""'
     )

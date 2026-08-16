@@ -416,9 +416,11 @@ generated nodes default to `None`, and cloning preserves an existing value. It i
 manifest-neutral and unrelated to LOOP's execution-only `origin_id`.
 `CodeNode` additionally carries `code_origin`, the whole authored scalar fallback,
 and `code_line_origins`, an immutable tuple in exact constructed literal-line order.
-Quoted and folded scalars have no exact-line tuple; source-free nodes use `None`
-and `()`. Inline CODE compiles the ordinary unpadded wrapper and retains its recursive
-code-object tree. Its `exception_origin` walks outer-to-inner and keeps the deepest
+Quoted and folded scalars have no exact-line tuple. Direct source-free nodes default to
+`None` and `()`, while explicit programmatic carriers are valid and Compose preserves
+them when no physical site is available. Inline CODE compiles the ordinary unpadded
+wrapper and retains its recursive code-object tree. Its `exception_origin` walks
+outer-to-inner and keeps the deepest
 frame whose `f_code` is one of those objects by `is`; code-object equality, hash
 membership, and filenames are intentionally irrelevant. Wrapper line `n` maps to
 constructed slot `n - 2`, then falls back to the whole scalar and node. Failures after
@@ -567,8 +569,9 @@ After the common header stamp, assembly calls the descriptor's immutable
 base hook is a no-op. CODE registers the whole `code:` value and, for a literal
 block only, each exact constructed line in order, then transfers those opaque
 references to `CodeNode`. Quoted and folded scalars keep only the whole-value
-fallback; source-free descriptors keep no CODE origins. The hook never retains a
-cursor, coordinates, or a parallel source map.
+fallback. Source-free descriptors mint no new Compose origins and preserve explicit
+programmatic carriers. The hook never retains a cursor, coordinates, or a parallel
+source map.
 Authored node headers, ordinary node-input keys and values, and source-backed reserved
 MAP/WAIT wiring values, plus source-backed flow-output values and flow/node assertion
 occurrences, are registered under their complete lexical owner paths and carried by the

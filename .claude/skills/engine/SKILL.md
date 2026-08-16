@@ -385,8 +385,9 @@ After the common header stamp, assembly calls each descriptor's immutable
 `with_source_origins(...)` hook while its located cursor is still available. The
 default is a no-op. CODE uses the hook to register the whole `code:` value and,
 for literal blocks only, each exact constructed line in order; quoted and folded
-scalars keep only the whole-value fallback, and source-free descriptors keep no
-CODE origins. The hook returns opaque `OriginRef` carriers only and never retains
+scalars keep only the whole-value fallback. Source-free descriptors mint no new
+Compose origins but preserve explicit programmatic carriers. The hook returns opaque
+`OriginRef` carriers only and never retains
 the cursor, coordinates, or a parallel source map. CODE load-time syntax errors
 resolve those already-registered sites through the builder's package-private read
 seam; it does not reparse or freeze. The loader remains the sole successful-load

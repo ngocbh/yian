@@ -164,9 +164,10 @@ their cached `child_inputs` origins and expose the baked child through
 `compile.origins` joins those hooks with flow-owned wiring and declared outputs.
 `iter_flow_origins()` walks wiring, outputs, nodes, and static children in stable
 order, guarding flow, node, and frozen-carrier identity so shared or cyclic
-graphs terminate. `rewrite_flow_origins()` deep-copies the root once, then uses
-identity memos for carrier and output replacements; aliases and deliberate
-cycles survive while the authored graph remains unchanged. Binding sources,
+graphs terminate. `rewrite_flow_origins()` rewrites an isolated working copy by
+identity, then copies that finalized graph for return so payload dict/set hashes
+are rebuilt after frozen carrier values change. Aliases, payload back-references,
+and deliberate cycles survive while the authored graph remains unchanged. Binding sources,
 parameter defaults, node environments, and render metadata are opaque even when
 they contain an `OriginRef`. Origins remain excluded from manifests,
 fingerprints, and expansion digests.

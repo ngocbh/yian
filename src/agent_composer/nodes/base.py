@@ -34,6 +34,7 @@ from agent_composer.nodes.contracts import (
     _iter_origin_carrier,
     _map_origin,
     _rewrite_origin_carrier,
+    _validate_optional_origin,
 )
 
 if TYPE_CHECKING:
@@ -370,6 +371,7 @@ class Node(ABC):
                 once per traversal.
         """
         seen = _seen_carriers if _seen_carriers is not None else set()
+        _validate_optional_origin(self.origin, "node origin")
         if self.origin is not None:
             yield self.origin
         if self.output_contract is not None:
@@ -386,7 +388,7 @@ class Node(ABC):
         self,
         mapper: Callable[[OriginRef], OriginRef],
         *,
-        _carrier_memo: Optional[dict[int, object]] = None,
+        _seen_carriers: Optional[set[int]] = None,
     ) -> None:
         """Rewrite this node's local origins while retaining carrier aliases.
 
@@ -398,33 +400,26 @@ class Node(ABC):
             mapper (`Callable[[OriginRef], OriginRef]`):
                 Pure transform for each present origin. It must return an
                 `OriginRef`; exceptions propagate.
-            _carrier_memo (`dict[int, object]`, *optional*, defaults to `None`):
-                Graph-wide old/replacement carrier identities. `None` starts an
-                independent local rewrite.
+            _seen_carriers (`set[int]`, *optional*, defaults to `None`):
+                Graph-wide carrier identities already rewritten. `None` starts
+                an independent local rewrite.
 
         Raises:
             TypeError:
                 Raised when `mapper` returns a value other than `OriginRef`.
         """
-        memo = _carrier_memo if _carrier_memo is not None else {}
+        seen = _seen_carriers if _seen_carriers is not None else set()
+        _validate_optional_origin(self.origin, "node origin")
         self.origin = _map_origin(self.origin, mapper)
         if self.output_contract is not None:
-            self.output_contract = _rewrite_origin_carrier(
-                self.output_contract, mapper, memo
-            )
+            _rewrite_origin_carrier(self.output_contract, mapper, seen)
         if self.params is not None:
-            for index, parameter in enumerate(self.params):
-                self.params[index] = _rewrite_origin_carrier(
-                    parameter, mapper, memo
-                )
-        for index, assertion in enumerate(self.pre_asserts):
-            self.pre_asserts[index] = _rewrite_origin_carrier(
-                assertion, mapper, memo
-            )
-        for index, assertion in enumerate(self.post_asserts):
-            self.post_asserts[index] = _rewrite_origin_carrier(
-                assertion, mapper, memo
-            )
+            for parameter in self.params:
+                _rewrite_origin_carrier(parameter, mapper, seen)
+        for assertion in self.pre_asserts:
+            _rewrite_origin_carrier(assertion, mapper, seen)
+        for assertion in self.post_asserts:
+            _rewrite_origin_carrier(assertion, mapper, seen)
 
     def origin_children(self) -> tuple[Any, ...]:
         """Return static child flows whose origins belong to this node.

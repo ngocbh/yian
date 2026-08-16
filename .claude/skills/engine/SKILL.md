@@ -42,8 +42,9 @@ Hold this model whenever you design anything:
   `typesys.Type` remains provenance-free while arbitrary payloads stay opaque.
 - Nodes own local origin enumeration/rewrite and expose static children through
   `origin_children()`. `compile.origins` combines those hooks with flow wiring
-  and outputs, using identity guards and replacement memos so shared or cyclic
-  graphs remain safe without a `NodeKind` branch.
+  and outputs, rewriting an isolated copy by identity and returning a finalized
+  copy whose hash containers are rebuilt. Shared or cyclic graphs remain safe
+  without a `NodeKind` branch.
 - `Node.origin` is the optional source-neutral identity of an authored node
   context. It has no execution meaning, is unrelated to LOOP's `origin_id`, and
   stays outside manifests/fingerprints. Compose stamps physical node headers;

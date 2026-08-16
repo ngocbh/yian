@@ -363,6 +363,91 @@ def test_rewrite_flow_origins_is_a_pure_alias_preserving_graph_copy() -> None:
     assert rewritten.nodes["body"].env["opaque"].key == "payload/not-provenance"
 
 
+def test_rewrite_preserves_payload_back_references_to_frozen_graph_objects() -> None:
+    """Opaque payload cycles keep pointing at their canonical copied objects."""
+    binding_payload: list[Any] = []
+    binding = Binding(binding_payload, _origin("binding"))
+    binding_payload.append(binding)
+
+    default_payload: list[Any] = []
+    parameter = Parameter(
+        "value",
+        has_default=True,
+        default=default_payload,
+        origin=_origin("parameter"),
+    )
+    default_payload.append(parameter)
+
+    output_payload: list[Any] = []
+    output = FlowOutput(
+        "result",
+        Binding(output_payload, _origin("output")),
+    )
+    output_payload.append(output)
+
+    node = Node("node")
+    node.params = [parameter]
+    flow = CompiledFlow.from_parts(
+        nodes={"node": node},
+        edges=[],
+        outputs=[output],
+        wiring={"node": {"value": binding}},
+    )
+
+    rewritten = rewrite_flow_origins(
+        flow,
+        lambda origin: _origin(f"mapped/{origin.key}"),
+    )
+
+    rewritten_binding = rewritten.wiring["node"]["value"]
+    rewritten_parameter = rewritten.nodes["node"].params[0]
+    rewritten_output = rewritten.outputs[0]
+    assert rewritten_binding.source[0] is rewritten_binding
+    assert rewritten_parameter.default[0] is rewritten_parameter
+    assert rewritten_output.binding.source[0] is rewritten_output
+    assert rewritten_binding.origin == _origin("mapped/binding")
+    assert rewritten_parameter.origin == _origin("mapped/parameter")
+    assert rewritten_output.binding.origin == _origin("mapped/output")
+
+    assert binding.source[0] is binding
+    assert parameter.default[0] is parameter
+    assert output.binding.source[0] is output
+
+
+def test_rewrite_rebuilds_payload_hash_containers_after_origin_changes() -> None:
+    """Carrier keys and set members remain findable under their mapped hashes."""
+    assertion = Assertion("True", "true", _origin("assertion"))
+    payload = {
+        "mapping": {assertion: "sentinel"},
+        "set": {assertion},
+    }
+    node = Node("node")
+    node.pre_asserts = [assertion]
+    flow = Flow(
+        nodes={"node": node},
+        edges=[],
+        wiring={"node": {"value": Binding(payload)}},
+        start_id="node",
+        end_id="node",
+    )
+
+    rewritten = rewrite_flow_origins(
+        flow,
+        lambda origin: _origin(f"mapped/{origin.key}"),
+    )
+
+    rewritten_assertion = rewritten.nodes["node"].pre_asserts[0]
+    rewritten_payload = rewritten.wiring["node"]["value"].source
+    assert rewritten_payload["mapping"][rewritten_assertion] == "sentinel"
+    assert rewritten_assertion in rewritten_payload["set"]
+    assert next(iter(rewritten_payload["mapping"])) is rewritten_assertion
+    assert next(iter(rewritten_payload["set"])) is rewritten_assertion
+    assert rewritten_assertion.origin == _origin("mapped/assertion")
+
+    assert payload["mapping"][assertion] == "sentinel"
+    assert assertion in payload["set"]
+
+
 def test_traversal_and_rewrite_terminate_on_a_deliberate_child_cycle() -> None:
     """Identity guards visit a recursive object graph once and retain its cycle."""
     cycle = Flow(
@@ -428,6 +513,48 @@ def test_source_free_python_graph_ignores_origin_refs_in_semantic_payloads() -> 
     assert rewritten.outputs[0].binding.source == payload_origin
     assert rewritten.nodes["python"].params[0].default["origin-shaped"] == payload_origin
     assert rewritten.nodes["python"].env["ordinary"] == payload_origin
+
+
+def test_invalid_mutable_node_origin_fails_before_iteration_or_mapping() -> None:
+    """A directly corrupted Python node cannot leak a non-origin through the API."""
+    node = Node("invalid")
+    node.origin = "not-an-origin"  # type: ignore[assignment]
+    flow = Flow(
+        nodes={"invalid": node},
+        edges=[],
+        wiring={"invalid": {}},
+        start_id="invalid",
+        end_id="invalid",
+    )
+
+    with pytest.raises(TypeError, match="node origin must be an OriginRef"):
+        list(iter_flow_origins(flow))
+    with pytest.raises(TypeError, match="node origin must be an OriginRef"):
+        rewrite_flow_origins(flow, lambda origin: origin)
+
+
+def test_invalid_child_is_rejected_before_deepcopying_payloads() -> None:
+    """Structural child errors win over arbitrary deepcopy behavior."""
+
+    class DeepcopyBomb:
+        """Invalid child whose copy path must never run."""
+
+        def __deepcopy__(self, _memo: dict[int, object]) -> Any:
+            raise RuntimeError("deepcopy bomb")
+
+    driver = CallNode("call", flow_id="invalid", child=DeepcopyBomb())
+    flow = Flow(
+        nodes={"call": driver},
+        edges=[],
+        wiring={"call": {}},
+        start_id="call",
+        end_id="call",
+    )
+
+    with pytest.raises(TypeError, match="origin child must be a Flow"):
+        list(iter_flow_origins(flow))
+    with pytest.raises(TypeError, match="origin child must be a Flow"):
+        rewrite_flow_origins(flow, lambda origin: origin)
 
 
 @pytest.mark.parametrize("invalid", [None, "not-an-origin"])

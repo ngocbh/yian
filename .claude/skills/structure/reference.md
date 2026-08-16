@@ -90,8 +90,10 @@ expose their baked child through `origin_children()`.
 
 `compile/origins.py` owns the graph-wide operation because `compile` already owns
 `Flow` wiring and `CompiledFlow.outputs`. It combines the node hooks with
-identity guards, one root deep copy, and frozen-carrier/output replacement memos.
-This preserves aliases and cycles without a `nodes -> compile` back-edge,
+identity guards, an isolated working copy whose provenance fields are rewritten
+without replacing frozen graph objects, and a finalized return copy that rebuilds
+payload hash containers. This preserves aliases, payload back-references, and
+cycles without a `nodes -> compile` back-edge,
 reflection, or `NodeKind` dispatch. Semantic payloads remain opaque, and origin
 changes do not affect manifests or fingerprints.
 

@@ -114,10 +114,12 @@ def rewrite_flow_origins(
 ) -> _FlowT:
     """Return an identity-preserving deep copy with every origin transformed.
 
-    The authored input graph is never mutated. One root `deepcopy` retains shared
-    topology and cycles; rewriting then memoizes every frozen carrier replacement,
-    including nested contracts. The mapper is called once for each origin reached
-    through a unique carrier or node slot. Ordinary payloads stay opaque.
+    The authored input graph is never mutated. An isolated working copy retains
+    shared topology and cycles while provenance fields are rewritten once per
+    frozen carrier identity. A final copy rebuilds hash containers after those
+    frozen values change. The mapper is still called once for each origin reached
+    through a unique carrier or node slot. Ordinary payloads stay opaque,
+    including back-references to graph objects.
 
     Args:
         flow (`Flow`):
@@ -141,16 +143,23 @@ def rewrite_flow_origins(
     if not callable(mapper):
         raise TypeError(f"origin mapper must be callable, got {type(mapper).__name__}")
 
-    rewritten = copy.deepcopy(flow)
+    # Validate static shape before copying so an invalid child cannot run an
+    # arbitrary payload's __deepcopy__ ahead of the structural TypeError.
+    for _origin in iter_flow_origins(flow):
+        pass
+
+    working = copy.deepcopy(flow)
     _rewrite_flow_origin_graph(
-        rewritten,
+        working,
         mapper=mapper,
         seen_flows=set(),
         seen_nodes=set(),
-        carrier_memo={},
-        output_memo={},
+        seen_carriers=set(),
     )
-    return cast(_FlowT, rewritten)
+    # Frozen carriers may also be keys or set members inside opaque payloads.
+    # Re-copying the finalized working graph rebuilds those hash containers with
+    # mapped hashes while preserving every alias and cycle.
+    return cast(_FlowT, copy.deepcopy(working))
 
 
 def _rewrite_flow_origin_graph(
@@ -159,8 +168,7 @@ def _rewrite_flow_origin_graph(
     mapper: Callable[[OriginRef], OriginRef],
     seen_flows: set[int],
     seen_nodes: set[int],
-    carrier_memo: dict[int, object],
-    output_memo: dict[int, FlowOutput],
+    seen_carriers: set[int],
 ) -> None:
     """Rewrite one copied flow in place and recurse through unseen children."""
     flow_identity = id(flow)
@@ -169,30 +177,17 @@ def _rewrite_flow_origin_graph(
     seen_flows.add(flow_identity)
 
     for node_wiring in flow.wiring.values():
-        for parameter, binding in node_wiring.items():
-            node_wiring[parameter] = _rewrite_origin_carrier(
-                binding, mapper, carrier_memo
-            )
+        for binding in node_wiring.values():
+            _rewrite_origin_carrier(binding, mapper, seen_carriers)
 
     if isinstance(flow, CompiledFlow):
-        for index, output in enumerate(flow.outputs):
+        for output in flow.outputs:
             if not isinstance(output, FlowOutput):
                 raise TypeError(
                     "compiled flow outputs must contain FlowOutput values, "
                     f"got {type(output).__name__}"
                 )
-            output_identity = id(output)
-            replacement = output_memo.get(output_identity)
-            if replacement is None:
-                replacement = FlowOutput(
-                    name=output.name,
-                    binding=_rewrite_origin_carrier(
-                        output.binding, mapper, carrier_memo
-                    ),
-                )
-                output_memo[output_identity] = replacement
-                output_memo[id(replacement)] = replacement
-            flow.outputs[index] = replacement
+            _rewrite_origin_carrier(output.binding, mapper, seen_carriers)
 
     for node in flow.nodes.values():
         if not isinstance(node, Node):
@@ -204,7 +199,7 @@ def _rewrite_flow_origin_graph(
         if node_identity in seen_nodes:
             continue
         seen_nodes.add(node_identity)
-        node.rewrite_local_origins(mapper, _carrier_memo=carrier_memo)
+        node.rewrite_local_origins(mapper, _seen_carriers=seen_carriers)
         for child in node.origin_children():
             if not isinstance(child, Flow):
                 raise TypeError(
@@ -216,8 +211,7 @@ def _rewrite_flow_origin_graph(
                 mapper=mapper,
                 seen_flows=seen_flows,
                 seen_nodes=seen_nodes,
-                carrier_memo=carrier_memo,
-                output_memo=output_memo,
+                seen_carriers=seen_carriers,
             )
 
 

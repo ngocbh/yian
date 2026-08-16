@@ -333,7 +333,7 @@ surface is unchanged.
 
 The base `Node` visits its node origin, output contract, parameters, and ordered
 assertions through `iter_local_origins()`. `rewrite_local_origins()` mutates only
-a compile-owned copied node and shares a frozen-carrier replacement memo across
+a compile-owned copied node and shares a frozen-carrier identity guard across
 the graph. CALL/MAP/LOOP extend those hooks with their cached `child_inputs` and
 return a non-`None` baked child from `origin_children()`; ordinary nodes return no
 children. CASE and CODE currently need only the common hook.
@@ -341,10 +341,12 @@ children. CASE and CODE currently need only the common hook.
 `compile.origins.iter_flow_origins(flow)` visits wiring, `CompiledFlow.outputs`,
 nodes, and their static children in deterministic structural order. Identity
 sets for flows, nodes, and frozen carriers make aliases and deliberate child
-cycles finite. `rewrite_flow_origins(flow, mapper)` performs one root
-`deepcopy`, then uses carrier and `FlowOutput` identity memos while rewriting the
-copy. The input graph stays unchanged, shared carriers and children remain
-shared, and invalid mapper results fail loudly. Equal origins stored in distinct
+cycles finite. `rewrite_flow_origins(flow, mapper)` rewrites provenance fields
+on an isolated working copy without replacing frozen carrier or `FlowOutput`
+objects, then copies that finalized graph for return. The final copy rebuilds
+payload dict/set hashes after frozen values change. The input graph stays unchanged,
+shared carriers, payload back-references, and children remain shared, and invalid
+mapper results fail loudly. Equal origins stored in distinct
 carriers remain distinct occurrences. Neither operation inspects binding
 sources, parameter defaults, node environments, or render metadata.
 

@@ -106,16 +106,14 @@ class LoopNode(Node):
         self,
         mapper: Callable[[OriginRef], OriginRef],
         *,
-        _carrier_memo: Optional[dict[int, object]] = None,
+        _seen_carriers: Optional[set[int]] = None,
     ) -> None:
         """Rewrite common and cached-signature origins on a copied LOOP."""
-        memo = _carrier_memo if _carrier_memo is not None else {}
-        super().rewrite_local_origins(mapper, _carrier_memo=memo)
+        seen = _seen_carriers if _seen_carriers is not None else set()
+        super().rewrite_local_origins(mapper, _seen_carriers=seen)
         if self.child_inputs is not None:
-            for index, parameter in enumerate(self.child_inputs):
-                self.child_inputs[index] = _rewrite_origin_carrier(
-                    parameter, mapper, memo
-                )
+            for parameter in self.child_inputs:
+                _rewrite_origin_carrier(parameter, mapper, seen)
 
     def origin_children(self) -> tuple[Any, ...]:
         """Return the baked body flow, or no child for an unbaked LOOP."""

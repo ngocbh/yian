@@ -9,7 +9,7 @@ derivation preserves those carriers and projects `.type` only inside type algori
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, TypeAlias, TypeVar, cast
+from typing import Any, Callable, Iterator, TypeAlias, cast
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.typesys import Type
@@ -74,7 +74,8 @@ class Binding:
 
     def map_origins(self, mapper: _OriginMapper) -> Binding:
         """Return this binding with its present origin transformed by ``mapper``."""
-        return _rewrite_origin_carrier(self, mapper, {})
+        origin = _map_origin(self.origin, mapper)
+        return Binding(source=self.source, origin=origin)
 
     def iter_origins(self) -> Iterator[OriginRef]:
         """Yield this binding's present origin."""
@@ -101,7 +102,12 @@ class Assertion:
 
     def map_origins(self, mapper: _OriginMapper) -> Assertion:
         """Return this assertion with its present origin transformed."""
-        return _rewrite_origin_carrier(self, mapper, {})
+        origin = _map_origin(self.origin, mapper)
+        return Assertion(
+            expression=self.expression,
+            display=self.display,
+            origin=origin,
+        )
 
     def iter_origins(self) -> Iterator[OriginRef]:
         """Yield this assertion's present origin."""
@@ -165,7 +171,9 @@ class ContractOrigins:
 
     def map_origins(self, mapper: _OriginMapper) -> ContractOrigins:
         """Return this index with every present origin transformed in order."""
-        return _rewrite_origin_carrier(self, mapper, {})
+        default = _map_origin(self.default, mapper)
+        entries = tuple((path, _map_origin(origin, mapper)) for path, origin in self.entries)
+        return ContractOrigins(default=default, entries=entries)
 
     def iter_origins(self) -> Iterator[OriginRef]:
         """Yield the default then nested origins in canonical path order."""
@@ -193,7 +201,7 @@ class ValueContract:
 
     def map_origins(self, mapper: _OriginMapper) -> ValueContract:
         """Return this contract with nested origins transformed, retaining its type."""
-        return _rewrite_origin_carrier(self, mapper, {})
+        return ValueContract(type=self.type, origins=self.origins.map_origins(mapper))
 
     def iter_origins(self) -> Iterator[OriginRef]:
         """Yield this contract's root and nested origins in canonical order."""
@@ -243,7 +251,21 @@ class Parameter:
 
     def map_origins(self, mapper: _OriginMapper) -> Parameter:
         """Transform parameter, default, and nested contract origins without copying data."""
-        return _rewrite_origin_carrier(self, mapper, {})
+        contract = (
+            self.contract.map_origins(mapper) if self.contract is not None else None
+        )
+        origin = _map_origin(self.origin, mapper)
+        default_origin = _map_origin(self.default_origin, mapper)
+        return Parameter(
+            name=self.name,
+            contract=contract,
+            required=self.required,
+            has_default=self.has_default,
+            default=self.default,
+            coerce_strings=self.coerce_strings,
+            origin=origin,
+            default_origin=default_origin,
+        )
 
     def iter_origins(self) -> Iterator[OriginRef]:
         """Yield contract, declaration, then default origins in stable order."""
@@ -252,14 +274,6 @@ class Parameter:
 
 _OriginCarrier: TypeAlias = (
     Binding | Assertion | ContractOrigins | ValueContract | Parameter
-)
-_OriginCarrierT = TypeVar(
-    "_OriginCarrierT",
-    Binding,
-    Assertion,
-    ContractOrigins,
-    ValueContract,
-    Parameter,
 )
 
 
@@ -274,17 +288,23 @@ def _iter_origin_carrier(
     seen.add(identity)
 
     if isinstance(carrier, Binding):
+        _validate_optional_origin(carrier.origin, "binding origin")
         if carrier.origin is not None:
             yield carrier.origin
         return
     if isinstance(carrier, Assertion):
+        _validate_optional_origin(carrier.origin, "assertion origin")
         if carrier.origin is not None:
             yield carrier.origin
         return
     if isinstance(carrier, ContractOrigins):
+        _validate_optional_origin(carrier.default, "contract default origin")
         if carrier.default is not None:
             yield carrier.default
-        yield from (origin for _, origin in carrier.entries)
+        for _, origin in carrier.entries:
+            if not isinstance(origin, OriginRef):
+                raise TypeError("contract entry origin must be an OriginRef")
+            yield origin
         return
     if isinstance(carrier, ValueContract):
         yield from _iter_origin_carrier(carrier.origins, seen)
@@ -292,6 +312,8 @@ def _iter_origin_carrier(
     if isinstance(carrier, Parameter):
         if carrier.contract is not None:
             yield from _iter_origin_carrier(carrier.contract, seen)
+        _validate_optional_origin(carrier.origin, "parameter origin")
+        _validate_optional_origin(carrier.default_origin, "parameter default origin")
         if carrier.origin is not None:
             yield carrier.origin
         if carrier.default_origin is not None:
@@ -301,62 +323,61 @@ def _iter_origin_carrier(
 
 
 def _rewrite_origin_carrier(
-    carrier: _OriginCarrierT,
+    carrier: _OriginCarrier,
     mapper: _OriginMapper,
-    memo: dict[int, object],
-) -> _OriginCarrierT:
-    """Rewrite one frozen carrier graph while retaining every shared carrier."""
+    seen: set[int],
+) -> None:
+    """Rewrite one carrier in a private copy without replacing its identity."""
     identity = id(carrier)
-    if identity in memo:
-        return cast(_OriginCarrierT, memo[identity])
+    if identity in seen:
+        return
+    seen.add(identity)
 
+    # Public carriers remain frozen. Bypassing their generated setter only on the
+    # unreachable private copy preserves payload back-references to these objects.
     if isinstance(carrier, Binding):
-        rewritten: _OriginCarrier = Binding(
-            source=carrier.source,
-            origin=_map_origin(carrier.origin, mapper),
+        object.__setattr__(
+            carrier,
+            "origin",
+            _map_origin(carrier.origin, mapper),
         )
     elif isinstance(carrier, Assertion):
-        rewritten = Assertion(
-            expression=carrier.expression,
-            display=carrier.display,
-            origin=_map_origin(carrier.origin, mapper),
+        object.__setattr__(
+            carrier,
+            "origin",
+            _map_origin(carrier.origin, mapper),
         )
     elif isinstance(carrier, ContractOrigins):
-        rewritten = ContractOrigins(
-            default=_map_origin(carrier.default, mapper),
-            entries=tuple(
+        object.__setattr__(
+            carrier,
+            "default",
+            _map_origin(carrier.default, mapper),
+        )
+        object.__setattr__(
+            carrier,
+            "entries",
+            tuple(
                 (path, cast(OriginRef, _map_origin(origin, mapper)))
                 for path, origin in carrier.entries
             ),
         )
     elif isinstance(carrier, ValueContract):
-        rewritten = ValueContract(
-            type=carrier.type,
-            origins=_rewrite_origin_carrier(carrier.origins, mapper, memo),
-        )
+        _rewrite_origin_carrier(carrier.origins, mapper, seen)
     elif isinstance(carrier, Parameter):
-        rewritten = Parameter(
-            name=carrier.name,
-            contract=(
-                _rewrite_origin_carrier(carrier.contract, mapper, memo)
-                if carrier.contract is not None
-                else None
-            ),
-            required=carrier.required,
-            has_default=carrier.has_default,
-            default=carrier.default,
-            coerce_strings=carrier.coerce_strings,
-            origin=_map_origin(carrier.origin, mapper),
-            default_origin=_map_origin(carrier.default_origin, mapper),
+        if carrier.contract is not None:
+            _rewrite_origin_carrier(carrier.contract, mapper, seen)
+        object.__setattr__(
+            carrier,
+            "origin",
+            _map_origin(carrier.origin, mapper),
+        )
+        object.__setattr__(
+            carrier,
+            "default_origin",
+            _map_origin(carrier.default_origin, mapper),
         )
     else:
         raise TypeError(f"unsupported origin carrier: {type(carrier).__name__}")
-
-    # The second entry makes a shared mutable container safe when another path
-    # encounters the replacement after an earlier in-place list/dict update.
-    memo[identity] = rewritten
-    memo[id(rewritten)] = rewritten
-    return cast(_OriginCarrierT, rewritten)
 
 
 def as_binding(value: Any) -> Binding:

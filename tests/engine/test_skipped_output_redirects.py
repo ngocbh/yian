@@ -455,6 +455,22 @@ def test_live_redirect_target_is_rejected_before_skip() -> None:
     assert log.next_sequence == sequence
 
 
+def test_settled_redirect_residue_does_not_own_a_future_output() -> None:
+    """Pruned nested-growth residue is inert even if its old anchor is gone."""
+    flow = _call_redirect_flow()
+    residue = FuncNode("settled-residue", lambda inputs: inputs)
+    residue.commit_as = "pruned-anchor"
+    flow.nodes[residue.id] = residue
+    state, log = _router_in_flight(flow)
+    state.node_state[residue.id] = NodeState.TAKEN
+
+    commit_prepared(log, state, prepare_node_routed(state, "router", "default"))
+
+    assert state.edge_state["call-end"] is NodeState.SKIPPED
+    assert state.node_state[END_ID] is NodeState.SKIPPED
+    assert isinstance(state.result, RunFailed)
+
+
 def test_map_collector_redirects_skipped_output_to_spawner() -> None:
     state, log = _router_in_flight(_map_redirect_flow())
 

@@ -2032,7 +2032,6 @@ def _prepare_growth_topology(
         for node_id, node in combined_nodes.items()
         if node_id not in prune_ids
     }
-    _validate_final_redirect_owners(final_nodes)
     final_edges = [
         edge
         for edge in combined_edges
@@ -2050,6 +2049,7 @@ def _prepare_growth_topology(
     node_state[record.spawner_id] = NodeState.EXPANDED
     for node_id in prune_ids:
         node_state.pop(node_id, None)
+    _validate_final_redirect_owners(final_nodes, node_state)
 
     edge_state = dict(state.edge_state)
     edge_state.update((edge_id, NodeState.UNKNOWN) for edge_id in new_edge_ids)
@@ -3000,10 +3000,15 @@ def _validate_skipped_output_target(
     return target
 
 
-def _validate_final_redirect_owners(nodes: dict[str, Node]) -> None:
-    """Reject a final growth topology with several owners for one output."""
+def _validate_final_redirect_owners(
+    nodes: dict[str, Node],
+    node_state: dict[str, NodeState],
+) -> None:
+    """Reject several unfinished owners for one final growth output."""
     mutable: dict[str, list[str]] = {}
     for node_id, node in nodes.items():
+        if node_state.get(node_id) is not NodeState.UNKNOWN:
+            continue
         target = node.skipped_output_target()
         try:
             target = _validate_skipped_output_target(nodes, node_id, target)
@@ -3032,6 +3037,8 @@ def _skipped_output_owners(state: RunState) -> dict[str, tuple[str, ...]]:
     """
     mutable: dict[str, list[str]] = {}
     for node_id in state.flow.nodes:
+        if state.node_state.get(node_id) is not NodeState.UNKNOWN:
+            continue
         target = _skipped_output_target(state, node_id)
         if target == node_id:
             continue

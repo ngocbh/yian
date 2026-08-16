@@ -50,8 +50,15 @@ from agent_composer.expr import ExpressionError, condition_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
 from agent_composer.expr.template import flow_call_callees_in_spans
 from agent_composer.compose.desugar.inline_calls import desugar_call_directives
+from agent_composer.compose.helpers.output_contracts import output_contract_path_error
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import Assertion, Parameter, ValueContract
+from agent_composer.nodes.contracts import (
+    Assertion,
+    OutputContract,
+    Parameter,
+    PartialRecordContract,
+    ValueContract,
+)
 from agent_composer.typesys.values import ValueKind
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 
@@ -92,7 +99,7 @@ def lower_flow_asserts(
     assert_list: list[Assertion],
     flow_inputs: "set[str]",
     valid_targets: "set[str]",
-    producers: "dict[str, ValueContract]",
+    producers: "dict[str, OutputContract]",
     assert_ranges: "list[SourceRange | None] | None" = None,
     *,
     diagnostics: LoadDiagnostics | None = None,
@@ -118,17 +125,14 @@ def lower_flow_asserts(
     """
     diagnostics = diagnostics or LoadDiagnostics()
     result = LoweredAsserts()
-    # The representation-neutral leaf checker speaks Type. Project only at that boundary;
-    # the canonical ValueContract carriers (and their origins) stay untouched here.
+    # Retain exact and partial carriers so a closed partial root can reject an
+    # unknown field without inventing a semantic Type for opaque siblings.
     for node_id, contract in producers.items():
-        if type(contract) is not ValueContract:
+        if type(contract) not in (ValueContract, PartialRecordContract):
             raise TypeError(
-                "producer contracts must be exact ValueContract values, "
+                "producer contracts must be ValueContract or PartialRecordContract values, "
                 f"got {type(contract).__name__} for {node_id!r}"
             )
-    producer_types = {
-        node_id: contract.type for node_id, contract in producers.items()
-    }
     # Positional flow-assert ranges, aligned 1:1 with `assert_list` (an entry is None where no span
     # exists). Indexed by the loop position below — never keyed by assert text — so two identical
     # flow asserts get distinct carets.
@@ -180,7 +184,17 @@ def lower_flow_asserts(
         # 2. validate each ref + forbid `${system}` + detect any outputs-head ref (-> post).
         is_post = False
         for path in refs:
-            err = _classify_path(path, valid_targets, flow_inputs, (), producer_types)
+            err = _classify_path(path, valid_targets, flow_inputs, ())
+            parts = path.split(".")
+            if (
+                err is None
+                and len(parts) >= 2
+                and parts[1] == "output"
+                and parts[0] in producers
+            ):
+                err = output_contract_path_error(
+                    producers[parts[0]], parts[2:], path
+                )
             if err is not None:
                 raise diagnostics.error(
                     f"assert {assertion.display!r}: {err}", range=rng
@@ -265,8 +279,9 @@ def validate_node_asserts(
     """Validate + classify + stamp each node's `asserts:` — the per-node contract.
 
     A node assert is node-LOCAL: a bare `${name}` is one of the node's declared inputs;
-    `${output}`/`${output.field}` is the node's own output (dotted-walked through its
-    `output_contract.type`).
+    `${output}`/`${output.field}` is the node's own output. Exact contracts walk their
+    semantic type; partial records enforce their closed root field set and walk any
+    independently proven field contract.
     Rejected (located `LoadError`): a pool head (`${outputs/inputs/system/item.X}`), an inline
     `${call}`, `${output.field}` on a non-record output, a declared input named `output`, and
     any node assert on a mapped call (a `MapNode`, `kind: map` — the per-node hook has no `${item}` scope).
@@ -359,10 +374,20 @@ def validate_node_asserts(
                     reads_output = True
                     if len(segs) > 1:
                         contract = node.output_contract
+                        if type(contract) is PartialRecordContract:
+                            err = output_contract_path_error(
+                                contract, segs[1:], ref
+                            )
+                            if err is not None:
+                                errors.append(
+                                    (f"node {nid!r} assert: {err}", error_range)
+                                )
+                            continue
                         if contract is not None and type(contract) is not ValueContract:
                             raise TypeError(
                                 f"node {nid!r} output_contract must be an exact "
-                                f"ValueContract or None, got {type(contract).__name__}"
+                                "ValueContract, PartialRecordContract, or None, "
+                                f"got {type(contract).__name__}"
                             )
                         sh = contract.type if contract is not None else None
                         if sh is not None and sh.kind != ValueKind.OBJECT:

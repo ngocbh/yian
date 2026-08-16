@@ -35,6 +35,7 @@ from agent_composer.nodes.contracts import (
     Binding,
     ContractOrigins,
     Parameter,
+    PartialRecordContract,
     ValueContract,
 )
 from agent_composer.nodes.end import EndNode
@@ -172,6 +173,7 @@ _PARAMETER_CANONICAL_FIELDS = frozenset(
 _PARAMETER_IGNORED_FIELDS = frozenset({"origin", "default_origin"})
 _VALUE_CONTRACT_CANONICAL_FIELDS = frozenset({"type"})
 _VALUE_CONTRACT_IGNORED_FIELDS = frozenset({"origins"})
+_PARTIAL_RECORD_CONTRACT_FIELDS = frozenset({"fields"})
 _CONTRACT_ORIGINS_IGNORED_FIELDS = frozenset({"default", "entries"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
 _CASE_CANONICAL_FIELDS = frozenset({"handle", "when"})
@@ -1439,6 +1441,40 @@ def _value_contract_manifest(
     return {"type": _type_manifest(value.type, ctx, f"{path}.type")}
 
 
+def _output_contract_manifest(
+    value: ValueContract | PartialRecordContract,
+    ctx: _ManifestContext,
+    path: str,
+) -> Any:
+    """Canonicalize either output-contract arm while excluding provenance."""
+    if type(value) is ValueContract:
+        return _value_contract_manifest(value, ctx, path)["type"]
+    if type(value) is not PartialRecordContract:
+        raise TypeError(
+            f"{path}: expected ValueContract or PartialRecordContract, "
+            f"got {type(value).__name__}"
+        )
+    _check_fields(value, _PARTIAL_RECORD_CONTRACT_FIELDS, path)
+    value.validate_shape()
+    return {
+        "partial_record": [
+            {
+                "name": name,
+                "type": (
+                    None
+                    if contract is None
+                    else _value_contract_manifest(
+                        contract,
+                        ctx,
+                        f"{path}.fields.{name}",
+                    )["type"]
+                ),
+            }
+            for name, contract in value.fields
+        ]
+    }
+
+
 def _parameter_manifest(
     value: Parameter,
     ctx: _ManifestContext,
@@ -1506,11 +1542,11 @@ def _node_manifest(
         ]
     output_type = None
     if node.output_contract is not None:
-        output_type = _value_contract_manifest(
+        output_type = _output_contract_manifest(
             node.output_contract,
             ctx,
             f"{path}.output_contract",
-        )["type"]
+        )
     manifest: dict[str, Any] = {
         "commit_as": _canonical_value(node.commit_as, ctx, f"{path}.commit_as"),
         "env": _sorted_mapping(node.env, ctx, f"{path}.env", redact_credentials=True),

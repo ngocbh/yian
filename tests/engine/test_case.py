@@ -27,7 +27,7 @@ import pytest
 
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.case import DEFAULT_HANDLE, CaseNode
-from agent_composer.nodes.contracts import ValueContract
+from agent_composer.nodes.contracts import PartialRecordContract, ValueContract
 from agent_composer.typesys.values import ValueKind, Type
 from agent_composer.compose.nodes.base import BuildContext
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
@@ -327,9 +327,38 @@ def test_exhaustiveness_dotted_missing_tag_raises():
     assert exc.value.diagnostic.frames[0].range == descriptor_range
 
 
+def test_exhaustiveness_projects_known_field_from_partial_record():
+    """An opaque sibling does not hide a proven enum field from coverage checks."""
+    stance = ValueContract(
+        Type(
+            kind=ValueKind.STRING,
+            tags=frozenset({"positive", "negative", "neutral"}),
+        )
+    )
+    desc = CaseDescriptor(
+        id="route",
+        on="${synth.output.stance}",
+        cases=[
+            {"when": "positive", "then": "pro_note"},
+            {"when": "negative", "then": "con_note"},
+        ],
+        else_=None,
+    )
+
+    with pytest.raises(LoadError, match="neutral"):
+        check_case_exhaustive(
+            {desc.id: desc},
+            {
+                "synth": PartialRecordContract(
+                    fields=(("stance", stance), ("note", None))
+                )
+            },
+        )
+
+
 def test_exhaustiveness_rejects_noncanonical_producer_contract():
     desc, _ = _enum_case(tags=["pro", "con"], cases=["pro"], else_=None)
-    with pytest.raises(TypeError, match="exact ValueContract"):
+    with pytest.raises(TypeError, match="ValueContract or PartialRecordContract"):
         check_case_exhaustive(
             {desc.id: desc},
             {"cls": Type(kind=ValueKind.STRING, tags=frozenset({"pro", "con"}))},
@@ -339,7 +368,7 @@ def test_exhaustiveness_rejects_noncanonical_producer_contract():
 def test_exhaustiveness_rejects_noncanonical_unused_producer_contract():
     """The CASE validator enforces its carrier map before selecting a case form."""
     desc = _case_desc("02-case.yaml", "gate")
-    with pytest.raises(TypeError, match="exact ValueContract"):
+    with pytest.raises(TypeError, match="ValueContract or PartialRecordContract"):
         check_case_exhaustive(
             {desc.id: desc},
             {"unused": Type.scalar(ValueKind.STRING)},  # type: ignore[dict-item]

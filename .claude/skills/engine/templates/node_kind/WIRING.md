@@ -48,11 +48,11 @@ carriers, never raw strings or a side text map.
 Every non-`None` programmatic node signature is an exact `list` of exact
 `Parameter` carriers; never introduce subclasses, alternate containers, a
 parallel declaration type, or a source on the parameter itself.
-Every enforced programmatic node output is an exact `ValueContract` stored in
-`Node.output_contract`; `None` means unenforced. Node-side code reads the
-contract's `.type` when it needs the semantic type and retains the carrier when it
-clones or rewrites the node. Python callers pass `output_contract=`; do not add
-another output-Type field or compatibility property.
+Every enforced programmatic node output uses the single `Node.output_contract` sum:
+an exact `ValueContract`, a closed `PartialRecordContract`, or `None` when unenforced.
+Node-side code reads `.type` only from the exact arm and retains either carrier when it
+clones or rewrites the node. Python callers pass `output_contract=`; do not add another
+output-Type field or compatibility property.
 `Node.origin` is optional opaque diagnostic provenance and is unrelated to LOOP's
 `origin_id`. A programmatic/generated node defaults to `None`; preserve an existing
 origin when cloning, and never interpret it as execution state. Nodes expose only
@@ -163,7 +163,7 @@ attachment hook, and the sink derivations (`output_contract` / `sink_params` /
   `self._finish(node, wiring)`. `_finish` stamps only the source-neutral `.origin`
   on the semantic node; it copies the descriptor's header and field locations into
   `BuildResult.node_range` / `field_ranges`.
-  The inherited `self.output_contract(ctx.registry)` returns a `ValueContract | None`;
+  The inherited `self.output_contract(ctx)` returns a `ValueContract | None`;
   assign that carrier directly to `node.output_contract`. Retain an existing carrier when
   re-exporting a child output; construct a new carrier only when the kind changes the semantic
   type (for example, MAP deriving `list[U]`). The authored `outputs:` field does not change.

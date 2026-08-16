@@ -14,6 +14,7 @@ from agent_composer.compose.build.inline_inputs import (
 )
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.diagnostics import SourceRange
+from agent_composer.nodes.contracts import PartialRecordContract, ValueContract
 from agent_composer.typesys import canonical_type_label
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -541,6 +542,46 @@ def test_nullable_producer_root_propagates_to_a_selected_field():
     )
 
     assert inferred == Type(kind=ValueKind.INTEGER, nullable=True)
+
+
+def test_known_partial_producer_field_is_available_to_inline_inference():
+    """A partial sibling does not hide an independently proven selected field."""
+    partial = PartialRecordContract(
+        fields=(
+            ("value", ValueContract(Type.scalar(ValueKind.INTEGER))),
+            ("note", None),
+        )
+    )
+
+    inferred = infer_inline_binding_type(
+        "${source.output.value}",
+        parent_input_types={},
+        producer_type=lambda _node, _label, _range: partial,
+        binding_label="call.input.value",
+    )
+
+    assert inferred == Type.scalar(ValueKind.INTEGER)
+
+
+@pytest.mark.parametrize("reference", ["${source.output}", "${source.output.note}"])
+def test_opaque_partial_producer_reads_remain_unavailable_to_inline_inference(
+    reference: str,
+):
+    """Whole and opaque-field reads cannot invent an exact generated input type."""
+    partial = PartialRecordContract(
+        fields=(
+            ("value", ValueContract(Type.scalar(ValueKind.INTEGER))),
+            ("note", None),
+        )
+    )
+
+    with pytest.raises(LoadError, match="no statically proven exact type"):
+        infer_inline_binding_type(
+            reference,
+            parent_input_types={},
+            producer_type=lambda _node, _label, _range: partial,
+            binding_label="call.input.value",
+        )
 
 
 def test_nullable_item_root_propagates_to_a_selected_field():

@@ -13,11 +13,16 @@ from agent_composer.nodes.contracts import (
     Assertion,
     Binding,
     ContractOrigins,
+    OutputContract,
+    PartialRecordContract,
     Parameter,
     ValueContract,
     ValuePath,
     as_binding,
     binding_source,
+    missing_output_contract_field,
+    output_contract_origin,
+    validate_output_contract,
 )
 from agent_composer.typesys import Type, ValueKind
 
@@ -29,7 +34,14 @@ def _origin(key: str) -> OriginRef:
 
 def test_carriers_have_exact_final_fields() -> None:
     """The shared vocabulary must not grow parallel semantic authorities."""
-    for carrier in (Binding, Assertion, ContractOrigins, ValueContract, Parameter):
+    for carrier in (
+        Binding,
+        Assertion,
+        ContractOrigins,
+        ValueContract,
+        PartialRecordContract,
+        Parameter,
+    ):
         assert carrier.__dataclass_params__.frozen is True
 
     assert [field.name for field in fields(Binding)] == ["source", "origin"]
@@ -40,6 +52,7 @@ def test_carriers_have_exact_final_fields() -> None:
     ]
     assert [field.name for field in fields(ContractOrigins)] == ["default", "entries"]
     assert [field.name for field in fields(ValueContract)] == ["type", "origins"]
+    assert [field.name for field in fields(PartialRecordContract)] == ["fields"]
     assert [field.name for field in fields(Parameter)] == [
         "name",
         "contract",
@@ -219,6 +232,52 @@ def test_value_contract_uses_a_fresh_empty_origin_index() -> None:
     assert first.origins is not second.origins
 
 
+def test_partial_record_contract_enforces_closed_shape_and_known_fields() -> None:
+    """Opaque fields stay present while proven siblings retain exact contracts."""
+    origin = _origin("known")
+    contract = PartialRecordContract(
+        fields=(
+            (
+                "count",
+                ValueContract(
+                    Type.scalar(ValueKind.INTEGER),
+                    ContractOrigins(default=origin),
+                ),
+            ),
+            ("note", None),
+        )
+    )
+
+    validate_output_contract(contract, {"count": 1, "note": object()})
+    assert contract.names == ("count", "note")
+    assert missing_output_contract_field(contract, ["count"]) is None
+    assert missing_output_contract_field(contract, ["note", "anything"]) is None
+    assert missing_output_contract_field(contract, ["absent"]) == "absent"
+    assert output_contract_origin(contract, ("count",)) is origin
+    assert output_contract_origin(contract, ("note",)) is None
+
+    with pytest.raises(ValueError, match="does not match declared type int"):
+        validate_output_contract(contract, {"count": "one", "note": "x"})
+    with pytest.raises(ValueError, match="missing required"):
+        validate_output_contract(contract, {"count": 1})
+    with pytest.raises(ValueError, match="unknown fields"):
+        validate_output_contract(
+            contract,
+            {"count": 1, "note": "x", "extra": True},
+        )
+
+
+def test_partial_record_contract_rejects_ambiguous_representations() -> None:
+    """Duplicate, mutable, and fully typed field sets have one canonical rejection."""
+    integer = ValueContract(Type.scalar(ValueKind.INTEGER))
+    with pytest.raises(TypeError, match="tuple"):
+        PartialRecordContract(fields=[])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="duplicate"):
+        PartialRecordContract(fields=(("x", integer), ("x", None)))
+    with pytest.raises(ValueError, match="fully typed"):
+        PartialRecordContract(fields=(("x", integer),))
+
+
 def test_parameter_maps_every_nested_origin_without_copying_semantics() -> None:
     """Origin rebasing is recursive while semantic payload objects stay identical."""
     value_type = Type.scalar(ValueKind.OBJECT)
@@ -272,6 +331,21 @@ def test_each_carrier_maps_present_origins_and_skips_none() -> None:
     assert ValueContract(
         Type.scalar(ValueKind.STRING), ContractOrigins(default=present)
     ).map_origins(mapper).origins.default == _origin("new:present")
+    partial = PartialRecordContract(
+        fields=(
+            (
+                "known",
+                ValueContract(
+                    Type.scalar(ValueKind.STRING),
+                    ContractOrigins(default=present),
+                ),
+            ),
+            ("opaque", None),
+        )
+    )
+    assert partial.map_origins(mapper).fields[0][1].origins.default == _origin(
+        "new:present"
+    )
 
     call_count = len(calls)
     Binding("x").map_origins(mapper)
@@ -326,6 +400,8 @@ def test_nodes_package_exports_the_canonical_contract_vocabulary() -> None:
         "Assertion": Assertion,
         "Binding": Binding,
         "ContractOrigins": ContractOrigins,
+        "OutputContract": OutputContract,
+        "PartialRecordContract": PartialRecordContract,
         "Parameter": Parameter,
         "ValueContract": ValueContract,
         "ValuePath": ValuePath,

@@ -119,6 +119,14 @@ expression, so a string default must be **quoted** (`${x:-"today"}`; bare `today
 reads a variable). A child-flow call is the whole-value `call(...)` directive
 (see below), never a `${flow(args)}` span.
 
+For child-flow output contracts, a direct ref preserves its exact or partial contract;
+selecting a known partial-record field yields an exact type. A comparison/membership or
+`not`/`and`/`or` result is proven `bool`. This permits a
+LOOP body field such as `exited: ${ask.output == "/exit"}` without a CODE fold.
+Other computed result types remain unknown unless an explicit typed node supplies them.
+In LOOP records, an unknown field does not disable enforcement of proven siblings,
+including when `while:` stops before the first iteration or a run is replayed.
+
 ## Types
 
 Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`,
@@ -356,7 +364,9 @@ turn:
 generated parameters are the carried `input:` fields, so the same `'a -> 'a`
 contract still applies.
 The body's `output:` shape must **equal** the carried record and read only a
-**subset** of its names (`'a -> 'a`) — names checked at build, types at load. The
+**subset** of its names (`'a -> 'a`) — names are checked at build, and statically
+proven body/seed field pairs are compared at load. Proven output fields are always
+enforced at runtime and replay. The
 node's value is the final carried record. A body that blocks (a `human_input` leaf)
 makes the loop a live chat REPL: the same run threads each answered turn. Pick
 **exactly one**
@@ -364,16 +374,17 @@ driver: `while:` (pre-check, 0+ runs), `until:` (post-check / do-while, 1+ runs,
 stop when the predicate becomes true), or `times: N` (fixed count). `max:` is
 required for `while:`/`until:` but **redundant and rejected** with `times:`.
 
-#### Conversational REPL — a chat as a `loop` (what `ac chat` runs)
+#### Conversational REPL — the `loop` shape used by `ac chat`
 A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
 `case` routes exact `/exit` and `/quit` values to an exit record before the
-`reply` agent. The normal branch builds the next transcript; defaulted output
+`reply` agent. The normal branch builds the next transcript; the body's output
 bindings rejoin the exit record or normal transcript into the carried
 `{transcript: str, exited: bool}` record. Typed exit is flow-owned — a host must
 not intercept it — while terminal EOF may be normalized to `/exit`. **Gotcha:**
 the body's `output:` must EQUAL the carried record. A lone multi-ref coalesce has
-no inferable type; adjacent defaulted spans preserve `str`, and the lone
-defaulted exit span preserves `bool`. See [`templates/chat.yaml`](templates/chat.yaml).
+no inferable type; adjacent defaulted spans preserve `str`, and comparing the
+optional exit field with `true` proves the carried `bool`. See
+[`templates/chat.yaml`](templates/chat.yaml).
 
 ## Run-ordering without data (`depends_on` / `runs_after`)
 Both gate a node on another **settling** even when no value flows. `depends_on:

@@ -209,9 +209,10 @@ node_range, field_ranges = result.node_range, result.field_ranges
 - the **node** carries only what it needs to run: its canonical `output_contract`,
   its sink `params` (formal names plus optional input contracts/default policy), and
   an optional source-neutral authored-context `origin`. It has no `range`,
-  `field_ranges`, `pre_assert_ranges`, or `post_assert_ranges`. Descriptors derive a
-  `ValueContract` directly; consumers retain it and project `.type` only inside
-  semantic type algorithms. CODE additionally carries the diagnostic-only whole-source
+  `field_ranges`, `pre_assert_ranges`, or `post_assert_ranges`. An output-authoring leaf
+  descriptor derives an exact `ValueContract`; composite CALL/LOOP builders may preserve
+  a child's `PartialRecordContract`. Consumers retain the output-contract sum and project
+  an exact type only inside semantic type algorithms. CODE additionally carries the diagnostic-only whole-source
   `code_origin` and ordered exact `code_line_origins`. Inline CODE compiles one
   unpadded wrapper and uses retained code-object identity to select the deepest
   owned traceback line; filenames and structural equality never establish ownership.

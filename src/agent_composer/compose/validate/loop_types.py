@@ -4,15 +4,15 @@ A loader post-build pass (run after `check_ref_map_types`). `nodes.loop.build` c
 carried field-NAME sets — it lacks the resolved carried-record Types, which depend on the parent
 producers/flow inputs assembled LATER. This pass resolves each carried field's contract from its
 bound seed source (`${<id>.output}`/`${input.X}` over the parent producer + flow-input
-contracts, via `_output_value_contract`), projects its Type, and checks it is structurally
-compatible (`types_compatible`, C-EQUIV) with the body OUTPUT's same-named field Type. It
-carries a range anchor from the loop's transient Compose
+contracts, via `resolve_output_binding_contract`), projects its Type, and checks it is structurally
+compatible (`types_compatible`, C-EQUIV) with the body OUTPUT's same-named field Type. The
+node's canonical output contract already retains independently proven body fields when no
+sound exact aggregate exists. This pass carries a range anchor from
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
-Imports flow down only: `compile.validation` (the type comparator), `compose.nodes.resolver`
-(`_output_value_contract`, the shared contract resolver — `resolver` imports no later phase, so
-this edge is acyclic), and `compose.helpers.errors`. Only the loader
-(and the compose package facade) import this back.
+Imports flow down only: `compile.validation` (the type comparator) and
+`compose.helpers` (shared output-contract inference and load diagnostics). Only
+the loader (and the compose package facade) import this back.
 """
 
 from __future__ import annotations
@@ -20,17 +20,23 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from agent_composer.compile.validation import types_compatible
-from agent_composer.compose.nodes.resolver import _output_value_contract
 from agent_composer.compose.helpers.errors import LoadDiagnostics
+from agent_composer.compose.helpers.output_contracts import (
+    resolve_output_binding_contract,
+)
 from agent_composer.compose.nodes.base import BuildResult
 from agent_composer.diagnostics import SourceRange
-from agent_composer.nodes.contracts import ValueContract
+from agent_composer.nodes.contracts import (
+    OutputContract,
+    PartialRecordContract,
+    ValueContract,
+)
 from agent_composer.typesys import canonical_type_label
 
 
 def check_loop_type_contract(
     build_results: dict[str, BuildResult],
-    producers: dict[str, ValueContract],
+    producers: dict[str, OutputContract],
     flow_inputs: dict[str, ValueContract],
     flow_wiring: dict[str, dict[str, Any]],
     *,
@@ -42,11 +48,14 @@ def check_loop_type_contract(
     Types — the seed sources' types depend on the parent producers/flow inputs assembled
     LATER). This pass, run after `check_ref_map_types`, resolves each carried field's Type
     from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producer +
-    flow-input contracts, exactly as `check_ref_map_types` via `_output_value_contract`),
+    flow-input contracts, exactly as `check_ref_map_types` via
+    `resolve_output_binding_contract`),
     and checks it is structurally compatible (`types_compatible`, C-EQUIV) with the body
-    OUTPUT's same-named field Type (the body `output_contract.type`). A
-    literal/coalesce/opaque seed source, or an opaque body output field, stays lenient
-    (skipped). Loud + located at the loop node's `input:` mapping range
+    OUTPUT's same-named field Type. A fully proven body reads those fields from the
+    aggregate `output_contract`; a partially typed record reads its independently
+    proven field contracts from the same canonical output-contract sum. A literal/
+    coalesce/opaque seed source, or an opaque body output field, stays lenient (skipped).
+    Loud + located at the loop node's `input:` mapping range
     (else the Compose-owned node range) on a
     same-names/different-TYPES mismatch."""
     diagnostics = diagnostics or LoadDiagnostics()
@@ -55,9 +64,19 @@ def check_loop_type_contract(
         ("flow input", flow_inputs),
     ):
         for name, contract in contracts.items():
-            if type(contract) is not ValueContract:
+            allowed = (
+                (ValueContract, PartialRecordContract)
+                if label == "output producer"
+                else (ValueContract,)
+            )
+            if type(contract) not in allowed:
+                required = (
+                    "ValueContract or PartialRecordContract"
+                    if label == "output producer"
+                    else "exact ValueContract"
+                )
                 raise TypeError(
-                    f"{label} contracts must be exact ValueContract values, "
+                    f"{label} contracts must be {required} values, "
                     f"got {type(contract).__name__} for {name!r}"
                 )
     for nid, result in build_results.items():
@@ -65,23 +84,52 @@ def check_loop_type_contract(
         if not node.is_loop:
             continue
         body_contract = node.output_contract
-        if body_contract is not None and type(body_contract) is not ValueContract:
+        if body_contract is not None and type(body_contract) not in (
+            ValueContract,
+            PartialRecordContract,
+        ):
             raise TypeError(
-                f"node {nid!r} output_contract must be an exact ValueContract or None, "
+                f"node {nid!r} output_contract must be an exact ValueContract, "
+                "PartialRecordContract, or None, "
                 f"got {type(body_contract).__name__}"
             )
-        body_out = None if body_contract is None else body_contract.type
+        body_out = (
+            body_contract.type
+            if type(body_contract) is ValueContract
+            else None
+        )
+        if body_out is not None and body_out.fields is not None:
+            body_fields = body_out.fields
+        elif type(body_contract) is PartialRecordContract:
+            body_fields = {
+                field_name: field_contract.type
+                for field_name, field_contract in body_contract.fields
+                if field_contract is not None
+            }
+        else:
+            body_fields = {}
         # A non-record / absent body output was already caught by the field-name half in
-        # nodes.loop.build; nothing typed to compare against here.
-        if body_out is None or body_out.fields is None:
+        # nodes.loop.build. With no independently proven fields, nothing remains to compare.
+        if not body_fields:
             continue
         for field_name, src in flow_wiring.get(nid, {}).items():
-            body_field = body_out.fields.get(field_name)
+            body_field = body_fields.get(field_name)
             if body_field is None:
                 continue  # name mismatch caught in build; nothing to type-check
-            source_contract = _output_value_contract(src, producers, flow_inputs)
+            source_contract = resolve_output_binding_contract(
+                src,
+                producers,
+                flow_inputs,
+            )
             if source_contract is None:
                 continue  # literal/coalesce/opaque seed source -> lenient
+            if type(source_contract) is PartialRecordContract:
+                continue  # a whole partial record has no exact Type to compare
+            if type(source_contract) is not ValueContract:
+                raise TypeError(
+                    "resolved loop source contract must be ValueContract, "
+                    "PartialRecordContract, or None"
+                )
             source = source_contract.type
             if not types_compatible(source, body_field):
                 rng: Optional[SourceRange] = (

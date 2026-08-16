@@ -31,7 +31,7 @@ from agent_composer.events import (
 )
 from agent_composer.nodes.base import Grow, Node, NodeKind
 from agent_composer.nodes.code import CodeNode
-from agent_composer.nodes.contracts import ValueContract
+from agent_composer.nodes.contracts import PartialRecordContract, ValueContract
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.log import (
@@ -903,6 +903,29 @@ def test_success_commits_canonical_value_before_fifo_successors():
         NodeStartedRecord,
         NodeSucceededRecord,
     ]
+
+
+def test_success_replay_revalidates_partial_record_contract() -> None:
+    """A forged durable success cannot bypass field-local output guarantees."""
+    flow = _fanout_flow()
+    flow.nodes[START_ID].output_contract = PartialRecordContract(
+        fields=(
+            ("items", ValueContract(Type(kind=ValueKind.LIST_INTEGER))),
+            ("note", None),
+        )
+    )
+    state, _log = _initialized_and_started(flow)
+    record = NodeSucceededRecord(
+        node_id=START_ID,
+        commit_target=START_ID,
+        value={
+            "kind": "object",
+            "value": {"items": ["bad"], "note": "opaque"},
+        },
+    )
+
+    with pytest.raises(ValueError, match="declared"):
+        prepare_record(state, record)
 
 
 def _joined_fanout_flow() -> CompiledFlow:

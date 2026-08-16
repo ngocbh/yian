@@ -672,11 +672,20 @@ the LOOP contract `'a -> 'a`.
   The body's `output:` must be the **same shape** as
   the carried record (`'a -> 'a`), and the fields the body reads (`${input.X}`)
   must be a subset of the carried names. This contract is checked twice: field
-  **names** at build, field **types** at load. Each output field's type is inferred
-  from its binding shape (see [expressions](expressions.md)): a lone `${...}` span is
-  a typed passthrough, while a **concatenating template** (literal text around spans)
-  is a `str` — so a carried `str` field (e.g. a chat transcript) can be grown with a
-  plain `${...}` template binding, no CODE fold node required.
+  **names** at build, and each statically proven body field against a statically
+  proven seed source at load. Every proven output field is enforced at runtime and
+  replay even when its seed was opaque at load. Each output field's type is inferred
+  from its binding shape (see [expressions](expressions.md)): a lone direct ref preserves
+  an exact or partial contract, a known partial-record field is exact, a proven comparison
+  or boolean expression is `bool`, and a
+  **concatenating template** (literal text around spans) is `str`. Therefore a body may
+  write `exited: ${ask.output == "/exit"}` directly, and a carried transcript may grow
+  through a plain template binding, without a CODE fold node. If a computed field's
+  type is not proven, its declared name is still checked but its type stays opaque;
+  opaque never means a concrete `None` value and does not erase type checks for proven
+  sibling fields. LOOP enforces the closed field set and every proven sibling on normal
+  iterations, zero-iteration `while:` commits, and durable replay. A literal `${null}`
+  is compatible with a nullable carried field, including inside a typed list.
 - **Exactly one** of `while:` / `until:` / `times:` per loop node selects the
   driver. Zero or more than one is a load-time error (`exactly one of
   while:/until:/times: is required`).

@@ -442,7 +442,12 @@ class NodeDescriptor:
         """
         raise NotImplementedError(f"{type(self).__name__} has no build")
 
-    def _finish(self, node, wiring, edges=()) -> BuildResult:
+    def _finish(
+        self,
+        node,
+        wiring,
+        edges=(),
+    ) -> BuildResult:
         """Attach semantic provenance and return the Compose build product.
 
         The tail helper every `build` ends with — the ONE place source metadata stamps live, so

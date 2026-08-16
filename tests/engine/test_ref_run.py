@@ -101,6 +101,72 @@ def test_ref_runs_child_and_reexports_value():
     assert result.output == {"report": "report for ACME", "n": 4}
 
 
+def test_ref_output_projection_preserves_nullable_parent_path():
+    """A dotted read through a nullable record may itself evaluate to None."""
+    parent = load_flow(
+        """id: nullable-projection
+name: nullable_projection
+typedefs:
+  Payload:
+    value: int
+input:
+  payload: Optional[Payload]
+defs:
+  pick:
+    input:
+      payload: Optional[Payload]
+    nodes: {}
+    output: ${input.payload.value}
+nodes:
+  invoke:
+    kind: call
+    call: pick
+    input:
+      payload: ${input.payload}
+output: ${invoke.output}
+"""
+    )
+
+    contract = parent.compiled.nodes["invoke"].output_contract
+    assert contract is not None
+    assert contract.type.nullable is True
+
+    result = run_flow(parent, {"payload": None})
+    assert result.status == "succeeded"
+    assert result.output is None
+
+
+def test_ref_accepts_none_elements_for_nullable_list_sink():
+    """Static list compatibility recurses into the nullable element contract."""
+    parent = load_flow(
+        """id: list-none-call
+name: list_none_call
+defs:
+  echo:
+    input:
+      values: list[Optional[str]]
+    nodes: {}
+    output: ${input.values}
+nodes:
+  source:
+    kind: code
+    code: |
+      return [None]
+    output: list[None]
+  invoke:
+    kind: call
+    call: echo
+    input:
+      values: ${source.output}
+output: ${invoke.output}
+"""
+    )
+
+    result = run_flow(parent, {})
+    assert result.status == "succeeded"
+    assert result.output == [None]
+
+
 def test_ref_child_failure_fails_the_run():
     parent = load_flow(_REF_BOOM, child_resolver=_resolver(**{"boom-child": _BOOM_CHILD}))
     result = run_flow(parent, {"topic": "ACME"})

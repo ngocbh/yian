@@ -89,7 +89,8 @@ class CallDescriptor(NodeDescriptor):
         in `wiring`. A MAP's reserved `over:` iteration source rides the wiring under the `"over"`
         key (over-then-inputs order); a REF's wiring is just its `inputs:`. Resolves the callable
         via `ctx.resolver`, derives its `ChildSignature`, stamps `output_contract` (REF re-exports
-        the codomain carrier; MAP wraps its type in `list[U]` and retains its default origin),
+        the codomain carrier; MAP wraps an exact type in `list[U]` and retains its default
+        origin, while a partial/opaque child remains unenforced),
         name/arity-checks the params, and BAKES the child's
         compiled flow onto the node. The REF/MAP discriminator is the descriptor CLASS
         (`MapDescriptor` -> `MapNode`, else `CallNode`). `ctx.registry` is unused (call/map resolve
@@ -141,12 +142,12 @@ class CallDescriptor(NodeDescriptor):
                 "over": self.over,
                 **self.sink_wiring(),
             }  # over FIRST (edge order)
-            if sig.output is None:
+            if not sig.output_names:
                 errors.append(
                     f"map node {self.id!r}: {child_display} must declare exactly one "
                     f"output value — a mapped call (over:) returns list[U] of that single output"
                 )
-            else:
+            elif type(sig.output) is ValueContract:
                 node.output_contract = ValueContract(
                     type=_list_of(sig.output.type),
                     origins=ContractOrigins(default=sig.output.origins.default),

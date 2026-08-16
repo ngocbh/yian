@@ -18,9 +18,9 @@ Located parse metadata: each error anchors on the referencing field's `SourceRan
 from the transient Compose `BuildResult` (the coarse per-field span — e.g. the node's
 `input:` mapping for an input-binding ref, its `prompt:` for a prompt ref).
 
-Imports flow down only: `compile.validation` (the leaf ref checker), `expr` (the binding
-parser), `nodes` (Node/AgentNode/WaitNode discrimination and `ValueContract`),
-`compose.helpers.errors`.
+Imports flow down only: `compile.validation` (the leaf namespace checker), `expr` (the
+binding parser), `nodes` (Node/AgentNode/WaitNode discrimination and the output-contract
+sum), and `compose.helpers` (closed-path projection and errors).
 Only the loader (and the compose package facade) import this back.
 """
 
@@ -30,6 +30,7 @@ from typing import Any, Optional
 
 from agent_composer.compile.validation import _classify_path
 from agent_composer.compose.helpers.errors import LoadDiagnostics
+from agent_composer.compose.helpers.output_contracts import output_contract_path_error
 from agent_composer.compose.nodes.base import BuildResult
 from agent_composer.diagnostics import SourceRange
 from agent_composer.expr import (
@@ -38,7 +39,12 @@ from agent_composer.expr import (
     prompt_refs,
 )
 from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.contracts import ValueContract, binding_source
+from agent_composer.nodes.contracts import (
+    OutputContract,
+    PartialRecordContract,
+    ValueContract,
+    binding_source,
+)
 from agent_composer.nodes.wait import WaitNode
 
 # Heads forbidden in a strict prompt (always trigger the bespoke hint).
@@ -64,7 +70,7 @@ def _output_bindings(outputs: Any) -> list[Any]:
 def validate_references(
     build_results: dict[str, BuildResult],
     flow_inputs: "set[str]",
-    producers: dict[str, ValueContract],
+    producers: dict[str, OutputContract],
     outputs: Any,
     flow_wiring: dict[str, dict[str, Any]],
     *,
@@ -77,10 +83,10 @@ def validate_references(
     `Node`s and desugared `CaseNode`s (their wiring carries the `__rN`/`__on` sources), while
     its range fields retain YAML locations only for this validation phase.
     `flow_inputs` is the `read_flow_inputs(...)` decl names (the `${input.X}` set);
-    `producers` maps node id -> its exact `output_contract`. Only producers with a
-    resolvable contract belong here; an absent producer contract stays lenient. The
-    existing structural reference walker receives only each contract's semantic `.type`,
-    leaving its origins attached to the untouched carrier. `outputs` is the raw flow
+    `producers` maps node id -> its exact or partial `output_contract`. An absent
+    contract stays lenient. The namespace checker validates the reference head, then
+    the shared output-contract helper checks exact fields or the partial arm's closed
+    root name set without inventing a type for opaque fields. `outputs` is the raw flow
     `outputs:` section.
 
     Each error anchors on the referencing site's `SourceRange`, resolved from its
@@ -95,17 +101,14 @@ def validate_references(
     """
     diagnostics = diagnostics or LoadDiagnostics()
     valid_targets = set(build_results)
-    # The representation-neutral leaf checker speaks Type. Project only at that boundary;
-    # the canonical ValueContract carriers (and their origins) stay untouched here.
+    # Keep exact and partial carriers intact; the Compose projection below checks
+    # closed record paths without inventing a Type for opaque fields.
     for node_id, contract in producers.items():
-        if type(contract) is not ValueContract:
+        if type(contract) not in (ValueContract, PartialRecordContract):
             raise TypeError(
-                "producer contracts must be exact ValueContract values, "
+                "producer contracts must be ValueContract or PartialRecordContract values, "
                 f"got {type(contract).__name__} for {node_id!r}"
             )
-    producer_types = {
-        node_id: contract.type for node_id, contract in producers.items()
-    }
     errors: list[tuple[str, Optional[SourceRange]]] = []
 
     def scan(
@@ -129,8 +132,18 @@ def validate_references(
             return
         for path in paths:
             err = _classify_path(
-                path, valid_targets, flow_inputs, extra_heads, producer_types
+                path, valid_targets, flow_inputs, extra_heads
             )
+            parts = path.split(".")
+            if (
+                err is None
+                and len(parts) >= 2
+                and parts[1] == "output"
+                and parts[0] in producers
+            ):
+                err = output_contract_path_error(
+                    producers[parts[0]], parts[2:], path
+                )
             if err is not None:
                 errors.append((f"{where}: {err}", rng))
 

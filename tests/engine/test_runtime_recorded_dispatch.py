@@ -30,7 +30,12 @@ from agent_composer.events import (
     StreamChunk,
 )
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output, Route, _HostStop
-from agent_composer.nodes.contracts import ContractOrigins, ValueContract
+from agent_composer.nodes.contracts import (
+    ContractOrigins,
+    OutputContract,
+    PartialRecordContract,
+    ValueContract,
+)
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 from agent_composer.runtime.engine import FlowEngine
@@ -64,7 +69,7 @@ class _ActionNode(Node):
         node_id: str,
         action: Callable[[], Any],
         *,
-        output_contract: ValueContract | None = None,
+        output_contract: OutputContract | None = None,
         origin: OriginRef | None = None,
     ) -> None:
         super().__init__(node_id, output_contract=output_contract, origin=origin)
@@ -598,6 +603,67 @@ def test_nested_output_failure_uses_the_exact_contract_origin(
     assert len(failures) == 1
     assert failures[0].code == "contract.output"
     assert failures[0].trace == (score_origin,)
+
+
+def test_partial_output_failure_uses_the_known_field_origin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Field-local evidence retains output classification and authored location."""
+    node_origin = OriginRef("nodes/work")
+    count_origin = OriginRef("defs/body/output/count")
+    node = _ActionNode(
+        "work",
+        lambda: {"count": "bad", "note": "opaque"},
+        output_contract=PartialRecordContract(
+            fields=(
+                (
+                    "count",
+                    ValueContract(
+                        Type.scalar(ValueKind.INTEGER),
+                        ContractOrigins(default=count_origin),
+                    ),
+                ),
+                ("note", None),
+            )
+        ),
+        origin=node_origin,
+    )
+    state, log = _initialized(_flow([node]), num_workers=0)
+    failures = _capture_semantic_failures(monkeypatch)
+
+    list(_dispatcher(state, log, num_workers=0).run())
+
+    assert len(failures) == 1
+    assert failures[0].code == "contract.output"
+    assert failures[0].trace == (count_origin,)
+    assert failures[0].cause_type == "TypeCheckError"
+
+
+def test_partial_output_shape_failure_falls_back_to_node_origin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Unknown keys are rejected even though no field contract owns their origin."""
+    node_origin = OriginRef("nodes/work")
+    node = _ActionNode(
+        "work",
+        lambda: {"count": 1, "note": "opaque", "extra": True},
+        output_contract=PartialRecordContract(
+            fields=(
+                ("count", ValueContract(Type.scalar(ValueKind.INTEGER))),
+                ("note", None),
+            )
+        ),
+        origin=node_origin,
+    )
+    state, log = _initialized(_flow([node]), num_workers=0)
+    failures = _capture_semantic_failures(monkeypatch)
+
+    list(_dispatcher(state, log, num_workers=0).run())
+
+    assert len(failures) == 1
+    assert failures[0].code == "contract.output"
+    assert failures[0].trace == (node_origin,)
+    assert "unknown fields" in failures[0].message
 
 
 def test_non_type_output_failure_uses_the_contract_default_origin(

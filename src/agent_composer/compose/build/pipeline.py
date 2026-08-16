@@ -36,7 +36,13 @@ from agent_composer.diagnostics import (
     SourceRange,
 )
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import Parameter, ValueContract, as_binding
+from agent_composer.nodes.contracts import (
+    OutputContract,
+    Parameter,
+    PartialRecordContract,
+    ValueContract,
+    as_binding,
+)
 from agent_composer.typesys.values import Type
 from agent_composer.compose.validate.asserts import lower_flow_asserts
 from agent_composer.compose.build.boundary import synthesize_boundary_graph
@@ -1008,7 +1014,7 @@ def _assemble(
             producer_id: str,
             binding_label: str,
             binding_range: SourceRange | None,
-        ) -> Type:
+        ) -> Type | OutputContract:
             """Resolve one parent producer through this assembly's build cache."""
             def unavailable_type() -> LoadError:
                 return diagnostics.error(
@@ -1033,12 +1039,13 @@ def _assemble(
             ).node.output_contract
             if output_contract is None:
                 raise unavailable_type()
-            if type(output_contract) is not ValueContract:
+            if type(output_contract) not in (ValueContract, PartialRecordContract):
                 raise TypeError(
-                    "output producer contracts must be exact ValueContract values, "
+                    "output producer contracts must be ValueContract or "
+                    "PartialRecordContract values, "
                     f"got {type(output_contract).__name__} for {producer_id!r}"
                 )
-            return output_contract.type
+            return output_contract
 
         item_type: Callable[[str, SourceRange | None], Type] | None = None
         if isinstance(descriptor, MapDescriptor):
@@ -1167,14 +1174,15 @@ def _assemble(
     # producers: each built node's declared output contract (drives the case `on:` enum
     # exhaustiveness + the dotted-field walk in ref/assert validation). A case node has no
     # contract, so it is naturally excluded.
-    producers: dict[str, ValueContract] = {}
+    producers: dict[str, OutputContract] = {}
     for nid, node in nodes_built.items():
         contract = node.output_contract
         if contract is None:
             continue
-        if type(contract) is not ValueContract:
+        if type(contract) not in (ValueContract, PartialRecordContract):
             raise TypeError(
-                "output producer contracts must be exact ValueContract values, "
+                "output producer contracts must be ValueContract or "
+                "PartialRecordContract values, "
                 f"got {type(contract).__name__} for {nid!r}"
             )
         producers[nid] = contract

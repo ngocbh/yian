@@ -3,7 +3,8 @@
 These frozen carriers attach opaque origins to executable meanings without
 depending on Compose/YAML or runtime state. Compiled wiring, node assertions,
 node parameters, and node outputs use their canonical carriers. Compose output
-derivation preserves those carriers and projects `.type` only inside type algorithms.
+derivation preserves those carriers and projects exact field/value types only inside
+type algorithms.
 """
 
 from __future__ import annotations
@@ -12,7 +13,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, TypeAlias, cast
 
 from agent_composer.diagnostics import OriginRef
-from agent_composer.typesys import Type
+from agent_composer.typesys import (
+    Type,
+    TypeCheckError,
+    TypedValue,
+    build_value_as,
+)
 
 
 ValuePath: TypeAlias = tuple[str | int, ...]
@@ -209,6 +215,225 @@ class ValueContract:
 
 
 @dataclass(frozen=True)
+class PartialRecordContract:
+    """A closed record shape whose individual field types may be unproven.
+
+    Every field name is part of the contract: runtime values must contain exactly
+    this key set. A present ``ValueContract`` enforces that field recursively;
+    ``None`` keeps only the field's structural presence. At least one field must
+    be opaque, otherwise one exact record ``ValueContract`` is canonical.
+
+    Attributes:
+        fields (`tuple[tuple[str, ValueContract | None], ...]`):
+            Ordered field names paired with optional exact value contracts.
+    """
+
+    fields: tuple[tuple[str, ValueContract | None], ...]
+
+    def __post_init__(self) -> None:
+        """Require one immutable, unique, genuinely partial record declaration."""
+        self.validate_shape()
+
+    def validate_shape(self) -> None:
+        """Reject malformed or noncanonical field metadata, including after copying."""
+        if type(self.fields) is not tuple:
+            raise TypeError("partial record fields must be a tuple")
+        if not self.fields:
+            raise ValueError("partial record contract must declare at least one field")
+        names: set[str] = set()
+        has_opaque_field = False
+        for entry in self.fields:
+            if type(entry) is not tuple or len(entry) != 2:
+                raise TypeError(
+                    "partial record fields must be (name, optional contract) tuples"
+                )
+            name, contract = entry
+            if type(name) is not str or not name:
+                raise TypeError("partial record field names must be non-empty strings")
+            if name in names:
+                raise ValueError(f"duplicate partial record field {name!r}")
+            names.add(name)
+            if contract is None:
+                has_opaque_field = True
+            elif type(contract) is not ValueContract:
+                raise TypeError(
+                    "partial record field contracts must be exact ValueContract "
+                    f"values or None, got {type(contract).__name__} for {name!r}"
+                )
+        if not has_opaque_field:
+            raise ValueError(
+                "a fully typed record must use one exact ValueContract"
+            )
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """Return the closed field-name sequence in declaration order."""
+        return tuple(name for name, _contract in self.fields)
+
+    def map_origins(self, mapper: _OriginMapper) -> PartialRecordContract:
+        """Return this contract with every proven field origin transformed."""
+        return PartialRecordContract(
+            fields=tuple(
+                (
+                    name,
+                    None if contract is None else contract.map_origins(mapper),
+                )
+                for name, contract in self.fields
+            )
+        )
+
+    def iter_origins(self) -> Iterator[OriginRef]:
+        """Yield proven field-contract origins in declaration order."""
+        yield from _iter_origin_carrier(self, set())
+
+
+OutputContract: TypeAlias = ValueContract | PartialRecordContract
+"""The closed compiled output-contract sum: exact value or partial record."""
+
+
+def output_contract_type(contract: OutputContract | None) -> Type | None:
+    """Return an exact whole-value type, validating either contract arm's shapes."""
+    if contract is None:
+        return None
+    if type(contract) is ValueContract:
+        if not isinstance(contract.type, Type):
+            raise TypeError("value contract type must be a Type")
+        contract.type.validate_shape()
+        return contract.type
+    if type(contract) is PartialRecordContract:
+        contract.validate_shape()
+        for _name, field_contract in contract.fields:
+            if field_contract is not None:
+                if not isinstance(field_contract.type, Type):
+                    raise TypeError("value contract type must be a Type")
+                field_contract.type.validate_shape()
+        return None
+    raise TypeError(
+        "output contract must be an exact ValueContract, "
+        "PartialRecordContract, or None, "
+        f"got {type(contract).__name__}"
+    )
+
+
+def missing_output_contract_field(
+    contract: OutputContract,
+    fields: list[str] | tuple[str, ...],
+) -> str | None:
+    """Return the first field proven absent by a closed contract path.
+
+    An exact record remains closed at every proven nested record. A partial
+    record is closed at its root; traversal below one opaque field is lenient
+    because no nested shape is known.
+    """
+    if not isinstance(fields, (list, tuple)) or any(
+        type(field) is not str or not field for field in fields
+    ):
+        raise TypeError("output contract fields must be non-empty strings")
+    if type(contract) is PartialRecordContract:
+        contract.validate_shape()
+        if not fields:
+            return None
+        field_name, *remaining = fields
+        field_contracts = dict(contract.fields)
+        if field_name not in field_contracts:
+            return field_name
+        field_contract = field_contracts[field_name]
+        if field_contract is None:
+            return None
+        return missing_output_contract_field(field_contract, remaining)
+    if type(contract) is not ValueContract:
+        output_contract_type(contract)
+        return None  # pragma: no cover - the validator above always raises
+
+    typ = output_contract_type(contract)
+    assert typ is not None
+    for field_name in fields:
+        if typ.fields is None:
+            return None
+        if field_name not in typ.fields:
+            return field_name
+        typ = typ.fields[field_name]
+    return None
+
+
+def output_contract_origin(
+    contract: OutputContract | None,
+    path: ValuePath,
+) -> OriginRef | None:
+    """Select the most precise authored origin for one output-validation path."""
+    _validate_path(path, field_name="output contract lookup")
+    if contract is None:
+        return None
+    if type(contract) is ValueContract:
+        return contract.origins.at(path)
+    if type(contract) is not PartialRecordContract:
+        output_contract_type(contract)
+        return None  # pragma: no cover - the validator above always raises
+    if not path or type(path[0]) is not str:
+        return None
+    field_contract = dict(contract.fields).get(path[0])
+    if field_contract is None:
+        return None
+    return field_contract.origins.at(path[1:])
+
+
+def validate_output_contract(
+    contract: OutputContract | None,
+    value: Any,
+) -> None:
+    """Validate a plain or typed value against either output-contract arm."""
+    exact_type = output_contract_type(contract)
+    if exact_type is not None:
+        build_value_as(exact_type, value)
+        return
+    if contract is None:
+        return
+    assert type(contract) is PartialRecordContract
+    if isinstance(value, TypedValue):
+        value = value.to_object()
+    if not isinstance(value, dict):
+        raise TypeCheckError(
+            f"{value!r} is not an object for a partial record contract"
+        )
+
+    expected = set(contract.names)
+    missing = [name for name in contract.names if name not in value]
+    if missing:
+        raise TypeCheckError(
+            f"record missing required fields: {missing!r}",
+            path=(missing[0],),
+        )
+    unknown = value.keys() - expected
+    if unknown:
+        try:
+            ordered_unknown = sorted(unknown)
+        except TypeError:
+            ordered_unknown = sorted(
+                unknown,
+                key=lambda name: (type(name).__qualname__, repr(name)),
+            )
+        path = (
+            (ordered_unknown[0],)
+            if all(type(name) is str for name in unknown)
+            else ()
+        )
+        raise TypeCheckError(
+            f"record has unknown fields: {ordered_unknown!r}",
+            path=path,
+        )
+    for name, field_contract in contract.fields:
+        if field_contract is None:
+            continue
+        try:
+            build_value_as(field_contract.type, value[name])
+        except TypeCheckError as exc:
+            raise TypeCheckError(
+                *exc.args,
+                path=(name, *exc.path),
+            ) from exc
+
+
+@dataclass(frozen=True)
 class Parameter:
     """One formal input with one optional value contract and default policy.
 
@@ -273,7 +498,12 @@ class Parameter:
 
 
 _OriginCarrier: TypeAlias = (
-    Binding | Assertion | ContractOrigins | ValueContract | Parameter
+    Binding
+    | Assertion
+    | ContractOrigins
+    | ValueContract
+    | PartialRecordContract
+    | Parameter
 )
 
 
@@ -308,6 +538,11 @@ def _iter_origin_carrier(
         return
     if isinstance(carrier, ValueContract):
         yield from _iter_origin_carrier(carrier.origins, seen)
+        return
+    if isinstance(carrier, PartialRecordContract):
+        for _name, contract in carrier.fields:
+            if contract is not None:
+                yield from _iter_origin_carrier(contract, seen)
         return
     if isinstance(carrier, Parameter):
         if carrier.contract is not None:
@@ -363,6 +598,10 @@ def _rewrite_origin_carrier(
         )
     elif isinstance(carrier, ValueContract):
         _rewrite_origin_carrier(carrier.origins, mapper, seen)
+    elif isinstance(carrier, PartialRecordContract):
+        for _name, contract in carrier.fields:
+            if contract is not None:
+                _rewrite_origin_carrier(contract, mapper, seen)
     elif isinstance(carrier, Parameter):
         if carrier.contract is not None:
             _rewrite_origin_carrier(carrier.contract, mapper, seen)
@@ -394,9 +633,15 @@ __all__ = [
     "Assertion",
     "Binding",
     "ContractOrigins",
+    "OutputContract",
     "Parameter",
+    "PartialRecordContract",
     "ValueContract",
     "ValuePath",
     "as_binding",
     "binding_source",
+    "missing_output_contract_field",
+    "output_contract_origin",
+    "output_contract_type",
+    "validate_output_contract",
 ]

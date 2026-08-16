@@ -1,6 +1,6 @@
 # The default `ac chat` flow — a composer assistant with flow-op tools.
 # Same LOOP-per-turn shape as examples/chat.yaml; the reply agent is tool_calling.
-# A CASE keeps textual exit flow-owned; the body's defaulted output bindings rejoin the
+# A CASE keeps textual exit flow-owned; the body's output bindings rejoin the
 # typed exit record and normal transcript.
 id: composer-chat
 name: composer_chat
@@ -71,11 +71,11 @@ defs:
               + "\n\nUser: " + inputs["message"]
               + "\n\nAssistant: " + inputs["reply"]
           )
-    # A lone multi-ref coalesce has no inferable type. Adjacent defaulted spans
-    # concatenate as str, while the single defaulted exit span remains bool.
+    # Adjacent defaulted spans concatenate as str. Comparing the optional exit
+    # record field with true always yields the carried bool, including on a miss.
     output:
       transcript: '${exit_turn.output.transcript:-""}${normal_turn.output:-""}'
-      exited: ${exit_turn.output.exited:-false}
+      exited: ${exit_turn.output.exited == true}
 
 nodes:
   chat:

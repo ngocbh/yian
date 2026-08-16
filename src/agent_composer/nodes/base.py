@@ -30,7 +30,9 @@ from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.binding import BindingError, apply_defaults
 from agent_composer.nodes.contracts import (
     Assertion,
+    OutputContract,
     Parameter,
+    PartialRecordContract,
     ValueContract,
     _iter_origin_carrier,
     _map_origin,
@@ -197,9 +199,9 @@ class Node(ABC):
             The node's unique id within its (possibly namespaced) flow.
         title (`str`, *optional*):
             A human-friendly display title, or `None`.
-        output_contract (`ValueContract`, *optional*):
-            The canonical declared output contract (one value); `None` leaves the write
-            unenforced.
+        output_contract (`OutputContract`, *optional*):
+            The canonical declared output contract: one exact value or a closed record
+            with field-local type evidence. `None` leaves the write unenforced.
         params (`list[Parameter]`, *optional*):
             The node-side declared params (no source — the flow owns the wiring); `None`
             for a node that declares no inputs.
@@ -272,18 +274,22 @@ class Node(ABC):
         node_id: str,
         *,
         title: Optional[str] = None,
-        output_contract: Optional[ValueContract] = None,
+        output_contract: OutputContract | None = None,
         origin: OriginRef | None = None,
     ) -> None:
         self.id = node_id
         self.title = title
-        if output_contract is not None and type(output_contract) is not ValueContract:
+        if output_contract is not None and type(output_contract) not in (
+            ValueContract,
+            PartialRecordContract,
+        ):
             raise TypeError(
-                "output_contract must be an exact ValueContract or None, "
+                "output_contract must be an exact ValueContract, "
+                "PartialRecordContract, or None, "
                 f"got {type(output_contract).__name__}"
             )
         # One canonical output declaration shared by compiled and Python-authored nodes.
-        self.output_contract: Optional[ValueContract] = output_contract
+        self.output_contract: OutputContract | None = output_contract
         # The node-side signature (the node/flow split): declared params with NO source — the flow owns
         # the wiring in `CompiledFlow.wiring[node_id][param]`. Stamped by the compiler
         # (`build_*`/case desugar); the engine's `eval_node` binds via `params` + `flow.wiring`.

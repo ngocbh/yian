@@ -19,6 +19,7 @@ from agent_composer.nodes.contracts import (
     Assertion,
     ContractOrigins,
     Parameter,
+    PartialRecordContract,
     ValueContract,
 )
 from agent_composer.typesys.values import Type, ValueKind
@@ -131,6 +132,23 @@ def test_unknown_field_on_record_producer_raises():
             ["${synth.output.badfield} >= 0"],
             valid_targets={"synth"},
             producers={"synth": ValueContract(view)},
+        )
+
+
+def test_unknown_field_on_partial_record_producer_raises():
+    """A partial producer is opaque by type, not by its closed root shape."""
+    partial = PartialRecordContract(
+        fields=(
+            ("score", ValueContract(Type.scalar(ValueKind.NUMBER))),
+            ("note", None),
+        )
+    )
+
+    with pytest.raises(LoadError, match="badfield"):
+        _lower(
+            ["${synth.output.badfield} >= 0"],
+            valid_targets={"synth"},
+            producers={"synth": partial},
         )
 
 

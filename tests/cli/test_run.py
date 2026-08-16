@@ -1,9 +1,10 @@
 """Tests for the `ac run` CLI — exercised through typer's `CliRunner`.
 
-These use a CODE-only flow (no AGENT) so the suite never hits a network or needs a
-provider key. They cover: a successful run, flag-supplied inputs, `--inputs` JSON,
-flag-over-JSON precedence, non-TTY missing-input policy and setup ordering, a failing
-run's non-zero exit, and the `k=v` parse error.
+These use CODE-only flows (no AGENT) so the suite never hits a network or needs a
+provider key. They cover: successful runs, flag-supplied inputs, `--inputs` JSON,
+interactive structured input, explicit structured null, flag-over-JSON precedence,
+non-TTY missing-input policy and setup ordering, a failing run's non-zero exit, and
+the `k=v` parse error.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import json
 from pathlib import Path
 import re
 import sys
+from types import ModuleType
 
 import pytest
 import typer.testing as typer_testing
@@ -33,6 +35,11 @@ class _TTYBytesIO(BytesIO):
     def isatty(self) -> bool:
         """Report that the synthetic input stream is attached to a terminal."""
         return True
+
+
+def _tty_input_stream(_input_value, _charset) -> _TTYBytesIO:
+    """Return an empty byte stream whose terminal capability is interactive."""
+    return _TTYBytesIO()
 
 
 def _write_flow(dir_: Path, body: str) -> Path:
@@ -135,6 +142,44 @@ nodes:
     code: |
       return inputs
 output: ${show.output}
+"""
+
+STRUCTURED_INPUT_FLOW = """\
+id: cli_structured_input
+name: cli_structured_input
+input:
+  items: list[int]
+nodes:
+  inspect:
+    kind: code
+    input:
+      items: ${input.items}
+    output: object
+    code: |
+      return {
+          "items": inputs["items"],
+          "is_list": isinstance(inputs["items"], list),
+      }
+output: ${inspect.output}
+"""
+
+NULLABLE_STRUCTURED_INPUT_FLOW = """\
+id: cli_nullable_structured_input
+name: cli_nullable_structured_input
+input:
+  items: Optional[list[int]]
+nodes:
+  inspect:
+    kind: code
+    input:
+      items: ${input.items}
+    output: object
+    code: |
+      return {
+          "items": inputs["items"],
+          "is_none": inputs["items"] is None,
+      }
+output: ${inspect.output}
 """
 
 
@@ -265,6 +310,92 @@ def test_non_tty_run_reports_all_missing_required_inputs_before_setup(
     assert calls == []
 
 
+def test_tty_run_parses_structured_prompt_as_native_value(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A structured prompt crosses START and CODE as its declared native type."""
+    flow = _write_flow(tmp_path, STRUCTURED_INPUT_FLOW)
+    log = tmp_path / "run.jsonl"
+    raw = "[2, 3, 5]"
+    validated: list[str] = []
+    questionary = ModuleType("questionary")
+
+    class TextWidget:
+        """Return the exact raw text accepted by the production validator."""
+
+        def __init__(self, validate) -> None:
+            """Retain the callback that the real widget runs before submission."""
+            self._validate = validate
+
+        def ask(self) -> str:
+            """Validate and return the scripted answer without converting it."""
+            if self._validate is not None:
+                validated.append(raw)
+                assert self._validate(raw) is True
+            return raw
+
+    def style(_rules):
+        """Supply the minimal style constructor used by the production prompt."""
+        return object()
+
+    def text(_label, *, validate=None, **_options):
+        """Build the minimal text widget around production's callback."""
+        return TextWidget(validate)
+
+    questionary.Style = style
+    questionary.text = text
+    monkeypatch.setitem(sys.modules, "questionary", questionary)
+    monkeypatch.setattr(run_cli, "_Q_STYLE", None)
+    monkeypatch.setattr(typer_testing, "make_input_stream", _tty_input_stream)
+
+    result = runner.invoke(
+        app,
+        ["run", str(flow), "--log", str(log), "--quiet"],
+        input=b"",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert log.is_file()
+    assert validated == [raw]
+    assert literal_eval(_plain(result.stdout)) == {
+        "is_list": True,
+        "items": [2, 3, 5],
+    }
+
+
+def test_non_tty_inputs_json_preserves_explicit_structured_null(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A scripted JSON file can still bind explicit null to a nullable list."""
+    flow = _write_flow(tmp_path, NULLABLE_STRUCTURED_INPUT_FLOW)
+    inputs = tmp_path / "inputs.json"
+    inputs.write_text(json.dumps({"items": None}))
+    log = tmp_path / "run.jsonl"
+    monkeypatch.setitem(sys.modules, "questionary", None)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(flow),
+            "--inputs",
+            str(inputs),
+            "--log",
+            str(log),
+            "--quiet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert log.is_file()
+    assert literal_eval(_plain(result.stdout)) == {
+        "is_none": True,
+        "items": None,
+    }
+
+
 def test_run_forwards_tty_prompt_availability(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -278,11 +409,8 @@ def test_run_forwards_tty_prompt_availability(
         prompt_availability.append(prompt_available)
         return {"topic": "clouds"}
 
-    def tty_input_stream(_input_value, _charset):
-        return _TTYBytesIO()
-
     monkeypatch.setattr(run_cli, "_gather_missing_inputs", gather_inputs)
-    monkeypatch.setattr(typer_testing, "make_input_stream", tty_input_stream)
+    monkeypatch.setattr(typer_testing, "make_input_stream", _tty_input_stream)
 
     result = runner.invoke(
         app,

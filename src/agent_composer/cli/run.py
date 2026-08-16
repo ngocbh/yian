@@ -3,8 +3,10 @@
 Fresh inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`). On
 an interactive stdin, every declaration still missing is prompted for (required ones
 are starred); optional/defaulted prompts can be omitted so START retains ownership of
-any declared default or optional absence. Without an interactive stdin, omittable
-declarations stay absent and missing required declarations are rejected together.
+any declared default or optional absence. List and object prompts accept JSON text,
+validate the complete declared structure before accepting it, and return native values.
+Without an interactive stdin, omittable declarations stay absent and missing required
+declarations are rejected together.
 Fresh runs use a reported durable log under ``~/.agent_composer/runs`` unless
 ``--log`` selects a new path. ``--resume`` recovers an existing path without gathering
 fresh inputs or model configuration.
@@ -56,7 +58,12 @@ from agent_composer.events import NodeFailed
 from agent_composer.nodes.base import _HostStop
 from agent_composer.nodes.contracts import Parameter
 from agent_composer.tools import install_ask_user
-from agent_composer.typesys import canonical_type_label
+from agent_composer.typesys import (
+    Type,
+    TypeCheckError,
+    build_value_as,
+    canonical_type_label,
+)
 from agent_composer.typesys.seeding import default_run_id
 from agent_composer.typesys.values import ValueKind
 
@@ -627,14 +634,71 @@ def _flow_banner(
     return Panel(body, border_style="cyan", expand=False)
 
 
+class _StructuredInputError(ValueError):
+    """An expected user-value rejection from a structured text prompt."""
+
+
+def _parse_structured_input(
+    raw: str,
+    typ: Type,
+) -> list[Any] | dict[str, Any]:
+    """Parse and recursively validate one list/object prompt answer.
+
+    JSON supplies the CLI text vocabulary, while ``build_value_as`` remains the sole
+    recursive authority for the declared semantic contract. The root check deliberately
+    precedes that validation so even a nullable structural declaration rejects textual
+    ``null``; explicit interactive null is a separate input action rather than an array
+    or object spelling.
+
+    Args:
+        raw (`str`): Raw text returned by the interactive widget.
+        typ (`Type`): Resolved list or object contract for the declared input.
+
+    Returns:
+        `list[Any] | dict[str, Any]`: The native JSON array or object.
+
+    Raises:
+        `_StructuredInputError`: JSON syntax, root shape, or recursive contract
+            rejection. This remains a ``ValueError`` for direct callers.
+        `TypeError`: ``typ`` is not a list or object contract.
+    """
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise _StructuredInputError(
+            f"Invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+        ) from None
+
+    if typ.kind.is_list():
+        if not isinstance(parsed, list):
+            raise _StructuredInputError("Expected a JSON array")
+    elif typ.kind == ValueKind.OBJECT:
+        if not isinstance(parsed, dict):
+            raise _StructuredInputError("Expected a JSON object")
+    else:
+        raise TypeError("structured prompt type must be a list or object")
+
+    try:
+        build_value_as(typ, parsed)
+    except TypeCheckError as exc:
+        path = "$" + "".join(
+            f"[{segment}]" if type(segment) is int else f"[{json.dumps(segment)}]"
+            for segment in exc.path
+        )
+        raise _StructuredInputError(f"{path}: {exc}") from None
+
+    return parsed
+
+
 def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
     """Ask for one declared input and return value, omission, or cancellation.
 
     ``_OMIT_INPUT`` is the non-required/default action and ``None`` is Questionary's
     cancellation result. Required booleans use confirm; optional/defaulted booleans
-    and Literals use a select with omission preselected; other types use text, where
-    non-required whitespace means omission. Every explicit value is returned unchanged
-    for the ordinary run-boundary coercion and validation policy.
+    and Literals use a select with omission preselected. Lists and objects use validated
+    JSON text and return native values; remaining scalar types use unchanged text for
+    ordinary run-boundary coercion. Non-required whitespace means omission in either
+    text path.
 
     Args:
         decl (`Parameter`): Canonical flow input declaration to present.
@@ -693,6 +757,34 @@ def _prompt_input(decl: Parameter, questionary: Any, style: Any) -> Any:
             qmark="?",
             style=style,
         ).ask()
+
+    if typ is not None and (typ.kind.is_list() or typ.kind == ValueKind.OBJECT):
+        instruction = (
+            "Enter a JSON array" if typ.kind.is_list() else "Enter a JSON object"
+        )
+
+        def validate(raw: str) -> bool | str:
+            if not decl.required and raw.strip() == "":
+                return True
+            try:
+                _parse_structured_input(raw, typ)
+            except _StructuredInputError as exc:
+                return str(exc)
+            return True
+
+        value = questionary.text(
+            label,
+            default="",
+            instruction=instruction,
+            validate=validate,
+            qmark="?",
+            style=style,
+        ).ask()
+        if value is None:
+            return None
+        if value.strip() == "" and not decl.required:
+            return _OMIT_INPUT
+        return _parse_structured_input(value, typ)
 
     value = questionary.text(label, default="", qmark="?", style=style).ask()
     if (

@@ -125,21 +125,28 @@ ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
 - `--resume PATH` recovers that log with the same flow. It rejects `--input`,
   `--inputs`, `--provider`, `--model`, and `--log`, so recovery cannot replace
   recorded inputs or model configuration.
-- `--inputs file.json` loads inputs from a JSON object.
-- Repeatable `--input k=v` flags override individual JSON keys. Their string
-  values are coerced, where supported, against the input's declared type; stored
-  defaults are not coerced.
+- `--inputs file.json` loads inputs from a JSON object, including native
+  list/object values and explicit `null`.
+- Repeatable `--input k=v` flags override individual JSON keys. This is a
+  string/scalar surface: values are coerced, where supported, against scalar
+  input types; stored defaults are not coerced. Use `--inputs` for list/object
+  values or explicit null.
 - At run start a boxed **banner** (to stderr) names the flow being run — its
   `name`, `version`, and `description` — unless `--quiet`.
 - With an interactive stdin (TTY), each declared input still missing is
   **prompted interactively**. Each prompt is labelled with its canonical resolved
   type, a required (`*`)/optional mark, and any default. Optional/defaulted boolean
   and `Literal[...]` prompts offer an explicit omit/use-declared-default action;
-  blank optional/defaulted free text does the same. Without a TTY, missing
-  optional/defaulted declarations stay absent so START owns defaults and optional
-  absence; missing required declarations are rejected together as invalid CLI input
-  (exit code `2`), before provider or run-log setup, and must be supplied through
-  `--input`/`--inputs`.
+  blank optional/defaulted free text does the same, and other scalar prompts keep
+  their existing text/coercion behavior. Resolved list/object prompts accept JSON
+  text, validate the complete declared type, and show invalid JSON or type errors
+  inline until corrected. Cancelling still cancels the run; textual root `null` is
+  not an explicit-null action, so use `--inputs` for that value.
+  Without a TTY, missing optional/defaulted declarations stay absent so START owns
+  defaults and optional absence. Missing required declarations are rejected
+  together as invalid CLI input (exit code `2`) before provider or run-log setup;
+  list/object values require `--inputs`, while scalars may use `--input` or
+  `--inputs`.
 - `HUMAN_INPUT` and an authored agent `ask_user` tool are separate live-run
   interactions, unchanged by the initial-input omission policy. They block inside
   the live node call while the CLI's main-thread broker reads the answer from the

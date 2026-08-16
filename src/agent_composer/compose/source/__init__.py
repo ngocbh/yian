@@ -18,6 +18,7 @@ Never imports: compose helpers or phases, nodes, compile, runtime, the run
 """
 
 from agent_composer.compose.source.common import (
+    ScalarSource,
     SourceAccessError,
     SourceSyntaxError,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "SourceCatalog",
     "SourceCursor",
     "SourceDocument",
+    "ScalarSource",
     "SourceSyntaxError",
     "parse_yaml_literal",
 ]

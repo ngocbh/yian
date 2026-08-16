@@ -2,11 +2,15 @@
 
 Fresh inputs come from flags (`--input k=v`, repeatable; `--inputs file.json`). On
 an interactive stdin, every declaration still missing is prompted for (required ones
-are starred); optional/defaulted prompts can be omitted so START retains ownership of
-any declared default or optional absence. List and object prompts accept JSON text,
-validate the complete declared structure before accepting it, and return native values.
-Without an interactive stdin, omittable declarations stay absent and missing required
-declarations are rejected together.
+are starred). Initial prompts keep four outcomes distinct: an explicit value, `Set null`
+when the contract accepts it, omit/use-default when allowed, and cancellation. Nullable
+boolean/Literal selects embed `Set null`. Nullable open scalars/lists/objects first offer
+those actions plus `Enter value`; an optional blank in the editor returns to that palette,
+while a direct non-nullable optional editor still uses blank as omission. List/object
+editors validate typed JSON, including nested nulls, but reject root `null`; the null-only
+`None` type has `Set null` and no editor. Without an interactive stdin, omittable
+declarations stay absent, missing required declarations are rejected together, and native
+structures or explicit null come from `--inputs`.
 Fresh runs use a reported durable log under ``~/.agent_composer/runs`` unless
 ``--log`` selects a new path. ``--resume`` recovers an existing path without gathering
 fresh inputs or model configuration.

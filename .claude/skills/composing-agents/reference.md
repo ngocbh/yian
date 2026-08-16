@@ -337,14 +337,23 @@ ac run <flow>.yaml --inputs base.json --input k=v
 ```
 Explicit JSON inputs load first; repeatable `--input` flags override individual
 keys but remain a string/scalar surface. With an interactive stdin (TTY), `ac`
-prompts for declarations still missing. Resolved list/object prompts accept JSON
-text and validate the entire declared type; invalid JSON or values are shown inline
-and re-prompted. Scalar/boolean/`Literal[...]` behavior is unchanged. Blank
-optional/defaulted text omits the key, while cancellation cancels the run. A textual
-root `null` is not explicit null; use `--inputs` for explicit null and for structured
-values without a TTY. Missing optional/defaulted declarations remain absent. Missing
-required declarations fail with exit code `2` before setup: structured values require
-`--inputs`, while scalars may use `--input` or `--inputs`.
+prompts for declarations still missing and keeps four outcomes distinct: an explicit
+value, `Set null`, omit/use-default when allowed, and cancellation. Nullable
+boolean/`Literal[...]` widgets put `Set null` in their value select. A null-capable
+open scalar/list/object first offers omit/default when allowed, `Set null`, and
+`Enter value`; Enter opens the existing scalar or typed-JSON editor. Optional blank
+there returns to the palette instead of omitting. A direct non-null-capable
+optional/defaulted editor still blanks to omission. The null-only `None` type offers
+`Set null` and no Enter action.
+
+`Set null` supplies a present `None`; text `null` for a string input and a `Literal`
+tag named `null` remain ordinary strings. The structured editor rejects root JSON
+`null`, so choose `Set null`; nested null remains valid where the nested contract
+accepts it. Invalid JSON or values stay in the editor for correction. Cancelling the
+palette or editor cancels the run. Without a TTY, missing optional/defaulted
+declarations remain absent, and missing required declarations fail with exit code `2`
+before setup. Supply explicit null and native structures through `--inputs`; `--input`
+remains a string/scalar surface.
 
 From Python: `load_flow(text, search_paths=[flow_dir])` loads + compiles without a
 model. A flow with only `code`/`tool` nodes runs with no provider; any `agent` node

@@ -4,8 +4,10 @@ At run start the CLI prints a `_flow_banner` (name/description/version); each pr
 label carries the input's declared `type`, a required (`*`) / `optional` mark, and any
 default (`_input_label`). `_gather_missing_inputs` covers both non-TTY omission/error
 policy and an interactive path with fake `questionary`, so prompt labels are observable
-without a real TTY. Structural text prompts accept recursively validated JSON arrays and
-objects, while scalar text and `--input` flag values retain their string-valued boundary.
+without a real TTY. The prompt tests keep explicit values, `Set null`, omission/default,
+and cancellation distinct across finite, open, and null-only types. They also cover the
+nullable open-value palette, blank-to-palette loop, literal string/tag `null`, and typed
+JSON validation; scalar text and `--input` values retain their string-valued boundary.
 A runtime failure (`_render_run_error`) boxes the `.yaml` at the node that raised,
 mirroring the compile-error frame.
 """

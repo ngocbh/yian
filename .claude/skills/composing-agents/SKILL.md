@@ -432,15 +432,21 @@ agent `entry:`/`controls:` field or event-mode WAIT.
 - **Run:** `ac run <flow>.yaml [--inputs file.json] [--input k=v]...`. JSON inputs
   load first; repeatable `--input` flags override individual keys but remain a
   string/scalar surface. With an interactive stdin (TTY), every declaration still
-  missing is prompted. Resolved list/object prompts accept JSON text, validate the
-  entire declared type, and re-prompt inline for invalid JSON or values. Existing
-  scalar/boolean/`Literal[...]` widgets are unchanged; blank optional/defaulted
-  text omits the key, and cancellation cancels the run. Textual root `null` is not
-  explicit null: use `--inputs` for explicit null and for non-interactive
-  list/object values. Without a TTY, missing optional/defaulted declarations stay
-  absent. Missing required declarations fail with exit code `2` before provider or
-  run-log setup; structured values require `--inputs`, while scalars may use
-  `--input` or `--inputs`.
+  missing is prompted. Keep four outcomes distinct: a value, `Set null`,
+  omit/use-default, and cancellation. Nullable boolean and `Literal[...]` selects
+  include `Set null`. Null-capable open scalar/list/object inputs first show
+  omit/default when allowed, `Set null`, and `Enter value`; Enter opens the existing
+  scalar or typed-JSON editor. Optional blank there returns to the palette rather
+  than omitting, while a direct non-null-capable optional/defaulted editor still
+  blanks to omission. The null-only `None` type has `Set null` and no Enter action.
+  Treat text `null` for a string input or a `Literal` tag `null` as an ordinary
+  string. Keep root JSON `null` invalid in the structured editor—choose `Set null`
+  instead—while allowing nested null where the nested contract accepts it.
+  Cancellation cancels the run.
+  Without a TTY, missing optional/defaulted declarations stay absent. Missing
+  required declarations fail with exit code `2` before provider or run-log setup;
+  explicit null and native structures require `--inputs`, while ordinary scalars
+  may use the string-valued `--input` or `--inputs`.
   `human_input` and `ask_user` are separate live-run interactions, unchanged by
   the initial-input omission policy. The host broker reads their answers from its
   input stream while the run remains live. WAIT does not prompt and also remains

@@ -2,9 +2,9 @@
 
 These use CODE-only flows (no AGENT) so the suite never hits a network or needs a
 provider key. They cover: successful runs, flag-supplied inputs, `--inputs` JSON,
-interactive structured input, explicit structured null, flag-over-JSON precedence,
-non-TTY missing-input policy and setup ordering, a failing run's non-zero exit, and
-the `k=v` parse error.
+interactive typed JSON, interactive `Set null` shadowing a declared default,
+non-interactive structured null, flag-over-JSON precedence, non-TTY missing-input policy
+and setup ordering, a failing run's non-zero exit, and the `k=v` parse error.
 """
 
 from __future__ import annotations

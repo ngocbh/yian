@@ -18,6 +18,7 @@ from typing import Any, Callable
 from lark import Token, Tree
 
 from agent_composer.typesys.pool import VariablePool
+from agent_composer.typesys.values import Type, ValueKind
 
 
 class ExpressionError(ValueError):
@@ -612,6 +613,82 @@ def eval_expr(
             When a `head :? message` required atom's head misses / is None.
     """
     return _EvalExpr(resolve, item, mode).eval(tree)
+
+
+# --------------------------------------------------------------------------- #
+# Conservative compile-time type inference over the unified expression tree.
+# --------------------------------------------------------------------------- #
+
+
+def infer_expr_type(
+    tree: "Tree | Token",
+    ref_type_fn: Callable[[str], "Type | None"],
+) -> "Type | None":
+    """Return the statically proven type of one parsed expression, if any.
+
+    Inference is deliberately conservative: literal tokens, exact references,
+    comparisons, and boolean combinators have fixed result types. Other forms
+    remain unknown until their runtime value semantics can be modeled without
+    guessing. Reference lookup is injected so this source-neutral expression
+    layer does not know about a flow graph or Compose document.
+
+    Args:
+        tree (`Tree | Token`):
+            A tree or token returned by ``parse_expr``.
+        ref_type_fn (`Callable[[str], Type | None]`):
+            Resolves one dotted reference path to its known type, or returns
+            ``None`` when the type is not statically known. Any exception raised
+            by the callback propagates unchanged.
+
+    Returns:
+        `Type | None`:
+            The proven expression type, or ``None`` when inference is
+            inconclusive.
+
+    Examples:
+        ```python
+        inferred = infer_expr_type(
+            parse_expr("answer == 42"),
+            lambda _path: Type.scalar(ValueKind.INTEGER),
+        )
+        assert inferred == Type.scalar(ValueKind.BOOLEAN)
+        ```
+    """
+    if isinstance(tree, Token):
+        if tree.type == "NUMBER":
+            kind = ValueKind.NUMBER if "." in str(tree) else ValueKind.INTEGER
+            return Type.scalar(kind)
+        literal_kinds = {
+            "STRING": ValueKind.STRING,
+            "BOOL": ValueKind.BOOLEAN,
+            "NULL": ValueKind.NONE,
+        }
+        kind = literal_kinds.get(str(tree.type))
+        return None if kind is None else Type.scalar(kind)
+
+    if tree.data == "refcall":
+        children = tree.children
+        if any(
+            isinstance(child, Tree) and child.data == "call_suffix"
+            for child in children
+        ):
+            return None
+        path = ".".join(
+            [str(children[0]), *(str(child.children[0]) for child in children[1:])]
+        )
+        return ref_type_fn(path)
+
+    if tree.data in {
+        "compare",
+        "compare_in",
+        "compare_notin",
+        "negate",
+        "and_expr",
+        "or_expr",
+    }:
+        return Type.scalar(ValueKind.BOOLEAN)
+
+    return None
 
 
 # --------------------------------------------------------------------------- #

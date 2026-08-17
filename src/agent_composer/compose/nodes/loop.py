@@ -46,8 +46,9 @@ class LoopDescriptor(NodeDescriptor):
     deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
 
     Class attrs: `kind="loop"`; `allowed` adds `call`, normalized `inputs`, `while`/`until`/`times`/`max`, and
-    `asserts` to the commons; `required` is `{"call"}` (the body subflow); `binding_fields=()` —
-    a loop's input bindings are not inline-call-desugared, so the kind-blind walk skips them.
+    `asserts` to the commons; `required` is `{"call"}` (the body subflow);
+    `binding_fields=("inputs",)` — a loop's carried-record seed bindings participate in
+    inline-call and case-output desugaring.
     `keyword_remap` is loop-owned: it maps the surface Python keywords `while:`/`until:` onto the
     `while_`/`until_` descriptor fields so the inherited template `parse` reads them correctly.
     """
@@ -57,7 +58,7 @@ class LoopDescriptor(NodeDescriptor):
         "call", "inputs", "while", "until", "times", "max", "asserts"
     )
     required = NodeDescriptor.require("call")
-    binding_fields = ()
+    binding_fields = ("inputs",)
     # Loop owns this remap (the base's is empty): `while`/`until` are Python keywords, so the
     # template `parse` reads the surface `while:`/`until:` into the `while_`/`until_` fields.
     keyword_remap = {"while": "while_", "until": "until_"}

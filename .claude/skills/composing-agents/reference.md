@@ -88,9 +88,11 @@ One `${...}` grammar; the context decides what happens to the result:
 A child-flow call written as a binding's **whole value** (or a `case`
 `then:`/`else:` target) — `call(f, arg=${ref}, k=lit)` — desugars at load into an
 anonymous `call` node; the host becomes `${<synth>.output}`. Keyword args only;
-nesting allowed (`call(a, x=call(b, y=1))`). Recognized **only** as the entire
-trimmed value. The old `${flow(args)}` (a flow call inside braces) is a load
-error: hoist an embedded flow call to a named node; split a coalesce-of-calls into
+every authored node `input:` mapping participates, including HUMAN_INPUT context
+and LOOP carried-record seeds. Nesting is allowed (`call(a, x=call(b, y=1))`).
+It is recognized **only** as the entire trimmed value. The old `${flow(args)}`
+(a flow call inside braces) is a load error: hoist an embedded flow call to a named
+node; split a coalesce-of-calls into
 per-node outputs. Pure builtins (`${upper(x)}`) stay legal inside `${}`.
 
 This is distinct from an **inline child body**. `call(f, ...)` invokes an existing

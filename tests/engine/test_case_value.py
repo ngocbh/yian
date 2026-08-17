@@ -20,7 +20,12 @@ import pytest
 from agent_composer.compose import LoadError, expand_case_outputs, load_flow
 from agent_composer.compose.helpers.errors import LoadDiagnostics
 from agent_composer.run import run_flow
-from agent_composer.compose.parse.file import CaseDescriptor, CodeDescriptor
+from agent_composer.compose.parse.file import (
+    CaseDescriptor,
+    CodeDescriptor,
+    HumanInputDescriptor,
+    LoopDescriptor,
+)
 from agent_composer.diagnostics import SourceRange
 
 
@@ -126,6 +131,23 @@ def test_case_value_in_tool_inputs_expands():
     }
     new, _ = expand_case_outputs(descs, None, [])
     assert new["t"].inputs["q"] == "${pro.output | caut.output}"
+
+
+def test_case_value_in_human_input_and_loop_inputs_expands():
+    hosts = (
+        HumanInputDescriptor(
+            id="human", prompt="Continue?", inputs={"q": "${gate.output}"}
+        ),
+        LoopDescriptor(id="loop", call="body", inputs={"q": "${gate.output}"}),
+    )
+
+    for host in hosts:
+        new, _ = expand_case_outputs(
+            {"gate": _gate(), host.id: host},
+            None,
+            [],
+        )
+        assert new[host.id].inputs["q"] == "${pro.output | caut.output}"
 
 
 def test_case_with_no_branch_target_is_loud():

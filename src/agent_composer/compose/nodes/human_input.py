@@ -48,8 +48,8 @@ class HumanInputDescriptor(NodeDescriptor):
     Class attrs: `kind="human_input"`; `allowed` adds `prompt`/`questions`/`adaptive_questions`,
     normalized `inputs`/`outputs`, and `asserts` to the commons; `required` is empty (no single flat field is
     required — the question surface is one-of-three, enforced in `_validate_fields`);
-    `binding_fields=()` — HUMAN_INPUT inputs are runtime bindings and are not traversed by
-    inline-call or case-output desugaring.
+    `binding_fields=("inputs",)` — HUMAN_INPUT's ordinary input bindings participate in
+    inline-call and case-output desugaring.
     """
 
     kind = "human_input"
@@ -57,7 +57,7 @@ class HumanInputDescriptor(NodeDescriptor):
         "prompt", "questions", "adaptive_questions", "inputs", "outputs", "asserts"
     )
     required = NodeDescriptor.require()
-    binding_fields = ()
+    binding_fields = ("inputs",)
 
     prompt: Optional[str] = None
     questions: Any = None

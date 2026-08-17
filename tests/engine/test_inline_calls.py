@@ -60,6 +60,78 @@ output: ${{use.output}}
     assert result.output == "ACME"
 
 
+def test_inline_call_in_human_input_synthesizes_and_wires_call():
+    text = f"""
+id: ic_human_input
+name: ic_human_input
+input:
+  topic: str
+{_ENRICH_DEF}
+nodes:
+  ask:
+    kind: human_input
+    input:
+      context: call(enrich, topic=${{input.topic}})
+    prompt: "Review ${{context}}"
+    output: str
+output: ${{ask.output}}
+"""
+    loaded = load_flow(text)
+    edges = {(edge.from_, edge.to) for edge in loaded.compiled.edges}
+
+    assert "__call_0" in loaded.compiled.nodes
+    assert ("__call_0", "ask") in edges
+
+
+def test_inline_call_in_loop_input_synthesizes_wires_and_runs():
+    text = """
+id: ic_loop
+name: ic_loop
+input:
+  start: int
+defs:
+  seed:
+    input:
+      n: int
+    nodes:
+      echo:
+        kind: code
+        code: tests.engine._compose_codefns:echo
+        input:
+          topic: ${input.n}
+        output: int
+    output: ${echo.output}
+  body:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        code: tests.engine._compose_codefns:loop_countdown
+        input:
+          n: ${input.n}
+        output:
+          n: int
+    output: ${step.output}
+nodes:
+  repeat:
+    kind: loop
+    call: body
+    input:
+      n: call(seed, n=${input.start})
+    times: 1
+output: ${repeat.output}
+"""
+    loaded = load_flow(text)
+    edges = {(edge.from_, edge.to) for edge in loaded.compiled.edges}
+
+    assert "__call_0" in loaded.compiled.nodes
+    assert ("__call_0", "repeat") in edges
+    result = run_flow(loaded, {"start": 3})
+    assert result.status == "succeeded"
+    assert result.output == {"n": 2}
+
+
 def test_inline_call_literal_arg_runs():
     # a bare literal arg (string) flows like the named form's `input: {topic: HARD}`.
     text = f"""

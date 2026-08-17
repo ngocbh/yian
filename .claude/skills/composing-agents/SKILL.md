@@ -107,6 +107,10 @@ Allowed only for the **leaf kinds** (`agent`, `code`, `model`, `tool`,
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is **stringified**.
 
+Prompt templates are strict: a missing reference or any span whose final value is
+null raises, including an embedded span. Binding templates stay non-strict—a whole
+null remains typed null and an embedded null contributes empty text.
+
 **Operators inside `${...}`** — one expression grammar, everywhere:
 
 | Form | Meaning |

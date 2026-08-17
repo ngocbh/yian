@@ -569,10 +569,11 @@ def render_template_record(text: str, record: dict) -> str:
     local-input refs only — the pool namespaces (`node`/`system`) are not in scope.
 
     Rendered in `STRICT_RAISE` mode: unlike `eval_binding` (missing -> None) and the strict
-    CASE `when:` (missing -> falsy), this renderer RAISES on any missing reference — the
-    locked strict-prompt floor (no silent blank). A prompt is text, so the result is always
-    a `str`: a whole-single-span value is stringified, embedded spans are stringified in
-    place. `$$` renders a single `$` (the unified-scanner universal escape).
+    CASE `when:` (missing -> falsy), this renderer raises on a missing reference or a span
+    whose final value is `None`, before whole-value return or embedded stringification. A
+    prompt is text, so the result is always a `str`: a whole-single-span value is
+    stringified, embedded spans are stringified in place. `$$` renders a single `$` (the
+    unified-scanner universal escape).
 
     Args:
         text (`str`):
@@ -586,8 +587,8 @@ def render_template_record(text: str, record: dict) -> str:
 
     Raises:
         `ExpressionError`:
-            On an unbalanced span, an unresolved reference (unknown input, dict-path miss,
-            or `None` value), an unknown builtin, or a builtin that fails.
+            On an unbalanced span, an unresolved reference (unknown input or dict-path
+            miss), a final `None` span value, an unknown builtin, or a builtin that fails.
     """
     segments = scan_template(text)
     result = eval_template(
@@ -595,15 +596,6 @@ def render_template_record(text: str, record: dict) -> str:
         lambda path: _resolve_record_strict_or_none(path, record),
         mode=ResolveMode.STRICT_RAISE,
     )
-    # A prompt is text and the floor forbids a silent blank. A MISSING reference — plain
-    # or a dotted miss on a builtin-call result — now raises inside the span for BOTH single
-    # and multi span (the shared evaluator yields the `_MISSING` sentinel, which STRICT_RAISE
-    # turns into a raise). An exhausted `${a | b}` coalesce or a `${x:-...}` over missing
-    # refs likewise raises inside the evaluator. This guard remains only for a whole-single-
-    # span that evaluates to a genuine `None` VALUE with no missing reference — an explicit
-    # `${null}` literal (or an expression computing to null) — which is not a miss.
-    if result is None:
-        raise ExpressionError(f"unresolved reference in prompt {text!r}")
     return str(result)
 
 
@@ -772,9 +764,10 @@ def eval_template(
     A template that is EXACTLY one `${...}` span (no surrounding literal text)
     returns the TYPED value of `eval_expr` (a float stays a float, a list a list, a
     dict a dict). Otherwise every span is stringified and concatenated with the
-    literal runs (an embedded span is stringified; `None` -> `""`). A pure-literal
-    template returns its literal string. An empty template (`scan_template("") == []`,
-    no segments at all) returns `""`.
+    literal runs. In non-strict modes an embedded `None` becomes `""`; in
+    `STRICT_RAISE`, a span whose final value is `None` raises before either return or
+    concatenation. A pure-literal template returns its literal string. An empty template
+    (`scan_template("") == []`, no segments at all) returns `""`.
 
     Args:
         segments (`list[TypedValue]`):
@@ -794,18 +787,25 @@ def eval_template(
 
     Raises:
         `ExpressionError`:
-            On any error `eval_expr` raises for a span interior.
+            On any error `eval_expr` raises for a span interior, or when a span's final
+            value is `None` in `STRICT_RAISE` mode.
         `RequiredError`:
             When a span's `head :? message` required atom misses / is None.
     """
+    def eval_span(span: Span) -> Any:
+        value = eval_expr(span.tree, resolve, item=item, mode=mode)
+        if value is None and mode is ResolveMode.STRICT_RAISE:
+            raise ExpressionError("null value in strict template")
+        return value
+
     if len(segments) == 1 and isinstance(segments[0], Span):
-        return eval_expr(segments[0].tree, resolve, item=item, mode=mode)
+        return eval_span(segments[0])
     parts: list = []
     for seg in segments:
         if isinstance(seg, Literal):
             parts.append(seg.text)
-        else:  # a Span embedded in surrounding text -> stringified (None -> "")
-            v = eval_expr(seg.tree, resolve, item=item, mode=mode)
+        else:  # a Span embedded in surrounding text -> stringified
+            v = eval_span(seg)
             parts.append("" if v is None else str(v))
     return "".join(parts)
 

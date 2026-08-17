@@ -760,6 +760,9 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
 **Three resolve modes** decide what a MISSING reference does, one per context:
 `BINDING_NONE` (a binding → `None`, so `|`/`:-` can coalesce), `CONDITION_FALSY`
 (a `when:` → falsy), `STRICT_RAISE` (a prompt → raise; no silent blank).
+At the template boundary, `STRICT_RAISE` also rejects a span whose final value is
+`None` before whole-value return or embedded concatenation; non-strict binding
+stringification still maps an embedded `None` to empty text.
 
 Compose's `helpers/output_contracts.py` owns the template and provenance envelope:
 direct refs retain exact or partial contracts, known partial fields remain projectable,

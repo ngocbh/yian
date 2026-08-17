@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.contracts import ContractOrigins, ValueContract
@@ -107,6 +108,54 @@ def test_clean_case_seed02_passes():
 def test_clean_case_on_seed06_passes():
     nodes, flow_inputs, producers, outputs, flow_wiring = _load("06-case-on.yaml")
     validate_references(nodes, flow_inputs, producers, outputs, flow_wiring)  # no raise
+
+
+_WAIT_REFERENCE_FLOW = """\
+id: wait_refs
+name: wait_refs
+input:
+  deadline: datetime
+nodes:
+  clock:
+    kind: code
+    output: datetime
+    code: |
+      return "2026-01-01T00:00:00Z"
+  settle:
+    kind: wait
+    until: SOURCE
+output: ${settle.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        ("${missing.output}", "unknown namespace 'missing'"),
+        ("${input.missing}", "unknown flow input 'missing'"),
+        ("${system.tomorrow}", "unknown system ambient 'tomorrow'"),
+        ("${item}", "unknown namespace 'item'"),
+    ],
+)
+def test_wait_until_rejects_invalid_references_at_load(source: str, message: str):
+    with pytest.raises(LoadError) as exc:
+        load_flow(_WAIT_REFERENCE_FLOW.replace("SOURCE", source))
+
+    assert message in str(exc.value)
+    assert exc.value.diagnostic.frames[-1].range.start_line == 13
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "2026-01-01T00:00:00Z",
+        "${input.deadline}",
+        "${clock.output}",
+        "${system.now}",
+    ],
+)
+def test_wait_until_accepts_valid_reference_sources(source: str):
+    load_flow(_WAIT_REFERENCE_FLOW.replace("SOURCE", source))
 
 
 # --------------------------------------------------------------------------- #

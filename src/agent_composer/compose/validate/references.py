@@ -19,7 +19,7 @@ from the transient Compose `BuildResult` (the coarse per-field span — e.g. the
 `input:` mapping for an input-binding ref, its `prompt:` for a prompt ref).
 
 Imports flow down only: `compile.validation` (the leaf namespace checker), `expr` (the
-binding parser), `nodes` (Node/AgentNode/WaitNode discrimination and the output-contract
+binding parser), `nodes` (Node/AgentNode behavior and the output-contract
 sum), and `compose.helpers` (closed-path projection and errors).
 Only the loader (and the compose package facade) import this back.
 """
@@ -45,7 +45,6 @@ from agent_composer.nodes.contracts import (
     ValueContract,
     binding_source,
 )
-from agent_composer.nodes.wait import WaitNode
 
 # Heads forbidden in a strict prompt (always trigger the bespoke hint).
 # `input`/`system`/`item` are the pool-style heads; a node-id head (e.g. `${other.output}`)
@@ -175,22 +174,29 @@ def validate_references(
                         f"node {node_id!r} prompt: ${{{ref}}} is not a declared input{hint}",
                         prompt_rng,
                     ))
-        # A per-item binder (MAP) reads a parent-pool `list[T]` from its reserved wiring key(s)
-        # (`over` — no `${item}` there); each per-element input MAY use `${item}` (the body-local
-        # element scope, lenient).
+        # Node-owned reserved wiring (`over`, `until`, ...) follows the same pool reference
+        # grammar as ordinary inputs. It never receives a body-local scope: in particular,
+        # MAP's `${item}` is valid only in each per-element input, not in `over:`.
+        nwiring = flow_wiring.get(node_id, {})
+        reserved = node.reserved_wiring_keys()
+        input_rng = franges.get(("field", "inputs")) or node_range
+        for key in sorted(reserved):
+            # A reserved wiring key is a KIND FIELD, so its range is tagged
+            # `("field", key)` — not the bare key, which would silently fall back to the
+            # whole `input:` block or node header.
+            reserved_rng = franges.get(("field", key)) or input_rng
+            scan(
+                nwiring.get(key),
+                f"node {node_id!r} {node.kind.value} {key}",
+                reserved_rng,
+            )
+
+        # A per-item binder (MAP) reads its iteration source above, then validates each
+        # element input with the body-local `${item}` scope enabled.
         if node.binds_per_item:
-            nwiring = flow_wiring.get(node_id, {})
-            reserved = node.reserved_wiring_keys()
-            input_rng = franges.get(("field", "inputs")) or node_range
-            for key in reserved:
-                # A reserved wiring key (`over`) is a KIND FIELD, so its range is tagged
-                # `("field", key)` — not the bare key, which would never match and would
-                # silently anchor the error on the whole `input:` block instead.
-                over_rng = franges.get(("field", key)) or input_rng
-                scan(nwiring.get(key), f"node {node_id!r} map {key}", over_rng)
             for param, src in nwiring.items():
                 if param in reserved:
-                    continue  # the iteration source, scanned above (not a per-element input)
+                    continue
                 scan(
                     src,
                     f"node {node_id!r} map input {param!r} from",
@@ -198,8 +204,7 @@ def validate_references(
                     extra_heads=("item",),
                 )
             continue
-        if isinstance(node, WaitNode):
-            continue  # WAIT's `until` is reserved wiring outside the ordinary param scan
+
         # Each node input `from:` source, read from the flow-owned wiring. For a
         # desugared CASE these are the `__rN`/`__on` SOURCES (the original
         # `${<id>.output}` refs) — validated against the pool. The rewritten node-local
@@ -210,8 +215,9 @@ def validate_references(
         # one for its synthetic params (a CASE `__rN` -> its `cases[N].when` line); the block range
         # is only the fallback (a spanless flow has no ranges at all). `wiring_ref_label` gives a
         # synthetic param the author-facing name it was hoisted from instead of leaking `__rN`.
-        input_rng = franges.get(("field", "inputs")) or node_range
-        for param, src in flow_wiring.get(node_id, {}).items():
+        for param, src in nwiring.items():
+            if param in reserved:
+                continue
             scan(src, f"node {node_id!r} {node.wiring_ref_label(param)} from",
                  franges.get(("input", param)) or input_rng)
 

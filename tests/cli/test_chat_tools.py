@@ -1,5 +1,8 @@
 """Flow-op tools for `ac chat` — workspace-confined discover/read/validate/run/write."""
 from concurrent.futures import CancelledError
+import os
+from pathlib import Path
+import stat
 
 import pytest
 
@@ -234,7 +237,7 @@ def test_write_flow_does_not_follow_dangling_symlink_created_during_approval(
 
 @pytest.mark.parametrize(
     ("original", "substitute_after_check"),
-    [(None, 2), (b"original bytes\n", 1)],
+    [(None, 1), (b"original bytes\n", 1)],
 )
 def test_write_flow_commit_does_not_follow_symlink_substituted_after_recheck(
     tmp_path,
@@ -268,6 +271,62 @@ def test_write_flow_commit_does_not_follow_symlink_substituted_after_recheck(
     assert result == "NOT WRITTEN: new.yaml (target changed during approval)"
     assert link.is_symlink()
     assert not outside.exists()
+
+
+@pytest.mark.parametrize("original", [None, b"original bytes\n"])
+def test_write_flow_commit_is_anchored_across_parent_symlink_swap(
+    tmp_path, approval_tty, monkeypatch, original
+):
+    workspace = tmp_path / "workspace"
+    safe = workspace / "safe"
+    held = workspace / "held"
+    outside = tmp_path / "outside"
+    safe.mkdir(parents=True)
+    outside.mkdir()
+    target = safe / "flow.yaml"
+    outside_target = outside / "flow.yaml"
+    if original is not None:
+        target.write_bytes(original)
+        outside_target.write_bytes(original)
+    T.set_workspace(workspace)
+    original_open = T._open_no_follow
+    swapped = False
+
+    def swap_parent_before_leaf_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if not swapped and Path(path).name == "flow.yaml":
+            swapped = True
+            safe.rename(held)
+            safe.symlink_to(outside, target_is_directory=True)
+        try:
+            return original_open(path, flags, mode=mode, dir_fd=dir_fd)
+        except TypeError:
+            return original_open(path, flags)
+
+    monkeypatch.setattr(T, "_open_no_follow", swap_parent_before_leaf_open)
+    with install_ask_user(lambda **_request: {"Decision": "Approve"}):
+        result = T.write_flow("safe/flow.yaml", GOOD)
+
+    assert result == "NOT WRITTEN: safe/flow.yaml (target changed during approval)"
+    if original is None:
+        assert not outside_target.exists()
+        assert not (held / "flow.yaml").exists()
+    else:
+        assert outside_target.read_bytes() == original
+        assert (held / "flow.yaml").read_bytes() == original
+
+
+def test_write_flow_create_uses_normal_file_permissions(tmp_path, approval_tty):
+    T.set_workspace(tmp_path)
+    previous_umask = os.umask(0o022)
+    try:
+        with install_ask_user(lambda **_request: {"Decision": "Approve"}):
+            result = T.write_flow("new.yaml", GOOD)
+    finally:
+        os.umask(previous_umask)
+
+    assert result == "WROTE: new.yaml"
+    assert stat.S_IMODE((tmp_path / "new.yaml").stat().st_mode) == 0o644
 
 
 def test_write_flow_validates_before_prompt_and_confines_path(tmp_path):

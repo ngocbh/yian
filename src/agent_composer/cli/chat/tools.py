@@ -83,41 +83,176 @@ def _target_is_unchanged(
         return False
 
 
-def _open_no_follow(path: str, flags: int) -> int:
-    """Open one leaf without following it when the platform supports that flag."""
-    return os.open(path, flags | getattr(os, "O_NOFOLLOW", 0))
+def _open_no_follow(
+    path: str | Path,
+    flags: int,
+    mode: int = 0o777,
+    *,
+    dir_fd: int | None = None,
+) -> int:
+    """Open one path component without following it when the platform supports it."""
+    return os.open(
+        path,
+        flags | getattr(os, "O_NOFOLLOW", 0),
+        mode,
+        dir_fd=dir_fd,
+    )
 
 
-def _commit_flow_write(dest: Path, content: str, snapshot: bytes | None) -> bool:
-    """Write only through a missing or exact-snapshot non-symlink leaf."""
-    encoded = content.encode()
-    if snapshot is None:
-        try:
-            with open(dest, "xb", opener=_open_no_follow) as target:
-                target.write(encoded)
-        except FileExistsError:
-            return False
-        except OSError as exc:
-            if exc.errno == errno.ELOOP:
-                return False
-            raise
-        return True
+def _open_workspace_parent(relative: Path, *, create: bool) -> tuple[int, str] | None:
+    """Open the target parent from an anchored workspace fd, never through symlinks."""
+    parts = relative.parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        return None
 
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    current = _open_no_follow(_WORKSPACE, directory_flags)
     try:
-        target = open(dest, "r+b", opener=_open_no_follow)
-    except FileNotFoundError:
+        for part in parts[:-1]:
+            try:
+                child = _open_no_follow(part, directory_flags, dir_fd=current)
+            except FileNotFoundError:
+                if not create:
+                    os.close(current)
+                    return None
+                try:
+                    os.mkdir(part, 0o777, dir_fd=current)
+                except FileExistsError:
+                    pass
+                child = _open_no_follow(part, directory_flags, dir_fd=current)
+            os.close(current)
+            current = child
+        return current, parts[-1]
+    except BaseException:
+        os.close(current)
+        raise
+
+
+def _same_file(left: os.stat_result, right: os.stat_result) -> bool:
+    """Return whether two stat records identify the same filesystem object."""
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _read_fd(descriptor: int) -> bytes:
+    """Read one open regular file from its first byte."""
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks = []
+    while True:
+        chunk = os.read(descriptor, 65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _replace_fd_contents(descriptor: int, content: bytes) -> None:
+    """Replace one open regular file's bytes without resolving its path again."""
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    remaining = memoryview(content)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written == 0:
+            raise OSError("zero-byte write while committing approved flow")
+        remaining = remaining[written:]
+    os.ftruncate(descriptor, len(content))
+
+
+def _target_binding_is_current(
+    authored_path: str,
+    dest: Path,
+    parent_fd: int,
+    leaf: str,
+    leaf_fd: int,
+) -> bool:
+    """Verify that authored path, parent, and leaf still name the opened objects."""
+    try:
+        if _resolve(authored_path) != dest:
+            return False
+        if not _same_file(os.stat(dest.parent), os.fstat(parent_fd)):
+            return False
+        return _same_file(
+            os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False),
+            os.fstat(leaf_fd),
+        )
+    except (OSError, RuntimeError, ValueError):
         return False
+
+
+_CHANGED_PATH_ERRNOS = frozenset(
+    {
+        errno.EISDIR,
+        errno.ELOOP,
+        errno.ENOENT,
+        errno.ENOTDIR,
+    }
+)
+
+
+def _commit_flow_write(
+    authored_path: str,
+    dest: Path,
+    content: str,
+    snapshot: bytes | None,
+) -> bool:
+    """Commit through workspace-anchored fds or roll back a changed binding."""
+    relative = dest.relative_to(_WORKSPACE)
+    try:
+        opened_parent = _open_workspace_parent(relative, create=snapshot is None)
     except OSError as exc:
-        if exc.errno == errno.ELOOP:
+        if exc.errno in _CHANGED_PATH_ERRNOS:
             return False
         raise
-    with target:
-        if target.read() != snapshot:
+    if opened_parent is None:
+        return False
+    parent_fd, leaf = opened_parent
+    descriptor = None
+    try:
+        file_flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
+        if snapshot is None:
+            file_flags |= os.O_CREAT | os.O_EXCL
+        try:
+            descriptor = _open_no_follow(
+                leaf,
+                file_flags,
+                0o666,
+                dir_fd=parent_fd,
+            )
+        except OSError as exc:
+            if isinstance(exc, FileExistsError) or exc.errno in _CHANGED_PATH_ERRNOS:
+                return False
+            raise
+
+        if snapshot is not None and _read_fd(descriptor) != snapshot:
             return False
-        target.seek(0)
-        target.write(encoded)
-        target.truncate()
-    return True
+        _replace_fd_contents(descriptor, content.encode())
+        if _target_binding_is_current(
+            authored_path,
+            dest,
+            parent_fd,
+            leaf,
+            descriptor,
+        ):
+            return True
+
+        if snapshot is None:
+            opened = os.fstat(descriptor)
+            try:
+                current = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                if _same_file(opened, current):
+                    os.unlink(leaf, dir_fd=parent_fd)
+        else:
+            _replace_fd_contents(descriptor, snapshot)
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent_fd)
 
 
 def _line_ending_labels(text: str) -> tuple[str, ...]:
@@ -341,10 +476,6 @@ def write_flow(
         return f"NOT WRITTEN: {relative} (approval was not granted)"
     if not _target_is_unchanged(path, dest, snapshot):
         return f"NOT WRITTEN: {relative} (target changed during approval)"
-    if snapshot is None:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if not _target_is_unchanged(path, dest, snapshot):
-            return f"NOT WRITTEN: {relative} (target changed during approval)"
-    if not _commit_flow_write(dest, content, snapshot):
+    if not _commit_flow_write(path, dest, content, snapshot):
         return f"NOT WRITTEN: {relative} (target changed during approval)"
     return f"WROTE: {relative}"

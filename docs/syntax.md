@@ -812,7 +812,11 @@ One `${...}` grammar serves every context — the difference is what each contex
 
 `asserts:` are boolean invariants; a false (or raising) one fails the run loudly.
 A top-level `asserts:` runs over `input.X` (a boundary check, before any node)
-or `node.output` (a post check, after the terminal). `${system.X}` is **not**
+or `node.output` (a post check, after the terminal). An unqualified single name
+matching a declared flow input is shorthand (`age >= 18` means `input.age >= 18`)
+and wins over a same-named node; node results still require `node.output`. The
+shorthand does not extend through fields: write `input.profile.age`, not
+`profile.age`. `${system.X}` is **not**
 allowed in a flow-level assert — it is ambient (there is no producer node to draw
 the check's dependency edge from), so it raises a `LoadError` at load time. If you
 need a system-dependent check, put it in a body node's `asserts:` or a `case`.

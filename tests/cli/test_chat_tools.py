@@ -211,6 +211,53 @@ def test_write_flow_refuses_target_changed_while_approval_is_open(
     assert dest.read_bytes() == changed
 
 
+def test_write_flow_does_not_follow_dangling_symlink_created_during_approval(
+    tmp_path, approval_tty
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.yaml"
+    link = workspace / "new.yaml"
+    T.set_workspace(workspace)
+
+    def approve_after_link(**_request):
+        link.symlink_to(outside)
+        return {"Decision": "Approve"}
+
+    with install_ask_user(approve_after_link):
+        result = T.write_flow("new.yaml", GOOD)
+
+    assert result == "NOT WRITTEN: new.yaml (target changed during approval)"
+    assert link.is_symlink()
+    assert not outside.exists()
+
+
+def test_write_flow_commit_does_not_follow_symlink_substituted_after_recheck(
+    tmp_path, approval_tty, monkeypatch
+):
+    outside = tmp_path / "outside.yaml"
+    link = tmp_path / "new.yaml"
+    T.set_workspace(tmp_path)
+    original_check = T._target_is_unchanged
+    checks = 0
+
+    def substitute_after_recheck(*args):
+        nonlocal checks
+        unchanged = original_check(*args)
+        checks += 1
+        if checks == 2:
+            link.symlink_to(outside)
+        return unchanged
+
+    monkeypatch.setattr(T, "_target_is_unchanged", substitute_after_recheck)
+    with install_ask_user(lambda **_request: {"Decision": "Approve"}):
+        result = T.write_flow("new.yaml", GOOD)
+
+    assert result == "NOT WRITTEN: new.yaml (target changed during approval)"
+    assert link.is_symlink()
+    assert not outside.exists()
+
+
 def test_write_flow_validates_before_prompt_and_confines_path(tmp_path):
     T.set_workspace(tmp_path)
     # invalid content is refused before writing

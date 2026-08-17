@@ -10,6 +10,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from difflib import unified_diff
+import errno
+import os
 from pathlib import Path
 import sys
 from typing import Annotated, Any, Iterator, Optional
@@ -65,6 +67,57 @@ def _target_snapshot(dest: Path) -> bytes | None:
         return dest.read_bytes()
     except FileNotFoundError:
         return None
+
+
+def _target_is_unchanged(
+    authored_path: str,
+    dest: Path,
+    snapshot: bytes | None,
+) -> bool:
+    """Re-confine the authored path and compare its exact current target bytes."""
+    try:
+        if _resolve(authored_path) != dest:
+            return False
+        return _target_snapshot(dest) == snapshot
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _open_no_follow(path: str, flags: int) -> int:
+    """Open one leaf without following it when the platform supports that flag."""
+    return os.open(path, flags | getattr(os, "O_NOFOLLOW", 0))
+
+
+def _commit_flow_write(dest: Path, content: str, snapshot: bytes | None) -> bool:
+    """Write only through a missing or exact-snapshot non-symlink leaf."""
+    encoded = content.encode()
+    if snapshot is None:
+        try:
+            with open(dest, "xb", opener=_open_no_follow) as target:
+                target.write(encoded)
+        except FileExistsError:
+            return False
+        except OSError as exc:
+            if exc.errno == errno.ELOOP:
+                return False
+            raise
+        return True
+
+    try:
+        target = open(dest, "r+b", opener=_open_no_follow)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return False
+        raise
+    with target:
+        if target.read() != snapshot:
+            return False
+        target.seek(0)
+        target.write(encoded)
+        target.truncate()
+    return True
 
 
 def _line_ending_labels(text: str) -> tuple[str, ...]:
@@ -286,8 +339,12 @@ def write_flow(
         return f"NOT WRITTEN: {relative} (host approval is unavailable)"
     if not approved:
         return f"NOT WRITTEN: {relative} (approval was not granted)"
-    if _target_snapshot(dest) != snapshot:
+    if not _target_is_unchanged(path, dest, snapshot):
         return f"NOT WRITTEN: {relative} (target changed during approval)"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(content)
+    if snapshot is None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if not _target_is_unchanged(path, dest, snapshot):
+            return f"NOT WRITTEN: {relative} (target changed during approval)"
+    if not _commit_flow_write(dest, content, snapshot):
+        return f"NOT WRITTEN: {relative} (target changed during approval)"
     return f"WROTE: {relative}"

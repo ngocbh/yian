@@ -65,6 +65,10 @@ evaluator serves the pool, a prompt's local record, and the map-body `item` scop
 | `CONDITION_FALSY` | `None`, falsy through comparisons | `when:` / `asserts:` |
 | `STRICT_RAISE` | raises — no silent blank | prompt rendering |
 
+Strictness also applies to the span's final value: a prompt span that evaluates to
+null raises before whole-value return or embedded concatenation. Bindings remain
+non-strict, so an embedded null contributes an empty string.
+
 **Two safety rules:** dotted access is dict-key lookup only, never `getattr` (so
 `${x.__class__}` is just a missing key); builtin calls dispatch through `TEMPLATE_FNS` only
 (no arbitrary callable is reachable). Arithmetic runs on the resolved *values* with Python

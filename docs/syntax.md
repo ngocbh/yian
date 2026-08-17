@@ -93,6 +93,11 @@ Everywhere you wire data you use a `${...}` reference:
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is stringified.
 
+Prompt templates are strict: a missing reference or any span whose final value is
+null raises, even when the span is embedded in text. Binding templates retain their
+non-strict behavior—a whole null remains a typed null, while an embedded null
+contributes empty text.
+
 !!! important "Prompts see only local inputs"
     Inside a `prompt:` you may reference only names the node declares in its own
     `input:` block — written bare, like `${name}`. Pool references

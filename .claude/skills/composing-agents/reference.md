@@ -297,9 +297,11 @@ prove `bool`. This is the shape `ac chat` runs; see `chat.yaml` (and
   declared inputs (`${name}`), like a leaf node. `map` nodes reject node-local
   `asserts:` at load time — assert a `map`'s result with a flow-level/downstream check.
 - **Flow-level `asserts:` read `input.X` (boundary, before any node) or `node.output`
-  (post, after the terminal).** `${system.X}` is **not** allowed — it is ambient (no
-  producer node to draw the check's dependency edge from), so a `system` ref is a
-  LoadError; put a system-dependent check in a body node's `asserts:` or a `case`.
+  (post, after the terminal).** An exact unqualified input name is shorthand (`age`
+  means `input.age`) and takes precedence over a same-named node; dotted input reads
+  remain explicit (`input.profile.age`). `${system.X}` is **not** allowed — it is
+  ambient (no producer node to draw the check's dependency edge from), so a `system`
+  ref is a LoadError; put a system-dependent check in a body node's `asserts:` or a `case`.
   A flow's `asserts:` are lowered onto its synthesized `start`/`end` boundary nodes and
   fire on the ordinary node path (`start` post-coercion, `end` post-terminal), so a
   called `defs:`/`uses:` child's asserts fire identically to the top-level flow's.

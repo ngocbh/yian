@@ -4,7 +4,7 @@ Flow-level `asserts:` run through ordinary node-local assertion machinery on the
 synthesized START and END nodes. These tests cover child assertions over internal
 producers across call, map, and loop; boundary assertion reference forms; post-assert
 ordering behind a case branch; and load-time rejection of the ambient `system`
-namespace. Record-scoped bare boundary references remain deferred to issue #93.
+namespace. Boundary coverage includes explicit `input.age` and unqualified `age`.
 """
 
 import pytest
@@ -146,8 +146,8 @@ output: ${spin.output}
 # =========================================================================== #
 # Boundary assertion reference forms
 #
-# The braced `${input.age}` form runs through START's lowered assertion. Resolving a
-# bare `age` reference against the START record remains deferred to issue #93.
+# Explicit `${input.age}` and unqualified `age` both run through START's lowered
+# assertion against its coerced output record.
 # =========================================================================== #
 
 _BOUNDARY_ASSERT_ECHO_BODY = """
@@ -182,12 +182,6 @@ def test_braced_boundary_assert_fail_fast_and_pass():
     assert run_flow(loaded, {"age": 20}).status == "succeeded"
 
 
-@pytest.mark.xfail(
-    reason="The record-scoped bare boundary form `age >= 18` is an 'unknown "
-    "namespace' LoadError; resolving it against the START record is deferred to "
-    "ngocbh/agent-composer#93. The braced `${input.age}` form works.",
-    strict=False,
-)
 def test_bare_record_scoped_boundary_assert_fail_fast_and_pass():
     """A bare boundary reference should resolve against the START record."""
     loaded = load_flow(_boundary_assert_flow("age >= 18"))

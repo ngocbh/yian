@@ -12,8 +12,8 @@ from __future__ import annotations
 import pytest
 
 from agent_composer.compose.validate.asserts import lower_flow_asserts
-from agent_composer.compose.helpers.errors import LoadError
-from agent_composer.diagnostics import OriginRef
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
+from agent_composer.diagnostics import OriginRef, SourceRange
 from agent_composer.expr import condition_refs
 from agent_composer.nodes.contracts import (
     Assertion,
@@ -39,6 +39,7 @@ def _lower(asserts, **kw):
         kw.get("valid_targets", VALID_TARGETS),
         kw.get("producers", PRODUCERS),
         kw.get("assert_ranges"),
+        diagnostics=kw.get("diagnostics"),
     )
 
 
@@ -61,6 +62,36 @@ def test_pre_bare_spelling_rewrites_input_to_output():
     r = _lower(["input.age >= 18"])
     assert _expressions(r.start_pre) == ["output.age >= 18"]
     assert r.synth_params == []
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("age >= 18", "output.age >= 18"),
+        ("${age} >= 18", "${output.age} >= 18"),
+        ("${age >= 18}", "${output.age >= 18}"),
+    ],
+)
+def test_pre_unqualified_flow_input_rewrites_in_every_condition_spelling(
+    source, expected
+):
+    r = _lower([source])
+    assert _expressions(r.start_pre) == [expected]
+    assert r.end_post == []
+    assert r.synth_params == []
+    assert r.synth_wiring == {}
+
+
+def test_unqualified_flow_input_precedes_same_named_node():
+    r = _lower(
+        ["age >= 18", "age.output >= 18"],
+        valid_targets={"age"},
+    )
+
+    assert _expressions(r.start_pre) == ["output.age >= 18"]
+    assert _expressions(r.end_post) == ["__assert_age >= 18"]
+    assert r.synth_params == [Parameter(name="__assert_age")]
+    assert r.synth_wiring == {"__assert_age": "${age.output:-null}"}
 
 
 # ---- POST asserts: synth END params ---------------------------------------------
@@ -99,6 +130,20 @@ def test_post_mixed_producer_and_input_two_synths():
     assert r.synth_wiring["__assert_input_threshold"] == "${input.threshold}"
 
 
+def test_post_mixed_producer_and_unqualified_input_two_synths():
+    r = _lower(["emit.output.n >= age"])
+
+    assert _expressions(r.end_post) == ["__assert_emit.n >= __assert_input_age"]
+    assert r.synth_params == [
+        Parameter(name="__assert_emit"),
+        Parameter(name="__assert_input_age"),
+    ]
+    assert r.synth_wiring == {
+        "__assert_emit": "${emit.output:-null}",
+        "__assert_input_age": "${input.age}",
+    }
+
+
 # ---- Errors ---------------------------------------------------------------------
 
 def test_system_namespace_is_forbidden():
@@ -116,6 +161,28 @@ def test_dangling_input_ref_raises():
     # classify_asserts dangling-input check).
     with pytest.raises(LoadError, match="nope"):
         _lower(["${input.nope} != []"])
+
+
+def test_unknown_unqualified_name_remains_a_located_error():
+    rng = SourceRange(start_line=3, start_col=5, end_line=3, end_col=18)
+    diagnostics = LoadDiagnostics(
+        label="flow.yaml",
+        text="first\nsecond\n    missing >= 18\n",
+    )
+
+    with pytest.raises(LoadError, match="unknown namespace 'missing'") as caught:
+        _lower(
+            ["missing >= 18"],
+            assert_ranges=[rng],
+            diagnostics=diagnostics,
+        )
+
+    assert caught.value.diagnostic.frames[0].range == rng
+
+
+def test_dotted_input_name_is_not_unqualified_shorthand():
+    with pytest.raises(LoadError, match="unknown namespace 'profile'"):
+        _lower(["profile.age >= 18"], flow_inputs={"profile"})
 
 
 def test_unknown_field_on_record_producer_raises():

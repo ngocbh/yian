@@ -123,10 +123,10 @@ def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:
     """
     diagnostics = LoadDiagnostics.from_cursor(cursor)
     rng = cursor.range
-    if "#" in node_id or "/" in node_id:
+    if "#" in node_id or "/" in node_id or "." in node_id:
         raise diagnostics.error(
-            f"node id {node_id!r} uses a reserved separator ('#'/'/' are reserved for "
-            f"runtime graph expansion)",
+            f"node id {node_id!r} uses a reserved separator ('#' and '/' are reserved "
+            f"for runtime graph expansion; '.' is reserved for reference paths)",
             range=rng,
         )
     if node_id in (START_ID, END_ID):

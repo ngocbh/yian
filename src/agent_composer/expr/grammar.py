@@ -44,8 +44,11 @@ like `node#0` and `def/child`.
 ## Keyword priority
 
 The keyword terminals (`and` `or` `not` `in` `not in` `true` `false` `null`
-`none`) carry a lexer priority higher than `NAME`, so `and` / `in` win the tie
-and do not lex as ordinary refs.
+`none`) carry a lexer priority higher than `NAME`, so they win when an operator is
+valid. Lark's contextual lexer may still fall back to `NAME` where only an operand
+is valid; `parse_expr` therefore rejects these four operator words as exact
+reference roots after parsing. Dotted field segments retain the ordinary `NAME`
+token and remain legal.
 """
 
 from lark import Lark, Token, Tree
@@ -126,7 +129,8 @@ NUMBER: /\d+(\.\d+)?/
 // lexes as one ident and subtraction breaks — see the module docstring).
 NAME: /[A-Za-z_][A-Za-z0-9_#\/]*/
 
-// Keyword terminals outrank NAME so `and`/`in`/... win the lexer tie.
+// Keyword terminals outrank NAME where both are valid. The contextual lexer may
+// still emit NAME in an operand-only state; parse_expr rejects reserved ref roots.
 NOT_IN.5: /not\s+in\b/
 IN.4: /in\b/
 AND.4: /and\b/
@@ -143,6 +147,47 @@ NULL.3: /null\b/ | /none\b/
 # False so optional branches drop rather than inserting `None` placeholders into
 # the tree.
 _PARSER = Lark(_GRAMMAR, parser="lalr", maybe_placeholders=False)
+
+_RESERVED_REFERENCE_ROOTS = frozenset({"and", "or", "not", "in"})
+
+
+def _raise_if_reserved_reference_root(path: str) -> None:
+    """Reject an exact operator word at the root of one reference path."""
+    root = path.strip().split(".", 1)[0].strip()
+    if root in _RESERVED_REFERENCE_ROOTS:
+        raise ExpressionError(
+            f"reserved expression keyword {root!r} cannot be used as a reference root"
+        )
+
+
+def _reject_reserved_reference_roots(tree: Tree | Token) -> None:
+    """Reject operator words parsed contextually as reference roots.
+
+    A `refcall` with a `call_suffix` is a builtin call rather than a reference, so
+    its callee is outside this rule. Trailer segments and keyword-argument labels
+    are likewise not roots. `WRAPPED_REF` is a single token, so inspect its path
+    explicitly both at the top level and when nested inside a larger expression.
+    """
+    if isinstance(tree, Token):
+        wrapped_refs = (tree,) if tree.type == "WRAPPED_REF" else ()
+    else:
+        for node in tree.iter_subtrees():
+            if node.data != "refcall":
+                continue
+            if any(
+                isinstance(child, Tree) and child.data == "call_suffix"
+                for child in node.children
+            ):
+                continue
+            head = node.children[0]
+            if isinstance(head, Token) and head.type == "NAME":
+                _raise_if_reserved_reference_root(str(head))
+        wrapped_refs = tree.scan_values(
+            lambda value: isinstance(value, Token) and value.type == "WRAPPED_REF"
+        )
+
+    for token in wrapped_refs:
+        _raise_if_reserved_reference_root(str(token)[2:-1])
 
 
 def _reject_dotted_callee(tree: Tree | Token) -> None:
@@ -203,11 +248,13 @@ def parse_expr(text: str) -> Tree | Token:
 
     Raises:
         `ExpressionError`:
-            If `text` does not parse, or is a dotted-callee builtin call.
+            If `text` does not parse, is a dotted-callee builtin call, or uses a
+            reserved operator word as a reference root.
     """
     try:
         tree = _PARSER.parse(text)
     except LarkError as exc:
         raise ExpressionError(f"could not parse expression {text!r}: {exc}") from exc
     _reject_dotted_callee(tree)
+    _reject_reserved_reference_roots(tree)
     return tree

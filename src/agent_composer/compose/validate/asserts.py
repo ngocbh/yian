@@ -25,6 +25,10 @@ from). This module does NOT run the asserts — the boundary nodes fire them. Lo
 replaces only each carrier's executable expression; START/END receive the same
 display/origin-bearing carriers.
 
+An exact one-segment flow-input name is shorthand for `input.<name>` in this flow-level
+scope. It therefore wins over a same-named node; node results remain explicit as
+`node.output`. Dotted paths are not shorthand.
+
 NODE-LOCAL (`validate_node_asserts` + `_POOL_HEADS`). A node assert is scoped to
 one node: a bare `${name}` is a declared input, `${output}`/`${output.field}` is
 the node's own output. It validates + classifies each PRE/POST and stamps
@@ -107,8 +111,9 @@ def lower_flow_asserts(
     """Lower a flow's `asserts:` into node-local asserts for the START/END boundary nodes.
 
     Validation parses each assert + walks its `${...}` refs via `_classify_path` (a dangling
-    ref / bad field is a loud LoadError); the lowering then REWRITES each assert so it can fire
-    node-locally, replacing only each assertion carrier's executable expression:
+    ref / bad field is a loud LoadError). An exact unqualified name matching `flow_inputs`
+    is first treated as `input.<name>` in this scope. The lowering then REWRITES each assert
+    so it can fire node-locally, replacing only each assertion carrier's executable expression:
 
     - a PRE (boundary) assert rewrites each `${input.X}` ref to `${output.X}`, since START now
       fires these from its ordinary `post_asserts` against its own coerced output record; and
@@ -169,12 +174,18 @@ def lower_flow_asserts(
         allocated.add(name)
         return name
 
+    def _qualify_flow_input(path: str) -> str:
+        """Resolve one unqualified flow-input name into the explicit input namespace."""
+        if "." not in path and path in flow_inputs:
+            return f"input.{path}"
+        return path
+
     for i, assertion in enumerate(assert_list):
         expr = assertion.expression
         rng = ranges[i] if i < len(ranges) else None
         # 1. parse-check + collect refs on the ONE unified condition walk (any brace spelling).
         try:
-            refs = condition_refs(expr)
+            refs = [_qualify_flow_input(path) for path in condition_refs(expr)]
         except ExpressionError as exc:
             raise diagnostics.error(
                 f"assert {assertion.display!r} is not a valid boolean expression: {exc}",
@@ -215,8 +226,10 @@ def lower_flow_asserts(
             # asserts now ride its ORDINARY `post_asserts`, fired by the wrapper/eval_node against
             # `{**inputs, "output": <START's coerced record>}`. Reading `${output.X}` sees the
             # COERCED, defaulted value (int 5), whereas a bare `${X}` would read the raw
-            # pre-coercion input (the wire string "5"). The `input.` prefix maps to `output.`.
+            # pre-coercion input (the wire string "5"). Unqualified flow-input names first
+            # acquire the `input.` prefix; that prefix then maps to `output.`.
             def _pre_rename(path: str) -> "str | None":
+                path = _qualify_flow_input(path)
                 if path == "input":
                     return "output"  # defensive; a bare `${input}` head shouldn't appear
                 if path.startswith("input."):
@@ -229,6 +242,7 @@ def lower_flow_asserts(
 
         # 4. POST: turn each non-`output` ref into a synth END param, wired as an edge.
         def _post_rename(path: str) -> "str | None":
+            path = _qualify_flow_input(path)
             segs = path.split(".")
             head = segs[0]
             if head == "output":

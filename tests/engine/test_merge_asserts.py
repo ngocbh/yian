@@ -182,12 +182,6 @@ def test_braced_boundary_assert_fail_fast_and_pass():
     assert run_flow(loaded, {"age": 20}).status == "succeeded"
 
 
-@pytest.mark.xfail(
-    reason="The record-scoped bare boundary form `age >= 18` is an 'unknown "
-    "namespace' LoadError; resolving it against the START record is deferred to "
-    "ngocbh/agent-composer#93. The braced `${input.age}` form works.",
-    strict=False,
-)
 def test_bare_record_scoped_boundary_assert_fail_fast_and_pass():
     """A bare boundary reference should resolve against the START record."""
     loaded = load_flow(_boundary_assert_flow("age >= 18"))

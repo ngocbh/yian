@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 import agent_composer.cli.run as run_cli
+from agent_composer.cli.chat import tools as chat_tools
 from agent_composer.cli.terminal import PromptRequest, TerminalBroker
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import Failure
@@ -492,6 +493,38 @@ def test_prompt_and_progress_render_only_on_main_thread() -> None:
     assert controller_threads[0] is not main_thread()
     assert all(thread is main_thread() for _, thread in reporter.calls)
     assert [name for name, _ in reporter.calls].count("handle") == 1
+
+
+def test_chat_write_flow_approval_crosses_the_main_thread_broker(tmp_path) -> None:
+    """A nested trusted prompt gates the tool while terminal work stays on main."""
+    content = "id: g\nname: g\nnodes: {}\noutput: {}\n"
+    prompt_threads: list[Thread] = []
+    controller_threads: list[Thread] = []
+    requests: list[PromptRequest] = []
+
+    def prompt(request: PromptRequest) -> dict[str, str]:
+        prompt_threads.append(current_thread())
+        requests.append(request)
+        return {"Decision": "Approve"}
+
+    def controller(stop_event, on_event, ask_user, render):
+        controller_threads.append(current_thread())
+        chat_tools.set_workspace(tmp_path)
+        return _success(chat_tools.write_flow("new.yaml", content))
+
+    observed = run_cli._run_with_terminal_controller(
+        controller,
+        prompt_handler=prompt,
+        reporter=None,
+    )
+
+    assert observed.output == "WROTE: new.yaml"
+    assert (tmp_path / "new.yaml").read_text() == content
+    assert prompt_threads == [main_thread()]
+    assert controller_threads[0] is not main_thread()
+    assert "Create new.yaml" in requests[0].question
+    assert requests[0].questions is not None
+    assert requests[0].questions[0]["header"] == "Decision"
 
 
 def test_ctrl_c_during_active_prompt_preserves_keyboard_interrupt_and_joins() -> None:

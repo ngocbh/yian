@@ -6,14 +6,17 @@ paths resolve against a workspace root set by `set_workspace` at `ac chat` start
 escapes (absolute paths, `..`) are rejected.
 """
 from __future__ import annotations
+
 from contextlib import contextmanager
 from contextvars import ContextVar
+from difflib import unified_diff
 from pathlib import Path
 from typing import Annotated, Any, Iterator, Optional
-from agent_composer.tools import register_tool
+
 from agent_composer.compose.loader import load_flow
 from agent_composer.compose.helpers.errors import LoadError
 from agent_composer.run import _run_flow_controlled, run_flow as _run_flow
+from agent_composer.tools import invoke_tool_trusted, register_tool, resolve_tools
 
 # The workspace root every tool path is confined to. Set at `ac chat` startup.
 _WORKSPACE: Path = Path.cwd()
@@ -45,6 +48,68 @@ def _resolve(rel: str) -> Path:
     if p != _WORKSPACE and _WORKSPACE not in p.parents:
         raise ValueError(f"path escapes the workspace: {rel!r}")
     return p
+
+
+def _write_flow_preview(dest: Path, content: str) -> str:
+    """Return the target-labelled create content or overwrite diff for approval."""
+    relative = dest.relative_to(_WORKSPACE)
+    if not dest.exists():
+        return f"Create {relative} with this validated content:\n\n{content}"
+
+    # Preserve line endings so a byte-changing newline-only overwrite is not
+    # presented as identical content.
+    with dest.open(newline="") as source:
+        current = source.read()
+    diff = "\n".join(
+        unified_diff(
+            current.splitlines(),
+            content.splitlines(),
+            fromfile=f"a/{relative}",
+            tofile=f"b/{relative}",
+            lineterm="",
+        )
+    )
+    if not diff:
+        diff = (
+            "(only line endings or the final newline change)"
+            if current != content
+            else "(content is unchanged)"
+        )
+    return f"Overwrite {relative} with this validated diff:\n\n{diff}"
+
+
+def _approve_flow_write(dest: Path, content: str) -> bool | None:
+    """Return exact host approval, or ``None`` when no host owns interaction."""
+    try:
+        resolve_tools(["ask_user"])
+    except ValueError:
+        return None
+
+    answer = invoke_tool_trusted(
+        "ask_user",
+        {
+            "question": _write_flow_preview(dest, content),
+            "questions": [
+                {
+                    "question": "Write this validated flow?",
+                    "header": "Decision",
+                    "options": [
+                        {
+                            "label": "Approve",
+                            "description": "Commit the shown file change.",
+                        },
+                        {
+                            "label": "Reject",
+                            "description": "Leave the workspace unchanged.",
+                        },
+                    ],
+                    "multi_select": False,
+                }
+            ],
+            "title": "Flow write approval",
+        },
+    )
+    return answer == {"Decision": "Approve"}
 
 
 @register_tool("list_flows")
@@ -147,10 +212,11 @@ def write_flow(
     """CREATE a new flow or OVERWRITE an existing one. Use this to author or edit flows
     (read the current file with `read_flow` first when editing). `path` is a
     workspace-relative destination; `content` is the complete flow YAML. The content is
-    compile-checked BEFORE anything is written: returns `WROTE: <path>` on success, or
-    `INVALID (not written): <compile error>` if it doesn't compile — so a bad edit never
-    lands on disk."""
-    dest = _resolve(path)                        # raises on escape
+    compile-checked and shown to the human for explicit approval BEFORE anything is
+    written. Returns `WROTE: <path>` on approval, `NOT WRITTEN: <path> (...)` when
+    approval is rejected or unavailable, or `INVALID (not written): <compile error>` if
+    it doesn't compile."""
+    dest = _resolve(path)  # raises on escape
     try:
         load_flow(
             content,
@@ -159,6 +225,12 @@ def write_flow(
         )
     except LoadError as err:
         return f"INVALID (not written): {err}"
+    relative = dest.relative_to(_WORKSPACE)
+    approved = _approve_flow_write(dest, content)
+    if approved is None:
+        return f"NOT WRITTEN: {relative} (host approval is unavailable)"
+    if not approved:
+        return f"NOT WRITTEN: {relative} (approval was not granted)"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content)
-    return f"WROTE: {dest.relative_to(_WORKSPACE)}"
+    return f"WROTE: {relative}"

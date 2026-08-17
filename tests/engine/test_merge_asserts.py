@@ -4,7 +4,7 @@ Flow-level `asserts:` run through ordinary node-local assertion machinery on the
 synthesized START and END nodes. These tests cover child assertions over internal
 producers across call, map, and loop; boundary assertion reference forms; post-assert
 ordering behind a case branch; and load-time rejection of the ambient `system`
-namespace. Record-scoped bare boundary references remain deferred to issue #93.
+namespace. Boundary coverage includes explicit `input.age` and unqualified `age`.
 """
 
 import pytest
@@ -146,8 +146,8 @@ output: ${spin.output}
 # =========================================================================== #
 # Boundary assertion reference forms
 #
-# The braced `${input.age}` form runs through START's lowered assertion. Resolving a
-# bare `age` reference against the START record remains deferred to issue #93.
+# Explicit `${input.age}` and unqualified `age` both run through START's lowered
+# assertion against its coerced output record.
 # =========================================================================== #
 
 _BOUNDARY_ASSERT_ECHO_BODY = """

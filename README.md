@@ -217,7 +217,10 @@ The assistant's reply prints before the next `You:` prompt.
 - `FLOW` (optional) — a chat flow `.yaml`. The **default** is the bundled
   *composer chat*: a `tool_calling` agent with flow-op tools
   (`list_flows`, `read_flow`, `validate_flow`, `run_flow`, `write_flow`) so you
-  can build and run flows conversationally.
+  can build and run flows conversationally. `write_flow` validates proposed YAML,
+  then shows the target plus a full create preview or overwrite diff; it writes only
+  after the host receives an explicit **Approve** answer. Rejection, cancellation,
+  or an unavailable approval host leaves the target unchanged.
 - `--workspace`/`-C DIR` — the directory the flow-op tools are confined to
   (default: the current directory).
 - `--provider P` / `--model M` — fill-the-gap overrides for agents that set no

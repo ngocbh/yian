@@ -605,7 +605,8 @@ bodies. Each occurrence remains a separate lexical child.
 Declaring a whole `call` node for a one-off child call is verbose. The `call(...)`
 **directive** is sugar: written as a binding's **whole value**, it desugars at
 load into an anonymous `call` node, and the host binding is rewritten to reference
-that node's output.
+that node's output. This applies to every authored node `input:` mapping, including
+HUMAN_INPUT context bindings and LOOP carried-record seeds.
 
 ```yaml
 # these two are equivalent —

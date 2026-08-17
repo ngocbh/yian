@@ -123,6 +123,9 @@ null remains typed null and an embedded null contributes empty text.
 | `${a \| b \| c}` | first present among peers — **the branch-join coalesce** |
 | `$$` | a literal `$` (universal escape — in a prompt `$$` renders a single `$`) |
 
+`and`, `or`, `not`, and `in` are reserved operators, so none can be the root
+name of a reference. A dotted field may use those names (`${record.output.in}`).
+
 Nesting a ref is allowed: `${a:-${b:-"lit"}}`. The `:-`/`:?` RHS is an
 expression, so a string default must be **quoted** (`${x:-"today"}`; bare `today`
 reads a variable). A child-flow call is the whole-value `call(...)` directive

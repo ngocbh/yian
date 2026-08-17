@@ -14,6 +14,8 @@ from lark import Token, Tree
 from agent_composer.expr.expressions import ExpressionError
 from agent_composer.expr.grammar import parse_expr
 
+_RESERVED_KEYWORDS = ("and", "or", "not", "in")
+
 
 def _tree(text: str) -> Tree:
     """Parse `text` and assert we got a Lark `Tree` back (a parse, not an error)."""
@@ -74,6 +76,57 @@ def test_wrapped_ref():
 
 def test_item_ref():
     assert "refcall" in _kinds(_tree("item.title"))
+
+
+@pytest.mark.parametrize("keyword", _RESERVED_KEYWORDS)
+def test_reserved_keyword_cannot_be_a_bare_reference_root(keyword):
+    with pytest.raises(ExpressionError):
+        parse_expr(keyword)
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["x and and", "x or or", "x == not", "x in in"],
+)
+def test_reserved_keyword_cannot_be_an_operand_reference_root(source):
+    with pytest.raises(ExpressionError, match="reserved expression keyword"):
+        parse_expr(source)
+
+
+@pytest.mark.parametrize("keyword", _RESERVED_KEYWORDS)
+@pytest.mark.parametrize("prefix", ["", "x :- "])
+def test_reserved_keyword_cannot_be_a_wrapped_reference_root(keyword, prefix):
+    with pytest.raises(ExpressionError, match="reserved expression keyword"):
+        parse_expr(f"{prefix}${{{keyword}}}")
+
+
+@pytest.mark.parametrize("keyword", _RESERVED_KEYWORDS)
+def test_reserved_keyword_remains_legal_as_a_dotted_field(keyword):
+    _tree(f"record.output.{keyword}")
+    parse_expr(f"${{record.output.{keyword}}}")
+
+
+@pytest.mark.parametrize(
+    "root",
+    ["and/child", "or#0", "not/child", "not#0", "in#0"],
+)
+def test_keyword_prefix_remains_legal_in_generated_reference_roots(root):
+    _tree(f"{root}.output")
+    parse_expr(f"${{{root}.output}}")
+
+
+@pytest.mark.parametrize("source", ["and(x)", "or(x)", "in(x)"])
+def test_keyword_shaped_builtin_callee_is_not_a_reference_root(source):
+    assert "call_suffix" in _kinds(_tree(source))
+
+
+def test_not_followed_by_parentheses_remains_unary_operator():
+    assert _tree("not(x)").data == "negate"
+
+
+@pytest.mark.parametrize("keyword", ["and", "or", "in"])
+def test_keyword_argument_label_is_not_a_reference_root(keyword):
+    assert "call_suffix" in _kinds(_tree(f"fn({keyword}=x)"))
 
 
 # --------------------------------------------------------------------------- #

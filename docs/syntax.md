@@ -121,6 +121,10 @@ appears — bindings, conditions, prompts. Inside it you may write:
 | `${a \| b \| c}` | first present among peers (n-ary coalesce — for branch joins) |
 | `$$` | a literal `$` (the scanner's universal escape — outside a span; in a prompt `$$` renders a single `$`) |
 
+The operator words `and`, `or`, `not`, and `in` are reserved and cannot be the
+root name of a reference. They may still name a dotted field, for example
+`${record.output.in}`.
+
 The `:-` default and `:?` message RHS are themselves expressions, so a **string**
 default must be quoted: `${input.as_of:-"today"}`, not `:-today` (bare `today`
 would read a *variable* named `today`). Nesting a ref is allowed:

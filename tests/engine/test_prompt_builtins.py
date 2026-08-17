@@ -104,6 +104,24 @@ def test_multi_span_call_result_dotted_miss_raises():
         render_template_record("x ${_mkrec(${name}).nope} y", _REC)
 
 
+@pytest.mark.parametrize("expression", ["null", "null | null"])
+def test_strict_prompt_rejects_final_null_in_whole_and_embedded_spans(expression):
+    messages = []
+    for template in (f"${{{expression}}}", f"value=${{{expression}}}"):
+        with pytest.raises(ExpressionError, match="null value in strict template") as caught:
+            render_template_record(template, {})
+        messages.append(str(caught.value))
+    assert messages[0] == messages[1]
+
+
+def test_binding_embedded_null_still_stringifies_as_empty_text():
+    assert eval_binding("${null}", lambda _path: None) is None
+    assert eval_binding("value=${null}", lambda _path: None) == "value="
+
+
+def test_strict_prompt_allows_null_intermediate_with_non_null_result():
+    assert render_template_record("value=${null | 'fallback'}", {}) == "value=fallback"
+
 
 # --- render: plain references ------------------------------------------------ #
 

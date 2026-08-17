@@ -49,20 +49,17 @@ def test_dotted_access_on_call_result():
     assert render_template_record("${_mkrec(${name}).field}", _REC) == "F-zeta"
 
 
-# --- render: unified-expression spans (new grammar) -------------------------- #
+# --- render: arithmetic expressions and dollar escaping ---------------------- #
 
 
 def test_arithmetic_in_a_prompt_span():
-    # NEW under the unified engine: a `${}` span is a full expression, so arithmetic
-    # over a ref renders its computed value, stringified (the old prompt grammar had no
-    # arithmetic — a span was a plain ref or a builtin call only).
+    # A `${}` span is a full expression, so arithmetic over a ref renders its
+    # computed value as text.
     assert render_template_record("total ${a + 1}", {"a": 4}) == "total 5"
 
 
 def test_dollar_dollar_renders_single_dollar():
-    # INTENTIONAL, LOCKED change: the legacy renderer emitted `$$` verbatim; the unified
-    # scanner collapses `$$` -> a single `$` everywhere (the universal escape). A prompt
-    # containing `$$` now renders one `$`.
+    # The scanner treats `$$` as the universal escape for one literal dollar.
     assert render_template_record("cost is $$5", {}) == "cost is $5"
 
 
@@ -74,10 +71,9 @@ def test_unknown_builtin_raises():
         render_template_record("${frobnicate(${name})}", _REC)
 
 
-def test_bare_word_arg_is_a_ref_option_a():
-    # Option A: inside `${}` a BARE word is a REFERENCE (literals must be quoted). So a
-    # bare call arg resolves against the record — the old "bare word is neither ref nor
-    # literal -> raise" rule is gone. `${...}`-wrapping a ref still works (see below).
+def test_bare_word_call_arg_is_a_reference():
+    # Inside `${}`, a bare word is a reference and literals must be quoted. A bare
+    # call argument therefore resolves against the record.
     out = render_template_record("${render_as_json(briefs, 4)}", _REC)
     assert out == '[\n    "ab",\n    "adf"\n]'
 
@@ -101,32 +97,30 @@ def test_multi_span_plain_ref_dotted_miss_raises():
 
 
 def test_multi_span_call_result_dotted_miss_raises():
-    # THE STEP-8 GAP: a dotted miss on a builtin-CALL result embedded in surrounding text.
-    # It used to leak a plain `None` that the multi-span concat stringified to "" (a silent
-    # blank). The shared evaluator now yields the `_MISSING` sentinel for a call-result
-    # dotted miss too, so STRICT_RAISE raises for both single AND multi span.
+    # A dotted miss on a builtin-call result yields `_MISSING`, so an embedded span
+    # raises under STRICT_RAISE rather than rendering a silent blank.
     register_template_fn("_mkrec")(lambda x: {"field": f"F-{x}"})
     with pytest.raises(ExpressionError):
         render_template_record("x ${_mkrec(${name}).nope} y", _REC)
 
 
 
-# --- render: plain-ref regression (the pre-builtin behavior is unchanged) ----- #
+# --- render: plain references ------------------------------------------------ #
 
 
-def test_plain_ref_and_dotted_still_work():
+def test_plain_and_dotted_references_render():
     assert render_template_record("${name} v=${sig.value}", _REC) == "zeta v=0.8"
 
 
-def test_plain_ref_unknown_or_none_still_raises():
+def test_plain_reference_unknown_or_none_raises():
     with pytest.raises(ExpressionError):
         render_template_record("${ghost}", _REC)
     with pytest.raises(ExpressionError):
         render_template_record("${t}", {"t": None})
 
 
-def test_nested_braces_no_longer_misparsed():
-    # the old `_VAR_RE` regex stopped at the first `}` — the brace-aware scanner does not.
+def test_nested_braces_are_scanned_as_one_call_span():
+    # The brace-aware scanner retains the nested reference inside the builtin call.
     assert render_template_record("[${render_as_json(${briefs})}]", _REC).startswith("[")
 
 
@@ -182,9 +176,9 @@ def test_loader_rejects_unknown_builtin():
     assert "frobnicate" in str(exc.value)
 
 
-# --- mode interaction: a call-result dotted miss is `_MISSING`, not a raise, in the
-# non-strict modes (only STRICT_RAISE raises). These pin that the shared-evaluator fix
-# (call-result miss -> `_MISSING`) does NOT regress binding coalesce / condition falsy. --- #
+# --- mode interaction for call-result dotted misses -------------------------- #
+# A call-result dotted miss is `_MISSING`. Non-strict modes may coalesce,
+# default, or treat it as falsy; only STRICT_RAISE raises.
 
 
 def _record_resolve(record):

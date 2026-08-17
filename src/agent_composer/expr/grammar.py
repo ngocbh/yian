@@ -1,9 +1,8 @@
 r"""One unified `${...}` expression grammar — PARSE ONLY (no evaluation here).
 
-This is the single grammar that supersedes the three divergent `${...}` dialects
-the engine grew (binding coalesce/default, `when:` boolean/arithmetic, prompt
-builtin-call). It parses every construct of all three into one Lark tree; the
-evaluator that walks that tree is a LATER step and deliberately lives elsewhere.
+This single grammar parses binding coalesce/default expressions, `when:`
+boolean/arithmetic expressions, and prompt builtin calls into one Lark tree.
+Evaluation deliberately lives in `expr.expressions`.
 
 ## What it parses
 
@@ -18,18 +17,18 @@ evaluator that walks that tree is a LATER step and deliberately lives elsewhere.
 - Coalesce (`a | b | c`), default (`a :- d`), required (`a :? "msg"`), including a
   wrapped-ref default RHS (`a :- ${b}`).
 
-## The terminal design — the load-bearing "C1" fix
+## Shared terminal design for references and calls
 
 A naive grammar with a SEPARATE bare-ref terminal AND a separate
 `call: NAME "(" ... ")"` rule does NOT parse under LALR: the lexer matches the
 bare-ref terminal on `upper` before it can ever see the `(`, so the call rule is
-unreachable and `upper(name)` fails. The fix — verified — is ONE shared `NAME`
-terminal with an OPTIONAL call-suffix: a `refcall` is a `NAME`, then dotted
+unreachable and `upper(name)` fails. One shared `NAME` terminal with an optional
+call-suffix avoids that ambiguity: a `refcall` is a `NAME`, then dotted
 `trailer`s, then an OPTIONAL `call_suffix`. No suffix => a reference (path = the
 NAME joined with its trailer segments); a suffix present => a builtin call (callee
 = the leading NAME, any trailers AFTER the parens are dotted access on the
 result). A `call_suffix` WITH a leading trailer (`a.b(...)`) is rejected in
-`parse_expr` — builtins are bare-callee only, as the prompt form is today.
+`parse_expr` — builtins are bare-callee only, matching the prompt grammar.
 
 ## Charset decision — why `-` is NOT in `NAME` (and `#` / `/` are)
 
@@ -37,7 +36,7 @@ result). A `call_suffix` WITH a leading trailer (`a.b(...)`) is rejected in
 the terminal, `a - b` would lex as the single identifier `a-b` and subtraction
 would break. Consequence: references inside `${}` use this non-hyphen charset, so
 a hyphenated identifier is unavailable INSIDE an expression. That only matters for
-the later `call(...)` directive, whose flow-id may be hyphenated — but that is a
+the whole-value `call(...)` directive, whose flow-id may be hyphenated — but that is a
 loader-side string match (a directive recognizer), NOT this grammar, so it is
 unaffected. `#` and `/` ARE allowed because runtime graph expansion mints segments
 like `node#0` and `def/child`.
@@ -45,8 +44,8 @@ like `node#0` and `def/child`.
 ## Keyword priority
 
 The keyword terminals (`and` `or` `not` `in` `not in` `true` `false` `null`
-`none`) carry a lexer priority higher than `NAME` (as in the current
-`expressions.py`), so `and` / `in` win the tie and do not lex as ordinary refs.
+`none`) carry a lexer priority higher than `NAME`, so `and` / `in` win the tie
+and do not lex as ordinary refs.
 """
 
 from lark import Lark, Token, Tree
@@ -104,7 +103,7 @@ _GRAMMAR = r"""
      | WRAPPED_REF
      | "(" coalesce ")"
 
-// ONE shared NAME terminal + optional call-suffix (the C1 fix):
+// One shared NAME terminal disambiguates references from builtin calls:
 //   no call_suffix  => a reference (NAME + trailer segments)
 //   a call_suffix   => a builtin call (leading NAME is the callee; trailers
 //                      AFTER the parens are dotted access on the result). A
@@ -150,8 +149,8 @@ def _reject_dotted_callee(tree: Tree | Token) -> None:
     """Raise if any `refcall` is a call (`call_suffix`) with a leading `trailer`.
 
     Builtins are bare-callee only: `a.b(x)` — a dotted head applied like a call —
-    is not a valid builtin call and must be rejected, matching today's prompt
-    form. A call whose ONLY trailers follow the parens (`fn(x).field`, dotted
+    is not a valid builtin call and must be rejected, matching prompt syntax.
+    A call whose ONLY trailers follow the parens (`fn(x).field`, dotted
     access on the result) is fine; those trailers are parsed after `call_suffix`,
     so the guard checks for a trailer appearing BEFORE the suffix in the child
     order.
@@ -184,7 +183,7 @@ def parse_expr(text: str) -> Tree | Token:
     Parse one unified `${...}` expression into a Lark tree (PARSE ONLY).
 
     This does no evaluation and touches no variable pool — it is the shared front
-    end for the later evaluator. A dotted-callee builtin call (`a.b(x)`) is
+    end for the evaluator in `expr.expressions`. A dotted-callee builtin call (`a.b(x)`) is
     rejected here; every other construct in the module docstring parses.
 
     Args:

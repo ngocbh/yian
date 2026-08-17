@@ -45,7 +45,7 @@ def _eval(text, resolve=None, item=None, mode=ResolveMode.BINDING_NONE):
 
 
 # --------------------------------------------------------------------------- #
-# 4a: Whole-single-span preserves TYPE
+# Whole-single-span preserves type
 # --------------------------------------------------------------------------- #
 
 
@@ -67,7 +67,7 @@ def test_whole_single_span_missing_is_none():
 
 
 # --------------------------------------------------------------------------- #
-# 4a: Embedded span stringifies
+# Embedded span stringifies
 # --------------------------------------------------------------------------- #
 
 
@@ -88,7 +88,7 @@ def test_embedded_missing_span_stringifies_to_empty():
 
 
 # --------------------------------------------------------------------------- #
-# 4a: Literal text is NEVER parsed — operator chars stay literal
+# Literal text is never parsed — operator characters stay literal
 # --------------------------------------------------------------------------- #
 
 
@@ -121,7 +121,7 @@ def test_span_interior_is_parsed():
 
 
 # --------------------------------------------------------------------------- #
-# 4a: scan_template segment shapes
+# scan_template segment shapes
 # --------------------------------------------------------------------------- #
 
 
@@ -180,7 +180,7 @@ def test_scan_adjacent_spans_are_two_spans_and_concatenate():
 
 
 # --------------------------------------------------------------------------- #
-# 4a: template_refs
+# template_refs
 # --------------------------------------------------------------------------- #
 
 
@@ -200,7 +200,7 @@ def test_template_refs_ignores_literals_between_spans():
 
 
 # --------------------------------------------------------------------------- #
-# 4a: item scope + mode pass-through
+# Item scope and mode pass-through
 # --------------------------------------------------------------------------- #
 
 

@@ -1,12 +1,11 @@
 """The raw-string binding API on the unified engine — `eval_binding(source, resolve, item)`
 and `expr_refs_of(source)`.
 
-Step 5 switched the binding functions from taking PARSED segments to taking the RAW
-template string (scanning internally via the unified grammar). These pin:
-- parity with the legacy binding semantics (typed whole-span, embedded stringify, `$$`,
+The binding functions take a raw template string and scan it internally through the
+unified grammar. These tests cover:
+- binding semantics (typed whole-span, embedded stringify, `$$`,
   coalesce `|`, `:-` default, `:?` required, one nested `${x:-${y}}`, `${item}` scope);
-- the NEW power the unified grammar brings inside a binding span (arithmetic, string/list
-  ops) that the legacy coalesce-of-atoms grammar rejected.
+- full expressions inside a binding span, including arithmetic and string/list operations.
 """
 
 import pytest
@@ -19,7 +18,7 @@ def _from(mapping):
     return lambda path: mapping.get(path)
 
 
-# --- legacy parity on the new (raw-string) path ------------------------------ #
+# --- binding value semantics ------------------------------------------------- #
 
 
 def test_whole_span_is_typed():
@@ -60,11 +59,11 @@ def test_item_scope():
     assert eval_binding("${item}", _from({}), item="whole") == "whole"
 
 
-# --- NEW: full-expression power inside a binding span ------------------------- #
+# --- full expressions inside a binding span ---------------------------------- #
 
 
 def test_arithmetic_in_binding():
-    # the legacy coalesce-of-atoms grammar rejected `x + 1`; the unified one evaluates it.
+    # A binding span evaluates arithmetic over resolved values.
     assert eval_binding("${x + 1}", _from({"x": 2})) == 3
 
 

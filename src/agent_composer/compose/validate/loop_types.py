@@ -2,12 +2,12 @@
 
 A loader post-build pass (run after `check_ref_map_types`). `nodes.loop.build` checked only the
 carried field-NAME sets — it lacks the resolved carried-record Types, which depend on the parent
-producers/flow inputs assembled LATER. This pass resolves each carried field's contract from its
-bound seed source (`${<id>.output}`/`${input.X}` over the parent producer + flow-input
-contracts, via `resolve_output_binding_contract`), projects its Type, and checks it is structurally
-compatible (`types_compatible`, C-EQUIV) with the body OUTPUT's same-named field Type. The
-node's canonical output contract already retains independently proven body fields when no
-sound exact aggregate exists. This pass carries a range anchor from
+producers and flow inputs assembled by the parent build. This pass resolves each carried field's
+contract from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producer +
+flow-input contracts, via `resolve_output_binding_contract`), projects its Type, and checks it
+with `types_compatible` against the body OUTPUT's same-named field Type. The node's canonical
+output contract already retains independently proven body fields when no sound exact aggregate
+exists. This pass carries a range anchor from
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator) and
@@ -45,12 +45,12 @@ def check_loop_type_contract(
     """The TYPE-level half of a `loop`'s `'a -> 'a` contract (a loader post-build pass).
 
     `nodes.loop.build` checked only the field-NAME sets (it lacks the resolved carried-record
-    Types — the seed sources' types depend on the parent producers/flow inputs assembled
-    LATER). This pass, run after `check_ref_map_types`, resolves each carried field's Type
+    Types because the seed sources' types depend on parent producers and flow inputs).
+    This pass, run after `check_ref_map_types`, resolves each carried field's Type
     from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producer +
     flow-input contracts, exactly as `check_ref_map_types` via
     `resolve_output_binding_contract`),
-    and checks it is structurally compatible (`types_compatible`, C-EQUIV) with the body
+    and checks it with `types_compatible` against the body
     OUTPUT's same-named field Type. A fully proven body reads those fields from the
     aggregate `output_contract`; a partially typed record reads its independently
     proven field contracts from the same canonical output-contract sum. A literal/

@@ -1,9 +1,7 @@
 """`${...}` evaluation plus conservative compile-time type/reference analysis.
 
-Ported from the legacy engine's lark grammar, with one change: variable
-resolution now goes through `VariablePool.resolve`, so it reads typed
-segments (and can traverse into object outputs — `${x.output.output.ratio}` —
-which the old dict-of-str pool could not).
+Variable resolution goes through `VariablePool.resolve`, so expressions read typed
+segments and can traverse into object outputs such as `${x.output.output.ratio}`.
 
 Grammar: comparisons (`==` `!=` `<` `<=` `>` `>=` `in` `not in`) and arithmetic over
 references and literals, combined with `and` / `or` / `not` and parentheses. The same
@@ -46,9 +44,10 @@ def resolve_reference(path: str, pool: VariablePool) -> Any:
 def _resolve_in_record(path: str, record: dict) -> Any:
     """Resolve a `${path}` against a node's bound input record (dotted walk).
 
-    A missing input / dotted miss / None step -> None: the LOCKED `when:` missing->falsy
-    contract (the compile-time strict check rejects undeclared names, so a None here is a
-    legitimate empty value, not an authoring error). Bare local-input refs only.
+    A missing input, dotted miss, or `None` step returns `None`, which gives `when:` its
+    missing-is-falsy behavior. The compile-time strict check rejects undeclared names, so
+    a `None` here is a legitimate empty value rather than an authoring error. Bare
+    local-input refs only.
     """
     parts = [p.strip() for p in path.strip().split(".")]
     if not parts or any(not p for p in parts):
@@ -63,12 +62,10 @@ def render_template(text: str, pool: VariablePool) -> str:
     """Substitute every `${ref}` in `text` with its resolved value (str), against
     the whole pool (`node`/`system` namespaces).
 
-    No production caller as of slice 5 — strict AGENT renders prompts against the
-    bound input record via `render_template_record`. Retained (and test-pinned)
-    for the open-namespace render path a future templated `HUMAN_INPUT` prompt
-    will need. An UNRESOLVED reference (resolves to None) RAISES `ExpressionError`
-    rather than silently rendering "" (the runtime floor for refs the compile-time
-    check can't prove total).
+    `render_template_record` handles node-local AGENT and HUMAN_INPUT prompts. This
+    helper remains the pool-scoped rendering path for templates that read node or
+    system namespaces. An unresolved reference (one that resolves to `None`) raises
+    `ExpressionError` rather than silently rendering an empty string.
     """
 
     def _sub(match: "re.Match[str]") -> str:
@@ -206,8 +203,8 @@ def _evaluate(expression: str, resolve: Callable[[str], Any]) -> bool:
     each reference via `resolve`; the result is coerced to `bool`.
 
     Runs the unified `eval_expr` in `CONDITION_FALSY` mode — a missing reference is `None`
-    (falsy through comparisons, the LOCKED `when:` missing->falsy contract that `case default`
-    routing depends on). The truthiness fold of `and`/`or` (unified) is coerced back to a
+    and therefore falsy through comparisons, which lets `case default` routing handle
+    absent values. The truthiness fold of `and`/`or` is coerced back to a
     plain `bool` here, so a `when:`/`asserts:` predicate always yields a boolean.
     """
     tree = _parse_condition(expression)
@@ -270,7 +267,7 @@ def evaluate_when_record(expression: str, record: dict) -> bool:
     """Evaluate a strict-CASE `when:` against the node's bound input record.
 
     `${name}` / `${name.path}` resolve against `record`; a miss -> None, which is falsy
-    through ==/!=/ordered comparisons (the locked `when:` missing->falsy contract).
+    through ==/!=/ordered comparisons, preserving `when:` missing-is-falsy behavior.
     Note: `in`/`not in` with a None operand still raises (unchanged from the pool path).
     Bare local-input refs only; pool namespaces are not in scope (they belong in the
     node's input `from:` bindings).
@@ -299,7 +296,7 @@ class ResolveMode(Enum):
     - `BINDING_NONE`: a missing ref is `None` — the binding contract (a coalesce /
       default may then fire, or the whole value is `None`).
     - `CONDITION_FALSY`: a missing ref is `None`, which is falsy through comparisons
-      (the locked `when:` missing->falsy contract). Same None as `BINDING_NONE`; the
+      to preserve `when:` missing-is-falsy behavior. Same None as `BINDING_NONE`; the
       distinct name marks the intent at the call site (a `when:`/`asserts:` predicate).
     """
 
@@ -501,17 +498,15 @@ class _EvalExpr:
         return not self._as_value(self._walk(self._operands(node)[-1]))
 
     def _do_or_expr(self, node: Tree) -> Any:
-        # Operands fold by PYTHON truthiness, not bool-only (so `0 or "hit"` is truthy):
-        # a deliberate change from the legacy `when:` bool-filter, matching the design
-        # "operators delegate to Python semantics on resolved values".
+        # Operands fold by Python truthiness, not bool-only, so non-boolean values such
+        # as `0` and `"hit"` participate directly.
         return any(self._as_value(self._walk(c)) for c in self._operands(node))
 
     def _do_and_expr(self, node: Tree) -> Any:
-        # Operands fold by Python truthiness, not bool-only (see `_do_or_expr`): a
-        # deliberate change from the legacy `when:` bool-filter.
+        # Operands fold by Python truthiness, not bool-only (see `_do_or_expr`).
         return all(self._as_value(self._walk(c)) for c in self._operands(node))
 
-    # --- comparisons (reuse the locked `_eval_comparison` None-> False contract) --- #
+    # --- comparisons (reuse `_eval_comparison` missing-is-falsy behavior) --- #
     def _do_compare(self, node: Tree) -> Any:
         lhs, op, rhs = node.children
         return _eval_comparison(str(op), self._as_value(self._walk(lhs)), self._as_value(self._walk(rhs)))
@@ -578,7 +573,7 @@ def eval_expr(
     `str+str` concatenates and `list+list` extends), boolean combinators, list
     literals, coalesce / default / required, and pure builtin calls.
 
-    Three semantics are LOCKED (they are load-bearing for `case default` routing):
+    Three semantics support `case default` routing:
     a missing reference is `None` (in the non-strict modes); arithmetic over that
     `None` raises a loud `ExpressionError` (a wrapped `TypeError`); an ordered
     comparison with a `None` operand is `False` (missing->falsy).

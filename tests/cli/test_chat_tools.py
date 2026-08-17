@@ -232,11 +232,21 @@ def test_write_flow_does_not_follow_dangling_symlink_created_during_approval(
     assert not outside.exists()
 
 
+@pytest.mark.parametrize(
+    ("original", "substitute_after_check"),
+    [(None, 2), (b"original bytes\n", 1)],
+)
 def test_write_flow_commit_does_not_follow_symlink_substituted_after_recheck(
-    tmp_path, approval_tty, monkeypatch
+    tmp_path,
+    approval_tty,
+    monkeypatch,
+    original,
+    substitute_after_check,
 ):
     outside = tmp_path / "outside.yaml"
     link = tmp_path / "new.yaml"
+    if original is not None:
+        link.write_bytes(original)
     T.set_workspace(tmp_path)
     original_check = T._target_is_unchanged
     checks = 0
@@ -245,7 +255,9 @@ def test_write_flow_commit_does_not_follow_symlink_substituted_after_recheck(
         nonlocal checks
         unchanged = original_check(*args)
         checks += 1
-        if checks == 2:
+        if checks == substitute_after_check:
+            if original is not None:
+                link.unlink()
             link.symlink_to(outside)
         return unchanged
 

@@ -12,6 +12,7 @@ from agent_composer.nodes.agent.modes.common import (
     register_mode,
 )
 from agent_composer.nodes.agent.modes.utils import text_of
+from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
 from agent_composer.nodes.base import Output
 from agent_composer.tools import invoke_tool, resolve_tools
 
@@ -29,6 +30,19 @@ def tool_calling(ctx: AgentRunContext) -> Output:
     ctx.check_stopped()
     model = llm_clients.model_from_config(ctx.llm_config or {})
     ctx.check_stopped()
+    schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
+    if not ctx.tools and schema is not None:
+        return Output(
+            value=generate_structured(
+                model,
+                messages,
+                ctx.output_type,
+                max_retries=ctx.retries,
+                llm_config=ctx.llm_config,
+                check_stopped=ctx.check_stopped,
+            )
+        )
+
     bound = resolve_tools(list(ctx.tools))
     ctx.check_stopped()
     chat = model.bind_tools(bound) if bound else model
@@ -42,9 +56,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         messages.append(reply)
         calls = getattr(reply, "tool_calls", None) or []
         if not calls:
-            from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
-
-            if ctx.output_type is not None and type_to_schema(ctx.output_type) is not None:
+            if ctx.output_type is not None and schema is not None:
                 return Output(
                     value=generate_structured(
                         model,

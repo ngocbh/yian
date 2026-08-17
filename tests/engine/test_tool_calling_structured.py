@@ -1,5 +1,7 @@
 """`tool_calling` mode emits the declared `output:` type on its final answer turn."""
 
+import pytest
+
 import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
 from agent_composer.llm_clients import LLMConfig
@@ -64,6 +66,48 @@ class _StructuredFinalChat:
         return _Bound()
 
 
+class _DirectStructuredChat:
+    """Native structured fake that rejects an ordinary discovery invocation."""
+
+    def __init__(self, *schema_values):
+        self._values = list(schema_values)
+        self.structured_calls = 0
+
+    def bind_tools(self, tools):
+        raise AssertionError("a no-tools structured run must not bind tools")
+
+    def invoke(self, messages):
+        raise AssertionError("a no-tools structured run must not make a discovery call")
+
+    def with_structured_output(self, schema):
+        outer = self
+
+        class _Bound:
+            def invoke(self, messages):
+                outer.structured_calls += 1
+                return schema.model_validate(outer._values.pop(0))
+
+        return _Bound()
+
+
+class _DirectFallbackChat:
+    """Fallback structured fake whose sole invoke must carry the schema prompt."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def bind_tools(self, tools):
+        raise AssertionError("a no-tools structured run must not bind tools")
+
+    def with_structured_output(self, schema):
+        raise AssertionError("the no-structured sentinel must use the fallback")
+
+    def invoke(self, messages):
+        self.calls += 1
+        assert "json" in messages[-1].content.lower()
+        return AIMessage(content='{"value": 5}')
+
+
 def _run_node(node, pool=None):
     return eval_node(node, None, pool or VariablePool())
 
@@ -89,6 +133,88 @@ def test_tool_calling_final_answer_is_structured(monkeypatch):
     assert out == {"name": "ACME", "score": 9}  # a plain dict, structured final answer
     assert chat.structured_called_with is not None  # the structured emit turn ran
     assert tool.seen == [{"topic": "ACME"}]  # the mid-loop tool still ran
+
+
+@pytest.mark.parametrize(
+    ("output_type", "schema_value", "expected"),
+    [
+        (
+            Type(
+                kind=ValueKind.STRING,
+                tags=frozenset({"positive", "neutral", "negative"}),
+            ),
+            {"value": "neutral"},
+            "neutral",
+        ),
+        (Type.scalar(ValueKind.INTEGER), {"value": 7}, 7),
+        (
+            Type(
+                kind=ValueKind.LIST_STRING,
+                element=Type.scalar(ValueKind.STRING),
+            ),
+            {"items": ["alpha", "beta"]},
+            ["alpha", "beta"],
+        ),
+        (
+            Type(
+                kind=ValueKind.OBJECT,
+                fields={
+                    "name": Type.scalar(ValueKind.STRING),
+                    "score": Type.scalar(ValueKind.INTEGER),
+                },
+                required=frozenset({"name", "score"}),
+            ),
+            {"name": "ACME", "score": 9},
+            {"name": "ACME", "score": 9},
+        ),
+    ],
+    ids=["literal", "scalar", "list", "record"],
+)
+def test_no_tools_structured_output_skips_discovery_call(
+    monkeypatch, output_type, schema_value, expected
+):
+    chat = _DirectStructuredChat(schema_value)
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
+    node = AgentNode(
+        "n",
+        prompt="produce a value",
+        llm_config=LLMConfig(provider="anthropic", model="claude-sonnet-4-5"),
+        mode="tool_calling",
+    )
+    node.output_contract = ValueContract(output_type)
+
+    assert _run_node(node).value == expected
+    assert chat.structured_calls == 1
+
+
+def test_no_tools_structured_fallback_uses_one_schema_prompt(monkeypatch):
+    chat = _DirectFallbackChat()
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
+    node = AgentNode(
+        "n",
+        prompt="produce a number",
+        llm_config=LLMConfig(provider="vllm", model="no-structured-sentinel"),
+        mode="tool_calling",
+    )
+    node.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
+
+    assert _run_node(node).value == 5
+    assert chat.calls == 1
+
+
+def test_no_tools_structured_retry_never_adds_a_discovery_call(monkeypatch):
+    chat = _DirectStructuredChat({"value": "not-an-int"}, {"value": 11})
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
+    node = AgentNode(
+        "n",
+        prompt="produce a number",
+        llm_config=LLMConfig(provider="anthropic", model="claude-sonnet-4-5"),
+        mode="tool_calling",
+    )
+    node.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
+
+    assert _run_node(node).value == 11
+    assert chat.structured_calls == 2
 
 
 def test_tool_calling_literal_final_answer_is_structured(monkeypatch):

@@ -743,8 +743,10 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
 - **`grammar.py` — parse only.** `parse_expr` compiles a span into a Lark tree
   (arithmetic `+ - * / % **`, comparisons, `and`/`or`/`not`, `in`/`not in`, list
   literals, pure builtin calls with dotted access, `:-` default / `:?` required /
-  `|` coalesce). No evaluation here. The evaluator walks this **restricted AST** —
-  there is no Python `eval`; a builtin call resolves only against the
+  `|` coalesce). A post-parse guard reserves those four operator words as exact
+  reference roots while allowing them as dotted fields. No evaluation happens
+  here. The evaluator walks this **restricted AST** — there is no Python `eval`;
+  a builtin call resolves only against the
   `TEMPLATE_FNS` whitelist, so a span can compute but cannot reach arbitrary code.
 - **`expressions.py` — evaluate + static companions.** `eval_expr` walks the tree
   over a value resolver; `infer_expr_type` conservatively proves fixed result types

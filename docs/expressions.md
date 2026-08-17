@@ -45,6 +45,10 @@ Two load-bearing points: one shared `NAME` terminal with an optional call-suffix
 separate-ref-plus-call grammar won't parse under LALR); and `#`/`/` are in `NAME` (runtime
 ids like `node#0`) while `-` is not (so `a - b` is subtraction).
 
+`and`, `or`, `not`, and `in` are reserved operators and cannot be the exact root
+name of a reference. They remain legal as dotted field names, such as
+`record.output.in`.
+
 ## Layer 2 — the one evaluator
 
 `eval_expr(tree, resolve, item=None, mode=...)` is the single evaluator for every

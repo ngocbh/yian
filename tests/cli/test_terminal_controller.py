@@ -495,12 +495,20 @@ def test_prompt_and_progress_render_only_on_main_thread() -> None:
     assert [name for name, _ in reporter.calls].count("handle") == 1
 
 
-def test_chat_write_flow_approval_crosses_the_main_thread_broker(tmp_path) -> None:
+def test_chat_write_flow_approval_crosses_the_main_thread_broker(
+    tmp_path, monkeypatch
+) -> None:
     """A nested trusted prompt gates the tool while terminal work stays on main."""
     content = "id: g\nname: g\nnodes: {}\noutput: {}\n"
     prompt_threads: list[Thread] = []
     controller_threads: list[Thread] = []
     requests: list[PromptRequest] = []
+    monkeypatch.setattr(
+        chat_tools,
+        "_approval_prompt_available",
+        lambda: True,
+        raising=False,
+    )
 
     def prompt(request: PromptRequest) -> dict[str, str]:
         prompt_threads.append(current_thread())

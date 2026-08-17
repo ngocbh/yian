@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from difflib import unified_diff
 from pathlib import Path
+import sys
 from typing import Annotated, Any, Iterator, Optional
 
 from agent_composer.compose.loader import load_flow
@@ -50,35 +51,86 @@ def _resolve(rel: str) -> Path:
     return p
 
 
-def _write_flow_preview(dest: Path, content: str) -> str:
+def _approval_prompt_available() -> bool:
+    """Return whether this CLI host has an interactive input terminal."""
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def _target_snapshot(dest: Path) -> bytes | None:
+    """Read the exact target bytes, using ``None`` only for a missing path."""
+    try:
+        return dest.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _line_ending_labels(text: str) -> tuple[str, ...]:
+    """Return one visible line-ending label for every logical source line."""
+    labels = []
+    for line in text.splitlines(keepends=True):
+        if line.endswith("\r\n"):
+            labels.append("CRLF")
+        elif line.endswith("\n"):
+            labels.append("LF")
+        elif line.endswith("\r"):
+            labels.append("CR")
+        else:
+            labels.append("no newline")
+    return tuple(labels)
+
+
+def _diff_lines(text: str, *, show_endings: bool) -> list[str]:
+    """Split source for a unified diff, optionally making line endings visible."""
+    if not show_endings:
+        return text.splitlines()
+
+    lines = []
+    for line, ending in zip(
+        text.splitlines(keepends=True),
+        _line_ending_labels(text),
+    ):
+        if ending == "CRLF":
+            body = line[:-2]
+        elif ending in {"LF", "CR"}:
+            body = line[:-1]
+        else:
+            body = line
+        lines.append(f"{body} [{ending}]")
+    return lines
+
+
+def _write_flow_preview(dest: Path, content: str, snapshot: bytes | None) -> str:
     """Return the target-labelled create content or overwrite diff for approval."""
     relative = dest.relative_to(_WORKSPACE)
-    if not dest.exists():
+    if snapshot is None:
         return f"Create {relative} with this validated content:\n\n{content}"
 
-    # Preserve line endings so a byte-changing newline-only overwrite is not
-    # presented as identical content.
-    with dest.open(newline="") as source:
-        current = source.read()
+    current = snapshot.decode()
+    show_endings = _line_ending_labels(current) != _line_ending_labels(content)
     diff = "\n".join(
         unified_diff(
-            current.splitlines(),
-            content.splitlines(),
+            _diff_lines(current, show_endings=show_endings),
+            _diff_lines(content, show_endings=show_endings),
             fromfile=f"a/{relative}",
             tofile=f"b/{relative}",
             lineterm="",
         )
     )
     if not diff:
-        diff = (
-            "(only line endings or the final newline change)"
-            if current != content
-            else "(content is unchanged)"
-        )
+        diff = "(content is unchanged)"
+    elif show_endings:
+        diff += "\n\nLine endings are shown as [LF], [CRLF], [CR], or [no newline]."
     return f"Overwrite {relative} with this validated diff:\n\n{diff}"
 
 
-def _approve_flow_write(dest: Path, content: str) -> bool | None:
+def _approve_flow_write(
+    dest: Path,
+    content: str,
+    snapshot: bytes | None,
+) -> bool | None:
     """Return exact host approval, or ``None`` when no host owns interaction."""
     try:
         resolve_tools(["ask_user"])
@@ -88,7 +140,7 @@ def _approve_flow_write(dest: Path, content: str) -> bool | None:
     answer = invoke_tool_trusted(
         "ask_user",
         {
-            "question": _write_flow_preview(dest, content),
+            "question": _write_flow_preview(dest, content, snapshot),
             "questions": [
                 {
                     "question": "Write this validated flow?",
@@ -214,8 +266,8 @@ def write_flow(
     workspace-relative destination; `content` is the complete flow YAML. The content is
     compile-checked and shown to the human for explicit approval BEFORE anything is
     written. Returns `WROTE: <path>` on approval, `NOT WRITTEN: <path> (...)` when
-    approval is rejected or unavailable, or `INVALID (not written): <compile error>` if
-    it doesn't compile."""
+    approval is non-interactive, rejected, unavailable, or stale, or `INVALID (not
+    written): <compile error>` if it doesn't compile."""
     dest = _resolve(path)  # raises on escape
     try:
         load_flow(
@@ -226,11 +278,16 @@ def write_flow(
     except LoadError as err:
         return f"INVALID (not written): {err}"
     relative = dest.relative_to(_WORKSPACE)
-    approved = _approve_flow_write(dest, content)
+    if not _approval_prompt_available():
+        return f"NOT WRITTEN: {relative} (interactive approval requires a TTY)"
+    snapshot = _target_snapshot(dest)
+    approved = _approve_flow_write(dest, content, snapshot)
     if approved is None:
         return f"NOT WRITTEN: {relative} (host approval is unavailable)"
     if not approved:
         return f"NOT WRITTEN: {relative} (approval was not granted)"
+    if _target_snapshot(dest) != snapshot:
+        return f"NOT WRITTEN: {relative} (target changed during approval)"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content)
     return f"WROTE: {relative}"

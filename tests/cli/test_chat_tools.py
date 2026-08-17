@@ -7,6 +7,12 @@ from agent_composer.cli.chat import tools as T
 from agent_composer.tools import install_ask_user
 
 
+@pytest.fixture
+def approval_tty(monkeypatch):
+    """Make host approval available without depending on the test runner's stdin."""
+    monkeypatch.setattr(T, "_approval_prompt_available", lambda: True, raising=False)
+
+
 def test_list_and_read_flow(tmp_path):
     (tmp_path / "a.yaml").write_text("id: a\nname: a\nnodes: {}\noutput: {}\n")
     T.set_workspace(tmp_path)
@@ -50,7 +56,7 @@ def test_run_flow_tool_defaults_inputs(tmp_path):
     assert "OUTPUT: 1" in T.run_flow("n.yaml")
 
 
-def test_write_flow_approved_create_shows_target_and_content(tmp_path):
+def test_write_flow_approved_create_shows_target_and_content(tmp_path, approval_tty):
     requests = []
 
     def approve(**request):
@@ -72,10 +78,14 @@ def test_write_flow_approved_create_shows_target_and_content(tmp_path):
     ] == ["Approve", "Reject"]
 
 
-def test_write_flow_approved_overwrite_shows_unified_diff(tmp_path):
-    original = GOOD.replace("id: g", "id: old").replace("name: g", "name: old")
+def test_write_flow_approved_overwrite_shows_unified_diff(tmp_path, approval_tty):
+    original = (
+        GOOD.replace("id: g", "id: old")
+        .replace("name: g", "name: old")
+        .replace("\n", "\r\n")
+    )
     dest = tmp_path / "existing.yaml"
-    dest.write_text(original)
+    dest.write_bytes(original.encode())
     requests = []
 
     def approve(**request):
@@ -94,6 +104,8 @@ def test_write_flow_approved_overwrite_shows_unified_diff(tmp_path):
     assert "+++ b/existing.yaml" in preview
     assert "-id: old" in preview
     assert "+id: g" in preview
+    assert "[CRLF]" in preview
+    assert "[LF]" in preview
 
 
 @pytest.mark.parametrize(
@@ -106,7 +118,7 @@ def test_write_flow_approved_overwrite_shows_unified_diff(tmp_path):
     ],
 )
 def test_write_flow_requires_exact_approval_without_mutating_existing_bytes(
-    tmp_path, answer
+    tmp_path, answer, approval_tty
 ):
     dest = tmp_path / "existing.yaml"
     original = b"original bytes\r\n"
@@ -120,7 +132,7 @@ def test_write_flow_requires_exact_approval_without_mutating_existing_bytes(
     assert dest.read_bytes() == original
 
 
-def test_write_flow_rejected_create_has_no_filesystem_effect(tmp_path):
+def test_write_flow_rejected_create_has_no_filesystem_effect(tmp_path, approval_tty):
     T.set_workspace(tmp_path)
 
     with install_ask_user(lambda **_request: {"Decision": "Reject"}):
@@ -131,7 +143,9 @@ def test_write_flow_rejected_create_has_no_filesystem_effect(tmp_path):
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("prompt failed"), CancelledError()])
-def test_write_flow_prompt_failure_leaves_existing_bytes_unchanged(tmp_path, failure):
+def test_write_flow_prompt_failure_leaves_existing_bytes_unchanged(
+    tmp_path, failure, approval_tty
+):
     dest = tmp_path / "existing.yaml"
     original = b"original bytes\n"
     dest.write_bytes(original)
@@ -146,13 +160,55 @@ def test_write_flow_prompt_failure_leaves_existing_bytes_unchanged(tmp_path, fai
     assert dest.read_bytes() == original
 
 
-def test_write_flow_without_host_approval_fails_closed(tmp_path):
+def test_write_flow_without_host_approval_fails_closed(tmp_path, approval_tty):
     T.set_workspace(tmp_path)
 
     result = T.write_flow("new.yaml", GOOD)
 
     assert result == "NOT WRITTEN: new.yaml (host approval is unavailable)"
     assert not (tmp_path / "new.yaml").exists()
+
+
+def test_write_flow_noninteractive_input_fails_closed_without_prompting(
+    tmp_path, monkeypatch
+):
+    T.set_workspace(tmp_path)
+
+    class NonInteractiveInput:
+        def isatty(self):
+            return False
+
+    monkeypatch.setattr(T.sys, "stdin", NonInteractiveInput())
+
+    def unexpected_prompt(**_request):
+        raise AssertionError("non-interactive write must not prompt")
+
+    with install_ask_user(unexpected_prompt):
+        result = T.write_flow("new/subdir/flow.yaml", GOOD)
+
+    assert result == "NOT WRITTEN: new/subdir/flow.yaml (interactive approval requires a TTY)"
+    assert not (tmp_path / "new").exists()
+
+
+@pytest.mark.parametrize("original", [None, b"original bytes\n"])
+def test_write_flow_refuses_target_changed_while_approval_is_open(
+    tmp_path, original, approval_tty
+):
+    dest = tmp_path / "flow.yaml"
+    if original is not None:
+        dest.write_bytes(original)
+    changed = b"changed while approval was open\n"
+    T.set_workspace(tmp_path)
+
+    def approve_after_change(**_request):
+        dest.write_bytes(changed)
+        return {"Decision": "Approve"}
+
+    with install_ask_user(approve_after_change):
+        result = T.write_flow("flow.yaml", GOOD)
+
+    assert result == "NOT WRITTEN: flow.yaml (target changed during approval)"
+    assert dest.read_bytes() == changed
 
 
 def test_write_flow_validates_before_prompt_and_confines_path(tmp_path):

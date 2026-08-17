@@ -7,8 +7,8 @@ node and the AGENT tool-calling loop look tools up here by id.
 This is the package's tool *seam*: the core ships no domain tools — a host
 application registers its own (e.g. ``@register_tool("add")``). Tool ids must be
 unique across everything registered into the process. Model calls are validated
-against their public schema; HUMAN_INPUT alone may use the trusted schema for
-host-injected metadata. The reserved ``ask_user`` entry has one process-wide host
+against their public schema; host-owned interactions may use the trusted schema
+for injected metadata. The reserved ``ask_user`` entry has one process-wide host
 owner per interaction lifecycle.
 """
 

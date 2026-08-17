@@ -48,6 +48,24 @@ def _seed_nodes(name: str):
 # ---------- reserved boundary ids ----------
 
 
+def test_reserved_reference_path_separator_rejected():
+    """A dot cannot be both part of a node id and the reference path separator."""
+    with pytest.raises(
+        LoadError,
+        match=r"node id 'my\.node'.*'\.' is reserved for reference paths",
+    ) as exc:
+        _nodes(
+            """
+my.node:
+  kind: agent
+  prompt: hi
+  output: str
+"""
+        )
+
+    assert exc.value.diagnostic.frames[-1].range.start_line == 3
+
+
 @pytest.mark.parametrize("reserved", ["__start__", "__end__"])
 def test_reserved_boundary_id_rejected(reserved):
     # an author node id equal to the synthesized START_ID/END_ID boundary id is a located

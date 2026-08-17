@@ -69,6 +69,11 @@ asserts:                     # optional — boolean invariants
 There is **no `edges:` block**, no `__start__`/`__end__`, no per-node `id:`, and
 no body wrappers — a node body is flat.
 
+Node IDs are the keys under `nodes:`. They cannot contain `.`, `#`, or `/`:
+`.` separates the node name from `output` and its field path in a reference,
+while `#` and `/` are reserved for generated runtime identities. In compact
+mode, the flow `id` also names its node and follows this rule.
+
 ### Compact mode — when the flow is a single node
 
 For the "one flow, one node" case, drop the `nodes:` map and the redundant

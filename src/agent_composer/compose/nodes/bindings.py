@@ -1,7 +1,7 @@
 """The kind-blind binding-field walk — one place for "which fields are bindings".
 
-A node descriptor carries `${...}` binding strings in kind-specific fields (an
-agent/code/model's `input:`, a tool's `input:`, a mapped call's `input:`/`over:`).
+A node descriptor carries `${...}` binding strings in the kind-specific fields declared
+by its `binding_fields` trait (ordinary `inputs`, plus `over` on mapped calls).
 Two passes need to rewrite those strings in place: inline-call desugar
 (`compose.desugar.inline_calls`) and case-output expansion
 (`compose.desugar.case_outputs`). This module provides a table-driven walk over

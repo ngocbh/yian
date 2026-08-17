@@ -1,8 +1,8 @@
 """`compose.nodes.bindings.map_binding_strings`: the kind-blind binding-field walk.
 
 Each kind's `BINDING_FIELDS` string values are rewritten by the mapper, non-string values
-are left as-is, and a kind with no binding fields (case/wait/loop/human_input) passes
-through unchanged as the same object."""
+are left as-is, and a kind with no binding fields (case/wait) passes through unchanged
+as the same object. HUMAN_INPUT and LOOP expose their ordinary `inputs` mappings."""
 
 from agent_composer.compose.nodes.bindings import map_binding_strings
 from agent_composer.compose.nodes.agent import AgentDescriptor
@@ -78,11 +78,19 @@ def test_call_over_none_left_untouched():
 
 
 def test_no_binding_fields_pass_through_unchanged():
-    # case / wait / loop / human_input list no BINDING_FIELDS -> identity (same object).
+    # CASE and WAIT have no authored input-binding mapping -> identity (same object).
     for desc in (
         CaseDescriptor(id="k", on="${sel}", cases=[]),
         WaitDescriptor(id="w", until="${t}"),
-        LoopDescriptor(id="l", call="body", inputs={"acc": "${seed}"}),
-        HumanInputDescriptor(id="h", inputs={"q": "${qs}"}, prompt="hi"),
     ):
         assert map_binding_strings(desc, _up) is desc
+
+
+def test_human_input_and_loop_inputs_rewritten():
+    for desc in (
+        HumanInputDescriptor(id="h", inputs={"q": "${qs}"}, prompt="hi"),
+        LoopDescriptor(id="l", call="body", inputs={"q": "${qs}"}),
+    ):
+        out = map_binding_strings(desc, _up)
+        assert out.inputs == {"q": "${QS}"}
+        assert out is not desc

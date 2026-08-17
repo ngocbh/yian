@@ -195,10 +195,11 @@ so `float = 30` remains an integer.
 ## Recipes
 
 **Get a structured / numeric value out of an agent.** Declare the typed shape directly
-as the AGENT's `output:` — a record, `float`/`int`/`bool`, or list switches the agent to
-**structured generation** (the engine derives a schema and the model emits a conforming
-value, retried up to `retries:` times on deviation; see `typed_output.yaml`). Use a
-downstream `code` node only when you need deterministic post-processing of the value.
+as the AGENT's `output:` — a `Literal[...]`, record, non-string scalar, or list switches
+the agent to **structured generation** (the engine derives a schema and the model emits a
+conforming value, retried up to `retries:` times on deviation; see `typed_output.yaml`).
+Use a downstream `code` node only when you need deterministic post-processing of the
+value.
 
 **Branch and rejoin.** A `case` runs exactly one branch; the others skip and their
 refs resolve to null. Always coalesce the branches back with `${a | b | c}` (see
@@ -268,9 +269,9 @@ prove `bool`. This is the shape `ac chat` runs; see `chat.yaml` (and
   input:
     x: ${input.x}
   ```
-- **AGENT `output:` may be any shape** — a bare `str`/`Literal[...]` keeps it a text
-  producer; a record/number/bool/list switches it to structured generation (schema-checked
-  at the write boundary, `retries:`-capped self-correction).
+- **AGENT `output:` may be any shape** — only a bare, untagged `str` keeps it a text
+  producer; a `Literal[...]`/record/non-string scalar/list switches it to structured
+  generation (schema-checked at the write boundary, `retries:`-capped self-correction).
 - **Prompts see only LOCAL inputs.** Inside `prompt:` you may reference only names
   the node declares in its own `input:` block, written bare (`${name}`). Pool refs
   (`${input.x}`, `${other.output}`) go in the `input:` block first.

@@ -215,14 +215,15 @@ classify:
     Answer with exactly one of: positive, neutral, negative.
 ```
 
-An AGENT's `output:` may be any declared shape. A bare `str` (or a `Literal[...]`
-enum, where the model answers with one tag) keeps the agent a **text producer**.
-Any richer shape — a record, a `float`/`int`/`bool`, or a list — switches the
-agent to **structured generation**: the engine derives a schema from the declared
-`output:` and asks the model to emit a conforming value (via the provider's native
-structured output, or a JSON prompt-injection fallback for providers that lack it).
-The result is validated while its canonical success record is prepared, like every
-other node output.
+An AGENT's `output:` may be any declared shape. Only a bare, untagged `str` keeps
+the agent a **text producer**. A `Literal[...]` enum, record, non-string scalar,
+or list switches the agent to **structured generation**: the engine derives a
+schema from the declared `output:` and asks the model to emit a conforming value
+(via the provider's native structured output, or a JSON prompt-injection fallback
+for providers that lack it). A root `Literal[...]` is constrained internally as a
+single `value` field and returned to the flow as the bare tag. The result is
+validated while its canonical success record is prepared, like every other node
+output.
 
 ```yaml
 extract:

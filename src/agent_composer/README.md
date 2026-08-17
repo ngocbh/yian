@@ -304,7 +304,9 @@ on `Node.output_contract`, including when compact/flat lowering generates the re
 The partial arm is a closed record: every field name is enforced, proven fields retain
 their recursive contracts, and opaque fields retain presence without pretending their
 type is `None`. Runtime success and replay validate the effective commit target through
-this same sum. Exact contracts also drive node-owned structured generation. A live type
+this same sum. Exact contracts also drive node-owned structured generation. For AGENT,
+only an untagged `str` opts out to free text; a tagged string (`Literal[...]`) uses the
+generated scalar `value` wrapper and is unwrapped back to its bare tag. A live type
 rejection resolves its contract-relative structural path through the matching exact or
 field-local origins. The path is consumed before `Failure` construction and is not part
 of the run-record wire. Manifests include the semantic exact/partial contract but omit

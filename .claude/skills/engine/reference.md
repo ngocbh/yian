@@ -359,15 +359,17 @@ model made enforceable.
 - **Single-process CLI target** — dispatch and workers stay in-process. The durable
   seam is `RunLog` with memory and locked JSONL implementations, not a DB, server, or
   remote scheduler.
-- **AGENT structured output** — a non-text `output:` Type switches an agent from text
-  producer to structured generation: `type_to_schema` (`nodes/agent/structured.py`)
-  derives a pydantic schema, the mode generates a conforming value (native
+- **AGENT structured output** — only an untagged `str` keeps an agent on the text path.
+  `type_to_schema` (`nodes/agent/structured.py`) derives a pydantic schema for supported
+  constrained outputs, the mode generates a conforming value (native
   `with_structured_output`, or a JSON prompt-injection fallback gated by
   `supports_native_structured(provider, model)`), with `retries:`-capped self-correction.
+  A root tagged string (`Literal[...]`) uses `ScalarWrapper.value` with a Pydantic
+  `Literal` annotation and unwraps to the bare tag returned to the flow.
   Three-part contract: **generate-tries** (the schema asks), **boundary-enforces**
   (success-record preparation runs `canonical_typed` against the effective target's
   declared type on both ordinary and `commit_as` paths), **retry-catches** (a deviation
-  is fed back and re-asked). A bare `str`/`Literal[...]` keeps the text path.
+  is fed back and re-asked).
   If retries exhaust with a Pydantic error, or a native parser wraps one directly,
   AGENT attributes it only when exact generator and generated-schema validation
   frames prove ownership. It does not traverse deeper cause chains. It normalizes

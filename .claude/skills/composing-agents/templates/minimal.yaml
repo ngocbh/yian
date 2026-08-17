@@ -14,7 +14,7 @@ nodes:
     kind: agent
     input:
       topic: ${input.topic}        # bind the pool value to a LOCAL name
-    output: str                    # text out; a record/number/list -> structured generation
+    output: str                    # text out; a constrained type -> structured generation
     prompt: |-
       Write one clear paragraph about ${topic}.
 

@@ -17,7 +17,7 @@ description: A one-agent flow written inline — a name in, a greeting out.
 
 input:
   name: str                  # auto-wired into the node as ${input.name}
-output: str                  # the node's output TYPE; a record/number/list -> structured generation
+output: str                  # the node's output TYPE; constrained types -> structured generation
 kind: agent
 prompt: |-
   Write a short, warm one-sentence greeting addressed to ${name}.

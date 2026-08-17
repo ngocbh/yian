@@ -16,7 +16,7 @@ def _text(name: str) -> str:
 
 
 def _resolver(**children):
-    # Mirrors tests/engine/test_ref_run.py:_resolver —
+    # Mirrors tests/engine/test_call_run.py:_resolver —
     # resolve(flow_id, version=None) returns a pre-loaded child; unknown id is a loud LoadError.
     loaded = {fid: load_flow(text) for fid, text in children.items()}
 
@@ -29,7 +29,7 @@ def _resolver(**children):
     return resolve
 
 
-# --- (i) CODE-only REF run + CODE-only MAP run — the run-result behavior must be preserved.
+# --- (i) CODE-only CALL run + CODE-only MAP run --------------------------------------------
 #     LLM-free via run_flow + a child_resolver fake. NOT seeds 04/05.
 _CHILD = """
 id: child-one
@@ -50,7 +50,7 @@ output:
   n: ${emit.output.n}
 """
 
-_REF = """
+_CALL = """
 id: ref-parent
 name: ref_parent
 input:
@@ -84,8 +84,8 @@ output: ${research_each.output}
 """
 
 
-def test_golden_ref_run_result():
-    parent = load_flow(_REF, child_resolver=_resolver(**{"child-one": _CHILD}))
+def test_golden_call_run_result():
+    parent = load_flow(_CALL, child_resolver=_resolver(**{"child-one": _CHILD}))
     res = run_flow(parent, {"topic": "ACME"})
     assert res.status == "succeeded"
     assert res.output == {"report": "report for ACME", "n": 4}
@@ -171,7 +171,7 @@ def test_golden_static_edge_ids_case_and_call_and_map():
         "positive->__end__#0",
         "score->gate#0",
     ]
-    # seed 04 (REF): `take` AGENT reads TWO refs from `research`; `research` reads ${input.topic}.
+    # Seed 04 (CALL): `take` AGENT reads two refs from `research`; `research` reads ${input.topic}.
     assert _edge_ids("04-call.yaml", search_paths=[_SEEDS]) == [
         "__start__->research#0",
         "research->__end__#0",
@@ -192,7 +192,7 @@ def test_golden_static_edge_ids_case_and_call_and_map():
 # --- (iii.b) a single ${input.x} reader with a bare output. Pins the input-producer DATA edge
 #     + the END_ID producer edge — the canonical `START_ID -> body -> END_ID` shape with NO
 #     bare-root edge for an input-reader.
-_P25_FLOW = """
+_STATIC_EDGE_FLOW = """
 id: f
 name: f
 input:
@@ -209,14 +209,14 @@ output: ${n.output}
 
 
 def test_golden_static_edge_ids_start_end():
-    flow = load_flow(_P25_FLOW).compiled
+    flow = load_flow(_STATIC_EDGE_FLOW).compiled
     assert sorted(e.id for e in flow.edges) == [
         "__start__->n#0",   # the ${input.x} producer DATA edge (input_group=x); NO bare root edge
-        "n->__end__#0",     # the outputs: ${n.output} producer edge (input_group=result)
+        "n->__end__#0",     # the output: ${n.output} producer edge (input_group=result)
     ]
 
 
-# --- (iv) the inputs/outputs author surface: a flow with input: defaults + a multi-output
+# --- (iv) the input/output author surface: a flow with input: defaults + a multi-output
 #     output:. Pins coerce + apply_defaults + the >=2-output record arity that START_ID/END_ID
 #     must reproduce (coerce/default; EndNode record-mode >=2 -> {name: value}).
 _SURFACE = """
@@ -306,21 +306,21 @@ output:
 
 
 def test_golden_output_arity_0():
-    # no `outputs:` section -> END_ID(record, 0 names) -> None.
+    # no `output:` section -> END_ID(record, 0 names) -> None.
     res = run_flow(load_flow(_ARITY_0), {"x": "ACME"})
     assert res.status == "succeeded"
     assert res.output is None
 
 
 def test_golden_output_arity_1():
-    # bare `outputs: ${n.output}` -> END_ID(record, 1 name) -> the bare value.
+    # bare `output: ${n.output}` -> END_ID(record, 1 name) -> the bare value.
     res = run_flow(load_flow(_ARITY_1), {"x": "ACME"})
     assert res.status == "succeeded"
     assert res.output == "ACME"
 
 
 def test_golden_output_arity_2():
-    # name-map `outputs:` -> END_ID(record, >=2 names) -> a record keyed by output name.
+    # name-map `output:` -> END_ID(record, >=2 names) -> a record keyed by output name.
     res = run_flow(load_flow(_ARITY_2), {"x": "ACME"})
     assert res.status == "succeeded"
     assert res.output == {"report": "report for ACME", "count": 4}

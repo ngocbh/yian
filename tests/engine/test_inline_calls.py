@@ -329,9 +329,9 @@ def test_inline_call_seed_21_loads():
 
 
 # --------------------------------------------------------------------------- #
-# Hardening: named-form parity, located outputs errors, and the in-scope binding
-# positions / paths that were implemented but untested (TOOL inputs:, mapped-call
-# over:, defs body, multi-site ids, unknown callee, e06 over a synth binding).
+# Named-form parity, located flow-output errors, and supported binding positions:
+# TOOL `input:`, mapped-call `over:`, defs bodies, multi-site ids, unknown callees,
+# and runtime failure over a synthesized binding.
 # --------------------------------------------------------------------------- #
 
 from agent_composer.compose import desugar_inline_calls  # noqa: E402
@@ -384,7 +384,7 @@ output: call(enrich, 30)
 
 
 def test_inline_call_in_tool_inputs_desugars():
-    # the ToolDescriptor `inputs:` binding surface desugars too. Unit-level
+    # the ToolDescriptor's internal `inputs` binding field desugars too. Unit-level
     # (a real TOOL run needs a registered tool); asserts the synth node + rewrite.
     descriptors = {
         "t": ToolDescriptor(id="t", tool_id="some_tool", inputs={"q": "call(enrich, x=${input.k})"})

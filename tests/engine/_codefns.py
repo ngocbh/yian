@@ -23,7 +23,7 @@ def finalize(inputs: dict) -> dict:
 
 
 def child_step(inputs: dict) -> dict:
-    # echoes the bound `topics` argument (the REF binds it explicitly — no
+    # Echoes the bound `topics` argument (CALL binds it explicitly — no
     # ambient inheritance, no parent hyperparameter).
     return {"output": inputs.get("topics")}
 
@@ -34,17 +34,17 @@ def echo(inputs: dict) -> dict:
 
 
 def echo_window(inputs: dict) -> dict:
-    # echoes the bound `window` (used to prove REF child declared-default seeding)
+    # Echoes the bound `window` to prove CALL child declared-default seeding.
     return {"output": inputs.get("window")}
 
 
 def echo_as_of(inputs: dict) -> dict:
-    # echoes the bound `as_of_date` (used to prove REF child fill_as_of seeding)
+    # Echoes the bound `as_of_date` to prove CALL child date seeding.
     return {"output": inputs.get("as_of_date")}
 
 
 def child_report(inputs: dict) -> dict:
-    # a string-typed child output (used for typed REF output re-export tests)
+    # A string-typed child output used for typed CALL output re-export tests.
     return {"output": f"REPORT:{inputs.get('topics')}"}
 
 
@@ -66,7 +66,7 @@ def bad_rating(inputs: dict) -> dict:
 
 
 def boom(inputs: dict) -> dict:
-    # always raises — proves a MAP/REF child failure fails the parent run.
+    # Always raises, proving a CALL/MAP child failure fails the parent run.
     raise RuntimeError("boom")
 
 

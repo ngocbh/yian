@@ -4,8 +4,8 @@
 # Here `enrich` is a 2-node sub-flow (CODE fetch -> AGENT summarize) that lives in THIS
 # file; the top-level flow calls it. A multi-node def lets a self-contained branch live
 # inline instead of as a separate flow file (and the flow loads resolver-free — the
-# callable is in-file). Shows: a `defs:` section, a multi-node callable (`inputs:`
-# signature + `nodes:` body + `outputs:` codomain), and a `call:` resolving to it.
+# callable is in-file). Shows: a `defs:` section, a multi-node callable (`input:`
+# signature + `nodes:` body + `output:` codomain), and a `call:` resolving to it.
 
 id: call-defs
 name: call_defs

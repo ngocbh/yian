@@ -102,7 +102,7 @@ def _normalized_key_names(cursor: SourceCursor) -> dict[Any, Any]:
 class CaseDescriptor(NodeDescriptor):
     """kind=case — branch routing (searched `when:` or `on:`-value form).
 
-    A `case` routes only — it carries NO `inputs:` (the lowering maps it onto the
+    A `case` routes only — it carries no authored `input:` (the lowering maps it onto the
     inputs-bearing `CaseNode`). `else_` is the `else:` fallback.
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the

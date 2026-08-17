@@ -10,7 +10,7 @@ description: Exercise the type grammar — scalars, list[X], inline/block/nested
 
 input:
   topic: str
-  names: list[str]             # (the old `topics` alias is just list[str] now)
+  names: list[str]
   quantity: int
   budget: float
   as_of: date

@@ -11,7 +11,7 @@ mints no edge to/from a case node (the case data-edge coverage is `tests/engine/
 
 A coalesce `${a | b}` sink yields TWO edges that SHARE one `input_group` (the sink
 input name). An `${input.X}` read mints a `START_ID->reader` input-producer DATA edge;
-`${system.X}`/`${item}` mint none. NO `->END_ID` synthesis here (that is a later step).
+`${system.X}`/`${item}` mint none. Boundary assembly, not this pass, synthesizes `->END_ID` edges.
 """
 
 from pathlib import Path
@@ -36,8 +36,7 @@ def _wiring(desc):
 
 
 def _seed(name: str):
-    """(descriptors, flow_wiring) for a seed — leaf-kind wiring built, case/ref/map skipped.
-    infer_data_edges now derives leaf edges from the flow-owned wiring."""
+    """Return descriptors and leaf wiring for a seed, excluding case/call/map builds."""
     path = _SEEDS / name
     document = SourceDocument.parse(path.read_text(), label=str(path))
     parse_file(document)
@@ -137,7 +136,7 @@ def test_map_over_ref_produces_data_edge():
             }
         )
     )
-    # The MAP wiring is built by build_call_node (needs a resolver); supply it directly —
+    # `CallDescriptor.build` creates MAP wiring and needs a resolver; supply it directly —
     # the `over` source rides the reserved "over" key, over-then-inputs order.
     wiring = {
         "bundle": _wiring(descriptors["bundle"]),

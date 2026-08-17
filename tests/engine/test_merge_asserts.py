@@ -199,11 +199,9 @@ def test_bare_record_scoped_boundary_assert_fail_fast_and_pass():
 # Optional-edge and co-skip semantics behind a `case` branch
 #
 # A top-level post assert referencing a producer behind an UNTAKEN case branch.
-# Two sub-behaviors:
-#   (A) an assert on the TAKEN branch's producer: END must WAIT for the branch to
-#       settle then NOT co-skip (optional edge) — the run completes, not deadlocks.
-#   (B) an ORDERED assert on a GENUINELY-SKIPPED producer must fail LOUDLY
-#       (documented behavior, not a silent pass).
+# An assert on the TAKEN branch's producer makes END wait for the branch to settle,
+# then not co-skip (optional edge), so the run completes rather than deadlocking.
+# An ordered assert on a genuinely skipped producer fails loudly instead of passing.
 #
 # `gate` routes on `input.v`: v>=100 -> `hi`, else -> `lo`. With v=5, `lo` runs and
 # `hi` is skip-flooded. Branches join with a coalesce `${hi.output | lo.output}`.

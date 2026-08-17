@@ -33,7 +33,7 @@ class HumanInputNode(Node):
             The intro text to show the human (rendered against the bound input
             record). `None` for a questions-only node with no human-facing intro.
         answer_schema (`list[dict]`, *optional*, defaults to `None`):
-            IOField-shaped description of the expected answer; defaults to `[]`.
+            Field schema describing the expected answer; defaults to `[]`.
         questions (`list`, *optional*, defaults to `None`):
             A LITERAL question list baked into the node. Each question's string
             fields (`question`, and each option's `label`/`description`) are

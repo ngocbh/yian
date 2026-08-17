@@ -100,7 +100,7 @@ def test_kind_dispatch_stays_at_or_below_ceiling():
     )
 
 
-def test_kind_dispatch_ceiling_is_tight():
+def test_kind_dispatch_ceiling_matches_observed_count():
     """The configured ceiling must equal the observed number of dispatch sites."""
     total = sum(len(lines) for lines in _census().values())
     assert total == KIND_DISPATCH_CEILING, (

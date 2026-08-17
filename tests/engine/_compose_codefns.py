@@ -2,7 +2,7 @@
 
 A CODE node references one of these as `tests.engine._compose_codefns:fn`; it receives its
 bound typed input record (a dict of its declared inputs, resolved from their
-sources) and returns the node's one output value (a dict for a record `outputs:`,
+sources) and returns the node's one output value (a dict for a record `output:`,
 a scalar otherwise). No Ollama, no agent runtime — these keep the run tests pure.
 """
 
@@ -30,9 +30,9 @@ def join_two(inputs: dict) -> str:
     return f"{inputs['pro']} | {inputs['con']}"
 
 
-# --- REF/MAP child-flow CODE fns (Ollama-free subflows) --------------------- #
+# --- CALL/MAP child-flow CODE fns (Ollama-free subflows) -------------------- #
 def make_report(inputs: dict) -> dict:
-    # a {report, n} record child codomain (REF re-exports it; MAP collects list of it).
+    # A {report, n} child codomain (CALL re-exports it; MAP collects a list of it).
     t = inputs["topic"]
     return {"report": f"report for {t}", "n": len(t)}
 
@@ -48,7 +48,7 @@ def echo_x(inputs: dict):
 
 
 def boom(inputs: dict):
-    # a child CODE node that fails -> the REF/MAP run fails.
+    # A child CODE node that fails makes the CALL/MAP run fail.
     raise ValueError("boom")
 
 

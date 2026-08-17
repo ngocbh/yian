@@ -28,13 +28,13 @@ class CodeDescriptor(NodeDescriptor):
     """kind=code — deterministic code (a `module:function` ref or a source snippet).
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `inputs:`
+    the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `input:`
     call-arg map and the template `parse` (no custom parse hook — code's field legality is the
     default allowed/required key check + the asserts-list check). The code-specific semantic
     fields (`code`, `asserts`) and diagnostic origin carriers (`code_origin`,
     `code_line_origins`) are declared here; `inputs`/`outputs` come from the base.
 
-    Class attrs: `kind="code"`; `allowed` adds `code`/`inputs`/`outputs`/`asserts` to the
+    Class attrs: `kind="code"`; `allowed` adds `code`, normalized `inputs`/`outputs`, and `asserts` to the
     commons; `required` is `{"code"}` (the one mandatory flat field); `binding_fields=("inputs",)`
     — the `code:` body is source text, not a `${...}` binding surface, so only `inputs` is walked.
     """
@@ -122,7 +122,7 @@ class CodeDescriptor(NodeDescriptor):
         """Construct the runtime `CodeNode` (+ wiring) for this `CodeDescriptor`.
 
         Builds the code leaf (classify + syntax/return gates, node-side `params` +
-        flow-owned `inputs` wiring, `output_contract` from `outputs:`). The
+        flow-owned `inputs` wiring, `output_contract` from authored `output:`). The
         descriptor's source-neutral whole-code and exact-line origins are transferred
         unchanged. A load-time `SyntaxError.lineno` uses the same wrapped-line selector
         as runtime exceptions, then `ctx.resolve_origin` presents the already-registered

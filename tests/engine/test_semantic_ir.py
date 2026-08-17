@@ -33,7 +33,7 @@ from agent_composer.compose.helpers.output_contracts import (
 )
 from agent_composer.compose.nodes.case import _data_edges as case_data_edges
 from agent_composer.compose.nodes.resolver import ChildSignature, child_signature
-from agent_composer.compose.validate.call_types import check_ref_map_types
+from agent_composer.compose.validate.call_types import check_call_map_types
 from agent_composer.compose.validate.loop_types import check_loop_type_contract
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose import load_flow
@@ -857,7 +857,7 @@ def test_call_type_error_is_identical_for_raw_and_wrapped_sources() -> None:
     errors: list[str] = []
     for value in (source, Binding(source, _origin("call-topic"))):
         with pytest.raises(LoadError) as caught:
-            check_ref_map_types(
+            check_call_map_types(
                 {"call": result},
                 {},
                 {"x": ValueContract(nullable_parent)},
@@ -889,7 +889,7 @@ def test_call_type_check_projects_known_partial_producer_field() -> None:
     )
 
     with pytest.raises(LoadError, match="child expects 'str', source is 'int'"):
-        check_ref_map_types(
+        check_call_map_types(
             {"call": result},
             {"producer": partial},
             {},

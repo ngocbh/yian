@@ -1,9 +1,8 @@
-"""`compose.nodes.bindings.map_binding_strings`: the kind-blind binding-field walk that
-replaced the `calls.map_binding_strings_in_descriptor` isinstance ladder.
+"""`compose.nodes.bindings.map_binding_strings`: the kind-blind binding-field walk.
 
-Asserts parity with the retired ladder's behavior: each kind's `BINDING_FIELDS` string
-values are rewritten by the mapper, non-string values are left as-is, and a kind with no
-binding fields (case/wait/loop/human_input) passes through UNCHANGED (same object)."""
+Each kind's `BINDING_FIELDS` string values are rewritten by the mapper, non-string values
+are left as-is, and a kind with no binding fields (case/wait/loop/human_input) passes
+through unchanged as the same object."""
 
 from agent_composer.compose.nodes.bindings import map_binding_strings
 from agent_composer.compose.nodes.agent import AgentDescriptor

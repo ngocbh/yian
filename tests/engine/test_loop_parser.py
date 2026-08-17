@@ -3,7 +3,7 @@
 The parser layer only: `parse_file` -> `ComposeFile` (raw `nodes` dict), then
 `parse_nodes(document.root.child("nodes"))` reads each keyed-map body into its typed descriptor.
 `kind: loop` must produce a `LoopDescriptor` with `call`/`while_`/`max`/`inputs`
-populated. Baking the descriptor into a runtime LoopNode is a later step.
+populated. Runtime construction is covered by the loop build tests.
 """
 
 from agent_composer.compose.parse.file import parse_file
@@ -66,8 +66,8 @@ nodes:
 def test_parser_accepts_until_and_times_keys():
     desc = _parse_nodes(UNTIL_TIMES_YAML)["L"]
     assert desc.until_ == "${n} <= 0"
-    # `times:` is also an accepted loop key (exactly-one-of is a later build check, not the
-    # parser's job) — a node declaring it parses into `LoopDescriptor.times`.
+    # `times:` is also an accepted loop key. `LoopDescriptor.build`, not parsing, enforces
+    # exactly one termination form.
     times_desc = _parse_nodes(
         UNTIL_TIMES_YAML.replace("until: ${n} <= 0", "times: 4")
     )["L"]

@@ -1,4 +1,4 @@
-# e13 — a malformed type expression in `outputs:`. COMPILE: "bad type expression 'list['".
+# e13 — a malformed type expression in `output:`. COMPILE: "bad type expression 'list['".
 id: err-bad-type-expr
 name: err_bad_type_expr
 input:

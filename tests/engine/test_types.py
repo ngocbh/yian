@@ -163,8 +163,8 @@ def test_resolve_inline_literal_is_enum():
     assert sh.kind == ValueKind.STRING and sh.tags == frozenset({"pro", "con"})
 
 
-def test_resolve_dict_is_m11_placeholder():
-    # dict[K,V] parses + resolves to a lenient object placeholder (full typing is deferred)
+def test_resolve_dict_is_lenient_object_placeholder():
+    # dict[K,V] parses and resolves to a lenient object placeholder.
     sh = type_for("dict[str, int]", REG)
     assert sh.kind == ValueKind.OBJECT
 

@@ -172,7 +172,7 @@ def test_case_ref_in_required_message_is_loud():
 
 
 def test_case_ref_in_assert_is_located():
-    # the assert-position rejection locates at the asserts: line, not the outputs: line.
+    # The assert-position rejection locates at the `asserts:` line, not the `output:` line.
     descs = {"gate": _gate()}
     diagnostics = LoadDiagnostics(label="flow.yaml", text=(" " * 80 + "\n") * 50)
     assertion_range = SourceRange(42, 1, 42, 1)
@@ -315,7 +315,7 @@ def test_seed_22_case_value_output_expanded():
 
     seeds = Path(__file__).resolve().parents[2] / "tests" / "seeds"
     loaded = load_flow((seeds / "22-case-value.yaml").read_text())
-    # seed 22's `outputs: ${gate.output}` desugared to seed 02's hand-written join.
+    # Seed 22's `output: ${gate.output}` desugars to seed 02's hand-written join.
     assert loaded.compiled.outputs[0].from_ == "${positive.output | cautious.output}"
 
 

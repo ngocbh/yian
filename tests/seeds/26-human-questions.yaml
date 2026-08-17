@@ -4,13 +4,13 @@
 # answer keyed by each question's `header` in the same live call. It carries questions in one
 # of three forms:
 #
-#   (A) static     — a literal `questions:` list written in the YAML (THIS seed).
-#   (C) manual ref — a `code`/agent node produces the list, fed via
-#                    `input: {qs: ${src.output}}` + `questions: ${qs}`.
-#   (B) adaptive   — an `adaptive_questions:` block `{prompt: <brief>, ...}` that
-#                    desugars at load into a synth compose-agent + the gate.
+#   static   — a literal `questions:` list written in the YAML (THIS seed).
+#   upstream — a `code`/agent node produces the list, fed via
+#              `input: {qs: ${src.output}}` + `questions: ${qs}`.
+#   adaptive — an `adaptive_questions:` block `{prompt: <brief>, ...}` that
+#              desugars at load into a synth compose-agent + the gate.
 #
-# This seed pins form (A): two questions (one single-select with options, one
+# This seed pins the static form: two questions (one single-select with options, one
 # free-text), `${proj}` templated into a question to prove rendering. The gate's
 # output defaults to `object` — a record keyed by header (e.g. {Framework: React,
 # Notes: "..."}) — and the flow routes its terminal value on that answer.

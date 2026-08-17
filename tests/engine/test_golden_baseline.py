@@ -10,8 +10,8 @@ topology, update the literals here in the same commit and explain why.
 
 Coverage across the three seeds: data edges, CASE/case control edges + skip-flood targets,
 synthesized root (`__start__->`) + terminal (`->__end__#0`) edges, the ordering separator (`~>`),
-and a mapped `call` (MAP) node. REF/MAP child-message byte-identity is guarded by the existing
-lock-in tests (test_ref_run / test_map / test_ref_map); the format constants are recorded here for
+and a mapped `call` (MAP) node. CALL/MAP child-message byte identity is guarded by the existing
+lock-in tests (test_call_run / test_map / test_call_map); the format constants are recorded here for
 the lock-in that re-homes the MAP `over`-not-a-list message into the engine bind seam.
 """
 

@@ -202,9 +202,9 @@ def test_failure_under_workers():
     assert events[-1].failure.message == "nope"
 
 
-def test_terminal_output_under_workers():
+def test_end_output_under_workers():
     # The terminal node's produced value reaches RunSucceeded. With a single
-    # declared output bound to node `t`'s whole value, terminal_output() yields
+    # declared output bound to node `t`'s whole value, END yields
     # the bare value (== the node's object).
     g = _graph(
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final"})],
@@ -216,8 +216,7 @@ def test_terminal_output_under_workers():
 
 
 def test_no_declared_outputs_yields_none_under_workers():
-    # the raw-terminal dict fallback is retired. A flow with no
-    # declared outputs returns None from terminal_output().
+    # A flow with no declared output makes END return None.
     g = _graph(
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final"})],
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],

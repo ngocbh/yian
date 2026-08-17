@@ -4,10 +4,10 @@ A `human_input` gate calls the installed host with a validated ``questions`` lis
 and returns the handler's record keyed by each question's ``header``. The three ways
 the gate sources its questions are:
 
-  (A) static     — a literal `questions:` list in the YAML (seed 26).
-  (C) manual ref — a `code` node produces the list, fed via `questions: ${qs}`.
-  (B) adaptive   — an `adaptive_questions:` block that desugars at load into a synth
-                   compose-agent + the gate; the agent authors the list.
+  static   — a literal `questions:` list in the YAML (seed 26).
+  upstream — a `code` node produces the list, fed via `questions: ${qs}`.
+  adaptive — an `adaptive_questions:` block that desugars at load into a synth
+             compose-agent + the gate; the agent authors the list.
 
 Each test asserts the trusted host payload and the succeeded terminal. The static and
 manual-ref forms need no LLM; the
@@ -22,7 +22,7 @@ from agent_composer.run import run_flow
 from agent_composer.tools import install_ask_user
 
 
-# --- (A) static: a literal questions list in the seed --------------------------------- #
+# --- static: a literal questions list in the seed ------------------------------------- #
 
 
 def test_static_questions_block_and_return_answer():
@@ -43,7 +43,7 @@ def test_static_questions_block_and_return_answer():
     assert result.output == "React"  # routed on the returned label
 
 
-# --- (C) manual ref: a code node produces the questions list -------------------------- #
+# --- upstream: a code node produces the questions list -------------------------------- #
 
 _MANUAL_REF = """
 id: manual_ref
@@ -82,7 +82,7 @@ def test_manual_ref_questions_block_and_return_answer():
     assert result.output == {"H": "A"}
 
 
-# --- (B) adaptive: an LLM composes the questions, desugared into agent + gate ---------- #
+# --- adaptive: an LLM composes the questions, desugared into agent + gate -------------- #
 
 _ADAPTIVE = """
 id: adaptive

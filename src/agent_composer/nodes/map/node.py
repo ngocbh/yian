@@ -1,6 +1,6 @@
 """MAP — the authorable `List.map` driver (`kind: map` + `over:`).
 
-`MapNode` is the mapped-call node, distinct from REF's `CallNode`. The two are different typed
+`MapNode` is the mapped-call node, distinct from the single-call `CallNode`. The two are different typed
 drivers: a `CallNode` applies a callable ONCE (`'a flow -> 'b`); a `MapNode` maps it over a
 list (`list['a] -> list['b]`). The discriminator is the KIND (`NodeKind.MAP`) — `MapNode` carries
 NO `over` attribute and no `${...}` source on the node. The `over` SOURCE binding rides
@@ -13,7 +13,7 @@ empty `over` builds a synthetic start wired directly to the list END (which emit
 per-element call-args go RAW: the spliced child START_ID owns omitted-input
 defaulting (its params carry default/required), so the driver no longer pre-defaults.
 `child`/`child_inputs` are baked at load by `compose.nodes.map.build`; `child_inputs` is read by
-compile validation (`check_ref_map_types`). The child's asserts ride its own compiled boundary
+compile validation (`check_call_map_types`). The child's asserts ride its own compiled boundary
 nodes and survive the `clone_child` deep-copy per element. `parallel` is inert (concurrency is the
 engine's `num_workers`); it is carried for the over case.
 """
@@ -35,8 +35,8 @@ class MapNode(Node):
     """
     The `List.map` driver (`kind: map` + `over:`) — map a callable flow over a list (`list['a] -> list['b]`).
 
-    The MAP half of the REF/MAP pair (the REF half is
-    [`CallNode`][agent_composer.nodes.call.node.CallNode]). The `over` source is pre-resolved into
+    The mapped counterpart to [`CallNode`][agent_composer.nodes.call.node.CallNode].
+    The `over` source is pre-resolved into
     `inputs["over"]` by the engine bind seam; `run` returns one seed-first `Grow`. The injected
     compile builder constructs the MAP fan-in and the engine splices it. The spliced child START
     owns omitted-input defaulting, so per-element call-args go raw.
@@ -61,7 +61,7 @@ class MapNode(Node):
     kind = NodeKind.MAP
     is_spawner: ClassVar[bool] = True  # grows the graph: run() returns a seed-first Grow
     binds_per_item: ClassVar[bool] = True  # binds call-args PER ELEMENT via `bind_item`, not up front
-    grow_depth_delta: ClassVar[int] = 1  # each child is one REF level deeper (bounded by MAX_REF_DEPTH)
+    grow_depth_delta: ClassVar[int] = 1  # each child is one call level deeper (bounded by MAX_REF_DEPTH)
 
     def __init__(self, node_id: str, *, flow_id: str, parallel: bool = False,
                  flow_version: Optional[int] = None, child: Any = None,

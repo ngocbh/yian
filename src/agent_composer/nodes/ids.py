@@ -3,7 +3,7 @@
 
 def ns(callsite: str, child_id: str) -> str:
     """Namespace a child node/edge id under its callsite: `<callsite>/<child_id>`.
-    `callsite` = spawner id (REF/agent) or `f"{spawner}#{i}"` (MAP element i); nests."""
+    `callsite` = spawner id (call/agent) or `f"{spawner}#{i}"` (map element i); nests."""
     return f"{callsite}/{child_id}"
 
 

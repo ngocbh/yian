@@ -2,7 +2,7 @@
 #
 # Propose an action, ask a human to APPROVE it (blocking HUMAN_INPUT, a TYPED answer),
 # route on the answer, WAIT until a settle time, then confirm (a side effect). Shows:
-# kind: human_input (flat: inputs:/prompt:/outputs:, the answer validated against a type),
+# kind: human_input (flat: input:/prompt:/output:, the answer validated against a type),
 # kind: wait (until:), `case … on` routing the human's answer, and depends_on: to order a
 # side-effect node after the wait with no data binding.
 #

@@ -194,7 +194,7 @@ class CompiledFlow(Flow):
 
     Attributes:
         outputs (`list[FlowOutput]`):
-            The declared `outputs:`; empty means the flow falls back to the raw terminal
+            The declared flow `output:`; empty means the flow falls back to the raw terminal
             node value.
         flow_llm_config (`dict[str, Any]`):
             The flow's authored `llm_config:` model-selection defaults (the cascade's flow

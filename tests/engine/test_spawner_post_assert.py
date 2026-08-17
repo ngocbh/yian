@@ -1,16 +1,16 @@
 """A `call` node's node-level POST `asserts:` fire from the CLONED CHILD END.
 
-A `call` is a spawner: `run()` returns a `Grow`, its `${output}` is committed when the
-cloned child END filler finishes. This branch LOWERS the spawner's node-level `asserts:`
-onto that cloned child END (in the same grow builder that clones it), so they fire through
-the ORDINARY `eval_node` post-assert seam — NOT from a bespoke redirect-commit site.
+A `call` is a spawner: its `run()` returns `Grow`, and its `${output}` is committed when the
+cloned child END filler finishes. The grow builder lowers the call's node-level `asserts:`
+onto that END, where the inherited `Node.run` wrapper evaluates them after
+`EndNode._run_impl()` returns `Output`.
 
 Because the assert now rides the cloned child END, a failing assert emits `NodeFailed`
 naming the CHILD END id (e.g. `research/__end__`), not the spawner id. The lowering mirrors
 build-time flow-assert lowering:
 
 - `${output}` / `${output.field}` stays as-is (the cloned END's own record value == the
-  spawner's committed output, injected by eval_node as `{"output": value}`).
+  spawner's committed output, exposed by `Node.run` as `{"output": value}`).
 - a declared call input `${X}` maps to a synth END param wired off the cloned child START's
   coerced output (`${<callsite>/__start__.output.X:-null}`), with a structural
   `<callsite>/__start__ -> <callsite>/__end__` edge — the same shape build-time uses.
@@ -229,17 +229,16 @@ def test_spawner_post_assert_fires_after_log_recovery(tmp_path: Path):
 
 
 # =========================================================================== #
-# 4. collision-free synth alloc vs a child def's OWN lowered `__assert_input_v`
+# Collision-free synthesized assertion parameters
 # =========================================================================== #
 
 # A child def that (a) doubles its input AND (b) carries its OWN flow-level POST assert
 # reading `${input.v}`. Because a flow assert is POST (rides the def's END) only when it
 # also reads a produced value, it reads `${x.output}` too. Build-time lowers that flow
 # assert onto the def's END as a synth param `__assert_input_v` (+ its wiring + a
-# producer->END edge). A `call` to this def ALSO carrying a node-level POST assert reading
-# the SAME declared input `${v}` used to allocate the IDENTICAL `__assert_input_v` name a
-# SECOND time onto the cloned END (a duplicate Parameter + a phantom producer->END edge
-# sharing the input_group).
+# producer->END edge). A `call` to this def also carries a node-level POST assert reading
+# the same declared input `${v}`. Spawner lowering must allocate a distinct parameter rather
+# than duplicate the child's `__assert_input_v` parameter or its producer edge.
 _ECHO_CHILD_WITH_INPUT_ASSERT = """
 id: echo-child
 name: echo_child
@@ -304,10 +303,8 @@ def _cloned_child_end(loaded):
 
 
 def test_collision_free_cloned_end_has_no_duplicate_params_or_edges():
-    # Structural regression: the cloned child END must NOT carry a duplicate synth param nor a
-    # phantom second producer->END edge sharing an input_group. This FAILS against the pre-fix
-    # code (the def's `__assert_input_v` survives the clone, then the spawner lowering allocates
-    # `__assert_input_v` AGAIN — duplicate Parameter + phantom edge).
+    # The cloned child END must not carry a duplicate synthesized parameter or a second
+    # producer edge sharing its input group.
     loaded = _load_collision()
     end, flow = _cloned_child_end(loaded)
 

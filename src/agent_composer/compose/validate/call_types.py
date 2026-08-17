@@ -34,7 +34,7 @@ from agent_composer.nodes.contracts import (
 from agent_composer.typesys import canonical_type_label
 
 
-def check_ref_map_types(
+def check_call_map_types(
     build_results: dict[str, BuildResult],
     producers: dict[str, OutputContract],
     flow_inputs: dict[str, ValueContract],
@@ -78,8 +78,7 @@ def check_ref_map_types(
         node = result.node
         # CALL/MAP carry `child_inputs` to type-check against; a LOOP also carries a child but
         # its `'a -> 'a` contract is checked by check_loop_type_contract/carried_types instead.
-        # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy) -> skip
-        # (behavior-identical to the old empty-child_decls loop, which ran zero checks).
+        # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy), so skip.
         if node.is_loop or not getattr(node, "child_inputs", None):
             continue
         child_decls = {d.name: d for d in node.child_inputs}

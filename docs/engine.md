@@ -263,8 +263,8 @@ change.
 
 ## Why a closed match, on the right axis
 
-An earlier engine branched on node *kind* in many places. That dispatch is now fully
-removed from the core; a ratchet test (`tests/engine/test_kind_census.py`) holds the
+The engine core never branches on node *kind*; a ratchet test
+(`tests/engine/test_kind_census.py`) holds the
 kind-branch count at **zero**. The design keeps the value of an explicit closed `match`
 — but on the **`NodeResult`** (three arms) and durable `RunRecord` variants, not the
 kind (a dozen and growing). New kinds extend the node side; the engine never changes.

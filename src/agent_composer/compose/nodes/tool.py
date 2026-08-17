@@ -21,13 +21,13 @@ class ToolDescriptor(NodeDescriptor):
     """kind=tool — a direct, deterministic call into TOOL_REGISTRY (untyped inputs).
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata), the node-signature `inputs` binding map, and the
+    the Compose-only `range`/`field_ranges` parse metadata), the normalized `inputs` binding carrier, and the
     template `parse` from `NodeDescriptor` (no custom parse hook — tool's field legality is the
     default allowed/required key check + the asserts-list check). Only the tool-specific fields
-    (`tool_id`, `asserts`) are declared here; a tool's sink surface is the base's `inputs` map,
+    (`tool_id`, `asserts`) are declared here; a tool's authored `input:` is stored in the base's `inputs` map,
     the same untyped binding surface every value-shaped leaf kind uses.
 
-    Class attrs: `kind="tool"`; `allowed` adds `tool_id`/`inputs`/`asserts` to the commons;
+    Class attrs: `kind="tool"`; `allowed` adds `tool_id`, normalized `inputs`, and `asserts` to the commons;
     `required` is `{"tool_id"}`; `binding_fields=("inputs",)` — a tool's input map is its
     sink-binding surface, walked kind-blind by `bindings.py`.
     """
@@ -44,7 +44,7 @@ class ToolDescriptor(NodeDescriptor):
         """Construct the runtime `ToolNode` (+ wiring) for this `ToolDescriptor`.
 
         Node-side `params` (the sink NAMES) + flow-owned `inputs` wiring; a tool declares no
-        `outputs:`, so `output_contract` stays unset. `_finish` stamps the descriptor origin on
+        authored `output:`, so `output_contract` stays unset. `_finish` stamps the descriptor origin on
         the node and keeps its ranges on the Compose-owned `BuildResult`. The sink surface is
         the base's `inputs` map, so it uses the inherited
         `self.sink_params()`/`self.sink_wiring()`.

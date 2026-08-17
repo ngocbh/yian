@@ -74,7 +74,7 @@ def test_resolve_inputs_and_system():
 
 
 def test_subflow_outputs_resolve_via_node_first_head():
-    # A REF/subflow node's value lives under its own id in `store` and resolves via
+    # A CALL/subflow node's value lives under its own id in `store` and resolves via
     # the node-first `<id>.output` head (`.output` is a syntactic SKIP).
     pool = VariablePool()
     pool.set("child_ref", "child-result")

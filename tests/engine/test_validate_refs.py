@@ -2,7 +2,8 @@
 
 `validate_references` runs the reused leaf checkers (`compile.validation._classify_path`
 + `_walk_record_fields`) over every binding site of a built flow — node input
-`from:` bindings, the flow `outputs:` bindings, and (via the DESUGARED `CaseNode.inputs`)
+bindings from authored node `input:`, flow `output:` bindings, and (via the desugared
+`CaseNode.inputs`)
 each `case`'s `on:`/`when:` data refs. It accumulates ALL located errors and raises a
 single `LoadError`. Three loud mechanisms are pinned:
 

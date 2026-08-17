@@ -4,7 +4,7 @@ Each `nodes:` entry (map key = node id, no `id:` field) carries a `kind:` plus
 flat kind-fields; `parse_nodes` reads it into a typed per-kind descriptor and is
 loud (a `LoadError` at the node's `.yaml` range) on a field illegal for the kind
 or an unknown kind. These are DESCRIPTORS (validated parsed shape) — runtime
-`Node`s are built later.
+`Node`s are constructed by the per-kind build methods.
 """
 
 from pathlib import Path
@@ -261,10 +261,10 @@ gate:
 
 
 def test_call_ref_form_parses():
-    # seed 04 — a plain `call` (REF) = single application.
+    # Seed 04 — a plain `call` is a single application.
     node = _seed_nodes("04-call.yaml")["research"]
     assert isinstance(node, CallDescriptor)
-    assert node.kind == "call"                          # the REF discriminator
+    assert node.kind == "call"
     assert node.call == "research-one"
     assert node.inputs == {"topic": "${input.topic}"}
     assert node.over is None
@@ -344,7 +344,7 @@ n:
 
 
 def test_over_on_kind_call_is_loud():
-    # `over:`/`parallel:` are MAP-only — on `kind: call` (REF) they are not allowed (use `map`).
+    # `over:`/`parallel:` are MAP-only; `kind: call` rejects them (use `map`).
     with pytest.raises(LoadError) as exc:
         _nodes(
             """

@@ -6,7 +6,7 @@ SOLE owner of input *bindable* sources. A node carries only its signature (`para
 every representative seed's nodes (recursing into baked `call`/`map` child flows) and asserts no
 node-held string is a pool-ref source (`${outputs|inputs|system|item ...}`); a stray leaf source
 or a `WaitNode.until` left on a node would trip it. Sources live only on `flow.wiring` (and the
-flow-level `outputs:`), never on a `Node`.
+flow-level `output:`), never on a `Node`.
 
 No exemptions for *bindable sources*: the MAP re-split retired the last one (the old
 `CallNode.over` discriminator). `MapNode` discriminates by KIND, not an `over` source string.

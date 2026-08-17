@@ -5,7 +5,7 @@ input:
   topic: str
 nodes:
   note:
-    kind: llm          # ERROR: not agent/code/model/tool/case/ref/map
+    kind: llm          # ERROR: not a supported node kind
     input:
       topic: ${input.topic}
     output: str

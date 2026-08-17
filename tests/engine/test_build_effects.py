@@ -5,7 +5,7 @@ from agent_composer.nodes.wait import WaitNode
 
 
 def _build(desc):
-    """Build a leaf descriptor -> the legacy `(node, wiring)` pair (unwrapping BuildResult)."""
+    """Build a leaf descriptor and extract its `(node, wiring)` pair."""
     result = desc.build(BuildContext({}))
     return result.node, result.wiring
 

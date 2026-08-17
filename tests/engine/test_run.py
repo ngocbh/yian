@@ -7,7 +7,7 @@ with `status == "failed"`. The four behaviors pinned:
 
 - a CODE-only flow runs end-to-end -> the declared output object;
 - a coalesce-output flow (seed-02 shape, test-local CODE branches via a `case`) runs with
-  one branch SKIPPED and `terminal_output` resolves the taken branch;
+  one branch SKIPPED and END resolves the taken branch;
 - a BOUNDARY assert false -> `status == "failed"` BEFORE any node runs (no node output / no
   NodeSucceeded event);
 - a POST-TERMINAL assert false -> `status == "failed"` after the run (a succeeded run flips
@@ -83,8 +83,8 @@ output: ${positive.output | cautious.output}
 """
 
 
-# A flow with both a boundary assert (${inputs} only) and a post-terminal assert
-# (${X.output}). The booleans are driven by the run inputs so a single fixture pins
+# A flow with both a boundary assert (`${input.*}` only) and a post-terminal assert
+# (`${node.output}`). The booleans are driven by the run inputs so a single fixture pins
 # all-true / boundary-false / post-false.
 _ASSERT_FLOW = """
 id: run-asserts
@@ -144,7 +144,7 @@ def test_leaf_binds_from_flow_wiring():
 
 
 # --------------------------------------------------------------------------- #
-# a coalesce-output flow runs with one branch SKIPPED; terminal_output resolves
+# A coalesce-output flow runs with one branch skipped; END resolves
 # the taken branch
 # --------------------------------------------------------------------------- #
 

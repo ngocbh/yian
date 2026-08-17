@@ -2,7 +2,7 @@
 
 These assert parse success and coarse tree shape only; no value is computed here.
 The shared-terminal tests cover the exact LALR-collision cases that a naive
-two-terminal grammar (a bare `REF` terminal plus a separate
+two-terminal grammar (a bare-reference terminal plus a separate
 `call: NAME "(" ... ")"` rule) fails to parse,
 because the lexer matches the bare-ref terminal before it can see the `(`. The
 grammar instead uses one shared `NAME` terminal with an optional call-suffix.

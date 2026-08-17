@@ -214,7 +214,7 @@ def read_value_contract(
     )
 
 
-# ---------- flow `inputs:` declarations ----------
+# ---------- flow `input:` declarations ----------
 
 
 def _split_default(spec: str) -> tuple[str, Optional[str]]:
@@ -314,7 +314,7 @@ def read_flow_inputs(
     *,
     diagnostics: LoadDiagnostics | None = None,
 ) -> list[Parameter]:
-    """Read Compose ``inputs:`` directly into canonical semantic parameters.
+    """Read Compose ``input:`` directly into canonical semantic parameters.
 
     A `str` value is the `TYPE [= default]` / `Optional[X]` form; a mapping is a
     record type (resolved via `read_type`, no default — the `{type:, default:}`

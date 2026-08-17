@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 logger = logging.getLogger("agent_composer.nodes.code.watchdog")
 
-# Hardcoded until the deferred per-node limits surface exists.
+# Fixed process-wide default; CODE has no per-node budget configuration surface.
 DEFAULT_BUDGET_SECONDS = 30.0
 
 

@@ -1,8 +1,8 @@
 # e35 — a dangling `${...}` ref in a MAP's reserved `over:` key. COMPILE: "unresolved references".
-# The highlight must box the `over:` line (26) — its range is stamped ("field", "over"). PR #98's
-# tuple migration left this lookup keyed by the BARE string ("over"), which can never match a
-# tuple-keyed map, so it silently fell back to the `input:` block (lines 27-28) — an unrelated
-# construct. Regression pin for #101. Fails at load; no inputs needed.
+# The highlight must box the `over:` line (26), whose range is stamped ("field", "over").
+# The `input:` block on lines 27-28 is an unrelated author construct.
+# The diagnostic names the MAP's reserved `over:` binding and selects its exact range.
+# Fails at load; no inputs needed.
 id: err-bad-map-over-ref
 name: err_bad_map_over_ref
 input:

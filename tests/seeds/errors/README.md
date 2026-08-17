@@ -41,12 +41,12 @@ just what can.
 | `e01-undeclared-ref.yaml` | unknown reference `${<typo>.output}` — no such node | reference validation and source location |
 | `e02-cycle.yaml` | the inferred graph has a cycle (not a DAG) | data-edge cycle detection |
 | `e03-unknown-field.yaml` | dotted access into a record field that doesn't exist | record-field validation |
-| `e06-type-mismatch-ref.yaml` | a `float` bound to a REF child input declared `str` | cross-flow signature compatibility |
+| `e06-type-mismatch-ref.yaml` | a `float` bound to a called child's `str` input | cross-flow signature compatibility |
 | `e09-unknown-top-level-key.yaml` | an unknown top-level section key (`extra='forbid'`) | strict top-level schema |
 | `e10-unknown-node-kind.yaml` | a node `kind:` outside the closed set | closed `NodeKind` |
 | `e11-field-not-allowed.yaml` | a flat field illegal for the kind (`prompt` on a `code`) | per-kind body shape |
 | `e12-missing-required-field.yaml` | a kind-required field omitted (`code` w/o `code:`) | per-kind body shape |
-| `e13-bad-type-expression.yaml` | a malformed type expression (`outputs: list[`) | the `ast` type parser |
+| `e13-bad-type-expression.yaml` | a malformed type expression (`output: list[`) | the `ast` type parser |
 | `e14-unknown-system-ambient.yaml` | `${system.bogus}` — only `today`/`now`/`run_id` are valid | strict `system` ambients |
 | `e15-prompt-undeclared-input.yaml` | an AGENT prompt references a non-declared input | prompt input validation |
 | `e16-bad-typedef-name.yaml` | a `typedefs:` name shadows a typing constructor | `read_typedefs` rules |
@@ -59,18 +59,18 @@ just what can.
 | `e30-inline-syntax-error.yaml` | a malformed inline `code:` body (`return (`) | inline syntax gate → exact literal-line `LoadError` via the CODE origin selector |
 | `e31-inline-no-return.yaml` | an inline `code:` body with no `return` | has-`return` load gate → located `LoadError` |
 | `e32-malformed-code-ref.yaml` | a `code:` value that is neither a valid ref nor inline source (dotted, no colon) | reject bucket → `LoadError` with a "did you mean" hint |
-| `e35-bad-map-over-ref.yaml` | a dangling `${…}` in a MAP's reserved `over:` key | the caret boxes the `over:` line, not the `input:` block — `("field", "over")` is tuple-keyed (#101) |
-| `e36-bad-map-input-ref.yaml` | a dangling `${…}` in ONE of a MAP's per-element `input:` entries | the caret boxes that entry, not the whole block — the MAP per-element scan path (#87) |
+| `e35-bad-map-over-ref.yaml` | a dangling `${…}` in a MAP's reserved `over:` key | the caret boxes the `over:` line, not the `input:` block — `("field", "over")` is tuple-keyed |
+| `e36-bad-map-input-ref.yaml` | a dangling `${…}` in ONE of a MAP's per-element `input:` entries | the caret boxes that entry, not the whole block — the MAP per-element scan path |
 
 ## Runtime failures (fail during the run; the header states the triggering inputs)
 
 | File | Should fail with | Pins |
 |---|---|---|
-| `e18-false-boundary-assert.yaml` | a false `${inputs}`-only assert (run `window: -5`) | flow-boundary assertion evaluation |
+| `e18-false-boundary-assert.yaml` | a false input-only assert (run `window: -5`) | flow-boundary assertion evaluation |
 | `e19-false-post-assert.yaml` | a false `${X.output}` assert flips success → failed | post-terminal asserts |
-| `e34-dup-assert.yaml` | two IDENTICAL post-asserts on one node, both false (run with no inputs) | asserts located BY POSITION — the caret points at the FIRST occurrence, never collapsing to the last (#88) |
+| `e34-dup-assert.yaml` | two IDENTICAL post-asserts on one node, both false (run with no inputs) | asserts located BY POSITION — the caret points at the FIRST occurrence, never collapsing to the last |
 | `e20-code-raises.yaml` | a CODE callable that raises → the run fails | node-failure → `RunFailed` |
-| `e21-code-wrong-type.yaml` | a CODE node returns the wrong type for its `outputs:` | typed write boundary |
+| `e21-code-wrong-type.yaml` | a CODE node returns the wrong type for its `output:` | typed write boundary |
 | `e22-required-missing.yaml` | `${x:?msg}` on an omitted value (run with it omitted) | `:?` use-site required |
 | `e23-unknown-tool.yaml` | a TOOL node naming an unregistered `tool_id` | TOOL registry lookup |
 | `e08-input-type-mismatch.yaml` | a non-coercible input value for a declared type (run `window: "soon"`) | typed read boundary (mirror of e21) |
@@ -85,15 +85,13 @@ just what can.
 ## Unsupported checks (`_future/errors/`)
 
 These **load and run clean today** — the engine has no check to fire, so they assert nothing. They
-exist because #88's container table reads as if `env:`/`tools:` are one absent line away from a
-precise caret; they are not. Both are the clean proof that the **stamp was never the bottleneck**: a
-per-entry range for `("env","API_KEY")` would be correct, free under a path model, and asked for by
-nothing, ever.
+exist because a per-entry source range alone cannot create a diagnostic. Each also needs a
+validation contract and a semantic origin carrier.
 
-| File | Does today | Blocked on |
+| File | Does today | Missing contract |
 |---|---|---|
-| `f01-env-ref-not-interpolated.yaml` | `env: {API_KEY: ${nope.output}}` loads AND runs — the ref is passed through as a literal string; `env: {API_KEY: 123}` also passes (only env KEYS are checked) | **no issue filed.** The silent `${...}` pass-through looks like a bug in its own right; out of scope for #88 |
-| `f02-agent-tools-no-load-check.yaml` | an unknown id in an AGENT `tools:` list survives compile; surfaces as an unclassified host error with no canonical diagnostic origin | **no issue filed.** Not a dup of `e23`, which pins a TOOL node's `tool_id:` (that one IS checked) |
+| `f01-env-ref-not-interpolated.yaml` | `env: {API_KEY: ${nope.output}}` loads AND runs — the ref is passed through as a literal string; `env: {API_KEY: 123}` also passes (only env KEYS are checked) | Validation/interpolation semantics for `env:` values |
+| `f02-agent-tools-no-load-check.yaml` | an unknown id in an AGENT `tools:` list survives compile; at run time it becomes a canonical `node.execute` failure at the AGENT node | Load-time AGENT tool-id validation and a per-entry semantic origin |
 
 (`e08` covers the typed input boundary; `e04`/`e05` were dropped with the
 `kind: match` + payload-union design — tagged data is a discriminant record routed by

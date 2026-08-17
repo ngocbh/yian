@@ -262,7 +262,7 @@ then defaults to `object`. `prompt:` is optional; `questions:` and
 calls an LLM: `adaptive_questions:` is LOAD-TIME sugar that lowers to a
 compose-agent + gate; the gate only calls the host's installed interaction tool.
 ```yaml
-ask:                                  # (A) static questions list
+ask:                                  # static questions list
   kind: human_input
   input: { proj: ${input.proj} }      # ${proj} renders into question text
   questions:
@@ -270,14 +270,14 @@ ask:                                  # (A) static questions list
       header: Framework               # answer key -> {Framework: <label>}
       options: [ {label: React, description: a lib}, {label: Vue, description: a fw} ]
     - { question: "Any notes?", header: Notes }   # no options -> free-text
-ask2:                                 # (B) LLM composes them (desugars at load)
+ask2:                                 # LLM-composed questions (desugared at load)
   kind: human_input
   input: { ctx: ${research.output} }
   adaptive_questions: { prompt: "Design 1-3 questions for: ${ctx}", retries: 3 }
 ```
 (On an adaptive gate, `__questions` is reserved for the generated composer wire;
 do not declare it in `input:`.)
-(Form (C): read a list from an upstream node — `questions: ${qs}`.)
+Questions may also come from an upstream node: `questions: ${qs}`.
 
 ### `wait` — block until an absolute UTC deadline
 ```yaml

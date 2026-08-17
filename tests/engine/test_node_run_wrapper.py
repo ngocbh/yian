@@ -123,13 +123,9 @@ def test_duplicate_assertions_retain_first_occurrence_origin():
     assert caught.value.assertion is first
 
 
-# The inherited base
-# `Node.run` wrapper is the entry point for real/fake kinds: calling `node.run(...)`
-# (with no asserts set) must delegate to the kind's `_run_impl` and return its result
-# unchanged, once per result category (Output / Route / Grow). These prove the
-# wrapper correctly finds the renamed `_run_impl` — they FAIL before the rename because
-# the kinds still shadow `run` (so `run` is the kind body, not the wrapper), and the base
-# `_run_impl` stub raises NotImplementedError.
+# The inherited `Node.run` wrapper is the entry point for real and fake kinds. With no
+# assertions, it delegates to the kind's `_run_impl` and returns each result category
+# (Output / Route / Grow) unchanged.
 
 
 def test_wrapper_delegates_to_real_code_node_run_impl():
@@ -138,7 +134,7 @@ def test_wrapper_delegates_to_real_code_node_run_impl():
     from agent_composer.nodes.code import CodeNode
 
     node = CodeNode("c", code="return inputs['v']")
-    # After the rename the kind defines no `run`, so `run` resolves to the base wrapper.
+    # The kind defines no `run`, so method resolution selects the base wrapper.
     assert type(node).run is Node.run
     result = node.run({"v": "hi"})
 

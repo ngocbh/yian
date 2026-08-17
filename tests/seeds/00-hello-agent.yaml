@@ -1,7 +1,7 @@
 # 00 — Hello agent.
 #
 # The smallest useful flow: one AGENT turns a topic into a one-paragraph note.
-# Shows: the top-level inputs:/outputs: interface (Compose-style), a single AGENT,
+# Shows: the top-level input:/output: interface (Compose-style), a single AGENT,
 # a scalar (str) value in and out, a bare flow return, and the INFERRED graph.
 
 id: hello-agent

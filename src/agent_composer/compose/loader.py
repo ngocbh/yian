@@ -31,7 +31,7 @@ authorities to the exact reachable keys, and installs `ComposedFlow.origin_resol
 Source-free graphs carry `None`; private `_assemble` products keep the resolver unset.
 Final resolver routes include the START signature's parameter, contract, and default origins.
 
-Imports flow DOWN only: this module composes the compose package's own slices plus
+Imports flow DOWN only: this module composes the compose package's own components plus
 `typesys`/`compile`; nothing in the engine imports it back.
 """
 
@@ -182,10 +182,10 @@ def _single_node_def_cursor(
     return def_cursor.project_mapping({name: (node_body, body_cursor)})
 
 
-# A multi-node `defs:` callable is a sub-flow inline: the same sections as a top-level
-# flow MINUS the file-scoped metadata + type registry (`id`/`name`/`typedefs` — a def
-# shares the file's). A single-node form (a top-level `kind:`) is deferred.
-# `asserts:` ARE allowed: the REF/MAP child seam enforces a def's two-phase asserts
+# A `defs:` callable accepts either a multi-node sub-flow or a flat single-node `kind:`
+# body. Both share the file-scoped metadata and type registry rather than declaring
+# `id`/`name`/`typedefs` themselves.
+# `asserts:` are allowed: the call/map child seam enforces a def's two-phase asserts
 # against the child pool (boundary before the child runs, post after it terminates).
 _DEF_ALLOWED = frozenset({"inputs", "nodes", "outputs", "asserts", "llm_config"})
 
@@ -572,7 +572,7 @@ def load_flow(
     Raises:
         `LoadError`:
             On any malformed or inconsistent flow, located at the offending `.yaml`
-            line where a slice supplies one.
+            line when source provenance is available.
 
     Example:
         ```python
@@ -1002,7 +1002,7 @@ def _load_def(
 ) -> ComposedFlow:
     """Build one in-file `defs:` entry into a `ComposedFlow` (a callable / sub-flow inline).
 
-    Supports both a multi-node sub-flow (`{inputs?, nodes, outputs?, asserts?}`)
+    Supports both a multi-node sub-flow (`{input?, nodes, output?, asserts?}`)
     and a flat single-node body (`{kind, ...}`). Both share the file's typedef
     registry and callable scope. ``def_cursor`` is the occurrence-local authored
     body: it retains absolute locations used by assembly and source diagnosis.

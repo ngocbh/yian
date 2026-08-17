@@ -36,7 +36,7 @@ class StartNode(Node):
 
     kind = NodeKind.START
 
-    #: Reserved id of the synthesized input boundary (the old `__start__` sentinel).
+    #: Reserved id of the synthesized input boundary.
     #: The canonical source of truth; `compile.model` re-exports it as `START_ID`/`START_ID`.
     #: At top level the loader mints one StartNode with this id; a child flow's is
     #: deep-namespaced (`<callsite>/__start__`). Authors can never name a node this

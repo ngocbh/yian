@@ -192,7 +192,7 @@ def test_e04_else_satisfies_coverage():
 # A float-typed node output bound to a callable input declared `str` -> loud + located.
 # --------------------------------------------------------------------------- #
 
-_SEEDS = _ERRORS.parent  # calpha/seeds (the child `research-one` = seed 03 lives here)
+_SEEDS = _ERRORS.parent  # tests/seeds (the child `research-one` = seed 03 lives here)
 
 
 def _research_resolver():
@@ -337,7 +337,7 @@ def test_false_boundary_assert_origin_resolves_to_assertion():
 
 
 def test_bad_input_ref_locates_the_offending_entry():
-    # e14 (#87): the node's `input:` block spans lines 10-12, but only `rid:` on line 11 is bad
+    # e14's `input:` block spans lines 10-12, but only `rid:` on line 11 is bad
     # (`topic:` on 10 is valid; 12 is `output: str`, a different field). The range must box line
     # 11 alone — the block range would highlight all three.
     #
@@ -353,7 +353,7 @@ def test_bad_input_ref_locates_the_offending_entry():
 
 
 def test_bad_map_per_element_input_ref_locates_the_offending_entry():
-    # e36 (#87): the MAP per-element branch is not the same code as the plain-input branch — it
+    # e36's MAP per-element branch is not the same code as the plain-input branch — it
     # reads `nwiring`, allows the `${item}` scope, and skips the reserved `over` key — so it gets
     # its own pin. `extra:` is on line 33; the `input:` block spans 31-33.
     err = _load_error("e36-bad-map-input-ref.yaml")
@@ -364,9 +364,8 @@ def test_bad_map_per_element_input_ref_locates_the_offending_entry():
 
 
 def test_map_over_ref_locates_the_over_line():
-    # e35 (#101): a dangling ref in a MAP's reserved `over:` key (line 26). The range must box
-    # `over:` itself — NOT the `input:` block on 27-28, which is what the bare-string lookup
-    # `field_ranges.get("over")` silently degraded to once the map became tuple-keyed (#98).
+    # e35 has a dangling ref in MAP's reserved `over:` key on line 26. Its tuple-tagged range
+    # must box `over:` itself, not the unrelated `input:` block on lines 27-28.
     err = _load_error("e35-bad-map-over-ref.yaml")
     assert "unresolved references" in str(err)
     assert "map over" in str(err)  # names the reserved key, not an input
@@ -375,9 +374,8 @@ def test_map_over_ref_locates_the_over_line():
 
 
 def test_duplicate_asserts_caret_at_first_occurrence():
-    # e34 (#88 case 1): two IDENTICAL post-asserts on lines 12 and 13; both fail (output is 1, not
-    # < 0). Asserts are located BY POSITION, so the caret points at the FIRST occurrence (line 12) —
-    # the old text-keyed field_ranges collapsed identical items last-wins and would box line 13.
+    # e34 has identical failing post-asserts on lines 12 and 13. Position-owned origins must
+    # locate the first failure at its first occurrence on line 12.
     loaded = load_flow((_ERRORS / "e34-dup-assert.yaml").read_text())
     result = run_flow(loaded, {})
     assert result.status == "failed"
@@ -385,24 +383,20 @@ def test_duplicate_asserts_caret_at_first_occurrence():
 
 
 def test_input_named_like_a_field_does_not_collide():
-    # e33 (#88 case 2): the node has an `env:` FIELD (value L32) and an input literally named
-    # `env` (L35). Under the old flat
-    # `dict[str, SourceRange]` both keyed the bare string "env" and the later stamp won, so a caret
-    # could land on the unrelated construct. The (kind, key) tuple keeps them distinct.
-    #
-    # This regression pin asserts that the field and input retain separate source ranges.
+    # e33 has an `env:` field on L32 and an input named `env` on L35. Tuple-tagged keys retain
+    # separate source ranges for those author constructs.
     text = (_ERRORS / "e33-input-named-like-field.yaml").read_text()
     document = SourceDocument.parse(text.replace("${nope.output}", '"lit"'))
     fr = parse_nodes(document.root.child("nodes"))["calc"].field_ranges
     assert fr[("field", "env")].start_line == 32  # the `env:` field's VALUE
     assert fr[("input", "env")].start_line == 35  # the input NAMED `env`
-    assert fr[("field", "env")] != fr[("input", "env")]  # the collision #88 reported
+    assert fr[("field", "env")] != fr[("input", "env")]
 
     err = _load_error("e33-input-named-like-field.yaml")
     assert "unresolved references" in str(err) and "'env'" in str(err)
     source_range = _only_error_range(err)
-    # per-entry resolution (#87, PR #104) lands ON the offending `env:` input (L35), never L32 —
-    # a collision would have put the caret on the unrelated `env:` field value instead.
+    # Per-entry resolution lands on the offending `env:` input (L35), never the unrelated
+    # `env:` field value on L32.
     assert source_range.start_line == 35
     assert source_range.start_line != 32
 
@@ -443,35 +437,21 @@ def test_structured_output_origin_is_exact():
 
 
 def test_synth_node_locates_at_its_call_directive_line():
-    # e37 (#106): the inline `call(...)` on L30 desugars to `__call_0`. It USED to be handed the HOST
-    # node's field_ranges verbatim, so its ("input","topic") pointed at the HOST's valid `topic:` on
-    # L29 — a foreign map (the key is right, the map belongs to another node), which per-entry
-    # resolution (PR #104) turned into a confidently-wrong caret on a valid line.
-    #
-    # The desugar gives the synth node the `call(...)` directive's own provenance, so the caret is
-    # L30 (the actual error), and the message names the synth node.
+    # e37's inline `call(...)` on L30 desugars to `__call_0`. Directive-owned provenance locates
+    # the bad `topic` binding at L30 rather than the host node's like-named input on L29.
     err = _load_error("e37-synth-node-inherits-host-ranges.yaml")
     assert "unresolved references" in str(err)
     assert "__call_0" in str(err) and "'topic'" in str(err)  # the SYNTH node's input, not the host's
-    # The `call(...)` directive (was L29, the host's valid `topic:`).
+    # The `call(...)` directive owns the failing binding.
     assert _only_error_range(err).start_line == 30
 
 
 def test_case_when_ref_locates_at_when_line():
-    # e38 (#106): a dangling ref in `cases[1].when` (L36) hoists to a synthetic CASE input `__r1`.
-    # It USED to locate at the `gate:` header and print the synthetic `__r1` (a name that appears
-    # nowhere in the file). The CASE desugar stamps `__r1` with its own `cases[1].when` range and
-    # label, so the caret is L36 and the message names the author's construct.
+    # e38's dangling ref in `cases[1].when` (L36) hoists to synthetic input `__r1`. Predicate-owned
+    # provenance keeps the caret and author-facing label on `cases[1].when`.
     err = _load_error("e38-case-when-ref-locates-node-header.yaml")
     assert "unresolved references" in str(err)
     assert "'__r1'" not in str(err)       # the synthetic name no longer leaks
     assert "cases[1].when" in str(err)     # ... it is named by the author-facing site instead
-    # The offending `cases[1].when` (was L31, the `gate:` header).
+    # The offending `cases[1].when` owns the failure range.
     assert _only_error_range(err).start_line == 36
-
-
-# --------------------------------------------------------------------------- #
-# Deferred negative fixtures (NOTED, not asserted yet):
-#   e05 — bare-tags union  -> read_typedefs mechanism (already covered)
-# e08 — input type enforcement at the flow boundary — now asserted in the runtime gallery above.
-# --------------------------------------------------------------------------- #

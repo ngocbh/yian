@@ -218,8 +218,8 @@ def evaluate_when(expression: str, pool: VariablePool) -> bool:
     Parses and folds the expression on the ONE unified engine — comparisons
     (`==` `!=` `<` `<=` `>` `>=` `in` `not in`) and arithmetic over references and literals,
     combined with `and` / `or` / `not` — and coerces the result to a single boolean. This is
-    the pool-based path, kept for manifest parse-checks and the deferred LOOP `while:` predicate
-    seam; strict `CASE` uses the record-based path.
+    the public pool-based path. Record-scoped CASE and LOOP predicates use
+    `evaluate_when_record` instead.
 
     The value may be written three ways, all evaluating IDENTICALLY: a bare expression
     `a > 5`, a legacy `${a} > 5` (braces on the ref), or a whole `${a > 5}` (braces around
@@ -254,9 +254,8 @@ def evaluate_when(expression: str, pool: VariablePool) -> bool:
 def first_failing_assert(exprs, pool: VariablePool):
     """The first assert expression in `exprs` that is false against `pool`, else None.
 
-    The shared enforcement primitive for a flow's `asserts:` (boundary or post): `run_flow`
-    uses it at the top-level boundary, and the REF/MAP child seam uses it to enforce a def's
-    child-boundary asserts. Each expr is the `when:`/`asserts:` boolean grammar."""
+    A compatibility helper for callers that evaluate several pool-scoped expressions.
+    Each expression uses the `when:`/`asserts:` boolean grammar."""
     for expr in exprs:
         if not evaluate_when(expr, pool):
             return expr
@@ -764,9 +763,7 @@ def _collect_expr_refs(node: "Tree | Token", refs: list[str]) -> None:
 #
 # `expr_refs` COLLECTS reference paths; these functions REWRITE them. The compile-time
 # passes that re-namespace a source (call/loop/map inlining) or rebind refs to node-local
-# params (searched `case`) used to `.sub` a flat `${...}` regex — which mishandles a
-# whole-span `${a > 5}` (rewrites the whole interior as one path) and a bare `a > 5` (no
-# `${}`, no match). Routing them through the ONE parse tree here fixes both: only the
+# params (searched `case`) route through the shared parse tree: only the
 # reference LEAVES move, every operator / literal / builtin-callee / whitespace stays
 # verbatim (spliced by source position), and all three spellings rewrite identically.
 # --------------------------------------------------------------------------- #

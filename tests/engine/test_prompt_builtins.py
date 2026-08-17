@@ -7,8 +7,8 @@ Two layers:
 - compile: `prompt_refs` extracts the declared-input refs a prompt reads (so the loader
   can name-check prompt scope) and rejects an unknown builtin / malformed span.
 
-The feature is prompt-only: it mints no graph node or edge (see agent-compose-principles
-§4(A)). These tests are Ollama-free — the renderer runs without any model.
+The feature is prompt-only: it mints no graph node or edge. These tests are Ollama-free —
+the renderer runs without any model.
 """
 
 import pytest

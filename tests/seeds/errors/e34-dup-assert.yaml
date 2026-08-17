@@ -1,6 +1,6 @@
-# e34 — case 1 (#88): two IDENTICAL post-asserts on one node. RUNTIME: `${output} < 0` is false
+# e34 — two IDENTICAL post-asserts on one node. RUNTIME: `${output} < 0` is false
 # (output is 1), so both fail; the caret must point at the FIRST occurrence (located BY POSITION),
-# never collapse to the second the way the old text-keyed field_ranges map did. Run with no inputs.
+# never collapse to the second occurrence. Run with no inputs.
 id: err-dup-assert
 name: err_dup_assert
 nodes:

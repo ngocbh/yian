@@ -5,8 +5,8 @@
 # `${positive.output | cautious.output}` (seed 02's hand-written join). Only the taken
 # branch produces a value (the other is skip-flooded → null), so the coalesce yields it.
 # Shows: the value-case `${<case>.output}` shorthand for "the taken branch's value".
-# (The inline `then: ${call}` branch form is a later milestone — it needs the
-# case-route hard-gate veto to stay sound.)
+# Inline `then: call(...)` branches use the same case-route hard-gate veto and are
+# covered separately by the case-call tests.
 
 id: case-value
 name: case_value

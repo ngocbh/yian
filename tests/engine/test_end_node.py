@@ -7,7 +7,7 @@ def test_end_kind():
     assert EndNode.record("__end__", output_names=["a"]).kind == NodeKind.END
 
 
-# --- RECORD mode (a flow's output:) — reproduces terminal_output()'s arity (engine.py:163-188).
+# --- RECORD mode (a flow's `output:`) — assembles the run result by declared-output arity.
 def test_end_record_zero_outputs_returns_none():
     out = EndNode.record("__end__", output_names=[]).run({})
     assert isinstance(out, Output) and out.value is None

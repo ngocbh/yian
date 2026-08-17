@@ -94,9 +94,8 @@ def test_start_through_eval_node_binds_from_wiring():
 
 def test_start_through_eval_node_fills_omitted_default():
     # when a child input is OMITTED by the caller (no wiring edge), the START_ID
-    # node ITSELF fills the declared default — not the REF/MAP driver. START_ID's params carry
+    # node itself fills the declared default, not the CALL/MAP driver. START_ID's params carry
     # `default`/`required`, so bind_params fills the absent input before run().
-    # (Pre-fix the bare params bound it as present-None, so apply_defaults could not fill it.)
     from types import SimpleNamespace
 
     node = StartNode(

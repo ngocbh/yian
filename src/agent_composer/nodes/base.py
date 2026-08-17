@@ -53,7 +53,7 @@ class NodeKind(str, Enum):
     LOOP = "loop"  # authorable: iterate a callable to a fixpoint (`('a -> 'a) -> 'a -> 'a`)
     START = "start"  # internal-only: loader-synthesized input boundary (parameter binding)
     END = "end"      # internal-only: loader-synthesized return boundary (record + list modes)
-    CALL = "call"    # authorable: consult another flow once (REF — `kind: call`)
+    CALL = "call"    # authorable: consult another flow once (`kind: call`)
     MAP = "map"      # authorable: map a callable over a list (`kind: map` + `over:`)
 
 
@@ -249,11 +249,11 @@ class Node(ABC):
     # `caps['bind_item']`; when False (the common case) it binds `params` once from the pool.
     # Overridden True by MapNode; every other kind binds up front.
     binds_per_item: ClassVar[bool] = False
-    # REF-depth policy for the engine's growth core. The depth stamped on a grow's subgraph
+    # Nested-call depth policy for the engine's growth core. The depth stamped on a grow's subgraph
     # spawners + its terminal is `parent_depth + grow_depth_delta`; a positive delta is also
     # bounded by MAX_REF_DEPTH. Possible values:
     #   None  — a non-spawner; the core does no depth work.
-    #   0     — LOOP inherits its parent's REF depth without consuming another level.
+    #   0     — LOOP inherits its parent's call depth without consuming another level.
     #   1     — a nested call, +1 and bounded (CALL/MAP: each child is one deeper level).
     # Overridden by LOOP (0) and CALL/MAP (1); the default None fits non-spawners.
     grow_depth_delta: ClassVar[Optional[int]] = None
@@ -576,10 +576,10 @@ class Node(ABC):
             if not classify_body_errors:
                 raise
             raise _NodeBodyError(exc) from exc
-        # Post-asserts fire ONLY for an `Output` result — never Route/Grow. A spawner's
-        # Grow post-asserts are handled in a later step. A generator (streaming) result also
-        # falls through the guard untouched — the DORMANT streaming path: the wrapper must not
-        # fire post on it; it is returned unchanged for `eval_node` to drain. No node kind
+        # Post-asserts fire ONLY for an `Output` result — never Route/Grow. The
+        # growth-specific expansion path owns spawner post-assert handling. A generator result
+        # also falls through the guard untouched — the DORMANT streaming path: the wrapper must
+        # not fire post on it; it is returned unchanged for `eval_node` to drain. No node kind
         # returns a generator today.
         if isinstance(result, Output) and self.post_asserts:
             post_record = {**post_input, "output": result.value}

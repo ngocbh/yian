@@ -2,7 +2,7 @@
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `loop` node's frozen
 `LoopDescriptor`, inheriting the template `parse` from `NodeDescriptor` (which records each
-field's `SourceRange`), and overriding the resolve-and-bake `build` (predicate-slice legality +
+field's `SourceRange`), and overriding the resolve-and-bake `build` (termination configuration +
 the `'a -> 'a` field-name contract). `_finish` keeps concrete ranges on the Compose-owned
 `BuildResult` and stamps only the descriptor's opaque origin onto the runtime node. Registered
 into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
@@ -32,7 +32,7 @@ class LoopDescriptor(NodeDescriptor):
     """kind=loop — a `('a -> 'a) -> 'a -> 'a` driver over a carried record.
 
     `call` names the body subflow (defs-first, else external — same resolution as
-    `call`/`map`). `inputs` seeds the carried record at turn 0. Exactly one of
+    `call`/`map`). The authored `input:` mapping seeds the carried record at turn 0. Exactly one of
     `while_`/`until_`/`times` carries the predicate; `max` is the runaway guard (required for
     while/until). `while`/`until` are Python keywords, so they land here as `while_`/`until_`.
 
@@ -40,13 +40,14 @@ class LoopDescriptor(NodeDescriptor):
     the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
     custom parse hook — loop's field legality is the default allowed/required key check + the
     asserts-list check; all its deeper legality lives in `build`). Only the loop-specific fields
-    are declared here; `inputs` comes from the base, and a loop never populates `outputs`.
+    are declared here; the normalized `inputs` field comes from the base, and a loop has no
+    authored `output:` field.
     `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
     deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
 
-    Class attrs: `kind="loop"`; `allowed` adds `call`/`inputs`/`while`/`until`/`times`/`max`/
+    Class attrs: `kind="loop"`; `allowed` adds `call`, normalized `inputs`, `while`/`until`/`times`/`max`, and
     `asserts` to the commons; `required` is `{"call"}` (the body subflow); `binding_fields=()` —
-    a loop's `inputs:` are NOT inline-call-desugared today, so the kind-blind walk skips it.
+    a loop's input bindings are not inline-call-desugared, so the kind-blind walk skips them.
     `keyword_remap` is loop-owned: it maps the surface Python keywords `while:`/`until:` onto the
     `while_`/`until_` descriptor fields so the inherited template `parse` reads them correctly.
     """
@@ -75,12 +76,12 @@ class LoopDescriptor(NodeDescriptor):
         via `_finish`.
 
         `loop` is a higher-order driver: the body subflow (`call:`) reads a subset of the
-        carried record (`inputs:`) and returns the WHOLE next carried record. Returns a
+        carried record (`input:`) and returns the WHOLE next carried record. Returns a
         `BuildResult` (the split): the node carries `params`; the flow owns the carried-record
         seed sources in `wiring`. Resolves the callable through `ctx.resolver` (required — a loop
         is higher-order), derives its `ChildSignature`, bakes the compiled child + parameters,
         stamps `output_contract` (the body codomain, which IS the carried record contract), and enforces
-        the FIELD-NAME half of the contract + slice legality (`while:` present, `max:` present).
+        the FIELD-NAME half of the contract plus termination configuration legality.
         The deep TYPE-level half compares every statically proven body field with its
         statically proven carried seed in the loader pass `check_loop_type_contract`, which
         needs the assembled parent producers/flow-input contracts.
@@ -114,7 +115,7 @@ class LoopDescriptor(NodeDescriptor):
         node.output_contract = sig.output
 
         errors: list[str] = []
-        # Predicate slice legality: exactly one of `while:`/`until:`/`times:` selects the loop's
+        # Exactly one of `while:`/`until:`/`times:` selects the loop's
         # driver. `while`/`until` are PREDICATE loops (record-scoped boolean, `max:` runaway
         # guard); `times: N` is a fixed COUNT (no predicate, `max:` redundant since the count
         # bounds it). Bake `predicate_kind`/`predicate`/`times`/`max_iters` per the present kind.
@@ -179,9 +180,9 @@ class LoopDescriptor(NodeDescriptor):
                 )
 
         # The `'a -> 'a` FIELD-NAME contract (types are the loader pass). The carried record's
-        # keys are the seed `inputs:` names. The body OUTPUT field NAMES must equal them (the
+        # keys are the seed input names. The body OUTPUT field NAMES must equal them (the
         # whole next state threads back); the body INPUT NAMES must be a subset (it reads a
-        # slice of the carried record). A non-record body output (no fields) can't match a
+        # subset of the carried record). A non-record body output (no fields) can't match a
         # multi-field carried record — flag it too.
         carried = set(self.inputs or {})
         out_names = _contract_field_names(node.output_contract)

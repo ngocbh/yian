@@ -1,4 +1,4 @@
-"""Public direct-engine contract after the authoritative run-log cutover.
+"""Public direct-engine contract for the authoritative run-log runtime.
 
 These tests start below the package-root run boundary on purpose.  A direct caller
 must prepare and durably apply ``RunStarted`` first, then lend that exact state/log

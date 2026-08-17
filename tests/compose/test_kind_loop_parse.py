@@ -1,7 +1,7 @@
-"""6.10 — the `loop` kind handle: parse records the `call`/`while`/`until`/`times`/`max` field
+"""The `loop` kind handle: parsing records the `call`/`while`/`until`/`times`/`max` field
 ranges and maps the Python-keyword surface keys `while:`/`until:` onto the `while_`/`until_`
-fields; the required flat field is `call` (the body subflow). Build (drive of `build_loop_node`,
-predicate-slice legality) is exercised end-to-end via the `load_flow` suite."""
+fields; the required flat field is `call` (the body subflow). `LoopDescriptor.build`, including
+predicate-reference validation, is exercised end-to-end via the `load_flow` suite."""
 
 import pytest
 

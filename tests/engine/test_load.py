@@ -10,7 +10,7 @@ EXCLUDED (recorded reasons):
   (15/16 + errors/e04/e05 — the dropped `kind: match`/payload-union design — were deleted;
   tagged data is modelled as a discriminant record + `case … on <field>`.)
 - 04/05 — `call` nodes need a child resolver (asserted loud below; the resolver'd
-  load+compile path lives in tests/engine/test_ref_map.py).
+  load+compile path lives in tests/engine/test_call_map.py).
 """
 
 from pathlib import Path
@@ -103,7 +103,7 @@ def test_seed02_gate_is_case_with_control_edges():
     # coalesce flow-output: BOTH branches reach __end__.
     end_producers = {e.from_ for e in flow.edges if e.to == END_ID}
     assert end_producers == {"positive", "cautious"}
-    # bare whole-string `outputs:` -> one FlowOutput (terminal_output returns bare value).
+    # Bare whole-string `output:` -> one FlowOutput (record-mode END returns the bare value).
     assert len(flow.outputs) == 1
     assert flow.outputs[0].from_ == "${positive.output | cautious.output}"
 
@@ -297,10 +297,10 @@ def test_seed19_loads_clean():
 
 
 @pytest.mark.parametrize("seed", ["04-call.yaml", "05-call-map.yaml"])
-def test_ref_map_without_resolver_is_loud(seed):
+def test_call_map_without_resolver_is_loud(seed):
     # A `call` node is built given a child resolver; without one it is loud (the
     # resolver-required path). The resolver'd load+compile path is covered in
-    # tests/engine/test_ref_map.py.
+    # tests/engine/test_call_map.py.
     with pytest.raises(LoadError) as exc:
         load_flow((_SEEDS / seed).read_text())
     assert "resolver" in str(exc.value).lower()

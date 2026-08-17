@@ -15,7 +15,7 @@ callable:
   semantic assertion.
 
 Holds `ComposedFlow` (the compiled+validated flow the engine runs) plus the flow
-`outputs:` parser and source-origin attachment. Ladder position: the LAST phase
+`output:` parser and source-origin attachment. Ladder position: the LAST phase
 before the loader — it may import every earlier phase (helpers/nodes/parse/desugar/
 edges/validate/build.boundary); the loader imports `_assemble`/`ComposedFlow` back
 from here. It imports NOTHING from `loader.py` (that would be a back-edge).
@@ -69,7 +69,7 @@ from agent_composer.compose.validate.cycles import reject_cycles
 from agent_composer.compose.validate.human_questions import validate_human_questions
 from agent_composer.compose.validate.loop_types import check_loop_type_contract
 from agent_composer.compose.edges.ordering import infer_ordering_edges
-from agent_composer.compose.validate.call_types import check_ref_map_types
+from agent_composer.compose.validate.call_types import check_call_map_types
 from agent_composer.compose.validate.references import validate_references
 from agent_composer.compose.validate.wiring_parity import check_wiring_parity
 from agent_composer.compose.parse.nodes import (
@@ -86,8 +86,8 @@ from agent_composer.compose.helpers.types import (
 from agent_composer.compose.validate.handles import check_case_handles
 from agent_composer.compose.validate.asserts import validate_node_asserts
 
-# Name for the single output of a bare whole-string `outputs:` binding. With one
-# `FlowOutput`, `terminal_output` returns the bare resolved value, so the name
+# Name for the single output of a bare whole-string `output:` binding. With one
+# `FlowOutput`, the record-mode EndNode returns the bare resolved value, so the name
 # only labels the carrier.
 _SINGLE_OUTPUT_NAME = "result"
 
@@ -610,17 +610,17 @@ def _stamp_node_wiring_origins(
 
 
 def _flow_outputs(outputs) -> list[FlowOutput]:
-    """Read the flow `outputs:` section into the `FlowOutput` carriers `terminal_output` reads.
+    """Read the flow `output:` section into carriers for the record-mode EndNode.
 
     A name -> binding map becomes one `FlowOutput` per entry
-    (>=2 -> `terminal_output` returns an object keyed by name); a bare whole-string
+    (>=2 -> END returns an object keyed by name); a bare whole-string
     binding (`${note.output}`) is one output named `result` (1 ->
-    `terminal_output` returns the bare value). A `None` section -> no declared outputs
-    (`terminal_output` returns `None`).
+    END returns the bare value). A `None` section -> no declared outputs
+    (END returns `None`).
 
     Args:
         outputs (`dict | str | None`):
-            The raw `outputs:` section: a name -> binding map, a single binding string,
+            The raw `output:` section: a name -> binding map, a single binding string,
             or `None`.
     """
     if outputs is None:
@@ -1189,7 +1189,7 @@ def _assemble(
 
     # cross-flow type check: each `call` binding's source type vs the callable
     # input type (needs producers, so it runs after all nodes are built).
-    check_ref_map_types(
+    check_call_map_types(
         build_results,
         producers,
         flow_input_contracts,
@@ -1206,9 +1206,8 @@ def _assemble(
         flow_wiring,
         diagnostics=diagnostics,
     )
-    # case `on:` enum-exhaustiveness (a validate-phase check — needs the assembled producer
-    # types). Runs right after the type contracts, the same phase-position as the old
-    # desugar-time check, so error ordering is preserved.
+    # Case `on:` enum exhaustiveness needs the assembled producer types, so it runs after
+    # the cross-flow type contracts while preserving validation error order.
     check_case_exhaustive(
         descriptors,
         producers,
@@ -1225,13 +1224,13 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
-    # Data edges — the projection of flow.wiring (leaf + WAIT + REF/MAP); a case owns its own
+    # Data edges — the projection of flow.wiring (leaf + WAIT + call/map); a case owns its own
     # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended here.
     data_edges = infer_data_edges(descriptors, flow_wiring)
     reconciled = data_edges + case_edges
 
     # Reference + assert validation over the built flow. Errors locate
-    # at the node's line (a bad node-input ref) or the `outputs:` section line (a
+    # at the node's line (a bad node-input ref) or the `output:` section line (a
     # dangling flow-output ref).
     validate_references(
         build_results,

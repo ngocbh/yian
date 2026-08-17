@@ -10,5 +10,5 @@ def test_start_end_call_member_values():
 
 def test_new_members_are_distinct():
     assert len({NodeKind.START, NodeKind.END, NodeKind.CALL, NodeKind.MAP}) == 4
-    # REF stays collapsed into CALL; MAP is re-split into its own kind (the two drivers).
+    # The retired REF member stays absent; CALL and MAP are distinct current drivers.
     assert not hasattr(NodeKind, "REF") and hasattr(NodeKind, "MAP")

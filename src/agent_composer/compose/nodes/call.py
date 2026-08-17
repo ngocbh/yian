@@ -47,23 +47,23 @@ class CallDescriptor(NodeDescriptor):
     loader composes that resolution). `kind: call` is a single application (built as a plain
     `CallNode`); `kind: map` + `over: ${list}` is `List.map` — iteration with `${item}` in
     element scope (built as a `MapNode`). `parallel:` is retained but currently inert; run-level
-    workers control concurrency. `inputs:` are the (per-element) call-arg bindings.
+    workers control concurrency. `input:` contains the (per-element) call-arg bindings.
 
-    The REF/MAP discriminator is the descriptor CLASS: a plain `CallDescriptor` is a REF (built
-    as a `CallNode`); a `MapDescriptor` (its subclass, in `map.py`) is a MAP (built as a
+    The call/map discriminator is the descriptor class: a plain `CallDescriptor` is a single
+    call (built as a `CallNode`); a `MapDescriptor` (its subclass, in `map.py`) is a map (built as a
     `MapNode`). `build` branches on `isinstance(self, MapDescriptor)`. The `kind` CLASS ATTR
     (`"call"` here, `"map"` on the subclass) is the surface string for dispatch/diagnostics; it is
     no longer an instance field. The two SYNTH paths (inline-call + case desugar) mint plain
-    `CallDescriptor`s (REF, `over=None`).
+    `CallDescriptor`s (single call, `over=None`).
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata) and `inputs` from `NodeDescriptor`; only the
+    the Compose-only `range`/`field_ranges` parse metadata) and normalized `inputs` carrier from `NodeDescriptor`; only the
     call/map-specific fields are declared here. `over`/`parallel` are fields on the shared base
     class (a plain `call` leaves them at `None`/`False`); only `map` lists them in its `allowed`.
     `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
     deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
 
-    Class attrs (call's own surface): `kind="call"`; `allowed` adds `call`/`inputs`/`asserts` to
+    Class attrs: `kind="call"`; `allowed` adds `call`, normalized `inputs`, and `asserts` to
     the commons; `required` is `{"call"}`; `binding_fields=("inputs","over")` — the call-arg
     bindings plus the map iteration source (a plain `call` leaves `over=None`, so the kind-blind
     walk skips it).
@@ -82,17 +82,17 @@ class CallDescriptor(NodeDescriptor):
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `CallNode`/`MapNode` (+ wiring) for this descriptor —
-        REF's `CallNode` (single application) or MAP's `MapNode` (`kind: map` + `over:`, mapped
+        a `CallNode` (single application) or `MapNode` (`kind: map` + `over:`, mapped
         iteration) — resolve-and-bake, then retain Compose-only ranges via `_finish`.
 
         Returns a `BuildResult` (the split): the node carries `params`; the flow owns the sources
         in `wiring`. A MAP's reserved `over:` iteration source rides the wiring under the `"over"`
-        key (over-then-inputs order); a REF's wiring is just its `inputs:`. Resolves the callable
-        via `ctx.resolver`, derives its `ChildSignature`, stamps `output_contract` (REF re-exports
-        the codomain carrier; MAP wraps an exact type in `list[U]` and retains its default
+        key (over-then-input order); a single call's wiring is just its authored `input:`. Resolves the callable
+        via `ctx.resolver`, derives its `ChildSignature`, stamps `output_contract` (call re-exports
+        the codomain carrier; map wraps an exact type in `list[U]` and retains its default
         origin, while a partial/opaque child remains unenforced),
         name/arity-checks the params, and BAKES the child's
-        compiled flow onto the node. The REF/MAP discriminator is the descriptor CLASS
+        compiled flow onto the node. The call/map discriminator is the descriptor class
         (`MapDescriptor` -> `MapNode`, else `CallNode`). `ctx.registry` is unused (call/map resolve
         their output contract from the child signature, not the flow typedefs); the inline-CODE anchors
         on `ctx` are read only by the CODE build.
@@ -107,7 +107,7 @@ class CallDescriptor(NodeDescriptor):
         is_map = isinstance(self, MapDescriptor)
         if is_map and "over" in (self.inputs or {}):
             # Reserved-name guard: a MAP's `over` is the iteration source, carried under
-            # the reserved wiring key — an `inputs:` param named `over` would collide.
+            # the reserved wiring key — an `input:` parameter named `over` would collide.
             raise ctx.diagnostics.error(
                 f"map node {self.id!r}: input name 'over' is reserved (the iteration "
                 f"source); rename the `inputs:` entry",
@@ -201,7 +201,7 @@ def _check_child_bindings(
     """Name/arity check a `call` node's PARAMS against the child SIGNATURE (the analogue of
     `compile.validation._check_ref_bindings`'s name + required-input checks, read off the
     signature). Reads the node-side `params` (the split); the deep cross-flow TYPE
-    check is `check_ref_map_types`, a loader post-build pass over the flow wiring."""
+    check is `check_call_map_types`, a loader post-build pass over the flow wiring."""
     declared = {d.name for d in sig.inputs}
     bound = set()
     for p in params:

@@ -13,11 +13,11 @@ def _child():
     return SimpleNamespace(nodes={}, edges=[], wiring={}, outputs=[])
 
 
-def test_call_node_is_ref_only():
-    ref = CallNode("c", flow_id="child", child=_child())
-    assert ref.kind == NodeKind.CALL
-    assert not hasattr(ref, "over")                   # REF carries no over/parallel
-    assert not hasattr(ref, "parallel")
+def test_call_node_has_no_map_fields():
+    call = CallNode("c", flow_id="child", child=_child())
+    assert call.kind == NodeKind.CALL
+    assert not hasattr(call, "over")
+    assert not hasattr(call, "parallel")
 
 
 def test_map_node_kind_and_parallel_fields():
@@ -28,7 +28,7 @@ def test_map_node_kind_and_parallel_fields():
     assert MapNode("d", flow_id="child", child=_child()).parallel is False
 
 
-def test_call_ref_mode_returns_grow():
+def test_call_returns_grow():
     # CALL returns only the raw call-arg record; compile owns fragment construction.
     from tests.engine.test_expand import _child_flow
 

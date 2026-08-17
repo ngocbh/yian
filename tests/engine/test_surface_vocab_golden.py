@@ -22,10 +22,9 @@ from tests.engine._graph_builder import _engine
 # --------------------------------------------------------------------------- #
 
 
-# parser dual-arm model_validator normalizes both inputs:/input:
 def test_section_keywords_load() -> None:
-    """Both `inputs:`/`outputs:` (legacy) and `input:`/`output:` (new) load identically."""
-    legacy = """
+    """A flow written with singular `input:`/`output:` sections loads and runs."""
+    source = """
 id: f
 name: f
 input:
@@ -40,7 +39,7 @@ nodes:
 output:
   result: ${n.output}
 """
-    loaded = load_flow_from_string(legacy)
+    loaded = load_flow_from_string(source)
     rec = run_flow(loaded, {"x": "hi"})
     assert rec.status == "succeeded"
     assert rec.output == "hi"
@@ -226,24 +225,12 @@ def test_pool_heads_singular() -> None:
     assert "outputs" not in _POOL_HEADS
 
 
-# END_ID post-asserts route record-scoped (`${output}` injection).
-# Previously, an END_ID `${output}` ref silently resolved to None via the pool (no `output`
-# head), so any assert with `${output}` silently held. The fix: `${output}` reads
-# the END_ID's committed value through an injected `{"output": end_value}` record.
+# END_ID post-asserts evaluate record-scoped with `${output}` bound to the END value.
 def test_end_post_assert_reads_output() -> None:
-    """Direct EndNode with an `${output} > 0` assertion fires correctly through
-    eval_node's END_ID branch.
-
-    Before the fix: pool-scoped `first_failing_assert(["${output} > 0"], pool)` silently resolved
-    `${output}` to None (the pool has no `output` head), then `None > 0` raised — caught
-    as `evaluate_when` -> False -> assert SILENTLY held as failure even on a positive
-    output. After the fix: `${output}` reads through the injected `{"output": end_value}`
-    record so the comparison evaluates correctly.
-    """
+    """A direct EndNode evaluates `${output} > 0` through the `Node.run` wrapper."""
     from agent_composer.compile.model import CompiledFlow, END_ID, START_ID, Edge
     from agent_composer.nodes.end import EndNode
     from agent_composer.nodes.start import StartNode
-    from agent_composer.typesys.pool import VariablePool
     from tests.engine._fakes import FuncNode, derive_wiring
 
     def _make_flow(post_assert: str) -> CompiledFlow:
@@ -267,7 +254,7 @@ def test_end_post_assert_reads_output() -> None:
     assert type(events_pass[-1]).__name__ == "RunSucceeded", events_pass[-1]
     assert events_pass[-1].output == 5
 
-    # Fail-case: `${output} > 100` fires LOUD (pre-fix would have silently held).
+    # Fail-case: `${output} > 100` fails the END postcondition.
     g_fail = _make_flow("${output} > 100")
     events_fail = list(_engine(g_fail).run())
     assert type(events_fail[-1]).__name__ == "RunFailed", events_fail[-1]

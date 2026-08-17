@@ -12,7 +12,7 @@ reject an ill-formed flow before it is compiled:
   built graph.
 - `human_questions.py` — `validate_human_questions`: the `human_input` questions
   surface is well-formed.
-- `call_types.py` — `check_ref_map_types`: each `call`/`map` binding's source
+- `call_types.py` — `check_call_map_types`: each `call`/`map` binding's source
   Type is compatible with the child input's declared Type.
 - `loop_types.py` — `check_loop_type_contract`: a `loop`'s carried record obeys
   the `'a -> 'a` type contract by comparing each already-retained proven body field

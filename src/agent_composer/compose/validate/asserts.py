@@ -72,9 +72,9 @@ _SYNTH_PREFIX = "__assert_"
 class LoweredAsserts:
     """A flow's `asserts:` lowered into node-local asserts on the synthesized START/END.
 
-    The refactor replaces flow-level assert enforcement (which resolves refs against the
-    pool) with node-local asserts stamped on the boundary nodes and fired uniformly by
-    `eval_node`. That makes a cross-node post-assert's dependency STRUCTURAL — each
+    Flow-level assertions become node-local assertions on the synthesized boundary nodes,
+    evaluated uniformly by the `Node.run` wrapper. That makes a cross-node post-assert's
+    dependency structural — each
     `${producer.output}` ref becomes a real END input edge — so it survives child-cloning
     and namespacing under `kind: call` instead of silently failing.
 

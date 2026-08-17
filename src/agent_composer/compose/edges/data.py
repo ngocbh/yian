@@ -7,8 +7,8 @@ already flattens a coalesce `${a | b}` to BOTH ref paths, so the two alternative
 of one sink share that sink's `input_group` (per-input readiness). Refs whose
 head is not `outputs` (`inputs`/`system`/`item`) are NOT data edges.
 
-Root/terminal `__start__`/`__end__` synthesis is a later pass (it must run after the
-`case` control edges): this pass emits ONLY real-node data edges.
+Boundary assembly owns root/terminal `__start__`/`__end__` synthesis and runs after
+`case` control-edge construction; this pass emits only real-node data edges.
 """
 
 from __future__ import annotations
@@ -30,9 +30,9 @@ def infer_data_edges(
 
     For each consuming node, scan its sources and emit a data `Edge` per `${<id>.output[.…]}`
     ref, tagged with the `input_group` that identifies WHICH sink it feeds (the param/arg name
-    for a leaf/REF input; `over` for a MAP's `over:`; `until` for WAIT). A coalesce
+    for a leaf/call input; `over` for a map's `over:`; `until` for WAIT). A coalesce
     sink's alternatives share one group. Edges are the **projection of `flow.wiring`** for
-    leaf + WAIT + REF/MAP.
+    leaf + WAIT + call/map.
 
     `flow_wiring[node_id]` is the `{param -> source}` map (WAIT carries its `until`, a
     MAP its `over`, under the reserved keys). A `case` node is SKIPPED here — `CaseDescriptor.build`
@@ -75,7 +75,7 @@ def infer_data_edges(
             emit_for(wiring["until"], node_id, "until")
             continue
 
-        # leaf + REF/MAP: sources are the flow-owned wiring. A MAP's
+        # leaf + call/map: sources are the flow-owned wiring. A map's
         # reserved `over` source rides the `"over"` key (over-then-inputs order); `${item}` is
         # body-local and yields no edge. CASE/WAIT were handled above.
         for param, src in flow_wiring.get(node_id, {}).items():

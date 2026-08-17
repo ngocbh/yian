@@ -1,6 +1,6 @@
 """Graph-stage: the TYPE-level half of a `loop`'s `'a -> 'a` contract.
 
-A loader post-build pass (run after `check_ref_map_types`). `nodes.loop.build` checked only the
+A loader post-build pass (run after `check_call_map_types`). `nodes.loop.build` checked only the
 carried field-NAME sets — it lacks the resolved carried-record Types, which depend on the parent
 producers and flow inputs assembled by the parent build. This pass resolves each carried field's
 contract from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producer +
@@ -46,9 +46,9 @@ def check_loop_type_contract(
 
     `nodes.loop.build` checked only the field-NAME sets (it lacks the resolved carried-record
     Types because the seed sources' types depend on parent producers and flow inputs).
-    This pass, run after `check_ref_map_types`, resolves each carried field's Type
+    This pass, run after `check_call_map_types`, resolves each carried field's Type
     from its bound seed source (`${<id>.output}`/`${input.X}` over the parent producer +
-    flow-input contracts, exactly as `check_ref_map_types` via
+    flow-input contracts, exactly as `check_call_map_types` via
     `resolve_output_binding_contract`),
     and checks it with `types_compatible` against the body
     OUTPUT's same-named field Type. A fully proven body reads those fields from the

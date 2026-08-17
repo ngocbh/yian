@@ -19,7 +19,7 @@ def _boundary_field_ranges(
 ) -> dict[tuple[str, str], SourceRange]:
     """Return Compose-owned ranges for authored flow input declarations.
 
-    Keys: each top-level `input:`/`inputs:` declaration name, tagged
+    Keys: each top-level `input:` declaration name, tagged
     `("input", name)` -> its declaration value `SourceRange`. Assembly uses the
     map while compiling flow parameters and discards it before semantic graph
     construction. Flow-level `asserts:` are not here: assembly derives their

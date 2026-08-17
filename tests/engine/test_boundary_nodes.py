@@ -28,7 +28,7 @@ output: ${n.output}
 
 # A required terminal output whose only producer SKIPS -> END_ID's required group dies ->
 # END_ID is skip-flooded, never commits -> RunFailed (via END_ID disposition). `gate` routes to
-# `kept`; `dropped` is skip-flooded, so the `outputs: ${dropped.output}` group co-skips.
+# `kept`; `dropped` is skip-flooded, so the `output: ${dropped.output}` group co-skips.
 _COALESCE_REQUIRED = """
 id: e7
 name: e7
@@ -66,7 +66,7 @@ _E7_INPUTS = {"seed": 0.0}   # score=0 -> when `>= 1` false -> else `cold`; `kep
 
 def test_loader_synthesizes_start_and_end_nodes():
     flow = load_flow(_FLOW).compiled
-    # START_ID/END_ID are real NODES now (the ids ARE the old sentinel strings).
+    # START_ID and END_ID identify real synthesized nodes.
     assert flow.nodes[START_ID].kind is NodeKind.START
     assert flow.nodes[END_ID].kind is NodeKind.END
     # START_ID is the single root; END_ID is the terminal (via the start_id/end_id accessors).
@@ -94,7 +94,7 @@ def test_terminal_helpers_retired():
 
 
 def test_terminal_coskip_fails_via_end_disposition():
-    # a required `outputs:` group whose only producer SKIPS -> END_ID's required group dies ->
+    # a required flow `output:` group whose only producer SKIPS -> END_ID's required group dies ->
     # END_ID is skip-flooded, never commits -> RunFailed (via END_ID disposition), byte-stable msg.
     res = run_flow(load_flow(_COALESCE_REQUIRED), _E7_INPUTS)
     assert res.status == "failed"

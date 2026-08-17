@@ -3,7 +3,7 @@
 `desugar_call_directives` (below) is the pure string→data half: a field whose WHOLE
 trimmed value is exactly `call( … )` rewrites to `${<synth>.output}` and emits a
 `CallDescriptor`. This module is the assembly pass that runs it over a flow's parsed
-descriptors + `outputs:` section and installs each synth `call` node (`over=None`).
+descriptors + `output:` section and installs each synth `call` node (`over=None`).
 After it runs, the rest of `_assemble` (build → edge-infer → validate → DAG) sees the
 synth nodes as ordinary `call` nodes — inline calls are pure load-time sugar, no new
 runtime kind, the synth callee resolves through the SAME composite resolver
@@ -13,8 +13,8 @@ The retired inline `${ f(args) }` form — a FLOW call embedded inside a `${...}
 is a hard-break `LoadError` pointing the author at the `call(...)` directive; a pure
 builtin (`upper`, `join`, …) inside `${...}` stays legal.
 
-Binding positions + the flow `asserts:` section: a node's `inputs:` (agent/code/model/tool/call),
-a mapped call's `over:`, the flow `outputs:` bindings, AND each flow
+Binding positions + the flow `asserts:` section: a node's `input:` (agent/code/model/tool/call),
+a mapped call's `over:`, the flow `output:` bindings, AND each flow
 `asserts:` expression (a whole-value `call(...)` lifts to a synth node so the assert reads
 its output). NOT `when:`/`on:` (the case condition grammar) and NOT a node-local
 `asserts:` (those stay node-local — no inline call). A `case` descriptor carries no walked
@@ -34,7 +34,7 @@ Located parse metadata: each parsed host descriptor carries its own `range`/`fie
 (read from its source cursor). A synth `call` node locates at the SITE it desugared from — the host
 binding's own line (looked up in the host `field_ranges` by the binding key), not the host
 node header — and owns an empty `field_ranges`, so a bad ref inside the directive carets the
-directive rather than a host input that shares its param name. The flow `outputs:`/`asserts:`
+directive rather than a host input that shares its param name. The flow `output:`/`asserts:`
 sections have no descriptor, so their inline calls use a supplied section/item range.
 
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
@@ -97,7 +97,7 @@ def desugar_inline_calls(
 
     Returns `(new_descriptors, new_outputs, new_asserts)`: the descriptor map augmented with
     one synth `CallDescriptor` per inline call (the host binding rewritten to
-    `${<synth>.output}`), the flow `outputs:` section, and ordered semantic `Assertion`
+    `${<synth>.output}`), the flow `output:` section, and ordered semantic `Assertion`
     carriers. ``assertion_origin_at`` supplies an optional origin by authored list index
     exactly when raw text crosses into its carrier. Existing origins take precedence. An
     assertion's inline calls rewrite only its executable expression; display/origin stay
@@ -105,10 +105,10 @@ def desugar_inline_calls(
     (`${ f(...) } == x`) lifts to a synth node so the assert reads its output.
 
     Each synth node from a node host locates at the range of the binding it was found in (its
-    own `call(...)` directive line). A synth from flow `outputs:` uses ``outputs_range``; one
+    own `call(...)` directive line). A synth from flow `output:` uses ``outputs_range``; one
     from `asserts:` uses the authored item returned by ``assertion_range_at``. Raises
     `LoadError` on a malformed inline call, a `${item}` capture, or a reserved-prefix
-    collision — located at the host node / `outputs:` / `asserts:`."""
+    collision — located at the host node / `output:` / `asserts:`."""
     diagnostics = diagnostics or LoadDiagnostics()
     mint = next_id or _synth_id_gen()
 
@@ -181,14 +181,14 @@ def desugar_inline_calls(
 
 
 # --------------------------------------------------------------------------- #
-# The flow `outputs:` binding walk (used by this pass AND the case-value
+# The flow `output:` binding walk (used by this pass AND the case-value
 # expansion in `compose.desugar.case_outputs`). Descriptor binding fields go through the
 # kind-blind `compose.nodes.bindings.map_binding_strings` instead.
 # --------------------------------------------------------------------------- #
 
 
 def map_outputs_strings(outputs: Any, fn: Callable[[str], Any]) -> Any:
-    """Apply `fn` to each STRING binding in the flow `outputs:` section (a name→binding
+    """Apply `fn` to each STRING binding in the flow `output:` section (a name→binding
     map, a bare binding string, or `None`)."""
     if isinstance(outputs, dict):
         return {k: (fn(v) if isinstance(v, str) else v) for k, v in outputs.items()}
@@ -369,8 +369,8 @@ def _desugar_outputs(
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics,
 ) -> tuple:
-    """Desugar the flow `outputs:` section, returning `(new_outputs, inline_calls)`.
-    ``range`` is the `outputs:` section source range."""
+    """Desugar the flow `output:` section, returning `(new_outputs, inline_calls)`.
+    ``range`` is the `output:` section source range."""
     calls: list = []
     new_outputs = map_outputs_strings(
         outputs,

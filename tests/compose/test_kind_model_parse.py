@@ -1,4 +1,4 @@
-"""6.3 — the `model` kind handle: parse records field ranges into the descriptor; build
+"""The `model` kind handle: parsing records field ranges in the descriptor; build
 returns a runtime ModelNode with an output contract, wiring, and stamped ranges."""
 
 from agent_composer.compose.nodes.base import BuildContext

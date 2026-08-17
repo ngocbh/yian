@@ -194,7 +194,7 @@ def test_uses_node_id_collision():
 
 
 def test_uncalled_broken_alias_is_loud():
-    # `dead` is declared but never called; eager resolution must still fire (hub: deferred)
+    # `dead` is declared but never called; eager resolution still rejects unsupported hub refs.
     text = _BASE + "uses:\n  dead: hub:x/y@1\n"
     with pytest.raises(LoadError, match="marketplace not supported yet"):
         load_flow(text, child_resolver=_fake_resolver([]))

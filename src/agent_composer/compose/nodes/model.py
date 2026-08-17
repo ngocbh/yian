@@ -22,13 +22,13 @@ class ModelDescriptor(NodeDescriptor):
     """kind=model — ML inference (a `model_id`, optional weights/runtime).
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `inputs:`
+    the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `input:`
     call-arg map and the template `parse` (no custom parse hook — model's field legality is the
     default allowed/required key check + the asserts-list check). Only the model-specific fields
     (`model_id`, `weights_uri`, `runtime`, `asserts`) are declared here; `inputs`/`outputs` come
     from the base.
 
-    Class attrs: `kind="model"`; `allowed` adds `model_id`/`inputs`/`outputs`/`weights_uri`/
+    Class attrs: `kind="model"`; `allowed` adds `model_id`, normalized `inputs`/`outputs`, `weights_uri`,
     `runtime`/`asserts` to the commons; `required` is `{"model_id"}`; `binding_fields=("inputs",)`
     — `model_id`/`weights_uri`/`runtime` are static refs, not `${...}` bindings.
     """
@@ -49,7 +49,7 @@ class ModelDescriptor(NodeDescriptor):
         """Construct the runtime `ModelNode` (+ wiring) for this `ModelDescriptor`.
 
         Builds the model leaf (node-side `params` + flow-owned `inputs` wiring,
-        `output_contract` from `outputs:`). `_finish` stamps the descriptor origin on the node
+        `output_contract` from authored `output:`). `_finish` stamps the descriptor origin on the node
         and keeps its ranges on the Compose-owned `BuildResult`. `ctx.resolver` is unused (leaf
         kind), and the inline-CODE anchors on `ctx` are read only by the CODE build.
         """

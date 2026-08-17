@@ -149,7 +149,7 @@ def test_nested_call_loop_respawn_failure_keeps_each_authored_origin_once():
     assert result.failure.trace == (outer.origin, repeat.origin)
 
 
-# The chat-shaped slice: a body blocks each turn on a `human_input` leaf, folds the
+# The chat scenario: a body blocks each turn on a `human_input` leaf, folds the
 # returned message into the carried {messages, exited} record, and loops until "bye".
 LOOP_CHAT = """
 id: chat

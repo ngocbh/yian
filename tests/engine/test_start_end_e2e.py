@@ -36,7 +36,7 @@ _REPRESENTATIVE = [
 # comments/docstrings is fine — those are excluded by the AST walk, which never sees them).
 # `MapNode` is NOT retired — it is the re-split MAP driver (`kind: map`).
 _RETIRED_NAMES = {"RefNode", "OutputResolverNode", "CollectorNode"}
-_RETIRED_KIND_ATTRS = {"REF", "OUTPUT_RESOLVER", "COLLECTOR"}  # MAP re-split into its own kind
+_RETIRED_KIND_ATTRS = {"REF", "OUTPUT_RESOLVER", "COLLECTOR"}
 _RETIRED_FUNCS = {"terminal_output", "_emit_terminal", "_terminal_coskip"}
 
 
@@ -59,7 +59,7 @@ def test_exactly_one_start_and_one_end_per_flow(seed):
 def test_nodekind_has_no_retired_members():
     for attr in _RETIRED_KIND_ATTRS:
         assert not hasattr(NodeKind, attr), f"NodeKind still carries {attr}"
-    # the closed set: CALL (REF) + MAP are the two composition kinds (re-split).
+    # CALL and MAP are the two composition kinds.
     assert NodeKind.CALL == "call" and NodeKind.MAP == "map"
 
 
@@ -67,7 +67,7 @@ def test_nodekind_has_no_retired_members():
 def test_no_retired_node_kinds_in_compiled_ir(seed):
     compiled = load_flow((_SEEDS / seed).read_text(), search_paths=[_SEEDS]).compiled
     kinds = {n.kind for n in compiled.nodes.values()}
-    # CALL + MAP exist; REF/OUTPUT_RESOLVER/COLLECTOR cannot (removed from NodeKind).
+    # Every compiled kind belongs to the closed current enum.
     assert all(k in NodeKind for k in kinds)
     # __start__/__end__ appear ONLY as the real boundary NODE ids — never a stray sentinel
     # string on a non-boundary node, and every edge touching them is to/from a real node.
@@ -138,17 +138,17 @@ def test_inputs_default_resolves_via_start_d_b_closed():
 
 def test_author_identical_run_results_hold():
     # LLM-terminating seeds run via the CODE-child goldens (test_golden_run_results.py); re-assert the
-    # REF/MAP run-results + blocking interaction + output arity remain covered.
+    # CALL/MAP run results, blocking interaction, and output arity remain covered.
     from tests.engine.test_golden_run_results import (
         test_golden_human_input_then_past_wait_completes_in_one_run,
         test_golden_map_run_result,
         test_golden_output_arity_0,
         test_golden_output_arity_1,
         test_golden_output_arity_2,
-        test_golden_ref_run_result,
+        test_golden_call_run_result,
     )
 
-    test_golden_ref_run_result()
+    test_golden_call_run_result()
     test_golden_map_run_result()
     test_golden_human_input_then_past_wait_completes_in_one_run()
     test_golden_output_arity_0()

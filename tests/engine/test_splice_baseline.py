@@ -1,7 +1,7 @@
 """Splice baseline (characterization, GREEN on first run).
 
 Pins the child START_ID/END_ID shape the splice keys off, so the splice can assert its deltas
-against recorded literals (not a remembered set). Loads a one-output REF parent + a CODE-only
+against recorded literals (not a remembered set). Loads a one-output CALL parent + a CODE-only
 child and a MAP parent WITHOUT running them, recording the boundary-node shape (the child
 START_ID's params == declared input names; the child END_ID's params == declared output names; START_ID
 is the single root; END_ID is the terminal) + the parent edge id set + the CALL/MAP wiring.
@@ -14,11 +14,11 @@ from agent_composer.compose import load_flow
 from agent_composer.nodes.base import NodeKind
 from tests.engine.test_map import _ECHO_CHILD, _map_flow
 from tests.engine.test_map import _resolver as _map_resolver
-from tests.engine.test_ref_run import _CHILD, _REF_PARENT, _resolver
+from tests.engine.test_call_run import _CALL_PARENT, _CHILD, _resolver
 
 
-def test_ref_child_carries_one_start_and_one_end_boundary():
-    parent = load_flow(_REF_PARENT, child_resolver=_resolver(**{"child-one": _CHILD}))
+def test_call_child_carries_one_start_and_one_end_boundary():
+    parent = load_flow(_CALL_PARENT, child_resolver=_resolver(**{"child-one": _CHILD}))
     child = parent.compiled.nodes["research"].child
 
     # (i) exactly one START_ID (single root) + one END_ID (terminal), with the reserved ids.
@@ -32,8 +32,8 @@ def test_ref_child_carries_one_start_and_one_end_boundary():
     assert [p.name for p in child.nodes[child.end_id].params] == ["report", "n"]
 
 
-def test_ref_parent_edge_ids_and_call_wiring():
-    parent = load_flow(_REF_PARENT, child_resolver=_resolver(**{"child-one": _CHILD}))
+def test_call_parent_edge_ids_and_wiring():
+    parent = load_flow(_CALL_PARENT, child_resolver=_resolver(**{"child-one": _CHILD}))
     c = parent.compiled
     assert sorted(e.id for e in c.edges) == [
         "__start__->research#0",
@@ -70,7 +70,7 @@ def test_no_output_resolver_or_collector_in_a_loaded_flow():
     # synthesis removed OUTPUT_RESOLVER/COLLECTOR; a LOADED (un-run) flow carries none.
     # (the kinds were deleted entirely; assert by VALUE so this holds across the deletion.)
     for parent in (
-        load_flow(_REF_PARENT, child_resolver=_resolver(**{"child-one": _CHILD})),
+        load_flow(_CALL_PARENT, child_resolver=_resolver(**{"child-one": _CHILD})),
         load_flow(_map_flow("echo-one", parallel=False),
                   child_resolver=_map_resolver(**{"echo-one": _ECHO_CHILD})),
     ):

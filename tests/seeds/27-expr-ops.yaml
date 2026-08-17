@@ -1,7 +1,7 @@
 # 27 — Every new ${...} expression form, in one flow.
 #
 # The unified grammar makes the FULL expression language available inside every
-# ${...} — bindings, conditions, AND prompts (each used to have its own dialect).
+# ${...} — bindings, conditions, and prompts.
 # This seed exercises each form once:
 #   arithmetic  + - * / % ** and unary minus, with parens for precedence
 #   strings     concatenation with +  (and the upper/lower builtins)

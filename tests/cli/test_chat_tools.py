@@ -193,6 +193,30 @@ def test_write_flow_noninteractive_input_fails_closed_without_prompting(
     assert not (tmp_path / "new").exists()
 
 
+def test_write_flow_without_secure_dirfd_support_fails_closed_before_prompt(
+    tmp_path, approval_tty, monkeypatch
+):
+    T.set_workspace(tmp_path)
+    monkeypatch.setattr(
+        T,
+        "_secure_workspace_write_available",
+        lambda: False,
+        raising=False,
+    )
+
+    def unexpected_prompt(**_request):
+        raise AssertionError("unsupported host must not prompt")
+
+    with install_ask_user(unexpected_prompt):
+        result = T.write_flow("new/subdir/flow.yaml", GOOD)
+
+    assert result == (
+        "NOT WRITTEN: new/subdir/flow.yaml "
+        "(secure workspace writes are unsupported on this platform)"
+    )
+    assert not (tmp_path / "new").exists()
+
+
 @pytest.mark.parametrize("original", [None, b"original bytes\n"])
 def test_write_flow_refuses_target_changed_while_approval_is_open(
     tmp_path, original, approval_tty
@@ -233,6 +257,51 @@ def test_write_flow_does_not_follow_dangling_symlink_created_during_approval(
     assert result == "NOT WRITTEN: new.yaml (target changed during approval)"
     assert link.is_symlink()
     assert not outside.exists()
+
+
+def test_write_flow_rejects_same_byte_hardlink_swap_during_approval(
+    tmp_path, approval_tty
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "flow.yaml"
+    outside = tmp_path / "outside.yaml"
+    original = b"original bytes\n"
+    target.write_bytes(original)
+    outside.write_bytes(original)
+    T.set_workspace(workspace)
+
+    def approve_after_hardlink_swap(**_request):
+        target.unlink()
+        os.link(outside, target)
+        return {"Decision": "Approve"}
+
+    with install_ask_user(approve_after_hardlink_swap):
+        result = T.write_flow("flow.yaml", GOOD)
+
+    assert result == "NOT WRITTEN: flow.yaml (target changed during approval)"
+    assert target.read_bytes() == original
+    assert outside.read_bytes() == original
+
+
+def test_write_flow_rejects_preexisting_multi_link_target_before_prompt(
+    tmp_path, approval_tty
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.yaml"
+    outside.write_bytes(b"original bytes\n")
+    os.link(outside, workspace / "flow.yaml")
+    T.set_workspace(workspace)
+
+    def unexpected_prompt(**_request):
+        raise AssertionError("multi-link target must not prompt")
+
+    with install_ask_user(unexpected_prompt):
+        result = T.write_flow("flow.yaml", GOOD)
+
+    assert result == "NOT WRITTEN: flow.yaml (target has multiple hard links)"
+    assert outside.read_bytes() == b"original bytes\n"
 
 
 @pytest.mark.parametrize(
@@ -291,10 +360,13 @@ def test_write_flow_commit_is_anchored_across_parent_symlink_swap(
     T.set_workspace(workspace)
     original_open = T._open_no_follow
     swapped = False
+    leaf_opens = 0
 
     def swap_parent_before_leaf_open(path, flags, mode=0o777, *, dir_fd=None):
-        nonlocal swapped
-        if not swapped and Path(path).name == "flow.yaml":
+        nonlocal leaf_opens, swapped
+        if Path(path).name == "flow.yaml":
+            leaf_opens += 1
+        if not swapped and leaf_opens == 3:
             swapped = True
             safe.rename(held)
             safe.symlink_to(outside, target_is_directory=True)
@@ -314,6 +386,38 @@ def test_write_flow_commit_is_anchored_across_parent_symlink_swap(
     else:
         assert outside_target.read_bytes() == original
         assert (held / "flow.yaml").read_bytes() == original
+
+
+@pytest.mark.parametrize("original", [None, b"original bytes\n"])
+def test_write_flow_rolls_back_hardlink_added_during_commit(
+    tmp_path, approval_tty, monkeypatch, original
+):
+    target = tmp_path / "flow.yaml"
+    outside = tmp_path / "outside.yaml"
+    if original is not None:
+        target.write_bytes(original)
+    T.set_workspace(tmp_path)
+    replace_contents = T._replace_fd_contents
+    linked = False
+
+    def link_before_write(descriptor, content):
+        nonlocal linked
+        if not linked:
+            linked = True
+            os.link(target, outside)
+        replace_contents(descriptor, content)
+
+    monkeypatch.setattr(T, "_replace_fd_contents", link_before_write)
+    with install_ask_user(lambda **_request: {"Decision": "Approve"}):
+        result = T.write_flow("flow.yaml", GOOD)
+
+    assert result == "NOT WRITTEN: flow.yaml (target changed during approval)"
+    if original is None:
+        assert not target.exists()
+        assert outside.read_bytes() == b""
+    else:
+        assert target.read_bytes() == original
+        assert outside.read_bytes() == original
 
 
 def test_write_flow_create_uses_normal_file_permissions(tmp_path, approval_tty):

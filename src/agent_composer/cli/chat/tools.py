@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from difflib import unified_diff
 import errno
 import os
@@ -61,18 +62,69 @@ def _approval_prompt_available() -> bool:
         return False
 
 
-def _target_snapshot(dest: Path) -> bytes | None:
-    """Read the exact target bytes, using ``None`` only for a missing path."""
+def _secure_workspace_write_available() -> bool:
+    """Return whether the host can anchor every path component to a directory fd."""
+    required_dir_fd = {os.mkdir, os.open, os.stat, os.unlink}
+    return (
+        hasattr(os, "O_DIRECTORY")
+        and hasattr(os, "O_NOFOLLOW")
+        and required_dir_fd.issubset(os.supports_dir_fd)
+        and os.stat in os.supports_follow_symlinks
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _TargetSnapshot:
+    """Approval-time bytes and filesystem identity for one existing target."""
+
+    content: bytes
+    device: int
+    inode: int
+    link_count: int
+
+
+def _target_snapshot(dest: Path) -> _TargetSnapshot | None:
+    """Read target bytes and identity, using ``None`` only for a missing path."""
+    relative = dest.relative_to(_WORKSPACE)
     try:
-        return dest.read_bytes()
-    except FileNotFoundError:
+        opened_parent = _open_workspace_parent(relative, create=False)
+    except OSError as exc:
+        if exc.errno in _CHANGED_PATH_ERRNOS:
+            return None
+        raise
+    if opened_parent is None:
         return None
+    parent_fd, leaf = opened_parent
+    descriptor = None
+    try:
+        try:
+            descriptor = _open_no_follow(
+                leaf,
+                os.O_RDONLY | getattr(os, "O_BINARY", 0),
+                dir_fd=parent_fd,
+            )
+        except OSError as exc:
+            if exc.errno in _CHANGED_PATH_ERRNOS:
+                return None
+            raise
+        content = _read_fd(descriptor)
+        identity = os.fstat(descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent_fd)
+    return _TargetSnapshot(
+        content=content,
+        device=identity.st_dev,
+        inode=identity.st_ino,
+        link_count=identity.st_nlink,
+    )
 
 
 def _target_is_unchanged(
     authored_path: str,
     dest: Path,
-    snapshot: bytes | None,
+    snapshot: _TargetSnapshot | None,
 ) -> bool:
     """Re-confine the authored path and compare its exact current target bytes."""
     try:
@@ -173,12 +225,35 @@ def _target_binding_is_current(
             return False
         if not _same_file(os.stat(dest.parent), os.fstat(parent_fd)):
             return False
-        return _same_file(
-            os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False),
-            os.fstat(leaf_fd),
+        opened = os.fstat(leaf_fd)
+        return opened.st_nlink == 1 and _same_file(
+            os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False), opened
         )
     except (OSError, RuntimeError, ValueError):
         return False
+
+
+def _snapshot_matches_fd(snapshot: _TargetSnapshot, descriptor: int) -> bool:
+    """Match bytes, identity, and link count against the approval snapshot."""
+    identity = os.fstat(descriptor)
+    return (
+        identity.st_dev == snapshot.device
+        and identity.st_ino == snapshot.inode
+        and identity.st_nlink == snapshot.link_count == 1
+        and _read_fd(descriptor) == snapshot.content
+    )
+
+
+def _rollback_created_leaf(parent_fd: int, leaf: str, descriptor: int) -> None:
+    """Restore a newly created inode to empty and unlink our still-current leaf."""
+    _replace_fd_contents(descriptor, b"")
+    opened = os.fstat(descriptor)
+    try:
+        current = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if _same_file(opened, current):
+        os.unlink(leaf, dir_fd=parent_fd)
 
 
 _CHANGED_PATH_ERRNOS = frozenset(
@@ -195,7 +270,7 @@ def _commit_flow_write(
     authored_path: str,
     dest: Path,
     content: str,
-    snapshot: bytes | None,
+    snapshot: _TargetSnapshot | None,
 ) -> bool:
     """Commit through workspace-anchored fds or roll back a changed binding."""
     relative = dest.relative_to(_WORKSPACE)
@@ -225,7 +300,11 @@ def _commit_flow_write(
                 return False
             raise
 
-        if snapshot is not None and _read_fd(descriptor) != snapshot:
+        if snapshot is None:
+            if os.fstat(descriptor).st_nlink != 1:
+                _rollback_created_leaf(parent_fd, leaf, descriptor)
+                return False
+        elif not _snapshot_matches_fd(snapshot, descriptor):
             return False
         _replace_fd_contents(descriptor, content.encode())
         if _target_binding_is_current(
@@ -238,16 +317,9 @@ def _commit_flow_write(
             return True
 
         if snapshot is None:
-            opened = os.fstat(descriptor)
-            try:
-                current = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
-            except FileNotFoundError:
-                pass
-            else:
-                if _same_file(opened, current):
-                    os.unlink(leaf, dir_fd=parent_fd)
+            _rollback_created_leaf(parent_fd, leaf, descriptor)
         else:
-            _replace_fd_contents(descriptor, snapshot)
+            _replace_fd_contents(descriptor, snapshot.content)
         return False
     finally:
         if descriptor is not None:
@@ -290,13 +362,17 @@ def _diff_lines(text: str, *, show_endings: bool) -> list[str]:
     return lines
 
 
-def _write_flow_preview(dest: Path, content: str, snapshot: bytes | None) -> str:
+def _write_flow_preview(
+    dest: Path,
+    content: str,
+    snapshot: _TargetSnapshot | None,
+) -> str:
     """Return the target-labelled create content or overwrite diff for approval."""
     relative = dest.relative_to(_WORKSPACE)
     if snapshot is None:
         return f"Create {relative} with this validated content:\n\n{content}"
 
-    current = snapshot.decode()
+    current = snapshot.content.decode()
     show_endings = _line_ending_labels(current) != _line_ending_labels(content)
     diff = "\n".join(
         unified_diff(
@@ -317,7 +393,7 @@ def _write_flow_preview(dest: Path, content: str, snapshot: bytes | None) -> str
 def _approve_flow_write(
     dest: Path,
     content: str,
-    snapshot: bytes | None,
+    snapshot: _TargetSnapshot | None,
 ) -> bool | None:
     """Return exact host approval, or ``None`` when no host owns interaction."""
     try:
@@ -454,8 +530,9 @@ def write_flow(
     workspace-relative destination; `content` is the complete flow YAML. The content is
     compile-checked and shown to the human for explicit approval BEFORE anything is
     written. Returns `WROTE: <path>` on approval, `NOT WRITTEN: <path> (...)` when
-    approval is non-interactive, rejected, unavailable, or stale, or `INVALID (not
-    written): <compile error>` if it doesn't compile."""
+    approval is non-interactive, rejected, unavailable, stale, multi-linked, or lacks a
+    secure host commit primitive, or `INVALID (not written): <compile error>` if it
+    doesn't compile."""
     dest = _resolve(path)  # raises on escape
     try:
         load_flow(
@@ -468,7 +545,14 @@ def write_flow(
     relative = dest.relative_to(_WORKSPACE)
     if not _approval_prompt_available():
         return f"NOT WRITTEN: {relative} (interactive approval requires a TTY)"
+    if not _secure_workspace_write_available():
+        return (
+            f"NOT WRITTEN: {relative} "
+            "(secure workspace writes are unsupported on this platform)"
+        )
     snapshot = _target_snapshot(dest)
+    if snapshot is not None and snapshot.link_count != 1:
+        return f"NOT WRITTEN: {relative} (target has multiple hard links)"
     approved = _approve_flow_write(dest, content, snapshot)
     if approved is None:
         return f"NOT WRITTEN: {relative} (host approval is unavailable)"

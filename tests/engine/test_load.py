@@ -1,6 +1,6 @@
 """Integration tests for the top-level loader.
 
-`load_flow(text) -> ComposedFlow` wires every prior slice into one runnable
+`load_flow(text) -> ComposedFlow` assembles the parsed flow into one runnable
 `CompiledFlow` + canonical flow parameters + the boundary/post-terminal assert split. The
 load-test set is the seeds: flat (00/01), case (02/06), the
 arithmetic asserts (10), anchors (11), MODEL (07), AGENT knobs (14), nested records +
@@ -10,7 +10,7 @@ EXCLUDED (recorded reasons):
   (15/16 + errors/e04/e05 — the dropped `kind: match`/payload-union design — were deleted;
   tagged data is modelled as a discriminant record + `case … on <field>`.)
 - 04/05 — `call` nodes need a child resolver (asserted loud below; the resolver'd
-  load+compile path lives in tests/engine/test_ref_map.py).
+  load+compile path lives in tests/engine/test_call_map.py).
 """
 
 from pathlib import Path
@@ -38,13 +38,13 @@ _SEED_FILES = {
     "07": "07-model-rating.yaml",
     # 09 — ${...} operator forms incl. the ${system.run_id} ambient (now allow-listed).
     "09": "09-interpolation-ops.yaml",
-    # 12 — depends_on/runs_after ordering edges (feature D); now wired, not parsed-only.
+    # 12 — depends_on/runs_after produce ordering edges.
     "12": "12-depends-on.yaml",
     "10": "10-asserts-arithmetic.yaml",
     "11": "11-reuse-anchors.yaml",
     "13": "13-types-objects.yaml",
     "14": "14-agent-tools.yaml",
-    # 17 loads resolver-free — effects (human_input/wait); promoted from _future (feature E).
+    # 17 loads resolver-free because human_input and wait need no child flow.
     "17": "17-effects-human-wait.yaml",
     "18": "18-research-pipeline.yaml",
     "19": "19-binding-stances.yaml",
@@ -103,7 +103,7 @@ def test_seed02_gate_is_case_with_control_edges():
     # coalesce flow-output: BOTH branches reach __end__.
     end_producers = {e.from_ for e in flow.edges if e.to == END_ID}
     assert end_producers == {"positive", "cautious"}
-    # bare whole-string `outputs:` -> one FlowOutput (terminal_output returns bare value).
+    # Bare whole-string `output:` -> one FlowOutput (record-mode END returns the bare value).
     assert len(flow.outputs) == 1
     assert flow.outputs[0].from_ == "${positive.output | cautious.output}"
 
@@ -297,17 +297,17 @@ def test_seed19_loads_clean():
 
 
 @pytest.mark.parametrize("seed", ["04-call.yaml", "05-call-map.yaml"])
-def test_ref_map_without_resolver_is_loud(seed):
+def test_call_map_without_resolver_is_loud(seed):
     # A `call` node is built given a child resolver; without one it is loud (the
     # resolver-required path). The resolver'd load+compile path is covered in
-    # tests/engine/test_ref_map.py.
+    # tests/engine/test_call_map.py.
     with pytest.raises(LoadError) as exc:
         load_flow((_SEEDS / seed).read_text())
     assert "resolver" in str(exc.value).lower()
 
 
 def test_depends_on_seed_emits_ordering_edge():
-    # seed 12 is wired (feature D): `fetch depends_on [warm_cache]` -> an ordering edge.
+    # `fetch depends_on [warm_cache]` produces an ordering edge.
     loaded = load_flow((_SEEDS / "12-depends-on.yaml").read_text())
     assert isinstance(loaded, ComposedFlow)
     ordering = [e for e in loaded.compiled.edges if e.ordering]

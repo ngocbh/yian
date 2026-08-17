@@ -1,6 +1,6 @@
 """Authoring TypeExpr grammar → runtime Type.
 
-Parses an `IOField.type` / `types:` reference string into a `TypeExpr` AST, and
+Parses an authored type expression into a `TypeExpr` AST, and
 resolves a `TypeExpr` against the per-flow type registry into a leaf `Type`
 (`agent_composer.typesys.values`). This is the bridge from the authoring contract
 to the typed value system.
@@ -53,7 +53,7 @@ class EnumExpr:
 
 @dataclass(frozen=True)
 class DictExpr:
-    # dict[K, V] — full key/value typing is deferred; resolves to a lenient object.
+    # dict[K, V] resolves to a lenient object; key/value types are not enforced.
     pass
 
 

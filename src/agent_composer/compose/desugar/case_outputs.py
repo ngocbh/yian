@@ -1,7 +1,7 @@
 """Desugar pass: `${<case>.output}` binding refs -> branch coalesce over case leaves.
 
-`expand_case_outputs` (below) walks every binding field (any node's `inputs:` /
-mapped-call `over:`) and the flow `outputs:` bindings, and rewrites a clean WHOLE-SPAN
+`expand_case_outputs` (below) walks every binding field (any node's `input:` /
+mapped-call `over:`) and the flow `output:` bindings, and rewrites a clean WHOLE-SPAN
 case-output ref `${<case>.output[.path]}` to a coalesce `${t1.output[.path] | t2.output… }`
 over the case's LEAF (non-case) branch targets. A case-value ref in any NON-clean binding
 position (coalesce / default operand / embedded text), or in a `case` condition
@@ -14,7 +14,7 @@ Runs AFTER `desugar_case_call_targets` (so a `then:/else: call(...)` synth id is
 target here) and, like the other desugars, BEFORE the build loop.
 
 Imports flow DOWN/peer only: `expr` (the ref-walk), `compose.nodes.bindings` (the
-kind-blind binding-field walk), `compose.desugar.inline_calls` (the `outputs:` walk —
+kind-blind binding-field walk), `compose.desugar.inline_calls` (the `output:` walk —
 within-phase peer), `compose.helpers.errors`, `compose.parse.file` (CaseDescriptor).
 Only the loader (and the compose package root re-export) import this back.
 """
@@ -53,8 +53,8 @@ def expand_case_outputs(
     """Expand every `${<case>.output}` binding ref to a coalesce over the case's branch
     targets, returning `(new_descriptors, new_outputs)`.
 
-    Walks every binding field (any node's `inputs:` / a mapped call's `over:`) and
-    the flow `outputs:` bindings; rewrites a clean whole-span case-output ref to the
+    Walks every binding field (any node's `input:` / a mapped call's `over:`) and
+    the flow `output:` bindings; rewrites a clean whole-span case-output ref to the
     branch coalesce. Rejects (located `LoadError`) a case-value ref in a non-clean
     binding position, or in a `case` condition (`on:`/`when:`) or an `assert` — those are
     not bindings. Descriptor field/item ranges locate node-owned sites;

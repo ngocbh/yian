@@ -1,6 +1,6 @@
 # e02 — Cyclic data graph.
 # EXPECT: compile error — the inferred graph has a cycle (a -> b -> a). The graph is inferred
-# from ${X.output} refs; a cycle is not a DAG (alang L4 / C4).
+# from ${X.output} refs; cycle validation rejects the resulting non-DAG.
 
 id: err-cycle
 name: err_cycle

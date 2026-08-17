@@ -1,4 +1,4 @@
-"""6.7 — the `case` kind handle: parse records the `on`/`cases`/`else` field ranges and
+"""The `case` kind handle: parsing records the `on`/`cases`/`else` field ranges and
 survives YAML 1.1's `on:` -> True key coercion; build LOWERS the case to a strict `CaseNode`
 plus its data + control edges (the case's lowering is its own `.build(ctx)`, no leaf Node).
 """

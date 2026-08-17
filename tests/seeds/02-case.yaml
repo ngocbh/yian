@@ -23,7 +23,7 @@ nodes:
 
   gate:
     kind: case
-    # A `case` routes only — no inputs:. The edge score -> gate is inferred from the
+    # A `case` routes only — no input:. The edge score -> gate is inferred from the
     # score.output ref in when:. Each `when:` is a boolean expression; the first
     # true one's `then:` runs. `else:` is the unconditional fallback branch.
     cases:

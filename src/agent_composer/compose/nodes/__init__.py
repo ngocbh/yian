@@ -3,9 +3,7 @@
 The Compose front end is split along two axes: the *node-kind* axis lives here
 (`compose/nodes/<kind>.py`), and the cross-node *graph-stage* axis lives in the
 `compose/parse/`, `compose/desugar/`, `compose/edges/`, and `compose/validate/` phases.
-Each kind module owns the four things that used to be scattered across `parse/file.py`
-(its descriptor + the `_KIND_SPECS` row) and the old leaf-build branch (its slice of the
-per-kind isinstance ladder, now dissolved):
+Each kind module owns four things:
 
 - its frozen **descriptor** dataclass (subclassing `NodeDescriptor`),
 - **`parse(id, cursor)`** — a classmethod that reads one node body via a located
@@ -31,8 +29,7 @@ adding/altering a kind is a local edit here —
 the engine core never sees any of it (kind-blind invariant, `tests/engine/test_kind_census.py`).
 
 `BINDING_FIELDS` is the sibling trait table: per kind, the descriptor fields that carry
-`${...}` binding strings. `compose/nodes/bindings.py` walks it kind-blind (replacing the old
-`map_binding_strings_in_descriptor` isinstance ladder).
+`${...}` binding strings. `compose/nodes/bindings.py` walks it kind-blind.
 
 Both tables are derived **below** from a single `_DESCRIPTORS` tuple — one entry per
 author-written kind, keyed by each class's own `kind`/`binding_fields` ClassVars. Adding a

@@ -42,7 +42,7 @@ def test_linear_runs_in_order():
     assert isinstance(events[-1], RunSucceeded)
 
 
-def test_terminal_output_surface():
+def test_end_assembles_declared_output_record():
     # The flow's declared codomain is assembled from the pool: two outputs bound to
     # the terminal node's value -> an object keyed by output name (>=2 arity rule).
     g = _graph(
@@ -58,8 +58,7 @@ def test_terminal_output_surface():
 
 
 def test_no_declared_outputs_yields_none():
-    # A-NOFALLBACK: with no declared `outputs:`, the raw-terminal dict fallback is
-    # retired -> terminal_output() (and the success event) is None.
+    # With no declared `output:`, END and the success event carry None.
     g = _graph(
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final", "n": 7})],
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],
@@ -68,10 +67,10 @@ def test_no_declared_outputs_yields_none():
     assert events[-1].output is None
 
 
-# --- terminal_output via the binding layer ---------------------------------- #
+# --- END output assembly via the binding layer ----------------------------- #
 
 
-def test_terminal_output_coalesce_returns_first_non_none():
+def test_end_output_coalesce_returns_first_non_none():
     # A coalesce output `${a | b}` ("return whichever branch ran"): only `b`
     # produced a value (the `a` branch was skipped) -> resolve to b's value.
     g = _graph(
@@ -83,7 +82,7 @@ def test_terminal_output_coalesce_returns_first_non_none():
     assert events[-1].output == "B-RAN"
 
 
-def test_terminal_output_default_when_ref_none():
+def test_end_output_default_when_ref_none():
     # `${x:-lit}` falls back to the literal default when x is unbound (None).
     g = _graph(
         [FuncNode("a", lambda p: {})],
@@ -94,7 +93,7 @@ def test_terminal_output_default_when_ref_none():
     assert events[-1].output == "fallback"
 
 
-def test_terminal_output_literal_string_passthrough():
+def test_end_output_literal_string_passthrough():
     # A non-${...} string flow-output value passes through unchanged.
     g = _graph(
         [FuncNode("a", lambda p: {})],
@@ -105,7 +104,7 @@ def test_terminal_output_literal_string_passthrough():
     assert events[-1].output == "plain literal"
 
 
-def test_terminal_output_literal_numeric_passthrough():
+def test_end_output_literal_numeric_passthrough():
     # A non-string literal output value is kept as-is (no stringification).
     g = _graph(
         [FuncNode("a", lambda p: {})],
@@ -117,9 +116,9 @@ def test_terminal_output_literal_numeric_passthrough():
     assert isinstance(events[-1].output, int)
 
 
-def test_terminal_output_flowoutput_carrier_like_iofield():
-    # FlowOutput behaves exactly like IOField in terminal_output (reads .name/.from_):
-    # whole-string ref preserves the typed value; >=2 -> object keyed by name.
+def test_end_output_flowoutput_carrier_builds_record():
+    # FlowOutput reads each name/binding pair: a whole-string ref preserves the typed
+    # value, and two or more outputs form an object keyed by name.
     g = _graph(
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final", "n": 7})],
         [(START_ID, "a"), ("a", "t"), ("t", END_ID)],
@@ -132,8 +131,7 @@ def test_terminal_output_flowoutput_carrier_like_iofield():
     assert events[-1].output == {"output": "final", "n": 7}
 
 
-def test_terminal_output_iofield_still_resolves():
-    # Legacy IOField-typed outputs list still resolves (whole-string ${...}).
+def test_end_output_whole_ref_preserves_typed_value():
     g = _graph(
         [FuncNode("t", lambda p: {"output": "final"})],
         [(START_ID, "t"), ("t", END_ID)],
@@ -277,7 +275,7 @@ def test_data_edged_branch_target_does_not_run_when_skipped():
     assert isinstance(events[-1], RunSucceeded)
 
 
-# --- E7: a co-skipped terminal fails the run ------------------------------- #
+# --- a co-skipped terminal fails the run ----------------------------------- #
 
 
 def _gate_flow(log, output_from):
@@ -302,13 +300,13 @@ def test_coalesce_terminal_one_branch_skipped_succeeds():
 
 
 def test_does_not_misfire_on_optional_terminal():
-    # ${t.output:-null}: t skipped, but the literal escape -> succeeds binding null (not E7).
+    # ${t.output:-null}: t skipped, but the literal escape succeeds by binding null.
     last = _run(_engine(_gate_flow([], "${t.output:-null}")))[-1]
     assert isinstance(last, RunSucceeded) and last.output is None
 
 
 def test_genuine_none_terminal_succeeds():
-    # terminal RAN and returned None (TAKEN, value None) -> RunSucceeded(None), NOT E7.
+    # A terminal that ran and returned None succeeds with that genuine value.
     g = _graph(
         [FuncNode("n", lambda p: None)],
         [(START_ID, "n"), ("n", END_ID)],
@@ -331,7 +329,7 @@ def test_node_failure_produces_graph_failed():
     assert events[-1].failure.message == "nope"
 
 
-# --- write-boundary output enforcement (slice 2) ---------------------------- #
+# --- write-boundary output enforcement -------------------------------------- #
 
 
 def test_output_enforced_rejects_type_mismatch():

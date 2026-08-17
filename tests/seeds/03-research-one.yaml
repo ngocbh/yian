@@ -1,7 +1,7 @@
 # 03 — Single-topic research (a reusable child flow).
 #
 # A small CODE -> AGENT pipeline that researches ONE topic and returns {report, asof}.
-# This is the atomic unit; 04 (REF) and 05 (MAP) compose it. Shows: a CODE data-fetch
+# This is the atomic unit; 04 (single call) and 05 (map) compose it. Shows: a CODE data-fetch
 # leaf (flat `code:`), ${input.X} + a typed parameter default (as_of), an
 # object output, and a node binding from another node's object field.
 

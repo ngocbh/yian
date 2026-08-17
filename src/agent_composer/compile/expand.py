@@ -81,9 +81,8 @@ def _rens_internal(binding: Binding, callsite: str) -> Binding:
 
     Legacy plural heads (`outputs.X` / `inputs.X`) are rejected at parse time.
 
-    Routes every `${...}` span through `rewrite_template_refs` + the ONE parse tree, so an
-    embedded / coalesce / whole-expression span is re-namespaced leaf-by-leaf (the old flat
-    `${...}` regex only handled a simple single-path span)."""
+    Routes every `${...}` span through `rewrite_template_refs` and the shared parse tree, so
+    embedded, coalesced, and whole-expression spans are re-namespaced leaf by leaf."""
     if not isinstance(binding, Binding):
         raise TypeError(
             "compiled flow wiring must contain Binding values, "
@@ -210,7 +209,7 @@ def clone_child(child, callsite: str, record: dict, *,
     reducer applies the returned fragment and updates its dispositions/frontier.
 
     Returns a `Flow` whose `start_id` is the namespaced child START (the sole seed point) and whose
-    `end_id` is the namespaced child END (the alias filler for REF / one element input for MAP).
+    `end_id` is the namespaced child END (the alias filler for a call / one map element).
 
     `origin_context` is the enclosing spawner's ordered failure trace. It is prefixed to each
     clone's existing generated ancestry without deduplication. `post_asserts`/
@@ -317,16 +316,17 @@ def call_subgraph(child, callsite: str, record: dict, *,
     commits under the spawner id on the ordinary success path), and returns a `Flow` whose `start_id`
     is the single cloned child START and whose `end_id` is the cloned child END filler. The child's
     asserts (a def's `asserts:` lowered onto its START/END at build) ride the cloned boundary nodes
-    and fire through the ordinary node path — boundary asserts in the cloned `StartNode.run()` (post
-    coercion), post asserts on the cloned END via `eval_node` — exactly like the top-level flow.
+    and fire through the ordinary `Node.run` wrapper — boundary asserts after the cloned
+    `StartNode._run_impl()` coerces its record, and post asserts after the cloned
+    `EndNode._run_impl()` returns `Output`.
 
     `post_asserts`/`input_names` carry the SPAWNER's OWN node-level POST `asserts:`
     (a `call` node's `asserts:` reading `${output}` + declared inputs). They are lowered onto the
-    cloned child END by `clone_child`, so they fire through the SAME eval_node post-assert seam —
-    NOT a bespoke redirect-commit site. `origin_context` is the spawner's outer-to-inner failure
-    trace and is prefixed to every clone, including both child boundaries. The CALL node passes its
-    ordered assertion carriers and declared-input names; durable `build_grow` uses the same
-    inputs so a resumed run's rebuilt child END is identical."""
+    cloned child END by `clone_child`, so the END's ordinary `Node.run` wrapper evaluates them.
+    `origin_context` is the spawner's outer-to-inner failure trace and is prefixed to every clone,
+    including both child boundaries. The CALL node passes its ordered assertion carriers and
+    declared-input names; durable `build_grow` uses the same inputs so a resumed run's rebuilt
+    child END is identical."""
     cloned = clone_child(child, callsite=callsite, record=record,
                          origin_context=origin_context,
                          post_asserts=post_asserts,

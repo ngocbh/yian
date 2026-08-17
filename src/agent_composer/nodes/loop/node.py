@@ -56,7 +56,7 @@ class LoopNode(Node):
     kind = NodeKind.LOOP
     is_spawner: ClassVar[bool] = True  # each continuing iteration returns a seed-first Grow
     is_loop: ClassVar[bool] = True  # the fixpoint-iteration driver: the ledger stays single-record
-    grow_depth_delta: ClassVar[int] = 0  # inherit enclosing REF depth without consuming a level
+    grow_depth_delta: ClassVar[int] = 0  # inherit enclosing call depth without consuming a level
 
     def __init__(
         self,

@@ -53,7 +53,7 @@ _PROMPT_FORBIDDEN_HEADS = ("input", "system", "item")
 
 
 def _output_bindings(outputs: Any) -> list[Any]:
-    """The flow `outputs:` section as a flat list of binding values (sites to check).
+    """The flow `output:` section as a flat list of binding values (sites to check).
 
     A whole-string binding (`${a.output | b.output}`) is one value; a
     name -> binding map is each mapped value. Mirrors
@@ -86,7 +86,7 @@ def validate_references(
     contract stays lenient. The namespace checker validates the reference head, then
     the shared output-contract helper checks exact fields or the partial arm's closed
     root name set without inventing a type for opaque fields. `outputs` is the raw flow
-    `outputs:` section.
+    `output:` section.
 
     Each error anchors on the referencing site's `SourceRange`, resolved from its
     `BuildResult.field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per

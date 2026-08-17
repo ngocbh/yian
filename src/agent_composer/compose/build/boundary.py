@@ -1,8 +1,8 @@
 """DAG boundary synthesis: `START_ID`/`END_ID` nodes + their edges over ALL edges.
 
-The `build_leaf_node` funnel is dissolved: every node kind now builds through
-its own `descriptor.build(ctx) -> BuildResult` (see `compose/nodes/<kind>.py`), and the
-conductor loop drives them kind-blind. What remains here is the boundary synthesis —
+Every node kind builds through its own `descriptor.build(ctx) -> BuildResult` (see
+`compose/nodes/<kind>.py`), and the conductor loop drives them kind-blind. This module owns
+boundary synthesis —
 `synthesize_boundary_graph` — which is representation-neutral graph plumbing, not per-kind
 build.
 """
@@ -30,10 +30,10 @@ from agent_composer.compose.validate.asserts import LoweredAsserts
 # reconciled — so a `case` branch target carrying only a `gate -> target` control
 # edge is correctly demoted from root. A root is a node with NO incoming edge of ANY
 # kind (data OR control); the engine seeds every root unconditionally, so a wrongly-
-# marked root makes BOTH branches of a `case` run. The flow `outputs:` bindings give
+# marked root makes BOTH branches of a `case` run. The flow `output:` bindings give
 # the terminals: each `${P.output[...]}` producer gets a `P -> __end__` edge (a
 # coalesce flow-output -> one terminal edge per producer; only the taken branch's
-# value survives, resolved by `terminal_output`).
+# value survives and is assembled by END).
 # --------------------------------------------------------------------------- #
 
 
@@ -104,7 +104,7 @@ def synthesize_boundary_graph(
         start.post_asserts = list(start.post_asserts) + list(lowered.start_pre)
         end.post_asserts = list(lowered.end_post)
         # Each synthesized END input is an extra param + a wiring source + a producer edge, so
-        # the value the post-assert reads is present in END's record when eval_node fires it.
+        # the value the post-assert reads is present when END's `Node.run` wrapper evaluates it.
         # EndNode.run() reads only its declared output names, so extra params are inert there.
         end.params = list(end.params) + list(lowered.synth_params)
         # Continue the SAME per-(producer, END) counter as the output-edge loop so a producer

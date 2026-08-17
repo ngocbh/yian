@@ -1,6 +1,6 @@
 # e01 — Undeclared reference.
 # EXPECT: compile error — `${scor.output}` references no node (the node is `score`).
-# L3: loud + located — the message should point at the `outputs:` line below.
+# The diagnostic must identify the reference and point at the `output:` line below.
 
 id: err-undeclared-ref
 name: err_undeclared_ref

@@ -546,8 +546,8 @@ def test_second_sigint_during_drain_waits_for_controller_before_registry_cleanup
         assert cleanup_entered.wait(_TIMEOUT)
         time.sleep(0.05)
         os.kill(os.getpid(), signal.SIGINT)
-        # Leave the old implementation enough time to unwind its registry context
-        # before the controller checks ownership; the fixed path keeps waiting inside it.
+        # Give the second SIGINT time to propagate; registry ownership must remain with
+        # the controller until its cleanup finishes.
         time.sleep(0.05)
         release_controller.set()
 

@@ -32,8 +32,7 @@ def test_kinds_maps_string_to_descriptor_class():
         assert cls.kind == kind
 
 
-def test_kindspec_is_gone():
-    # The old KindSpec bundling wrapper was deleted when parse/build became methods.
+def test_retired_kindspec_is_not_public():
     with pytest.raises(ImportError):
         from agent_composer.compose.nodes import KindSpec  # noqa: F401
 

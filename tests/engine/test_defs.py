@@ -408,8 +408,8 @@ def test_mutually_recursive_defs_are_loud():
 
 
 # --------------------------------------------------------------------------- #
-# single-node def: a flat `kind:`+logic body whose `inputs:` are params (name -> TYPE),
-# auto-wired by name into the one node; `outputs:` is the codomain type.
+# Single-node def: a flat `kind:` plus logic body whose `input:` entries are parameters
+# (name -> TYPE), auto-wired by name into the one node; `output:` is the codomain type.
 # --------------------------------------------------------------------------- #
 
 _SINGLE_NODE_DEF = """
@@ -567,7 +567,7 @@ output: ${go.output}
 
 
 # --------------------------------------------------------------------------- #
-# a def's `asserts:` is admitted and enforced at the REF/MAP child seam.
+# A def's `asserts:` is admitted and enforced at the CALL/MAP child seam.
 # --------------------------------------------------------------------------- #
 
 _DEF_WITH_ASSERTS = """
@@ -600,7 +600,7 @@ output: ${go.output}
 
 
 def test_def_asserts_are_enforced_at_the_child_seam():
-    # a def's `asserts:` is admitted and enforced at the REF/MAP child seam.
+    # A def's `asserts:` is admitted and enforced at the CALL/MAP child seam.
     out = run_flow(load_flow(_DEF_WITH_ASSERTS), {"topic": "ACME"})
     assert out.status == "succeeded"  # the def's post assert `${x.output} != ""` holds
     assert out.output == "ACME"

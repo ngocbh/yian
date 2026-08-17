@@ -1,11 +1,11 @@
 """Parse-only tests for the unified `${...}` expression grammar (`expr.grammar`).
 
-These assert PARSE SUCCESS and coarse TREE SHAPE only — evaluation is Step 2, so
-no value is computed here. The heart of the file is the five "C1" regression
-asserts: the exact LALR-collision cases that a naive two-terminal grammar (a bare
-`REF` terminal plus a separate `call: NAME "(" ... ")"` rule) fails to parse,
+These assert parse success and coarse tree shape only; no value is computed here.
+The shared-terminal tests cover the exact LALR-collision cases that a naive
+two-terminal grammar (a bare-reference terminal plus a separate
+`call: NAME "(" ... ")"` rule) fails to parse,
 because the lexer matches the bare-ref terminal before it can see the `(`. The
-fix under test is ONE shared `NAME` terminal with an optional call-suffix.
+grammar instead uses one shared `NAME` terminal with an optional call-suffix.
 """
 
 import pytest
@@ -161,8 +161,8 @@ def test_empty_arg_call():
 def test_kwarg_distinguishable_from_positional():
     # A kwarg `foo(a=1)` and a positional `foo(1)` both parse, and their `arg`
     # nodes are distinguishable by shape: a kwarg carries a leading NAME token
-    # (2 children), a positional does not (1 child, the expression) — the future
-    # evaluator relies on this to tell keyword from positional arguments.
+    # (2 children), a positional does not (1 child, the expression) — the evaluator
+    # uses this shape to tell keyword from positional arguments.
     kw_arg = next(n for n in _tree("foo(a=1)").iter_subtrees() if n.data == "arg")
     pos_arg = next(n for n in _tree("foo(1)").iter_subtrees() if n.data == "arg")
 
@@ -239,36 +239,36 @@ def test_coalesce_below_arithmetic():
 
 
 # --------------------------------------------------------------------------- #
-# C1 regression asserts — the exact LALR-collision cases that MUST pass.
+# Shared NAME terminal disambiguation
 # --------------------------------------------------------------------------- #
 
 
-def test_c1_upper_name_is_a_call():
+def test_shared_name_terminal_distinguishes_builtin_call():
     """`upper(name)` -> a call (callee `upper`, one ref arg), NOT bare-ref + junk."""
     tree = _tree("upper(name)")
     assert "call_suffix" in _kinds(tree)
 
 
-def test_c1_join_with_string_literal():
+def test_shared_name_terminal_parses_mixed_call_arguments():
     """`join(items, ", ")` -> callee + ref arg + string-literal arg."""
     tree = _tree('join(items, ", ")')
     assert "call_suffix" in _kinds(tree)
     assert "arg" in _kinds(tree)
 
 
-def test_c1_dotted_ref_single():
+def test_shared_name_terminal_keeps_dotted_reference_single():
     """`a.b.c` -> a single dotted ref (one refcall)."""
     tree = _tree("a.b.c")
     refcalls = [n for n in tree.iter_subtrees() if n.data == "refcall"]
     assert len(refcalls) == 1
 
 
-def test_c1_hash_in_segment():
+def test_name_terminal_accepts_hash_in_reference_segment():
     """`node#0.output` -> parses (`#` in a segment)."""
     _tree("node#0.output")
 
 
-def test_c1_subtraction_not_one_ident():
+def test_name_terminal_excludes_hyphen_for_subtraction():
     """`a - b` -> subtraction of two refs, NOT one identifier `a-b`.
 
     The trap: if `-` is in the shared NAME terminal, `a - b` lexes as a single

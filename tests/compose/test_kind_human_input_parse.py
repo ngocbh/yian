@@ -1,4 +1,4 @@
-"""6.6 — the `human_input` kind handle: parse enforces the one-of-three question-surface
+"""The `human_input` kind handle: parsing enforces the one-of-three question-surface
 legality and records field ranges; build returns a runtime HumanInputNode carrying its
 questions config + derived answer_schema, with wiring from `inputs` and stamped ranges."""
 
@@ -73,7 +73,7 @@ def test_human_input_build_questions_gate_defaults_to_open_object():
     from agent_composer.typesys.values import ValueKind
 
     assert isinstance(node, HumanInputNode)
-    # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT.
+    # A questions gate with no explicit `output:` defaults to a bare open OBJECT.
     assert node.output_contract is not None
     assert node.output_contract.type.kind == ValueKind.OBJECT
     assert node.answer_schema is not None

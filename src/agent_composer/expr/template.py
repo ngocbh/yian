@@ -1,6 +1,6 @@
 """The `${...}` template language — binding values AND strict prompt rendering.
 
-A binding value (a node input `from:`, a flow `outputs:` entry) is a TEMPLATE:
+A binding value (a node `input:` entry or a flow `output:` entry) is a TEMPLATE:
 plain text interspersed with `${...}` spans, with `$$` for a literal `$`.
 
 - A value that is EXACTLY one `${...}` resolves to the **typed** value of that
@@ -8,12 +8,9 @@ plain text interspersed with `${...}` spans, with `$$` for a literal `$`.
 - A `${...}` **embedded** in surrounding text is **stringified** into it.
 - A value with no `${...}` is a plain literal (after `$$` -> `$`).
 
-The interior of a `${...}` is a COALESCE of atoms, `|`-separated, first-non-None
-(`null` ≡ no value):
-- `outputs.x.y`        — a reference
-- `x:-default`         — value, else a literal default OR ONE nested `${...}`
-- `x:?message`         — required (raise if unbound)
-- a literal            — number / bool / null / quoted string
+The interior of a `${...}` uses the unified expression grammar: references such as
+`node.output.field` and `input.name`, literals, arithmetic/boolean operators, pure
+builtins, coalesce (`|`), default (`:-`), and required (`:?`).
 
 Nesting is ONE level: `${x:-${y}}` is allowed; `${x:-${y:-${z}}}` is an error
 (use `|` for multi-way chains: `${x | y | z}`).
@@ -98,7 +95,7 @@ def _split_kv(pair: str) -> tuple:
 
 
 def _arg_source(value: str) -> Any:
-    """One inline-call arg value -> its source, mirroring the named form's `inputs:`:
+    """One inline-call arg value -> its source, mirroring the named form's `input:`:
 
     - a fully-quoted scalar (`"…"`/`'…'`) -> its inner text (quotes stripped, like a
       YAML quoted scalar): a binding template if it interpolates (`"hi ${name}"` ->
@@ -388,7 +385,7 @@ def _operand_co_skips(node: "Tree | Token") -> bool:
 # builtin call (`${ fn(${ref}, lit).path }`). Unlike a binding, a prompt is not on the
 # graph: it reads inputs already bound to this node, mints no edge, and (the call form)
 # evaluates a read-only `TEMPLATE_FNS` formatter at render time — a bounded bend of the
-# "all computation is a node" law (see docs/agent-compose-principles.md §4(A)). The
+# "all computation is a node" law documented in `docs/expressions.md`. The
 # renderer (`render_template_record`) and the compile-time scope check
 # (`prompt_refs` -> `compose.validate`) share ONE span parser so they cannot drift.
 # --------------------------------------------------------------------------- #

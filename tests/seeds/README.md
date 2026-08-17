@@ -1,16 +1,14 @@
 # Seed gallery — Agent Composer flow syntax
 
-These are **example flows in the `Agent Composer` contract** (the Compose-inspired,
-edge-free, single-value I/O model from
-`docs/plans/2026-06-10-engine-json-io-redesign-design.md` → §0c). They load and
-run via the Compose loader (`agent_composer.load_flow` / `run_flow`); the CODE
-nodes call `tests.seeds.fns`.
+These are **example flows in the `Agent Composer` contract**: a Compose-inspired,
+edge-free, single-value I/O model. They load and run via the Compose loader
+(`agent_composer.load_flow` / `run_flow`); the CODE nodes call `tests.seeds.fns`.
 
-> Flows that need not-yet-supported features (including MATCH) live under `_future/`
-> until their milestone lands. Settled blocking HUMAN_INPUT and WAIT coverage lives in
-> the main gallery.
+> Negative fixtures for failure modes that lack a canonical check live under
+> `_future/errors/`. Supported syntax, including blocking HUMAN_INPUT and WAIT,
+> stays in the main gallery.
 
-The goal: every feature and every syntax convention shows up in at least one seed, so the
+The goal: every behavior and every syntax convention shows up in at least one seed, so the
 gallery doubles as the spec.
 
 ---
@@ -28,7 +26,7 @@ description: …
 input:  { … }   # the flow's parameters   — source types (+ default/optional)
 nodes:   { … }   # the body — a MAP keyed by node id
 output: { … }   # the flow's return       — sink bindings
-asserts: [ … ]   # optional — boolean checks over ${inputs}/${outputs}
+asserts: [ … ]   # optional — boolean checks over ${input.X}/${node.output}
 x-…:             # optional — extension keys, ignored by the engine
 ```
 
@@ -70,10 +68,11 @@ nodes:
     prompt: "…"                # ← kind field, flat on the node
 ```
 
-Per kind, the flat fields are: **agent** → `prompt` (+ future tools/mode/llm_config); **code**
+Per kind, the flat fields are: **agent** → `prompt` (+ `tools`/`mode`/`llm_config`); **code**
 → `code: module:function`; **call** → `call:` + `input:` (a single application); **map** →
 `call:` + `over:` + `input:` (+ `parallel:`) — `List.map` over the `over:` list, `${item}` per
-element; **case** → `cases:` + `else:` (+ `on:`). `model` / `tool` land in the next batch.
+element; **case** → `cases:` + `else:` (+ `on:`); **model** → `model_id:` (+
+`weights_uri:`/`runtime:`); **tool** → `tool_id:` + `input:`.
 
 A `call` also has an **inline form** — `call(f, arg=${ref}, k=lit)` written as the whole value of any binding
 (a node input, a TOOL `arg:`, a `map`'s `over:`, a flow output). It is sugar: it desugars
@@ -108,9 +107,9 @@ output:                                  # nested record
   meta: { source: str, asof: date }
 ```
 (Anonymous inline records **are field-checked** at compile time, like named records — a dotted read
-of a field the record doesn't declare is a compile error (C-ANON-CHECK, as of the M7 loader). Only
+of a field the record doesn't declare is a compile error. Only
 `Any` stays opaque. Naming a type in `typedefs:` adds reuse + cross-flow structural equivalence, not
-"more checking". *(Updated 2026-06-13 — superseded the earlier "anon records are opaque" draft.)*)
+"more checking".
 
 **Bindings** (sink side) — a reference, a literal, an operator form, or a coalesce (see below).
 
@@ -146,18 +145,16 @@ named record is **type-checked at compile time** (`${analyze.output.rating.categ
 
 - **Scalars** are Python: `str`/`int`/`float`/`bool`, plus `date`; opaque = `Any`. **Generics**:
   `list[X]`, `Optional[X]`, `dict[K, V]`.
-- **Enums** are `Literal[a, b, c]` (tag-only) — routed by `case … on`. **Tagged unions** are a
-  sequence with **≥1 payload** case (`{tag: payload}`, bare tags allowed alongside) — destructured by
-  the **`MATCH`** node (exhaustive + payload binding; deferred). An **all-bare-tags sequence is not
-  allowed** — use `Literal[…]` (one spelling per meaning).
+- **Enums** are `Literal[a, b, c]` (tag-only) — routed by `case … on`. Model tagged choices as a
+  discriminated record with a `Literal` field, then route on that field. `Union[...]`, payload-union
+  sequences, and the retired `kind: match` form are not supported.
 - **Names**: PascalCase; must not shadow a scalar (`str`/`int`/…/`date`) **or** a typing constructor
   (`Any`/`Optional`/`Literal`/`Union`/`List`/`Dict`).
-- **Equivalence** across REF/MAP boundaries is **structural**; **recursive** (and alias-cycle) defs
-  are rejected. `list[<payload-union>]` is rejected (it would drop payloads).
-- *Status:* the Compose loader maps Python names → the engine's types; scalars, `list[X]`, **all-required**
-  records, `Literal` enums, and aliases resolve on the existing resolver. Still needing engine work:
-  **`Optional` record-fields** (per-field nullable bit), **`dict[K, V]`**, and **payload unions + the
-  `MATCH` node**.
+- **Equivalence** across call/map boundaries is **structural** and recursive through records and
+  lists; recursive or alias-cycle definitions are rejected.
+- *Status:* the Compose loader resolves scalars, `list[X]`, `Optional[X]`, records, `Literal` enums,
+  and aliases. `dict[K, V]` currently resolves to a lenient object placeholder; structural key/value
+  checking remains unsupported.
 
 ## References & interpolation
 
@@ -271,7 +268,7 @@ input:
   prior: 'Rating = {category: pro, score: 0.0, rationale: neutral}'
 ```
 
-Applied at every flow boundary (top-level run + a REF/MAP child seeding its own params). Defaults live
+Applied at every flow boundary (top-level run plus a call/map child seeding its own parameters). Defaults live
 on flow `input:` only — internal nodes never declare defaults; a sink that may be absent uses
 `${X:-default}` or a coalesce `${a | b}` (e.g. to pick whichever `case` branch ran). *(Distinct layers:
 `= default` sets a **parameter's** default in the signature; `${X:-default}` is a
@@ -306,7 +303,7 @@ nodes:
 
 ---
 
-## The gallery (this batch)
+## The gallery
 
 | File | Shows |
 |---|---|
@@ -326,8 +323,8 @@ nodes:
 | `13-types-objects.yaml` | the type grammar — Python scalars, `list[X]`, inline/block/nested objects (records), deep dotted access |
 | `14-agent-tools.yaml` | AGENT knobs — `mode` / ordinary `tools` including `ask_user` / `llm_config` + structured output |
 | `17-effects-human-wait.yaml` | effects — blocking `HUMAN_INPUT` (typed answer) + absolute UTC `WAIT` (`until:`) + `case` on the answer + a `depends_on` side-effect |
-| `18-research-pipeline.yaml` | **(DRAFT)** realistic end-to-end — fan-out reviewers → typed-`View` synth → `case … on` stance → multi-output + `asserts:` |
-| `19-binding-stances.yaml` | **(DRAFT/proposed)** every input-binding stance — required (plain, co-skip) / optional (`:-`) / branch-join (`\|`) / fail-loud (`:?`); pins the **per-input readiness** model (review-doc CC3 / Problem 2) |
+| `18-research-pipeline.yaml` | realistic end-to-end — fan-out reviewers → typed-`View` synth → `case … on` stance → multi-output + `asserts:` |
+| `19-binding-stances.yaml` | every input-binding stance — required (plain, co-skip) / optional (`:-`) / branch-join (`\|`) / fail-loud (`:?`); pins **per-input readiness** |
 | `20-call-defs.yaml` | a `call:` resolving to an in-file `defs:` callable (a multi-node sub-flow inline) — `defs:` section + `call` defs-first; loads resolver-free |
 | `21-inline-call.yaml` | an INLINE `call(enrich, topic=${input.topic})` call directive — desugars to a synth `call` node on the in-file def; loads resolver-free |
 | `22-case-value.yaml` | the **value-case**: `output: ${gate.output}` = the taken branch's value (desugars to the branch coalesce — seed 02's hand-written join) |
@@ -337,7 +334,7 @@ nodes:
 | `29-inline-code.yaml` | inline **`code:`** source — a bare body reading `inputs`, wrapped as `def main(inputs)` and run **in-process** (the alternative to the `module:function` reference form); same one-dict convention as reference mode |
 | `30-reference-code.yaml` | reference **`code:`** source — a `module:function` token imported and called **in-process**; the reference twin of seed 29 (same body as its inline block), showing one computation both ways |
 
-Every node kind (AGENT/CODE/MODEL/TOOL/call/case/loop/HUMAN_INPUT/WAIT) and every settled
+Every node kind (AGENT/CODE/MODEL/TOOL/call/map/case/loop/HUMAN_INPUT/WAIT) and every supported
 convention appears in at least one seed. Seed 17 pins blocking HUMAN_INPUT and WAIT's
 absolute UTC deadline surface. Tagged data is modelled as a discriminant record (a `Literal`
 field) routed by `case … on <field>` — the `kind: match` + payload-union design was dropped.
@@ -345,27 +342,24 @@ field) routed by `case … on <field>` — the `kind: match` + payload-union des
 ## Negative gallery — `errors/`
 
 `errors/` holds flows that are **supposed to fail**, at compile **or** at runtime — they pin
-Agent Composer's **L3 "loud + located errors"** and are the loader's negative test fixtures
+loud, source-located failures and are the loader's negative test fixtures
 (`tests/engine/test_errors.py`).
 
-**The rule:** every feature here gets accompanying error fixtures in `errors/` covering its
+**The rule:** every behavior here gets accompanying error fixtures in `errors/` covering its
 expected **compile-time** (`load_flow` → `LoadError`, located at the `.yaml` line) **and
 runtime** (`run_flow` → `status="failed"`) failure modes that the engine can actually capture;
 each isolates one failure, with a matching test. Failure modes whose check isn't built yet live
-in `_future/errors/` with their milestone. See `errors/README.md` for the full table and rule.
+in `_future/errors/` until that check exists. See `errors/README.md` for the full table and rule.
 
-**Deferred / still to build:** `MATCH` remains proposed in seed 16; treat its exact syntax as
-*for review*. HUMAN_INPUT and WAIT are settled blocking nodes. The `tests.seeds.fns`
-CODE module now owes, in addition to
-`one_line_summary` / `fetch_facts` / `prime_cache` / `build_outline` (seeds 01/03/12/13):
-`confirm_action` (seed 17). *(The `errors/`
-fixtures need no owed fns — they fail before/without running a CODE callable.)*
+HUMAN_INPUT and WAIT are blocking nodes. Reusable CODE helpers for the seeds, including
+`one_line_summary`, `fetch_facts`, `prime_cache`, `build_outline`, and `confirm_action`, live in
+`tests.seeds.fns`. The `errors/` fixtures fail before or without running a CODE callable.
 
-## Locked conventions (revise here)
+## Supported conventions
 
-All settled this session and recorded in design §0c — Compose-style top-level
+The supported contract uses Compose-style top-level
 `input:`/`nodes:`/`output:`/`asserts:`; no `edges:`/`__start__`/`__end__`; keyed `nodes:` map
 with flat bodies; `case`/`when`/`then`/`else`/`on`; references `${…}` with `:-`/`:?`/`|`
 and `$$` escape; unquoted block-form bindings; strict schema + `x-*` + YAML anchors; and a
 **Python-typing** type system (`str`/`int`/`float`/`bool`, `list[X]`/`Optional[X]`, dataclass
-records, `Literal` enums, sequence payload-unions, inline `TYPE = default`) — `typedefs:` registry (C10).
+records, `Literal` enums, discriminated records, inline `TYPE = default`) — `typedefs:` registry.

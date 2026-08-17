@@ -20,8 +20,8 @@ nodes:
     output:                    # an OBJECT type (this node returns one object = a record)
       rating: float             #   a relevance-ish score in [-1, 1]
       rationale: str
-    # A structured AGENT is forced to emit exactly these typed fields (design §6 —
-    # the phase-5 capability; shown here so the syntax is on record).
+    # A structured AGENT is constrained to emit exactly these typed fields; the
+    # declaration is the node's output contract.
     prompt: |-
       Score ${topic}'s near-term relevance as {rating, rationale}.
       rating is a number in [-1,1]; rationale is one sentence. Neutral, no advice.

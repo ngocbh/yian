@@ -185,7 +185,7 @@ Runtime and compile validation read these node members instead of branching on
 | `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate, AGENT generated-schema path |
 | `failure_trace(operation_origin=None)` | evaluator, dispatcher, and terminal-unreachable producers: combine generated ancestry with the best local origin | `origin_context + (operation origin or node origin)`; omit only an absent local suffix |
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
-| `grow_depth_delta: int\|None` | growth core: REF-depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
+| `grow_depth_delta: int\|None` | growth core: nested-call depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
 
@@ -237,8 +237,7 @@ WAIT are never timed by that watchdog.
 |------------------|------------------------------------|
 | `AGENT`, `CODE`, `MODEL`*, `TOOL`, `CASE`, `HUMAN_INPUT`, `WAIT`, `CALL`, `MAP`, `LOOP` | `START`, `END` |
 
-\* `MODEL` parses but `run` raises — the ML-serving seam was removed as dead
-plumbing; re-add when real serving lands.
+\* `MODEL` parses but `run` raises because no ML-serving implementation is wired.
 
 ## Durable execution contract
 
@@ -422,8 +421,7 @@ owns executable and display text, and `ValueContract` pairs a provenance-free
 carrier's `iter_origins()` / pure `map_origins()` methods. Those operations visit
 declared origin slots only; sources, defaults, and other payload values remain
 opaque. Do not put origin fields into `Type`, or recreate them in parallel maps.
-Stored flow-owned bindings have completed their
-cutover: `Flow.__init__`, `CompiledFlow.from_parts`, and `add_subgraph` normalize
+Stored flow-owned bindings are canonical: `Flow.__init__`, `CompiledFlow.from_parts`, and `add_subgraph` normalize
 every direct wiring value exactly once, and `FlowOutput.binding` is canonical.
 Raw Python values remain accepted only at those construction boundaries;
 pre-IR Compose dictionaries and runtime overrides are deliberately raw. A

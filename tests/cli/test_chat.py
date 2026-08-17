@@ -689,9 +689,8 @@ def test_chat_survives_a_failed_turn(tmp_path, monkeypatch):
 
 def test_chat_missing_key_no_tty_exits_clean(monkeypatch):
     """A key-requiring provider with no key and no TTY must exit cleanly (red on stderr, exit 1),
-    NOT dump a raw traceback — parity with `ac run`. Both the buggy and fixed code exit 1 under
-    CliRunner, so the guard is the exception TYPE: a clean `typer.Exit` (surfaces as `SystemExit`),
-    never a bare `RuntimeError`. Regression for #16."""
+    not dump a raw traceback. The exception must be a clean `typer.Exit` (surfacing as
+    `SystemExit`), never a bare `RuntimeError`."""
     # `--provider openai` makes `_ensure_provider_keys` pick openai for the flow's agent (which sets
     # none); delete its key so the preflight raises regardless of the ambient environment. No model
     # is invoked — the raise is at the preflight, before any model call, so no key/network is needed.
@@ -721,11 +720,11 @@ def test_chat_log_host_error_exits_cleanly(monkeypatch):
 
 
 def test_chat_malformed_flow_exits_clean(tmp_path):
-    """A malformed chat flow must exit cleanly (located `.yaml` error on stderr, exit 1), NOT dump a
-    raw traceback — the SAME parity with `ac run` as the missing-key path. `load_flow` raises
-    `LoadError` (a `ValueError`, not `RuntimeError`), so the missing-key guard alone would let it
-    escape; the guard here is the exception TYPE — a clean `typer.Exit` (`SystemExit`), never a bare
-    `ValueError`/`LoadError`. Regression for #16."""
+    """A malformed chat flow exits cleanly with a located error rather than a traceback.
+
+    `load_flow` raises `LoadError` (a `ValueError`), so the CLI boundary must convert it to a
+    clean `typer.Exit` (`SystemExit`).
+    """
     bad = tmp_path / "bad.yaml"
     bad.write_text("id: f\nname: f\ninput: {}\noutput: int\nnodes:\n  a:\n    kind: nonesuch\n")
     r = runner.invoke(app, ["chat", str(bad)], input="")

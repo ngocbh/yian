@@ -5,16 +5,13 @@ shape a `kind:` node body parses into (before it is built into a runtime `Node`)
 of those per-kind descriptors inherits `NodeDescriptor`, which holds the fields common to all
 nodes so no kind redeclares them — exactly as every runtime node subclasses `nodes.base.Node`.
 
-Beyond the common fields it also carries the two node-signature surfaces every value-shaped
-kind shares — `inputs` (the call-arg bindings) and `outputs` (the declared output shape) — plus
-the build-time derivations over them (`output_contract`/`sink_params`/`sink_wiring`), the
-descriptor analogue of the runtime `Node`'s `output_contract`/`params`. A kind that has no
-signature (wait/case)
-simply leaves them at their empty defaults, and a kind that derives its output from a child flow
-(call/map/loop) ignores `outputs`. The fields live on the base but are NOT auto-allowed as
-authoring keys — each kind still lists `inputs`/`outputs` in its own ALLOWED set (they are
-subtracted from `NodeDescriptor.common_field_names()`), so wait/case/call/loop/map keep
-rejecting them.
+Beyond the common fields it carries the normalized node-signature fields every value-shaped
+kind shares: `inputs` stores authored `input:` bindings and `outputs` stores the authored
+`output:` declaration. Build-time derivations over them (`output_contract`/`sink_params`/
+`sink_wiring`) are the descriptor analogue of the runtime `Node`'s `output_contract`/`params`.
+A signature-less kind leaves them empty, while a child-derived kind ignores `outputs`. Each
+kind opts into these normalized keys through its own `allowed` set, so kinds without the
+corresponding authored fields continue to reject them.
 
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
 `typesys` (TypeRegistry), `nodes.contracts` (Parameter/ValueContract),
@@ -91,11 +88,10 @@ class NodeDescriptor:
       `runs_after` are RUN-ORDERING edges (no data flows — both gate on the source settling,
       but `depends_on` co-skips the dependent if the source skipped while `runs_after` does not);
       `env` is static per-node config, merged under the flow `env:` at build.
-    - **Node-signature surface** (`inputs`/`outputs`): `inputs` is the call-arg binding map
-      (`param -> ${source}`); `outputs` is the declared output shape (a `read_type`-able spec, or
-      `None`). Both default empty, so a signature-less kind (wait/case) or a child-derived one
-      (call/map/loop) simply never populates them. They are NOT common authoring keys — each kind
-      opts in via its own ALLOWED set (see the module docstring).
+    - **Normalized node-signature carriers** (`inputs`/`outputs`): `inputs` stores the authored
+      `input:` binding map (`param -> ${source}`); `outputs` stores the authored `output:` shape
+      (a `read_type`-able spec, or `None`). Both default empty, and each kind opts into them via
+      its own `allowed` set (see the module docstring).
     - **Located-parse metadata** (`origin`/`range`/`field_ranges`): the opaque authored node
       identity, node body's `SourceRange`, and each present field's `SourceRange`. `compare=False`
       keeps them out of `==`, so a descriptor still equals an identically-configured one built
@@ -116,16 +112,17 @@ class NodeDescriptor:
     # every concrete kind sets it (e.g. `"agent"`, `"code"`, `"map"`).
     kind: ClassVar[str] = ""
 
-    # The COMPLETE set of legal body keys for this kind (surface spelling). Starts as the
+    # The complete set of normalized body keys for this kind. Starts as the
     # keys every node body accepts — the four author-surface commons plus `kind` itself —
     # so `_check_keys` compares against `cls.allowed` directly (no manual COMMON union).
-    # Each kind EXTENDS it via `allow(...)` with its own keys; `inputs`/`outputs` are opt-in
+    # Each kind extends it via `allow(...)` with its own keys; `inputs`/`outputs` are the
+    # normalized carriers for authored `input:`/`output:` and remain opt-in
     # (a signature-less kind like wait/case never lists them, so it keeps rejecting them).
     allowed: ClassVar[frozenset[str]] = frozenset(
         {"kind", "node_name", "depends_on", "runs_after", "env"}
     )
 
-    # The body keys this kind REQUIRES (surface spelling). Empty on the base — no key is
+    # The normalized body keys this kind requires. Empty on the base — no key is
     # required by every kind (`kind` is resolved by dispatch before `parse`, never checked
     # here). Each kind extends it via `require(...)` (e.g. `code` requires `code`).
     required: ClassVar[frozenset[str]] = frozenset()
@@ -173,7 +170,7 @@ class NodeDescriptor:
         self,
         ctx: BuildContext,
     ) -> Optional[ValueContract]:
-        """Return the declared ``outputs:`` as one canonical contract.
+        """Return the declared ``output:`` as one canonical contract.
 
         The optional Compose reader runs at this existing build position so
         source compilation cannot move ahead of kind-owned validation. Direct
@@ -218,7 +215,7 @@ class NodeDescriptor:
             ) from exc
 
     def sink_params(self) -> list[Parameter]:
-        """This descriptor's `inputs:` map -> untyped Parameters (the node-side signature).
+        """This descriptor's authored `input:` map -> untyped Parameters (the node-side signature).
 
         The split: `params` carries only the declared NAMES (no source); the flow owns the
         sources in `CompiledFlow.wiring`. These parameters have `contract=None`; they are
@@ -227,7 +224,7 @@ class NodeDescriptor:
         return [Parameter(name=k) for k in (self.inputs or {})]
 
     def sink_wiring(self) -> dict[str, Any]:
-        """This descriptor's `inputs:` map -> the flow-owned wiring (`param -> source`).
+        """This descriptor's authored `input:` map -> the flow-owned wiring (`param -> source`).
         The source half of the split; the same dict `sink_params` reads the names from.
         """
         return dict(self.inputs or {})
@@ -257,9 +254,9 @@ class NodeDescriptor:
 
     @classmethod
     def _check_keys(cls, node_id: str, cursor: SourceCursor) -> None:
-        """Legality check for a node body's surface keys, run by the template `parse`.
+        """Check a node body's normalized keys, run by the template `parse`.
 
-        Rejects any body key not in `cls.allowed` (the COMPLETE legal key set for this kind —
+        Rejects any body key not in `cls.allowed` (the complete legal key set for this kind —
         the commons + `kind` + the kind's own keys, so no manual union is needed), then requires
         every key in `cls.required`. Raises a located `LoadError` for the first offense — an
         unknown key caret-points at that key's value, a missing key at the node body. Reads

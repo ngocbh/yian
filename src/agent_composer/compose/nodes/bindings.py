@@ -1,13 +1,11 @@
 """The kind-blind binding-field walk — one place for "which fields are bindings".
 
 A node descriptor carries `${...}` binding strings in kind-specific fields (an
-agent/code/model's `inputs:`, a tool's `inputs:`, a mapped call's `inputs:`/`over:`).
+agent/code/model's `input:`, a tool's `input:`, a mapped call's `input:`/`over:`).
 Two passes need to rewrite those strings in place: inline-call desugar
 (`compose.desugar.inline_calls`) and case-output expansion
-(`compose.desugar.case_outputs`). Both
-used to reach for the same isinstance ladder (the old
-`calls.map_binding_strings_in_descriptor`); this module replaces it with a
-table-driven walk over `BINDING_FIELDS[kind]`, so adding or altering a kind's
+(`compose.desugar.case_outputs`). This module provides a table-driven walk over
+`BINDING_FIELDS[kind]`, so adding or altering a kind's
 binding surface is a local edit in `compose/nodes/<kind>.py` (its
 `binding_fields`) — not a new ladder arm here.
 

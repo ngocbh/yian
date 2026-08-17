@@ -387,7 +387,7 @@ def test_post_assert_violated_fails():
 
 def test_post_assert_on_nonscalar_output_fails_cleanly():
     # ${output} is a record (dict); an ordered op RAISES inside evaluate_when_record — the
-    # hook must turn that into a clean NodeFailed, not crash the run (review critical #3).
+    # wrapper must turn that into a clean NodeFailed rather than crash the run.
     flow = """
 id: rec
 name: rec
@@ -470,7 +470,7 @@ output: ${gate.output}
 
 def test_absent_input_pre_assert_fails_cleanly():
     # a node runs with a required input bound from an omitted Optional flow input (-> None);
-    # the assert-time bind raises BindingError, which must become a clean RunFailed (review #2).
+    # the assert-time bind raises BindingError, which must become a clean RunFailed.
     flow = """
 id: ab
 name: ab
@@ -509,7 +509,7 @@ defs:
 """
 
 
-def test_def_internal_node_assert_via_ref():
+def test_def_internal_node_assert_via_call():
     flow = f"""
 id: dr
 name: dr

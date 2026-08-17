@@ -2,7 +2,7 @@
 
 Each function is a `module:function` target for a `kind: code` node: it receives
 the node's **bound input record** (one dict) and returns the node's **one output
-value** — a scalar, list, or object matching the seed's declared `outputs:`
+value** — a scalar, list, or object matching the seed's declared `output:`
 shape. These are deterministic placeholders (no live data/IO) so the gallery
 flows are runnable end-to-end; swap in real implementations as needed.
 """
@@ -48,13 +48,13 @@ def build_outline(rec: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# --- _future/12 (depends-on) ----------------------------------------------- #
+# --- seed 12 (depends-on) -------------------------------------------------- #
 def prime_cache(rec: Dict[str, Any]) -> bool:
     """Side-effect node: warm a cache, return a `bool` nobody binds."""
     return True
 
 
-# --- _future/17 (effects-human-wait) --------------------------------------- #
+# --- seed 17 (effects-human-wait) ------------------------------------------ #
 def confirm_action(rec: Dict[str, Any]) -> str:
     """Echo the confirmed action."""
     return str(rec.get("answer", "cancel"))

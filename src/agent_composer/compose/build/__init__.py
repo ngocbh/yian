@@ -9,7 +9,7 @@ The LAST compose phase before the loader. Three modules:
   (build every node kind-blind -> type/exhaustiveness checks -> edge inference ->
   reference/assert validation -> boundary synthesis -> cycle/handle checks ->
   `CompiledFlow.from_parts`), plus `ComposedFlow` (the compiled+validated result) and the
-  flow `outputs:` parser. Root and definition assembly pass their retained `input:` cursor
+  flow `output:` parser. Root and definition assembly pass their retained `input:` cursor
   through the shared type reader: declaration keys own `Parameter.origin`, type values own
   root/nested contract origins, and a packed default owns `default_origin`. Synthesized START
   reuses those carriers; inferred inline signatures remain source-free. It stamps authored

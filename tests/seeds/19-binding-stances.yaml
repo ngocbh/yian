@@ -1,8 +1,7 @@
 # 19 — Input-binding stances: required, optional, branch-join, fail-loud, co-skip.
 #
-# Every way a node input can relate to its source, in one flow. Pins the PER-INPUT
-# readiness model from the adversarial review
-# (docs/plans/2026-06-11-alang-v1-surface-adversarial-review.md → CC3 / Problem 2):
+# Every way a node input can relate to its source, in one flow. Pins the per-input
+# readiness model:
 # a node runs iff EVERY input is satisfied, where an input is satisfied if its plain
 # ref is TAKEN, or a coalesce has >=1 alternative TAKEN, or it has a literal fallback.
 # So OPTIONALITY IS A PROPERTY OF THE BINDING (a fallback), not a flag:

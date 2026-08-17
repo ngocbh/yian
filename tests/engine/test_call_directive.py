@@ -29,7 +29,7 @@ def _ids():
 
 
 def _code(nid, inputs):
-    """A minimal CodeDescriptor whose `inputs:` carry the binding under test."""
+    """A minimal CodeDescriptor whose internal `inputs` carry the binding under test."""
     return CodeDescriptor(id=nid, code="mod:fn", inputs=inputs, outputs="str")
 
 
@@ -252,7 +252,7 @@ def test_keyword_literal_values_coerce_like_named_form():
 def test_bare_bool_word_arg_stays_string():
     # deliberate: inline bare literals are a YAML-1.1 SUBSET — `yes`/`on`/`off`/`no` stay
     # strings (no boolean coercion), avoiding the YAML bool footgun. (A named call's YAML
-    # `inputs:` map WOULD coerce `yes` -> True; the directive form intentionally does not.)
+    # authored `input:` map would coerce `yes` -> True; the directive form intentionally does not.)
     descriptors = {"use": _code("use", {"topic": "call(f, flag=yes)"})}
     new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
     assert new_descriptors["__call_0"].inputs == {"flag": "yes"}
@@ -267,7 +267,7 @@ def test_unbalanced_directive_parens_left_literal():
 
 
 def test_directive_in_outputs_and_asserts_is_desugared():
-    # a directive placed in the flow `outputs:` map and in a flow-level assert both
+    # a directive placed in the flow `output:` map and in a flow-level assert both
     # desugar on the shared traversal.
     new_descriptors, new_outputs, new_asserts = desugar_inline_calls(
         {},

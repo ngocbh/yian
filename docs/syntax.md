@@ -426,7 +426,7 @@ The gate's answer is a **record keyed by header** — `{header: label}`, or
 `object`. `prompt:` is optional once a node has questions; `questions:` and
 `adaptive_questions:` are **mutually exclusive**.
 
-**(A) static** — a literal list (with `${...}` templating from `input:`):
+**Static questions** — a literal list (with `${...}` templating from `input:`):
 
 ```yaml
 ask:
@@ -444,7 +444,7 @@ ask:
   # output omitted -> defaults to object: {Framework: ..., Notes: ...}
 ```
 
-**(B) adaptive** — an LLM composes the questions from context. The block
+**Adaptive questions** — an LLM composes the questions from context. The block
 **desugars at load** into a synth compose-agent (`<node>__compose`, output
 `list[Question]`) wired into the gate; the runtime gate never calls an LLM.
 The input name `__questions` is reserved for that generated wire and cannot be
@@ -461,7 +461,7 @@ ask:
     retries: 3                   # optional — self-correction attempts
 ```
 
-**(C) manual ref** — read the list from an author-written upstream node:
+**Upstream questions** — read the list from an author-written upstream node:
 
 ```yaml
 ask:

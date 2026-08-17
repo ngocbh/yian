@@ -4,8 +4,8 @@ This is the analogue of `manifest/parser.py`: inspect an existing document
 cursor, copy its semantic value into a strict Pydantic model, and raise
 `LoadError` on any violation. Three surface rules shape it:
 
-- **Top-level sections only** (`id`/`name`/`description?`/`inputs`/`nodes`/
-  `outputs`/`asserts`/`typedefs`/`defs`/`uses`/`system`). `extra="forbid"` on the
+- **Top-level sections only** (`id`/`name`/`description?`/`input`/`nodes`/
+  `output`/`asserts`/`typedefs`/`defs`/`uses`/`system`). `extra="forbid"` on the
   strict body makes a typo'd top-level key (e.g. `nodez:`) loud rather than silently
   dropped. (`uses:` = external callables; `system: paths:` = the resolution search
   path — NOT the strict `${system.X}` ambient namespace.)
@@ -14,7 +14,7 @@ cursor, copy its semantic value into a strict Pydantic model, and raise
 - **YAML anchors** (`&` / `*` / `<<:` merge) are expanded by the source
   document's single safe construction pass before the strict schema sees it.
 
-`nodes` stays a raw `dict` here; per-kind node descriptors are a later step.
+`nodes` stays a raw `dict` here; `compose.parse.nodes` constructs per-kind descriptors.
 """
 
 from __future__ import annotations
@@ -70,9 +70,8 @@ def _normalize_section_keys(
     descriptor dataclasses (AgentDescriptor, CodeDescriptor, ...) keep their internal
     `inputs`/`outputs` field names (Python collection fields stay plural).
     The body-level back-map (`_back_map_to_plural`) translates the new singular
-    keys to the dataclass field names. The rejector fires at the TOP-level only — if a
-    flow author writes `inputs:` at any depth, the top-level rejector catches it via
-    parse_file before _parse_node sees it.
+    keys to the dataclass field names. This helper's rejection scope is the top-level
+    mapping passed to it.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if not isinstance(body, dict):
@@ -113,14 +112,13 @@ class ComposeFile(BaseModel):
     """A parsed Compose flow — top-level sections, pre-node-descriptor.
 
     `inputs` / `nodes` / `typedefs` / `defs` stay raw dicts and `outputs` raw `Any` (a
-    `${...}` binding string or a name -> binding map); later steps read each
-    section into its typed form. `defs` holds in-file callables (each entry a sub-flow
-    `{inputs?, nodes, outputs?, asserts?}`), resolved by a `call:` defs-first.
+    `${...}` binding string or a name -> binding map); downstream parsers read each
+    section into its typed form. `defs` holds in-file callables (each entry an authored
+    sub-flow `{input?, nodes, output?, asserts?}`), resolved by a `call:` defs-first.
 
-    A `model_validator(mode='before')` normalizes BOTH `inputs:` ↔ `input:` and
-    `outputs:` ↔ `output:` (top-level + nested per-node + defs bodies) — see
-    `_normalize_section_keys`. The dataclass fields keep the plural names; the
-    normalizer rejects the legacy plural section keywords with a bespoke `LoadError`.
+    A `model_validator(mode='before')` maps authored `input:`/`output:` keys to the
+    plural Python carrier fields at the top level and recursively in node/definition
+    bodies. `_normalize_section_keys` rejects legacy plural top-level section keywords.
     """
 
     model_config = _STRICT
@@ -153,12 +151,11 @@ class ComposeFile(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalize_sections(cls, data: Any) -> Any:
-        """Normalize `inputs:`/`outputs:` ↔ `input:`/`output:` BEFORE Pydantic validates.
-        Recurses into nested `nodes:` + `defs:` bodies. Raises on ambiguous (both).
+        """Map authored `input:`/`output:` to carrier fields before Pydantic validates.
 
-        The dataclass fields are still named `inputs`/`outputs` plural, so after
-        normalization we map BACK to the plural names (`_back_map_to_plural`).
-        The validator rejects the legacy plural section keywords with a bespoke message.
+        The Python fields are named `inputs`/`outputs`, so `_back_map_to_plural`
+        performs the projection recursively through `nodes:` and `defs:`. The top-level
+        legacy-key check happens before this projection.
         """
         if not isinstance(data, dict):
             return data
@@ -361,10 +358,9 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     if "kind" in body and "nodes" not in body:
         body = _desugar_compact(body, root)
 
-    # ComposeFile's model_validator(mode='before') normalizes section
-    # keywords (input:↔inputs:, output:↔outputs:) at top + nested + defs bodies.
-    # We pre-check unknown top-level keys here, allowing BOTH the new singular and the
-    # legacy plural spellings.
+    # ComposeFile's model validator projects the singular surface keys onto plural
+    # Python carrier fields at the top level and in node/definition bodies. Legacy
+    # plural top-level spellings were rejected above.
     allowed_top = set(ComposeFile.model_fields) | {"input", "output"}
     for key in body:
         if key not in allowed_top:
@@ -390,7 +386,7 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
 # ---------- per-kind node descriptors ----------
 #
 # A `nodes:` entry is a keyed map (key = node id, no `id:` field) carrying a
-# `kind:` plus FLAT kind-fields — the surface flattens `inputs:`/`outputs:`
+# `kind:` plus flat kind fields — the surface places `input:`/`output:`
 # onto the node (vs the legacy spec's body wrappers, `spec/nodes.py`). These are
 # DESCRIPTORS: the validated parsed shape per kind, each owned by its `nodes/<kind>.py`
 # module (the frozen dataclass + its `parse`/`build`) and inheriting the common

@@ -1,13 +1,8 @@
-"""Unit tests for the additive `NodeDescriptor` base contract (Step 1).
+"""Unit tests for the shared `NodeDescriptor` parsing contract.
 
-These cover the class-level pieces the descriptor base gains before any kind is
-converted onto it: the `allowed`/`required` key sets, the `allow`/`require`
-extension helpers, and the parse-template hooks (`_normalize_cursor` no-op,
-`_validate_fields` default asserts check). Behavioral parity of `_check_keys`/
-`_read_common_fields`/`parse` with the old `helpers.py` free functions is
-exercised indirectly by the existing per-kind parse tests once the kinds are
-converted; here we pin the new surface directly so the additive step is green
-before any kind depends on it.
+These cover the common `allowed`/`required` key sets, the `allow`/`require`
+extension helpers, the default normalization and validation hooks, and the
+template that constructs a kind-specific descriptor from a source cursor.
 """
 
 from dataclasses import dataclass

@@ -2,14 +2,13 @@
 
 The first cross-node assembly pass. Consumes a source cursor over the flow's
 `nodes:` mapping and dispatches each node body to its kind's `parse` via the
-`KINDS` table — replacing the legacy line-based
-`parser.parse_nodes`/`_parse_node`/`_KIND_SPECS` trio.
+`KINDS` table.
 
 Only the generic, kind-independent pre-checks live here (body-is-mapping, reserved node ids,
 the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own `parse`
 owns its field legality (allowed/required/asserts/env) and its descriptor-local
 `SourceRange` recording (each field tagged `("field", name)`). Two kind-blind enrichments
-run after every kind parse: each `inputs:` binding's own range is stamped into the
+run after every kind parse: each `input:` binding's own range is stamped into the
 descriptor's `field_ranges` under `("input", name)`, and each `asserts:` item range is
 appended positionally to its `assert_ranges`. This metadata remains inside Compose;
 `_finish()` copies node/field locations to `BuildResult` for validation, while runtime
@@ -90,7 +89,7 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
     # Compose-only range enrichments retained on parsed descriptors, keyed by `(kind, key)`
     # rather than a bare name so namespaces cannot collide (the kind already stamped
     # its own fields as `("field", name)` in `cls.parse`):
-    #   - each `inputs:` binding -> its own range, tagged `("input", name)` and distinct
+    #   - each `input:` binding -> its own range, tagged `("input", name)` and distinct
     #     from a like-named field.
     #   - each `asserts:` list item -> its POSITIONAL range, appended to the descriptor's
     #     `assert_ranges` (aligned 1:1 with the authored `asserts:` list). Asserts are located by
@@ -98,7 +97,7 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
     #     they live in a list, NOT in `field_ranges`.
     # Runtime diagnosis does not consume these ranges, and the semantic Node never receives
     # them. Both no-op for a source-free cursor or a descriptor without the field.
-    # `inputs:` is read AFTER
+    # `input:` is read AFTER
     # `normalize_node_signature_cursor` has renamed the author's singular
     # `input:` key to plural.
     field_ranges = getattr(desc, "field_ranges", None)

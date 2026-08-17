@@ -46,7 +46,7 @@ def _node_wiring(desc):
 def _built_flow(text):
     """Build leaf nodes + flow wiring + producers from a flow's `nodes:` (span-aware).
 
-    Mirrors the loader's leaf-build slice: parse the `nodes:` mapping from one source document,
+    Mirrors the relevant assembly path: parse the `nodes:` mapping from one source document,
     build each agent/code leaf, and retain `{nid: BuildResult}` plus wiring and the
     `{nid: output_contract}` producer map — enough to drive `validate_references` in
     isolation without placing YAML ranges on semantic nodes.
@@ -166,7 +166,7 @@ def test_validate_references_diag_has_range():
     # A node input binding that references an unknown node (`${ghost.output}`) is a dangling
     # ref. The aggregate LoadError anchors its `range` on the OFFENDING ENTRY — the per-binding
     # `("input", name)` span the parse loop stamps for every kind — not the enclosing `input:`
-    # mapping, which would also mark every innocent sibling entry (#87).
+    # mapping, which would also mark every innocent sibling entry.
     text = (
         "id: f\nname: f\nnodes:\n"
         "  a:\n    kind: agent\n    prompt: hi\n"
@@ -186,8 +186,7 @@ def test_validate_references_diag_has_range():
     assert "ghost" in str(exc.value)
     frame = exc.value.diagnostic.frames[0]
     assert frame.range == build_results["a"].field_ranges[("input", "x")]
-    # ...and it is strictly narrower than the block it used to report: `x:` is on line 8, while
-    # the `input:` mapping runs to line 9 (`output: str` — a different field entirely).
+    # The exact `x:` entry is narrower than the `input:` mapping, which runs through line 9.
     assert frame.range != build_results["a"].field_ranges[("field", "inputs")]
     assert frame.range.start_line == frame.range.end_line == 8
 
@@ -197,7 +196,7 @@ def test_validate_references_diag_locates_case_when_via_synth_param():
     # refs) the author never wrote. The CASE desugar stamps each `__rN` with its own
     # `cases[N].when` range and label, so a bad ref there locates at the `when:` line and names the
     # author's construct — NOT the synthetic `__rN`, and NOT the node header. Driven through the
-    # whole loader because the desugar is what mints `__rN` (the `_built_flow` slice above only
+    # whole loader because the desugar is what mints `__rN` (the `_built_flow` helper above only
     # builds agent/code leaves).
     text = (
         "id: f\nname: f\nnodes:\n"
@@ -277,12 +276,12 @@ def test_validate_references_diag_case_then_call_locates_at_then_line():
     assert exc.value.diagnostic.frames[0].range.start_line == 12
 
 
-def test_check_ref_map_types_moved():
+def test_check_call_map_types_is_owned_by_call_validation():
     # A `call` binding whose SOURCE Type mismatches the child input's declared Type is loud.
     # The check lives in `validate.call_types`; the LoadError anchors on the call node's
     # `input:` mapping span (`field_ranges["inputs"]`, the coarsest available binding-site
     # span), and the canonical frame carries that range.
-    from agent_composer.compose.validate.call_types import check_ref_map_types
+    from agent_composer.compose.validate.call_types import check_call_map_types
     from agent_composer.nodes.call import CallNode
     from agent_composer.nodes.contracts import Parameter, ValueContract
     from agent_composer.typesys.values import Type, ValueKind
@@ -310,7 +309,7 @@ def test_check_ref_map_types_moved():
     }  # source is a string
     wiring = {"c": {"n": "${src.output}"}}  # bound to the int-expecting child input
     with pytest.raises(LoadError) as exc:
-        check_ref_map_types(
+        check_call_map_types(
             {"c": result},
             producers,
             {},
@@ -360,13 +359,13 @@ def test_check_loop_type_contract_moved():
 
 def test_type_validators_reject_noncanonical_contract_maps_before_walking():
     """Direct validator calls enforce the same exact-carrier boundary as the pipeline."""
-    from agent_composer.compose.validate.call_types import check_ref_map_types
+    from agent_composer.compose.validate.call_types import check_call_map_types
     from agent_composer.compose.validate.loop_types import check_loop_type_contract
     from agent_composer.typesys.values import Type, ValueKind
 
     bad = {"unused": Type.scalar(ValueKind.STRING)}
     with pytest.raises(TypeError, match="output producer contracts.*ValueContract"):
-        check_ref_map_types({}, bad, {}, {})  # type: ignore[arg-type]
+        check_call_map_types({}, bad, {}, {})  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="flow input contracts.*ValueContract"):
         check_loop_type_contract({}, {}, bad, {})  # type: ignore[arg-type]
 
@@ -465,7 +464,7 @@ output: ${report.output}
 
 def test_per_input_param_carries_ranges():
     # Each input binding maps to its OWN SourceRange under its param NAME in the descriptor's
-    # legacy field_ranges. Recorded in the parse choke point alongside the coarse `inputs:`
+    # legacy field_ranges. Recorded in the parse choke point alongside the coarse internal `inputs`
     # span (still present under the field name); runtime diagnosis uses Binding origins.
     descriptors = parse_nodes(_nodes_reader(_INPUT_FLOW))
     fr = descriptors["report"].field_ranges
@@ -493,9 +492,7 @@ output: ${n.output}
 
 
 def test_input_named_like_field_no_collision():
-    # Case 2 (#88): a node with an input named `env` AND its own `env:` config field. Under the old
-    # flat string key both stamped `"env"` and collided (last-write-wins, one range survived); now
-    # they are tagged `("input", "env")` and `("field", "env")` — distinct keys, distinct ranges.
+    # An input named `env` and the node's `env:` config field retain distinct tuple-tagged ranges.
     fr = parse_nodes(_nodes_reader(_INPUT_LIKE_FIELD_FLOW))["n"].field_ranges
     assert ("input", "env") in fr and ("field", "env") in fr
     assert fr[("input", "env")].start_line == 9  # the input binding line

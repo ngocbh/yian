@@ -1,6 +1,6 @@
 """The desugar phase: FLOW-LEVEL rewrites that run BEFORE the build loop.
 
-A desugar pass takes a flow's parsed descriptors (and its `outputs:`/`asserts:`
+A desugar pass takes a flow's parsed descriptors (and its `output:`/`asserts:`
 sections) and rewrites them into ordinary descriptors + bindings that the build
 loop then sees as author-written — pure load-time sugar, no new runtime kind. The
 passes:

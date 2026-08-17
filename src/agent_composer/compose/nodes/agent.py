@@ -76,12 +76,12 @@ class AgentDescriptor(NodeDescriptor):
     """kind=agent — an LLM reasoner (prompt + mode + optional tools/llm).
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `inputs:`/
-    `outputs:` node-signature surface and the template `parse` (no custom parse hook — agent's
+    the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `input:`/
+    `output:` node-signature surface and the template `parse` (no custom parse hook — agent's
     field legality is the default allowed/required key check + the asserts-list check). Only the
     agent-specific fields are declared here; `inputs`/`outputs` come from the base.
 
-    Class attrs: `kind="agent"`; `allowed` adds `inputs`/`outputs`/`prompt`/`tools`/
+    Class attrs: `kind="agent"`; `allowed` adds normalized `inputs`/`outputs` plus `prompt`/`tools`/
     `mode`/`llm_config`/`retries`/`asserts` to the commons; `required` is empty (no mandatory
     flat field); `binding_fields=("inputs",)` — a `prompt:`'s `${...}` refs are handled by
     template scanning, not the inline-call desugar, so only `inputs` is walked.
@@ -116,7 +116,7 @@ class AgentDescriptor(NodeDescriptor):
         """Construct the runtime `AgentNode` (+ wiring) for this `AgentDescriptor`.
 
         Builds the agent leaf (LLM-config validation, node-side
-        `params` + flow-owned `inputs` wiring, `output_contract` from `outputs:`/override).
+        `params` + flow-owned `inputs` wiring, `output_contract` from authored `output:`/override).
         `_finish` stamps the descriptor origin on the node and keeps its ranges on the
         Compose-owned `BuildResult`. `ctx.resolver` is unused (leaf kind), and the inline-CODE
         anchors on `ctx` are read only by the CODE build.

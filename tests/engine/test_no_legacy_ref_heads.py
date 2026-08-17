@@ -7,7 +7,7 @@ source, the seed gallery, or the test fixtures — the concrete red->green ratin
 an otherwise mechanical sweep. (The needles are built dynamically below so this
 guard file never matches itself.)
 
-Scope: `calpha/` (engine + seeds) and `tests/`. The design docs under `docs/`
+Scope: `src/` and `tests/`, including the seed gallery. The design docs under `docs/`
 legitimately discuss the old vocabulary historically and are not scanned.
 """
 

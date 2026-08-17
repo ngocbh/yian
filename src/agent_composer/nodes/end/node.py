@@ -4,8 +4,8 @@ The loader synthesizes ONE EndNode per flow as its single terminal; the engine's
 END_ID's committed value.
 
 Two modes:
-- RECORD (a flow's `output:`): params one per declared output; `run` reproduces
-  terminal_output()'s arity — 0 -> None, 1 -> bare inputs[name], >=2 -> {name: inputs[name]}.
+- RECORD (a flow's `output:`): params one per declared output; `run` uses arity
+  0 -> None, 1 -> bare inputs[name], >=2 -> {name: inputs[name]}.
 - LIST (a MAP fan-in): params e0..e{n-1}, each <- a MAP element's child
   END_ID; `run` -> Output([inputs[ei]...]) in over order (index); n=0 -> [].
 
@@ -47,7 +47,7 @@ class EndNode(Node):
 
     kind = NodeKind.END
 
-    #: Reserved id of the synthesized return boundary (the old `__end__` sentinel).
+    #: Reserved id of the synthesized return boundary.
     #: The canonical source of truth; `compile.model` re-exports it as `END_ID`/`END_ID`.
     #: One per flow (deep-namespaced in a child); the run result is `store[<this id>]`.
     #: Authors can never name a node this (parser reserved-id ban).

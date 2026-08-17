@@ -47,7 +47,7 @@ class ChildSignature:
     child's single codomain: one declared output re-exports that binding's exact or
     partial contract; >=2 produces an exact or partial closed record keyed by name;
     `None` means no output or no statically known shape. This follows the same arity
-    rule `terminal_output` assembles."""
+    rule the record-mode EndNode assembles."""
 
     inputs: list[Parameter]
     output: OutputContract | None
@@ -115,7 +115,7 @@ def child_signature(loaded: Any) -> ChildSignature:
 
     Duck-typed on `loaded.input` (the canonical parameters) + `loaded.compiled`
     so `build` need not import `loader` (which imports `build`). The codomain contract
-    follows `terminal_output`'s arity rule over the flow outputs: one output re-exports
+    follows the record-mode EndNode's arity rule over the flow outputs: one output re-exports
     its exact or partial contract; >=2 produces an exact or partial closed record keyed
     by name."""
     producers: dict[str, OutputContract] = {}

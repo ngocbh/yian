@@ -1,4 +1,4 @@
-"""REF child-run seam — end-to-end, Ollama-free.
+"""CALL child-run seam — end-to-end, Ollama-free.
 
 A plain `call` (`kind: call` without `over:`) applies a callable by explicit application:
 bind the declared args against the parent pool, seed a child pool (+ the child's own
@@ -46,7 +46,7 @@ nodes:
 output: ${emit.output}
 """
 
-_REF_PARENT = """
+_CALL_PARENT = """
 id: ref-parent
 name: ref_parent
 input:
@@ -64,7 +64,7 @@ output:
   n: ${research.output.n}
 """
 
-_REF_BOOM = """
+_CALL_BOOM = """
 id: ref-boom
 name: ref_boom
 input:
@@ -93,15 +93,15 @@ def _resolver(**children):
     return resolve
 
 
-def test_ref_runs_child_and_reexports_value():
-    parent = load_flow(_REF_PARENT, child_resolver=_resolver(**{"child-one": _CHILD}))
+def test_call_runs_child_and_reexports_value():
+    parent = load_flow(_CALL_PARENT, child_resolver=_resolver(**{"child-one": _CHILD}))
     result = run_flow(parent, {"topic": "ACME"})
     assert result.status == "succeeded"
-    # the REF node re-exports the child's {report, n}; the parent re-keys it.
+    # The CALL node re-exports the child's {report, n}; the parent re-keys it.
     assert result.output == {"report": "report for ACME", "n": 4}
 
 
-def test_ref_output_projection_preserves_nullable_parent_path():
+def test_call_output_projection_preserves_nullable_parent_path():
     """A dotted read through a nullable record may itself evaluate to None."""
     parent = load_flow(
         """id: nullable-projection
@@ -136,7 +136,7 @@ output: ${invoke.output}
     assert result.output is None
 
 
-def test_ref_accepts_none_elements_for_nullable_list_sink():
+def test_call_accepts_none_elements_for_nullable_list_sink():
     """Static list compatibility recurses into the nullable element contract."""
     parent = load_flow(
         """id: list-none-call
@@ -167,8 +167,8 @@ output: ${invoke.output}
     assert result.output == [None]
 
 
-def test_ref_child_failure_fails_the_run():
-    parent = load_flow(_REF_BOOM, child_resolver=_resolver(**{"boom-child": _BOOM_CHILD}))
+def test_call_child_failure_fails_the_run():
+    parent = load_flow(_CALL_BOOM, child_resolver=_resolver(**{"boom-child": _BOOM_CHILD}))
     result = run_flow(parent, {"topic": "ACME"})
     assert result.status != "succeeded"
     assert "boom" in result.failure.message
@@ -180,10 +180,10 @@ def test_ref_child_failure_fails_the_run():
     )
 
 
-def test_ref_child_applies_its_own_default():
+def test_call_child_applies_its_own_default():
     # the child declares `suffix: str = "!"`, which the parent does not bind; the child's
     # own default fills it (the default-seeding path runs without the parent supplying it).
-    parent = load_flow(_REF_PARENT, child_resolver=_resolver(**{"child-one": _CHILD}))
+    parent = load_flow(_CALL_PARENT, child_resolver=_resolver(**{"child-one": _CHILD}))
     result = run_flow(parent, {"topic": "X"})
     assert result.status == "succeeded"
     assert result.output["n"] == 1
@@ -207,7 +207,7 @@ asserts:
   - ${input.window} >= 1
 """
 
-_REF_PARENT_BD = """
+_CALL_PARENT_BD = """
 id: ref-parent-bd
 name: ref_parent_bd
 input:
@@ -224,18 +224,18 @@ output: ${research.output}
 """
 
 
-def test_ref_boundary_assert_sees_omitted_default():
+def test_call_boundary_assert_sees_omitted_default():
     # `window`'s default (30) is omitted by the parent, yet the child's BOUNDARY
     # assert `${input.window} >= 1` must see the EFFECTIVE input (30), not None — the eager
     # pre-run check mirrors START_ID's omitted-input defaulting (regression guard: a naive
     # driver-apply_defaults drop left the assert reading the raw, un-defaulted record).
-    parent = load_flow(_REF_PARENT_BD, child_resolver=_resolver(**{"child-bd": _CHILD_BOUNDARY_DEFAULT}))
+    parent = load_flow(_CALL_PARENT_BD, child_resolver=_resolver(**{"child-bd": _CHILD_BOUNDARY_DEFAULT}))
     result = run_flow(parent, {"topic": "ACME"})
     assert result.status == "succeeded", result.failure
     assert result.output == "ACME"
 
 
-_REF_PARENT_BD_COERCE = """
+_CALL_PARENT_BD_COERCE = """
 id: ref-parent-bdc
 name: ref_parent_bdc
 input:
@@ -253,18 +253,18 @@ output: ${research.output}
 """
 
 
-def test_ref_boundary_assert_sees_coerced_present_value():
+def test_call_boundary_assert_sees_coerced_present_value():
     # The eager boundary check must mirror START_ID's FULL transform (coerce THEN default), not just
     # defaulting: a PRESENT call-arg that is a coercible literal ("30" -> int 30) must be seen
     # COERCED by the boundary assert `${input.window} >= 1` — else `"30" >= 1` raises a
     # str-vs-int TypeError and spuriously fails a child the body would run fine.
-    parent = load_flow(_REF_PARENT_BD_COERCE, child_resolver=_resolver(**{"child-bd": _CHILD_BOUNDARY_DEFAULT}))
+    parent = load_flow(_CALL_PARENT_BD_COERCE, child_resolver=_resolver(**{"child-bd": _CHILD_BOUNDARY_DEFAULT}))
     result = run_flow(parent, {"topic": "ACME"})
     assert result.status == "succeeded", result.failure
     assert result.output == "ACME"
 
 
-def test_ref_run_expands_not_child_engine():
+def test_call_run_expands_not_child_engine():
     # The CallNode returns only a seed; compile reconstructs the child fragment for the engine.
     from agent_composer.compile.expand import build_grow
     from agent_composer.nodes.base import Grow
@@ -273,7 +273,7 @@ def test_ref_run_expands_not_child_engine():
     from tests.engine.test_expand import _child_flow
 
     child = _child_flow()
-    n = CallNode("r", flow_id="c", child=child, child_inputs=[])   # REF — call once
+    n = CallNode("r", flow_id="c", child=child, child_inputs=[])   # call once
     out = n.run({"topic": "ACME"})          # no *, system cap anymore
     assert isinstance(out, Grow)
     assert out.seed == {"topic": "ACME"}

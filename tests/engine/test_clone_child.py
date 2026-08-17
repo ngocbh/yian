@@ -171,8 +171,8 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     # post-assert becomes a synth END param (`__assert_<pid>`) fed by a `${pid.output:-null}`
     # wiring + a producer->END edge, and the post-assert is rewritten node-local (`${__assert_<pid>}`).
     # clone_child deep-copies the END, re-namespaces its wiring, and re-keys its edges — so the whole
-    # structural dependency SURVIVES the clone (the C2 fix: no re-homing needed, and none possible
-    # without deleting the synth edge that gates the assert on its producer).
+    # structural dependency SURVIVES the clone: no re-homing is needed or possible without
+    # deleting the synth edge that gates the assert on its producer.
     child = _child([FlowOutput(name="out", binding="${tail.output}")])
     end = child.nodes[END_ID]
     # Lower `${tail.output} != ''` onto END exactly as boundary synthesis does.

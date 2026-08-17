@@ -27,12 +27,12 @@ own Python in-process is the same capability reference mode already has (trust m
 author is the operator). That safety argument holds **only** while flow YAML is
 operator-authored: because inline source is `exec`'d in-process with the engine's
 privileges, loading a flow from an untrusted or agent-generated source is remote code
-execution. An opt-in load-time gate for that pathway is deferred until an untrusted-source
-loader exists (see the backlog). Phase 1 runs inline **in-process** with no isolation — a runaway
-body is *diagnosed* by CODE's package-local watchdog (it logs an over-budget body) but cannot be
-killed; a killable subprocess runtime and a security sandbox are deferred (see the design
-docs). A per-node `run()` **deep serialize-once check** makes a non-serializable inline
-return fail *inside CODE*, before the dispatcher prepares its durable success record.
+execution. No opt-in load-time gate exists because there is no untrusted-source loader. The
+current runtime executes inline code **in-process** with no isolation — a runaway body is
+*diagnosed* by CODE's package-local watchdog (it logs an over-budget body) but cannot be killed;
+there is no killable subprocess runtime or security sandbox. A per-node `run()` **deep
+serialize-once check** makes a non-serializable inline return fail *inside CODE*, before the
+dispatcher prepares its durable success record.
 """
 
 import ast

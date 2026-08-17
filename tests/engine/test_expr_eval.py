@@ -41,7 +41,7 @@ def _from(mapping):
 
 
 # --------------------------------------------------------------------------- #
-# Operators on values (NOT the number-only legacy `_arith` gate)
+# Operators on resolved Python values
 # --------------------------------------------------------------------------- #
 
 
@@ -90,22 +90,22 @@ def test_dotted_access_never_getattr():
 
 
 # --------------------------------------------------------------------------- #
-# Missing-ref by mode — the three locked behaviors
+# Missing-reference behavior by resolution mode
 # --------------------------------------------------------------------------- #
 
 
 def test_binding_none_missing_is_none():
-    # LOCKED: a missing ref resolves to None in the non-strict binding mode.
+    # A missing ref resolves to None in the non-strict binding mode.
     assert _eval("a", mode=ResolveMode.BINDING_NONE) is None
 
 
 def test_condition_falsy_missing_ordered_compare_is_false():
-    # LOCKED: an ordered comparison with a missing (None) operand -> False.
+    # An ordered comparison with a missing (None) operand returns False.
     assert _eval("missing > 5", mode=ResolveMode.CONDITION_FALSY) is False
 
 
 def test_condition_falsy_arith_over_none_is_loud():
-    # LOCKED: arithmetic over a missing (None) operand propagates a loud TypeError,
+    # Arithmetic over a missing (None) operand propagates a loud TypeError,
     # wrapped as ExpressionError (NOT silently None/0).
     with pytest.raises(ExpressionError):
         _eval("missing + 1 > 5", mode=ResolveMode.CONDITION_FALSY)
@@ -213,14 +213,13 @@ def test_item_scope_dict_only():
 
 
 # --------------------------------------------------------------------------- #
-# `and` / `or` fold by PYTHON truthiness (NOT the legacy bool-only filter)
+# `and` / `or` fold by Python truthiness
 # --------------------------------------------------------------------------- #
 
 
 def test_or_folds_by_python_truthiness():
     # `x or y` with x a FALSY non-bool (0) and y truthy: the non-bool operand
-    # participates (legacy `when:` filtered to bools only). Result is True since y
-    # is truthy — pins the deliberate Python-truthiness semantics.
+    # participates. The result is True because y is truthy.
     assert _eval("x or y", _from({"x": 0, "y": "hit"})) is True
 
 
@@ -231,7 +230,7 @@ def test_and_folds_by_python_truthiness():
 
 
 # --------------------------------------------------------------------------- #
-# Cheap edge cases later steps rely on
+# Membership, unary-missing, and list edge cases
 # --------------------------------------------------------------------------- #
 
 
@@ -246,7 +245,6 @@ def test_not_in_list_false():
 def test_unary_minus_on_missing_ref_raises_loudly():
     # `-missing` in binding-none: the miss coerces to None, and unary minus over
     # None raises a loud (wrapped) ExpressionError — NOT a silent value.
-    # (loud-arith-adjacent: PINNED to the observed behavior.)
     with pytest.raises(ExpressionError):
         _eval("-missing", mode=ResolveMode.BINDING_NONE)
 
@@ -259,7 +257,7 @@ def test_list_lit_with_missing_element():
 # --------------------------------------------------------------------------- #
 # Coalesce / default / required PRECEDENCE — pinned against the grammar's grouping
 # (split on `|` at the top, then parse each operand).
-# Under Option A every bare name is a REF (a literal must be quoted), so in
+# Every bare name is a reference and a literal must be quoted, so in
 # `a:-b | c` the names `a`, `b`, `c` are all references. The grouping MUST be
 # `(a:-b) | c` and `a | (b + 1)` — coalesce (`|`) is the lowest-precedence,
 # n-ary, flat operator; `:-`/`:?` and arithmetic bind tighter.
@@ -268,7 +266,7 @@ def test_list_lit_with_missing_element():
 
 def _ref_name(node):
     """The NAME of a bare-reference operand: a `refcall` Tree with a single NAME
-    child (Option A: a bare word is a ref). Raises if `node` is not that shape."""
+    child. Raises if `node` is not that shape."""
     from lark import Tree
 
     assert isinstance(node, Tree) and node.data == "refcall", node
@@ -354,8 +352,8 @@ def test_nested_one_level_default_ref():
 
 
 def test_two_level_nested_default_rejected():
-    # `${x:-${y:-${z}}}` — TWO levels of nesting is an error (as in legacy). The
-    # unified scanner/grammar must reject it, in the ExpressionError family.
+    # `${x:-${y:-${z}}}` — two levels of nesting is rejected by the scanner/grammar
+    # in the ExpressionError family.
     from agent_composer.expr.template import scan_template
 
     with pytest.raises(ExpressionError):

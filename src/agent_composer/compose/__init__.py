@@ -2,7 +2,7 @@
 
 Reads Compose-shaped YAML flows into the engine's runtime model. One recursive
 type reader turns a node's `output:` / a flow's `input:` into a `ValueContract`
-whose `Type` replaces the old flat `list[IOField]`; nested records are native.
+whose `Type` represents scalars, containers, and nested records natively.
 For retained root/definition flow signatures, the same traversal compiles the
 parameter key, contract root/nested values, and packed default into opaque origins.
 For authored node outputs, assembly injects an optional Compose-owned reader through

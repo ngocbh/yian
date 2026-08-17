@@ -46,5 +46,5 @@ output:                       # multi-output: the flow returns one object
   report: ${compare.output}
   briefs: ${research_each.output}
 
-asserts:                       # boolean checks over ${inputs}/${outputs}; a false fails the run
+asserts:                       # boolean checks over inputs/node outputs; a false fails the run
   - input.topics != []                 # the bundle must be non-empty

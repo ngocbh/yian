@@ -1,4 +1,4 @@
-"""6.9 — the `map` kind handle: `MapDescriptor` subclasses call's `CallDescriptor`, inheriting
+"""The `map` kind handle: `MapDescriptor` subclasses call's `CallDescriptor`, inheriting
 the template parse; it records the `call`/`over`/`inputs` field ranges. `over` (the
 iteration source) is required alongside `call`; build (`CallDescriptor.build`, `MapNode` branch on
 `isinstance(self, MapDescriptor)`) is exercised end-to-end via the `load_flow` suite."""

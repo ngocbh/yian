@@ -251,8 +251,7 @@ A cycle means two packages are really one responsibility split wrong, or a
 contract is living in the wrong place. Fixes, in preference order:
 
 1. **Extract the shared contract** to a lower/leaf module (`common.py`, or a new
-   leaf package both can depend on). Both formerly-cyclic packages now import
-   *down* into it.
+   leaf package both can depend on), then have both packages import *down* into it.
 2. **Invert via a seam** — if a lower-level package needs behavior from a
    higher-level one, it should take it as an injected callable/parameter, not
    import it. The high level wires the low level; the low level stays a leaf.

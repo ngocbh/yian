@@ -1,18 +1,16 @@
 # f02 — an unknown AGENT `tools:` entry is NOT checked at load: this flow LOADS CLEAN.
-# No milestone owns this yet — no issue filed. DEFERRED because the load-side check does not exist.
+# The load-side check does not exist, so this remains a future negative fixture.
 #
 # NOT a duplicate of e23: that pins a TOOL node's `tool_id:`, which IS checked. This is an AGENT
-# node's `tools:` LIST, which is not. The unknown id survives compile and only surfaces at run time,
-# from `resolve_tools` (`tools/registry.py:62`) called deep inside the mode
-# (`nodes/agent/modes/tool_calling.py:93`) — as an unclassified `ValueError` with no
-# canonical Failure or diagnostic origin. Reaching it also requires live model creds,
-# which is why this seed asserts nothing.
+# node's `tools:` list, which is not. The unknown id survives compile and only surfaces at run time
+# when the agent mode resolves its tools. The node wrapper classifies it as a canonical
+# `node.execute` failure at the AGENT node; reaching it still requires live model credentials,
+# so this seed asserts nothing.
 #
-# WHY IT'S HERE: same lesson as f01, one shape over. #88's container table lists `tools:` as a
-# sequence we "never descended into," implying an easy win. But a stamp for ("tools", 1) would have
-# nothing to ask for it — there is no load-time check or semantic origin carrier.
+# A per-entry range alone cannot make this a load error: there is no load-time validation or
+# semantic origin carrier for an AGENT `tools:` entry.
 #
-#   CURRENT:  loads OK. At run: unclassified ValueError from inside the agent mode.
+#   CURRENT:  loads OK. At run: canonical node.execute failure at the AGENT node.
 #   EXPECTED: a load-time check naming the unknown id, located at its own `tools:` entry.
 id: fut-agent-tools-no-load-check
 name: fut_agent_tools_no_load_check

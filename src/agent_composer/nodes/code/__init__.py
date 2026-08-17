@@ -6,8 +6,9 @@
   node-local origin traversal/rewrite hooks for those declared slots.
 - `watchdog.py` — CODE's soft-budget warning for an in-process body that may be stuck.
 
-A killable subprocess runtime is a deferred later phase. This package knows only
-the node contract and typed-value validation; it never imports runtime/compose.
+CODE currently runs in-process and provides no killable subprocess isolation. This
+package knows only the node contract and typed-value validation; it never imports
+runtime/compose.
 
 Knows about: diagnostics, nodes.base, typesys, peer CODE modules, and the Python
              standard library.

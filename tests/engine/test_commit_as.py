@@ -1,7 +1,7 @@
 """`commit_as` lives on the three coordinated carriers — the field itself.
 
-P2 replaces the engine's `alias`/`loop_alias` redirect dicts with a `commit_as` field
-that travels on the node/Output/event. This test pins the field's presence and defaults
+The `commit_as` field replaces the engine's `alias`/`loop_alias` redirect dicts and
+travels on the node/Output/event. This test pins the field's presence and defaults
 on all three homes (the engine wiring is exercised by the expansion/loop/durable tests).
 """
 

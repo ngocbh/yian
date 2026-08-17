@@ -1,15 +1,9 @@
-"""Step 6: the top-level START runs as an ordinary scheduled node.
+"""The top-level START runs as an ordinary scheduled node.
 
-Before this step the engine bypassed START — it invoked `StartNode.run(run_inputs)`
-once at init, committed `store[START_ID]`, and advanced WITHOUT enqueuing START or
-emitting NodeStarted/NodeSucceeded, and the flow's boundary `asserts:` fired from a
-bespoke `boundary_asserts` slot inside `StartNode._run_impl`.
-
-After this step START is scheduled like any other node: it runs through `eval_node`
-(so it emits NodeStarted/NodeSucceeded) and the flow's boundary asserts are rerouted
-into START's ordinary `post_asserts`, firing against START's COERCED output. The
-`${input.X}` refs a boundary assert reads are lowered to `${output.X}` so they see the
-coerced record, not the raw pre-coercion run args.
+START runs through `eval_node`, emits NodeStarted/NodeSucceeded, and carries flow
+boundary assertions in its ordinary `post_asserts`. Boundary `${input.X}` references
+are lowered to `${output.X}` so assertions read START's coerced output record rather
+than raw pre-coercion run arguments.
 """
 
 import pytest
@@ -53,8 +47,7 @@ def test_boundary_assert_satisfying_value_succeeds():
 
 
 def test_start_emits_started_and_succeeded():
-    # BEHAVIOR CHANGE: START is now an ordinary scheduled node, so it emits
-    # NodeStarted + NodeSucceeded (the old bypass emitted neither).
+    # START is an ordinary scheduled node, so it emits both lifecycle events.
     loaded = load_flow(_AGE_FLOW)
     eng = _engine(loaded.compiled, run_inputs={"age": 20})
     events = list(eng.run())
@@ -62,7 +55,7 @@ def test_start_emits_started_and_succeeded():
     assert any(isinstance(e, NodeSucceeded) and e.node_id == START_ID for e in events)
 
 
-# --- C-2: a typed default reaches START output through the full engine path ---------------- #
+# --- a typed default reaches START output through the full engine path ---------------------- #
 _DEFAULT_FLOW = """
 id: dflt
 name: dflt
@@ -80,8 +73,8 @@ output: ${echo.output}
 
 
 def test_typed_int_default_is_used_when_omitted():
-    # C-2 regression: the caller omits `n`; ordinary parameter binding supplies the
-    # already-validated integer default before START runs through `eval_node`.
+    # The caller omits `n`; ordinary parameter binding supplies the already-validated
+    # integer default before START runs through `eval_node`.
     loaded = load_flow(_DEFAULT_FLOW)
     eng = _engine(loaded.compiled, run_inputs={})
     events = list(eng.run())
@@ -91,7 +84,7 @@ def test_typed_int_default_is_used_when_omitted():
     assert res.status == "succeeded" and res.output == 5
 
 
-# --- S-a: a boundary assert over a typed default reads START's bound output ---------------- #
+# --- a boundary assert over a typed default reads START's bound output ---------------------- #
 _DEFAULT_ASSERT_FLOW = """
 id: da
 name: da
@@ -111,14 +104,14 @@ asserts:
 
 
 def test_boundary_assert_reads_typed_default():
-    # S-a regression: `n` is omitted, so the boundary assert reads START's bound
-    # integer output after `${input.n}` is lowered to `${output.n}`.
+    # `n` is omitted, so the boundary assert reads START's bound integer output after
+    # `${input.n}` is lowered to `${output.n}`.
     res = run_flow(load_flow(_DEFAULT_ASSERT_FLOW), {})
     assert res.status == "succeeded"
     assert res.output == 5
 
 
-# --- S-1: a def's boundary assert fires from the cloned child START, fails the run --------- #
+# --- a def's boundary assert fires from the cloned child START ------------------------------ #
 _CHILD_ASSERT_FLOW = """
 id: d
 name: d
@@ -162,7 +155,7 @@ def test_child_boundary_assert_satisfied_succeeds(num_workers):
     assert res.output == 10
 
 
-# --- fix-B guard: a ComposedFlow is REUSABLE across runs with different input key sets --------- #
+# --- a ComposedFlow is reusable across runs with different input key sets ------------------- #
 # START's per-run `${input.X}` narrowing rides a per-ENGINE `wiring_overrides` dict, NOT the
 # shared compiled `flow.wiring[START_ID]`. This test would FAIL if the engine reverted to
 # mutating the shared IR (run 1 would narrow it to {topic,window}, then run 2 with `window`
@@ -207,5 +200,5 @@ def test_loadedflow_reusable_across_runs_shared_ir_untouched():
     assert r2.status == "succeeded"
     assert r2.input == {"topic": "B"}          # caller-passed, coerced (default not re-surfaced)
     assert r2.output == {"report": "report for B", "n": 1}  # make_report: n = len(topic)
-    # Still unchanged after a second run with an omitted key — the fix-B guarantee.
+    # Still unchanged after a second run with an omitted key.
     assert loaded.compiled.wiring[START_ID] == full_wiring

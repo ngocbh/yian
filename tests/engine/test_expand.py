@@ -35,9 +35,7 @@ def test_rens_internal_input_and_output_heads():
 
 
 def test_rens_internal_computed_whole_span_renamespaces_all_leaves():
-    # A whole-span computed expression `${x.output - y.output}` — the OLD flat-regex
-    # rewriter read the interior as one bogus path and left it UNCHANGED; the parse-based
-    # rewriter re-namespaces every reference leaf.
+    # A whole-span computed expression re-namespaces every reference leaf.
     from agent_composer.compile.expand import _rens_internal
 
     assert (
@@ -172,16 +170,16 @@ def test_call_grow_clones_namespaced_and_substitutes_spawner(num_workers):
     assert eng.state.flow.nodes["sp/__end__"].commit_as == "sp"
 
 
-# --- runtime bounds (MAX_TOTAL_NODES + MAX_REF_DEPTH) + REF-inside-MAP nesting proof ------- #
+# --- runtime bounds (MAX_TOTAL_NODES + MAX_REF_DEPTH) + CALL-inside-MAP nesting proof ------ #
 
 from agent_composer.compose import load_flow
 
 
-# A REF-inside-MAP: parent MAP "each" over the elements; the child "mid" is itself a REF
-# -> a CODE leaf. Uniform recursion namespaces the MAP element as `each#i` and the nested
-# REF clone under it as `each#i/inner/...` (the REF callsite is the spawner id; only the
+# A CALL-inside-MAP: parent MAP "each" over the elements; the child "mid" contains a CALL
+# to a CODE leaf. Uniform recursion namespaces the MAP element as `each#i` and the nested
+# CALL clone under it as `each#i/inner/...` (the CALL site is the spawner id; only the
 # MAP layer adds the `#i` element suffix — `ns`/`map_callsite`).
-_REF_INSIDE_MAP = """
+_CALL_INSIDE_MAP = """
 id: parent
 name: parent
 input:
@@ -220,11 +218,11 @@ output: ${each.output}
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
-def test_ref_inside_map_expands_and_runs_uniformly(num_workers):
-    # parent MAP "each" over 2 elements; the child is itself a REF -> a leaf. Uniform
+def test_call_inside_map_expands_and_runs_uniformly(num_workers):
+    # Parent MAP "each" over 2 elements; the child contains a CALL to a leaf. Uniform
     # recursion composes the namespacing as each#0/inner/..., each#1/inner/... (the MAP
-    # layer adds `#i`; the nested REF callsite is the spawner id `each#i/inner`).
-    loaded = load_flow(_REF_INSIDE_MAP)
+    # layer adds `#i`; the nested CALL site is the spawner id `each#i/inner`).
+    loaded = load_flow(_CALL_INSIDE_MAP)
     eng = _engine(
         loaded.compiled,
         run_inputs={"xs": ["a", "b"]},
@@ -233,14 +231,14 @@ def test_ref_inside_map_expands_and_runs_uniformly(num_workers):
     )
     events = list(eng.run())
     assert isinstance(events[-1], RunSucceeded)
-    assert events[-1].output == ["a", "b"]            # both elements ran through the nested REF
+    assert events[-1].output == ["a", "b"]            # both elements ran through the nested CALL
     # the doubly-namespaced clones exist in the live graph (uniform recursion)
     assert any(nid.startswith("each#0/inner/") for nid in eng.state.flow.nodes)
     assert any(nid.startswith("each#1/inner/") for nid in eng.state.flow.nodes)
 
 
-def _ref_chain_flow(depth: int):
-    """A static REF -> REF -> ... -> CODE leaf chain `depth` defs deep (a genuine chain,
+def _call_chain_flow(depth: int):
+    """A static CALL -> CALL -> ... -> CODE leaf chain `depth` defs deep (a genuine chain,
     NOT a wide fan-out): `step0` calls `step1` calls ... `step{depth-1}` calls the `leaf`.
     Drives the depth bound independently of the node budget."""
     lines = [
@@ -288,15 +286,15 @@ def _ref_chain_flow(depth: int):
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
-def test_deep_ref_chain_trips_max_ref_depth(num_workers):
+def test_deep_call_chain_trips_max_ref_depth(num_workers):
     from agent_composer.events import RunFailed
     from agent_composer.runtime.state import MAX_REF_DEPTH
 
-    # a REF that calls a REF that calls a REF ... deeper than MAX_REF_DEPTH (a genuine chain,
+    # A CALL chain deeper than MAX_REF_DEPTH (a genuine chain,
     # NOT a wide fan-out) -> the depth bound fires before MAX_TOTAL_NODES. The RuntimeError
     # funnels to RunFailed via the dispatcher-thread wrap (NOT an uncaught raise out of run());
     # the pooled path funnels identically.
-    parent = _ref_chain_flow(depth=MAX_REF_DEPTH + 2)
+    parent = _call_chain_flow(depth=MAX_REF_DEPTH + 2)
     events = list(
         _engine(
             parent,

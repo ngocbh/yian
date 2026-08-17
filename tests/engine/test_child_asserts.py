@@ -2,12 +2,11 @@
 
 A `def` may declare `asserts:`. At build these are lowered onto the def's synthesized
 START/END nodes (PRE/boundary -> `START.post_asserts` with each `${input.X}` rewritten to
-`${output.X}`, POST -> `END.post_asserts`). When the def runs via a `call` (REF once, MAP per
+`${output.X}`, POST -> `END.post_asserts`). When the def runs via a CALL once or MAP per
 element), the child START/END are cloned into the parent and fire their asserts through the
-ordinary `eval_node` path — the child START fires the boundary asserts (as post-asserts against
-its COERCED output), the child END fires the post asserts. A failed child assert fails the child
-node -> the parent run fails. This is the SAME firing path as a top-level flow's asserts (the
-whole point of the merge).
+ordinary `Node.run` wrapper — the child START fires boundary assertions against its coerced
+output, and the child END fires post-assertions against its result. A failed child assertion
+fails the child node and therefore the parent run, exactly as at the top-level boundaries.
 """
 
 import pytest
@@ -34,7 +33,7 @@ defs:
       - "${x.output} < 100"
 """
 
-_REF_FLOW = f"""
+_CALL_FLOW = f"""
 id: d
 name: d
 input:
@@ -67,32 +66,32 @@ output: ${{map_it.output}}
 
 
 def test_def_with_asserts_loads():
-    load_flow(_REF_FLOW)
+    load_flow(_CALL_FLOW)
 
 
-# --- REF: non-vacuous boundary + post pairs, run through expansion. The same parent flow
-# stays `succeeded` with a satisfying value AND fails with a violating one (the eager
-# boundary eval in _apply_grow / the child END_ID pool-scoped post-assert). #
-def test_ref_child_boundary_assert_satisfying_value_succeeds():
-    out = run_flow(load_flow(_REF_FLOW), {"v": 5})           # 5 >= 0 -> boundary holds
+# --- CALL: non-vacuous boundary + post pairs, run through expansion. The same parent flow
+# stays `succeeded` with a satisfying value and fails with a violating one (the cloned
+# child START/END own the boundary/post assertions). #
+def test_call_child_boundary_assert_satisfying_value_succeeds():
+    out = run_flow(load_flow(_CALL_FLOW), {"v": 5})           # 5 >= 0 -> boundary holds
     assert out.status == "succeeded"
     assert out.output == 10
 
 
-def test_ref_child_boundary_assert_violating_value_fails():
-    res = run_flow(load_flow(_REF_FLOW), {"v": -1})          # -1 violates ${input.n} >= 0
-    assert res.status == "failed"                            # eager boundary eval in _apply_grow
+def test_call_child_boundary_assert_violating_value_fails():
+    res = run_flow(load_flow(_CALL_FLOW), {"v": -1})          # -1 violates ${input.n} >= 0
+    assert res.status == "failed"
     assert res.failure is not None
     assert "assert failed" in res.failure.message
 
 
-def test_ref_child_post_assert_satisfying_value_succeeds():
-    out = run_flow(load_flow(_REF_FLOW), {"v": 5})           # x=10 < 100 -> post holds
+def test_call_child_post_assert_satisfying_value_succeeds():
+    out = run_flow(load_flow(_CALL_FLOW), {"v": 5})           # x=10 < 100 -> post holds
     assert out.status == "succeeded"
 
 
-def test_ref_child_post_assert_violating_value_fails():
-    res = run_flow(load_flow(_REF_FLOW), {"v": 60})          # x=120 violates ${x.output} < 100
+def test_call_child_post_assert_violating_value_fails():
+    res = run_flow(load_flow(_CALL_FLOW), {"v": 60})          # x=120 violates ${x.output} < 100
     assert res.status == "failed"                            # child END_ID pool-scoped post-assert
     assert res.failure is not None
     assert "assert failed" in res.failure.message
@@ -128,8 +127,8 @@ from tests.engine._graph_builder import _engine
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
-def test_ref_boundary_failure_fails_run(num_workers):
-    loaded = load_flow(_REF_FLOW)
+def test_call_boundary_failure_fails_run(num_workers):
+    loaded = load_flow(_CALL_FLOW)
     eng = _engine(loaded.compiled, run_inputs={"v": -1},   # violates n >= 0 on the cloned child START
                      num_workers=num_workers, grow_builder=build_grow)
     events = list(eng.run())

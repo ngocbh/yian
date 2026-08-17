@@ -1,12 +1,11 @@
 """A `call` node's node-level POST `asserts:` must fire — on the CLONED CHILD END.
 
-A `call` is a spawner: it returns a `Grow` (eval_node returns BEFORE the post-assert
-block), and its `${output}` is committed LATER, when the cloned child's END filler finishes
-(`commit_as=callsite`). Its node-level POST asserts are LOWERED onto that cloned child END (in
-`call_subgraph`), so they fire through the ORDINARY `eval_node` post-assert seam — NOT a bespoke
-redirect-commit site in the engine. A false one therefore fails the run LOUDLY, naming the CHILD
-END id (e.g. `research/__end__`), not the spawner. Before this branch they fired from the
-redirect-commit site (naming the spawner); before an earlier fix they were silently dropped.
+A `call` is a spawner: its `run()` returns `Grow`, and its `${output}` is committed when the
+cloned child END filler finishes (`commit_as=callsite`). `call_subgraph` lowers the call's
+node-level post-asserts onto that END. When `EndNode._run_impl()` returns `Output`, the inherited
+`Node.run` wrapper evaluates them against the END's bound inputs and output. A false assertion
+therefore fails the child END (for example `research/__end__`), which owns the committed call
+output and its postconditions.
 
 These pin: a true call post-assert passes, a false one fails the run LOUDLY (RunFailed,
 failure cause type "NodeAssertFailed", with the assertion origin on the child END), a post-assert

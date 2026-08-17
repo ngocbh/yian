@@ -70,7 +70,7 @@ def _build_case(desc: CaseDescriptor, producers=None):
 
 
 # --------------------------------------------------------------------------- #
-# 9a — searched form
+# Searched form
 # --------------------------------------------------------------------------- #
 
 
@@ -163,7 +163,7 @@ def test_searched_when_malformed_is_loud():
 
 
 # --------------------------------------------------------------------------- #
-# 9b — on: form
+# Discriminant (`on:`) form
 # --------------------------------------------------------------------------- #
 
 
@@ -219,7 +219,7 @@ def test_desugared_on_routes_via_evaluate_when_record():
 
 
 # --------------------------------------------------------------------------- #
-# 9c — exhaustiveness over an enum producer (the SEPARATE validate-phase check)
+# Exhaustiveness over an enum producer (the separate validate-phase check)
 # --------------------------------------------------------------------------- #
 
 

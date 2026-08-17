@@ -1,15 +1,15 @@
 # e08 — Flow input fails type enforcement at the boundary.
 # EXPECT: RUNTIME RunFailed at the input boundary — `window` is declared `int`, but the
-# run passes a non-numeric string that can't coerce. Pins: L3 runtime type enforcement
-# (the same `build_segment_with_type` check, applied at the flow-input boundary).
+# run passes a non-numeric string that can't coerce. Runtime type enforcement uses the
+# same `build_segment_with_type` check applied at the flow-input boundary.
 # No CODE node needed — the value comes straight from the run inputs.
 #
 # Trigger: run with  window: "soon"  (a runtime fixture states its triggering inputs).
 # Expected message: input `window` — 'soon' does not match declared type int.
 #
-# (The *write*-boundary variant — a node PRODUCING the wrong type — is the cleaner
-# demonstration but needs a CODE fn that returns a bad value; deferred until the
-# inline-code / CODE-node question is settled. See docs/TODO.md.)
+# The write-boundary counterpart is a CODE node that returns a value outside its declared
+# output type. That behavior is covered separately by `e21-code-wrong-type.yaml` in the
+# runtime error gallery.
 
 id: err-input-type-mismatch
 name: err_input_type_mismatch

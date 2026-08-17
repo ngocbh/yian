@@ -7,9 +7,8 @@ leaving every operator / literal / builtin-callee / whitespace verbatim.
 `rewrite_condition_refs` wraps it for the three condition spellings (bare / mixed /
 whole-span); `rewrite_template_refs` wraps it for a multi-span binding/template value.
 
-These replace the old flat-regex `.sub` rewriters (call/loop/map inlining, searched
-`case`), which mishandled whole-span `${a > 5}` (rewrote the interior as one path) and a
-bare `a > 5` (no `${}`, no match).
+These support call/loop/map inlining and searched-case rebinding across whole-span,
+mixed, and bare expressions.
 """
 
 from agent_composer.expr.expressions import rewrite_condition_refs, rewrite_expr_refs

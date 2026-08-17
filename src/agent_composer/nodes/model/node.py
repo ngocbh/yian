@@ -1,14 +1,12 @@
-"""MODEL — an ML-inference node (kind kept; serving seam not wired yet).
+"""MODEL — an ML-inference node whose serving seam is not wired yet.
 
 A MODEL node holds a `model_id` (+ optional weights/runtime hints) and is meant to
 delegate the actual inference to an injected ML-serving seam — the MODEL analogue of
-AGENT's LLM. That seam (`model_runtime`) was never threaded through the loader/run path
-(it was dead plumbing), so it was removed; the MODEL **node kind** stays a first-class,
-parseable/buildable kind, but running one raises until a real serving seam is re-added.
+AGENT's LLM. The node kind is first-class and parseable/buildable, but running one raises
+until an ML-serving implementation is available.
 
-When ML serving lands, re-introduce an injected `model_runtime(ctx) -> value` seam
-(threaded `load_flow`/`run_flow` -> build -> node, and into REF/MAP baked children) and
-have `run` call it over the node's bound input record.
+An implementation must be injected through load/run/build and into baked call/map children,
+then invoked over the node's bound input record.
 """
 
 from typing import Optional
@@ -21,9 +19,8 @@ class ModelNode(Node):
     An ML-inference node — the kind is first-class, but the serving seam is not wired yet.
 
     A MODEL node holds a `model_id` (+ optional weights/runtime hints) and is meant to delegate
-    inference to an injected ML-serving seam (the MODEL analogue of AGENT's LLM). That seam was
-    removed as dead plumbing, so [`Node.run`][agent_composer.nodes.base.Node.run] raises
-    until real serving lands.
+    inference to an injected ML-serving seam (the MODEL analogue of AGENT's LLM).
+    [`Node.run`][agent_composer.nodes.base.Node.run] raises until that seam is implemented.
 
     Args:
         node_id (`str`):
@@ -55,7 +52,7 @@ class ModelNode(Node):
         self.runtime_name = runtime
 
     def _run_impl(self, inputs: dict) -> Output:
-        """Always raises — the ML-serving seam was removed as dead plumbing (see the class docstring)."""
+        """Raise because no ML-serving implementation is available."""
         raise NotImplementedError(
             f"MODEL node {self.id!r}: ML serving is not wired yet — the model_runtime "
             f"seam was removed as dead plumbing; re-add it when real ML serving lands"

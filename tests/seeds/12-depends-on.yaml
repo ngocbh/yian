@@ -2,7 +2,7 @@
 #
 # Most edges are inferred from ${...} data bindings. When a node must run AFTER
 # another with no data flowing between them (a side effect — priming a shared
-# cache), an ORDERING edge adds the constraint. Two flavours (feature D):
+# cache), an ORDERING edge adds the constraint. Two forms are available:
 #   - `depends_on: [X]` — run after X AND co-skip if X is skipped ("I need X").
 #   - `runs_after:  [X]` — run after X but still run if X is skipped (pure order).
 # Both gate on X settling. This seed uses `depends_on` (the source `warm_cache` is

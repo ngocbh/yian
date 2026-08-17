@@ -1,4 +1,4 @@
-"""6.4 — the `tool` kind handle: parse records field ranges into the descriptor; build
+"""The `tool` kind handle: parsing records field ranges in the descriptor; build
 returns a runtime ToolNode with `inputs` wiring (the tool's sink surface) and stamped ranges."""
 
 from agent_composer.compose.nodes.base import BuildContext

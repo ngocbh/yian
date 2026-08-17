@@ -66,8 +66,7 @@ def test_when_missing_reference_is_falsy_not_error():
 
 
 def test_when_bare_reference_is_truthiness():
-    # Under the unified engine a bare ref in a `when:` is a truthiness test (coerced to
-    # bool at the boundary), NOT a parse error — the legacy bool-only path rejected it.
+    # A bare ref in a `when:` is a truthiness test, coerced to bool at the boundary.
     assert evaluate_when("${x.output}", _pool_with(x=1)) is True
     assert evaluate_when("${x.output}", _pool_with(x=0)) is False
     assert evaluate_when("${missing.output}", VariablePool()) is False
@@ -153,8 +152,8 @@ def test_when_arithmetic_in_record_path():
     assert evaluate_when_record("${a} % 2 == 1", {"a": 5}) is True
 
 
-def test_when_string_equality_still_works_under_arith_grammar():
-    # non-arithmetic comparisons (string ==, in) unaffected by the arithmetic grammar
+def test_when_string_equality_and_membership():
+    # String equality and membership share the expression grammar with arithmetic.
     pool = _pool_with(label="approve")
     assert evaluate_when("${label.output} == 'approve'", pool) is True
     assert evaluate_when("${label.output} in 'approve/reject'", pool) is True
@@ -175,7 +174,7 @@ def test_when_list_literal_membership_and_equality():
     assert evaluate_when("5 in [2 + 3, 10]", pool) is True
 
 
-# --- render_template raise-on-unresolved (slice 3) -------------------------- #
+# --- pool-scoped template rendering ----------------------------------------- #
 
 
 def test_render_template_substitutes_present_ref():
@@ -201,13 +200,13 @@ def test_render_template_no_refs_is_identity():
     assert render_template("plain text, no refs", VariablePool()) == "plain text, no refs"
 
 
-def test_when_missing_reference_still_falsy_after_render_change():
-    # The `when:` path must KEEP missing -> falsy (locked); only render_template changed.
+def test_condition_context_treats_missing_reference_as_falsy():
+    # Template rendering is strict, while condition evaluation treats a miss as falsy.
     pool = VariablePool()
     assert evaluate_when("${ghost.output} > 5", pool) is False
 
 
-# --- render_template_record (strict-AGENT prompt; slice 5) ------------------- #
+# --- record-scoped strict prompt rendering ---------------------------------- #
 
 
 def test_render_record_substitutes_declared_inputs():
@@ -240,7 +239,7 @@ def test_render_record_falsy_present_values_render():
     assert render_template_record("w=${w} flag=${s.on} n='${name}'", rec) == "w=0 flag=False n=''"
 
 
-# --- evaluate_when_record (strict-CASE when:; slice 8) ------------------- #
+# --- record-scoped CASE condition evaluation -------------------------------- #
 
 
 def test_evaluate_when_record_resolves_declared_inputs():
@@ -253,8 +252,7 @@ def test_evaluate_when_record_resolves_declared_inputs():
 
 
 def test_evaluate_when_record_missing_is_falsy_not_raise():
-    # A declared-but-None input (or a dotted miss) propagates as falsy — the LOCKED
-    # `when:` semantics — NOT a raise (unlike render_template_record).
+    # A declared-but-None input or dotted miss is falsy rather than an error.
     from agent_composer.expr.expressions import evaluate_when_record
 
     assert evaluate_when_record("${label} == 'POSITIVE'", {"label": None}) is False
@@ -263,9 +261,8 @@ def test_evaluate_when_record_missing_is_falsy_not_raise():
 
 def test_evaluate_when_record_in_with_none_operand_raises():
     # Boundary: `in`/`not in` with a None operand on EITHER side RAISES (not falsy) —
-    # pre-existing _eval_comparison behavior, shared with the pool path, unchanged. This
-    # is the one leg of the locked None semantics that fails the node rather than routing
-    # to default (==/!=/ordered all go falsy on None).
+    # `_eval_comparison` shares this behavior with the pool path. Membership with `None`
+    # fails the node, while equality and ordered comparisons remain falsy.
     from agent_composer.expr.expressions import evaluate_when_record
 
     with pytest.raises(ExpressionError):

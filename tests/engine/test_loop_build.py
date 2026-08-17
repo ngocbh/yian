@@ -1,10 +1,10 @@
-"""build_loop_node + loader dispatch + the `'a -> 'a` type contract.
+"""`LoopDescriptor.build`, loader dispatch, and the `'a -> 'a` type contract.
 
 A `kind: loop` node bakes a `LoopNode` from a `LoopDescriptor`: it resolves+bakes the
 body subflow (the `call:` child, a `defs:` callable here so no external resolver is
 needed), stamps `output_contract`, and enforces the two halves of the type contract:
 
-- FIELD-NAME-set (in `build_loop_node`): body output field NAMES == carried keys,
+- FIELD-NAME-set (in `LoopDescriptor.build`): body output field NAMES == carried keys,
   body input NAMES subset of carried keys — a located `LoadError` on a name mismatch.
 - FULL TYPE equality (in the loader post-build pass `check_loop_type_contract`):
   body output Type == carried record Type per field — a located `LoadError` on a
@@ -91,7 +91,7 @@ def test_partial_loop_contract_rejects_unknown_downstream_field_at_load():
 
 
 # The body output OMITS `exited`, so its output field NAMES ({n}) != the carried keys
-# ({n, exited}) -> caught in build_loop_node (the field-name-set half).
+# ({n, exited}) -> caught in `LoopDescriptor.build` (the field-name-set half).
 BAD_FIELDSET = """
 id: loop-bad-fieldset
 name: loop_bad_fieldset
@@ -333,7 +333,7 @@ BAD_MAX = GOOD.replace("    max: 5\n", "    max: 0\n")
 BAD_PREDICATE_NAME = GOOD.replace("    while: not ${exited}\n", "    while: not ${exted}\n")
 
 # `max:` must be a plain integer. The descriptor is a bare dataclass (its `Optional[int]`
-# annotation isn't enforced), so these non-int YAML types pass through to build_loop_node:
+# annotation isn't enforced), so these non-int YAML types reach `LoopDescriptor.build`:
 # a quoted string, a float, and a bool (an int subclass that would silently read as 0/1).
 BAD_MAX_STR = GOOD.replace("    max: 5\n", '    max: "5"\n')
 BAD_MAX_FLOAT = GOOD.replace("    max: 5\n", "    max: 2.5\n")

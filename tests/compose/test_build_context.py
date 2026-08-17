@@ -1,7 +1,7 @@
 """Unit tests for the `BuildContext`/`BuildResult` build-side dataclasses.
 
-These are the immutable carriers a node `.build()` will consume/return once wired
-in a later commit; here we only pin their defaults and frozen-ness."""
+These immutable carriers are consumed and returned by node `.build()` methods;
+the tests pin their defaults and frozen-ness."""
 
 import dataclasses
 

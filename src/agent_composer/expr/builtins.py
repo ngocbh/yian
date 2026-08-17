@@ -7,7 +7,7 @@ invokes it at render time against the node's already-bound declared inputs.
 
 This is a deliberate, bounded bend of the "all computation is a node" law: builtins are
 read-only string formatting over a node's OWN inputs, produce no graph node or edge, and
-are unavailable in `from:`/`when:`/bindings. See `docs/agent-compose-principles.md` §4(A).
+are unavailable in `from:`/`when:`/bindings. See `docs/expressions.md`.
 
 Knows about: `expr.expressions` (peer — `ExpressionError`).
 Never imports: `template`, `nodes`, `compile`, `runtime` (they sit above / beside it).

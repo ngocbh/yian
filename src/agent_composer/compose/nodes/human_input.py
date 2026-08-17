@@ -40,17 +40,16 @@ class HumanInputDescriptor(NodeDescriptor):
     Legality (exactly-one, adaptive needs its own `prompt:`) is enforced in `_validate_fields`.
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata), the `inputs:`/`outputs:` signature surface, and the
+    the Compose-only `range`/`field_ranges` parse metadata), the `input:`/`output:` signature surface, and the
     template `parse` from `NodeDescriptor`. It overrides ONLY the `_validate_fields` hook (the
     one-of-three legality, calling `super()` first for the default asserts-list check); only the
     human_input-specific fields are declared here.
 
-    Class attrs: `kind="human_input"`; `allowed` adds `prompt`/`questions`/`adaptive_questions`/
-    `inputs`/`outputs`/`asserts` to the commons; `required` is empty (no single flat field is
+    Class attrs: `kind="human_input"`; `allowed` adds `prompt`/`questions`/`adaptive_questions`,
+    normalized `inputs`/`outputs`, and `asserts` to the commons; `required` is empty (no single flat field is
     required — the question surface is one-of-three, enforced in `_validate_fields`);
-    `binding_fields=()` — this PRESERVES the retired `map_binding_strings_in_descriptor` ladder
-    behavior, which never matched a human_input, so its `inputs:` were NOT inline-call-desugared
-    (making them desugarable would be a behavior change, out of scope here).
+    `binding_fields=()` — HUMAN_INPUT inputs are runtime bindings and are not traversed by
+    inline-call or case-output desugaring.
     """
 
     kind = "human_input"
@@ -153,7 +152,7 @@ class HumanInputDescriptor(NodeDescriptor):
         """Construct the runtime `HumanInputNode` (+ wiring) for this `HumanInputDescriptor`.
 
         Builds the human_input leaf: build the gate (one of three
-        question forms), derive `output_contract` from `outputs:` (a questions gate with none
+        question forms), derive `output_contract` from authored `output:` (a questions gate with none
         defaults to a bare open OBJECT — the host returns a free-form answer record), compute the
         `answer_schema`, and wire node-side `params` + flow-owned `inputs`. `_finish` stamps the
         descriptor origin on the node and keeps its ranges on the Compose-owned `BuildResult`.
@@ -162,7 +161,7 @@ class HumanInputDescriptor(NodeDescriptor):
         """
         node = self._build_gate(ctx.diagnostics)
         node.output_contract = self.output_contract(ctx)
-        # A questions gate with no explicit `outputs:` defaults to a bare open OBJECT (the host
+        # A questions gate with no explicit `output:` defaults to a bare open OBJECT (the host
         # returns a free-form answer record). Legacy gates derive their schema from the (possibly
         # absent) declared output type.
         if node.output_contract is None and (
@@ -193,7 +192,7 @@ def _field_schema(name: str, typ: Type, required: bool) -> dict[str, Any]:
 
 
 def _answer_schema(typ: Optional[Type]) -> list[dict[str, Any]]:
-    """A light IOField-shaped schema for a HUMAN_INPUT answer, from its output `Type`.
+    """A lightweight answer-field schema for HUMAN_INPUT, derived from its output `Type`.
 
     A record output -> one entry per field (recursively); any other (scalar / enum / list,
     incl. list-of-enum) -> a single `answer` entry. Lets a host renderer prompt against the

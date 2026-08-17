@@ -1,4 +1,4 @@
-# e15 — an AGENT prompt references a non-declared input (prompt-L1). COMPILE.
+# e15 — an AGENT prompt references an undeclared node input. COMPILE.
 id: err-prompt-undeclared
 name: err_prompt_undeclared
 input:

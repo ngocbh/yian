@@ -1,6 +1,6 @@
-"""6.8 — the `call` kind handle: parse stamps `kind="call"` onto the shared
+"""The `call` kind handle: parsing stamps `kind="call"` onto the shared
 `CallDescriptor` and records the `call`/`inputs` field ranges; the required flat field is
-`call` (the callable). Build (drive of `build_call_node`) is exercised end-to-end via the
+`call` (the callable). `CallDescriptor.build` is exercised end-to-end via the
 `load_flow` suite; this module covers the located parse."""
 
 import pytest

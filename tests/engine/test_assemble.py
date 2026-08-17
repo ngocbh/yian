@@ -4,7 +4,7 @@ Runs AFTER data edges + case control edges. Roots are body nodes with
 NO incoming edge of ANY kind (data OR control), so a `case` branch target (its only
 incoming edge is the `gate->target` control edge) is correctly demoted from root —
 otherwise the engine enqueues both branches unconditionally. Terminals come from the
-flow `outputs:` bindings: `synthesize_boundary_graph` mints a `P -> __end__` edge per
+flow `output:` bindings: `synthesize_boundary_graph` mints a `P -> __end__` edge per
 producer per output (a coalesce flow-output -> one edge per producer), keyed by output name.
 """
 
@@ -312,8 +312,7 @@ def test_resolved_parameters_accept_zero_args_and_wire_empty_start():
 
 
 def _end_edges(f, node_ids, edges):
-    """The END_ID producer edges synthesize_boundary_graph mints for the flow `outputs:` (the old
-    synthesize_terminals' `P -> __end__` edges, now keyed by output name)."""
+    """Return END_ID producer edges synthesized from flow `output:` bindings."""
     _, all_edges, _ = synthesize_boundary_graph(
         [], _flow_outputs(f.outputs), node_ids, list(edges)
     )
@@ -364,7 +363,7 @@ def _bare_roots(node_ids, edges):
 
 
 # --------------------------------------------------------------------------- #
-# 10a — roots / input-producer edges: an ${input.X} reader gets a START_ID->reader
+# Roots / input-producer edges: an ${input.X} reader gets a START_ID->reader
 # DATA edge — NOT a bare root; a case branch target stays control-gated. infer_data_edges now
 # mints the input-producer edges, so the boundary synthesis (no-incoming) yields no bare body root.
 # --------------------------------------------------------------------------- #
@@ -403,7 +402,7 @@ def test_seed06_notes_not_bare_roots():
 
 
 # --------------------------------------------------------------------------- #
-# 10b — terminals from the flow outputs: bindings
+# Terminals from flow `output:` bindings
 # --------------------------------------------------------------------------- #
 
 
@@ -421,7 +420,7 @@ def test_seed02_coalesce_both_producers_terminal():
     node_ids, edges, f = _all_edges("02-case.yaml")
     ends = _end_edges(f, node_ids, edges)
     producers = {e.from_ for e in ends}
-    # outputs: ${positive.output | cautious.output} -> BOTH get a __end__ edge.
+    # output: ${positive.output | cautious.output} -> both get a __end__ edge.
     assert producers == {"positive", "cautious"}
     for e in ends:
         assert e.to == END_ID

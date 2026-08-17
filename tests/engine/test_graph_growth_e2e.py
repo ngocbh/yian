@@ -5,7 +5,7 @@ contract, this locks the engine results end-to-end:
 
 - **scratch is eliminated** structurally: no `pool.scratch`/`NodeScratch`, no
   per-kind scratch cap module, no `Node` attribute or string referencing scratch.
-- **the live graph GROWS** under a REF/MAP run: a `Grow` deep-namespaces the child
+- **the live graph grows** under a CALL/MAP run: a `Grow` deep-namespaces the child
   into the live `CompiledFlow` and `len(flow.nodes)` increases — driven via `FlowEngine.run()`
   directly so the test can inspect the engine-owned projection.
 - the **START_ID..END_ID splice** is exercised: each call splices the namespaced child
@@ -41,7 +41,7 @@ from tests.engine._graph_builder import _engine
 _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
 
-# --- CODE-child REF/MAP fixtures (Ollama-free; mirror test_golden_run_results.py) ------------- #
+# --- CODE-child CALL/MAP fixtures (Ollama-free; mirror test_golden_run_results.py) ------------ #
 
 _CHILD = """
 id: child-one
@@ -214,13 +214,13 @@ def test_nested_human_input_reaches_terminal():
 def test_f0_goldens_hold():
     from tests.engine.test_golden_run_results import (
         test_golden_map_run_result,
-        test_golden_ref_run_result,
+        test_golden_call_run_result,
         test_golden_static_edge_ids_case_and_call_and_map,
     )
 
-    # re-assert the REF/MAP run-results + static edge-id sets still hold (graph-growth
+    # Reassert the CALL/MAP run results and static edge-id sets (graph-growth
     # adds namespaced nodes; the STATIC topology + run results are unperturbed).
-    test_golden_ref_run_result()
+    test_golden_call_run_result()
     test_golden_map_run_result()
     test_golden_static_edge_ids_case_and_call_and_map()
 

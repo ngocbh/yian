@@ -3,9 +3,9 @@
 A leaf descriptor (agent/code/model/tool) + a typedefs registry (via `BuildContext`) build the
 matching runtime `Node`, stamped with:
   - `output_contract = ValueContract(read_type(descriptor.outputs, registry))`
-    (None if no outputs),
+    (None if no authored `output:`),
   - untyped `Parameter(name=k)` values plus flow-owned wiring from the descriptor's
-    `inputs:` map; a TOOL's `input:` map binds the same way.
+    authored `input:` map; a TOOL's `input:` map binds the same way.
 
 `desc.build(ctx)` returns a `BuildResult` (`.node`/`.wiring`/`.edges`). Mirrors the per-kind
 ctor args.
@@ -34,11 +34,7 @@ _SEEDS = Path(__file__).resolve().parents[2] / "tests" / "seeds"
 
 
 def _build(desc, registry=None, diagnostics=None):
-    """Build a leaf descriptor and return the legacy `(node, wiring)` pair.
-
-    Wraps `desc.build(BuildContext(registry))` (which returns a `BuildResult`) so these unit
-    tests read the node/wiring the way they did against the old `build_leaf_node` tuple.
-    """
+    """Build a leaf descriptor and extract its `(node, wiring)` pair."""
     result = desc.build(
         BuildContext(
             registry if registry is not None else {},
@@ -259,8 +255,7 @@ def test_model_node_built():
 
 
 def test_model_node_run_raises_serving_not_wired():
-    # The model_runtime seam was removed (dead plumbing); the MODEL kind still builds,
-    # but running one is loud until ML serving is re-added.
+    # MODEL still builds, but running it is loud until ML serving is implemented.
     desc = _seed_nodes("07-model-rating.yaml")["predict"]
     node, _ = _build(desc)
     with pytest.raises(NotImplementedError, match="not wired"):
@@ -276,7 +271,7 @@ def test_tool_node_built_with_args_bindings():
     node, wiring = _build(desc)
     assert isinstance(node, ToolNode)
     assert node.tool_id == "get_facts"
-    assert node.output_contract is None  # no outputs: declared
+    assert node.output_contract is None  # no `output:` declared
     assert {p.name for p in node.params} == {"symbol", "limit"}
     assert wiring == {"symbol": "${input.topic}", "limit": 10}
     # Inputs are exact untyped sink parameters.

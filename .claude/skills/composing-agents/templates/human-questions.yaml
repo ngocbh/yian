@@ -14,7 +14,7 @@ input:
   proj: str
 
 nodes:
-  # (A) STATIC — a literal questions list, with ${proj} templated into the text.
+  # STATIC — a literal questions list, with ${proj} templated into the text.
   ask_static:
     kind: human_input
     input:
@@ -30,7 +30,7 @@ nodes:
         header: Notes
     # output omitted -> defaults to object: {Framework: ..., Notes: ...}
 
-  # (B) ADAPTIVE — an LLM composes the questions from context. This block
+  # ADAPTIVE — an LLM composes the questions from context. This block
   # DESUGARS at load into a synth compose-agent (ask_adaptive__compose, output
   # list[Question]) wired into the gate; the runtime gate never calls an LLM.
   ask_adaptive:
@@ -42,7 +42,7 @@ nodes:
       mode: plain                  # optional, default plain
       retries: 3                   # optional — self-correction attempts
 
-  # (C) MANUAL REF (not shown as a node): write your own composer node and wire
+  # UPSTREAM QUESTIONS: write your own composer node and wire its output
   #   input: { qs: ${composer.output} }   # composer.output is a list[Question]
   #   questions: ${qs}
 

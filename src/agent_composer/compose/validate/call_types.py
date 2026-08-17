@@ -2,9 +2,9 @@
 
 A loader post-build pass (run after the flow's leaves + child signatures are assembled).
 Each binding's SOURCE contract is resolved from its `${<id>.output}`/`${input.X}` ref over
-the PARENT producer + flow-input contracts, then its `Type` is projected and checked for
-structural compatibility with the CHILD input's declared `Type` (`types_compatible`,
-C-EQUIV). Its range anchor comes from the call node's transient Compose
+the PARENT producer + flow-input contracts, then its `Type` is projected and checked with
+`types_compatible` against the CHILD input's declared `Type`. Its range anchor comes from
+the call node's transient Compose
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
@@ -34,7 +34,7 @@ from agent_composer.nodes.contracts import (
 from agent_composer.typesys import canonical_type_label
 
 
-def check_ref_map_types(
+def check_call_map_types(
     build_results: dict[str, BuildResult],
     producers: dict[str, OutputContract],
     flow_inputs: dict[str, ValueContract],
@@ -45,9 +45,9 @@ def check_ref_map_types(
     """Cross-flow type check for every `call` binding (a loader post-build pass).
 
     Each binding's SOURCE contract (resolved from its `${<id>.output}`/`${input.X}` ref
-    over the PARENT producer + flow-input contracts) is projected to its `Type` and must be
-    structurally compatible with the CHILD input's declared `Type` (`types_compatible`,
-    C-EQUIV). A `${item}`/coalesce/literal/opaque source — or an opaque/absent child input
+    over the PARENT producer + flow-input contracts) is projected to its `Type` and must
+    satisfy `types_compatible` against the CHILD input's declared `Type`. A
+    `${item}`/coalesce/literal/opaque source — or an opaque/absent child input
     (incl. the reserved `over` key) — stays lenient (skipped). Loud + located at the
     node's Compose-owned `input:` mapping range, else its authored node range.
     Iterates the WIRING (not the params)
@@ -78,8 +78,7 @@ def check_ref_map_types(
         node = result.node
         # CALL/MAP carry `child_inputs` to type-check against; a LOOP also carries a child but
         # its `'a -> 'a` contract is checked by check_loop_type_contract/carried_types instead.
-        # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy) -> skip
-        # (behavior-identical to the old empty-child_decls loop, which ran zero checks).
+        # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy), so skip.
         if node.is_loop or not getattr(node, "child_inputs", None):
             continue
         child_decls = {d.name: d for d in node.child_inputs}

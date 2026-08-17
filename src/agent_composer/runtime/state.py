@@ -77,7 +77,7 @@ MAX_TOTAL_NODES = 10_000
 """Maximum live topology size before same-transition pruning."""
 
 MAX_REF_DEPTH = 5
-"""Maximum positive CALL/MAP reference-growth depth."""
+"""Maximum positive graph-growth nesting depth."""
 
 GrowBuilder = Callable[[Node, Any], Flow]
 """Injected kind-aware interpreter from a spawner and canonical seed to a fragment."""
@@ -168,7 +168,7 @@ class RunState:
             First route-derived proof that the terminal output is unreachable,
             retained independently of later frontier and topology changes.
         depth (`dict[str, int]`):
-            Reference-growth depth keyed by live dynamic node ID.
+            Graph-growth nesting depth keyed by live dynamic node ID.
         wiring_overrides (`dict[str, dict[str, Any]]`):
             Per-run wiring keyed by node ID, beginning with START's narrowed inputs.
         run_id (`str | None`):
@@ -1010,7 +1010,7 @@ def prepare_record(
 
     Raises:
         `TypeError`:
-            State has the wrong type or the record kind is not implemented yet.
+            State has the wrong type or the record type is unsupported for preparation.
         `ValueError`:
             The record is not the exact next transition for this state.
     """
@@ -2570,7 +2570,7 @@ def _reject_growth_cycle(
 
 
 def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
-    """Derive the exact trait-driven reference depth for one expansion."""
+    """Derive the exact trait-driven growth depth for one expansion."""
     delta = state.flow.nodes[spawner_id].grow_depth_delta
     if delta is None:
         return None

@@ -1,7 +1,7 @@
 # e07 — Required-at-use-site (`:?`) missing at runtime.
 # EXPECT: RUNTIME RunFailed (not a compile error) — `as_of` is an Optional param, omitted
 # at the boundary, but `report` insists on it via `${input.as_of:?…}`. The TYPE allows
-# null; this USE SITE does not. Pins: L3 loud failure for `:?`.
+# null; this USE SITE does not. The `:?` binding must fail loudly.
 #
 # Trigger: run this flow with `as_of` OMITTED (a runtime fixture needs its triggering
 # inputs stated — unlike the compile fixtures, which fail regardless of inputs).

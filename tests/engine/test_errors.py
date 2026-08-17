@@ -5,12 +5,12 @@ The "loud + located" contract for the loader: a malformed flow raises a
 three seed fixtures pin that contract end-to-end:
 
 - **e01** — a dangling flow-output ref (`${scor.output}` typo) -> located at the
-  `outputs:` line (the offending line).
+  `output:` line (the offending line).
 - **e02** — a cyclic data graph (`a -> b -> a`) -> one frame for each actual cycle
   member, in authored source order; the message names both nodes.
 - **e03** — a dotted-field miss on an ANONYMOUS producer record
   (`${score.output.confidence}` on `{rating, rationale}`) -> located at the
-  `outputs:` line (C-ANON-CHECK: anon records are field-checked).
+  `output:` line because anonymous records are field-checked.
 
 The **exhaustiveness mechanism** is asserted on a CONSTRUCTED inline
 fixture — a `case … on <Literal enum producer>` missing a tag with no `else:` -> loud.
@@ -52,7 +52,7 @@ def _only_error_range(error: LoadError) -> SourceRange:
 
 
 # --------------------------------------------------------------------------- #
-# e01 — dangling flow-output ref, located at the `outputs:` line (offending line)
+# e01 — dangling flow-output ref, located at the `output:` line (offending line)
 # --------------------------------------------------------------------------- #
 
 
@@ -61,7 +61,7 @@ def test_e01_dangling_ref_located():
     msg = str(err)
     assert "unresolved references" in msg
     assert "scor" in msg  # names the dangling ref
-    # `outputs: ${scor.output}` is line 19 of the fixture (the offending line).
+    # `output: ${scor.output}` is line 19 of the fixture (the offending line).
     assert _only_error_range(err).start_line == 19
 
 
@@ -80,7 +80,7 @@ def test_e02_cycle_located():
 
 
 # --------------------------------------------------------------------------- #
-# e03 — dotted-field miss on an anonymous producer record, at the `outputs:` line
+# e03 — dotted-field miss on an anonymous producer record, at the `output:` line
 # --------------------------------------------------------------------------- #
 
 
@@ -89,7 +89,7 @@ def test_e03_unknown_field_located():
     msg = str(err)
     assert "unresolved references" in msg
     assert "confidence" in msg  # names the missing record field
-    # `outputs: ${score.output.confidence}` is line 21 of the fixture.
+    # `output: ${score.output.confidence}` is line 21 of the fixture.
     assert _only_error_range(err).start_line == 21
 
 
@@ -385,12 +385,12 @@ def test_duplicate_asserts_caret_at_first_occurrence():
 
 
 def test_input_named_like_a_field_does_not_collide():
-    # e33 (#88 case 2) — the one seed PR #98's plan promised and never shipped. The node has an
-    # `env:` FIELD (value L32) and an input literally named `env` (L35). Under the old flat
+    # e33 (#88 case 2): the node has an `env:` FIELD (value L32) and an input literally named
+    # `env` (L35). Under the old flat
     # `dict[str, SourceRange]` both keyed the bare string "env" and the later stamp won, so a caret
     # could land on the unrelated construct. The (kind, key) tuple keeps them distinct.
     #
-    # Asserts CORRECT behavior — the regression pin for the part of #88 that IS fixed.
+    # This regression pin asserts that the field and input retain separate source ranges.
     text = (_ERRORS / "e33-input-named-like-field.yaml").read_text()
     document = SourceDocument.parse(text.replace("${nope.output}", '"lit"'))
     fr = parse_nodes(document.root.child("nodes"))["calc"].field_ranges
@@ -408,9 +408,9 @@ def test_input_named_like_a_field_does_not_collide():
 
 
 # --------------------------------------------------------------------------- #
-# Source-location regressions. Fixed cases remain positive pins; the structured-output
-# case below deliberately preserves its separate runtime reproduction until that contract
-# is addressed.
+# Source-location regressions. Source-location contracts remain positive pins; the
+# structured-output case below preserves its separate runtime reproduction until that
+# contract is addressed.
 # --------------------------------------------------------------------------- #
 
 
@@ -448,8 +448,8 @@ def test_synth_node_locates_at_its_call_directive_line():
     # L29 — a foreign map (the key is right, the map belongs to another node), which per-entry
     # resolution (PR #104) turned into a confidently-wrong caret on a valid line.
     #
-    # FIXED (#106): the desugar hands the synth node its OWN provenance — the `call(...)` directive's
-    # binding line — so the caret is L30 (the actual error), and the message names the synth node.
+    # The desugar gives the synth node the `call(...)` directive's own provenance, so the caret is
+    # L30 (the actual error), and the message names the synth node.
     err = _load_error("e37-synth-node-inherits-host-ranges.yaml")
     assert "unresolved references" in str(err)
     assert "__call_0" in str(err) and "'topic'" in str(err)  # the SYNTH node's input, not the host's
@@ -460,8 +460,8 @@ def test_synth_node_locates_at_its_call_directive_line():
 def test_case_when_ref_locates_at_when_line():
     # e38 (#106): a dangling ref in `cases[1].when` (L36) hoists to a synthetic CASE input `__r1`.
     # It USED to locate at the `gate:` header and print the synthetic `__r1` (a name that appears
-    # nowhere in the file). FIXED: the CASE desugar stamps `__r1`'s own `cases[1].when` range and a
-    # `cases[1].when` label, so the caret is L36 and the message names the author's construct.
+    # nowhere in the file). The CASE desugar stamps `__r1` with its own `cases[1].when` range and
+    # label, so the caret is L36 and the message names the author's construct.
     err = _load_error("e38-case-when-ref-locates-node-header.yaml")
     assert "unresolved references" in str(err)
     assert "'__r1'" not in str(err)       # the synthetic name no longer leaks

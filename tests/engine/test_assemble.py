@@ -364,7 +364,7 @@ def _bare_roots(node_ids, edges):
 
 
 # --------------------------------------------------------------------------- #
-# 10a — roots / input-producer edges: an ${input.X} reader gets a START_ID->reader
+# Roots / input-producer edges: an ${input.X} reader gets a START_ID->reader
 # DATA edge — NOT a bare root; a case branch target stays control-gated. infer_data_edges now
 # mints the input-producer edges, so the boundary synthesis (no-incoming) yields no bare body root.
 # --------------------------------------------------------------------------- #
@@ -403,7 +403,7 @@ def test_seed06_notes_not_bare_roots():
 
 
 # --------------------------------------------------------------------------- #
-# 10b — terminals from the flow outputs: bindings
+# Terminals from the flow outputs: bindings
 # --------------------------------------------------------------------------- #
 
 

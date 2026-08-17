@@ -1,6 +1,6 @@
 # e03 — Unknown record field.
 # EXPECT: compile error — `${score.output.confidence}` reads a field not on score's declared
-# output type {rating, rationale}. Dotted access into a record is type-checked (alang L3 / C3).
+# output type {rating, rationale}. Record-field validation rejects the dotted access.
 
 id: err-unknown-field
 name: err_unknown_field

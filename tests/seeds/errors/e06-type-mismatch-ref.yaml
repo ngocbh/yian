@@ -1,13 +1,13 @@
 # e06 — type mismatch at a typed `call` boundary.
 #
 # A `call` applies a callable by signature; the callee's declared input types are
-# checked against the bound sources (structural equivalence, §0c C10). Here the callee
+# checked structurally against the bound sources. Here the callee
 # `research-one` (seed 03) declares  topic: str , but we bind it from a float-typed
 # node output. Sink bindings carry no type of their own — the type comes from the
 # SOURCE — so the mismatch surfaces at the callee boundary.
 #
 # Should fail with:  call.topic — child expects `str`, source is `float`.
-# Pins: L3 (loud + located) at the cross-flow `call` signature check.
+# The diagnostic must locate the incompatible cross-flow `call` binding.
 
 id: err-type-mismatch-ref
 name: err_type_mismatch_ref

@@ -1,4 +1,4 @@
-"""Unit tests for read_type — the Compose D2 reader (YAML -> one Type)."""
+"""Unit tests for converting one Compose type declaration into a `Type`."""
 
 import pytest
 

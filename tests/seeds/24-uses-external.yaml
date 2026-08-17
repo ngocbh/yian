@@ -1,4 +1,4 @@
-# 24 — USES: call an EXTERNAL flow (Python-import style) — feature F.
+# 24 — USES: call an EXTERNAL flow (Python-import style).
 #
 # `uses:` declares an external callable bound to a local alias; a node then `call:`s the
 # alias like any in-file callable. The alias's ref (`lib_verdict`) is resolved on the

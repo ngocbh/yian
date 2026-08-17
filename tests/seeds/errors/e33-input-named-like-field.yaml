@@ -1,26 +1,26 @@
-# e33 — case 2 of #88: an INPUT named exactly like a FLAT FIELD (`env`). COMPILE: "unresolved
-# references". Fails at load; no inputs needed.
+# e33 — An INPUT named like a flat field (`env`) must retain its own source range.
+# EXPECT: compile error — unresolved reference located at the input binding, not the field.
 #
-# This is #88's headline case and PR #98's fix for it shipped WITHOUT a regression seed (the L1 plan
-# promised one; only e34, case 1, landed). Backfilled here.
+# The node deliberately gives both a flat field and an input the key `env`; source locations
+# are indexed by (kind, key), so the two authoring sites remain distinct.
 #
 # The node has BOTH an `env:` field (L31, value on L32) AND an input literally named `env` (L35).
-# They are different locations in the document. The OLD flat `dict[str, SourceRange]` keyed both as
-# the bare string "env", so the second stamp overwrote the first and a caret could point at the
-# wrong construct entirely. PR #98 tags the key with the location's kind, keeping them distinct:
+# They are different locations in the document. A flat `dict[str, SourceRange]` would key both as
+# the bare string "env", allowing the later stamp to overwrite the first and point a caret at the
+# wrong construct. Tuple keys include the location kind and keep the sites distinct:
 #
 #     ('field', 'env')     -> L32      # the env: block's VALUE
 #     ('input', 'env')     -> L35      # the input binding named `env`
 #     ('field', 'inputs')  -> L34      # the inputs: block (spans L34-L35)
 #
-# The pin is that those two resolve to DIFFERENT lines. Note what makes this seed load-bearing: the
+# The invariant is that those two keys resolve to different lines. The
 # `env:` field's value (L32) sits ABOVE the inputs block, so a collision is VISIBLE as a caret on an
 # unrelated construct — with the field's value adjacent to the input, a last-wins bug could still
 # land on a plausible line and hide.
 #
-#   CURRENT (correct): caret L35 alone — per-entry resolution (#87, landed in PR #104) lands ON the
-#     offending `env:` input, NOT L32 the unrelated `env:` field value. This is the desired behavior;
-#     the (kind, key) tuple is what keeps the two `env` sites distinct.
+#   The unresolved-reference caret covers L35 alone, the offending `env:` input, rather than L32,
+#     the unrelated `env:` field value. Per-entry resolution and the (kind, key) tuple keep the two
+#     authoring sites distinct.
 id: err-input-named-like-field
 name: err_input_named_like_field
 input:

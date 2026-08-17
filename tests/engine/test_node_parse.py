@@ -379,7 +379,7 @@ def test_legacy_ref_kind_is_unknown():
 
 
 def test_node_name_depends_on_and_runs_after_captured():
-    # depends_on + runs_after are run-ordering edges (feature D); node_name is the label.
+    # depends_on + runs_after declare run-ordering edges; node_name is the display label.
     node = _nodes(
         """
 fetch:

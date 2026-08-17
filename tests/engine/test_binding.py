@@ -14,6 +14,7 @@ import pytest
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.compile.model import START_ID
+from agent_composer.expr import RequiredError
 from agent_composer.nodes.binding import BindingError, apply_defaults, bind_params
 from agent_composer.nodes.contracts import (
     Binding,
@@ -573,8 +574,13 @@ def test_default_operator_quoted_rhs_is_literal():
 
 def test_required_operator_fails_loud_when_unbound():
     empty = VariablePool()
-    with pytest.raises(BindingError, match="a topic is required"):
-        bind_inputs([InputBinding(name="t", source="${input.topic:?a topic is required}")], empty)
+    with pytest.raises(BindingError) as exc:
+        bind_inputs(
+            [InputBinding(name="t", source='${input.topic:?"a topic is required"}')],
+            empty,
+        )
+    assert type(exc.value.__cause__) is RequiredError
+    assert str(exc.value.__cause__) == "a topic is required"
     # present -> returns the value, no raise
     pool = VariablePool(); pool.set(START_ID, {"topic": "ACME"})
     assert bind_inputs([InputBinding(name="t", source="${input.topic:?required}")], pool) == {"t": "ACME"}

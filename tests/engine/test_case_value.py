@@ -5,12 +5,11 @@ case's branch targets (`${t1.output | t2.output | … | else.output}`). Pure loa
 sugar — skip-flood makes every non-taken branch null, so the coalesce yields the taken
 value (exactly seed 02's hand-written join). Runtime IR unchanged.
 
-STEP 1 (pure): `expand_case_outputs` over constructed descriptors — whole / dotted /
-embedded / on-form / case-of-case (flattened to leaves) / non-case / fast-path;
-and the loud rejections of a case value in a non-clean binding position, a condition, or
-an assert.
-STEP 2 (e2e): load + run a CODE-branch case with `outputs: ${gate.output}` and a node
-consuming `${gate.output}` (incl. nested case-of-case).
+Descriptor-level coverage exercises `expand_case_outputs` over constructed descriptors:
+whole, dotted, embedded, `on:` form, nested cases flattened to leaves, non-case, and
+fast-path references. It also covers loud rejection of a case value in a non-clean binding
+position, a condition, or an assert. End-to-end coverage loads and runs CODE branches with
+`output: ${gate.output}` and with a node consuming `${gate.output}`.
 
 (The `then:/else: ${call}` inline-call branch form is covered by
 `tests/engine/test_case_call.py`.)
@@ -26,7 +25,7 @@ from agent_composer.diagnostics import SourceRange
 
 
 # --------------------------------------------------------------------------- #
-# STEP 1 — `expand_case_outputs` (pure): constructed descriptors.
+# Descriptor-level `expand_case_outputs` coverage
 # --------------------------------------------------------------------------- #
 
 
@@ -165,7 +164,7 @@ def test_case_ref_in_nested_default_value_is_loud():
 
 
 def test_case_ref_in_required_message_is_loud():
-    # ${input.t:?${gate.output}} — under Option A the :? MESSAGE is a full expression,
+    # ${input.t:?${gate.output}} — the :? message is a full expression,
     # so a case ref in it is a genuine ref and must be LOUD (parallel to the :- default).
     descs = {"gate": _gate(), "c": _code("c", v="${input.t:?${gate.output}}")}
     with pytest.raises(LoadError, match="whole single reference"):
@@ -205,7 +204,7 @@ def test_case_ref_in_assert_is_loud():
 
 
 # --------------------------------------------------------------------------- #
-# STEP 2 — end-to-end (load + run), CODE branches (Ollama-free), the SOUND case
+# End-to-end load/run coverage with CODE branches (Ollama-free)
 # (branches read ${input.X} only -> no data edges, so skip-flood is correct).
 # --------------------------------------------------------------------------- #
 
@@ -246,7 +245,7 @@ output: ${gate.output}
 
 def test_case_value_flow_output_is_expanded():
     loaded = load_flow(_CASE_VALUE_FLOW)
-    # `outputs: ${gate.output}` desugared to the branch coalesce (= seed 02's hand form).
+    # `output: ${gate.output}` desugared to the branch coalesce (= seed 02's hand form).
     assert loaded.compiled.outputs[0].from_ == "${pro.output | caut.output}"
 
 

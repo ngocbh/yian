@@ -700,7 +700,7 @@ def test_long_loop_stays_within_node_budget(monkeypatch):
 
 def test_terminate_leaves_exactly_one_dead_final_body_and_driver():
     """The STOP arm commits under `L` and does NOT prune the final body `L#(k-1)/` NOR the STOP
-    driver clone `L~k` — a bounded one-time residue (design risk #5 / D4). Self-prune happens ONLY
+    driver clone `L~k` — a bounded one-time termination residue. Self-prune happens ONLY
     in the CONTINUE `Grow` arm; the STOP driver returns `Output` and grows nothing, so it and the
     last body it read are left resident.
 

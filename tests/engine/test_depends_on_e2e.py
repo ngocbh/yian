@@ -1,4 +1,4 @@
-"""Feature D end-to-end (Ollama-free): depends_on (co-skip) vs runs_after (pure order).
+"""End-to-end `depends_on` co-skip versus `runs_after` pure ordering (Ollama-free).
 
 A CODE-bodied flow where a side-effect `warm` node sits behind a `case`, so it can be
 skipped. Two downstream nodes carry NO data from `warm`, only an ordering edge:

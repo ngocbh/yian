@@ -58,7 +58,7 @@ def test_terminal_output_surface():
 
 
 def test_no_declared_outputs_yields_none():
-    # A-NOFALLBACK: with no declared `outputs:`, the raw-terminal dict fallback is
+    # With no declared `output:`, the raw-terminal dict fallback is
     # retired -> terminal_output() (and the success event) is None.
     g = _graph(
         [FuncNode("a", lambda p: {}), FuncNode("t", lambda p: {"output": "final", "n": 7})],
@@ -277,7 +277,7 @@ def test_data_edged_branch_target_does_not_run_when_skipped():
     assert isinstance(events[-1], RunSucceeded)
 
 
-# --- E7: a co-skipped terminal fails the run ------------------------------- #
+# --- a co-skipped terminal fails the run ----------------------------------- #
 
 
 def _gate_flow(log, output_from):
@@ -302,13 +302,13 @@ def test_coalesce_terminal_one_branch_skipped_succeeds():
 
 
 def test_does_not_misfire_on_optional_terminal():
-    # ${t.output:-null}: t skipped, but the literal escape -> succeeds binding null (not E7).
+    # ${t.output:-null}: t skipped, but the literal escape succeeds by binding null.
     last = _run(_engine(_gate_flow([], "${t.output:-null}")))[-1]
     assert isinstance(last, RunSucceeded) and last.output is None
 
 
 def test_genuine_none_terminal_succeeds():
-    # terminal RAN and returned None (TAKEN, value None) -> RunSucceeded(None), NOT E7.
+    # A terminal that ran and returned None succeeds with that genuine value.
     g = _graph(
         [FuncNode("n", lambda p: None)],
         [(START_ID, "n"), ("n", END_ID)],
@@ -331,7 +331,7 @@ def test_node_failure_produces_graph_failed():
     assert events[-1].failure.message == "nope"
 
 
-# --- write-boundary output enforcement (slice 2) ---------------------------- #
+# --- write-boundary output enforcement -------------------------------------- #
 
 
 def test_output_enforced_rejects_type_mismatch():

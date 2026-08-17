@@ -235,7 +235,7 @@ def test_item_head_ref_yields_no_edge_but_producer_ref_does():
 
 
 # --------------------------------------------------------------------------- #
-# `binding_co_skips` -> edge `optional=` end-to-end (the co-skip contract, "Option A").
+# `binding_co_skips` -> edge `optional=` end-to-end (the co-skip contract).
 # A binding whose fallback is a REF (a bare ref, `.field` walk, or a `:-<ref>` default) may
 # be absent without failing -> co-skips -> REQUIRED edge. A binding that pins a concrete
 # value or REQUIRES presence (`:-"literal"`, `:-null`, `:?`) does NOT co-skip -> OPTIONAL

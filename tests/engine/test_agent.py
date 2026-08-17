@@ -295,7 +295,17 @@ def test_structured_failure_selects_exact_or_ancestor_output_origin(
     assert event.failure.trace == (expected,)
 
 
-def test_structured_scalar_failure_selects_contract_root(monkeypatch):
+@pytest.mark.parametrize(
+    ("typ", "payload"),
+    [
+        (Type.scalar(ValueKind.INTEGER), {"value": "bad"}),
+        (
+            Type(kind=ValueKind.STRING, tags=frozenset({"positive", "negative"})),
+            {"value": "not-a-tag"},
+        ),
+    ],
+)
+def test_structured_scalar_failure_selects_contract_root(monkeypatch, typ, payload):
     """The generated scalar `value` wrapper maps to the output root."""
     node = AgentNode(
         "n",
@@ -305,10 +315,10 @@ def test_structured_scalar_failure_selects_contract_root(monkeypatch):
     )
     node.origin = OriginRef("node")
     node.output_contract = ValueContract(
-        type=Type.scalar(ValueKind.INTEGER),
+        type=typ,
         origins=ContractOrigins(default=OriginRef("output")),
     )
-    _patch_model(monkeypatch, _InvalidStructuredChat(payload={"value": "bad"}))
+    _patch_model(monkeypatch, _InvalidStructuredChat(payload=payload))
 
     event = _run_node(node)
 

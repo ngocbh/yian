@@ -1,12 +1,13 @@
 """Structured AGENT output — derive a pydantic schema from a declared `output:` Type and
 generate a value that conforms to it.
 
-An AGENT declares `output:` as a typed `Type`. For a bare `str` (or a `Literal[...]`
-variant) the agent stays a text producer — `type_to_schema` returns `None` and the mode
-takes the plain-text path. For any richer type (a record, a scalar `int`/`float`/`bool`, a
-list) `type_to_schema` builds a `pydantic.BaseModel` the mode hands to
-`with_structured_output`, so the model emits a value that success-record preparation
-can canonicalize against the effective target's declared output type.
+An AGENT declares `output:` as a typed `Type`. For a bare `str` the agent stays a text
+producer — `type_to_schema` returns `None` and the mode takes the plain-text path. For any
+constrained or richer type (a `Literal[...]` variant, record, scalar
+`int`/`float`/`bool`, or list) `type_to_schema` builds a `pydantic.BaseModel` the
+mode hands to `with_structured_output`, so the model emits a value that
+success-record preparation can canonicalize against the effective target's declared
+output type.
 
 Scalars and lists can't be a top-level pydantic model field on their own, so they are wrapped
 in a single-field model (`{"value": <scalar>}` / `{"items": [<element>]}`); `_unwrap` strips
@@ -79,15 +80,15 @@ def _record_model(typ: Type) -> type[BaseModel]:
 
 def type_to_schema(typ: Type) -> Optional[type[BaseModel]]:
     """Derive a pydantic model for `typ`, or `None` when the agent should stay a text
-    producer (a bare `str` or a `Literal[...]` variant — today's passthrough).
+    producer (a bare, untagged `str`).
 
     A record (`OBJECT` with `fields`) maps directly to a model. A scalar or a list can't be a
     standalone model, so it is wrapped in a single-field model (`value` / `items`) that
     `_unwrap` later strips.
     """
     seg = typ.kind
-    if seg == ValueKind.STRING:
-        return None  # bare str OR a Literal variant — keep the text path
+    if seg == ValueKind.STRING and not typ.tags:
+        return None  # unconstrained text stays on the ordinary generation path
     if seg == ValueKind.OBJECT and typ.fields:
         return _record_model(typ)
     if seg.is_list() or seg == ValueKind.LIST_ANY:

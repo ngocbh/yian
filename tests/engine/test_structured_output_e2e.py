@@ -1,9 +1,9 @@
 """Structured AGENT output end-to-end through `run_flow`.
 
-A `plain` agent declaring a record `output:` emits a structured value via the engine's
-structured-generation path; the flow output is the plain dict and it passes the write
-boundary (`pool.set(..., declared=output_type)`). A sibling bare-`str` agent in the same
-flow confirms the text passthrough is untouched.
+Plain agents declaring record and `Literal[...]` outputs emit structured values via the
+engine's structured-generation path; both pass the write boundary
+(`pool.set(..., declared=output_type)`). A sibling bare-`str` agent in the same flow
+confirms the text passthrough is untouched.
 """
 
 import agent_composer.llm_clients as llm_clients_mod
@@ -28,9 +28,16 @@ nodes:
     depends_on: [rec]
     prompt: say hi
     output: str
+  sentiment:
+    kind: agent
+    mode: plain
+    depends_on: [txt]
+    prompt: classify the greeting
+    output: Literal[positive, neutral, negative]
 output:
   person: ${rec.output}
   greeting: ${txt.output}
+  sentiment: ${sentiment.output}
 """
 
 
@@ -43,10 +50,15 @@ def test_structured_output_end_to_end(monkeypatch):
 
                 return R()
 
-            def with_structured_output(self, schema):  # the record (rec) path
+            def with_structured_output(self, schema):  # record and Literal paths
                 class _Bound:
                     def invoke(self, msgs):
-                        return schema.model_validate({"name": "Ada", "score": 9})
+                        payload = (
+                            {"value": "neutral"}
+                            if "value" in schema.model_fields
+                            else {"name": "Ada", "score": 9}
+                        )
+                        return schema.model_validate(payload)
 
                 return _Bound()
 
@@ -57,6 +69,9 @@ def test_structured_output_end_to_end(monkeypatch):
     loaded = load_flow(_FLOW)
     res = run_flow(loaded, {})
     assert res.status == "succeeded"
-    # the record is a plain dict (write boundary accepted the structured value), and the
-    # bare-str agent's text passthrough is unchanged.
-    assert res.output == {"person": {"name": "Ada", "score": 9}, "greeting": "hello there"}
+    # Structured values crossed the write boundary, while bare-str text stayed unchanged.
+    assert res.output == {
+        "person": {"name": "Ada", "score": 9},
+        "greeting": "hello there",
+        "sentiment": "neutral",
+    }

@@ -62,15 +62,17 @@ Hold this model whenever you design anything:
   a predicate exception by its own `_run_impl` frame and active `Case` identity,
   with node fallback outside predicate evaluation. Extend CASE's local origin
   traversal/rewrite for these carriers; they remain manifest-neutral.
-- AGENT structured-output failures reuse `Node.output_contract.origins`; do not add
-  another carrier. On retry exhaustion, accept a Pydantic location (including an
-  immediate native-parser cause, but no deeper cause chain) only when exact generator
-  and generated-schema validation frames prove ownership. Normalize only the first
-  error: record paths stay unchanged, scalar `value` and list `items` are generated
-  wrappers, and the result must be valid for the expected `Type`. Resolve through
-  `ContractOrigins.at()` and retain node fallback for tool/provider errors,
-  non-validation failures, or source-free contracts. Never change the exception or
-  retry policy for diagnostic attribution.
+- AGENT schema selection leaves only an untagged `str` on the free-text path. A tagged
+  string (`Literal[...]`) uses the generated scalar `value` wrapper, structured retries,
+  and unwrapping to the bare tag. Structured-output failures reuse
+  `Node.output_contract.origins`; do not add another carrier. On retry exhaustion, accept
+  a Pydantic location (including an immediate native-parser cause, but no deeper cause
+  chain) only when exact generator and generated-schema validation frames prove
+  ownership. Normalize only the first error: record paths stay unchanged, scalar `value`
+  and list `items` are generated wrappers, and the result must be valid for the expected
+  `Type`. Resolve through `ContractOrigins.at()` and retain node fallback for
+  tool/provider errors, non-validation failures, or source-free contracts. Never change
+  the exception or retry policy for diagnostic attribution.
 - `diagnostics.ResolverTable` composes opaque namespaces through exact
   new-origin-to-delegate/old-origin routes without parsing keys or resolver
   fallback. `compile.rebase_flow_origins` maps each distinct reachable old key

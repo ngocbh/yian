@@ -91,11 +91,33 @@ def test_tool_calling_final_answer_is_structured(monkeypatch):
     assert tool.seen == [{"topic": "ACME"}]  # the mid-loop tool still ran
 
 
-def test_tool_calling_text_answer_unchanged(monkeypatch):
+def test_tool_calling_literal_final_answer_is_structured(monkeypatch):
+    chat = _StructuredFinalChat({"value": "neutral"})
+    chat._replies = [AIMessage(content="The sentiment is neutral.")]
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
+    node = AgentNode(
+        "n",
+        prompt="classify",
+        llm_config=LLMConfig(provider="ollama", model="qwen2.5:72b"),
+        mode="tool_calling",
+    )
+    node.output_contract = ValueContract(
+        Type(
+            kind=ValueKind.STRING,
+            tags=frozenset({"positive", "neutral", "negative"}),
+        )
+    )
+
+    assert _run_node(node).value == "neutral"
+    assert chat.structured_called_with is not None
+
+
+def test_tool_calling_declared_bare_str_answer_unchanged(monkeypatch):
     chat = _StructuredFinalChat({})
     chat._replies = [AIMessage(content="plain answer")]
     monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda cfg: chat)
     node = AgentNode("n", prompt="hi", llm_config=LLMConfig(), mode="tool_calling")
-    # no output contract declared -> text passthrough, no structured emit turn
+    node.output_contract = ValueContract(Type.scalar(ValueKind.STRING))
+    # An unconstrained string remains text passthrough with no structured emit turn.
     assert _run_node(node).value == "plain answer"
     assert chat.structured_called_with is None

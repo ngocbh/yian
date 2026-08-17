@@ -12,8 +12,8 @@
 # downstream node, multi-output, and asserts — all with AGENT nodes, so it runs against
 # any provider/model with no extra Python.
 #
-# Note on typed outputs: an AGENT can declare any `output:` shape — `str`, a `Literal[...]`
-# enum, or a record/number/list (the engine constrains generation to it; see
+# Note on typed outputs: an AGENT can declare any `output:` shape. A bare `str` is free
+# text; a `Literal[...]` enum, record, number, or list uses structured generation (see
 # triage-ticket.yaml). The verdict here is an enum on purpose: `case ... on` routes on a
 # single tag, so a one-tag answer is exactly what this flow needs.
 #

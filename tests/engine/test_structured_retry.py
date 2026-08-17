@@ -35,6 +35,33 @@ def test_retry_on_invalid_then_succeeds():
     assert out == 42 and calls["n"] == 2
 
 
+def test_literal_retries_an_invalid_tag_then_returns_bare_tag():
+    typ = Type(
+        kind=ValueKind.STRING,
+        tags=frozenset({"positive", "neutral", "negative"}),
+    )
+    calls = {"n": 0}
+
+    class _Flaky:
+        def with_structured_output(self, schema):
+            class _Bound:
+                def invoke(self, msgs):
+                    calls["n"] += 1
+                    value = "The sentiment is neutral." if calls["n"] == 1 else "neutral"
+                    return schema.model_validate({"value": value})
+
+            return _Bound()
+
+    assert generate_structured(
+        _Flaky(),
+        [],
+        typ,
+        max_retries=2,
+        llm_config={"provider": "openai", "model": "gpt-4o"},
+    ) == "neutral"
+    assert calls["n"] == 2
+
+
 def test_retry_on_invalid_provider_shape_then_succeeds():
     """A provider object that cannot be unwrapped remains a correctable deviation."""
     typ = Type.scalar(ValueKind.INTEGER)

@@ -1,8 +1,8 @@
 """plain mode — direct generation with no tools or tool loop.
 
-The simplest agent: render the prompt and return text, or use structured
-generation (including its configured correction attempts) for a non-text output
-type. Any authored tools are ignored because there is no tool loop.
+The simplest agent: render the prompt and return unconstrained text, or use structured
+generation (including its configured correction attempts) for a constrained output type.
+Any authored tools are ignored because there is no tool loop.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ def plain(ctx: AgentRunContext) -> Output:
     model = llm_clients.model_from_config(ctx.llm_config or {})
     ctx.check_stopped()
     msgs = [SystemMessage(content=DEFAULT_SYSTEM), HumanMessage(content=ctx.prompt)]
-    # A declared non-text type -> structured generation; a bare str/Literal -> text path.
+    # A constrained type -> structured generation; only a bare str keeps the text path.
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
     if schema is None:
         reply = model.invoke(msgs)

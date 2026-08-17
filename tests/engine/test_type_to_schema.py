@@ -1,7 +1,10 @@
 """`type_to_schema` — derive a pydantic model from a declared output `Type`."""
 
-from agent_composer.typesys.values import Type, ValueKind
+import pytest
+from pydantic import ValidationError
+
 from agent_composer.nodes.agent.structured import type_to_schema
+from agent_composer.typesys.values import Type, ValueKind
 
 
 def test_bare_str_returns_none():
@@ -9,10 +12,14 @@ def test_bare_str_returns_none():
     assert type_to_schema(Type.scalar(ValueKind.STRING)) is None
 
 
-def test_variant_str_returns_none():
-    # a Literal[...] variant stays text passthrough too (the model answers with one tag)
+def test_variant_str_gets_scalar_schema():
     typ = Type(kind=ValueKind.STRING, tags=frozenset({"a", "b"}))
-    assert type_to_schema(typ) is None
+    model = type_to_schema(typ)
+
+    assert model is not None
+    assert model.model_validate({"value": "a"}).value == "a"
+    with pytest.raises(ValidationError):
+        model.model_validate({"value": "not-a-tag"})
 
 
 def test_scalar_int_gets_schema():

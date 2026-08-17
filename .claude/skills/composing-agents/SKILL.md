@@ -164,12 +164,13 @@ classify:
     Classify the sentiment of: ${text}
     Answer with exactly one of: positive, neutral, negative.
 ```
-**An AGENT's `output:` may be any shape.** A bare `str` or a `Literal[...]` enum
-(the model answers with one tag) keeps the agent a text producer. A record,
-`float`, `int`, `bool`, or list switches it to **structured generation** — the
-engine derives a schema from `output:` and the model emits a conforming value
-(native structured output, or a JSON fallback for providers that lack it), validated
-at the write boundary and retried up to `retries:` times (default 2) on deviation.
+**An AGENT's `output:` may be any shape.** Only a bare, untagged `str` keeps the
+agent a text producer. A `Literal[...]` enum, record, non-string scalar, or list
+switches it to **structured generation** — the engine derives a schema from
+`output:` and the model emits a conforming value (native structured output, or a
+JSON fallback for providers that lack it), validated at the write boundary and
+retried up to `retries:` times (default 2) on deviation. A root `Literal[...]`
+returns its bare tag to the flow.
 Use a downstream `code`/`model` node only for deterministic post-processing. To give
 an agent ordinary tools: `tools: [tool_id, ...]` (requires `mode: tool_calling`).
 A node may pin its model via `llm_config:`; otherwise the process defaults captured
@@ -468,7 +469,8 @@ agent `entry:`/`controls:` field or event-mode WAIT.
 ## Authoring checklist
 - [ ] `input:` and `output:` are fully typed; every type used is a scalar/form or a `typedefs:` entry.
 - [ ] Every node consumes upstream values via `${...}` in its `input:` (the edges are inferred).
-- [ ] Every `agent` `output:` is typed — `str`/`Literal[...]` for text, or a record/number/bool/list for structured generation.
+- [ ] Every `agent` `output:` is typed — bare `str` for free text, or a
+  `Literal[...]`/other supported shape for structured generation.
 - [ ] Every prompt references only the node's own local input names.
 - [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.
 - [ ] `tool` ids are registered; a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.

@@ -106,7 +106,10 @@ def test_reserved_keyword_remains_legal_as_a_dotted_field(keyword):
     parse_expr(f"${{record.output.{keyword}}}")
 
 
-@pytest.mark.parametrize("root", ["and/child", "or#0", "in#0"])
+@pytest.mark.parametrize(
+    "root",
+    ["and/child", "or#0", "not/child", "not#0", "in#0"],
+)
 def test_keyword_prefix_remains_legal_in_generated_reference_roots(root):
     _tree(f"{root}.output")
     parse_expr(f"${{{root}.output}}")
@@ -115,6 +118,10 @@ def test_keyword_prefix_remains_legal_in_generated_reference_roots(root):
 @pytest.mark.parametrize("source", ["and(x)", "or(x)", "in(x)"])
 def test_keyword_shaped_builtin_callee_is_not_a_reference_root(source):
     assert "call_suffix" in _kinds(_tree(source))
+
+
+def test_not_followed_by_parentheses_remains_unary_operator():
+    assert _tree("not(x)").data == "negate"
 
 
 @pytest.mark.parametrize("keyword", ["and", "or", "in"])

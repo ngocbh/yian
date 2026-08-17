@@ -135,7 +135,7 @@ NOT_IN.5: /not\s+in\b/
 IN.4: /in\b/
 AND.4: /and\b/
 OR.4: /or\b/
-NOT.4: /not\b/
+NOT.4: /not\b(?![#\/])/
 BOOL.3: /true\b/ | /false\b/
 NULL.3: /null\b/ | /none\b/
 

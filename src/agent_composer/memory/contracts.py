@@ -379,12 +379,12 @@ def _matches_private_suffix(value: str, vocabulary: frozenset[str]) -> bool:
 def _matches_private_credential_indirection(value: str) -> bool:
     """Return whether one key names a file or path containing credentials."""
     compact = value.replace("_", "")
-    for field in _PRIVATE_INDIRECTION_FIELDS:
-        suffix = f"_{field}"
+    for location_field in _PRIVATE_INDIRECTION_FIELDS:
+        suffix = f"_{location_field}"
         if value.endswith(suffix):
             stem = value[: -len(suffix)]
         else:
-            compact_field = field.replace("_", "")
+            compact_field = location_field.replace("_", "")
             if not compact.endswith(compact_field):
                 continue
             stem = compact[: -len(compact_field)]
@@ -1284,6 +1284,86 @@ class MemoryMutation:
     def payload(self) -> JsonValue:
         """Return a fresh plain-JSON copy of the mutation payload."""
         return _thaw_json(self._payload)
+
+
+@dataclass(frozen=True, slots=True)
+class LearningFailure:
+    """One frame-local learn or policy-local commit failure in a run result."""
+
+    policy_name: str
+    operation: str
+    failure: MemoryOperationFailure
+    frame_ref: MemoryFrameRef | None = None
+
+    def __post_init__(self) -> None:
+        """Require exact attribution and one revalidated durable failure."""
+        _require_string(self.policy_name, "policy_name")
+        _require_string(self.operation, "operation")
+        if self.operation not in ("learn", "commit"):
+            raise ValueError("operation must be 'learn' or 'commit'")
+        if type(self.failure) is not MemoryOperationFailure:
+            raise TypeError("failure must be a MemoryOperationFailure")
+        MemoryOperationFailure(
+            self.failure.stage,
+            self.failure.code,
+            self.failure.message,
+            self.failure.retryable,
+        )
+        if self.frame_ref is not None:
+            if type(self.frame_ref) is not MemoryFrameRef:
+                raise TypeError("frame_ref must be a MemoryFrameRef or None")
+            MemoryFrameRef(
+                self.frame_ref.root_flow_id,
+                self.frame_ref.static_path,
+                self.frame_ref.owner,
+            )
+        if self.operation == "learn" and self.frame_ref is None:
+            raise ValueError("a learn failure requires frame_ref")
+        if self.operation == "commit" and self.frame_ref is not None:
+            raise ValueError("a commit failure cannot carry frame_ref")
+
+
+@dataclass(frozen=True, slots=True)
+class LearningResult:
+    """Separate post-terminal learning disposition exposed by ``RunResult``."""
+
+    status: str
+    failures: tuple[LearningFailure, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Require one closed status and failures consistent with retryability."""
+        _require_string(self.status, "status")
+        if self.status not in ("succeeded", "failed", "incomplete"):
+            raise ValueError(
+                "learning status must be 'succeeded', 'failed', or 'incomplete'"
+            )
+        if type(self.failures) is not tuple:
+            raise TypeError("learning failures must be a tuple")
+        identities: set[tuple[str, str, MemoryFrameRef | None]] = set()
+        for failure in self.failures:
+            if type(failure) is not LearningFailure:
+                raise TypeError("failures items must be LearningFailure values")
+            LearningFailure(
+                failure.policy_name,
+                failure.operation,
+                failure.failure,
+                failure.frame_ref,
+            )
+            identity = (
+                failure.policy_name,
+                failure.operation,
+                failure.frame_ref,
+            )
+            if identity in identities:
+                raise ValueError("learning failure attribution must be unique")
+            identities.add(identity)
+        retryable = any(item.failure.retryable for item in self.failures)
+        if self.status == "succeeded" and self.failures:
+            raise ValueError("succeeded learning cannot carry failures")
+        if self.status == "failed" and (not self.failures or retryable):
+            raise ValueError("failed learning requires only final failures")
+        if self.status == "incomplete" and not retryable:
+            raise ValueError("incomplete learning requires a retryable failure")
 
 
 class MemoryOperationError(Exception):

@@ -15,6 +15,8 @@ from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
     JsonObject,
     LearnContext,
+    LearningFailure,
+    LearningResult,
     Memory,
     MemoryBoundary,
     MemoryBoundaryKind,
@@ -28,6 +30,7 @@ from agent_composer.memory import (
     MemoryOccurrenceRef,
     MemoryOccurrenceSegment,
     MemoryOperationError,
+    MemoryOperationFailure,
     MemoryOwner,
     MemoryPolicySpec,
     MemoryRecallError,
@@ -642,6 +645,39 @@ def test_memory_errors_expose_typed_fields_and_origin() -> None:
             "bad",
             "failed",
             retryable=1,  # type: ignore[arg-type]
+        )
+
+
+def test_learning_result_keeps_primary_independent_failure_attribution() -> None:
+    """The public carrier distinguishes retryable work from settled failure."""
+    retryable = LearningFailure(
+        "reflective",
+        "learn",
+        MemoryOperationFailure("learn", "busy", "try later", True),
+        _agent_ref(),
+    )
+    final = LearningFailure(
+        "profile",
+        "commit",
+        MemoryOperationFailure("commit", "rejected", "not applied", False),
+    )
+
+    assert LearningResult("succeeded").failures == ()
+    assert LearningResult("failed", (final,)).status == "failed"
+    result = LearningResult("incomplete", (retryable, final))
+    assert result.failures == (retryable, final)
+    with pytest.raises(ValueError, match="requires only final"):
+        LearningResult("failed", (retryable,))
+    with pytest.raises(ValueError, match="retryable"):
+        LearningResult("incomplete", (final,))
+    with pytest.raises(ValueError, match="frame_ref"):
+        LearningFailure("reflective", "learn", final.failure)
+    with pytest.raises(ValueError, match="cannot carry"):
+        LearningFailure(
+            "reflective",
+            "commit",
+            final.failure,
+            _agent_ref(),
         )
 
 

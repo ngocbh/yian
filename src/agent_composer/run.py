@@ -3,8 +3,8 @@
 ``run_flow`` initializes a private copy of a loaded flow, commits its complete
 canonical start state, and drives only post-durable observer notifications.
 ``resume_flow`` reconstructs that state from a locked JSONL prefix and either
-returns an existing terminal result without changing the log or commits one
-``RunResumed`` transition before continuing.
+returns a fully settled terminal result unchanged, continues unfinished terminal
+learning, or commits one ``RunResumed`` transition before primary execution.
 
 The runtime borrows an already-open log.  This module owns log creation,
 recovery, locking, tail repair, and closure after the engine's structured drain.
@@ -28,12 +28,24 @@ from agent_composer.compile.llm_cascade import (
     resolve_llm_cascade,
 )
 from agent_composer.compile.manifest import flow_fingerprint
+from agent_composer.compile.memory_layout import (
+    apply_memory_layout,
+    resolve_memory_layout,
+)
+from agent_composer.compile.model import CompiledFlow
 from agent_composer.compose.loader import ComposedFlow
-from agent_composer.diagnostics import Failure
+from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.events import (
     RunFailed,
     RunSucceeded,
     StreamChunk,
+)
+from agent_composer.memory import (
+    LearningResult,
+    Memory,
+    MemoryFrameRef,
+    MemoryFrameSpec,
+    MemorySetupError,
 )
 from agent_composer.nodes.binding import coerce_inputs
 from agent_composer.runtime.engine import FlowEngine
@@ -52,6 +64,11 @@ from agent_composer.runtime.state import (
     commit_prepared,
     prepare_run_resumed,
     prepare_run_started,
+)
+from agent_composer.runtime.memory_runtime import (
+    MemoryRuntime,
+    learning_is_settled,
+    learning_result,
 )
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.seeding import default_run_id, seed_system_clock
@@ -84,6 +101,9 @@ class RunResult:
             Canonical terminal failure on failure; otherwise `None`.
         events (`list[Any]`):
             Post-durable observers from this fresh or resume segment only.
+        learning (`LearningResult | None`):
+            Separate post-terminal learning disposition, or ``None`` when the
+            run did not enable learning.
     """
 
     input: dict[str, Any]
@@ -93,6 +113,7 @@ class RunResult:
     output: Any = None
     failure: Failure | None = None
     events: list[Any] = field(default_factory=list)
+    learning: LearningResult | None = None
 
 
 def run_flow(
@@ -105,6 +126,8 @@ def run_flow(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     llm_config: dict[str, Any] | None = None,
+    memory: dict[str, Memory] | None = None,
+    learn: bool = False,
 ) -> RunResult:
     """Start and drive one flow through an in-memory or durable run log.
 
@@ -136,6 +159,13 @@ def run_flow(
         llm_config (`dict[str, Any] | None`, *optional*, defaults to `None`):
             Per-run outer model configuration layer. The fully resolved static map
             is captured in the initialization record.
+        memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
+            Host-injected policy implementations keyed by authored policy name.
+            ``None`` leaves every authored policy dormant. A mapping enables
+            recall and records exact per-policy recovery snapshots.
+        learn (`bool`, *optional*, defaults to `False`):
+            Run the durable post-terminal learning phase. This requires an
+            enabled ``memory`` mapping and never changes the primary result.
 
     Returns:
         `RunResult`:
@@ -148,6 +178,9 @@ def run_flow(
         `ValueError`:
             Inputs, identity, worker count, model configuration, or prepared run
             state violates its contract.
+        `MemorySetupError`:
+            Memory is enabled without a required policy implementation, cannot
+            open an exact run snapshot, or ``learn`` is enabled without memory.
         `FileExistsError`:
             ``log`` names an existing path.
         `OSError`:
@@ -162,6 +195,8 @@ def run_flow(
         on_event=on_event,
         on_stream=on_stream,
         llm_config=llm_config,
+        memory=memory,
+        learn=learn,
         stop_event=threading.Event(),
     )
 
@@ -176,11 +211,17 @@ def _run_flow_controlled(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     llm_config: dict[str, Any] | None = None,
+    memory: dict[str, Memory] | None = None,
+    learn: bool = False,
     stop_event: threading.Event,
 ) -> RunResult:
     """Drive a fresh run with one host-owned cooperative stop event."""
     if not isinstance(flow, ComposedFlow):
         raise TypeError("run_flow expects a ComposedFlow")
+    if type(learn) is not bool:
+        raise TypeError("learn must be a bool")
+    if memory is None and learn:
+        raise MemorySetupError("learn=True requires an enabled memory mapping")
 
     # Identity belongs to the authored program, before cascade resolution or any
     # per-run copy can change object topology.
@@ -211,28 +252,45 @@ def _run_flow_controlled(
         name: f"${{input.{name}}}" for name in coerced
     }
 
-    state = RunState(private_flow)
-    prepared_start = prepare_run_started(
-        state,
-        RunStartData(
-            run_id=canonical_run_id,
-            flow_fingerprint=authored_fingerprint,
-            initial_pool=pool,
-            start_wiring_override=start_wiring_override,
-            effective_llm_by_static_path=effective_llm,
-            num_workers=num_workers,
-        ),
-    )
+    memory_runtime: MemoryRuntime | None = None
+    if memory is not None:
+        memory_layout, memory_origins = _resolve_runtime_memory_layout(private_flow)
+        memory_runtime = MemoryRuntime.open(
+            layout=memory_layout,
+            origins=memory_origins,
+            memory=memory,
+        )
 
-    # Preparation precedes durable-file creation, so invalid initialization
-    # cannot leave an empty path behind.
-    authority: RunLog = (
-        MemoryRunLog(canonical_run_id)
-        if log is None
-        else JsonlRunLog.create(log, canonical_run_id)
-    )
+    authority: RunLog | None = None
     primary_error: BaseException | None = None
     try:
+        state = RunState(private_flow)
+        prepared_start = prepare_run_started(
+            state,
+            RunStartData(
+                run_id=canonical_run_id,
+                flow_fingerprint=authored_fingerprint,
+                initial_pool=pool,
+                start_wiring_override=start_wiring_override,
+                effective_llm_by_static_path=effective_llm,
+                num_workers=num_workers,
+                memory_layout=(
+                    None if memory_runtime is None else memory_runtime.layout
+                ),
+                memory_snapshots=(
+                    None if memory_runtime is None else memory_runtime.snapshots
+                ),
+                learn=learn,
+            ),
+        )
+
+        # Preparation precedes durable-file creation, so invalid initialization
+        # cannot leave an empty path behind.
+        authority = (
+            MemoryRunLog(canonical_run_id)
+            if log is None
+            else JsonlRunLog.create(log, canonical_run_id)
+        )
         events: list[Any] = []
         start_observers = commit_prepared(authority, state, prepared_start)
         _publish_boundary_observers(
@@ -250,14 +308,21 @@ def _run_flow_controlled(
             on_event=on_event,
             on_stream=on_stream,
             stop_event=stop_event,
+            memory_recall=(
+                None if memory_runtime is None else memory_runtime.recall
+            ),
         )
         events.extend(engine.run())
+        if learn:
+            if memory_runtime is None:  # guarded before any setup side effect
+                raise AssertionError("learning has no opened memory runtime")
+            memory_runtime.drive_learning(state, authority)
         return _result_from_state(state, authority.path, events)
     except BaseException as exc:
         primary_error = exc
         raise
     finally:
-        _close_owned_log(authority, primary_error)
+        _close_run_resources(memory_runtime, authority, primary_error)
 
 
 def resume_flow(
@@ -267,8 +332,9 @@ def resume_flow(
     num_workers: int | None = None,
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
+    memory: dict[str, Memory] | None = None,
 ) -> RunResult:
-    """Recover one durable run and drive it only when it remains nonterminal.
+    """Recover primary execution and any enabled post-terminal learning.
 
     Historical records are folded silently.  Recovery never reads ambient model
     defaults, mints a new identity, or accepts fresh input/configuration.
@@ -288,6 +354,10 @@ def resume_flow(
             replay and terminal recovery are silent.
         on_stream (`Callable[[StreamChunk], None] | None`, *optional*, defaults to `None`):
             Callback for new transient stream chunks, which are never replayed.
+        memory (`dict[str, Memory] | None`, *optional*, defaults to `None`):
+            Host-injected policy implementations required when the recorded run
+            enabled memory and still has unfinished execution or learning. A
+            fully settled terminal run ignores this argument.
 
     Returns:
         `RunResult`:
@@ -300,6 +370,9 @@ def resume_flow(
         `ValueError`:
             The prefix is invalid, the flow fingerprint differs, or the selected
             worker count violates its contract.
+        `MemorySetupError`:
+            The recorded run needs memory but its mapping is absent, incomplete,
+            or cannot reproduce the exact recorded snapshots.
         `FileNotFoundError`:
             ``log`` does not exist.
         `OSError`:
@@ -311,6 +384,7 @@ def resume_flow(
         num_workers=num_workers,
         on_event=on_event,
         on_stream=on_stream,
+        memory=memory,
         stop_event=threading.Event(),
     )
 
@@ -322,46 +396,78 @@ def _resume_flow_controlled(
     num_workers: int | None = None,
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
+    memory: dict[str, Memory] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event."""
     authority = JsonlRunLog.resume(log)
+    memory_runtime: MemoryRuntime | None = None
     primary_error: BaseException | None = None
     try:
         state = _replay_run_log(flow, authority)
-        if state.result is not None:
+        if state.result is not None and learning_is_settled(state):
             return _result_from_state(state, authority.path, [])
 
-        selected_workers = state.num_workers if num_workers is None else num_workers
-        prepared_resume = prepare_run_resumed(
-            state,
-            num_workers=selected_workers,
-        )
-        events: list[Any] = []
-        resume_observers = commit_prepared(authority, state, prepared_resume)
-        _publish_boundary_observers(
-            resume_observers,
-            events,
-            on_event=on_event,
-            stop_event=stop_event,
-        )
+        if state.memory_layout is not None:
+            if memory is None:
+                raise MemorySetupError(
+                    "resuming this run requires its enabled memory mapping"
+                )
+            memory_layout, memory_origins = _resolve_runtime_memory_layout(
+                state.flow
+            )
+            if memory_layout != state.memory_layout:
+                raise ValueError(
+                    "recorded memory layout does not match the supplied flow"
+                )
+            memory_runtime = MemoryRuntime.open(
+                layout=memory_layout,
+                origins=memory_origins,
+                memory=memory,
+                snapshots=state.memory_snapshots,
+            )
 
-        engine = FlowEngine(
-            state,
-            authority,
-            grow_builder=build_grow,
-            num_workers=selected_workers,
-            on_event=on_event,
-            on_stream=on_stream,
-            stop_event=stop_event,
-        )
-        events.extend(engine.run())
+        events: list[Any] = []
+        if state.result is None:
+            selected_workers = (
+                state.num_workers if num_workers is None else num_workers
+            )
+            prepared_resume = prepare_run_resumed(
+                state,
+                num_workers=selected_workers,
+            )
+            resume_observers = commit_prepared(authority, state, prepared_resume)
+            _publish_boundary_observers(
+                resume_observers,
+                events,
+                on_event=on_event,
+                stop_event=stop_event,
+            )
+
+            engine = FlowEngine(
+                state,
+                authority,
+                grow_builder=build_grow,
+                num_workers=selected_workers,
+                on_event=on_event,
+                on_stream=on_stream,
+                stop_event=stop_event,
+                memory_recall=(
+                    None if memory_runtime is None else memory_runtime.recall
+                ),
+            )
+            events.extend(engine.run())
+
+        if state.learn and not learning_is_settled(state):
+            if memory_runtime is None:
+                raise AssertionError("unfinished learning has no memory runtime")
+            memory_runtime.drive_learning(state, authority)
         return _result_from_state(state, authority.path, events)
     except BaseException as exc:
         primary_error = exc
         raise
     finally:
-        _close_owned_log(authority, primary_error)
+        _close_run_resources(memory_runtime, authority, primary_error)
 
 
 def _replay_run_log(flow: ComposedFlow, log: RunLog) -> RunState:
@@ -427,6 +533,12 @@ def _replay_run_log(flow: ComposedFlow, log: RunLog) -> RunState:
         private_flow,
         first.record.effective_llm_by_static_path,
     )
+    if first.record.memory_layout is not None:
+        replay_layout, _ = _resolve_runtime_memory_layout(private_flow)
+        if replay_layout != first.record.memory_layout:
+            raise ValueError(
+                "recorded memory layout does not match the supplied flow"
+            )
     state = _replay_records(
         RunState(private_flow),
         tuple(canonical),
@@ -435,6 +547,31 @@ def _replay_run_log(flow: ComposedFlow, log: RunLog) -> RunState:
     if log.run_id != source_run_id or log.next_sequence != source_sequence:
         raise ValueError("run log changed while its historical prefix was replayed")
     return state
+
+
+def _resolve_runtime_memory_layout(
+    flow: CompiledFlow,
+) -> tuple[
+    tuple[MemoryFrameSpec, ...],
+    dict[MemoryFrameRef, OriginRef | None],
+]:
+    """Derive, canonically order, and atomically stamp one private graph."""
+    resolved = resolve_memory_layout(flow)
+    apply_memory_layout(flow, resolved)
+    ordered = tuple(
+        sorted(
+            resolved.frames,
+            key=lambda frame: (
+                frame.spec.ref.root_flow_id,
+                frame.spec.ref.static_path,
+                frame.spec.ref.owner.value,
+            ),
+        )
+    )
+    return (
+        tuple(frame.spec for frame in ordered),
+        {frame.spec.ref: frame.origin for frame in ordered},
+    )
 
 
 def _publish_boundary_observers(
@@ -462,6 +599,7 @@ def _result_from_state(
 ) -> RunResult:
     """Project one terminal reducer state into the exact public result shape."""
     terminal = state.result
+    projected_learning = learning_result(state)
     if isinstance(terminal, RunSucceeded):
         return RunResult(
             input=copy.deepcopy(state.input),
@@ -470,6 +608,7 @@ def _result_from_state(
             log=path,
             output=copy.deepcopy(terminal.output),
             events=events,
+            learning=projected_learning,
         )
     if isinstance(terminal, RunFailed):
         return RunResult(
@@ -479,6 +618,7 @@ def _result_from_state(
             log=path,
             failure=terminal.failure,
             events=events,
+            learning=projected_learning,
         )
     raise RuntimeError("engine returned without deriving a terminal run result")
 
@@ -512,6 +652,37 @@ def _close_owned_log(
         if primary_error is None:
             raise
         _note_cleanup_error(primary_error, "run-log close", cleanup_error)
+
+
+def _close_run_resources(
+    memory_runtime: MemoryRuntime | None,
+    log: RunLog | None,
+    primary_error: BaseException | None,
+) -> None:
+    """Close memory then log while preserving one initiating exception."""
+    pending = primary_error
+    if memory_runtime is not None:
+        try:
+            memory_runtime.close()
+        except BaseException as cleanup_error:
+            if pending is None:
+                pending = cleanup_error
+            else:
+                _note_cleanup_error(
+                    pending,
+                    "memory-session close",
+                    cleanup_error,
+                )
+    if log is not None:
+        try:
+            log.close()
+        except BaseException as cleanup_error:
+            if pending is None:
+                pending = cleanup_error
+            else:
+                _note_cleanup_error(pending, "run-log close", cleanup_error)
+    if primary_error is None and pending is not None:
+        raise pending
 
 
 def _note_cleanup_error(

@@ -37,6 +37,7 @@ def test_failure_carriers_have_no_parallel_location_fields() -> None:
         "output",
         "failure",
         "events",
+        "learning",
     ]
 
 

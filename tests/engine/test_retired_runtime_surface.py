@@ -164,6 +164,8 @@ def test_final_log_only_runtime_and_public_surface():
         "on_event",
         "on_stream",
         "llm_config",
+        "memory",
+        "learn",
     ]
     assert list(inspect.signature(run.resume_flow).parameters) == [
         "flow",
@@ -171,6 +173,7 @@ def test_final_log_only_runtime_and_public_surface():
         "num_workers",
         "on_event",
         "on_stream",
+        "memory",
     ]
     assert [field.name for field in fields(run.RunResult)] == [
         "input",
@@ -180,6 +183,7 @@ def test_final_log_only_runtime_and_public_surface():
         "output",
         "failure",
         "events",
+        "learning",
     ]
 
 

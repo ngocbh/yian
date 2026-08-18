@@ -31,7 +31,12 @@ from agent_composer.memory.contracts import (
     MemoryFrameSpec,
     MemoryMutation,
     MemoryOperationError,
+    ModelTextInteraction,
+    ModelValueInteraction,
     RecallContext,
+    ToolCallInteraction,
+    ToolResultInteraction,
+    VisibleInteraction,
 )
 
 
@@ -426,18 +431,51 @@ def _episode_json(episode: MemoryEpisode) -> JsonObject:
             }
         )
     return {
+        "base_system_prompt": episode.base_system_prompt,
         "failure": episode.failure,
         "inputs": episode.inputs,
-        "interactions": list(episode.interactions),
+        "interactions": [
+            _visible_interaction_json(interaction)
+            for interaction in episode.interactions
+        ],
+        "memory_sections": [
+            {
+                "frame_ref": _frame_ref_json(section.frame_ref),
+                "text": section.text,
+            }
+            for section in episode.memory_sections
+        ],
         "occurrence": {
             "frame_ref": _frame_ref_json(episode.occurrence.frame_ref),
             "occurrence_path": occurrence_path,
         },
         "output": episode.output,
         "owner_static_path": list(episode.owner_static_path),
+        "prompt": episode.prompt,
         "run_id": episode.run_id,
         "status": episode.status.value,
     }
+
+
+def _visible_interaction_json(interaction: VisibleInteraction) -> JsonObject:
+    """Encode one closed visible interaction for the reflector prompt."""
+    if type(interaction) is ModelTextInteraction:
+        return {"kind": "model_text", "text": interaction.text}
+    if type(interaction) is ModelValueInteraction:
+        return {"kind": "model_value", "value": interaction.value}
+    if type(interaction) is ToolCallInteraction:
+        return {
+            "kind": "tool_call",
+            "name": interaction.name,
+            "arguments": interaction.arguments,
+        }
+    if type(interaction) is ToolResultInteraction:
+        return {
+            "kind": "tool_result",
+            "name": interaction.name,
+            "text": interaction.text,
+        }
+    raise TypeError("unsupported visible interaction")
 
 
 def _bounded_json_material(value: JsonValue, limit: int) -> str:

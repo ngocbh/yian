@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from types import TracebackType
 from typing import (
+    Annotated,
     Any,
     BinaryIO,
     Final,
@@ -30,6 +31,27 @@ from typing import (
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
+from agent_composer.memory import (
+    EvaluationEvidence,
+    MemoryBoundary,
+    MemoryBoundaryKind,
+    MemoryFrameRef,
+    MemoryFrameSpec,
+    MemoryMutation,
+    MemoryOccurrenceKind,
+    MemoryOccurrenceRef,
+    MemoryOccurrenceSegment,
+    MemoryOperationFailure,
+    MemoryOwner,
+    MemoryScope,
+    MemorySection,
+    MemorySnapshotEnvelope,
+    ModelTextInteraction,
+    ModelValueInteraction,
+    ToolCallInteraction,
+    ToolResultInteraction,
+    VisibleInteraction,
+)
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import (
     ANY_VALUE_ADAPTER,
@@ -41,7 +63,7 @@ from agent_composer.typesys.values import (
 )
 
 
-SCHEMA_VERSION: Final = 3
+SCHEMA_VERSION: Final = 4
 """The one run-record wire schema understood by this release."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -70,6 +92,17 @@ class RunStartedRecord:
     start_wiring_override: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
     num_workers: int
+    memory_layout: tuple[MemoryFrameSpec, ...] | None = None
+    memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
+    learn: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate the enabled-memory shape and its canonical policy inventory."""
+        _validate_run_memory_configuration(
+            self.memory_layout,
+            self.memory_snapshots,
+            self.learn,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +127,11 @@ class NodeSucceededRecord:
     node_id: str
     commit_target: str
     value: dict[str, Any]
+    evidence: EvaluationEvidence | None = None
+
+    def __post_init__(self) -> None:
+        """Require exact source-neutral evidence when it is present."""
+        _validate_optional_evidence(self.evidence)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +141,11 @@ class NodeRoutedRecord:
     node_id: str
     handle: str
     terminal_failure: Failure | None = None
+    evidence: EvaluationEvidence | None = None
+
+    def __post_init__(self) -> None:
+        """Require exact source-neutral evidence when it is present."""
+        _validate_optional_evidence(self.evidence)
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +156,11 @@ class NodeExpandedRecord:
     seed: Any
     prune_ids: tuple[str, ...]
     topology_digest: str
+    evidence: EvaluationEvidence | None = None
+
+    def __post_init__(self) -> None:
+        """Require exact source-neutral evidence when it is present."""
+        _validate_optional_evidence(self.evidence)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +168,144 @@ class NodeFailedRecord:
     """Make a run terminal-failed with the captured semantic failure."""
 
     failure: Failure
+    evidence: EvaluationEvidence | None = None
+
+    def __post_init__(self) -> None:
+        """Require exact source-neutral evidence when it is present."""
+        _validate_optional_evidence(self.evidence)
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryFrameLearningStartedRecord:
+    """Start learning for one frame from its canonical occurrence set."""
+
+    policy_name: str
+    frame_ref: MemoryFrameRef
+    occurrences: tuple[MemoryOccurrenceRef, ...]
+
+    def __post_init__(self) -> None:
+        """Validate policy, ownership, uniqueness, and canonical occurrence order."""
+        _require_nonempty_string(self.policy_name, "policy_name")
+        if type(self.frame_ref) is not MemoryFrameRef:
+            raise TypeError("frame_ref must be a MemoryFrameRef")
+        MemoryFrameRef(
+            self.frame_ref.root_flow_id,
+            self.frame_ref.static_path,
+            self.frame_ref.owner,
+        )
+        if type(self.occurrences) is not tuple:
+            raise TypeError("occurrences must be a tuple")
+        for occurrence in self.occurrences:
+            if type(occurrence) is not MemoryOccurrenceRef:
+                raise TypeError("occurrences items must be MemoryOccurrenceRef values")
+            MemoryOccurrenceRef(
+                occurrence.frame_ref,
+                occurrence.occurrence_path,
+            )
+            if occurrence.frame_ref != self.frame_ref:
+                raise ValueError("occurrence frame_ref must match the learning frame")
+        keys = tuple(_occurrence_key(item) for item in self.occurrences)
+        if keys != tuple(sorted(set(keys))):
+            raise ValueError("occurrences must be sorted and unique")
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryFrameLearnedRecord:
+    """Retain one frame's canonical proposed mutation batch."""
+
+    policy_name: str
+    frame_ref: MemoryFrameRef
+    mutations: tuple[MemoryMutation, ...]
+
+    def __post_init__(self) -> None:
+        """Validate frame ownership and canonical unique mutation identities."""
+        _require_nonempty_string(self.policy_name, "policy_name")
+        if type(self.frame_ref) is not MemoryFrameRef:
+            raise TypeError("frame_ref must be a MemoryFrameRef")
+        MemoryFrameRef(
+            self.frame_ref.root_flow_id,
+            self.frame_ref.static_path,
+            self.frame_ref.owner,
+        )
+        _validate_mutations(self.mutations, frame_ref=self.frame_ref)
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryFrameLearningFailedRecord:
+    """Retain one sanitized frame-local learning failure."""
+
+    policy_name: str
+    frame_ref: MemoryFrameRef
+    failure: MemoryOperationFailure
+
+    def __post_init__(self) -> None:
+        """Validate exact policy, frame, and failure carriers."""
+        _require_nonempty_string(self.policy_name, "policy_name")
+        if type(self.frame_ref) is not MemoryFrameRef:
+            raise TypeError("frame_ref must be a MemoryFrameRef")
+        MemoryFrameRef(
+            self.frame_ref.root_flow_id,
+            self.frame_ref.static_path,
+            self.frame_ref.owner,
+        )
+        if type(self.failure) is not MemoryOperationFailure:
+            raise TypeError("failure must be a MemoryOperationFailure")
+        MemoryOperationFailure(
+            self.failure.stage,
+            self.failure.code,
+            self.failure.message,
+            self.failure.retryable,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryCommitRequestedRecord:
+    """Request one policy's atomic idempotent mutation commit."""
+
+    policy_name: str
+    commit_id: str
+    mutations: tuple[MemoryMutation, ...]
+
+    def __post_init__(self) -> None:
+        """Validate exact identity and canonical unique mutations."""
+        _require_nonempty_string(self.policy_name, "policy_name")
+        _require_nonempty_string(self.commit_id, "commit_id")
+        _validate_mutations(self.mutations)
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryCommitSucceededRecord:
+    """Confirm one policy commit completed successfully."""
+
+    policy_name: str
+    commit_id: str
+
+    def __post_init__(self) -> None:
+        """Validate the exact policy and commit identities."""
+        _require_nonempty_string(self.policy_name, "policy_name")
+        _require_nonempty_string(self.commit_id, "commit_id")
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryCommitFailedRecord:
+    """Retain one sanitized policy commit failure."""
+
+    policy_name: str
+    commit_id: str
+    failure: MemoryOperationFailure
+
+    def __post_init__(self) -> None:
+        """Validate exact identities and failure carrier."""
+        _require_nonempty_string(self.policy_name, "policy_name")
+        _require_nonempty_string(self.commit_id, "commit_id")
+        if type(self.failure) is not MemoryOperationFailure:
+            raise TypeError("failure must be a MemoryOperationFailure")
+        MemoryOperationFailure(
+            self.failure.stage,
+            self.failure.code,
+            self.failure.message,
+            self.failure.retryable,
+        )
 
 
 RunRecord: TypeAlias = (
@@ -130,6 +316,12 @@ RunRecord: TypeAlias = (
     | NodeRoutedRecord
     | NodeExpandedRecord
     | NodeFailedRecord
+    | MemoryFrameLearningStartedRecord
+    | MemoryFrameLearnedRecord
+    | MemoryFrameLearningFailedRecord
+    | MemoryCommitRequestedRecord
+    | MemoryCommitSucceededRecord
+    | MemoryCommitFailedRecord
 )
 """The exhaustive durable transition vocabulary for one run."""
 
@@ -141,7 +333,131 @@ _RUN_RECORD_TYPES = (
     NodeRoutedRecord,
     NodeExpandedRecord,
     NodeFailedRecord,
+    MemoryFrameLearningStartedRecord,
+    MemoryFrameLearnedRecord,
+    MemoryFrameLearningFailedRecord,
+    MemoryCommitRequestedRecord,
+    MemoryCommitSucceededRecord,
+    MemoryCommitFailedRecord,
 )
+
+
+def _require_nonempty_string(value: object, name: str) -> str:
+    """Return one exact non-empty record identity string."""
+    if type(value) is not str:
+        raise TypeError(f"{name} must be a string")
+    if not value:
+        raise ValueError(f"{name} must be non-empty")
+    return value
+
+
+def _frame_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
+    """Return the canonical sortable identity of one memory frame."""
+    return (ref.root_flow_id, ref.static_path, ref.owner.value)
+
+
+def _occurrence_key(
+    occurrence: MemoryOccurrenceRef,
+) -> tuple[
+    tuple[str, tuple[str, ...], str],
+    tuple[tuple[str, tuple[str, ...], int], ...],
+]:
+    """Return the canonical sortable identity of one dynamic occurrence."""
+    return (
+        _frame_key(occurrence.frame_ref),
+        tuple(
+            (segment.kind.value, segment.static_path, segment.index)
+            for segment in occurrence.occurrence_path
+        ),
+    )
+
+
+def _mutation_key(
+    mutation: MemoryMutation,
+) -> tuple[tuple[str, tuple[str, ...], str], str]:
+    """Return the canonical sortable identity of one memory mutation."""
+    return (_frame_key(mutation.frame_ref), mutation.mutation_id)
+
+
+def _validate_optional_evidence(evidence: EvaluationEvidence | None) -> None:
+    """Reject forged or unsupported node-evidence carriers."""
+    if evidence is not None and type(evidence) is not EvaluationEvidence:
+        raise TypeError("evidence must be an EvaluationEvidence or None")
+    if evidence is not None:
+        EvaluationEvidence(
+            evidence.scope,
+            evidence.bound_inputs,
+            evidence.base_system_prompt,
+            evidence.prompt,
+            evidence.memory_sections,
+            evidence.interactions,
+        )
+
+
+def _validate_run_memory_configuration(
+    layout: tuple[MemoryFrameSpec, ...] | None,
+    snapshots: tuple[MemorySnapshotEnvelope, ...] | None,
+    learn: bool,
+) -> None:
+    """Validate one RunStarted memory configuration and canonical ordering."""
+    if type(learn) is not bool:
+        raise TypeError("learn must be a boolean")
+    if (layout is None) != (snapshots is None):
+        raise ValueError(
+            "memory_layout and memory_snapshots must both be enabled or disabled"
+        )
+    if layout is None:
+        if learn:
+            raise ValueError("learn requires enabled memory")
+        return
+    if type(layout) is not tuple or type(snapshots) is not tuple:
+        raise TypeError(
+            "memory_layout and memory_snapshots must be tuples when enabled"
+        )
+    for spec in layout:
+        if type(spec) is not MemoryFrameSpec:
+            raise TypeError("memory_layout items must be MemoryFrameSpec values")
+        MemoryFrameSpec(spec.ref, spec.policy_name, spec.config)
+    layout_keys = tuple(_frame_key(spec.ref) for spec in layout)
+    if layout_keys != tuple(sorted(set(layout_keys))):
+        raise ValueError("memory_layout frame refs must be sorted and unique")
+
+    for snapshot in snapshots:
+        if type(snapshot) is not MemorySnapshotEnvelope:
+            raise TypeError(
+                "memory_snapshots items must be MemorySnapshotEnvelope values"
+            )
+        MemorySnapshotEnvelope(snapshot.policy_name, snapshot.snapshot)
+    snapshot_names = tuple(snapshot.policy_name for snapshot in snapshots)
+    if snapshot_names != tuple(sorted(set(snapshot_names))):
+        raise ValueError("memory_snapshots policy names must be sorted and unique")
+    referenced_names = {spec.policy_name for spec in layout}
+    if set(snapshot_names) != referenced_names:
+        raise ValueError(
+            "memory_snapshots policy names must equal memory_layout policy names"
+        )
+
+
+def _validate_mutations(
+    mutations: tuple[MemoryMutation, ...],
+    *,
+    frame_ref: MemoryFrameRef | None = None,
+) -> None:
+    """Validate exact mutation carriers, ownership, IDs, and canonical order."""
+    if type(mutations) is not tuple:
+        raise TypeError("mutations must be a tuple")
+    for mutation in mutations:
+        if type(mutation) is not MemoryMutation:
+            raise TypeError("mutations items must be MemoryMutation values")
+        MemoryMutation(mutation.mutation_id, mutation.frame_ref, mutation.payload)
+        if frame_ref is not None and mutation.frame_ref != frame_ref:
+            raise ValueError("mutation frame_ref must match the learning frame")
+    ids = tuple(mutation.mutation_id for mutation in mutations)
+    if len(ids) != len(set(ids)):
+        raise ValueError("mutation IDs must be unique")
+    keys = tuple(_mutation_key(mutation) for mutation in mutations)
+    if keys != tuple(sorted(keys)):
+        raise ValueError("mutations must be in canonical order")
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,6 +838,9 @@ class _RunStartedPayload(_StrictModel):
     start_wiring_override: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
     num_workers: int = Field(ge=0)
+    memory_layout: list[_MemoryFrameSpecPayload] | None
+    memory_snapshots: list[_MemorySnapshotEnvelopePayload] | None
+    learn: bool
 
 
 class _RunResumedPayload(_StrictModel):
@@ -553,6 +872,7 @@ class _NodeSucceededPayload(_StrictModel):
     node_id: str = Field(min_length=1)
     commit_target: str = Field(min_length=1)
     value: dict[str, Any]
+    evidence: _EvaluationEvidencePayload | None
 
 
 class _OriginRefPayload(_StrictModel):
@@ -572,12 +892,166 @@ class _FailurePayload(_StrictModel):
     traceback: str | None
 
 
+class _MemoryFrameRefPayload(_StrictModel):
+    """Strict wire form of one stable memory-frame identity."""
+
+    root_flow_id: str = Field(min_length=1)
+    static_path: list[str] = Field(min_length=1)
+    owner: Literal["flow", "agent"]
+
+    @field_validator("static_path")
+    @classmethod
+    def _nonempty_path(cls, value: list[str]) -> list[str]:
+        """Reject empty path components."""
+        if any(not part for part in value):
+            raise ValueError("memory frame path components must be non-empty")
+        return value
+
+
+class _MemoryOccurrenceSegmentPayload(_StrictModel):
+    """Strict wire form of one dynamic occurrence segment."""
+
+    kind: Literal["map_item", "loop_iteration"]
+    static_path: list[str] = Field(min_length=1)
+    index: int = Field(ge=0)
+
+    @field_validator("static_path")
+    @classmethod
+    def _nonempty_path(cls, value: list[str]) -> list[str]:
+        """Reject empty path components."""
+        if any(not part for part in value):
+            raise ValueError("occurrence path components must be non-empty")
+        return value
+
+
+class _MemoryOccurrenceRefPayload(_StrictModel):
+    """Strict wire form of one dynamic frame occurrence."""
+
+    frame_ref: _MemoryFrameRefPayload
+    occurrence_path: list[_MemoryOccurrenceSegmentPayload]
+
+
+class _MemoryBoundaryPayload(_StrictModel):
+    """Strict wire form of one flow-owned memory boundary."""
+
+    kind: Literal["start", "end"]
+    frame_ref: _MemoryFrameRefPayload
+
+
+class _MemoryScopePayload(_StrictModel):
+    """Strict wire form of one compiled node's memory scope."""
+
+    root_flow_id: str = Field(min_length=1)
+    static_path: list[str] = Field(min_length=1)
+    frame_stack: list[_MemoryFrameRefPayload]
+    occurrence_path: list[_MemoryOccurrenceSegmentPayload]
+    boundary: _MemoryBoundaryPayload | None
+
+    @field_validator("static_path")
+    @classmethod
+    def _nonempty_path(cls, value: list[str]) -> list[str]:
+        """Reject empty path components."""
+        if any(not part for part in value):
+            raise ValueError("memory scope path components must be non-empty")
+        return value
+
+
+class _MemoryFrameSpecPayload(_StrictModel):
+    """Strict origin-free wire form of one effective frame specification."""
+
+    ref: _MemoryFrameRefPayload
+    policy_name: str = Field(min_length=1)
+    config: dict[str, Any]
+
+
+class _MemorySnapshotEnvelopePayload(_StrictModel):
+    """Strict wire form of one named policy snapshot."""
+
+    policy_name: str = Field(min_length=1)
+    snapshot: dict[str, Any]
+
+
+class _MemorySectionPayload(_StrictModel):
+    """Strict wire form of one separate recalled-memory section."""
+
+    frame_ref: _MemoryFrameRefPayload
+    text: str
+
+
+class _ModelTextInteractionPayload(_StrictModel):
+    """Strict wire form of visible model text."""
+
+    kind: Literal["model_text"]
+    text: str
+
+
+class _ModelValueInteractionPayload(_StrictModel):
+    """Strict wire form of a visible structured model value."""
+
+    kind: Literal["model_value"]
+    value: Any
+
+
+class _ToolCallInteractionPayload(_StrictModel):
+    """Strict wire form of one visible tool call."""
+
+    kind: Literal["tool_call"]
+    name: str = Field(min_length=1)
+    arguments: dict[str, Any]
+
+
+class _ToolResultInteractionPayload(_StrictModel):
+    """Strict wire form of one visible tool result."""
+
+    kind: Literal["tool_result"]
+    name: str = Field(min_length=1)
+    text: str
+
+
+_VisibleInteractionPayload = Annotated[
+    _ModelTextInteractionPayload
+    | _ModelValueInteractionPayload
+    | _ToolCallInteractionPayload
+    | _ToolResultInteractionPayload,
+    Field(discriminator="kind"),
+]
+
+
+class _EvaluationEvidencePayload(_StrictModel):
+    """Strict wire form of one source-neutral accepted evaluation trace."""
+
+    scope: _MemoryScopePayload
+    bound_inputs: dict[str, Any] | None
+    base_system_prompt: str | None
+    prompt: str | None
+    memory_sections: list[_MemorySectionPayload]
+    interactions: list[_VisibleInteractionPayload]
+
+
+class _MemoryMutationPayload(_StrictModel):
+    """Strict wire form of one frame-owned memory mutation."""
+
+    mutation_id: str = Field(min_length=1)
+    frame_ref: _MemoryFrameRefPayload
+    payload: Any
+
+
+class _MemoryOperationFailurePayload(_StrictModel):
+    """Strict wire form of one sanitized memory-operation failure."""
+
+    stage: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    retryable: bool
+
+
 class _NodeRoutedPayload(_StrictModel):
     """Strict wire payload for :class:`NodeRoutedRecord`."""
 
     node_id: str = Field(min_length=1)
     handle: str = Field(min_length=1)
     terminal_failure: _FailurePayload | None
+    evidence: _EvaluationEvidencePayload | None
 
 
 class _NodeExpandedPayload(_StrictModel):
@@ -587,6 +1061,7 @@ class _NodeExpandedPayload(_StrictModel):
     seed: Any
     prune_ids: list[str]
     topology_digest: str = Field(pattern=_SHA256_PATTERN)
+    evidence: _EvaluationEvidencePayload | None
 
     @field_validator("prune_ids")
     @classmethod
@@ -603,6 +1078,54 @@ class _NodeFailedPayload(_StrictModel):
     """Strict wire payload for :class:`NodeFailedRecord`."""
 
     failure: _FailurePayload
+    evidence: _EvaluationEvidencePayload | None
+
+
+class _MemoryFrameLearningStartedPayload(_StrictModel):
+    """Strict wire payload for frame-learning start."""
+
+    policy_name: str = Field(min_length=1)
+    frame_ref: _MemoryFrameRefPayload
+    occurrences: list[_MemoryOccurrenceRefPayload]
+
+
+class _MemoryFrameLearnedPayload(_StrictModel):
+    """Strict wire payload for frame-local proposed mutations."""
+
+    policy_name: str = Field(min_length=1)
+    frame_ref: _MemoryFrameRefPayload
+    mutations: list[_MemoryMutationPayload]
+
+
+class _MemoryFrameLearningFailedPayload(_StrictModel):
+    """Strict wire payload for one frame-learning failure."""
+
+    policy_name: str = Field(min_length=1)
+    frame_ref: _MemoryFrameRefPayload
+    failure: _MemoryOperationFailurePayload
+
+
+class _MemoryCommitRequestedPayload(_StrictModel):
+    """Strict wire payload for one atomic policy commit request."""
+
+    policy_name: str = Field(min_length=1)
+    commit_id: str = Field(min_length=1)
+    mutations: list[_MemoryMutationPayload]
+
+
+class _MemoryCommitSucceededPayload(_StrictModel):
+    """Strict wire payload for one successful policy commit."""
+
+    policy_name: str = Field(min_length=1)
+    commit_id: str = Field(min_length=1)
+
+
+class _MemoryCommitFailedPayload(_StrictModel):
+    """Strict wire payload for one failed policy commit."""
+
+    policy_name: str = Field(min_length=1)
+    commit_id: str = Field(min_length=1)
+    failure: _MemoryOperationFailurePayload
 
 
 _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
@@ -613,6 +1136,12 @@ _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
     "node_routed": _NodeRoutedPayload,
     "node_expanded": _NodeExpandedPayload,
     "node_failed": _NodeFailedPayload,
+    "memory_frame_learning_started": _MemoryFrameLearningStartedPayload,
+    "memory_frame_learned": _MemoryFrameLearnedPayload,
+    "memory_frame_learning_failed": _MemoryFrameLearningFailedPayload,
+    "memory_commit_requested": _MemoryCommitRequestedPayload,
+    "memory_commit_succeeded": _MemoryCommitSucceededPayload,
+    "memory_commit_failed": _MemoryCommitFailedPayload,
 }
 
 _TYPE_TO_KIND: dict[type[Any], str] = {
@@ -623,6 +1152,12 @@ _TYPE_TO_KIND: dict[type[Any], str] = {
     NodeRoutedRecord: "node_routed",
     NodeExpandedRecord: "node_expanded",
     NodeFailedRecord: "node_failed",
+    MemoryFrameLearningStartedRecord: "memory_frame_learning_started",
+    MemoryFrameLearnedRecord: "memory_frame_learned",
+    MemoryFrameLearningFailedRecord: "memory_frame_learning_failed",
+    MemoryCommitRequestedRecord: "memory_commit_requested",
+    MemoryCommitSucceededRecord: "memory_commit_succeeded",
+    MemoryCommitFailedRecord: "memory_commit_failed",
 }
 
 
@@ -849,10 +1384,339 @@ def _failure_from_payload(payload: dict[str, Any]) -> Failure:
     )
 
 
+def _frame_ref_payload(ref: MemoryFrameRef) -> dict[str, Any]:
+    """Encode one exact stable memory-frame identity."""
+    if type(ref) is not MemoryFrameRef:
+        raise TypeError("memory frame ref must be a MemoryFrameRef")
+    MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner)
+    return {
+        "root_flow_id": ref.root_flow_id,
+        "static_path": list(ref.static_path),
+        "owner": ref.owner.value,
+    }
+
+
+def _frame_ref_from_payload(payload: dict[str, Any]) -> MemoryFrameRef:
+    """Decode one already-validated memory-frame identity."""
+    return MemoryFrameRef(
+        root_flow_id=payload["root_flow_id"],
+        static_path=tuple(payload["static_path"]),
+        owner=MemoryOwner(payload["owner"]),
+    )
+
+
+def _occurrence_segment_payload(segment: MemoryOccurrenceSegment) -> dict[str, Any]:
+    """Encode one exact dynamic occurrence segment."""
+    if type(segment) is not MemoryOccurrenceSegment:
+        raise TypeError("occurrence segment must be a MemoryOccurrenceSegment")
+    MemoryOccurrenceSegment(segment.kind, segment.static_path, segment.index)
+    return {
+        "kind": segment.kind.value,
+        "static_path": list(segment.static_path),
+        "index": segment.index,
+    }
+
+
+def _occurrence_segment_from_payload(
+    payload: dict[str, Any],
+) -> MemoryOccurrenceSegment:
+    """Decode one already-validated dynamic occurrence segment."""
+    return MemoryOccurrenceSegment(
+        kind=MemoryOccurrenceKind(payload["kind"]),
+        static_path=tuple(payload["static_path"]),
+        index=payload["index"],
+    )
+
+
+def _occurrence_ref_payload(occurrence: MemoryOccurrenceRef) -> dict[str, Any]:
+    """Encode one exact dynamic frame occurrence."""
+    if type(occurrence) is not MemoryOccurrenceRef:
+        raise TypeError("occurrence must be a MemoryOccurrenceRef")
+    MemoryOccurrenceRef(occurrence.frame_ref, occurrence.occurrence_path)
+    return {
+        "frame_ref": _frame_ref_payload(occurrence.frame_ref),
+        "occurrence_path": [
+            _occurrence_segment_payload(segment)
+            for segment in occurrence.occurrence_path
+        ],
+    }
+
+
+def _occurrence_ref_from_payload(payload: dict[str, Any]) -> MemoryOccurrenceRef:
+    """Decode one already-validated dynamic frame occurrence."""
+    return MemoryOccurrenceRef(
+        frame_ref=_frame_ref_from_payload(payload["frame_ref"]),
+        occurrence_path=tuple(
+            _occurrence_segment_from_payload(segment)
+            for segment in payload["occurrence_path"]
+        ),
+    )
+
+
+def _scope_payload(scope: MemoryScope) -> dict[str, Any]:
+    """Encode one exact compiled memory scope."""
+    if type(scope) is not MemoryScope:
+        raise TypeError("evidence scope must be a MemoryScope")
+    MemoryScope(
+        scope.root_flow_id,
+        scope.static_path,
+        scope.frame_stack,
+        scope.occurrence_path,
+        scope.boundary,
+    )
+    boundary = scope.boundary
+    return {
+        "root_flow_id": scope.root_flow_id,
+        "static_path": list(scope.static_path),
+        "frame_stack": [_frame_ref_payload(ref) for ref in scope.frame_stack],
+        "occurrence_path": [
+            _occurrence_segment_payload(segment)
+            for segment in scope.occurrence_path
+        ],
+        "boundary": (
+            None
+            if boundary is None
+            else {
+                "kind": boundary.kind.value,
+                "frame_ref": _frame_ref_payload(boundary.frame_ref),
+            }
+        ),
+    }
+
+
+def _scope_from_payload(payload: dict[str, Any]) -> MemoryScope:
+    """Decode one already-validated compiled memory scope."""
+    boundary_payload = payload["boundary"]
+    boundary = (
+        None
+        if boundary_payload is None
+        else MemoryBoundary(
+            MemoryBoundaryKind(boundary_payload["kind"]),
+            _frame_ref_from_payload(boundary_payload["frame_ref"]),
+        )
+    )
+    return MemoryScope(
+        root_flow_id=payload["root_flow_id"],
+        static_path=tuple(payload["static_path"]),
+        frame_stack=tuple(
+            _frame_ref_from_payload(ref) for ref in payload["frame_stack"]
+        ),
+        occurrence_path=tuple(
+            _occurrence_segment_from_payload(segment)
+            for segment in payload["occurrence_path"]
+        ),
+        boundary=boundary,
+    )
+
+
+def _frame_spec_payload(spec: MemoryFrameSpec) -> dict[str, Any]:
+    """Encode one exact origin-free effective memory-frame specification."""
+    if type(spec) is not MemoryFrameSpec:
+        raise TypeError("memory layout item must be a MemoryFrameSpec")
+    MemoryFrameSpec(spec.ref, spec.policy_name, spec.config)
+    return {
+        "ref": _frame_ref_payload(spec.ref),
+        "policy_name": spec.policy_name,
+        "config": spec.config,
+    }
+
+
+def _frame_spec_from_payload(payload: dict[str, Any]) -> MemoryFrameSpec:
+    """Decode one already-validated effective memory-frame specification."""
+    return MemoryFrameSpec(
+        ref=_frame_ref_from_payload(payload["ref"]),
+        policy_name=payload["policy_name"],
+        config=_copy_json(payload["config"]),
+    )
+
+
+def _snapshot_payload(snapshot: MemorySnapshotEnvelope) -> dict[str, Any]:
+    """Encode one exact named memory snapshot envelope."""
+    if type(snapshot) is not MemorySnapshotEnvelope:
+        raise TypeError("memory snapshot must be a MemorySnapshotEnvelope")
+    MemorySnapshotEnvelope(snapshot.policy_name, snapshot.snapshot)
+    return {
+        "policy_name": snapshot.policy_name,
+        "snapshot": snapshot.snapshot,
+    }
+
+
+def _snapshot_from_payload(payload: dict[str, Any]) -> MemorySnapshotEnvelope:
+    """Decode one already-validated named memory snapshot envelope."""
+    return MemorySnapshotEnvelope(
+        policy_name=payload["policy_name"],
+        snapshot=_copy_json(payload["snapshot"]),
+    )
+
+
+def _memory_section_payload(section: MemorySection) -> dict[str, Any]:
+    """Encode one exact separate recalled-memory section."""
+    if type(section) is not MemorySection:
+        raise TypeError("memory section must be a MemorySection")
+    MemorySection(section.frame_ref, section.text)
+    return {
+        "frame_ref": _frame_ref_payload(section.frame_ref),
+        "text": section.text,
+    }
+
+
+def _memory_section_from_payload(payload: dict[str, Any]) -> MemorySection:
+    """Decode one already-validated recalled-memory section."""
+    return MemorySection(
+        frame_ref=_frame_ref_from_payload(payload["frame_ref"]),
+        text=payload["text"],
+    )
+
+
+def _interaction_payload(interaction: VisibleInteraction) -> dict[str, Any]:
+    """Encode one exact member of the closed visible-interaction vocabulary."""
+    if type(interaction) is ModelTextInteraction:
+        ModelTextInteraction(interaction.text)
+        return {"kind": "model_text", "text": interaction.text}
+    if type(interaction) is ModelValueInteraction:
+        ModelValueInteraction(interaction.value)
+        return {"kind": "model_value", "value": interaction.value}
+    if type(interaction) is ToolCallInteraction:
+        ToolCallInteraction(interaction.name, interaction.arguments)
+        return {
+            "kind": "tool_call",
+            "name": interaction.name,
+            "arguments": interaction.arguments,
+        }
+    if type(interaction) is ToolResultInteraction:
+        ToolResultInteraction(interaction.name, interaction.text)
+        return {
+            "kind": "tool_result",
+            "name": interaction.name,
+            "text": interaction.text,
+        }
+    raise TypeError("unsupported visible interaction")
+
+
+def _interaction_from_payload(payload: dict[str, Any]) -> VisibleInteraction:
+    """Decode one already-validated closed visible interaction."""
+    kind = payload["kind"]
+    if kind == "model_text":
+        return ModelTextInteraction(payload["text"])
+    if kind == "model_value":
+        return ModelValueInteraction(_copy_json(payload["value"]))
+    if kind == "tool_call":
+        return ToolCallInteraction(payload["name"], _copy_json(payload["arguments"]))
+    if kind == "tool_result":
+        return ToolResultInteraction(payload["name"], payload["text"])
+    raise ValueError(f"unknown visible interaction kind: {kind!r}")
+
+
+def _evidence_payload(evidence: EvaluationEvidence | None) -> dict[str, Any] | None:
+    """Encode optional exact evaluation evidence."""
+    if evidence is None:
+        return None
+    if type(evidence) is not EvaluationEvidence:
+        raise TypeError("evidence must be an EvaluationEvidence or None")
+    EvaluationEvidence(
+        evidence.scope,
+        evidence.bound_inputs,
+        evidence.base_system_prompt,
+        evidence.prompt,
+        evidence.memory_sections,
+        evidence.interactions,
+    )
+    return {
+        "scope": _scope_payload(evidence.scope),
+        "bound_inputs": evidence.bound_inputs,
+        "base_system_prompt": evidence.base_system_prompt,
+        "prompt": evidence.prompt,
+        "memory_sections": [
+            _memory_section_payload(section) for section in evidence.memory_sections
+        ],
+        "interactions": [
+            _interaction_payload(interaction) for interaction in evidence.interactions
+        ],
+    }
+
+
+def _evidence_from_payload(payload: dict[str, Any] | None) -> EvaluationEvidence | None:
+    """Decode optional already-validated evaluation evidence."""
+    if payload is None:
+        return None
+    return EvaluationEvidence(
+        scope=_scope_from_payload(payload["scope"]),
+        bound_inputs=(
+            None
+            if payload["bound_inputs"] is None
+            else _copy_json(payload["bound_inputs"])
+        ),
+        base_system_prompt=payload["base_system_prompt"],
+        prompt=payload["prompt"],
+        memory_sections=tuple(
+            _memory_section_from_payload(section)
+            for section in payload["memory_sections"]
+        ),
+        interactions=tuple(
+            _interaction_from_payload(interaction)
+            for interaction in payload["interactions"]
+        ),
+    )
+
+
+def _mutation_payload(mutation: MemoryMutation) -> dict[str, Any]:
+    """Encode one exact frame-owned memory mutation."""
+    if type(mutation) is not MemoryMutation:
+        raise TypeError("mutation must be a MemoryMutation")
+    MemoryMutation(mutation.mutation_id, mutation.frame_ref, mutation.payload)
+    return {
+        "mutation_id": mutation.mutation_id,
+        "frame_ref": _frame_ref_payload(mutation.frame_ref),
+        "payload": mutation.payload,
+    }
+
+
+def _mutation_from_payload(payload: dict[str, Any]) -> MemoryMutation:
+    """Decode one already-validated frame-owned memory mutation."""
+    return MemoryMutation(
+        mutation_id=payload["mutation_id"],
+        frame_ref=_frame_ref_from_payload(payload["frame_ref"]),
+        payload=_copy_json(payload["payload"]),
+    )
+
+
+def _memory_failure_payload(failure: MemoryOperationFailure) -> dict[str, Any]:
+    """Encode one exact sanitized memory-operation failure."""
+    if type(failure) is not MemoryOperationFailure:
+        raise TypeError("failure must be a MemoryOperationFailure")
+    MemoryOperationFailure(
+        failure.stage,
+        failure.code,
+        failure.message,
+        failure.retryable,
+    )
+    return {
+        "stage": failure.stage,
+        "code": failure.code,
+        "message": failure.message,
+        "retryable": failure.retryable,
+    }
+
+
+def _memory_failure_from_payload(payload: dict[str, Any]) -> MemoryOperationFailure:
+    """Decode one already-validated sanitized memory-operation failure."""
+    return MemoryOperationFailure(
+        stage=payload["stage"],
+        code=payload["code"],
+        message=payload["message"],
+        retryable=payload["retryable"],
+    )
+
+
 def _payload_for_record(record: RunRecord) -> dict[str, Any]:
     """Build and validate the canonical JSON payload for one record variant."""
     kind = _kind_for_record(record)
     if isinstance(record, RunStartedRecord):
+        _validate_run_memory_configuration(
+            record.memory_layout,
+            record.memory_snapshots,
+            record.learn,
+        )
         raw = {
             "flow_fingerprint": record.flow_fingerprint,
             "initial_pool": encode_pool(decode_pool(record.initial_pool)),
@@ -861,6 +1725,20 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                 record.effective_llm_by_static_path
             )[0],
             "num_workers": record.num_workers,
+            "memory_layout": (
+                None
+                if record.memory_layout is None
+                else [_frame_spec_payload(spec) for spec in record.memory_layout]
+            ),
+            "memory_snapshots": (
+                None
+                if record.memory_snapshots is None
+                else [
+                    _snapshot_payload(snapshot)
+                    for snapshot in record.memory_snapshots
+                ]
+            ),
+            "learn": record.learn,
         }
     elif isinstance(record, RunResumedRecord):
         raw = {
@@ -878,6 +1756,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             "node_id": record.node_id,
             "commit_target": record.commit_target,
             "value": _copy_json(canonical),
+            "evidence": _evidence_payload(record.evidence),
         }
     elif isinstance(record, NodeRoutedRecord):
         raw = {
@@ -891,6 +1770,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                 if record.terminal_failure is not None
                 else None
             ),
+            "evidence": _evidence_payload(record.evidence),
         }
     elif isinstance(record, NodeExpandedRecord):
         raw = {
@@ -900,6 +1780,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                 record.prune_ids, "prune_ids", require_sorted=True
             ),
             "topology_digest": record.topology_digest,
+            "evidence": _evidence_payload(record.evidence),
         }
     elif isinstance(record, NodeFailedRecord):
         raw = {
@@ -907,6 +1788,49 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                 record.failure,
                 carrier="NodeFailedRecord",
             ),
+            "evidence": _evidence_payload(record.evidence),
+        }
+    elif isinstance(record, MemoryFrameLearningStartedRecord):
+        raw = {
+            "policy_name": record.policy_name,
+            "frame_ref": _frame_ref_payload(record.frame_ref),
+            "occurrences": [
+                _occurrence_ref_payload(occurrence)
+                for occurrence in record.occurrences
+            ],
+        }
+    elif isinstance(record, MemoryFrameLearnedRecord):
+        raw = {
+            "policy_name": record.policy_name,
+            "frame_ref": _frame_ref_payload(record.frame_ref),
+            "mutations": [
+                _mutation_payload(mutation) for mutation in record.mutations
+            ],
+        }
+    elif isinstance(record, MemoryFrameLearningFailedRecord):
+        raw = {
+            "policy_name": record.policy_name,
+            "frame_ref": _frame_ref_payload(record.frame_ref),
+            "failure": _memory_failure_payload(record.failure),
+        }
+    elif isinstance(record, MemoryCommitRequestedRecord):
+        raw = {
+            "policy_name": record.policy_name,
+            "commit_id": record.commit_id,
+            "mutations": [
+                _mutation_payload(mutation) for mutation in record.mutations
+            ],
+        }
+    elif isinstance(record, MemoryCommitSucceededRecord):
+        raw = {
+            "policy_name": record.policy_name,
+            "commit_id": record.commit_id,
+        }
+    elif isinstance(record, MemoryCommitFailedRecord):
+        raw = {
+            "policy_name": record.policy_name,
+            "commit_id": record.commit_id,
+            "failure": _memory_failure_payload(record.failure),
         }
     else:  # protected by _kind_for_record; retained for exhaustive local reasoning
         raise TypeError(f"unsupported run record: {type(record).__name__}")
@@ -931,6 +1855,23 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             start_wiring_override=start_wiring_override,
             effective_llm_by_static_path=effective,
             num_workers=values["num_workers"],
+            memory_layout=(
+                None
+                if values["memory_layout"] is None
+                else tuple(
+                    _frame_spec_from_payload(spec)
+                    for spec in values["memory_layout"]
+                )
+            ),
+            memory_snapshots=(
+                None
+                if values["memory_snapshots"] is None
+                else tuple(
+                    _snapshot_from_payload(snapshot)
+                    for snapshot in values["memory_snapshots"]
+                )
+            ),
+            learn=values["learn"],
         )
     if kind == "run_resumed":
         return RunResumedRecord(
@@ -946,6 +1887,7 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             node_id=values["node_id"],
             commit_target=values["commit_target"],
             value=_copy_json(canonical),
+            evidence=_evidence_from_payload(values["evidence"]),
         )
     if kind == "node_routed":
         terminal_payload = values["terminal_failure"]
@@ -957,6 +1899,7 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
                 if terminal_payload is not None
                 else None
             ),
+            evidence=_evidence_from_payload(values["evidence"]),
         )
     if kind == "node_expanded":
         seed = canonical_seed(values["seed"])[0]
@@ -965,11 +1908,57 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             seed=seed,
             prune_ids=tuple(values["prune_ids"]),
             topology_digest=values["topology_digest"],
+            evidence=_evidence_from_payload(values["evidence"]),
         )
     if kind == "node_failed":
         failure_payload = values["failure"]
         return NodeFailedRecord(
             failure=_failure_from_payload(failure_payload),
+            evidence=_evidence_from_payload(values["evidence"]),
+        )
+    if kind == "memory_frame_learning_started":
+        return MemoryFrameLearningStartedRecord(
+            policy_name=values["policy_name"],
+            frame_ref=_frame_ref_from_payload(values["frame_ref"]),
+            occurrences=tuple(
+                _occurrence_ref_from_payload(occurrence)
+                for occurrence in values["occurrences"]
+            ),
+        )
+    if kind == "memory_frame_learned":
+        return MemoryFrameLearnedRecord(
+            policy_name=values["policy_name"],
+            frame_ref=_frame_ref_from_payload(values["frame_ref"]),
+            mutations=tuple(
+                _mutation_from_payload(mutation)
+                for mutation in values["mutations"]
+            ),
+        )
+    if kind == "memory_frame_learning_failed":
+        return MemoryFrameLearningFailedRecord(
+            policy_name=values["policy_name"],
+            frame_ref=_frame_ref_from_payload(values["frame_ref"]),
+            failure=_memory_failure_from_payload(values["failure"]),
+        )
+    if kind == "memory_commit_requested":
+        return MemoryCommitRequestedRecord(
+            policy_name=values["policy_name"],
+            commit_id=values["commit_id"],
+            mutations=tuple(
+                _mutation_from_payload(mutation)
+                for mutation in values["mutations"]
+            ),
+        )
+    if kind == "memory_commit_succeeded":
+        return MemoryCommitSucceededRecord(
+            policy_name=values["policy_name"],
+            commit_id=values["commit_id"],
+        )
+    if kind == "memory_commit_failed":
+        return MemoryCommitFailedRecord(
+            policy_name=values["policy_name"],
+            commit_id=values["commit_id"],
+            failure=_memory_failure_from_payload(values["failure"]),
         )
     raise ValueError(f"unknown run-record kind: {kind!r}")
 
@@ -1221,6 +2210,12 @@ __all__ = [
     "SCHEMA_VERSION",
     "JsonlRunLog",
     "MemoryRunLog",
+    "MemoryCommitFailedRecord",
+    "MemoryCommitRequestedRecord",
+    "MemoryCommitSucceededRecord",
+    "MemoryFrameLearnedRecord",
+    "MemoryFrameLearningFailedRecord",
+    "MemoryFrameLearningStartedRecord",
     "NodeExpandedRecord",
     "NodeFailedRecord",
     "NodeRoutedRecord",

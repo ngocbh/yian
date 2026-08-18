@@ -34,6 +34,7 @@ from agent_composer.memory import (
     MemoryScope,
     MemorySession,
     MemorySetupError,
+    ModelValueInteraction,
     RecallContext,
 )
 
@@ -326,7 +327,8 @@ def test_json_contracts_reject_cycles() -> None:
 def test_context_episode_and_mutation_keep_json_snapshots() -> None:
     """Every durable JSON-bearing value owns a defensive canonical snapshot."""
     inputs: JsonObject = {"items": [1, 2]}
-    interaction: JsonObject = {"kind": "model", "value": {"text": "answer"}}
+    interaction_value: JsonObject = {"text": "answer"}
+    interaction = ModelValueInteraction(interaction_value)
     output: JsonObject = {"answer": ["yes"]}
     payload: JsonObject = {"add": [{"id": "lesson", "text": "remember"}]}
     context = RecallContext("base", "prompt", inputs, ("root", "agent"))
@@ -348,11 +350,12 @@ def test_context_episode_and_mutation_keep_json_snapshots() -> None:
     )
 
     inputs["items"].append(3)  # type: ignore[union-attr]
-    interaction["value"]["text"] = "changed"  # type: ignore[index]
+    interaction_value["text"] = "changed"
     output["answer"].append("no")  # type: ignore[union-attr]
     payload["add"].clear()  # type: ignore[union-attr]
     context.inputs["items"].append(4)  # type: ignore[union-attr]
-    episode.interactions[0]["value"]["text"] = "changed again"  # type: ignore[index]
+    assert isinstance(episode.interactions[0], ModelValueInteraction)
+    episode.interactions[0].value["text"] = "changed again"
     mutation.payload["add"].append("changed")  # type: ignore[union-attr]
     learn.feedback[0]["score"] = 0  # type: ignore[index]
 
@@ -360,7 +363,7 @@ def test_context_episode_and_mutation_keep_json_snapshots() -> None:
     assert episode.inputs == {"items": [1, 2]}
     assert episode.output == {"answer": ["yes"]}
     assert episode.failure is None
-    assert episode.interactions == ({"kind": "model", "value": {"text": "answer"}},)
+    assert episode.interactions == (ModelValueInteraction({"text": "answer"}),)
     assert mutation.payload == {"add": [{"id": "lesson", "text": "remember"}]}
     assert learn.episodes == (episode,)
     assert learn.feedback == ({"score": 1},)

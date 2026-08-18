@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterator
 
-from agent_composer.compile.model import CompiledFlow, Flow
+from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory.contracts import (
     MemoryBoundary,
@@ -27,6 +27,8 @@ from agent_composer.memory.contracts import (
 )
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node
+from agent_composer.nodes.end import EndNode
+from agent_composer.nodes.start import StartNode
 
 
 def _revalidate_memory_frame_ref(
@@ -285,6 +287,16 @@ def _validate_memory_flow_boundaries(
             "a memory-owning flow must have distinct START and END boundaries",
             origin=origin,
         )
+    if flow.start_id != START_ID:
+        raise _setup_error(
+            f"a memory-owning flow start_id must be canonical {START_ID!r}",
+            origin=origin,
+        )
+    if flow.end_id != END_ID:
+        raise _setup_error(
+            f"a memory-owning flow end_id must be canonical {END_ID!r}",
+            origin=origin,
+        )
     missing = [
         label
         for label, node_id in (("START", flow.start_id), ("END", flow.end_id))
@@ -295,6 +307,16 @@ def _validate_memory_flow_boundaries(
             "a memory-owning flow is missing direct "
             + " and ".join(missing)
             + " boundary node(s)",
+            origin=origin,
+        )
+    if type(flow.nodes[START_ID]) is not StartNode:
+        raise _setup_error(
+            "a memory-owning flow START boundary must be an exact StartNode",
+            origin=origin,
+        )
+    if type(flow.nodes[END_ID]) is not EndNode:
+        raise _setup_error(
+            "a memory-owning flow END boundary must be an exact EndNode",
             origin=origin,
         )
 

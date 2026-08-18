@@ -2404,30 +2404,31 @@ output: ${{body.output}}
 
 def test_memory_expansion_projection_covers_frame_occurrence_and_boundary_topology():
     root = "root"
+    scope_path = (root, "nested", "body")
     frame = MemoryFrameRef(root, (root,), MemoryOwner.FLOW)
     baseline = _fragment()
     baseline.nodes["body"].memory_scope = MemoryScope(
         root,
-        (root, "body"),
+        scope_path,
     )
 
     with_frame = copy.deepcopy(baseline)
     with_frame.nodes["body"].memory_scope = MemoryScope(
         root,
-        (root, "body"),
+        scope_path,
         frame_stack=(frame,),
     )
     with_other_frame_path = copy.deepcopy(with_frame)
     other_frame = MemoryFrameRef(root, (root, "nested"), MemoryOwner.FLOW)
     with_other_frame_path.nodes["body"].memory_scope = MemoryScope(
         root,
-        (root, "body"),
+        scope_path,
         frame_stack=(other_frame,),
     )
     with_occurrence = copy.deepcopy(with_frame)
     with_occurrence.nodes["body"].memory_scope = MemoryScope(
         root,
-        (root, "body"),
+        scope_path,
         frame_stack=(frame,),
         occurrence_path=(
             MemoryOccurrenceSegment(
@@ -2440,7 +2441,7 @@ def test_memory_expansion_projection_covers_frame_occurrence_and_boundary_topolo
     with_boundary = copy.deepcopy(with_frame)
     with_boundary.nodes["body"].memory_scope = MemoryScope(
         root,
-        (root, "body"),
+        scope_path,
         frame_stack=(frame,),
         boundary=MemoryBoundary(MemoryBoundaryKind.END, frame),
     )

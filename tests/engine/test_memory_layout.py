@@ -110,6 +110,10 @@ def test_reachable_policy_requires_root_id_at_the_authored_policy_site() -> None
         ("start-subclass", "start_id must be a non-empty exact string"),
         ("end-empty", "end_id must be a non-empty exact string"),
         ("same", "distinct START and END"),
+        ("wrong-start-id", "start_id must be canonical '__start__'"),
+        ("wrong-end-id", "end_id must be canonical '__end__'"),
+        ("wrong-start-class", "START boundary must be an exact StartNode"),
+        ("wrong-end-class", "END boundary must be an exact EndNode"),
     ],
 )
 def test_memory_owning_python_flow_requires_exact_direct_boundaries(
@@ -130,6 +134,14 @@ def test_memory_owning_python_flow_requires_exact_direct_boundaries(
         nodes.pop(START_ID)
     elif case == "missing-end":
         nodes.pop(END_ID)
+    elif case == "wrong-start-id":
+        nodes["entry"] = StartNode("entry", params=[])
+    elif case == "wrong-end-id":
+        nodes["result"] = EndNode.record("result", output_names=[])
+    elif case == "wrong-start-class":
+        nodes[START_ID] = CodeNode(START_ID, code="return None")
+    elif case == "wrong-end-class":
+        nodes[END_ID] = CodeNode(END_ID, code="return None")
     flow = CompiledFlow(
         nodes,
         [],
@@ -143,6 +155,10 @@ def test_memory_owning_python_flow_requires_exact_direct_boundaries(
         flow.end_id = ""
     elif case == "same":
         flow.end_id = START_ID
+    elif case == "wrong-start-id":
+        flow.start_id = "entry"
+    elif case == "wrong-end-id":
+        flow.end_id = "result"
 
     with pytest.raises(MemorySetupError, match=message) as caught:
         resolve_memory_layout(flow)

@@ -11,15 +11,24 @@ concrete node/field ranges on the Compose-owned `BuildResult`. Registered into
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Optional
 
 from agent_composer.compose.helpers.errors import LoadDiagnostics
+from agent_composer.compose.helpers.memory import (
+    attach_memory_policy_origin,
+    parse_memory_policy,
+)
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from agent_composer.compose.source import SourceCursor
 from agent_composer.diagnostics import SourceRange
 from agent_composer.llm_clients import LLMConfig
+from agent_composer.memory.contracts import MemoryPolicySpec
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.contracts import ValueContract
+
+if TYPE_CHECKING:
+    from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 
 
 def _validate_llm_config(
@@ -82,8 +91,9 @@ class AgentDescriptor(NodeDescriptor):
     agent-specific fields are declared here; `inputs`/`outputs` come from the base.
 
     Class attrs: `kind="agent"`; `allowed` adds normalized `inputs`/`outputs` plus `prompt`/`tools`/
-    `mode`/`llm_config`/`retries`/`asserts` to the commons; `required` is empty (no mandatory
-    flat field); `binding_fields=("inputs",)` — a `prompt:`'s `${...}` refs are handled by
+    `mode`/`llm_config`/`memory_policy`/`retries`/`asserts` to the commons;
+    `required` is empty (no mandatory flat field); `binding_fields=("inputs",)` — a
+    `prompt:`'s `${...}` refs are handled by
     template scanning, not the inline-call desugar, so only `inputs` is walked.
     """
 
@@ -95,6 +105,7 @@ class AgentDescriptor(NodeDescriptor):
         "tools",
         "mode",
         "llm_config",
+        "memory_policy",
         "retries",
         "asserts",
     )
@@ -107,10 +118,64 @@ class AgentDescriptor(NodeDescriptor):
     llm_config: dict[str, Any] = field(default_factory=dict)
     retries: int = 2
     asserts: list[str] = field(default_factory=list)
+    memory_policy: MemoryPolicySpec | None = None
     # INTERNAL — never parsed from YAML; set only by the adaptive_questions desugar pass.
     # When present it overrides the surface-derived contract for a synthesized structured
     # agent whose codomain is code-built and has no surface type-string.
     output_contract_override: Optional[ValueContract] = None
+
+    def __post_init__(self) -> None:
+        """Validate the optional source-neutral policy carrier."""
+        super().__post_init__()
+        if self.memory_policy is not None and type(self.memory_policy) is not MemoryPolicySpec:
+            raise TypeError(
+                "agent descriptor memory_policy must be an exact "
+                "MemoryPolicySpec or None"
+            )
+
+    @classmethod
+    def _validate_fields(
+        cls,
+        node_id: str,
+        kwargs: dict[str, Any],
+        ranges: dict[tuple[str, str], SourceRange],
+        own_range: SourceRange | None,
+        diagnostics: LoadDiagnostics,
+    ) -> None:
+        """Parse a present named policy before ordinary AGENT validation."""
+        if "memory_policy" in kwargs:
+            kwargs["memory_policy"] = parse_memory_policy(
+                kwargs["memory_policy"],
+                diagnostics=diagnostics,
+                source_range=ranges.get(("field", "memory_policy")),
+            )
+        super()._validate_fields(
+            node_id,
+            kwargs,
+            ranges,
+            own_range,
+            diagnostics,
+        )
+
+    def with_source_origins(
+        self,
+        cursor: SourceCursor,
+        *,
+        site_path: tuple[str | int, ...],
+        catalog_builder: "_SourceCatalogBuilder",
+    ) -> "AgentDescriptor":
+        """Attach the one authored ``memory_policy:`` value occurrence."""
+        spec = self.memory_policy
+        if spec is None or not cursor.has("memory_policy"):
+            return self
+        origin = catalog_builder.register(
+            (*site_path, "field", "memory_policy"),
+            cursor.child("memory_policy"),
+        )
+        return replace(
+            self,
+            memory_policy=attach_memory_policy_origin(spec, origin),
+        )
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `AgentNode` (+ wiring) for this `AgentDescriptor`.
@@ -144,6 +209,7 @@ class AgentDescriptor(NodeDescriptor):
                 mode=self.mode,
                 retries=self.retries,
                 title=self.node_name,
+                memory_policy=self.memory_policy,
             )
         except ValueError as exc:
             # AgentNode validates the mode registry; surface a rejection as

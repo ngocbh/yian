@@ -25,6 +25,7 @@ from agent_composer.compile.model import CompiledFlow, Edge, Flow, FlowOutput
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError, expr_refs, scan_template
 from agent_composer.expr.template import Literal, Span
+from agent_composer.memory.contracts import MemoryPolicySpec
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node, NodeKind
 from agent_composer.nodes.call import CallNode
@@ -89,6 +90,7 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
             "llm_inherit",
             "mode",
             "retries",
+            "memory_policy",
         }
     ),
     NodeKind.CODE: frozenset({"code"}),
@@ -178,6 +180,8 @@ _CONTRACT_ORIGINS_IGNORED_FIELDS = frozenset({"default", "entries"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
 _CASE_CANONICAL_FIELDS = frozenset({"handle", "when"})
 _CASE_IGNORED_FIELDS = frozenset({"origin"})
+_MEMORY_POLICY_CANONICAL_FIELDS = frozenset({"name", "_config"})
+_MEMORY_POLICY_IGNORED_FIELDS = frozenset({"origin"})
 
 # Config secrets are intentionally absent from identity. Exact names and high-confidence
 # compound suffixes are credentials in every config spelling. Generic auth/token/signature
@@ -1521,6 +1525,33 @@ def _case_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, An
     }
 
 
+def _memory_policy_manifest(
+    value: MemoryPolicySpec,
+    ctx: _ManifestContext,
+    path: str,
+) -> dict[str, Any]:
+    """Project one authored named policy while excluding its origin."""
+    if type(value) is not MemoryPolicySpec:
+        raise TypeError(
+            f"{path}: expected exact MemoryPolicySpec, got {type(value).__name__}"
+        )
+    _check_fields(
+        value,
+        _MEMORY_POLICY_CANONICAL_FIELDS | _MEMORY_POLICY_IGNORED_FIELDS,
+        path,
+    )
+    if type(value.name) is not str or not value.name:
+        raise ValueError(f"{path}.name: expected a non-empty exact string")
+    if value.origin is not None:
+        if not isinstance(value.origin, OriginRef):
+            raise TypeError(f"{path}.origin: expected OriginRef or None")
+        OriginRef(value.origin.key)
+    return {
+        "config": _sorted_mapping(value.config, ctx, f"{path}.config"),
+        "name": value.name,
+    }
+
+
 def _node_manifest(
     node: Node,
     ctx: _ManifestContext,
@@ -1578,6 +1609,15 @@ def _node_manifest(
         )
         manifest["n"] = node._n if node._mode == "list" else None
     elif node.kind is NodeKind.AGENT:
+        memory_policy = (
+            None
+            if node.memory_policy is None
+            else _memory_policy_manifest(
+                node.memory_policy,
+                ctx,
+                f"{path}.memory_policy",
+            )
+        )
         manifest.update(
             {
                 "llm_inherit": node.llm_inherit,
@@ -1593,6 +1633,8 @@ def _node_manifest(
                 ),
             }
         )
+        if not topology_only and memory_policy is not None:
+            manifest["memory_policy"] = memory_policy
     elif node.kind is NodeKind.CODE:
         manifest["code"] = node.code
     elif node.kind is NodeKind.MODEL:
@@ -1717,6 +1759,8 @@ def _flow_manifest(
                     "end_id",
                     "outputs",
                     "flow_llm_config",
+                    "flow_id",
+                    "memory_policy",
                     "_incoming",
                     "_outgoing",
                 }
@@ -1780,6 +1824,18 @@ def _flow_manifest(
             "wiring": wiring,
         }
         if type(flow) is CompiledFlow and not topology_only:
+            if flow.flow_id is not None:
+                if type(flow.flow_id) is not str or not flow.flow_id:
+                    raise ValueError(
+                        f"{path}.flow_id: expected a non-empty exact string or None"
+                    )
+                manifest["flow_id"] = flow.flow_id
+            if flow.memory_policy is not None:
+                manifest["memory_policy"] = _memory_policy_manifest(
+                    flow.memory_policy,
+                    ctx,
+                    f"{path}.memory_policy",
+                )
             manifest["flow_llm_config"] = _sorted_mapping(
                 flow.flow_llm_config,
                 ctx,
@@ -1790,6 +1846,19 @@ def _flow_manifest(
                 _output_manifest(output, ctx, f"{path}.outputs[{index}]")
                 for index, output in enumerate(flow.outputs)
             ]
+        elif type(flow) is CompiledFlow:
+            if flow.flow_id is not None and (
+                type(flow.flow_id) is not str or not flow.flow_id
+            ):
+                raise ValueError(
+                    f"{path}.flow_id: expected a non-empty exact string or None"
+                )
+            if flow.memory_policy is not None:
+                _memory_policy_manifest(
+                    flow.memory_policy,
+                    ctx,
+                    f"{path}.memory_policy",
+                )
         return {key: manifest[key] for key in sorted(manifest)}
     finally:
         ctx.flows.remove(object_id)

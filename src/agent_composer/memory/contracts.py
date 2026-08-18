@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from math import isfinite
 from types import NoneType, TracebackType
-from typing import Protocol, TypeAlias, runtime_checkable
+from typing import Callable, Iterator, Protocol, TypeAlias, runtime_checkable
 
 from agent_composer.diagnostics import OriginRef
 
@@ -327,6 +327,43 @@ class MemoryPolicySpec:
     def config(self) -> JsonObject:
         """Return a fresh plain-JSON copy of the policy configuration."""
         return _thaw_json_object(self._config)
+
+
+def _iter_memory_policy_origin(
+    spec: MemoryPolicySpec,
+    seen: set[int],
+) -> Iterator[OriginRef]:
+    """Yield one policy origin while preserving shared-carrier identity."""
+    if type(spec) is not MemoryPolicySpec:
+        raise TypeError("memory policy must be an exact MemoryPolicySpec")
+    identity = id(spec)
+    if identity in seen:
+        return
+    seen.add(identity)
+    origin = _require_origin(spec.origin, "memory policy origin")
+    if origin is not None:
+        yield origin
+
+
+def _rewrite_memory_policy_origin(
+    spec: MemoryPolicySpec,
+    mapper: Callable[[OriginRef], OriginRef],
+    seen: set[int],
+) -> None:
+    """Rewrite one policy origin in a private copy without replacing aliases."""
+    if type(spec) is not MemoryPolicySpec:
+        raise TypeError("memory policy must be an exact MemoryPolicySpec")
+    identity = id(spec)
+    if identity in seen:
+        return
+    seen.add(identity)
+    origin = _require_origin(spec.origin, "memory policy origin")
+    if origin is None:
+        return
+    mapped = mapper(origin)
+    if not isinstance(mapped, OriginRef):
+        raise TypeError("origin mapper must return an OriginRef")
+    object.__setattr__(spec, "origin", OriginRef(mapped.key))
 
 
 @dataclass(frozen=True, slots=True, init=False)

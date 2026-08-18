@@ -107,7 +107,7 @@ def test_record_encoding_is_canonical_newline_free_and_byte_stable():
 
     assert encoded == (
         b'{"kind":"node_started","payload":{"node_id":"work"},'
-        b'"run_id":"run-canonical","schema":3,"seq":0}'
+        b'"run_id":"run-canonical","schema":4,"seq":0}'
     )
     assert not encoded.endswith(b"\n")
     assert encode_record(decode_record(encoded)) == encoded
@@ -133,11 +133,12 @@ def test_node_failure_encoding_nests_one_canonical_failure():
     encoded = encode_record(envelope)
 
     assert json.loads(encoded) == {
-        "schema": 3,
+        "schema": 4,
         "run_id": "run-failure",
         "seq": 7,
         "kind": "node_failed",
         "payload": {
+            "evidence": None,
             "failure": {
                 "code": "contract.input",
                 "message": "bad input",
@@ -182,6 +183,7 @@ def test_route_encoding_persists_only_its_optional_terminal_failure():
     noncausal_wire = json.loads(encode_record(noncausal))
 
     assert causal_wire["payload"] == {
+        "evidence": None,
         "node_id": "choice",
         "handle": "default",
         "terminal_failure": {
@@ -194,6 +196,7 @@ def test_route_encoding_persists_only_its_optional_terminal_failure():
         },
     }
     assert noncausal_wire["payload"] == {
+        "evidence": None,
         "node_id": "other",
         "handle": "yes",
         "terminal_failure": None,
@@ -236,42 +239,42 @@ def _json_bytes(value: object) -> bytes:
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 3.0,
+            "schema": 4.0,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "run",
             "seq": -1,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "run",
             "seq": True,
             "kind": "node_started",
             "payload": {"node_id": "work"},
         },
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "run",
             "seq": 0,
             "kind": "not_a_record",
             "payload": {},
         },
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -279,7 +282,7 @@ def _json_bytes(value: object) -> bytes:
             "unexpected": True,
         },
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
@@ -295,28 +298,28 @@ def test_decode_rejects_invalid_envelopes(wire):
     "wire",
     [
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": "work", "unexpected": True},
         },
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {},
         },
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "run",
             "seq": 0,
             "kind": "node_started",
             "payload": {"node_id": 7},
         },
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "run",
             "seq": 0,
             "kind": "node_succeeded",
@@ -327,7 +330,7 @@ def test_decode_rejects_invalid_envelopes(wire):
             },
         },
         {
-            "schema": 3,
+            "schema": 4,
             "run_id": "run",
             "seq": 0,
             "kind": "node_failed",
@@ -351,13 +354,14 @@ def test_decode_rejects_unknown_missing_and_wrong_payload_fields(wire):
 
 
 def _node_failure_wire() -> dict[str, Any]:
-    """Return one independently mutable valid schema-3 node-failure object."""
+    """Return one independently mutable valid schema-4 node-failure object."""
     return {
-        "schema": 3,
+        "schema": 4,
         "run_id": "run",
         "seq": 0,
         "kind": "node_failed",
         "payload": {
+            "evidence": None,
             "failure": {
                 "code": "node.execute",
                 "message": "boom",
@@ -461,8 +465,8 @@ def test_decode_rejects_malformed_nested_failures(case, mutate):
 
 
 @pytest.mark.parametrize("field", ["locator", "range"])
-def test_schema_3_node_failure_rejects_legacy_location_fields(field):
-    """The schema-3 failure payload has one exact authority: `failure`."""
+def test_schema_4_node_failure_rejects_legacy_location_fields(field):
+    """The schema-4 failure payload has one exact authority: `failure`."""
     wire = _node_failure_wire()
     wire["payload"][field] = None
 
@@ -470,7 +474,7 @@ def test_schema_3_node_failure_rejects_legacy_location_fields(field):
         decode_record(_json_bytes(wire))
 
 
-@pytest.mark.parametrize("schema", [1, 2])
+@pytest.mark.parametrize("schema", [1, 2, 3])
 def test_decode_rejects_old_schemas_even_with_a_nested_failure(schema):
     wire = _node_failure_wire()
     wire["schema"] = schema
@@ -496,11 +500,11 @@ def test_decode_rejects_flattened_failure_aliases():
 
 def test_decode_requires_explicit_route_terminal_failure_field():
     wire = {
-        "schema": 3,
+        "schema": 4,
         "run_id": "run",
         "seq": 0,
         "kind": "node_routed",
-        "payload": {"node_id": "choice", "handle": "default"},
+        "payload": {"node_id": "choice", "handle": "default", "evidence": None},
     }
 
     with pytest.raises(ValueError):
@@ -509,11 +513,12 @@ def test_decode_requires_explicit_route_terminal_failure_field():
 
 def test_decode_rejects_extra_nested_route_terminal_failure_field():
     wire = {
-        "schema": 3,
+        "schema": 4,
         "run_id": "run",
         "seq": 0,
         "kind": "node_routed",
         "payload": {
+            "evidence": None,
             "node_id": "choice",
             "handle": "default",
             "terminal_failure": {
@@ -534,7 +539,7 @@ def test_decode_rejects_extra_nested_route_terminal_failure_field():
 
 def test_decode_rejects_duplicate_keys_at_any_object_depth():
     duplicate_payload_key = (
-        b'{"schema":3,"run_id":"run","seq":0,"kind":"node_started",'
+        b'{"schema":4,"run_id":"run","seq":0,"kind":"node_started",'
         b'"payload":{"node_id":"first","node_id":"second"}}'
     )
 
@@ -542,7 +547,7 @@ def test_decode_rejects_duplicate_keys_at_any_object_depth():
         decode_record(duplicate_payload_key)
 
     duplicate_origin_key = (
-        b'{"schema":3,"run_id":"run","seq":0,"kind":"node_failed",'
+        b'{"schema":4,"run_id":"run","seq":0,"kind":"node_failed",'
         b'"payload":{"failure":{"code":"node.execute","message":"boom",'
         b'"node_id":"work","trace":[{"key":"one","key":"two"}],'
         b'"cause_type":null,"traceback":null}}}'
@@ -640,7 +645,7 @@ def test_canonical_json_rejects_lone_unicode_surrogates_as_value_errors():
         )
     with pytest.raises(ValueError, match="Unicode surrogate"):
         decode_record(
-            '{"schema":3,"run_id":"run","seq":0,"kind":"node_started",'
+            '{"schema":4,"run_id":"run","seq":0,"kind":"node_started",'
             '"payload":{"node_id":"\\ud800"}}'
         )
 
@@ -654,6 +659,17 @@ def test_canonical_data_rejects_excessive_nesting_as_a_value_error():
         canonical_seed(value)
     with pytest.raises(ValueError, match="nesting exceeds"):
         canonical_typed(value, None)
+
+
+def test_decode_record_rejects_excessive_nesting_as_a_value_error():
+    nested = '{"nested":' * 1_500 + "null" + "}" * 1_500
+    wire = (
+        '{"schema":4,"run_id":"run","seq":0,"kind":"node_started",'
+        f'"payload":{{"node_id":"work","extra":{nested}}}}}'
+    )
+
+    with pytest.raises(ValueError, match="nesting exceeds"):
+        decode_record(wire)
 
 
 def test_typed_output_canonicalizes_tuple_date_and_file_ref():

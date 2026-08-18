@@ -410,20 +410,20 @@ def test_watchdog_wraps_both_code_modes_but_not_other_blocking_kinds(monkeypatch
     )
 
     empty_flow = SimpleNamespace(wiring={"agent": {}, "human": {}})
-    assert eval_node(AgentNode("agent"), empty_flow, VariablePool()) == Output(
+    assert eval_node(AgentNode("agent"), empty_flow, VariablePool()).outcome == Output(
         "agent answer"
     )
     assert eval_node(
         HumanInputNode("human", prompt="?"),
         empty_flow,
         VariablePool(),
-    ) == Output("human answer")
+    ).outcome == Output("human answer")
     wait_result = eval_node(
         WaitNode("wait"),
         SimpleNamespace(wiring={"wait": {"until": "2026-01-01T00:00:00+00:00"}}),
         VariablePool(),
         stop_event=threading.Event(),
-    )
+    ).outcome
     assert timers == []
     inline_result = CodeNode("inline", code="return inputs['v']").run({"v": 1})
     reference_result = CodeNode(

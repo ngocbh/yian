@@ -103,7 +103,7 @@ def _node(tools=None, prompt="hi", mode="tool_calling"):
 
 def _run_node(node, pool=None):
     """Evaluate one agent into its raw output or failure carrier."""
-    return eval_node(node, None, pool or VariablePool())
+    return eval_node(node, None, pool or VariablePool()).outcome
 
 
 def test_plain_mode_single_call_ignores_tools(monkeypatch):

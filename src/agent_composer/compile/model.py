@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from agent_composer._state import NodeState
+from agent_composer.memory.contracts import MemoryPolicySpec
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import Binding, as_binding
 from agent_composer.nodes.end import EndNode
@@ -201,18 +202,35 @@ class CompiledFlow(Flow):
             layer); `{}` when absent. `resolve_llm_cascade` gap-fills each agent's effective
             config from this, the parent chain, the CLI layer, and explicit process defaults
             captured once at run initialization. It returns the complete static-path map.
+        flow_id (`str | None`):
+            Stable authored semantic identity. Direct memoryless Python graphs may omit it.
+        memory_policy (`MemoryPolicySpec | None`):
+            Optional flow-owned named policy declaration. Runtime layout is derived later.
     """
 
     def __init__(self, nodes: dict[str, Node], edges: list[Edge],
                  outputs: Optional[list[FlowOutput]] = None,
                  wiring: Optional[dict[str, dict[str, Any]]] = None,
-                 flow_llm_config: Optional[dict] = None) -> None:
+                 flow_llm_config: Optional[dict] = None,
+                 flow_id: str | None = None,
+                 memory_policy: MemoryPolicySpec | None = None) -> None:
         # The top-level compiled flow always roots at the synthesized START and returns END.
         super().__init__(nodes=nodes, edges=edges, wiring=wiring,
                          start_id=START_ID, end_id=END_ID)
         self.outputs = outputs or []                    # declared outputs; empty -> fall back to the raw terminal value
         # The flow's authored llm_config: defaults — the cascade's flow layer; {} when absent.
         self.flow_llm_config: dict = flow_llm_config or {}
+        if flow_id is not None:
+            if type(flow_id) is not str:
+                raise TypeError("flow_id must be an exact string or None")
+            if not flow_id:
+                raise ValueError("flow_id must be non-empty")
+        if memory_policy is not None and type(memory_policy) is not MemoryPolicySpec:
+            raise TypeError(
+                "memory_policy must be an exact MemoryPolicySpec or None"
+            )
+        self.flow_id = flow_id
+        self.memory_policy = memory_policy
         # Adjacency indexes, built once from `edges`.
         self._incoming: dict[str, list[Edge]] = {}      # node id -> edges ending at it
         self._outgoing: dict[str, list[Edge]] = {}      # node id -> edges leaving it
@@ -238,12 +256,15 @@ class CompiledFlow(Flow):
     def from_parts(cls, nodes: dict[str, Node], edges: list[Edge],
                    outputs: Optional[list[FlowOutput]] = None,
                    wiring: Optional[dict[str, dict[str, Any]]] = None,
-                   flow_llm_config: Optional[dict] = None) -> "CompiledFlow":
+                   flow_llm_config: Optional[dict] = None,
+                   flow_id: str | None = None,
+                   memory_policy: MemoryPolicySpec | None = None) -> "CompiledFlow":
         """Build a CompiledFlow. The entry is always the synthesized START node (StartNode.ID),
         added implicitly by the loader / graph builder — never authored by the user; the engine
         seeds and advances it at run start."""
         return cls(nodes=nodes, edges=edges, outputs=outputs, wiring=wiring,
-                   flow_llm_config=flow_llm_config)
+                   flow_llm_config=flow_llm_config, flow_id=flow_id,
+                   memory_policy=memory_policy)
 
     def add_subgraph(self, nodes: dict[str, Node], edges: list[Edge],
                      wiring: dict[str, dict[str, Any]]) -> None:

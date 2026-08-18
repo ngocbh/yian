@@ -1,0 +1,1366 @@
+"""Process-local reflective memory with snapshot-isolated run sessions.
+
+The backend keeps atomic lessons in memory, retrieves them deterministically,
+and asks one tool-free structured model call to propose frame-local mutations.
+It deliberately knows nothing about compiled graphs, nodes, or the scheduler.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
+import json
+import re
+from threading import RLock
+from types import TracebackType
+from typing import Any, Literal, cast
+from uuid import uuid4
+
+from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from agent_composer._settings import default_llm_model, default_llm_provider
+from agent_composer.llm_clients import LLMConfig, model_from_config
+from agent_composer.memory.contracts import (
+    JsonObject,
+    JsonValue,
+    LearnContext,
+    MemoryEpisode,
+    MemoryFrameRef,
+    MemoryFrameSpec,
+    MemoryMutation,
+    MemoryOperationError,
+    ModelTextInteraction,
+    ModelValueInteraction,
+    RecallContext,
+    ToolCallInteraction,
+    ToolResultInteraction,
+    VisibleInteraction,
+    _MAX_JSON_NESTING,
+)
+
+
+_SNAPSHOT_FORMAT = "agent_composer.reflective_memory"
+_SNAPSHOT_VERSION = 1
+_POLICY_NAME = "reflective"
+_MAX_REFLECTION_PROMPT_CHARS = 32_000
+_MAX_FRAME_MATERIAL_CHARS = 1_000
+_MAX_LIMIT_MATERIAL_CHARS = 256
+_MAX_LESSON_MATERIAL_CHARS = 8_000
+_MAX_EPISODE_MATERIAL_CHARS = 20_000
+_WORD = re.compile(r"\w+", re.UNICODE)
+
+
+class _ReflectionAction(BaseModel):
+    """One closed model-proposed lesson action."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action: Literal["add", "revise", "remove", "noop"]
+    lesson_id: str | None = None
+    text: str | None = None
+
+
+class _ReflectionResponse(BaseModel):
+    """Strict structured result from one reflective model call."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    actions: list[_ReflectionAction] = Field(min_length=1)
+
+
+@dataclass(frozen=True, slots=True)
+class _Lesson:
+    """One immutable atomic lesson in insertion order."""
+
+    lesson_id: str
+    text: str
+    source: JsonObject
+
+
+@dataclass(frozen=True, slots=True)
+class _EffectiveFrameSpec:
+    """Validated concrete configuration of one reflective frame."""
+
+    ref: MemoryFrameRef
+    max_items: int
+    recall_limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class _FrameState:
+    """One frame specification and its ordered lessons."""
+
+    spec: _EffectiveFrameSpec
+    lessons: tuple[_Lesson, ...]
+
+
+def _operation_error(
+    stage: str,
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+) -> MemoryOperationError:
+    """Build one stable typed backend failure."""
+    return MemoryOperationError(stage, code, message, retryable)
+
+
+def _positive_int(value: object, name: str) -> int:
+    """Require one exact positive integer."""
+    if type(value) is not int:
+        raise TypeError(f"{name} must be an integer")
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
+def _validated_json_string(value: object, name: str) -> str:
+    """Return one exact string with a canonical UTF-8 representation."""
+    if type(value) is not str:
+        raise TypeError(f"{name} must be a string")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Unicode surrogate is not valid canonical JSON") from exc
+    return value
+
+
+def _copy_json(
+    value: object,
+    name: str = "value",
+    *,
+    active: set[int] | None = None,
+    nesting: int = 0,
+) -> JsonValue:
+    """Validate and defensively copy one exact finite JSON value."""
+    value_type = type(value)
+    if value is None or value_type in (bool, int):
+        return cast(JsonValue, value)
+    if value_type is str:
+        return _validated_json_string(value, name)
+    if value_type is float:
+        if value != value or value in (float("inf"), float("-inf")):
+            raise ValueError(f"{name} JSON number must be finite")
+        return value
+    if value_type not in (list, dict):
+        raise TypeError(f"{name} must contain exact JSON values")
+    if nesting >= _MAX_JSON_NESTING:
+        raise ValueError(
+            f"{name} JSON nesting exceeds the conservative wire-safe limit "
+            f"of {_MAX_JSON_NESTING}"
+        )
+
+    active = set() if active is None else active
+    identity = id(value)
+    if identity in active:
+        raise ValueError(f"{name} contains a circular JSON value")
+    active.add(identity)
+    try:
+        if value_type is list:
+            return [
+                _copy_json(
+                    item,
+                    f"{name}[{index}]",
+                    active=active,
+                    nesting=nesting + 1,
+                )
+                for index, item in enumerate(value)
+            ]
+        copied: JsonObject = {}
+        for key, item in value.items():
+            if type(key) is not str:
+                raise TypeError(f"{name} JSON object keys must be strings")
+            _validated_json_string(key, f"{name} JSON object key")
+            copied[key] = _copy_json(
+                item,
+                f"{name}.{key}",
+                active=active,
+                nesting=nesting + 1,
+            )
+        return copied
+    finally:
+        active.remove(identity)
+
+
+def _copy_json_object(value: object, name: str) -> JsonObject:
+    """Validate and copy one exact JSON object."""
+    if type(value) is not dict:
+        raise TypeError(f"{name} must be an exact JSON object")
+    return cast(JsonObject, _copy_json(value, name))
+
+
+def _canonical_json(value: JsonValue) -> str:
+    """Return one stable compact JSON encoding."""
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _nonempty_string(value: object, name: str) -> str:
+    """Require one exact nonempty string."""
+    value = _validated_json_string(value, name)
+    if not value:
+        raise ValueError(f"{name} must be non-empty")
+    return value
+
+
+def _frame_ref_json(ref: MemoryFrameRef) -> JsonObject:
+    """Encode one stable frame identity as canonical JSON."""
+    return {
+        "owner": ref.owner.value,
+        "root_flow_id": ref.root_flow_id,
+        "static_path": list(ref.static_path),
+    }
+
+
+def _frame_ref_from_json(value: object, name: str) -> MemoryFrameRef:
+    """Decode and validate one exact frame identity."""
+    from agent_composer.memory.contracts import MemoryOwner
+
+    data = _copy_json_object(value, name)
+    if set(data) != {"owner", "root_flow_id", "static_path"}:
+        raise ValueError(f"{name} has invalid fields")
+    root_flow_id = _nonempty_string(data["root_flow_id"], f"{name}.root_flow_id")
+    owner_raw = _nonempty_string(data["owner"], f"{name}.owner")
+    try:
+        owner = MemoryOwner(owner_raw)
+    except ValueError as exc:
+        raise ValueError(f"{name}.owner is invalid") from exc
+    path_raw = data["static_path"]
+    if type(path_raw) is not list or not path_raw:
+        raise ValueError(f"{name}.static_path must be a non-empty array")
+    path: list[str] = []
+    for index, part in enumerate(path_raw):
+        path.append(_nonempty_string(part, f"{name}.static_path[{index}]"))
+    return MemoryFrameRef(root_flow_id, tuple(path), owner)
+
+
+def _source_from_json(
+    value: object,
+    name: str,
+    expected_ref: MemoryFrameRef,
+) -> JsonObject:
+    """Decode one exact canonical lesson source for its containing frame."""
+    source = _copy_json_object(value, name)
+    if set(source) != {"frame_ref", "run_id"}:
+        raise ValueError(f"{name} has invalid fields")
+    run_id = _nonempty_string(source["run_id"], f"{name}.run_id")
+    source_ref = _frame_ref_from_json(source["frame_ref"], f"{name}.frame_ref")
+    if source_ref != expected_ref:
+        raise ValueError(f"{name}.frame_ref does not match its containing frame")
+    canonical: JsonObject = {
+        "frame_ref": _frame_ref_json(source_ref),
+        "run_id": run_id,
+    }
+    if _canonical_json(source) != _canonical_json(canonical):
+        raise ValueError(f"{name} must be canonical")
+    return canonical
+
+
+def _frame_sort_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
+    """Return the canonical static-frame order."""
+    return (ref.root_flow_id, ref.static_path, ref.owner.value)
+
+
+def _copy_lesson(lesson: _Lesson) -> _Lesson:
+    """Copy the sole mutable component of an immutable lesson."""
+    return _Lesson(lesson.lesson_id, lesson.text, _copy_json_object(lesson.source, "source"))
+
+
+def _copy_frame_state(state: _FrameState) -> _FrameState:
+    """Defensively copy one internal frame state."""
+    return _FrameState(state.spec, tuple(_copy_lesson(item) for item in state.lessons))
+
+
+def _snapshot_json(
+    namespace: str,
+    epoch: int,
+    revision: int,
+    frames: dict[MemoryFrameRef, _FrameState],
+    llm_config: JsonObject,
+) -> JsonObject:
+    """Encode one canonical session snapshot."""
+    encoded_frames: list[JsonValue] = []
+    for ref in sorted(frames, key=_frame_sort_key):
+        state = frames[ref]
+        encoded_frames.append(
+            {
+                "config": {
+                    "max_items": state.spec.max_items,
+                    "recall_limit": state.spec.recall_limit,
+                },
+                "lessons": [
+                    {
+                        "id": lesson.lesson_id,
+                        "source": _copy_json_object(lesson.source, "source"),
+                        "text": lesson.text,
+                    }
+                    for lesson in state.lessons
+                ],
+                "policy_name": _POLICY_NAME,
+                "ref": _frame_ref_json(ref),
+            }
+        )
+    return {
+        "epoch": epoch,
+        "format": _SNAPSHOT_FORMAT,
+        "frames": encoded_frames,
+        "llm_config": _copy_json_object(llm_config, "llm_config"),
+        "namespace": namespace,
+        "revision": revision,
+        "version": _SNAPSHOT_VERSION,
+    }
+
+
+def _snapshot_error(message: str) -> MemoryOperationError:
+    """Return a stable final snapshot-validation failure."""
+    return _operation_error(
+        "open_run", "reflective.invalid_snapshot", message, retryable=False
+    )
+
+
+def _parse_snapshot(
+    value: object,
+) -> tuple[str, int, int, dict[MemoryFrameRef, _FrameState], JsonObject]:
+    """Strictly decode one canonical reflective-memory snapshot."""
+    try:
+        data = _copy_json_object(value, "snapshot")
+        expected = {
+            "epoch",
+            "format",
+            "frames",
+            "llm_config",
+            "namespace",
+            "revision",
+            "version",
+        }
+        if set(data) != expected:
+            raise ValueError("snapshot has invalid fields")
+        if type(data["format"]) is not str or data["format"] != _SNAPSHOT_FORMAT:
+            raise ValueError("snapshot format is unsupported")
+        if type(data["version"]) is not int or data["version"] != _SNAPSHOT_VERSION:
+            raise ValueError("snapshot version is unsupported")
+        namespace = _nonempty_string(data["namespace"], "snapshot.namespace")
+        epoch = data["epoch"]
+        revision = data["revision"]
+        if type(epoch) is not int or epoch < 0:
+            raise ValueError("snapshot.epoch must be a non-negative integer")
+        if type(revision) is not int or revision < 0:
+            raise ValueError("snapshot.revision must be a non-negative integer")
+
+        llm_config = _copy_json_object(data["llm_config"], "snapshot.llm_config")
+        validated_llm = LLMConfig.model_validate(llm_config, strict=True)
+        complete_llm = cast(
+            JsonObject, validated_llm.model_dump(mode="json", exclude_none=False)
+        )
+        if _canonical_json(llm_config) != _canonical_json(complete_llm):
+            raise ValueError("snapshot.llm_config must be complete and canonical")
+        provider = _nonempty_string(
+            complete_llm.get("provider"), "snapshot.llm_config.provider"
+        )
+        model = _nonempty_string(
+            complete_llm.get("model"), "snapshot.llm_config.model"
+        )
+        if not provider.strip() or not model.strip():
+            raise ValueError(
+                "snapshot.llm_config must pin nonblank provider and model"
+            )
+
+        frames_raw = data["frames"]
+        if type(frames_raw) is not list:
+            raise TypeError("snapshot.frames must be an array")
+        frames: dict[MemoryFrameRef, _FrameState] = {}
+        prior_key: tuple[str, tuple[str, ...], str] | None = None
+        for index, raw_frame in enumerate(frames_raw):
+            frame = _copy_json_object(raw_frame, f"snapshot.frames[{index}]")
+            if set(frame) != {"config", "lessons", "policy_name", "ref"}:
+                raise ValueError(f"snapshot.frames[{index}] has invalid fields")
+            if frame["policy_name"] != _POLICY_NAME:
+                raise ValueError(f"snapshot.frames[{index}] has invalid policy")
+            ref = _frame_ref_from_json(frame["ref"], f"snapshot.frames[{index}].ref")
+            key = _frame_sort_key(ref)
+            if prior_key is not None and key <= prior_key:
+                raise ValueError("snapshot.frames must be uniquely sorted")
+            prior_key = key
+            config = _copy_json_object(
+                frame["config"], f"snapshot.frames[{index}].config"
+            )
+            if set(config) != {"max_items", "recall_limit"}:
+                raise ValueError(f"snapshot.frames[{index}].config has invalid fields")
+            max_items = _positive_int(
+                config["max_items"], f"snapshot.frames[{index}].config.max_items"
+            )
+            recall_limit = _positive_int(
+                config["recall_limit"],
+                f"snapshot.frames[{index}].config.recall_limit",
+            )
+            lessons_raw = frame["lessons"]
+            if type(lessons_raw) is not list:
+                raise TypeError(f"snapshot.frames[{index}].lessons must be an array")
+            lessons: list[_Lesson] = []
+            lesson_ids: set[str] = set()
+            for lesson_index, raw_lesson in enumerate(lessons_raw):
+                lesson = _copy_json_object(
+                    raw_lesson,
+                    f"snapshot.frames[{index}].lessons[{lesson_index}]",
+                )
+                if set(lesson) != {"id", "source", "text"}:
+                    raise ValueError("snapshot lesson has invalid fields")
+                lesson_id = _nonempty_string(lesson["id"], "snapshot lesson id")
+                text = _nonempty_string(lesson["text"], "snapshot lesson text")
+                if not text.strip():
+                    raise ValueError("snapshot lesson text must not be blank")
+                if lesson_id in lesson_ids:
+                    raise ValueError("snapshot lesson ids must be unique per frame")
+                lesson_ids.add(lesson_id)
+                source = _source_from_json(
+                    lesson["source"], "snapshot lesson source", ref
+                )
+                lessons.append(_Lesson(lesson_id, text, source))
+            if len(lessons) > max_items:
+                raise ValueError("snapshot frame exceeds max_items")
+            spec = _EffectiveFrameSpec(ref, max_items, recall_limit)
+            frames[ref] = _FrameState(spec, tuple(lessons))
+        return namespace, epoch, revision, frames, complete_llm
+    except MemoryOperationError:
+        raise
+    except (TypeError, ValueError, ValidationError, RecursionError) as exc:
+        raise _snapshot_error("recorded memory snapshot is invalid") from exc
+
+
+def _compatible_same_generation(
+    current: dict[MemoryFrameRef, _FrameState],
+    recorded: dict[MemoryFrameRef, _FrameState],
+) -> bool:
+    """Accept exact current state plus harmless recorded empty frame declarations."""
+    for ref, current_state in current.items():
+        recorded_state = recorded.get(ref)
+        if recorded_state is None or recorded_state != current_state:
+            return False
+    for ref, recorded_state in recorded.items():
+        if ref not in current and recorded_state.lessons:
+            return False
+    return True
+
+
+def _episode_json(episode: MemoryEpisode) -> JsonObject:
+    """Encode one immutable episode for the reflector prompt."""
+    occurrence_path: list[JsonValue] = []
+    for segment in episode.occurrence.occurrence_path:
+        occurrence_path.append(
+            {
+                "index": segment.index,
+                "kind": segment.kind.value,
+                "static_path": list(segment.static_path),
+            }
+        )
+    return {
+        "base_system_prompt": episode.base_system_prompt,
+        "failure": episode.failure,
+        "inputs": episode.inputs,
+        "interactions": [
+            _visible_interaction_json(interaction)
+            for interaction in episode.interactions
+        ],
+        "memory_sections": [
+            {
+                "frame_ref": _frame_ref_json(section.frame_ref),
+                "text": section.text,
+            }
+            for section in episode.memory_sections
+        ],
+        "occurrence": {
+            "frame_ref": _frame_ref_json(episode.occurrence.frame_ref),
+            "occurrence_path": occurrence_path,
+        },
+        "output": episode.output,
+        "owner_static_path": list(episode.owner_static_path),
+        "prompt": episode.prompt,
+        "run_id": episode.run_id,
+        "status": episode.status.value,
+    }
+
+
+def _visible_interaction_json(interaction: VisibleInteraction) -> JsonObject:
+    """Encode one closed visible interaction for the reflector prompt."""
+    if type(interaction) is ModelTextInteraction:
+        return {"kind": "model_text", "text": interaction.text}
+    if type(interaction) is ModelValueInteraction:
+        return {"kind": "model_value", "value": interaction.value}
+    if type(interaction) is ToolCallInteraction:
+        return {
+            "kind": "tool_call",
+            "name": interaction.name,
+            "arguments": interaction.arguments,
+        }
+    if type(interaction) is ToolResultInteraction:
+        return {
+            "kind": "tool_result",
+            "name": interaction.name,
+            "text": interaction.text,
+        }
+    raise TypeError("unsupported visible interaction")
+
+
+def _bounded_json_material(value: JsonValue, limit: int) -> str:
+    """Encode JSON under a deterministic cap while retaining both ends."""
+    material = _canonical_json(value)
+    if len(material) <= limit:
+        return material
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    chunk_chars = max(0, (limit - 200) // 2)
+    summary: JsonObject = {
+        "original_chars": len(material),
+        "prefix": material[:chunk_chars],
+        "sha256": digest,
+        "suffix": material[-chunk_chars:] if chunk_chars else "",
+        "truncated": True,
+    }
+    encoded = _canonical_json(summary)
+    while len(encoded) > limit and chunk_chars:
+        reduction = max(1, (len(encoded) - limit + 1) // 2)
+        chunk_chars = max(0, chunk_chars - reduction)
+        summary["prefix"] = material[:chunk_chars]
+        summary["suffix"] = material[-chunk_chars:] if chunk_chars else ""
+        encoded = _canonical_json(summary)
+    return encoded
+
+
+def _bounded_episode_material(context: LearnContext) -> str:
+    """Return deterministic episode material within its reserved prompt budget."""
+    payload: JsonObject = {
+        "episodes": [_episode_json(episode) for episode in context.episodes],
+        "feedback": list(context.feedback),
+    }
+    return _bounded_json_material(payload, _MAX_EPISODE_MATERIAL_CHARS)
+
+
+def _source_json(run_id: str, frame_ref: MemoryFrameRef) -> JsonObject:
+    """Return stable source metadata for one proposed lesson mutation."""
+    return {"frame_ref": _frame_ref_json(frame_ref), "run_id": run_id}
+
+
+def _mutation_digest_payload(
+    context: LearnContext,
+    index: int,
+    payload: JsonObject,
+) -> JsonObject:
+    """Return the complete deterministic mutation identity material."""
+    return {
+        "frame_ref": _frame_ref_json(context.frame_ref),
+        "index": index,
+        "payload": payload,
+        "run_id": context.run_id,
+    }
+
+
+class ReflectiveMemory:
+    """Process-local atomic lessons learned through structured reflection."""
+
+    def __init__(
+        self,
+        llm_config: JsonObject | None = None,
+        *,
+        max_items: int = 100,
+        recall_limit: int = 20,
+    ) -> None:
+        """Create one isolated memory namespace and validate its defaults."""
+        self._default_max_items = _positive_int(max_items, "max_items")
+        self._default_recall_limit = _positive_int(recall_limit, "recall_limit")
+        raw_config = (
+            {} if llm_config is None else _copy_json_object(llm_config, "llm_config")
+        )
+        validated = LLMConfig.model_validate(raw_config, strict=True)
+        if validated.model is not None and not validated.model.strip():
+            raise ValueError("llm_config.model must be non-empty")
+        self._llm_config = cast(
+            JsonObject, validated.model_dump(mode="json", exclude_none=True)
+        )
+        self._lock = RLock()
+        self._namespace = uuid4().hex
+        self._epoch = 0
+        self._revision = 0
+        self._frames: dict[MemoryFrameRef, _FrameState] = {}
+        self._applied_commits: dict[str, str] = {}
+        self._ever_opened = False
+        self._ever_reset = False
+        self._ever_committed = False
+
+    def rewrite_query(self, context: RecallContext) -> str:
+        """Build the default lexical query from the visible prompt and inputs."""
+        if type(context) is not RecallContext:
+            raise TypeError("context must be a RecallContext")
+        return f"Task: {context.prompt}\nInputs: {_canonical_json(context.inputs)}"
+
+    def _effective_llm_config(self) -> JsonObject:
+        """Resolve ambient defaults exactly once for one fresh session."""
+        config = _copy_json_object(self._llm_config, "llm_config")
+        try:
+            if config.get("provider") is None:
+                config["provider"] = default_llm_provider()
+            if config.get("model") is None:
+                config["model"] = default_llm_model()
+            validated = LLMConfig.model_validate(config, strict=True)
+            complete = cast(
+                JsonObject, validated.model_dump(mode="json", exclude_none=False)
+            )
+            _nonempty_string(complete.get("provider"), "llm_config.provider")
+            model = _nonempty_string(complete.get("model"), "llm_config.model")
+            if not model.strip():
+                raise ValueError("llm_config.model must not be blank")
+        except Exception as exc:
+            raise _operation_error(
+                "open_run",
+                "reflective.config",
+                "reflective model configuration is invalid",
+                retryable=False,
+            ) from exc
+        return complete
+
+    def open_run(self, *, snapshot: JsonObject | None = None) -> _ReflectiveSession:
+        """Open one immutable-read session, optionally from a recorded snapshot."""
+        parsed = None if snapshot is None else _parse_snapshot(snapshot)
+        with self._lock:
+            if parsed is None:
+                namespace = self._namespace
+                epoch = self._epoch
+                revision = self._revision
+                frames = {
+                    ref: _copy_frame_state(state) for ref, state in self._frames.items()
+                }
+                llm_config = self._effective_llm_config()
+            else:
+                namespace, epoch, revision, frames, llm_config = parsed
+                if namespace != self._namespace:
+                    pristine = (
+                        not self._ever_opened
+                        and not self._ever_reset
+                        and not self._ever_committed
+                        and not self._frames
+                        and self._epoch == 0
+                        and self._revision == 0
+                    )
+                    if not pristine:
+                        raise _snapshot_error(
+                            "snapshot namespace cannot replace a non-pristine memory"
+                        )
+                    self._namespace = namespace
+                    self._epoch = epoch
+                    self._revision = revision
+                    self._frames = {
+                        ref: _copy_frame_state(state) for ref, state in frames.items()
+                    }
+                    self._llm_config = {
+                        key: value
+                        for key, value in _copy_json_object(
+                            llm_config, "llm_config"
+                        ).items()
+                        if value is not None
+                    }
+                    self._ever_committed = revision > 0 or any(
+                        state.lessons for state in frames.values()
+                    )
+                else:
+                    if epoch != self._epoch:
+                        raise _snapshot_error(
+                            "snapshot generation is incompatible after reset"
+                        )
+                    if revision > self._revision:
+                        raise _snapshot_error(
+                            "snapshot revision is ahead of the memory state"
+                        )
+                    if revision == self._revision and not _compatible_same_generation(
+                        self._frames, frames
+                    ):
+                        raise _snapshot_error(
+                            "snapshot state does not match the current generation"
+                        )
+                frames = {ref: _copy_frame_state(state) for ref, state in frames.items()}
+            self._ever_opened = True
+            return _ReflectiveSession(
+                self,
+                namespace,
+                epoch,
+                revision,
+                frames,
+                llm_config,
+            )
+
+    def reset(self) -> None:
+        """Clear lessons, start a new generation, and retain commit idempotency."""
+        with self._lock:
+            self._frames = {}
+            self._epoch += 1
+            self._revision = 0
+            self._ever_reset = True
+
+
+class _ReflectiveSession:
+    """One run-scoped view over a pinned reflective-memory generation."""
+
+    def __init__(
+        self,
+        memory: ReflectiveMemory,
+        namespace: str,
+        epoch: int,
+        revision: int,
+        frames: dict[MemoryFrameRef, _FrameState],
+        llm_config: JsonObject,
+    ) -> None:
+        self._memory = memory
+        self._namespace = namespace
+        self._epoch = epoch
+        self._revision = revision
+        self._frames = frames
+        self._llm_config = _copy_json_object(llm_config, "llm_config")
+        self._opened: dict[MemoryFrameRef, _ReflectiveFrame] = {}
+        self._closed = False
+
+    def _ensure_open(self) -> None:
+        """Reject every operation once the run boundary has closed."""
+        if self._closed:
+            raise _operation_error(
+                "session", "reflective.session_closed", "memory session is closed"
+            )
+
+    @property
+    def snapshot(self) -> JsonObject:
+        """Return the public durable source-neutral state pinned for this run."""
+        with self._memory._lock:
+            self._ensure_open()
+            frames = {
+                ref: _copy_frame_state(state) for ref, state in self._frames.items()
+            }
+            for ref, frame in self._opened.items():
+                frames.setdefault(ref, _FrameState(frame._spec, ()))
+            return _snapshot_json(
+                self._namespace,
+                self._epoch,
+                self._revision,
+                frames,
+                self._llm_config,
+            )
+
+    def __enter__(self) -> _ReflectiveSession:
+        """Enter this still-open session."""
+        with self._memory._lock:
+            self._ensure_open()
+            return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close this run session without suppressing an exception."""
+        self.close()
+
+    def close(self) -> None:
+        """Idempotently close this process-local session."""
+        with self._memory._lock:
+            self._closed = True
+
+    def _normalize_spec(
+        self,
+        spec: MemoryFrameSpec,
+        recorded: _FrameState | None,
+    ) -> _EffectiveFrameSpec:
+        """Validate one reflective frame and fill its local defaults."""
+        if type(spec) is not MemoryFrameSpec:
+            raise _operation_error(
+                "open_frame",
+                "reflective.invalid_frame",
+                "spec must be a MemoryFrameSpec",
+            )
+        if spec.policy_name != _POLICY_NAME:
+            raise _operation_error(
+                "open_frame",
+                "reflective.invalid_policy",
+                "frame policy must be 'reflective'",
+            )
+        config = spec.config
+        unknown = set(config) - {"max_items", "recall_limit"}
+        if unknown:
+            raise _operation_error(
+                "open_frame",
+                "reflective.invalid_frame_config",
+                "frame configuration contains unsupported fields",
+            )
+        try:
+            default_max_items = (
+                recorded.spec.max_items
+                if recorded is not None
+                else self._memory._default_max_items
+            )
+            default_recall_limit = (
+                recorded.spec.recall_limit
+                if recorded is not None
+                else self._memory._default_recall_limit
+            )
+            max_items = _positive_int(
+                config.get("max_items", default_max_items),
+                "max_items",
+            )
+            recall_limit = _positive_int(
+                config.get("recall_limit", default_recall_limit),
+                "recall_limit",
+            )
+        except (TypeError, ValueError) as exc:
+            raise _operation_error(
+                "open_frame",
+                "reflective.invalid_frame_config",
+                "frame configuration values are invalid",
+            ) from exc
+        return _EffectiveFrameSpec(spec.ref, max_items, recall_limit)
+
+    def open_frame(self, spec: MemoryFrameSpec) -> _ReflectiveFrame:
+        """Open one frame idempotently against the pinned session snapshot."""
+        with self._memory._lock:
+            self._ensure_open()
+            if type(spec) is not MemoryFrameSpec:
+                raise _operation_error(
+                    "open_frame",
+                    "reflective.invalid_frame",
+                    "spec must be a MemoryFrameSpec",
+                )
+            recorded = self._frames.get(spec.ref)
+            effective = self._normalize_spec(spec, recorded)
+            opened = self._opened.get(effective.ref)
+            if opened is not None:
+                if opened._requested_spec != spec or opened._spec != effective:
+                    raise _operation_error(
+                        "open_frame",
+                        "reflective.frame_conflict",
+                        "the frame was already opened with a different specification",
+                    )
+                return opened
+            if recorded is not None and recorded.spec != effective:
+                raise _operation_error(
+                    "open_frame",
+                    "reflective.frame_conflict",
+                    "the recorded frame has a different specification",
+                )
+            frame = _ReflectiveFrame(self, effective, spec)
+            self._opened[effective.ref] = frame
+            return frame
+
+    def _assert_current_generation(self, stage: str) -> None:
+        """Require this proposal session to remain the current generation."""
+        if (
+            self._namespace != self._memory._namespace
+            or self._epoch != self._memory._epoch
+            or self._revision != self._memory._revision
+        ):
+            raise _operation_error(
+                stage,
+                "reflective.stale_generation",
+                "memory session is stale",
+                retryable=False,
+            )
+
+    def _state_for(self, ref: MemoryFrameRef) -> _FrameState:
+        """Return the pinned frame state or its declared empty initial state."""
+        state = self._frames.get(ref)
+        if state is not None:
+            return state
+        return _FrameState(self._opened[ref]._spec, ())
+
+    def _batch_digest(self, mutations: tuple[MemoryMutation, ...]) -> str:
+        """Compute a canonical digest before generation-dependent validation."""
+        if type(mutations) is not tuple:
+            raise _operation_error(
+                "commit",
+                "reflective.invalid_batch",
+                "mutations must be an exact tuple",
+            )
+        encoded: list[JsonObject] = []
+        for mutation in mutations:
+            if type(mutation) is not MemoryMutation:
+                raise _operation_error(
+                    "commit",
+                    "reflective.invalid_batch",
+                    "mutation batch contains an invalid value",
+                )
+            encoded.append(
+                {
+                    "frame_ref": _frame_ref_json(mutation.frame_ref),
+                    "mutation_id": mutation.mutation_id,
+                    "payload": mutation.payload,
+                }
+            )
+        try:
+            material = _canonical_json(cast(JsonValue, encoded))
+        except (TypeError, ValueError) as exc:
+            raise _operation_error(
+                "commit",
+                "reflective.invalid_batch",
+                "mutation batch cannot be encoded canonically",
+            ) from exc
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    def _validate_batch_ownership(
+        self, mutations: tuple[MemoryMutation, ...]
+    ) -> None:
+        """Validate session ownership and per-batch mutation identity."""
+        mutation_ids: set[str] = set()
+        for mutation in mutations:
+            if mutation.frame_ref not in self._opened:
+                raise _operation_error(
+                    "commit",
+                    "reflective.invalid_batch",
+                    "mutation belongs to a frame not opened by this session",
+                )
+            if mutation.mutation_id in mutation_ids:
+                raise _operation_error(
+                    "commit",
+                    "reflective.invalid_batch",
+                    "mutation ids must be unique within a batch",
+                )
+            mutation_ids.add(mutation.mutation_id)
+
+    def _validated_action(
+        self,
+        mutation: MemoryMutation,
+    ) -> tuple[str, str, str | None, JsonObject]:
+        """Validate one persisted reflective mutation payload exactly."""
+        payload = mutation.payload
+        if type(payload) is not dict:
+            raise _operation_error(
+                "commit",
+                "reflective.invalid_mutation",
+                "mutation payload must be an object",
+            )
+        allowed = {"action", "lesson_id", "source", "text"}
+        required = {"action", "lesson_id", "source"}
+        if set(payload) - allowed or not required.issubset(payload):
+            raise _operation_error(
+                "commit",
+                "reflective.invalid_mutation",
+                "mutation payload has invalid fields",
+            )
+        action = payload["action"]
+        if action not in ("add", "revise", "remove"):
+            raise _operation_error(
+                "commit",
+                "reflective.invalid_mutation",
+                "mutation action is invalid",
+            )
+        try:
+            lesson_id = _nonempty_string(payload["lesson_id"], "lesson_id")
+            source = _source_from_json(
+                payload["source"], "source", mutation.frame_ref
+            )
+        except (TypeError, ValueError) as exc:
+            raise _operation_error(
+                "commit",
+                "reflective.invalid_mutation",
+                "mutation identity or source is invalid",
+            ) from exc
+        text: str | None = None
+        if action in ("add", "revise"):
+            try:
+                text = _nonempty_string(payload.get("text"), "text")
+            except (TypeError, ValueError) as exc:
+                raise _operation_error(
+                    "commit",
+                    "reflective.invalid_mutation",
+                    "mutation text is invalid",
+                ) from exc
+            if not text.strip():
+                raise _operation_error(
+                    "commit",
+                    "reflective.invalid_mutation",
+                    "text must not be blank",
+                )
+        elif "text" in payload:
+            raise _operation_error(
+                "commit",
+                "reflective.invalid_mutation",
+                "remove mutations cannot carry text",
+            )
+        return cast(str, action), lesson_id, text, source
+
+    def commit(
+        self,
+        commit_id: str,
+        mutations: tuple[MemoryMutation, ...],
+    ) -> None:
+        """Atomically apply one exact batch, with ledger lookup before generation."""
+        with self._memory._lock:
+            self._ensure_open()
+            try:
+                commit_id = _nonempty_string(commit_id, "commit_id")
+            except (TypeError, ValueError) as exc:
+                raise _operation_error(
+                    "commit",
+                    "reflective.invalid_commit_id",
+                    "commit id must be a nonempty string",
+                ) from exc
+            digest = self._batch_digest(mutations)
+
+            applied_digest = self._memory._applied_commits.get(commit_id)
+            if applied_digest is not None:
+                if applied_digest == digest:
+                    return
+                raise _operation_error(
+                    "commit",
+                    "reflective.commit_collision",
+                    "commit id collision with a different batch",
+                )
+
+            self._validate_batch_ownership(mutations)
+            self._assert_current_generation("commit")
+            frames = {
+                ref: _copy_frame_state(state)
+                for ref, state in self._memory._frames.items()
+            }
+            for ref, opened in self._opened.items():
+                existing = frames.get(ref)
+                if existing is not None and existing.spec != opened._spec:
+                    raise _operation_error(
+                        "commit",
+                        "reflective.frame_conflict",
+                        "current frame specification changed",
+                    )
+                frames.setdefault(ref, _FrameState(opened._spec, ()))
+
+            touched: set[tuple[MemoryFrameRef, str]] = set()
+            for mutation in mutations:
+                action, lesson_id, text, source = self._validated_action(mutation)
+                target = (mutation.frame_ref, lesson_id)
+                if target in touched:
+                    raise _operation_error(
+                        "commit",
+                        "reflective.invalid_mutation",
+                        "a batch cannot target one lesson more than once",
+                    )
+                touched.add(target)
+                state = frames[mutation.frame_ref]
+                lessons = list(state.lessons)
+                position = next(
+                    (
+                        index
+                        for index, lesson in enumerate(lessons)
+                        if lesson.lesson_id == lesson_id
+                    ),
+                    None,
+                )
+                if action == "add":
+                    if position is not None:
+                        raise _operation_error(
+                            "commit",
+                            "reflective.invalid_mutation",
+                            "add mutation targets an existing lesson",
+                        )
+                    lessons.append(_Lesson(lesson_id, cast(str, text), source))
+                elif action == "revise":
+                    if position is None:
+                        raise _operation_error(
+                            "commit",
+                            "reflective.invalid_mutation",
+                            "revise mutation targets a missing lesson",
+                        )
+                    lessons[position] = _Lesson(lesson_id, cast(str, text), source)
+                else:
+                    if position is None:
+                        raise _operation_error(
+                            "commit",
+                            "reflective.invalid_mutation",
+                            "remove mutation targets a missing lesson",
+                        )
+                    lessons.pop(position)
+                frames[mutation.frame_ref] = _FrameState(state.spec, tuple(lessons))
+
+            for state in frames.values():
+                if len(state.lessons) > state.spec.max_items:
+                    raise _operation_error(
+                        "commit",
+                        "reflective.max_items",
+                        "mutation batch exceeds max_items",
+                    )
+
+            self._memory._frames = frames
+            self._memory._applied_commits[commit_id] = digest
+            self._memory._revision += 1
+            self._memory._ever_committed = True
+
+
+class _ReflectiveFrame:
+    """One session-bound frame for deterministic recall and proposal generation."""
+
+    def __init__(
+        self,
+        session: _ReflectiveSession,
+        spec: _EffectiveFrameSpec,
+        requested_spec: MemoryFrameSpec,
+    ) -> None:
+        self._session = session
+        self._spec = spec
+        self._requested_spec = requested_spec
+
+    def _lessons(self) -> tuple[_Lesson, ...]:
+        """Return this frame's pinned immutable lessons."""
+        return self._session._state_for(self._spec.ref).lessons
+
+    @staticmethod
+    def _format(lessons: list[_Lesson] | tuple[_Lesson, ...]) -> str:
+        """Render atomic ids and text without an outer section header."""
+        return "\n".join(f"[{lesson.lesson_id}] {lesson.text}" for lesson in lessons)
+
+    def recall(self, context: RecallContext | None = None) -> str:
+        """Return all pinned lessons or a deterministic lexical ranking."""
+        with self._session._memory._lock:
+            self._session._ensure_open()
+            lessons = self._lessons()
+        if context is None:
+            return self._format(lessons)
+        if type(context) is not RecallContext:
+            raise _operation_error(
+                "recall",
+                "reflective.invalid_context",
+                "context must be a RecallContext or None",
+            )
+        try:
+            query = self._session._memory.rewrite_query(context)
+        except Exception as exc:
+            raise _operation_error(
+                "recall",
+                "reflective.query",
+                "memory query rewriting failed",
+            ) from exc
+        if type(query) is not str:
+            raise _operation_error(
+                "recall",
+                "reflective.query",
+                "rewrite_query() must return a string",
+            )
+        query_words = set(_WORD.findall(query.casefold()))
+        ranked = sorted(
+            enumerate(lessons),
+            key=lambda item: (
+                -len(query_words & set(_WORD.findall(item[1].text.casefold()))),
+                item[0],
+                item[1].lesson_id,
+            ),
+        )
+        selected = [lesson for _, lesson in ranked[: self._spec.recall_limit]]
+        return self._format(selected)
+
+    def _reflection_prompt(self, context: LearnContext) -> str:
+        """Build one bounded deterministic human message for reflection."""
+        lessons = [
+            {
+                "id": lesson.lesson_id,
+                "source": lesson.source,
+                "text": lesson.text,
+            }
+            for lesson in self._lessons()
+        ]
+        frame_material = _bounded_json_material(
+            _frame_ref_json(self._spec.ref), _MAX_FRAME_MATERIAL_CHARS
+        )
+        lesson_material = _bounded_json_material(
+            cast(JsonValue, lessons), _MAX_LESSON_MATERIAL_CHARS
+        )
+        episode_material = _bounded_episode_material(context)
+        limit_material = _bounded_json_material(
+            {"max_items": self._spec.max_items}, _MAX_LIMIT_MATERIAL_CHARS
+        )
+        return (
+            f"Frame: {frame_material}\n"
+            f"Limits: {limit_material}\n"
+            f"Current lessons: {lesson_material}\n"
+            f"Episodes: {episode_material}"
+        )
+
+    def _validate_actions(
+        self,
+        context: LearnContext,
+        response: _ReflectionResponse,
+    ) -> list[MemoryMutation]:
+        """Validate closed actions against pinned state and build proposals."""
+        actions = response.actions
+        noops = [action for action in actions if action.action == "noop"]
+        if noops and len(actions) != 1:
+            raise _operation_error(
+                "learn",
+                "reflective.contract",
+                "a no-op action must be the only action",
+            )
+        if noops:
+            noop = noops[0]
+            if noop.lesson_id is not None or noop.text is not None:
+                raise _operation_error(
+                    "learn",
+                    "reflective.contract",
+                    "a no-op action cannot carry an id or text",
+                )
+            return []
+
+        current = {lesson.lesson_id: lesson for lesson in self._lessons()}
+        touched: set[str] = set()
+        proposals: list[MemoryMutation] = []
+        source = _source_json(context.run_id, context.frame_ref)
+        for index, action in enumerate(actions):
+            lesson_id = action.lesson_id
+            if type(lesson_id) is not str or not lesson_id:
+                raise _operation_error(
+                    "learn",
+                    "reflective.contract",
+                    "lesson ids must be non-empty strings",
+                )
+            if lesson_id in touched:
+                raise _operation_error(
+                    "learn",
+                    "reflective.contract",
+                    "actions cannot target one lesson more than once",
+                )
+            touched.add(lesson_id)
+            if action.action in ("add", "revise"):
+                if type(action.text) is not str or not action.text.strip():
+                    raise _operation_error(
+                        "learn",
+                        "reflective.contract",
+                        "add and revise actions require non-blank text",
+                    )
+            elif action.text is not None:
+                raise _operation_error(
+                    "learn",
+                    "reflective.contract",
+                    "remove actions cannot carry text",
+                )
+
+            if action.action == "add":
+                if lesson_id in current:
+                    raise _operation_error(
+                        "learn",
+                        "reflective.contract",
+                        "reflector add action targets an existing lesson",
+                    )
+                current[lesson_id] = _Lesson(lesson_id, cast(str, action.text), source)
+            elif action.action == "revise":
+                if lesson_id not in current:
+                    raise _operation_error(
+                        "learn",
+                        "reflective.contract",
+                        "reflector revise action targets a missing lesson",
+                    )
+                current[lesson_id] = _Lesson(lesson_id, cast(str, action.text), source)
+            else:
+                if lesson_id not in current:
+                    raise _operation_error(
+                        "learn",
+                        "reflective.contract",
+                        "reflector remove action targets a missing lesson",
+                    )
+                del current[lesson_id]
+
+            payload: JsonObject = {
+                "action": action.action,
+                "lesson_id": lesson_id,
+                "source": _copy_json_object(source, "source"),
+            }
+            if action.action in ("add", "revise"):
+                payload["text"] = cast(str, action.text)
+            identity = _mutation_digest_payload(context, index, payload)
+            mutation_id = "reflective:" + hashlib.sha256(
+                _canonical_json(identity).encode("utf-8")
+            ).hexdigest()
+            proposals.append(MemoryMutation(mutation_id, context.frame_ref, payload))
+
+        if len(current) > self._spec.max_items:
+            raise _operation_error(
+                "learn",
+                "reflective.max_items",
+                "proposed lessons exceed max_items",
+            )
+        return proposals
+
+    def learn(self, context: LearnContext) -> list[MemoryMutation]:
+        """Propose, but do not apply, one exact list of lesson mutations."""
+        if type(context) is not LearnContext:
+            raise _operation_error(
+                "learn",
+                "reflective.invalid_context",
+                "context must be a LearnContext",
+            )
+        if context.frame_ref != self._spec.ref:
+            raise _operation_error(
+                "learn",
+                "reflective.invalid_context",
+                "learning context belongs to a different frame",
+            )
+        with self._session._memory._lock:
+            self._session._ensure_open()
+            self._session._assert_current_generation("learn")
+            llm_config = _copy_json_object(self._session._llm_config, "llm_config")
+            prompt = self._reflection_prompt(context)
+
+        system = SystemMessage(
+            content=(
+                "You maintain atomic workflow lessons. Return only the requested "
+                "structured actions. Use add for a new id, revise/remove only for "
+                "an existing id, or one noop when nothing should change. Never use tools."
+            )
+        )
+        human = HumanMessage(content=prompt)
+        try:
+            model = model_from_config(llm_config)
+        except Exception as exc:
+            raise _operation_error(
+                "learn",
+                "reflective.model_construction",
+                "reflector model construction failed",
+                retryable=False,
+            ) from exc
+        try:
+            structured = model.with_structured_output(_ReflectionResponse)
+            if not callable(getattr(structured, "invoke", None)):
+                raise TypeError("structured model must provide invoke()")
+        except Exception as exc:
+            raise _operation_error(
+                "learn",
+                "reflective.structured_output",
+                "reflector does not support the required structured output",
+                retryable=False,
+            ) from exc
+        try:
+            raw_response = structured.invoke([system, human])
+        except (OutputParserException, ValidationError) as exc:
+            raise _operation_error(
+                "learn",
+                "reflective.contract",
+                "reflector returned invalid structured output",
+                retryable=False,
+            ) from exc
+        except Exception as exc:
+            raise _operation_error(
+                "learn",
+                "reflective.provider",
+                "reflector invocation failed",
+                retryable=True,
+            ) from exc
+        try:
+            response = _ReflectionResponse.model_validate(raw_response, strict=True)
+        except ValidationError as exc:
+            raise _operation_error(
+                "learn",
+                "reflective.contract",
+                "reflector returned invalid structured output",
+                retryable=False,
+            ) from exc
+        proposals = self._validate_actions(context, response)
+        with self._session._memory._lock:
+            self._session._ensure_open()
+            self._session._assert_current_generation("learn")
+        return proposals
+
+
+__all__ = ["ReflectiveMemory"]

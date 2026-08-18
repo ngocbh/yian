@@ -19,6 +19,7 @@ from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, F
 from agent_composer.compile.expand import build_grow
 from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.expr import binding_co_skips, expr_refs_of
+from agent_composer.memory import MemoryFrameSpec, MemorySnapshotEnvelope
 from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
@@ -47,6 +48,10 @@ def _engine(
     on_event=None,
     on_stream=None,
     stop_event=None,
+    memory_layout: tuple[MemoryFrameSpec, ...] | None = None,
+    memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None,
+    learn: bool = False,
+    memory_recall=None,
 ) -> FlowEngine:
     """Prepare one in-memory authority and return the final direct engine surface."""
     inputs = dict(run_inputs or {})
@@ -66,6 +71,9 @@ def _engine(
             },
             effective_llm_by_static_path={},
             num_workers=num_workers,
+            memory_layout=memory_layout,
+            memory_snapshots=memory_snapshots,
+            learn=learn,
         ),
     )
     commit_prepared(log, state, prepared)
@@ -77,6 +85,7 @@ def _engine(
         on_event=on_event,
         on_stream=on_stream,
         stop_event=stop_event,
+        memory_recall=memory_recall,
     )
 
 

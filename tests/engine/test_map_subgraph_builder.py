@@ -10,9 +10,18 @@ commits under the spawner; the end-wiring has `e0`/`e1`. The N=0 case pins that 
 the list-END and that the synthetic start wires straight to it (so it schedules and emits `[]`).
 """
 
+import pytest
+
 from agent_composer.compile.expand import map_callsite, map_subgraph, ns
 from agent_composer.compile.model import END_ID, START_ID, Flow
 from agent_composer.diagnostics import OriginRef
+from agent_composer.memory import (
+    MemoryFrameRef,
+    MemoryOccurrenceKind,
+    MemoryOccurrenceSegment,
+    MemoryOwner,
+    MemoryScope,
+)
 from agent_composer.nodes.contracts import Binding
 
 from tests.engine.test_expand import _child_flow
@@ -119,3 +128,83 @@ def test_map_subgraph_n0_wires_start_to_collector():
     assert sg.nodes[map_end_id].commit_as == "m0"
     assert sg.nodes[map_start_id].origin_context == context
     assert sg.nodes[map_end_id].origin_context == context
+
+
+def test_map_subgraph_appends_item_occurrence_and_scopes_generated_fan_nodes() -> None:
+    child = _child_flow()
+    outer_frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
+    for node_id, node in child.nodes.items():
+        node.memory_scope = MemoryScope(
+            "root",
+            ("root", "outer_loop", "map", node_id),
+            frame_stack=(outer_frame,),
+        )
+    outer = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.LOOP_ITERATION,
+        ("root", "outer_loop"),
+        4,
+    )
+    spawner_scope = MemoryScope(
+        "root",
+        ("root", "outer_loop", "map"),
+        frame_stack=(outer_frame,),
+        occurrence_path=(outer,),
+    )
+
+    fragment = map_subgraph(
+        child,
+        spawner_id="map",
+        records=[{"x": 1}, {"x": 2}],
+        memory_scope=spawner_scope,
+    )
+
+    for index in range(2):
+        expected = (
+            outer,
+            MemoryOccurrenceSegment(
+                MemoryOccurrenceKind.MAP_ITEM,
+                ("root", "outer_loop", "map"),
+                index,
+            ),
+        )
+        clone_prefix = map_callsite("map", index)
+        assert {
+            node.memory_scope.occurrence_path
+            for node_id, node in fragment.nodes.items()
+            if node_id.startswith(f"{clone_prefix}/")
+        } == {expected}
+
+    generated_scope = MemoryScope(
+        "root",
+        ("root", "outer_loop", "map"),
+        frame_stack=(outer_frame,),
+        occurrence_path=(outer,),
+        boundary=None,
+    )
+    assert fragment.nodes[ns("map", START_ID)].memory_scope == generated_scope
+    assert fragment.nodes[ns("map", END_ID)].memory_scope == generated_scope
+
+
+def test_map_subgraph_revalidates_supplied_memory_scope() -> None:
+    child = _child_flow()
+    occurrence = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.LOOP_ITERATION,
+        ("root", "outer"),
+        0,
+    )
+    scope = MemoryScope(
+        "root",
+        ("root", "outer", "map"),
+        occurrence_path=(occurrence,),
+    )
+    object.__setattr__(occurrence, "index", True)
+
+    with pytest.raises(TypeError, match="index must be an integer"):
+        map_subgraph(
+            child,
+            spawner_id="map",
+            records=[{"x": 1}],
+            memory_scope=scope,
+        )
+
+    assert all(node.memory_scope is None for node in child.nodes.values())

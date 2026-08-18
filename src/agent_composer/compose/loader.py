@@ -56,6 +56,7 @@ from agent_composer.compose.build.pipeline import _assemble, ComposedFlow
 from agent_composer.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from agent_composer.compose.nodes.resolver import ChildResolver
 from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
+from agent_composer.compose.helpers.memory import parse_memory_policy
 from agent_composer.compose.helpers.uses import parse_uses_ref
 from agent_composer.compose.helpers.source import _boundary_field_ranges
 from agent_composer.compose.parse.file import (
@@ -187,7 +188,9 @@ def _single_node_def_cursor(
 # `id`/`name`/`typedefs` themselves.
 # `asserts:` are allowed: the call/map child seam enforces a def's two-phase asserts
 # against the child pool (boundary before the child runs, post after it terminates).
-_DEF_ALLOWED = frozenset({"inputs", "nodes", "outputs", "asserts", "llm_config"})
+_DEF_ALLOWED = frozenset(
+    {"inputs", "nodes", "outputs", "asserts", "llm_config", "memory_policy"}
+)
 
 
 def _validate_system(
@@ -652,6 +655,15 @@ def _load_flow(
         uses_cursor=uses_cursor,
         diagnostics=diagnostics,
     )
+    root_memory_policy = (
+        parse_memory_policy(
+            f.memory_policy,
+            diagnostics=diagnostics,
+            source_range=root.range_of("memory_policy"),
+        )
+        if root.has("nodes") and root.has("memory_policy")
+        else None
+    )
     callable_scope.eager_load_defs()
 
     staged = _assemble(
@@ -678,6 +690,13 @@ def _load_flow(
         outputs_cursor=(
             root.child("output")
             if root.has("nodes") and root.has("output")
+            else None
+        ),
+        flow_id=f.id,
+        memory_policy=root_memory_policy,
+        memory_policy_cursor=(
+            root.child("memory_policy")
+            if root.has("nodes") and root.has("memory_policy")
             else None
         ),
     )
@@ -1040,6 +1059,19 @@ def _load_def(
         )
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
     try:
+        memory_policy = (
+            parse_memory_policy(
+                body["memory_policy"],
+                diagnostics=diagnostics,
+                source_range=(
+                    def_cursor.range_of("memory_policy")
+                    if def_cursor is not None
+                    else None
+                ),
+            )
+            if "memory_policy" in body
+            else None
+        )
         return _assemble(
             inputs_section=body.get("inputs") or {},
             inputs_cursor=(
@@ -1064,6 +1096,9 @@ def _load_def(
                 _source_child(def_cursor, "output")
                 or _source_child(def_cursor, "outputs")
             ),
+            flow_id=name,
+            memory_policy=memory_policy,
+            memory_policy_cursor=_source_child(def_cursor, "memory_policy"),
         )
     except LoadError as exc:
         raise diagnostics.prepend(
@@ -1128,6 +1163,7 @@ def _load_single_node_def(
                 else None
             ),
             outputs_range=output_range,
+            flow_id=name,
         )
     except LoadError as exc:
         raise diagnostics.prepend(

@@ -9,6 +9,7 @@ down into it.
 Modules:
   - `errors`      the document-owned diagnostic factory plus `LoadError`, whose one
                   canonical `Diagnostic` is ready for direct boundary rendering.
+  - `memory`      strict named-policy parsing plus opaque occurrence attachment.
   - `output_contracts` the template-aware output-binding contract resolver: exact or
                   partial direct-reference projection, source-free proven expression
                   results, closed-record assembly, and closed-path validation.

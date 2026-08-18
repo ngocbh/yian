@@ -5,7 +5,8 @@ cursor, copy its semantic value into a strict Pydantic model, and raise
 `LoadError` on any violation. Three surface rules shape it:
 
 - **Top-level sections only** (`id`/`name`/`description?`/`input`/`nodes`/
-  `output`/`asserts`/`typedefs`/`defs`/`uses`/`system`). `extra="forbid"` on the
+  `output`/`asserts`/`memory_policy`/`typedefs`/`defs`/`uses`/`system`).
+  `extra="forbid"` on the
   strict body makes a typo'd top-level key (e.g. `nodez:`) loud rather than silently
   dropped. (`uses:` = external callables; `system: paths:` = the resolution search
   path — NOT the strict `${system.X}` ambient namespace.)
@@ -147,6 +148,10 @@ class ComposeFile(BaseModel):
     # builder bakes the effective map onto `Node.env`. Flow-local: a called child flow does
     # NOT inherit this — it has its own flow `env:`.
     env: dict[str, Any] = Field(default_factory=dict)
+    # Full flows retain this raw occurrence for the shared located policy parser.
+    # Compact flows project it into their synthesized node because it intentionally
+    # stays outside ``_COMPACT_FLOW_KEYS`` below.
+    memory_policy: Any = None
 
     @model_validator(mode="before")
     @classmethod

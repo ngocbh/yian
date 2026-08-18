@@ -31,6 +31,8 @@ from agent_composer.diagnostics import (
     ResolverTable,
     SourceRange,
 )
+from agent_composer.memory import MemoryPolicySpec
+from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.case import Case, CaseNode
@@ -353,6 +355,85 @@ def test_case_predicate_origins_traverse_and_rewrite_by_arm_identity() -> None:
     assert rewritten_cases[2].origin == _origin("mapped/case/second")
     assert calls == ["case/shared", "case/second"]
     assert shared.origin == _origin("case/shared")
+
+
+def test_shared_memory_policy_origin_traverses_and_rewrites_once() -> None:
+    """A flow and AGENT may deliberately alias one immutable policy carrier."""
+    shared = MemoryPolicySpec(
+        "reflective",
+        {"max_items": 4},
+        _origin("policy/shared"),
+    )
+    agent = AgentNode("agent", memory_policy=shared)
+    flow = CompiledFlow.from_parts(
+        nodes={"agent": agent},
+        edges=[],
+        wiring={"agent": {}},
+        memory_policy=shared,
+    )
+
+    assert list(iter_flow_origins(flow)) == [_origin("policy/shared")]
+    calls: list[OriginRef] = []
+
+    class DerivedOrigin(OriginRef):
+        """Mapper output whose key must be canonicalized to the base carrier."""
+
+    rewritten = rewrite_flow_origins(
+        flow,
+        lambda origin: (
+            calls.append(origin) or DerivedOrigin(f"mapped/{origin.key}")
+        ),
+    )
+
+    assert calls == [_origin("policy/shared")]
+    assert rewritten.memory_policy is rewritten.nodes["agent"].memory_policy
+    assert type(rewritten.memory_policy.origin) is OriginRef
+    assert rewritten.memory_policy.origin == _origin("mapped/policy/shared")
+    assert flow.memory_policy is shared
+    assert agent.memory_policy is shared
+    assert shared.origin == _origin("policy/shared")
+
+
+def test_source_free_memory_policy_adds_no_origin() -> None:
+    shared = MemoryPolicySpec("reflective", {})
+    flow = CompiledFlow.from_parts(
+        nodes={"agent": AgentNode("agent", memory_policy=shared)},
+        edges=[],
+        memory_policy=shared,
+    )
+
+    assert list(iter_flow_origins(flow)) == []
+
+
+def test_memory_policy_origin_rebase_routes_the_single_shared_site() -> None:
+    shared = MemoryPolicySpec("reflective", {}, _origin("policy/shared"))
+    flow = CompiledFlow.from_parts(
+        nodes={"agent": AgentNode("agent", memory_policy=shared)},
+        edges=[],
+        memory_policy=shared,
+    )
+    frame = DiagnosticFrame(
+        label="memory.yaml",
+        text="memory_policy: reflective\n",
+        range=SourceRange(1, 16, 1, 26),
+    )
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return frame if origin == shared.origin else None
+
+    mapped: list[OriginRef] = []
+    rebased, table = rebase_flow_origins(
+        flow,
+        lambda origin: (
+            mapped.append(origin) or _origin(f"alias/{origin.key}")
+        ),
+        resolver=Resolver(),
+    )
+
+    assert mapped == [_origin("policy/shared")]
+    assert rebased.memory_policy is rebased.nodes["agent"].memory_policy
+    assert table.resolve(_origin("alias/policy/shared")) == frame
 
 
 @pytest.mark.parametrize(

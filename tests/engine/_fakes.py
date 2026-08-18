@@ -43,7 +43,7 @@ def drive(node, pool=None, flow=None, *, emit_stream=None, stop_event=None):
         pool if pool is not None else VariablePool(),
         emit_stream=emit_stream,
         stop_event=stop_event,
-    )
+    ).outcome
 
 
 class FuncNode(Node):

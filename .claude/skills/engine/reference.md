@@ -60,9 +60,10 @@ A streaming kind is a generator that yields `StreamChunk` and *returns* a
 evaluation boundary returns `EvaluationFailure(Failure)` for expected rejection;
 host control, stream callbacks, unexpected binder faults, and malformed setup
 escape. Result preparation constructs the same canonical value for expected
-output, route, and growth rejection. One strict schema-3 record boundary handles
-both paths, and the reducer carries the nested value through
-`NodeFailed`/`RunFailed` observers and `RunResult.failure`.
+output, route, and growth rejection. One strict schema-4 record boundary handles
+both paths, may retain optional source-neutral evaluation evidence, and carries
+the nested value through the reducer to `NodeFailed`/`RunFailed` observers and
+`RunResult.failure`.
 `Node.on_failure` is a dormant future seam, not currently driven by `eval_node`.
 
 The dependency-free `diagnostics` leaf defines the canonical semantic value for
@@ -249,13 +250,19 @@ WAIT are never timed by that watchdog.
 
 | Record | Transition |
 |--------|------------|
-| `RunStartedRecord` | complete initial pool, flow fingerprint, START override, resolved LLM map, and worker count |
+| `RunStartedRecord` | complete initial pool, flow fingerprint, START override, resolved LLM map, worker count, and optional memory configuration |
 | `RunResumedRecord` | ordered unfinished starts to retry plus the selected worker count |
 | `NodeStartedRecord` | move the exact ready head into the ordered in-flight set before evaluation/submission |
-| `NodeSucceededRecord` | commit one canonical typed value under an already-resolved target |
-| `NodeRoutedRecord` | select one named outgoing handle and retain the optional terminal failure first proved by its skip closure |
-| `NodeExpandedRecord` | rebuild and verify one canonical seed/digest, then splice its fragment |
-| `NodeFailedRecord` | make the run terminal-failed with its captured semantic `Failure` |
+| `NodeSucceededRecord` | commit one canonical typed value under an already-resolved target, with optional evaluation evidence |
+| `NodeRoutedRecord` | select one named outgoing handle and retain optional terminal failure and evaluation evidence |
+| `NodeExpandedRecord` | rebuild and verify one canonical seed/digest with optional evaluation evidence, then splice its fragment |
+| `NodeFailedRecord` | retain the semantic `Failure` and optional evaluation evidence that make the run terminal-failed |
+| `MemoryFrameLearningStartedRecord` | start learning for one frame from its canonical occurrence set |
+| `MemoryFrameLearnedRecord` | retain one frame's proposed mutation batch |
+| `MemoryFrameLearningFailedRecord` | retain one frame-local learning failure; typed policy messages are durable, while unexpected/invalid results are sanitized |
+| `MemoryCommitRequestedRecord` | request one policy's atomic idempotent mutation commit |
+| `MemoryCommitSucceededRecord` | confirm one policy commit completed successfully |
+| `MemoryCommitFailedRecord` | retain one policy commit failure under the same typed/unexpected boundary |
 
 `FlowEngine` borrows one initialized `RunState` plus a matching open `RunLog`.
 Workers only evaluate; the dispatcher prepares a total transition, appends its
@@ -264,12 +271,17 @@ explicitly non-durable. The engine never closes its log: package-root `run.py` o
 `MemoryRunLog`/`JsonlRunLog` creation, locking, recovery, tail repair, and closure.
 
 `run_flow(..., log=None)` uses process-local authority; a path selects a durable
-JSONL log. `resume_flow(flow, *, log=..., num_workers=None)` validates the authored
-flow fingerprint, silently folds the locked contiguous prefix through the same
-reducer, and either returns an already-terminal result unchanged or appends one
-`RunResumedRecord` before retrying unfinished starts in original dispatch order.
-`RunResult` exposes exactly `input`, `status`, `run_id`, `log`, `output`,
-`failure`, and this invocation's post-durable `events`.
+JSONL log. `memory={name: implementation}` opens one snapshot-isolated session
+per referenced authored policy; `learn=True` adds the record-authoritative
+post-terminal phase. `resume_flow(flow, *, log=..., num_workers=None,
+memory=None)` validates the authored flow fingerprint, silently folds the locked
+contiguous prefix through the same reducer. An unfinished primary appends one
+`RunResumedRecord` before retrying starts in original dispatch order; a terminal
+primary with retryable learning appends only learning records; and a fully settled
+run returns unchanged. An unfinished memory-enabled run also requires exact
+recorded snapshots. `RunResult` exposes exactly `input`,
+`status`, `run_id`, `log`, `output`, `failure`, this invocation's post-durable
+`events`, and the independent optional `learning` disposition.
 
 ## OCaml analogue map (design from this)
 
@@ -830,12 +842,13 @@ never runtime ids, graph topology, or a text heuristic.
   structural error path through the effective target contract's exact,
   nearest-ancestor, or default origin, then falls back to the executing node;
   other canonicalization errors use the contract default. Route and growth use
-  the executing node origin. Schema-3 output rejection retains its cause type
-  inside `Failure`; there is no adjacent runtime coordinate.
+  the executing node origin. Schema-4 output rejection retains its cause type
+  inside `Failure` and may retain source-neutral evaluation evidence beside it;
+  there is no adjacent runtime coordinate.
 - **Runtime boundary:** evaluator and dispatcher rejection construct one
-  canonical `Failure`; schema-3 `NodeFailedRecord` stores exactly that value.
-  Reducer state, `NodeFailed`, `RunFailed`, and `RunResult.failure` carry no
-  semantic aliases. The first route whose skip
+  canonical `Failure`; schema-4 `NodeFailedRecord` stores that value plus optional
+  source-neutral evaluation evidence. Reducer state, `NodeFailed`, `RunFailed`,
+  and `RunResult.failure` carry no semantic aliases. The first route whose skip
   closure reaches END latches `graph.terminal_unreachable` with that router and
   its `failure_trace()` on the causal `NodeRoutedRecord`; recovery structurally
   revalidates the route and restores the recorded value and trace even if the

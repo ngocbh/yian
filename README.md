@@ -292,18 +292,40 @@ from the compiled Compose graph. It is `None` only when that graph is source-fre
 otherwise it resolves local, nested, and external-file origins to diagnostic frames.
 Resolver metadata does not affect flow equality, fingerprints, or growth digests.
 
+Library hosts can enable named workflow memory without putting Python imports,
+credentials, or backend locations in YAML. Declare `memory_policy: reflective`
+on a flow or agent, create the implementation in Python, and inject it by name:
+
+```python
+from agent_composer.memory.reflective import ReflectiveMemory
+
+memory = ReflectiveMemory({"provider": "ollama", "model": "qwen3:30b"})
+result = run_flow(
+    loaded,
+    {"name": "Ada"},
+    memory={"reflective": memory},
+    learn=True,
+)
+```
+
+Supplying `memory` enables recall; `learn=True` adds durable post-terminal
+learning after either success or failure. Learning has a separate
+`result.learning` status and never replaces the primary result. The CLI leaves
+authored policies dormant for now. See the [Python API](docs/api.md) for recovery
+and snapshot semantics.
+
 Lower-level Python graph builders and tooling can import the source-neutral
 `Binding`, `Parameter`, `Assertion`, `ValueContract`, `ContractOrigins`, and
 `ValuePath` vocabulary from `agent_composer.nodes`. Origins are optional; these
 definitions are being adopted by engine consumers incrementally.
 
-Pass `log="run.jsonl"` to create an authoritative append-only schema-3 JSONL history for
+Pass `log="run.jsonl"` to create an authoritative append-only schema-4 JSONL history for
 the run. If the process is interrupted, load the same flow in a later process and
 recover the durable prefix with `resume_flow(loaded, log="run.jsonl")` from
 `agent_composer.run`. A fresh durable run never overwrites an existing path.
 Earlier schemas are not migrated. Run logs retain canonical inputs, node outputs
-(including human/tool/model data), resolved model configuration, and failure
-tracebacks. Treat them as sensitive:
+(including human/tool/model data), resolved model configuration, memory snapshots,
+recalled interaction evidence, mutation proposals, and failure tracebacks. Treat them as sensitive:
 choose an access-controlled path and do not commit or publish them.
 
 ## Develop & test

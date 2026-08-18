@@ -20,8 +20,14 @@ from typing import Any
 from agent_composer.compile.model import GrowthRejected
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import RunFailed, StreamChunk
+from agent_composer.memory import EvaluationEvidence
 from agent_composer.nodes.base import Grow, Output, Route, _HostStop
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
+from agent_composer.runtime.eval_node import (
+    EvaluatedOutcome,
+    EvaluationFailure,
+    MemoryRecall,
+    eval_node,
+)
 from agent_composer.runtime.log import RunLog
 from agent_composer.runtime.state import (
     GrowBuilder,
@@ -64,7 +70,8 @@ class FlowEngine:
 
     ``run`` yields only observers returned after a record has been appended and its
     reducer plan applied.  The optional event callback sees the same observers first;
-    stream chunks are callback-only and never durable or yielded.
+    stream chunks are callback-only and never durable or yielded. Optional memory recall is
+    one source-neutral callback; evidence capture follows only recorded ``RunState.learn``.
     """
 
     def __init__(
@@ -77,6 +84,7 @@ class FlowEngine:
         on_event: Callable[[Any], None] | None = None,
         on_stream: Callable[[StreamChunk], None] | None = None,
         stop_event: threading.Event | None = None,
+        memory_recall: MemoryRecall | None = None,
     ) -> None:
         """Borrow a prepared state/log pair and configure one bounded drive."""
         if type(state) is not RunState:
@@ -93,6 +101,8 @@ class FlowEngine:
             raise TypeError("on_event must be callable or None")
         if on_stream is not None and not callable(on_stream):
             raise TypeError("on_stream must be callable or None")
+        if memory_recall is not None and not callable(memory_recall):
+            raise TypeError("memory_recall must be callable or None")
         self.state = state
         self.log = log
         self.grow_builder = grow_builder
@@ -100,6 +110,7 @@ class FlowEngine:
         self.on_event = on_event
         self.on_stream = on_stream
         self.stop_event = stop_event if stop_event is not None else threading.Event()
+        self.memory_recall = memory_recall
 
     def run(self) -> Iterator[Any]:
         """Drive newly ready work and yield only post-durable observer notifications."""
@@ -250,16 +261,20 @@ class FlowEngine:
     def _commit_outcome(
         self,
         node_id: str,
-        outcome: Output | Route | Grow | EvaluationFailure,
+        evaluated: EvaluatedOutcome,
     ) -> tuple[Any, ...]:
         """Prepare node data, append its record, and apply the total reducer plan.
 
         Evaluator and dispatcher rejection paths both hand one canonical
-        ``Failure`` to the schema-3 reducer boundary.
+        ``Failure`` to the schema-4 reducer boundary.
         """
+        if type(evaluated) is not EvaluatedOutcome:
+            raise TypeError("FlowEngine outcome must be an EvaluatedOutcome")
+        outcome = evaluated.outcome
+        evidence = evaluated.evidence
         if isinstance(outcome, EvaluationFailure):
             failure = outcome.failure
-            prepared = self._prepare_failure(node_id, failure)
+            prepared = self._prepare_failure(node_id, failure, evidence=evidence)
             return commit_prepared(self.log, self.state, prepared)
 
         if not isinstance(outcome, (Output, Route, Grow)):
@@ -274,6 +289,7 @@ class FlowEngine:
                     node_id,
                     outcome.value,
                     commit_as=outcome.commit_as,
+                    evidence=evidence,
                 )
             except _NodeDataError as wrapped:
                 prepared = self._prepare_contract_failure(
@@ -282,6 +298,7 @@ class FlowEngine:
                     wrapped.original,
                     origin=wrapped.origin,
                     traceback_text=self._format_exception(wrapped.original),
+                    evidence=evidence,
                 )
         elif isinstance(outcome, Route):
             try:
@@ -289,6 +306,7 @@ class FlowEngine:
                     self.state,
                     node_id,
                     outcome.handle,
+                    evidence=evidence,
                 )
             except _NodeDataError as wrapped:
                 prepared = self._prepare_contract_failure(
@@ -297,6 +315,7 @@ class FlowEngine:
                     wrapped.original,
                     origin=wrapped.origin,
                     traceback_text=self._format_exception(wrapped.original),
+                    evidence=evidence,
                 )
         else:
             try:
@@ -305,6 +324,7 @@ class FlowEngine:
                     node_id,
                     outcome,
                     self.grow_builder,
+                    evidence=evidence,
                 )
             except GrowthRejected as wrapped:
                 prepared = self._prepare_contract_failure(
@@ -312,6 +332,7 @@ class FlowEngine:
                     "contract.growth",
                     wrapped.original,
                     traceback_text=self._format_exception(wrapped.original),
+                    evidence=evidence,
                 )
         return commit_prepared(self.log, self.state, prepared)
 
@@ -319,6 +340,8 @@ class FlowEngine:
         self,
         node_id: str,
         failure: Failure,
+        *,
+        evidence: EvaluationEvidence | None = None,
     ) -> PreparedTransition:
         """Prepare one canonical failure without flattening its semantic fields."""
         if failure.node_id != node_id:
@@ -326,7 +349,7 @@ class FlowEngine:
                 "raw evaluation failure node identity mismatch: "
                 f"expected {node_id!r}, found {failure.node_id!r}"
             )
-        return prepare_node_failed(self.state, failure)
+        return prepare_node_failed(self.state, failure, evidence=evidence)
 
     def _prepare_contract_failure(
         self,
@@ -336,6 +359,7 @@ class FlowEngine:
         *,
         origin: OriginRef | None = None,
         traceback_text: str | None = None,
+        evidence: EvaluationEvidence | None = None,
     ) -> PreparedTransition:
         """Construct and project one expected dispatcher contract rejection."""
         node = self.state.flow.nodes[node_id]
@@ -349,7 +373,7 @@ class FlowEngine:
                 traceback_text if traceback_text is not None else _tb.format_exc()
             ),
         )
-        return self._prepare_failure(node_id, failure)
+        return self._prepare_failure(node_id, failure, evidence=evidence)
 
     @staticmethod
     def _format_exception(exception: Exception) -> str:
@@ -367,7 +391,7 @@ class FlowEngine:
         node_id: str,
         *,
         emit_stream: Callable[[StreamChunk], None] | None,
-    ) -> Output | Route | Grow | EvaluationFailure:
+    ) -> EvaluatedOutcome:
         """Read and execute one already-started node without mutating run state."""
         node = self.state.flow.nodes[node_id]
         return eval_node(
@@ -377,13 +401,15 @@ class FlowEngine:
             wiring_override=self.state.wiring_overrides.get(node_id),
             stop_event=self.stop_event,
             emit_stream=emit_stream,
+            capture_evidence=self.state.learn,
+            memory_recall=self.memory_recall,
         )
 
     def _evaluate_worker(
         self,
         node_id: str,
         messages: queue.Queue,
-    ) -> Output | Route | Grow | EvaluationFailure:
+    ) -> EvaluatedOutcome:
         """Evaluate one claimed node and enqueue only its transient stream chunks."""
         return self._evaluate(
             node_id,

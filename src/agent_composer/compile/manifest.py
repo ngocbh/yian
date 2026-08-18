@@ -25,6 +25,13 @@ from agent_composer.compile.model import CompiledFlow, Edge, Flow, FlowOutput
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError, expr_refs, scan_template
 from agent_composer.expr.template import Literal, Span
+from agent_composer.memory.contracts import (
+    MemoryBoundary,
+    MemoryFrameRef,
+    MemoryOccurrenceSegment,
+    MemoryPolicySpec,
+    MemoryScope,
+)
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node, NodeKind
 from agent_composer.nodes.call import CallNode
@@ -71,6 +78,7 @@ _IGNORED_NODE_FIELDS = frozenset(
     {
         "origin",
         "origin_context",
+        "memory_scope",
         "wiring_labels",
     }
 )
@@ -89,6 +97,7 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
             "llm_inherit",
             "mode",
             "retries",
+            "memory_policy",
         }
     ),
     NodeKind.CODE: frozenset({"code"}),
@@ -178,6 +187,8 @@ _CONTRACT_ORIGINS_IGNORED_FIELDS = frozenset({"default", "entries"})
 _TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
 _CASE_CANONICAL_FIELDS = frozenset({"handle", "when"})
 _CASE_IGNORED_FIELDS = frozenset({"origin"})
+_MEMORY_POLICY_CANONICAL_FIELDS = frozenset({"name", "_config"})
+_MEMORY_POLICY_IGNORED_FIELDS = frozenset({"origin"})
 
 # Config secrets are intentionally absent from identity. Exact names and high-confidence
 # compound suffixes are credentials in every config spelling. Generic auth/token/signature
@@ -1521,6 +1532,176 @@ def _case_manifest(value: Any, ctx: _ManifestContext, path: str) -> dict[str, An
     }
 
 
+def _memory_policy_manifest(
+    value: MemoryPolicySpec,
+    ctx: _ManifestContext,
+    path: str,
+) -> dict[str, Any]:
+    """Project one authored named policy while excluding its origin."""
+    if type(value) is not MemoryPolicySpec:
+        raise TypeError(
+            f"{path}: expected exact MemoryPolicySpec, got {type(value).__name__}"
+        )
+    _check_fields(
+        value,
+        _MEMORY_POLICY_CANONICAL_FIELDS | _MEMORY_POLICY_IGNORED_FIELDS,
+        path,
+    )
+    if type(value.name) is not str or not value.name:
+        raise ValueError(f"{path}.name: expected a non-empty exact string")
+    if value.origin is not None:
+        if not isinstance(value.origin, OriginRef):
+            raise TypeError(f"{path}.origin: expected OriginRef or None")
+        OriginRef(value.origin.key)
+    return {
+        "config": _sorted_mapping(
+            value.config,
+            ctx,
+            f"{path}.config",
+            redact_credentials=True,
+        ),
+        "name": value.name,
+    }
+
+
+def _relative_memory_path(
+    value: tuple[str, ...],
+    root_flow_id: str,
+    path: str,
+) -> list[str]:
+    """Project one memory path relative to its semantic root identity."""
+    if type(value) is not tuple or not value or value[0] != root_flow_id:
+        raise ValueError(f"{path}: expected a path rooted at root_flow_id")
+    if any(type(part) is not str or not part for part in value):
+        raise ValueError(f"{path}: expected non-empty exact string components")
+    return list(value[1:])
+
+
+def _memory_frame_topology(
+    frame: MemoryFrameRef,
+    root_flow_id: str,
+    path: str,
+) -> dict[str, Any]:
+    """Project one frame identity without policy or authored-root identity."""
+    if type(frame) is not MemoryFrameRef:
+        raise TypeError(
+            f"{path}: expected exact MemoryFrameRef, got {type(frame).__name__}"
+        )
+    if frame.root_flow_id != root_flow_id:
+        raise ValueError(f"{path}.root_flow_id: expected the scope root_flow_id")
+    MemoryFrameRef(
+        root_flow_id=frame.root_flow_id,
+        static_path=frame.static_path,
+        owner=frame.owner,
+    )
+    return {
+        "owner": frame.owner.value,
+        "static_path": _relative_memory_path(
+            frame.static_path,
+            root_flow_id,
+            f"{path}.static_path",
+        ),
+    }
+
+
+def _memory_occurrence_topology(
+    segment: MemoryOccurrenceSegment,
+    root_flow_id: str,
+    path: str,
+) -> dict[str, Any]:
+    """Project one dynamic occurrence segment without authored-root identity."""
+    if type(segment) is not MemoryOccurrenceSegment:
+        raise TypeError(
+            f"{path}: expected exact MemoryOccurrenceSegment, "
+            f"got {type(segment).__name__}"
+        )
+    MemoryOccurrenceSegment(
+        kind=segment.kind,
+        static_path=segment.static_path,
+        index=segment.index,
+    )
+    return {
+        "index": segment.index,
+        "kind": segment.kind.value,
+        "static_path": _relative_memory_path(
+            segment.static_path,
+            root_flow_id,
+            f"{path}.static_path",
+        ),
+    }
+
+
+def _memory_boundary_topology(
+    boundary: MemoryBoundary,
+    root_flow_id: str,
+    path: str,
+) -> dict[str, Any]:
+    """Project one flow boundary without policy or authored-root identity."""
+    if type(boundary) is not MemoryBoundary:
+        raise TypeError(
+            f"{path}: expected exact MemoryBoundary, got {type(boundary).__name__}"
+        )
+    MemoryBoundary(kind=boundary.kind, frame_ref=boundary.frame_ref)
+    return {
+        "frame": _memory_frame_topology(
+            boundary.frame_ref,
+            root_flow_id,
+            f"{path}.frame_ref",
+        ),
+        "kind": boundary.kind.value,
+    }
+
+
+def _memory_scope_topology(value: MemoryScope, path: str) -> dict[str, Any]:
+    """Project only memory topology needed for deterministic growth identity."""
+    if type(value) is not MemoryScope:
+        raise TypeError(
+            f"{path}: expected exact MemoryScope, got {type(value).__name__}"
+        )
+    # Replay the frozen carrier's public invariants in case an object was forged
+    # or mutated through ``object.__setattr__``.
+    MemoryScope(
+        root_flow_id=value.root_flow_id,
+        static_path=value.static_path,
+        frame_stack=value.frame_stack,
+        occurrence_path=value.occurrence_path,
+        boundary=value.boundary,
+    )
+    root_flow_id = value.root_flow_id
+    return {
+        "boundary": (
+            None
+            if value.boundary is None
+            else _memory_boundary_topology(
+                value.boundary,
+                root_flow_id,
+                f"{path}.boundary",
+            )
+        ),
+        "frame_stack": [
+            _memory_frame_topology(
+                frame,
+                root_flow_id,
+                f"{path}.frame_stack[{index}]",
+            )
+            for index, frame in enumerate(value.frame_stack)
+        ],
+        "occurrence_path": [
+            _memory_occurrence_topology(
+                segment,
+                root_flow_id,
+                f"{path}.occurrence_path[{index}]",
+            )
+            for index, segment in enumerate(value.occurrence_path)
+        ],
+        "static_path": _relative_memory_path(
+            value.static_path,
+            root_flow_id,
+            f"{path}.static_path",
+        ),
+    }
+
+
 def _node_manifest(
     node: Node,
     ctx: _ManifestContext,
@@ -1578,6 +1759,15 @@ def _node_manifest(
         )
         manifest["n"] = node._n if node._mode == "list" else None
     elif node.kind is NodeKind.AGENT:
+        memory_policy = (
+            None
+            if node.memory_policy is None
+            else _memory_policy_manifest(
+                node.memory_policy,
+                ctx,
+                f"{path}.memory_policy",
+            )
+        )
         manifest.update(
             {
                 "llm_inherit": node.llm_inherit,
@@ -1593,6 +1783,8 @@ def _node_manifest(
                 ),
             }
         )
+        if not topology_only and memory_policy is not None:
+            manifest["memory_policy"] = memory_policy
     elif node.kind is NodeKind.CODE:
         manifest["code"] = node.code
     elif node.kind is NodeKind.MODEL:
@@ -1661,6 +1853,16 @@ def _node_manifest(
     else:  # pragma: no cover - _check_node_fields exhausts the closed enum first
         raise ValueError(f"{path}: unsupported node kind {node.kind.value!r}")
 
+    # Derived memory state is never authored program identity. Dynamic fragment
+    # identity includes only its root-relative frame/occurrence topology so replay
+    # rejects a structurally different memory occurrence without persisting policy
+    # names, configs, source origins, or root flow ids.
+    if topology_only and node.memory_scope is not None:
+        manifest["memory_scope"] = _memory_scope_topology(
+            node.memory_scope,
+            f"{path}.memory_scope",
+        )
+
     return {key: manifest[key] for key in sorted(manifest)}
 
 
@@ -1717,6 +1919,8 @@ def _flow_manifest(
                     "end_id",
                     "outputs",
                     "flow_llm_config",
+                    "flow_id",
+                    "memory_policy",
                     "_incoming",
                     "_outgoing",
                 }
@@ -1780,6 +1984,18 @@ def _flow_manifest(
             "wiring": wiring,
         }
         if type(flow) is CompiledFlow and not topology_only:
+            if flow.flow_id is not None:
+                if type(flow.flow_id) is not str or not flow.flow_id:
+                    raise ValueError(
+                        f"{path}.flow_id: expected a non-empty exact string or None"
+                    )
+                manifest["flow_id"] = flow.flow_id
+            if flow.memory_policy is not None:
+                manifest["memory_policy"] = _memory_policy_manifest(
+                    flow.memory_policy,
+                    ctx,
+                    f"{path}.memory_policy",
+                )
             manifest["flow_llm_config"] = _sorted_mapping(
                 flow.flow_llm_config,
                 ctx,
@@ -1790,6 +2006,19 @@ def _flow_manifest(
                 _output_manifest(output, ctx, f"{path}.outputs[{index}]")
                 for index, output in enumerate(flow.outputs)
             ]
+        elif type(flow) is CompiledFlow:
+            if flow.flow_id is not None and (
+                type(flow.flow_id) is not str or not flow.flow_id
+            ):
+                raise ValueError(
+                    f"{path}.flow_id: expected a non-empty exact string or None"
+                )
+            if flow.memory_policy is not None:
+                _memory_policy_manifest(
+                    flow.memory_policy,
+                    ctx,
+                    f"{path}.memory_policy",
+                )
         return {key: manifest[key] for key in sorted(manifest)}
     finally:
         ctx.flows.remove(object_id)

@@ -13,6 +13,10 @@ import copy
 from typing import Callable, Iterator, TypeVar, cast
 
 from agent_composer.diagnostics import OriginRef, OriginResolver, ResolverTable
+from agent_composer.memory.contracts import (
+    _iter_memory_policy_origin,
+    _rewrite_memory_policy_origin,
+)
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.contracts import (
     _iter_origin_carrier,
@@ -69,6 +73,9 @@ def _iter_flow_origins(
     if flow_identity in seen_flows:
         return
     seen_flows.add(flow_identity)
+
+    if isinstance(flow, CompiledFlow) and flow.memory_policy is not None:
+        yield from _iter_memory_policy_origin(flow.memory_policy, seen_carriers)
 
     for node_wiring in flow.wiring.values():
         for binding in node_wiring.values():
@@ -260,6 +267,9 @@ def _rewrite_flow_origin_graph(
     if flow_identity in seen_flows:
         return
     seen_flows.add(flow_identity)
+
+    if isinstance(flow, CompiledFlow) and flow.memory_policy is not None:
+        _rewrite_memory_policy_origin(flow.memory_policy, mapper, seen_carriers)
 
     for node_wiring in flow.wiring.values():
         for binding in node_wiring.values():

@@ -1,10 +1,17 @@
 """Seed-first growth: nodes describe expansion; compile constructs topology."""
 
+import copy
+
 import pytest
 
 import agent_composer.compile.expand as expand_module
 from agent_composer.compile.model import Flow, GrowthRejected
 from agent_composer.diagnostics import OriginRef
+from agent_composer.memory import (
+    MemoryOccurrenceKind,
+    MemoryOccurrenceSegment,
+    MemoryScope,
+)
 from agent_composer.nodes.base import Grow, Node, NodeKind
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.contracts import Assertion, Parameter
@@ -61,6 +68,7 @@ def _assert_same_fragment(actual: Flow, expected: Flow) -> None:
         assert left.commit_as == right.commit_as
         assert left.origin_id == right.origin_id
         assert left.origin_context == right.origin_context
+        assert left.memory_scope == right.memory_scope
         assert left.post_asserts == right.post_asserts
 
 
@@ -129,6 +137,67 @@ def test_source_free_spawners_do_not_invent_generated_context():
     for spawner, grow in _growth_producers():
         fragment = expand_module.build_grow(spawner, grow.seed)
         assert all(node.origin_context == () for node in fragment.nodes.values())
+
+
+def test_compile_builder_propagates_each_spawner_memory_occurrence() -> None:
+    (call, call_grow), (map_node, map_grow), (loop, loop_grow) = _growth_producers()
+    spawners = (call, map_node, loop)
+    outer = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.MAP_ITEM,
+        ("root", "outer"),
+        3,
+    )
+    for spawner in spawners:
+        spawner.child = copy.deepcopy(spawner.child)
+        spawner.memory_scope = MemoryScope(
+            "root",
+            ("root", "outer", spawner.id),
+            occurrence_path=(outer,),
+        )
+        for child_id, child_node in spawner.child.nodes.items():
+            child_node.memory_scope = MemoryScope(
+                "root",
+                ("root", "outer", spawner.id, child_id),
+            )
+
+    call_fragment = expand_module.build_grow(call, call_grow.seed)
+    assert {
+        node.memory_scope.occurrence_path for node in call_fragment.nodes.values()
+    } == {(outer,)}
+
+    map_fragment = expand_module.build_grow(map_node, map_grow.seed)
+    map_items = {
+        node.memory_scope.occurrence_path[-1]
+        for node_id, node in map_fragment.nodes.items()
+        if "#" in node_id
+    }
+    assert map_items == {
+        MemoryOccurrenceSegment(
+            MemoryOccurrenceKind.MAP_ITEM,
+            ("root", "outer", "map"),
+            0,
+        ),
+        MemoryOccurrenceSegment(
+            MemoryOccurrenceKind.MAP_ITEM,
+            ("root", "outer", "map"),
+            1,
+        ),
+    }
+
+    loop_fragment = expand_module.build_grow(loop, loop_grow.seed)
+    next_driver = loop_fragment.nodes["loop~1"]
+    assert next_driver.memory_scope.occurrence_path == (outer,)
+    assert {
+        node.memory_scope.occurrence_path[-1]
+        for node_id, node in loop_fragment.nodes.items()
+        if node_id != next_driver.id
+    } == {
+        MemoryOccurrenceSegment(
+            MemoryOccurrenceKind.LOOP_ITERATION,
+            ("root", "outer", "loop"),
+            0,
+        )
+    }
 
 
 def test_nested_map_then_call_extends_context_only_when_inner_expands():

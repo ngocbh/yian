@@ -211,6 +211,52 @@ Keys in use today:
 |-----|-----------|---------|
 | `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it gives up with an `AgentLoopError`. Default `-1` (**no cap** — run until a final answer). Set a positive int to bound it; `0` and other negatives are rejected. |
 
+## Workflow memory — `memory_policy:`
+
+`memory_policy:` declares a named behavior policy on a full flow (the ordinary
+`nodes:` form) or an `agent`. The declaration contains public behavior only; the
+Python host supplies the matching implementation at run time.
+
+```yaml
+id: research
+name: research
+memory_policy:
+  name: reflective
+  config:
+    max_items: 100
+    recall_limit: 12
+input:
+  topic: str
+nodes:
+  investigate:
+    kind: agent
+    memory_policy: reflective
+    input: {topic: "${input.topic}"}
+    output: str
+    prompt: Investigate ${topic}.
+output: ${investigate.output}
+```
+
+The short form is `memory_policy: reflective`. The mapping form accepts exactly
+`name:` and an optional literal `config:` mapping. Do not put credentials,
+tenant IDs, Python imports, backend paths, or persistence locations in YAML;
+those belong to the host-created memory object.
+
+A flow policy creates one flow-owned frame inherited by every agent executed in
+that flow. An agent policy creates a second, local frame for that agent. Recall
+stacks those sections from the outer flow inward, while each frame learns and
+writes only its own state. CALL enters the called flow's frames. MAP items and
+LOOP iterations do not create frames of their own; repeated executions contribute
+occurrences to the same statically authored flow/agent frame. `memory_policy:` is
+invalid on other node kinds and on anonymous inline CALL/MAP/LOOP bodies; use a
+named `defs:` flow when the child itself needs a flow frame.
+
+Authored policies are dormant unless a Python host passes a `memory={...}`
+registry to `run_flow`. Supplying the registry enables recall. Passing
+`learn=True` additionally runs durable post-terminal learning after either
+primary success or primary failure. The `ac run` CLI does not inject memory
+implementations or expose learning flags yet.
+
 ## Node kinds
 
 Every node has a `kind:`. The set is closed — you compose flows from these, you

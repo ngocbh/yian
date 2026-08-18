@@ -65,13 +65,13 @@ def test_stop_cap_is_exact_event_and_only_reaches_opted_in_node():
         None,
         VariablePool(),
         stop_event=stop_event,
-    ) == Output("done")
+    ).outcome == Output("done")
     assert eval_node(
         ordinary,
         None,
         VariablePool(),
         stop_event=stop_event,
-    ) == Output("done")
+    ).outcome == Output("done")
 
     assert opted_in.caps == {"stop_event": stop_event}
     assert opted_in.caps["stop_event"] is stop_event
@@ -81,7 +81,7 @@ def test_stop_cap_is_exact_event_and_only_reaches_opted_in_node():
 def test_direct_opted_in_eval_gets_private_unset_event_when_host_omits_one():
     node = _CapNode("aware", opted_in=True)
 
-    assert eval_node(node, None, VariablePool()) == Output("done")
+    assert eval_node(node, None, VariablePool()).outcome == Output("done")
 
     assert set(node.caps) == {"stop_event"}
     assert isinstance(node.caps["stop_event"], threading.Event)

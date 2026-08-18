@@ -96,6 +96,8 @@ run_flow(
     on_event: Callable[[Any], None] | None = None,
     on_stream: Callable[[StreamChunk], None] | None = None,
     llm_config: dict[str, Any] | None = None,
+    memory: dict[str, Memory] | None = None,
+    learn: bool = False,
 ) -> RunResult
 ```
 
@@ -114,6 +116,13 @@ terminal. Stored defaults are not coerced.
   durable records nor members of `RunResult.events`.
 - `llm_config` — the outer authored layer of the per-agent configuration cascade.
   The resolved map and process defaults are captured at initialization.
+- `memory` — host-created implementations keyed by authored `memory_policy`
+  name. `None` leaves all policies dormant. A mapping opens one snapshot-isolated
+  session per referenced policy, enables agent recall, and records the exact
+  public snapshots needed by recovery.
+- `learn` — when true, run durable learning after the graph reaches either
+  success or failure. It requires `memory`; learning failures are reported
+  separately and never replace the primary result.
 
 A node or flow-assert failure returns `RunResult(status="failed")` with one
 immutable `result.failure`; a successful flow returns `status="succeeded"` with
@@ -124,6 +133,59 @@ Canonical presentation resolves `failure.trace` through `ComposedFlow.diagnose()
 There are no `error`, `error_type`, or standalone `traceback` aliases.
 Host-control, callback, log I/O, and internal reducer errors propagate after the
 engine has drained active workers and released the boundary-owned log.
+
+## Injecting workflow memory
+
+YAML names a policy without importing its implementation:
+
+```yaml
+id: remembered-answer
+name: remembered_answer
+memory_policy: reflective
+input:
+  question: str
+nodes:
+  answer:
+    kind: agent
+    input: {question: "${input.question}"}
+    output: str
+    prompt: Answer ${question}.
+output: ${answer.output}
+```
+
+The host owns the backend, model configuration, credentials, tenant identity,
+and lifetime:
+
+```python
+from agent_composer.memory.reflective import ReflectiveMemory
+
+reflective = ReflectiveMemory(
+    {"provider": "ollama", "model": "qwen3:30b-a3b-instruct-2507-q4_K_M"}
+)
+result = run_flow(
+    loaded,
+    {"question": "What did we learn?"},
+    memory={"reflective": reflective},
+    learn=True,
+)
+```
+
+Passing the same memory object to later fresh runs makes committed lessons
+available to recall. `reflective.reset()` explicitly starts a fresh generation.
+`ReflectiveMemory` is process-local; persistence and other policy families are
+separate future backends.
+
+Application-specific implementations use the source-neutral `Memory`,
+`MemorySession`, and `MemoryFrame` protocols exported by
+`agent_composer.memory`. The host implements session snapshots, frame recall and
+learning, and idempotent policy commits behind those interfaces.
+
+`RunResult.learning` is `None` when `learn=False`. Otherwise it is independent
+of `RunResult.status` and has status `succeeded`, `failed`, or `incomplete`.
+Failures identify the policy and the exact frame for `learn`, or the policy-wide
+`commit`; `incomplete` means a retryable operation remains for `resume_flow`.
+Every flow/agent frame learns only from its own accepted occurrences, while flow
+frames are recalled by descendant agents before an optional agent-local frame.
 
 ## Diagnosing a failed run
 
@@ -153,15 +215,19 @@ library callers use the same method when they need presentation-ready frames.
 
 ## Authoritative run logs
 
-Every execution is reduced from one ordered schema-3 `RunLog`, including
+Every execution is reduced from one ordered schema-4 `RunLog`, including
 process-local runs. The closed durable record vocabulary is `RunStartedRecord`,
 `RunResumedRecord`, `NodeStartedRecord`, `NodeSucceededRecord`,
-`NodeRoutedRecord`, `NodeExpandedRecord`, and `NodeFailedRecord`. Terminal
-success or failure is derived from those node transitions. `NodeFailedRecord`
-stores the nested `Failure` directly. A causal `NodeRoutedRecord` stores the
-optional derived terminal-unreachable `Failure` that replay revalidates before
-restoring; no separate terminal record exists. Earlier schemas are deliberately
-rejected rather than migrated.
+`NodeRoutedRecord`, `NodeExpandedRecord`, `NodeFailedRecord`,
+`MemoryFrameLearningStartedRecord`, `MemoryFrameLearnedRecord`,
+`MemoryFrameLearningFailedRecord`, `MemoryCommitRequestedRecord`,
+`MemoryCommitSucceededRecord`, and `MemoryCommitFailedRecord`. The four node
+outcome records may retain optional source-neutral evaluation evidence. Terminal
+success or failure is derived from node transitions. `NodeFailedRecord` stores
+the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
+stores the optional derived terminal-unreachable `Failure` that replay
+revalidates before restoring; no separate terminal record exists. Earlier
+schemas are deliberately rejected rather than migrated.
 
 For each transition, the dispatcher follows one authority order:
 
@@ -176,7 +242,8 @@ the same ordering without a durable path.
 
 !!! warning "Run logs may contain sensitive data"
     Canonical records retain caller inputs, node outputs (including human, tool,
-    and model data), resolved model configuration, and failure tracebacks. The
+    and model data), resolved model configuration, memory snapshots and learning
+    proposals, and failure tracebacks. The
     runtime does not redact or encrypt them. Put durable logs on an
     access-controlled path; do not commit or publish them.
 
@@ -215,6 +282,7 @@ resume_flow(
     num_workers: int | None = None,
     on_event: Callable[[Any], None] | None = None,
     on_stream: Callable[[StreamChunk], None] | None = None,
+    memory: dict[str, Memory] | None = None,
 ) -> RunResult
 ```
 
@@ -224,16 +292,24 @@ supplied flow has the recorded fingerprint. It reconstructs the typed pool,
 dynamic expansions, original input, run identity, diagnostics, and snapshotted LLM
 configuration without reading current process defaults.
 
-If the prefix is unfinished, recovery appends one `RunResumedRecord` and retries
-the exact ordered set of nodes that have a durable start but no durable outcome,
-then continues the ready frontier. `num_workers=None` preserves the recorded worker
-count; an integer selects and records the new segment's count. Fresh inputs,
-`run_id`, and LLM configuration cannot be supplied during recovery.
+If the original run enabled memory and either primary execution or learning is
+unfinished, recovery requires implementations under the same names. Each session
+must reproduce the exact snapshot stored by `RunStarted`; this prevents a resumed
+run from reading a different memory generation. A fully settled terminal run is
+replayed silently and does not open or validate a supplied memory mapping.
 
-If the prefix is already terminal, `resume_flow` is read-only and silent: it
-returns the reconstructed result without appending a record or replaying historical
-events. In either case, `RunResult.events` contains only observers published in
-the current call.
+If primary execution is unfinished, recovery appends one `RunResumedRecord`,
+retries the exact ordered set of nodes that have a durable start but no durable
+outcome, and continues the ready frontier. `num_workers=None` preserves the
+recorded worker count; an integer selects and records the new segment's count.
+Fresh inputs, `run_id`, and LLM configuration cannot be supplied during recovery.
+
+If the primary result is terminal but learning has a retryable failure,
+`resume_flow` appends only the next learning intent/result records; it does not
+append `RunResumedRecord` or execute graph nodes. Recovery is read-only and
+silent only when both the primary result and learning are settled. In every
+case, `RunResult.events` contains only primary observers published in the current
+call; learning records do not emit observers.
 
 !!! important "Recovery may retry an interrupted node"
     A durable `NodeStarted` with no durable outcome is intentionally run again.

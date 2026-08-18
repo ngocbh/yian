@@ -147,6 +147,79 @@ def test_identity_values_reject_ambiguous_paths_and_indices(
         factory()
 
 
+class _ForgedFrameRef(MemoryFrameRef):
+    """A frame-reference subclass that bypasses base validation."""
+
+    def __post_init__(self) -> None:
+        """Deliberately skip validation for nested-carrier hardening tests."""
+
+
+class _ForgedOccurrenceSegment(MemoryOccurrenceSegment):
+    """An occurrence-segment subclass that bypasses base validation."""
+
+    def __post_init__(self) -> None:
+        """Deliberately skip validation for nested-carrier hardening tests."""
+
+
+class _ForgedBoundary(MemoryBoundary):
+    """A boundary subclass that bypasses base validation."""
+
+    def __post_init__(self) -> None:
+        """Deliberately skip validation for nested-carrier hardening tests."""
+
+
+class _ForgedOccurrenceRef(MemoryOccurrenceRef):
+    """An occurrence-reference subclass that bypasses base validation."""
+
+    def __post_init__(self) -> None:
+        """Deliberately skip validation for nested-carrier hardening tests."""
+
+
+class _ForgedEpisode(MemoryEpisode):
+    """An episode subclass whose fields may be forged without base validation."""
+
+
+def test_nested_memory_carriers_reject_forged_subclass_values() -> None:
+    """Nested memory products accept only exact, already-validated value types."""
+    forged_frame = _ForgedFrameRef("root", (), MemoryOwner.AGENT)
+    forged_segment = _ForgedOccurrenceSegment(
+        MemoryOccurrenceKind.MAP_ITEM,
+        ("root", "mapped"),
+        -1,
+    )
+    forged_boundary = _ForgedBoundary(MemoryBoundaryKind.START, _agent_ref())
+    forged_occurrence = _ForgedOccurrenceRef(_agent_ref(), ())
+    forged_episode = object.__new__(_ForgedEpisode)
+    object.__setattr__(forged_episode, "run_id", "")
+
+    with pytest.raises(TypeError, match="frame_ref"):
+        MemoryOccurrenceRef(forged_frame)
+    with pytest.raises(TypeError, match="occurrence_path"):
+        MemoryOccurrenceRef(_agent_ref(), (forged_segment,))
+    with pytest.raises(TypeError, match="frame_ref"):
+        MemoryBoundary(MemoryBoundaryKind.START, forged_frame)
+    with pytest.raises(TypeError, match="frame_stack"):
+        MemoryScope("root", ("root",), frame_stack=(forged_frame,))
+    with pytest.raises(TypeError, match="boundary"):
+        MemoryScope("root", ("root",), boundary=forged_boundary)
+    with pytest.raises(TypeError, match="ref"):
+        MemoryFrameSpec(forged_frame, "reflective", {})
+    with pytest.raises(TypeError, match="occurrence"):
+        MemoryEpisode(
+            "run",
+            forged_occurrence,
+            ("root", "agent"),
+            MemoryEpisodeStatus.SUCCEEDED,
+            {},
+        )
+    with pytest.raises(TypeError, match="frame_ref"):
+        LearnContext("run", forged_frame, ())
+    with pytest.raises(TypeError, match="episodes"):
+        LearnContext("run", _agent_ref(), (forged_episode,))
+    with pytest.raises(TypeError, match="frame_ref"):
+        MemoryMutation("mutation", forged_frame, {})
+
+
 def test_policy_specs_preserve_origin_and_isolate_canonical_json() -> None:
     """Caller mutation cannot change a frozen policy specification."""
     origin = OriginRef("policy")
@@ -334,6 +407,44 @@ def test_episode_status_enforces_output_or_failure_shape() -> None:
             output=None,
             failure={"code": "unexpected"},
         )
+
+
+def test_learn_context_requires_frame_local_episode_identity() -> None:
+    """A learning batch contains only episodes assigned to its run and frame."""
+    outer_flow_episode = MemoryEpisode(
+        run_id="run",
+        occurrence=MemoryOccurrenceRef(_flow_ref()),
+        owner_static_path=("root", "child", "agent"),
+        status=MemoryEpisodeStatus.SUCCEEDED,
+        inputs={},
+        output="answer",
+    )
+    context = LearnContext("run", _flow_ref(), (outer_flow_episode,))
+
+    assert context.episodes == (outer_flow_episode,)
+    assert context.episodes[0].owner_static_path == ("root", "child", "agent")
+
+    wrong_run = MemoryEpisode(
+        run_id="other-run",
+        occurrence=MemoryOccurrenceRef(_flow_ref()),
+        owner_static_path=("root", "child", "agent"),
+        status=MemoryEpisodeStatus.SUCCEEDED,
+        inputs={},
+        output="answer",
+    )
+    with pytest.raises(ValueError, match="run_id"):
+        LearnContext("run", _flow_ref(), (wrong_run,))
+
+    wrong_frame = MemoryEpisode(
+        run_id="run",
+        occurrence=MemoryOccurrenceRef(_agent_ref()),
+        owner_static_path=("root", "child", "agent"),
+        status=MemoryEpisodeStatus.SUCCEEDED,
+        inputs={},
+        output="answer",
+    )
+    with pytest.raises(ValueError, match="frame_ref"):
+        LearnContext("run", _flow_ref(), (wrong_frame,))
 
 
 class _FakeFrame:

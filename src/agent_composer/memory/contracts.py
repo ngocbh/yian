@@ -237,7 +237,7 @@ def _require_occurrence_path(value: object) -> tuple[MemoryOccurrenceSegment, ..
     if type(value) is not tuple:
         raise TypeError("occurrence_path must be a tuple")
     for segment in value:
-        if not isinstance(segment, MemoryOccurrenceSegment):
+        if type(segment) is not MemoryOccurrenceSegment:
             raise TypeError(
                 "occurrence_path items must be MemoryOccurrenceSegment values"
             )
@@ -253,7 +253,7 @@ class MemoryOccurrenceRef:
 
     def __post_init__(self) -> None:
         """Validate the frame identity and immutable occurrence path."""
-        if not isinstance(self.frame_ref, MemoryFrameRef):
+        if type(self.frame_ref) is not MemoryFrameRef:
             raise TypeError("frame_ref must be a MemoryFrameRef")
         _require_occurrence_path(self.occurrence_path)
 
@@ -269,7 +269,7 @@ class MemoryBoundary:
         """Require a closed boundary kind and a flow-owned frame."""
         if type(self.kind) is not MemoryBoundaryKind:
             raise TypeError("kind must be a MemoryBoundaryKind")
-        if not isinstance(self.frame_ref, MemoryFrameRef):
+        if type(self.frame_ref) is not MemoryFrameRef:
             raise TypeError("frame_ref must be a MemoryFrameRef")
         if self.frame_ref.owner is not MemoryOwner.FLOW:
             raise ValueError("a memory boundary must belong to a flow frame")
@@ -292,13 +292,13 @@ class MemoryScope:
         if type(self.frame_stack) is not tuple:
             raise TypeError("frame_stack must be a tuple")
         for frame in self.frame_stack:
-            if not isinstance(frame, MemoryFrameRef):
+            if type(frame) is not MemoryFrameRef:
                 raise TypeError("frame_stack items must be MemoryFrameRef values")
             if frame.root_flow_id != self.root_flow_id:
                 raise ValueError("frame_stack root_flow_id must match the scope")
         _require_occurrence_path(self.occurrence_path)
         if self.boundary is not None:
-            if not isinstance(self.boundary, MemoryBoundary):
+            if type(self.boundary) is not MemoryBoundary:
                 raise TypeError("boundary must be a MemoryBoundary or None")
             if self.boundary.frame_ref.root_flow_id != self.root_flow_id:
                 raise ValueError("boundary root_flow_id must match the scope")
@@ -344,7 +344,7 @@ class MemoryFrameSpec:
         config: JsonObject,
     ) -> None:
         """Validate and snapshot one effective frame specification."""
-        if not isinstance(ref, MemoryFrameRef):
+        if type(ref) is not MemoryFrameRef:
             raise TypeError("ref must be a MemoryFrameRef")
         object.__setattr__(self, "ref", ref)
         object.__setattr__(
@@ -426,7 +426,7 @@ class MemoryEpisode:
     ) -> None:
         """Validate one accepted success or failure episode and snapshot its JSON."""
         object.__setattr__(self, "run_id", _require_string(run_id, "run_id"))
-        if not isinstance(occurrence, MemoryOccurrenceRef):
+        if type(occurrence) is not MemoryOccurrenceRef:
             raise TypeError("occurrence must be a MemoryOccurrenceRef")
         object.__setattr__(self, "occurrence", occurrence)
         object.__setattr__(
@@ -502,14 +502,20 @@ class LearnContext:
     ) -> None:
         """Validate and snapshot one frame-local learning context."""
         object.__setattr__(self, "run_id", _require_string(run_id, "run_id"))
-        if not isinstance(frame_ref, MemoryFrameRef):
+        if type(frame_ref) is not MemoryFrameRef:
             raise TypeError("frame_ref must be a MemoryFrameRef")
         object.__setattr__(self, "frame_ref", frame_ref)
         if type(episodes) is not tuple:
             raise TypeError("episodes must be a tuple")
         for episode in episodes:
-            if not isinstance(episode, MemoryEpisode):
+            if type(episode) is not MemoryEpisode:
                 raise TypeError("episodes items must be MemoryEpisode values")
+            if episode.run_id != self.run_id:
+                raise ValueError("episode run_id must match the learning context")
+            if episode.occurrence.frame_ref != frame_ref:
+                raise ValueError(
+                    "episode occurrence frame_ref must match the learning context"
+                )
         object.__setattr__(self, "episodes", episodes)
         if type(feedback) is not tuple:
             raise TypeError("feedback must be a tuple")
@@ -548,7 +554,7 @@ class MemoryMutation:
             "mutation_id",
             _require_string(mutation_id, "mutation_id"),
         )
-        if not isinstance(frame_ref, MemoryFrameRef):
+        if type(frame_ref) is not MemoryFrameRef:
             raise TypeError("frame_ref must be a MemoryFrameRef")
         object.__setattr__(self, "frame_ref", frame_ref)
         object.__setattr__(self, "_payload", _freeze_json(payload, name="payload"))

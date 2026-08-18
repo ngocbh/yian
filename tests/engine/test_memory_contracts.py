@@ -54,7 +54,7 @@ def test_identity_values_are_frozen_structured_products() -> None:
     frame = _agent_ref()
     segment = MemoryOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "mapped"),
+        ("root", "child"),
         2,
     )
     occurrence = MemoryOccurrenceRef(frame, (segment,))
@@ -64,7 +64,6 @@ def test_identity_values_are_frozen_structured_products() -> None:
         static_path=("root", "child", "agent"),
         frame_stack=(_flow_ref(), frame),
         occurrence_path=(segment,),
-        boundary=boundary,
     )
 
     assert frame == MemoryFrameRef(
@@ -73,7 +72,8 @@ def test_identity_values_are_frozen_structured_products() -> None:
     assert occurrence == MemoryOccurrenceRef(frame, (segment,))
     assert scope.frame_stack == (_flow_ref(), frame)
     assert scope.occurrence_path == (segment,)
-    assert scope.boundary == boundary
+    assert scope.boundary is None
+    assert boundary.frame_ref == _flow_ref()
     with pytest.raises(FrozenInstanceError):
         frame.root_flow_id = "other"  # type: ignore[misc]
 
@@ -146,6 +146,44 @@ def test_identity_values_reject_ambiguous_paths_and_indices(
     """Identities accept exact immutable paths and non-boolean indices only."""
     with pytest.raises(error, match=message):
         factory()
+
+
+def test_occurrence_references_require_a_comparable_first_static_path() -> None:
+    """A frame occurrence cannot borrow an unrelated dynamic callsite path."""
+    unrelated = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.MAP_ITEM,
+        ("root", "other"),
+        0,
+    )
+
+    with pytest.raises(ValueError, match="lexically comparable"):
+        MemoryOccurrenceRef(_agent_ref(), (unrelated,))
+
+
+@pytest.mark.parametrize(
+    "segment_path",
+    [
+        ("root", "other"),
+        ("root", "child", "agent"),
+        ("root", "child", "agent", "inner"),
+    ],
+)
+def test_scope_occurrence_path_must_strictly_contain_the_node(
+    segment_path: tuple[str, ...],
+) -> None:
+    """The final occurrence callsite is an ancestor, never the scoped node itself."""
+    segment = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.LOOP_ITERATION,
+        segment_path,
+        0,
+    )
+
+    with pytest.raises(ValueError, match="innermost occurrence segment"):
+        MemoryScope(
+            "root",
+            ("root", "child", "agent"),
+            occurrence_path=(segment,),
+        )
 
 
 class _ForgedFrameRef(MemoryFrameRef):

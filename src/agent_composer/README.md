@@ -139,7 +139,7 @@ supplies a local origin. Unsupported growth kinds and arbitrary builder, compile
 spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
 faults escape rather than becoming flow failures.
 
-At the schema-3 boundary, every trace item becomes an exact base
+At the schema-4 boundary, every trace item becomes an exact base
 `OriginRef(key)`: front-end-specific subclasses are valid in memory, but class
 identity is intentionally absent from the single-key wire. The reducer carries
 that canonical immutable `Failure` through `NodeFailed`, terminal `RunFailed`,
@@ -566,12 +566,16 @@ an fsync per append. Both accept the same closed record vocabulary:
 
 ```
 RunStartedRecord | RunResumedRecord | NodeStartedRecord |
-NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord
+NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord |
+MemoryFrameLearningStartedRecord | MemoryFrameLearnedRecord |
+MemoryFrameLearningFailedRecord | MemoryCommitRequestedRecord |
+MemoryCommitSucceededRecord | MemoryCommitFailedRecord
 ```
 
-The exact wire version is schema 3. `NodeFailedRecord` contains exactly one nested
-`Failure`; earlier schemas are rejected rather than migrated. Terminal success
-remains derived from the END value. The first
+The exact wire version is schema 4. Accepted node outcomes may retain optional
+source-neutral evaluation evidence; `NodeFailedRecord` still owns one canonical
+nested `Failure`. Earlier schemas are rejected rather than migrated. Terminal
+success remains derived from the END value. The first
 route whose skip closure reaches END persists its causal `Failure` on that
 `NodeRoutedRecord`; replay revalidates the route before restoring it, and no
 additional terminal record is written.

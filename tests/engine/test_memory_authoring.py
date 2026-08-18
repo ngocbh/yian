@@ -319,56 +319,29 @@ def test_authored_identity_includes_flow_id_and_policy_but_excludes_origin() -> 
     assert expansion_digest(flow_policy) == expansion_digest(plain)
 
 
-@pytest.mark.parametrize("owner", ["flow", "agent"])
-def test_policy_identity_redacts_credentials_but_retains_semantic_config(
-    owner: str,
-) -> None:
-    def policy_flow(
-        *,
-        api_key: str,
-        client_secret: str,
-        max_items: int,
-    ) -> CompiledFlow:
-        spec = MemoryPolicySpec(
+@pytest.mark.parametrize("private_key", ["api_key", "backend_token", "tenant_id"])
+def test_policy_config_rejects_host_private_fields(private_key: str) -> None:
+    with pytest.raises(ValueError, match="forbidden private key"):
+        MemoryPolicySpec(
             "reflective",
             {
-                "api_key": api_key,
-                "backend": {
-                    "client_secret": client_secret,
-                    "max_items": max_items,
-                },
+                "max_items": 4,
+                "backend": {private_key: "private"},
             },
         )
-        if owner == "flow":
-            return CompiledFlow({}, [], memory_policy=spec)
-        return CompiledFlow(
-            {"agent": AgentNode("agent", memory_policy=spec)},
-            [],
-        )
 
-    first = policy_flow(
-        api_key="first-api-secret",
-        client_secret="first-client-secret",
-        max_items=4,
-    )
-    other_credentials = policy_flow(
-        api_key="second-api-secret",
-        client_secret="second-client-secret",
-        max_items=4,
-    )
-    other_semantics = policy_flow(
-        api_key="first-api-secret",
-        client_secret="first-client-secret",
-        max_items=5,
+
+@pytest.mark.parametrize("private_key", ["api_key", "backend_token", "tenant_id"])
+def test_authored_policy_config_rejects_host_private_fields(private_key: str) -> None:
+    source = _full_flow(
+        "memory_policy:\n"
+        "  name: reflective\n"
+        "  config:\n"
+        f"    nested: {{{private_key}: private}}\n"
     )
 
-    first_manifest = flow_manifest(first)
-    rendered = repr(first_manifest)
-    assert "first-api-secret" not in rendered
-    assert "first-client-secret" not in rendered
-    assert flow_manifest(other_credentials) == first_manifest
-    assert flow_fingerprint(other_credentials) == flow_fingerprint(first)
-    assert flow_fingerprint(other_semantics) != flow_fingerprint(first)
+    with pytest.raises(LoadError, match="forbidden private key"):
+        load_flow(source, source_label="memory.yaml")
 
 
 def test_expansion_digest_excludes_flow_id_and_agent_memory_policy() -> None:

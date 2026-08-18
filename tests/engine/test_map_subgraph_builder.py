@@ -136,7 +136,7 @@ def test_map_subgraph_appends_item_occurrence_and_scopes_generated_fan_nodes() -
     for node_id, node in child.nodes.items():
         node.memory_scope = MemoryScope(
             "root",
-            ("root", "map", node_id),
+            ("root", "outer_loop", "map", node_id),
             frame_stack=(outer_frame,),
         )
     outer = MemoryOccurrenceSegment(
@@ -146,7 +146,7 @@ def test_map_subgraph_appends_item_occurrence_and_scopes_generated_fan_nodes() -
     )
     spawner_scope = MemoryScope(
         "root",
-        ("root", "map"),
+        ("root", "outer_loop", "map"),
         frame_stack=(outer_frame,),
         occurrence_path=(outer,),
     )
@@ -163,7 +163,7 @@ def test_map_subgraph_appends_item_occurrence_and_scopes_generated_fan_nodes() -
             outer,
             MemoryOccurrenceSegment(
                 MemoryOccurrenceKind.MAP_ITEM,
-                ("root", "map"),
+                ("root", "outer_loop", "map"),
                 index,
             ),
         )
@@ -176,7 +176,7 @@ def test_map_subgraph_appends_item_occurrence_and_scopes_generated_fan_nodes() -
 
     generated_scope = MemoryScope(
         "root",
-        ("root", "map"),
+        ("root", "outer_loop", "map"),
         frame_stack=(outer_frame,),
         occurrence_path=(outer,),
         boundary=None,
@@ -194,7 +194,7 @@ def test_map_subgraph_revalidates_supplied_memory_scope() -> None:
     )
     scope = MemoryScope(
         "root",
-        ("root", "map"),
+        ("root", "outer", "map"),
         occurrence_path=(occurrence,),
     )
     object.__setattr__(occurrence, "index", True)

@@ -164,7 +164,7 @@ def test_continue_appends_body_iteration_but_driver_keeps_outer_occurrence() -> 
     for node_id, node in child.nodes.items():
         node.memory_scope = MemoryScope(
             "root",
-            ("root", "lp", node_id),
+            ("root", "outer_map", "lp", node_id),
             frame_stack=(outer_frame,),
         )
     outer = MemoryOccurrenceSegment(
@@ -174,7 +174,7 @@ def test_continue_appends_body_iteration_but_driver_keeps_outer_occurrence() -> 
     )
     loop_scope = MemoryScope(
         "root",
-        ("root", "lp"),
+        ("root", "outer_map", "lp"),
         frame_stack=(outer_frame,),
         occurrence_path=(outer,),
     )
@@ -194,7 +194,7 @@ def test_continue_appends_body_iteration_but_driver_keeps_outer_occurrence() -> 
         outer,
         MemoryOccurrenceSegment(
             MemoryOccurrenceKind.LOOP_ITERATION,
-            ("root", "lp"),
+            ("root", "outer_map", "lp"),
             2,
         ),
     )

@@ -110,7 +110,7 @@ def test_clone_child_rejects_a_dynamic_static_memory_template_atomically() -> No
     child = _single()
     occurrence = MemoryOccurrenceSegment(
         MemoryOccurrenceKind.MAP_ITEM,
-        ("root", "map"),
+        ("root", "call"),
         0,
     )
     child.nodes["head"].memory_scope = MemoryScope(

@@ -2433,7 +2433,7 @@ def test_memory_expansion_projection_covers_frame_occurrence_and_boundary_topolo
         occurrence_path=(
             MemoryOccurrenceSegment(
                 MemoryOccurrenceKind.MAP_ITEM,
-                (root, "map"),
+                (root, "nested"),
                 0,
             ),
         ),

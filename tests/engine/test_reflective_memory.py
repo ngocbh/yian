@@ -149,6 +149,15 @@ def test_constructor_and_frame_configuration_are_exact() -> None:
         ReflectiveMemory({"provider": "not-a-provider"})
     with pytest.raises(ValueError, match="model"):
         ReflectiveMemory({"model": ""})
+    for private_key in ("api_key", "backend_token", "tenant_id"):
+        with pytest.raises(ValueError):
+            ReflectiveMemory(
+                {
+                    "provider": "ollama",
+                    "model": "qwen",
+                    private_key: "private",
+                }
+            )
 
     memory = ReflectiveMemory(max_items=7, recall_limit=3)
     with memory.open_run() as session:
@@ -165,6 +174,29 @@ def test_constructor_and_frame_configuration_are_exact() -> None:
         with pytest.raises(MemoryOperationError) as value_error:
             session.open_frame(_spec(config={"max_items": True}))
         assert value_error.value.code == "reflective.invalid_frame_config"
+
+
+def test_snapshot_contains_only_public_pinned_model_configuration() -> None:
+    memory = ReflectiveMemory(
+        {
+            "provider": "ollama",
+            "model": "qwen",
+            "temperature": 0.2,
+        }
+    )
+
+    with memory.open_run() as session:
+        llm_config = session.snapshot["llm_config"]
+
+    assert set(llm_config) == {
+        "provider",
+        "model",
+        "anthropic_effort",
+        "openai_reasoning_effort",
+        "google_thinking_level",
+        "temperature",
+    }
+    assert not {"api_key", "backend_token", "tenant_id"} & set(llm_config)
 
 
 def test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them(

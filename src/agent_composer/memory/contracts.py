@@ -50,6 +50,16 @@ class _FrozenJsonObject:
 
 _FrozenJson: TypeAlias = _FrozenJsonScalar | _FrozenJsonArray | _FrozenJsonObject
 
+_FORBIDDEN_DURABLE_MEMORY_KEYS = frozenset(
+    {
+        "api_key",
+        "backend_path",
+        "backend_token",
+        "credentials",
+        "tenant_id",
+    }
+)
+
 
 def _require_string(value: object, name: str, *, nonempty: bool = True) -> str:
     """Return one exact string or reject an ambiguous identifier."""
@@ -159,6 +169,19 @@ def _thaw_json_object(value: _FrozenJsonObject) -> JsonObject:
     return {key: _thaw_json(item) for key, item in value.entries}
 
 
+def _reject_private_memory_keys(value: _FrozenJson, name: str) -> None:
+    """Reject the closed host-private key vocabulary from durable memory JSON."""
+    if isinstance(value, _FrozenJsonArray):
+        for index, item in enumerate(value.values):
+            _reject_private_memory_keys(item, f"{name}[{index}]")
+        return
+    if isinstance(value, _FrozenJsonObject):
+        for key, item in value.entries:
+            if key.casefold() in _FORBIDDEN_DURABLE_MEMORY_KEYS:
+                raise ValueError(f"{name} contains forbidden private key {key!r}")
+            _reject_private_memory_keys(item, f"{name}.{key}")
+
+
 def _require_origin(value: object, name: str = "origin") -> OriginRef | None:
     """Return one optional opaque source identity."""
     if value is not None and not isinstance(value, OriginRef):
@@ -199,13 +222,14 @@ class MemoryEpisodeStatus(str, Enum):
 
 @dataclass(frozen=True, slots=True, init=False)
 class MemorySnapshotEnvelope:
-    """One named policy snapshot retained by a durable run boundary."""
+    """One backend-declared source-neutral snapshot for durable run recovery."""
 
     policy_name: str
     _snapshot: _FrozenJsonObject = field(repr=False)
 
     def __init__(self, policy_name: str, snapshot: JsonObject) -> None:
         """Validate the policy name and retain a defensive JSON snapshot."""
+        frozen = _freeze_json_object(snapshot, "snapshot")
         object.__setattr__(
             self,
             "policy_name",
@@ -214,7 +238,7 @@ class MemorySnapshotEnvelope:
         object.__setattr__(
             self,
             "_snapshot",
-            _freeze_json_object(snapshot, "snapshot"),
+            frozen,
         )
 
     @property
@@ -272,6 +296,8 @@ class MemoryFrameRef:
         """Validate the root, static path, and closed owner vocabulary."""
         _require_string(self.root_flow_id, "root_flow_id")
         _require_path(self.static_path, "static_path")
+        if self.static_path[0] != self.root_flow_id:
+            raise ValueError("static_path must begin with root_flow_id")
         if type(self.owner) is not MemoryOwner:
             raise TypeError("owner must be a MemoryOwner")
 
@@ -305,8 +331,29 @@ class MemoryOccurrenceRef:
             self.frame_ref.owner,
         )
         _require_occurrence_path(self.occurrence_path)
+        prior_path: tuple[str, ...] | None = None
         for segment in self.occurrence_path:
             MemoryOccurrenceSegment(segment.kind, segment.static_path, segment.index)
+            if segment.static_path[0] != self.frame_ref.root_flow_id:
+                raise ValueError("occurrence segment root must match the frame")
+            if prior_path is None:
+                frame_path = self.frame_ref.static_path
+                comparable = (
+                    frame_path[: len(segment.static_path)] == segment.static_path
+                    or segment.static_path[: len(frame_path)] == frame_path
+                )
+                if not comparable:
+                    raise ValueError(
+                        "frame and first occurrence paths must be lexically comparable"
+                    )
+            if prior_path is not None and (
+                len(segment.static_path) <= len(prior_path)
+                or segment.static_path[: len(prior_path)] != prior_path
+            ):
+                raise ValueError(
+                    "occurrence segments must follow lexical nesting order"
+                )
+            prior_path = segment.static_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,23 +392,74 @@ class MemoryScope:
         """Validate paths and keep every nested identity within one root flow."""
         _require_string(self.root_flow_id, "root_flow_id")
         _require_path(self.static_path, "static_path")
+        if self.static_path[0] != self.root_flow_id:
+            raise ValueError("static_path must begin with root_flow_id")
         if type(self.frame_stack) is not tuple:
             raise TypeError("frame_stack must be a tuple")
-        for frame in self.frame_stack:
+        prior_path: tuple[str, ...] | None = None
+        seen_frames: set[MemoryFrameRef] = set()
+        for index, frame in enumerate(self.frame_stack):
             if type(frame) is not MemoryFrameRef:
                 raise TypeError("frame_stack items must be MemoryFrameRef values")
             MemoryFrameRef(frame.root_flow_id, frame.static_path, frame.owner)
             if frame.root_flow_id != self.root_flow_id:
                 raise ValueError("frame_stack root_flow_id must match the scope")
+            if frame in seen_frames:
+                raise ValueError("frame_stack must contain unique frame refs")
+            if (
+                prior_path is not None
+                and frame.static_path[: len(prior_path)] != prior_path
+            ):
+                raise ValueError("frame_stack must follow lexical ownership order")
+            if prior_path is not None and len(frame.static_path) == len(prior_path):
+                raise ValueError("frame_stack ownership paths must be strictly nested")
+            if frame.owner is MemoryOwner.AGENT and index != len(self.frame_stack) - 1:
+                raise ValueError("an AGENT frame must be the final local frame")
+            seen_frames.add(frame)
+            prior_path = frame.static_path
+        if self.frame_stack:
+            inner = self.frame_stack[-1]
+            if inner.owner is MemoryOwner.AGENT:
+                if self.static_path != inner.static_path:
+                    raise ValueError("an AGENT frame must own its exact node path")
+            elif (
+                len(self.static_path) <= len(inner.static_path)
+                or self.static_path[: len(inner.static_path)] != inner.static_path
+            ):
+                raise ValueError("a FLOW frame must lexically contain the node path")
         _require_occurrence_path(self.occurrence_path)
+        prior_occurrence_path: tuple[str, ...] | None = None
         for segment in self.occurrence_path:
             MemoryOccurrenceSegment(segment.kind, segment.static_path, segment.index)
+            if segment.static_path[0] != self.root_flow_id:
+                raise ValueError("occurrence segment root must match the scope")
+            if prior_occurrence_path is not None and (
+                len(segment.static_path) <= len(prior_occurrence_path)
+                or segment.static_path[: len(prior_occurrence_path)]
+                != prior_occurrence_path
+            ):
+                raise ValueError(
+                    "occurrence segments must follow lexical nesting order"
+                )
+            prior_occurrence_path = segment.static_path
+        if prior_occurrence_path is not None and (
+            len(prior_occurrence_path) >= len(self.static_path)
+            or self.static_path[: len(prior_occurrence_path)]
+            != prior_occurrence_path
+        ):
+            raise ValueError(
+                "the innermost occurrence segment must contain the scoped node"
+            )
         if self.boundary is not None:
             if type(self.boundary) is not MemoryBoundary:
                 raise TypeError("boundary must be a MemoryBoundary or None")
             MemoryBoundary(self.boundary.kind, self.boundary.frame_ref)
             if self.boundary.frame_ref.root_flow_id != self.root_flow_id:
                 raise ValueError("boundary root_flow_id must match the scope")
+            if not self.frame_stack or self.boundary.frame_ref != self.frame_stack[-1]:
+                raise ValueError(
+                    "boundary frame must be the innermost newly owned flow frame"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -507,6 +605,8 @@ class EvaluationEvidence:
             scope.occurrence_path,
             scope.boundary,
         )
+        if not scope.frame_stack:
+            raise ValueError("evaluation evidence requires a non-empty frame_stack")
         object.__setattr__(self, "scope", scope)
         if bound_inputs is not None and type(bound_inputs) is not dict:
             raise TypeError("bound_inputs must be an exact JSON object or None")
@@ -580,7 +680,9 @@ class MemoryPolicySpec:
     ) -> None:
         """Validate and snapshot one authored policy specification."""
         object.__setattr__(self, "name", _require_string(name, "name"))
-        object.__setattr__(self, "_config", _freeze_json_object(config, "config"))
+        frozen = _freeze_json_object(config, "config")
+        _reject_private_memory_keys(frozen, "config")
+        object.__setattr__(self, "_config", frozen)
         object.__setattr__(self, "origin", _require_origin(origin))
 
     @property
@@ -650,7 +752,9 @@ class MemoryFrameSpec:
             "policy_name",
             _require_string(policy_name, "policy_name"),
         )
-        object.__setattr__(self, "_config", _freeze_json_object(config, "config"))
+        frozen = _freeze_json_object(config, "config")
+        _reject_private_memory_keys(frozen, "config")
+        object.__setattr__(self, "_config", frozen)
 
     @property
     def config(self) -> JsonObject:
@@ -956,7 +1060,7 @@ class MemorySession(Protocol):
 
     @property
     def snapshot(self) -> JsonObject:
-        """Return a defensive copy of the pinned canonical run snapshot."""
+        """Return defensive source-neutral durable state sufficient for restore."""
         ...
 
     def __enter__(self) -> MemorySession:

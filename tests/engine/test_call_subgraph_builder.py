@@ -61,7 +61,7 @@ def test_call_subgraph_inherits_occurrence_and_preserves_child_boundary() -> Non
     child = _child_flow()
     child_frame = MemoryFrameRef(
         "root",
-        ("root", "call"),
+        ("root", "outer_map", "call"),
         MemoryOwner.FLOW,
     )
     for node_id, node in child.nodes.items():
@@ -72,7 +72,7 @@ def test_call_subgraph_inherits_occurrence_and_preserves_child_boundary() -> Non
             boundary = MemoryBoundary(MemoryBoundaryKind.END, child_frame)
         node.memory_scope = MemoryScope(
             "root",
-            ("root", "call", node_id),
+            ("root", "outer_map", "call", node_id),
             frame_stack=(child_frame,),
             boundary=boundary,
         )
@@ -83,7 +83,7 @@ def test_call_subgraph_inherits_occurrence_and_preserves_child_boundary() -> Non
     )
     spawner_scope = MemoryScope(
         "root",
-        ("root", "call"),
+        ("root", "outer_map", "call"),
         occurrence_path=(outer,),
     )
 
@@ -116,7 +116,7 @@ def test_call_subgraph_revalidates_supplied_memory_scope() -> None:
     )
     scope = MemoryScope(
         "root",
-        ("root", "call"),
+        ("root", "outer", "call"),
         occurrence_path=(occurrence,),
     )
     object.__setattr__(occurrence, "index", False)

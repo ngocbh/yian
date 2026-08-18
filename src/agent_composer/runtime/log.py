@@ -372,13 +372,6 @@ def _occurrence_key(
     )
 
 
-def _mutation_key(
-    mutation: MemoryMutation,
-) -> tuple[tuple[str, tuple[str, ...], str], str]:
-    """Return the canonical sortable identity of one memory mutation."""
-    return (_frame_key(mutation.frame_ref), mutation.mutation_id)
-
-
 def _validate_optional_evidence(evidence: EvaluationEvidence | None) -> None:
     """Reject forged or unsupported node-evidence carriers."""
     if evidence is not None and type(evidence) is not EvaluationEvidence:
@@ -421,6 +414,9 @@ def _validate_run_memory_configuration(
     layout_keys = tuple(_frame_key(spec.ref) for spec in layout)
     if layout_keys != tuple(sorted(set(layout_keys))):
         raise ValueError("memory_layout frame refs must be sorted and unique")
+    layout_roots = {spec.ref.root_flow_id for spec in layout}
+    if len(layout_roots) > 1:
+        raise ValueError("memory_layout frame refs must share one root_flow_id")
 
     for snapshot in snapshots:
         if type(snapshot) is not MemorySnapshotEnvelope:
@@ -455,9 +451,6 @@ def _validate_mutations(
     ids = tuple(mutation.mutation_id for mutation in mutations)
     if len(ids) != len(set(ids)):
         raise ValueError("mutation IDs must be unique")
-    keys = tuple(_mutation_key(mutation) for mutation in mutations)
-    if keys != tuple(sorted(keys)):
-        raise ValueError("mutations must be in canonical order")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1362,6 +1355,14 @@ def _failure_payload(failure: Failure, *, carrier: str) -> dict[str, Any]:
     """Return the one explicit wire form shared by failure-bearing records."""
     if type(failure) is not Failure:
         raise TypeError(f"{carrier} failure must be a Failure")
+    Failure(
+        code=failure.code,
+        message=failure.message,
+        node_id=failure.node_id,
+        trace=failure.trace,
+        cause_type=failure.cause_type,
+        traceback=failure.traceback,
+    )
     return {
         "code": failure.code,
         "message": failure.message,
@@ -1708,8 +1709,101 @@ def _memory_failure_from_payload(payload: dict[str, Any]) -> MemoryOperationFail
     )
 
 
+def _revalidate_run_record(record: RunRecord) -> None:
+    """Replay exact outer and nested invariants before any record is encoded."""
+    if type(record) is RunStartedRecord:
+        RunStartedRecord(
+            record.flow_fingerprint,
+            record.initial_pool,
+            record.start_wiring_override,
+            record.effective_llm_by_static_path,
+            record.num_workers,
+            record.memory_layout,
+            record.memory_snapshots,
+            record.learn,
+        )
+        return
+    if type(record) is RunResumedRecord:
+        RunResumedRecord(record.retry_node_ids, record.num_workers)
+        return
+    if type(record) is NodeStartedRecord:
+        NodeStartedRecord(record.node_id)
+        return
+    if type(record) is NodeSucceededRecord:
+        NodeSucceededRecord(
+            record.node_id,
+            record.commit_target,
+            record.value,
+            record.evidence,
+        )
+        return
+    if type(record) is NodeRoutedRecord:
+        NodeRoutedRecord(
+            record.node_id,
+            record.handle,
+            record.terminal_failure,
+            record.evidence,
+        )
+        if record.terminal_failure is not None:
+            _failure_payload(record.terminal_failure, carrier="NodeRoutedRecord")
+        return
+    if type(record) is NodeExpandedRecord:
+        NodeExpandedRecord(
+            record.spawner_id,
+            record.seed,
+            record.prune_ids,
+            record.topology_digest,
+            record.evidence,
+        )
+        return
+    if type(record) is NodeFailedRecord:
+        NodeFailedRecord(record.failure, record.evidence)
+        _failure_payload(record.failure, carrier="NodeFailedRecord")
+        return
+    if type(record) is MemoryFrameLearningStartedRecord:
+        MemoryFrameLearningStartedRecord(
+            record.policy_name,
+            record.frame_ref,
+            record.occurrences,
+        )
+        return
+    if type(record) is MemoryFrameLearnedRecord:
+        MemoryFrameLearnedRecord(
+            record.policy_name,
+            record.frame_ref,
+            record.mutations,
+        )
+        return
+    if type(record) is MemoryFrameLearningFailedRecord:
+        MemoryFrameLearningFailedRecord(
+            record.policy_name,
+            record.frame_ref,
+            record.failure,
+        )
+        return
+    if type(record) is MemoryCommitRequestedRecord:
+        MemoryCommitRequestedRecord(
+            record.policy_name,
+            record.commit_id,
+            record.mutations,
+        )
+        return
+    if type(record) is MemoryCommitSucceededRecord:
+        MemoryCommitSucceededRecord(record.policy_name, record.commit_id)
+        return
+    if type(record) is MemoryCommitFailedRecord:
+        MemoryCommitFailedRecord(
+            record.policy_name,
+            record.commit_id,
+            record.failure,
+        )
+        return
+    raise TypeError(f"unsupported run record: {type(record).__name__}")
+
+
 def _payload_for_record(record: RunRecord) -> dict[str, Any]:
     """Build and validate the canonical JSON payload for one record variant."""
+    _revalidate_run_record(record)
     kind = _kind_for_record(record)
     if isinstance(record, RunStartedRecord):
         _validate_run_memory_configuration(

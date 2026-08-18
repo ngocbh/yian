@@ -21,9 +21,13 @@ def test_source_span_is_absent_from_runtime_events() -> None:
 
 
 def test_failure_carriers_have_no_parallel_location_fields() -> None:
-    """Every runtime failure carrier owns only its canonical `Failure`."""
-    for carrier in (EvaluationFailure, NodeFailedRecord, NodeFailed, RunFailed):
+    """Failure carriers retain one authority and only approved memory evidence."""
+    for carrier in (EvaluationFailure, NodeFailed, RunFailed):
         assert [field.name for field in fields(carrier)] == ["failure"]
+    assert [field.name for field in fields(NodeFailedRecord)] == [
+        "failure",
+        "evidence",
+    ]
 
     assert [field.name for field in fields(RunResult)] == [
         "input",

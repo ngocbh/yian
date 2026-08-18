@@ -11,7 +11,7 @@ from agent_composer.compile.memory_layout import (
     apply_memory_layout,
     resolve_memory_layout,
 )
-from agent_composer.compile.model import CompiledFlow
+from agent_composer.compile.model import END_ID, START_ID, CompiledFlow
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
@@ -25,6 +25,8 @@ from agent_composer.memory import (
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.call import CallNode
 from agent_composer.nodes.code import CodeNode
+from agent_composer.nodes.end import EndNode
+from agent_composer.nodes.start import StartNode
 
 
 _NESTED = """id: root
@@ -97,6 +99,56 @@ def test_reachable_policy_requires_root_id_at_the_authored_policy_site() -> None
 
     assert caught.value.origin is origin
     assert agent.memory_scope is None
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("missing-both", "missing direct START and END"),
+        ("missing-start", "missing direct START"),
+        ("missing-end", "missing direct END"),
+        ("start-subclass", "start_id must be a non-empty exact string"),
+        ("end-empty", "end_id must be a non-empty exact string"),
+        ("same", "distinct START and END"),
+    ],
+)
+def test_memory_owning_python_flow_requires_exact_direct_boundaries(
+    case: str,
+    message: str,
+) -> None:
+    class StringSubclass(str):
+        """Equality-compatible but noncanonical boundary identifier."""
+
+    origin = OriginRef("flow/memory_policy")
+    nodes = {
+        START_ID: StartNode(START_ID, params=[]),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }
+    if case == "missing-both":
+        nodes = {"body": CodeNode("body", code="return 1")}
+    elif case == "missing-start":
+        nodes.pop(START_ID)
+    elif case == "missing-end":
+        nodes.pop(END_ID)
+    flow = CompiledFlow(
+        nodes,
+        [],
+        wiring={node_id: {} for node_id in nodes},
+        flow_id="root",
+        memory_policy=MemoryPolicySpec("reflective", {}, origin),
+    )
+    if case == "start-subclass":
+        flow.start_id = StringSubclass(START_ID)
+    elif case == "end-empty":
+        flow.end_id = ""
+    elif case == "same":
+        flow.end_id = START_ID
+
+    with pytest.raises(MemorySetupError, match=message) as caught:
+        resolve_memory_layout(flow)
+
+    assert caught.value.origin is origin
+    assert all(node.memory_scope is None for node in nodes.values())
 
 
 def test_layout_orders_outer_flow_inner_flow_and_local_agent_frames() -> None:
@@ -276,6 +328,57 @@ def test_apply_scope_mismatch_is_atomic() -> None:
     )
 
 
+def test_apply_revalidates_forged_nested_layout_scope_before_stamping() -> None:
+    class StringSubclass(str):
+        """Equality-compatible but noncanonical root identity."""
+
+    flow = load_flow(_NESTED).compiled
+    layout = resolve_memory_layout(flow)
+    forged = layout.targets[-1].scope
+    object.__setattr__(forged, "root_flow_id", StringSubclass("root"))
+
+    with pytest.raises(TypeError, match="root_flow_id must be a string"):
+        apply_memory_layout(flow, layout)
+
+    assert all(target.node.memory_scope is None for target in layout.targets)
+
+
+def test_apply_revalidates_forged_nested_frame_spec_before_stamping() -> None:
+    class StringSubclass(str):
+        """Equality-compatible but noncanonical policy identity."""
+
+    flow = load_flow(_NESTED).compiled
+    layout = resolve_memory_layout(flow)
+    object.__setattr__(
+        layout.frames[0].spec,
+        "policy_name",
+        StringSubclass("outer"),
+    )
+
+    with pytest.raises(TypeError, match="policy_name must be a string"):
+        apply_memory_layout(flow, layout)
+
+    assert all(target.node.memory_scope is None for target in layout.targets)
+
+
+def test_apply_revalidates_forged_equal_existing_scope_atomically() -> None:
+    class StringSubclass(str):
+        """Equality-compatible but noncanonical root identity."""
+
+    flow = load_flow(_NESTED).compiled
+    layout = resolve_memory_layout(flow)
+    final = layout.targets[-1]
+    forged = copy.deepcopy(final.scope)
+    object.__setattr__(forged, "root_flow_id", StringSubclass("root"))
+    final.node.memory_scope = forged
+
+    with pytest.raises(MemorySetupError, match="noncanonical memory scope"):
+        apply_memory_layout(flow, layout)
+
+    assert all(target.node.memory_scope is None for target in layout.targets[:-1])
+    assert final.node.memory_scope is forged
+
+
 def test_apply_stale_object_target_is_atomic() -> None:
     flow = load_flow(_NESTED).compiled
     layout = resolve_memory_layout(flow)
@@ -318,6 +421,18 @@ output: ${answer.output}
         apply_memory_layout(flow, layout)
 
     assert all(target.node.memory_scope is None for target in layout.targets)
+
+
+def test_recursive_static_child_cycle_is_rejected() -> None:
+    flow = CompiledFlow({}, [], wiring={}, flow_id="root")
+    cycle = CallNode("cycle", flow_id="root", child=flow)
+    flow.nodes["cycle"] = cycle
+    flow.wiring["cycle"] = {}
+
+    with pytest.raises(MemorySetupError, match="recursive child-flow cycle"):
+        resolve_memory_layout(flow)
+
+    assert cycle.memory_scope is None
 
 
 def test_flow_frame_spec_retains_config_and_origin_outside_node_scopes() -> None:

@@ -125,6 +125,49 @@ def test_clone_child_rejects_a_dynamic_static_memory_template_atomically() -> No
     assert child.nodes["head"].memory_scope.occurrence_path == (occurrence,)
 
 
+def test_clone_child_revalidates_forged_occurrence_before_propagation() -> None:
+    child = _single()
+    for node_id, node in child.nodes.items():
+        node.memory_scope = MemoryScope(
+            "root",
+            ("root", "call", node_id),
+        )
+    occurrence = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.MAP_ITEM,
+        ("root", "map"),
+        0,
+    )
+    # ``False == 0``; an equality-only guard would silently propagate this.
+    object.__setattr__(occurrence, "index", False)
+
+    with pytest.raises(TypeError, match="index must be an integer"):
+        clone_child(
+            child,
+            callsite="call",
+            record={"topic": "ACME"},
+            occurrence_path=(occurrence,),
+        )
+
+    assert all(
+        node.memory_scope.occurrence_path == () for node in child.nodes.values()
+    )
+
+
+def test_clone_child_revalidates_forged_static_scope_without_mutating_source() -> None:
+    class StringSubclass(str):
+        """Equality-compatible but noncanonical root identity."""
+
+    child = _single()
+    scope = MemoryScope("root", ("root", "call", "head"))
+    object.__setattr__(scope, "root_flow_id", StringSubclass("root"))
+    child.nodes["head"].memory_scope = scope
+
+    with pytest.raises(MemorySetupError, match="noncanonical static memory scope"):
+        clone_child(child, callsite="call", record={"topic": "ACME"})
+
+    assert child.nodes["head"].memory_scope is scope
+
+
 def test_clone_child_rewrites_one_binding_layer_and_preserves_its_origin():
     """Child namespacing rewrites semantic source text without replacing provenance."""
     child = _single()

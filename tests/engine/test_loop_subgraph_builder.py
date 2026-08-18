@@ -5,6 +5,10 @@ Output feeds the next driver by plain wiring) + the fresh `L~(k+1)` driver + the
 `body_k.END -> L~(k+1)`. Bodies are keyed on ORIGIN (not the running driver id), so live `run` and
 durable reconstruction builds the SAME `L#k/…` namespace.
 """
+import copy
+
+import pytest
+
 from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, ns
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
 from agent_composer.diagnostics import OriginRef
@@ -200,3 +204,31 @@ def test_continue_appends_body_iteration_but_driver_keeps_outer_occurrence() -> 
         if node_id != driver.id
     } == {expected_body}
     assert fragment.nodes[driver.id].memory_scope.occurrence_path == (outer,)
+
+
+def test_continue_revalidates_supplied_driver_memory_scope() -> None:
+    child = _child_flow()
+    driver = _driver("lp", 1, child)
+    base_scope = MemoryScope("root", ("root", "lp"))
+    forged = copy.deepcopy(base_scope)
+    occurrence = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.MAP_ITEM,
+        ("root", "outer"),
+        0,
+    )
+    object.__setattr__(forged, "occurrence_path", (occurrence,))
+    object.__setattr__(occurrence, "index", False)
+    driver.memory_scope = forged
+
+    with pytest.raises(TypeError, match="index must be an integer"):
+        loop_continue_subgraph(
+            child,
+            origin="lp",
+            carried={"x": 1},
+            k=0,
+            driver=driver,
+            memory_scope=base_scope,
+        )
+
+    assert driver.memory_scope is forged
+    assert all(node.memory_scope is None for node in child.nodes.values())

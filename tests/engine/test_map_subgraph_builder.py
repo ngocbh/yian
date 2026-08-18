@@ -10,6 +10,8 @@ commits under the spawner; the end-wiring has `e0`/`e1`. The N=0 case pins that 
 the list-END and that the synthetic start wires straight to it (so it schedules and emits `[]`).
 """
 
+import pytest
+
 from agent_composer.compile.expand import map_callsite, map_subgraph, ns
 from agent_composer.compile.model import END_ID, START_ID, Flow
 from agent_composer.diagnostics import OriginRef
@@ -181,3 +183,28 @@ def test_map_subgraph_appends_item_occurrence_and_scopes_generated_fan_nodes() -
     )
     assert fragment.nodes[ns("map", START_ID)].memory_scope == generated_scope
     assert fragment.nodes[ns("map", END_ID)].memory_scope == generated_scope
+
+
+def test_map_subgraph_revalidates_supplied_memory_scope() -> None:
+    child = _child_flow()
+    occurrence = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.LOOP_ITERATION,
+        ("root", "outer"),
+        0,
+    )
+    scope = MemoryScope(
+        "root",
+        ("root", "map"),
+        occurrence_path=(occurrence,),
+    )
+    object.__setattr__(occurrence, "index", True)
+
+    with pytest.raises(TypeError, match="index must be an integer"):
+        map_subgraph(
+            child,
+            spawner_id="map",
+            records=[{"x": 1}],
+            memory_scope=scope,
+        )
+
+    assert all(node.memory_scope is None for node in child.nodes.values())

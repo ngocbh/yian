@@ -7,6 +7,8 @@ namespaced child END carrying `commit_as == callsite`; and every node id is `ns`
 callsite.
 """
 
+import pytest
+
 from agent_composer.compile.expand import call_subgraph, ns
 from agent_composer.compile.model import END_ID, START_ID, Flow
 from agent_composer.diagnostics import OriginRef
@@ -103,3 +105,28 @@ def test_call_subgraph_inherits_occurrence_and_preserves_child_boundary() -> Non
         MemoryBoundaryKind.END,
         child_frame,
     )
+
+
+def test_call_subgraph_revalidates_supplied_memory_scope() -> None:
+    child = _child_flow()
+    occurrence = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.MAP_ITEM,
+        ("root", "outer"),
+        0,
+    )
+    scope = MemoryScope(
+        "root",
+        ("root", "call"),
+        occurrence_path=(occurrence,),
+    )
+    object.__setattr__(occurrence, "index", False)
+
+    with pytest.raises(TypeError, match="index must be an integer"):
+        call_subgraph(
+            child,
+            callsite="call",
+            record={"x": 1},
+            memory_scope=scope,
+        )
+
+    assert all(node.memory_scope is None for node in child.nodes.values())

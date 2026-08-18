@@ -19,6 +19,7 @@ from agent_composer.memory.contracts import (
     MemoryBoundaryKind,
     MemoryFrameRef,
     MemoryFrameSpec,
+    MemoryOccurrenceSegment,
     MemoryOwner,
     MemoryPolicySpec,
     MemoryScope,
@@ -26,6 +27,111 @@ from agent_composer.memory.contracts import (
 )
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node
+
+
+def _revalidate_memory_frame_ref(
+    value: MemoryFrameRef,
+    *,
+    name: str,
+) -> MemoryFrameRef:
+    """Replay every exact nested invariant of one frozen frame identity."""
+    if type(value) is not MemoryFrameRef:
+        raise TypeError(f"{name} must be an exact MemoryFrameRef")
+    MemoryFrameRef(
+        root_flow_id=value.root_flow_id,
+        static_path=value.static_path,
+        owner=value.owner,
+    )
+    return value
+
+
+def _revalidate_memory_occurrence_path(
+    value: tuple[MemoryOccurrenceSegment, ...],
+    *,
+    name: str,
+) -> tuple[MemoryOccurrenceSegment, ...]:
+    """Replay every exact nested invariant of one occurrence path."""
+    if type(value) is not tuple:
+        raise TypeError(f"{name} must be an exact tuple")
+    for index, segment in enumerate(value):
+        item_name = f"{name}[{index}]"
+        if type(segment) is not MemoryOccurrenceSegment:
+            raise TypeError(
+                f"{item_name} must be an exact MemoryOccurrenceSegment"
+            )
+        MemoryOccurrenceSegment(
+            kind=segment.kind,
+            static_path=segment.static_path,
+            index=segment.index,
+        )
+    return value
+
+
+def _revalidate_memory_boundary(
+    value: MemoryBoundary,
+    *,
+    name: str,
+) -> MemoryBoundary:
+    """Replay every exact nested invariant of one flow boundary."""
+    if type(value) is not MemoryBoundary:
+        raise TypeError(f"{name} must be an exact MemoryBoundary")
+    _revalidate_memory_frame_ref(value.frame_ref, name=f"{name}.frame_ref")
+    MemoryBoundary(kind=value.kind, frame_ref=value.frame_ref)
+    return value
+
+
+def _revalidate_memory_scope(
+    value: MemoryScope,
+    *,
+    name: str = "memory_scope",
+) -> MemoryScope:
+    """Replay every exact invariant nested below one frozen memory scope.
+
+    Frozen dataclasses can still be forged through ``object.__setattr__``. This
+    validator reconstructs each carrier layer so string/enum subclasses and
+    equality-collapsing values such as ``True`` for an occurrence index cannot
+    cross the compile boundary unnoticed.
+    """
+    if type(value) is not MemoryScope:
+        raise TypeError(f"{name} must be an exact MemoryScope")
+    if type(value.frame_stack) is not tuple:
+        raise TypeError(f"{name}.frame_stack must be an exact tuple")
+    for index, frame in enumerate(value.frame_stack):
+        _revalidate_memory_frame_ref(
+            frame,
+            name=f"{name}.frame_stack[{index}]",
+        )
+    _revalidate_memory_occurrence_path(
+        value.occurrence_path,
+        name=f"{name}.occurrence_path",
+    )
+    if value.boundary is not None:
+        _revalidate_memory_boundary(value.boundary, name=f"{name}.boundary")
+    MemoryScope(
+        root_flow_id=value.root_flow_id,
+        static_path=value.static_path,
+        frame_stack=value.frame_stack,
+        occurrence_path=value.occurrence_path,
+        boundary=value.boundary,
+    )
+    return value
+
+
+def _revalidate_memory_frame_spec(
+    value: MemoryFrameSpec,
+    *,
+    name: str,
+) -> MemoryFrameSpec:
+    """Replay one effective frame spec including its frozen config snapshot."""
+    if type(value) is not MemoryFrameSpec:
+        raise TypeError(f"{name} must be an exact MemoryFrameSpec")
+    _revalidate_memory_frame_ref(value.ref, name=f"{name}.ref")
+    MemoryFrameSpec(
+        ref=value.ref,
+        policy_name=value.policy_name,
+        config=value.config,
+    )
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,8 +143,7 @@ class ResolvedMemoryFrame:
 
     def __post_init__(self) -> None:
         """Require exact source-neutral carriers."""
-        if type(self.spec) is not MemoryFrameSpec:
-            raise TypeError("spec must be an exact MemoryFrameSpec")
+        _revalidate_memory_frame_spec(self.spec, name="spec")
         if self.origin is not None:
             if not isinstance(self.origin, OriginRef):
                 raise TypeError("origin must be an OriginRef or None")
@@ -61,6 +166,8 @@ class ResolvedMemoryTarget:
             raise TypeError("target locator components must be non-empty strings")
         if self.scope is not None and type(self.scope) is not MemoryScope:
             raise TypeError("target scope must be an exact MemoryScope or None")
+        if self.scope is not None:
+            _revalidate_memory_scope(self.scope, name="target scope")
         if not isinstance(self.node, Node):
             raise TypeError("target node must be a Node")
 
@@ -87,6 +194,14 @@ class ResolvedMemoryLayout:
             type(target) is not ResolvedMemoryTarget for target in self.targets
         ):
             raise TypeError("targets must be a tuple of ResolvedMemoryTarget values")
+        for frame in self.frames:
+            ResolvedMemoryFrame(spec=frame.spec, origin=frame.origin)
+        for target in self.targets:
+            ResolvedMemoryTarget(
+                locator=target.locator,
+                scope=target.scope,
+                node=target.node,
+            )
         if self.root_flow_id is None and self.frames:
             raise ValueError("a disabled memory layout cannot contain frames")
         for target in self.targets:
@@ -95,6 +210,17 @@ class ResolvedMemoryLayout:
                     raise ValueError("a disabled memory layout cannot contain scopes")
             elif target.scope is None:
                 raise ValueError("an enabled memory layout must scope every target")
+        if self.root_flow_id is not None:
+            for index, frame in enumerate(self.frames):
+                if frame.spec.ref.root_flow_id != self.root_flow_id:
+                    raise ValueError(
+                        f"frames[{index}] root_flow_id must match the layout"
+                    )
+            for index, target in enumerate(self.targets):
+                if target.scope.root_flow_id != self.root_flow_id:
+                    raise ValueError(
+                        f"targets[{index}] scope root_flow_id must match the layout"
+                    )
 
     @property
     def enabled(self) -> bool:
@@ -111,6 +237,17 @@ def _setup_error(
     return MemorySetupError(message, origin=origin)
 
 
+def _revalidate_resolved_layout(layout: ResolvedMemoryLayout) -> None:
+    """Replay the complete frozen layout contract after possible mutation."""
+    if type(layout) is not ResolvedMemoryLayout:
+        raise TypeError("layout must be an exact ResolvedMemoryLayout")
+    ResolvedMemoryLayout(
+        root_flow_id=layout.root_flow_id,
+        frames=layout.frames,
+        targets=layout.targets,
+    )
+
+
 def _flow_policy(flow: Flow) -> MemoryPolicySpec | None:
     """Return the optional policy owned by an exact compiled flow."""
     if type(flow) is not CompiledFlow:
@@ -119,6 +256,47 @@ def _flow_policy(flow: Flow) -> MemoryPolicySpec | None:
     if policy is not None and type(policy) is not MemoryPolicySpec:
         raise _setup_error("flow memory_policy must be an exact MemoryPolicySpec")
     return policy
+
+
+def _validate_memory_flow_boundaries(
+    flow: Flow,
+    *,
+    policy: MemoryPolicySpec,
+) -> None:
+    """Require exact direct START/END targets before emitting a flow frame."""
+    origin = policy.origin
+    if type(flow.nodes) is not dict:
+        raise _setup_error(
+            "a memory-owning flow requires an exact node dictionary",
+            origin=origin,
+        )
+    if type(flow.start_id) is not str or not flow.start_id:
+        raise _setup_error(
+            "a memory-owning flow start_id must be a non-empty exact string",
+            origin=origin,
+        )
+    if type(flow.end_id) is not str or not flow.end_id:
+        raise _setup_error(
+            "a memory-owning flow end_id must be a non-empty exact string",
+            origin=origin,
+        )
+    if flow.start_id == flow.end_id:
+        raise _setup_error(
+            "a memory-owning flow must have distinct START and END boundaries",
+            origin=origin,
+        )
+    missing = [
+        label
+        for label, node_id in (("START", flow.start_id), ("END", flow.end_id))
+        if node_id not in flow.nodes
+    ]
+    if missing:
+        raise _setup_error(
+            "a memory-owning flow is missing direct "
+            + " and ".join(missing)
+            + " boundary node(s)",
+            origin=origin,
+        )
 
 
 def _agent_policy(node: Node) -> MemoryPolicySpec | None:
@@ -302,6 +480,7 @@ def _resolve_enabled_flow(
         flow_frame: MemoryFrameRef | None = None
         frame_stack = inherited_frames
         if flow_policy is not None:
+            _validate_memory_flow_boundaries(flow, policy=flow_policy)
             flow_frame = MemoryFrameRef(
                 root_flow_id=root_flow_id,
                 static_path=flow_path,
@@ -309,12 +488,6 @@ def _resolve_enabled_flow(
             )
             frames.append(_resolved_frame(flow_policy, flow_frame))
             frame_stack = (*frame_stack, flow_frame)
-
-        if flow_frame is not None and flow.start_id == flow.end_id:
-            raise _setup_error(
-                "a memory-owning flow must have distinct START and END boundaries",
-                origin=flow_policy.origin,
-            )
 
         for node_id, node in _flow_nodes(flow, origin=owner_origin):
             node_locator = (*locator, node_id)
@@ -430,7 +603,7 @@ def _validate_unique_targets(layout: ResolvedMemoryLayout) -> None:
         if identity in identities:
             raise _setup_error(
                 "memory layout reaches one node object through multiple static paths; "
-                "de-alias child flows before applying it",
+                "the run setup must de-alias child flows before applying it",
                 origin=target.node.origin,
             )
         identities.add(identity)
@@ -449,8 +622,7 @@ def apply_memory_layout(
     """
     if type(flow) is not CompiledFlow:
         raise TypeError("apply_memory_layout expects an exact CompiledFlow")
-    if type(layout) is not ResolvedMemoryLayout:
-        raise TypeError("layout must be an exact ResolvedMemoryLayout")
+    _revalidate_resolved_layout(layout)
 
     _validate_unique_targets(layout)
     current = resolve_memory_layout(flow)
@@ -467,11 +639,17 @@ def apply_memory_layout(
                 origin=actual.node.origin,
             )
         existing = actual.node.memory_scope
-        if existing is not None and type(existing) is not MemoryScope:
-            raise _setup_error(
-                f"node at {target.locator!r} has a noncanonical memory scope",
-                origin=actual.node.origin,
-            )
+        if existing is not None:
+            try:
+                _revalidate_memory_scope(
+                    existing,
+                    name=f"node at {target.locator!r} memory_scope",
+                )
+            except (TypeError, ValueError) as exc:
+                raise _setup_error(
+                    f"node at {target.locator!r} has a noncanonical memory scope",
+                    origin=actual.node.origin,
+                ) from exc
         if existing is not None and existing != target.scope:
             raise _setup_error(
                 f"node at {target.locator!r} already has a different memory scope",

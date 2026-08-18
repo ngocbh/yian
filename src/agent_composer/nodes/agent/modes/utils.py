@@ -1,4 +1,4 @@
-"""Pure helper functions for agent modes (no shared state — that's in `common`)."""
+"""Text extraction and observational trace helpers shared by agent modes."""
 
 from __future__ import annotations
 

@@ -539,6 +539,33 @@ def test_invalid_unicode_text_is_ignored_by_observational_capture(
     assert capture_on.evidence.interactions == ()
 
 
+def test_invalid_unicode_prompt_is_ignored_by_observational_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unencodable prompt remains model input but never poisons evidence."""
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _config: _PlainChat("done"),
+    )
+    node = AgentNode("agent", prompt=chr(0xD800))
+    node.memory_scope = _scope(node.id)
+
+    capture_off = eval_node(node, None, VariablePool())
+    capture_on = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    assert capture_off.outcome == capture_on.outcome == Output("done")
+    assert capture_on.evidence is not None
+    assert capture_on.evidence.base_system_prompt is None
+    assert capture_on.evidence.prompt is None
+    assert capture_on.evidence.interactions == (ModelTextInteraction("done"),)
+
+
 def test_native_structured_agent_records_only_parsed_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

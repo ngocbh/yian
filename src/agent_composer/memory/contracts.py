@@ -881,7 +881,7 @@ class EvaluationEvidence:
 
     @property
     def bound_inputs(self) -> JsonObject | None:
-        """Return a fresh JSON copy of bound inputs, or ``None`` on binding failure."""
+        """Return bound inputs, or ``None`` when binding or safe capture was unavailable."""
         if self._bound_inputs is None:
             return None
         return _thaw_json_object(self._bound_inputs)
@@ -1115,7 +1115,7 @@ class MemoryEpisode:
 
     @property
     def inputs(self) -> JsonObject | None:
-        """Return a fresh input copy, or ``None`` when binding failed."""
+        """Return inputs, or ``None`` when binding or safe capture was unavailable."""
         return None if self._inputs is None else _thaw_json_object(self._inputs)
 
     @property

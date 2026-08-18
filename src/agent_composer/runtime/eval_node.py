@@ -160,17 +160,22 @@ class _EvaluationTraceCollector(EvaluationTrace):
         self._require_open()
         if self._prompt_recorded:
             raise RuntimeError("evaluation trace prompt was already recorded")
-        validated = EvaluationEvidence(
-            self._scope,
-            None,
-            base_system_prompt,
-            prompt,
-            memory_sections,
-        )
+        self._prompt_recorded = True
+        try:
+            validated = EvaluationEvidence(
+                self._scope,
+                None,
+                base_system_prompt,
+                prompt,
+                memory_sections,
+            )
+        except (TypeError, ValueError, RecursionError):
+            # The model already received this prompt. Trace serialization must not
+            # reclassify that ordinary provider execution as a node failure.
+            return
         self._base_system_prompt = validated.base_system_prompt
         self._prompt = validated.prompt
         self._memory_sections = validated.memory_sections
-        self._prompt_recorded = True
 
     def record_interaction(self, interaction: VisibleInteraction) -> None:
         """Append one exact visible interaction without exposing trace reads."""

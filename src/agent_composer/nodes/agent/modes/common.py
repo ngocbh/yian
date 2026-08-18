@@ -2,7 +2,7 @@
 
 Common (shared across the mode modules), kept out of `modes/__init__.py` so the
 concrete modes import from here and `__init__` only re-exports + registers — no
-`__init__` <-> submodule cycle. Pure helper functions live in `utils.py`.
+`__init__` <-> submodule cycle. Shared mode helpers live in `utils.py`.
 """
 
 from __future__ import annotations

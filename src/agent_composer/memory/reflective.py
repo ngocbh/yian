@@ -37,6 +37,7 @@ from agent_composer.memory.contracts import (
     ToolCallInteraction,
     ToolResultInteraction,
     VisibleInteraction,
+    _MAX_JSON_NESTING,
 )
 
 
@@ -115,22 +116,41 @@ def _positive_int(value: object, name: str) -> int:
     return value
 
 
+def _validated_json_string(value: object, name: str) -> str:
+    """Return one exact string with a canonical UTF-8 representation."""
+    if type(value) is not str:
+        raise TypeError(f"{name} must be a string")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Unicode surrogate is not valid canonical JSON") from exc
+    return value
+
+
 def _copy_json(
     value: object,
     name: str = "value",
     *,
     active: set[int] | None = None,
+    nesting: int = 0,
 ) -> JsonValue:
     """Validate and defensively copy one exact finite JSON value."""
     value_type = type(value)
-    if value is None or value_type in (bool, int, str):
+    if value is None or value_type in (bool, int):
         return cast(JsonValue, value)
+    if value_type is str:
+        return _validated_json_string(value, name)
     if value_type is float:
         if value != value or value in (float("inf"), float("-inf")):
             raise ValueError(f"{name} JSON number must be finite")
         return value
     if value_type not in (list, dict):
         raise TypeError(f"{name} must contain exact JSON values")
+    if nesting >= _MAX_JSON_NESTING:
+        raise ValueError(
+            f"{name} JSON nesting exceeds the conservative wire-safe limit "
+            f"of {_MAX_JSON_NESTING}"
+        )
 
     active = set() if active is None else active
     identity = id(value)
@@ -140,14 +160,25 @@ def _copy_json(
     try:
         if value_type is list:
             return [
-                _copy_json(item, f"{name}[{index}]", active=active)
+                _copy_json(
+                    item,
+                    f"{name}[{index}]",
+                    active=active,
+                    nesting=nesting + 1,
+                )
                 for index, item in enumerate(value)
             ]
         copied: JsonObject = {}
         for key, item in value.items():
             if type(key) is not str:
                 raise TypeError(f"{name} JSON object keys must be strings")
-            copied[key] = _copy_json(item, f"{name}.{key}", active=active)
+            _validated_json_string(key, f"{name} JSON object key")
+            copied[key] = _copy_json(
+                item,
+                f"{name}.{key}",
+                active=active,
+                nesting=nesting + 1,
+            )
         return copied
     finally:
         active.remove(identity)
@@ -173,8 +204,7 @@ def _canonical_json(value: JsonValue) -> str:
 
 def _nonempty_string(value: object, name: str) -> str:
     """Require one exact nonempty string."""
-    if type(value) is not str:
-        raise TypeError(f"{name} must be a string")
+    value = _validated_json_string(value, name)
     if not value:
         raise ValueError(f"{name} must be non-empty")
     return value
@@ -400,7 +430,7 @@ def _parse_snapshot(
         return namespace, epoch, revision, frames, complete_llm
     except MemoryOperationError:
         raise
-    except (TypeError, ValueError, ValidationError) as exc:
+    except (TypeError, ValueError, ValidationError, RecursionError) as exc:
         raise _snapshot_error("recorded memory snapshot is invalid") from exc
 
 

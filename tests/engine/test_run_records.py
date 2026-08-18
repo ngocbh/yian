@@ -661,6 +661,17 @@ def test_canonical_data_rejects_excessive_nesting_as_a_value_error():
         canonical_typed(value, None)
 
 
+def test_decode_record_rejects_excessive_nesting_as_a_value_error():
+    nested = '{"nested":' * 1_500 + "null" + "}" * 1_500
+    wire = (
+        '{"schema":4,"run_id":"run","seq":0,"kind":"node_started",'
+        f'"payload":{{"node_id":"work","extra":{nested}}}}}'
+    )
+
+    with pytest.raises(ValueError, match="nesting exceeds"):
+        decode_record(wire)
+
+
 def test_typed_output_canonicalizes_tuple_date_and_file_ref():
     value = {
         "items": (1, 2),

@@ -380,6 +380,35 @@ def test_snapshot_rejects_noncanonical_scalars_and_circular_json() -> None:
     assert exc.value.code == "reflective.invalid_snapshot"
 
 
+def test_reflective_json_rejects_non_utf8_model_and_snapshot_strings() -> None:
+    surrogate = "\ud800"
+    with pytest.raises(ValueError, match="Unicode surrogate"):
+        ReflectiveMemory({"provider": "ollama", "model": surrogate})
+
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    with memory.open_run() as session:
+        snapshot = session.snapshot
+    snapshot["namespace"] = surrogate
+
+    with pytest.raises(MemoryOperationError) as exc:
+        ReflectiveMemory().open_run(snapshot=snapshot)
+    assert exc.value.code == "reflective.invalid_snapshot"
+
+
+def test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot() -> None:
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    with memory.open_run() as session:
+        snapshot = session.snapshot
+    nested: dict[str, object] = {}
+    for _ in range(1_500):
+        nested = {"nested": nested}
+    snapshot["extra"] = nested
+
+    with pytest.raises(MemoryOperationError) as exc:
+        ReflectiveMemory().open_run(snapshot=snapshot)
+    assert exc.value.code == "reflective.invalid_snapshot"
+
+
 def test_snapshot_rejects_malformed_foreign_and_extra_lesson_sources() -> None:
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:

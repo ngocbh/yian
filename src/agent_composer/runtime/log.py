@@ -1327,9 +1327,11 @@ def decode_record(data: bytes | str) -> RecordEnvelope:
             object_pairs_hook=_object_without_duplicates,
             parse_constant=_reject_json_constant,
         )
+        raw = _copy_json(raw)
+    except RecursionError as exc:
+        raise ValueError("run-record JSON nesting exceeds the supported depth") from exc
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError("invalid run-record JSON") from exc
-    raw = _copy_json(raw)
     envelope = _EnvelopeWire.model_validate(raw)
     model_type = _KIND_TO_MODEL.get(envelope.kind)
     if model_type is None:

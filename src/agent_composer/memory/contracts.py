@@ -132,6 +132,7 @@ _PRIVATE_CREDENTIAL_SUFFIXES = frozenset(
         "shared_access_key",
         "shared_access_signature",
         "subscription_key",
+        "token",
         "webhook_url",
     }
 )
@@ -142,6 +143,7 @@ _PRIVATE_PYTHON_KEYS = frozenset(
         "class_path",
         "import",
         "import_path",
+        "imports",
         "module",
         "module_path",
         "python_class",
@@ -151,14 +153,27 @@ _PRIVATE_PYTHON_KEYS = frozenset(
     }
 )
 _PRIVATE_PYTHON_SUFFIXES = frozenset(
-    {"class_path", "import_path", "module_path", "python_path"}
+    {"class_path", "import_path", "imports", "module_path", "python_path"}
 )
 _PRIVATE_LOCATION_ROOTS = frozenset(
     {"backend", "database", "persistence", "storage"}
 )
 _PRIVATE_LOCATION_FIELDS = frozenset(
-    {"connection", "connection_string", "dsn", "location", "path", "uri", "url"}
+    {
+        "connection",
+        "connection_string",
+        "dir",
+        "directory",
+        "dsn",
+        "file",
+        "location",
+        "path",
+        "root",
+        "uri",
+        "url",
+    }
 )
+_PRIVATE_INDIRECTION_FIELDS = frozenset({"dir", "directory", "file", "path"})
 _PRIVATE_WEBHOOK_FIELDS = frozenset({"signature", "url"})
 _PRIVATE_PYTHON_FIELDS = frozenset({"class", "import", "module", "path"})
 
@@ -330,9 +345,29 @@ def _matches_private_suffix(value: str, vocabulary: frozenset[str]) -> bool:
     return any(
         value == item
         or value.endswith(f"_{item}")
-        or compact == item.replace("_", "")
+        or compact.endswith(item.replace("_", ""))
         for item in vocabulary
     )
+
+
+def _matches_private_credential_indirection(value: str) -> bool:
+    """Return whether one key names a file or path containing credentials."""
+    compact = value.replace("_", "")
+    for field in _PRIVATE_INDIRECTION_FIELDS:
+        suffix = f"_{field}"
+        if value.endswith(suffix):
+            stem = value[: -len(suffix)]
+        else:
+            compact_field = field.replace("_", "")
+            if not compact.endswith(compact_field):
+                continue
+            stem = compact[: -len(compact_field)]
+        if stem and (
+            _matches_exact_private_key(stem, _PRIVATE_CREDENTIAL_KEYS)
+            or _matches_private_suffix(stem, _PRIVATE_CREDENTIAL_SUFFIXES)
+        ):
+            return True
+    return False
 
 
 def _reject_private_memory_keys(
@@ -372,6 +407,7 @@ def _reject_private_memory_keys(
                 or _matches_private_suffix(normalized, _PRIVATE_TENANT_KEYS)
                 or _matches_exact_private_key(normalized, _PRIVATE_PYTHON_KEYS)
                 or _matches_private_suffix(normalized, _PRIVATE_PYTHON_SUFFIXES)
+                or _matches_private_credential_indirection(normalized)
                 or (
                     private_location
                     and _matches_private_suffix(

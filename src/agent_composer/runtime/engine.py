@@ -25,6 +25,7 @@ from agent_composer.nodes.base import Grow, Output, Route, _HostStop
 from agent_composer.runtime.eval_node import (
     EvaluatedOutcome,
     EvaluationFailure,
+    MemoryRecall,
     eval_node,
 )
 from agent_composer.runtime.log import RunLog
@@ -69,7 +70,8 @@ class FlowEngine:
 
     ``run`` yields only observers returned after a record has been appended and its
     reducer plan applied.  The optional event callback sees the same observers first;
-    stream chunks are callback-only and never durable or yielded.
+    stream chunks are callback-only and never durable or yielded. Optional memory recall is
+    one source-neutral callback; evidence capture follows only recorded ``RunState.learn``.
     """
 
     def __init__(
@@ -82,7 +84,7 @@ class FlowEngine:
         on_event: Callable[[Any], None] | None = None,
         on_stream: Callable[[StreamChunk], None] | None = None,
         stop_event: threading.Event | None = None,
-        capture_evidence: bool = False,
+        memory_recall: MemoryRecall | None = None,
     ) -> None:
         """Borrow a prepared state/log pair and configure one bounded drive."""
         if type(state) is not RunState:
@@ -99,8 +101,8 @@ class FlowEngine:
             raise TypeError("on_event must be callable or None")
         if on_stream is not None and not callable(on_stream):
             raise TypeError("on_stream must be callable or None")
-        if type(capture_evidence) is not bool:
-            raise TypeError("capture_evidence must be a bool")
+        if memory_recall is not None and not callable(memory_recall):
+            raise TypeError("memory_recall must be callable or None")
         self.state = state
         self.log = log
         self.grow_builder = grow_builder
@@ -108,7 +110,7 @@ class FlowEngine:
         self.on_event = on_event
         self.on_stream = on_stream
         self.stop_event = stop_event if stop_event is not None else threading.Event()
-        self.capture_evidence = capture_evidence
+        self.memory_recall = memory_recall
 
     def run(self) -> Iterator[Any]:
         """Drive newly ready work and yield only post-durable observer notifications."""
@@ -399,7 +401,8 @@ class FlowEngine:
             wiring_override=self.state.wiring_overrides.get(node_id),
             stop_event=self.stop_event,
             emit_stream=emit_stream,
-            capture_evidence=self.capture_evidence,
+            capture_evidence=self.state.learn,
+            memory_recall=self.memory_recall,
         )
 
     def _evaluate_worker(

@@ -2,13 +2,48 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from agent_composer.memory.contracts import (
     EvaluationTrace,
+    MemorySection,
     ModelTextInteraction,
     ToolResultInteraction,
 )
+
+
+def system_prompt_with_memory(
+    base_system_prompt: str,
+    memory_sections: tuple[MemorySection, ...],
+) -> str:
+    """Frame opaque policy text as labelled outer-to-local system sections."""
+    if not memory_sections:
+        return base_system_prompt
+    payload = {
+        "order": "outer-to-local",
+        "sections": [
+            {
+                "index": index,
+                "owner": section.frame_ref.owner.value.upper(),
+                "static_path": section.frame_ref.static_path,
+                "text": section.text,
+            }
+            for index, section in enumerate(memory_sections, start=1)
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return (
+        base_system_prompt
+        + "\n\nMemory context (canonical JSON; sections are ordered from outer "
+        + "workflow to local agent):\n"
+        + encoded
+    )
 
 
 def text_of(message: Any) -> str:

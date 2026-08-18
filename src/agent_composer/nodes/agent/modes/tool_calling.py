@@ -17,6 +17,7 @@ from agent_composer.nodes.agent.modes.common import (
 from agent_composer.nodes.agent.modes.utils import (
     record_model_text,
     record_tool_result,
+    system_prompt_with_memory,
     text_of,
 )
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
@@ -30,15 +31,20 @@ MAX_TOOL_ITERATIONS = -1
 @register_mode("tool_calling")
 def tool_calling(ctx: AgentRunContext) -> Output:
     """Execute model-returned tool calls in order until the model answers."""
+    system_prompt = system_prompt_with_memory(DEFAULT_SYSTEM, ctx.memory_sections)
     messages: list[BaseMessage] = [
-        SystemMessage(content=DEFAULT_SYSTEM),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=ctx.prompt),
     ]
     ctx.check_stopped()
     model = llm_clients.model_from_config(ctx.llm_config or {})
     ctx.check_stopped()
     if ctx.evaluation_trace is not None:
-        ctx.evaluation_trace.record_prompt(DEFAULT_SYSTEM, ctx.prompt)
+        ctx.evaluation_trace.record_prompt(
+            DEFAULT_SYSTEM,
+            ctx.prompt,
+            ctx.memory_sections,
+        )
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
     if not ctx.tools and schema is not None:
         return Output(

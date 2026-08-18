@@ -7,9 +7,10 @@ kind, a generator that yields `StreamChunk` and then *returns* a `NodeResult`.
 The node never receives the pool: the engine's `runtime.eval_node` seam binds its
 inputs (the read boundary) and hands it a record. Narrow effects enter through trait-gated
 capabilities: MAP receives `bind_item`, a cooperatively blocking node may receive
-`stop_event`, and AGENT may receive a write-only `evaluation_trace`. Failure is **not** a
-variant — a failing node `raise`s; expected evaluator rejection becomes a canonical
-`EvaluationFailure(Failure)` retained by the schema-4 failure record. A streaming
+`stop_event`, and a scoped AGENT may receive narrow recall plus a write-only
+`evaluation_trace`. Failure is **not** a variant — a failing node `raise`s; expected
+evaluator rejection becomes a canonical `EvaluationFailure(Failure)` retained by the
+schema-4 failure record. A streaming
 kind is a generator that yields `StreamChunk` and *returns* its `NodeResult` (drained
 by `_drain_node_generator`).
 
@@ -171,6 +172,15 @@ class _DeferredBindingFault(Exception):
         self.original = original
 
 
+class _CapabilityFault(Exception):
+    """Private carrier for an unexpected injected-capability host fault."""
+
+    def __init__(self, original: Exception) -> None:
+        """Retain the exact host fault so the evaluator can propagate its identity."""
+        super().__init__(str(original))
+        self.original = original
+
+
 class _AssertionStageError(Exception):
     """Private marker for an assertion failure produced by the base run wrapper."""
 
@@ -273,6 +283,11 @@ class Node(ABC):
     # (`eval_node`) supplies the exact `caps['stop_event']` object owned by the run. Nodes that
     # do not opt in receive no stop capability, keeping the effect boundary explicit.
     needs_stop_event: ClassVar[bool] = False
+    # Declares "I can recall ordered memory sections for my visible prompt". The evaluator
+    # supplies a narrow ``recall_memory(base_system_prompt, rendered_prompt)`` capability only
+    # when the run boundary injected recall and this node carries a compiled memory scope.
+    # AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
+    needs_memory_recall: ClassVar[bool] = False
     # Declares "I can emit visible prompt/model/tool evidence". The evaluator supplies a
     # write-only invocation-local trace only when evidence capture is enabled and this exact
     # trait is True. AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
@@ -494,7 +509,7 @@ class Node(ABC):
         run against the bound record, ``forward`` executes, and post-asserts inspect
         an ``Output`` against the pristine inputs. The method returns exactly
         ``Output | Route | Grow`` or a streaming generator with one of those terminal
-        values. ``bind_item`` and ``stop_event`` are the only trait-gated capabilities.
+        values. Narrow effects are passed only through node-owned trait gates.
 
         Direct calls preserve the original exception and traceback. The evaluator uses
         the private companion path to tag wrapper-owned binding, assertion, and body
@@ -533,7 +548,8 @@ class Node(ABC):
 
         Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
-        are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
+        are passed only to nodes whose traits request them (``bind_item``,
+        ``stop_event``, ``recall_memory``, and ``evaluation_trace``).
         Expected rejection is a `raise`, not a result variant; the evaluator classifies
         its structural stage before the dispatcher records the canonical `Failure`."""
         params = self.params if self.params is not None else []
@@ -582,7 +598,13 @@ class Node(ABC):
         post_input = copy.deepcopy(inputs) if self.post_asserts else None
         try:
             result = self.forward(inputs, **caps)
-        except (_HostStop, _BindingStageError, _DeferredBindingFault, _NodeBodyError):
+        except (
+            _HostStop,
+            _BindingStageError,
+            _DeferredBindingFault,
+            _CapabilityFault,
+            _NodeBodyError,
+        ):
             raise
         except Exception as exc:
             if not classify_body_errors:
@@ -626,7 +648,8 @@ class Node(ABC):
 
         Returns a `NodeResult` (`Output | Route | Grow`), or — for a streaming kind —
         a generator that yields `StreamChunk` and *returns* a `NodeResult`. Narrow effect caps
-        are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
+        are passed only to nodes whose traits request them (``bind_item``,
+        ``stop_event``, ``recall_memory``, and ``evaluation_trace``).
         A body exception is classified as ``node.execute`` by the evaluator."""
         raise NotImplementedError(
             f"node {self.id!r} ({type(self).__name__}) defines no forward"

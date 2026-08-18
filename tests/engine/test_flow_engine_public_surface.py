@@ -33,6 +33,7 @@ from agent_composer.events import (
     RunSucceeded,
     StreamChunk,
 )
+from agent_composer.memory import MemoryScope, MemorySection, RecallContext
 from agent_composer.nodes.base import Node, NodeKind, Output
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
@@ -317,7 +318,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         "on_event",
         "on_stream",
         "stop_event",
-        "capture_evidence",
+        "memory_recall",
     ]
     assert [parameter.kind for parameter in parameters] == [
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
@@ -339,7 +340,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         None,
         None,
         None,
-        False,
+        None,
     ]
     hints = get_type_hints(FlowEngine.__init__)
     assert set(hints) == {
@@ -350,7 +351,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         "on_event",
         "on_stream",
         "stop_event",
-        "capture_evidence",
+        "memory_recall",
         "return",
     }
     assert hints["state"] is RunState
@@ -373,7 +374,11 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         types.NoneType,
     )
     assert _optional_inner(hints["stop_event"]) is threading.Event
-    assert hints["capture_evidence"] is bool
+    recall_hint = _optional_inner(hints["memory_recall"])
+    assert get_origin(recall_hint) is Callable
+    recall_parameters, recall_result = get_args(recall_hint)
+    assert tuple(recall_parameters) == (MemoryScope, RecallContext)
+    assert recall_result == tuple[MemorySection, ...]
     assert hints["return"] is types.NoneType
 
 

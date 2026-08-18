@@ -18,10 +18,12 @@ from agent_composer.memory import (
     EvaluationEvidence,
     EvaluationTrace,
     MemoryFrameRef,
+    MemoryFrameSpec,
     MemoryOccurrenceKind,
     MemoryOccurrenceSegment,
     MemoryOwner,
     MemoryScope,
+    MemorySnapshotEnvelope,
     ModelTextInteraction,
     ModelValueInteraction,
     ToolCallInteraction,
@@ -87,6 +89,38 @@ def _occurrence(index: int) -> tuple[MemoryOccurrenceSegment, ...]:
             index,
         ),
     )
+
+
+def _learning_configuration(
+    *nodes: Node,
+) -> tuple[
+    tuple[MemoryFrameSpec, ...],
+    tuple[MemorySnapshotEnvelope, ...],
+]:
+    """Return one canonical test policy authority for the nodes' frame stacks."""
+    refs = {
+        frame
+        for node in nodes
+        if type(node.memory_scope) is MemoryScope
+        for frame in node.memory_scope.frame_stack
+    }
+    layout = tuple(
+        MemoryFrameSpec(ref, "evidence-test", {})
+        for ref in sorted(
+            refs,
+            key=lambda item: (
+                item.root_flow_id,
+                item.static_path,
+                item.owner.value,
+            ),
+        )
+    )
+    return layout, (MemorySnapshotEnvelope("evidence-test", {}),)
+
+
+def _empty_recall(_scope, _context):
+    """Represent enabled memory whose policies recalled no visible sections."""
+    return ()
 
 
 class _PlainChat:
@@ -323,6 +357,7 @@ def _captured_agent(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
     return node, evaluated
 
@@ -347,7 +382,12 @@ def test_capture_gate_requires_exact_flag_trait_and_nonempty_scope(
     )
     scoped = AgentNode("scoped")
     scoped.memory_scope = _scope(scoped.id)
-    disabled = eval_node(scoped, None, VariablePool())
+    disabled = eval_node(
+        scoped,
+        None,
+        VariablePool(),
+        memory_recall=_empty_recall,
+    )
     assert disabled.evidence is None
 
     unscoped = AgentNode("unscoped")
@@ -356,6 +396,7 @@ def test_capture_gate_requires_exact_flag_trait_and_nonempty_scope(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     ).evidence is None
 
     ordinary = FuncNode("ordinary", lambda _inputs: "done")
@@ -365,6 +406,7 @@ def test_capture_gate_requires_exact_flag_trait_and_nonempty_scope(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     ).evidence is None
 
     with pytest.raises(TypeError, match="capture_evidence must be a bool"):
@@ -380,6 +422,7 @@ def test_capture_snapshots_canonical_inputs_before_node_mutation() -> None:
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert evaluated.outcome == Output({"payload": {"items": [1, 2]}})
@@ -401,6 +444,7 @@ def test_input_snapshot_canonicalization_fault_propagates_before_node_run() -> N
             None,
             VariablePool(),
             capture_evidence=True,
+            memory_recall=_empty_recall,
         )
 
     assert node.ran is False
@@ -424,6 +468,7 @@ def test_binding_failure_captures_scope_with_absent_inputs_and_no_prompt(
         flow,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert isinstance(evaluated.outcome, EvaluationFailure)
@@ -433,17 +478,17 @@ def test_binding_failure_captures_scope_with_absent_inputs_and_no_prompt(
     assert evaluated.evidence.interactions == ()
 
 
-def test_wire_safe_but_oversized_bound_inputs_do_not_change_capture_behavior(
+def test_oversized_recall_inputs_fail_identically_with_or_without_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A conservative evidence bound may omit inputs without aborting execution."""
+    """Recall context validation is semantic while evidence remains observational."""
     nested: dict = {}
     for _ in range(160):
         nested = {"nested": nested}
     monkeypatch.setattr(
         llm_clients,
         "model_from_config",
-        lambda _config: _PlainChat("done"),
+        lambda _config: pytest.fail("invalid recall context must precede the model"),
     )
     node = AgentNode("agent", prompt="answer")
     node.params = [Parameter(name="payload", required=True)]
@@ -452,18 +497,21 @@ def test_wire_safe_but_oversized_bound_inputs_do_not_change_capture_behavior(
     pool.set("source", nested)
     flow = SimpleNamespace(wiring={node.id: {"payload": "${source.output}"}})
 
-    capture_off = eval_node(node, flow, pool)
+    capture_off = eval_node(node, flow, pool, memory_recall=_empty_recall)
     capture_on = eval_node(
         node,
         flow,
         pool,
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
-    assert capture_off.outcome == capture_on.outcome == Output("done")
+    assert isinstance(capture_off.outcome, EvaluationFailure)
+    assert capture_on.outcome == capture_off.outcome
+    assert capture_on.outcome.failure.message == "memory recall context is invalid"
     assert capture_on.evidence is not None
     assert capture_on.evidence.bound_inputs is None
-    assert capture_on.evidence.interactions == (ModelTextInteraction("done"),)
+    assert capture_on.evidence.interactions == ()
 
 
 def test_plain_agent_records_only_visible_prompt_and_text(
@@ -496,12 +544,18 @@ def test_visible_string_subclass_has_capture_off_on_behavioral_parity(
     node = AgentNode("agent", prompt="answer")
     node.memory_scope = _scope(node.id)
 
-    capture_off = eval_node(node, None, VariablePool())
+    capture_off = eval_node(
+        node,
+        None,
+        VariablePool(),
+        memory_recall=_empty_recall,
+    )
     capture_on = eval_node(
         node,
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert capture_off.outcome == capture_on.outcome == Output("subclass answer")
@@ -525,12 +579,18 @@ def test_invalid_unicode_text_is_ignored_by_observational_capture(
     node = AgentNode("agent", prompt="answer")
     node.memory_scope = _scope(node.id)
 
-    capture_off = eval_node(node, None, VariablePool())
+    capture_off = eval_node(
+        node,
+        None,
+        VariablePool(),
+        memory_recall=_empty_recall,
+    )
     capture_on = eval_node(
         node,
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     expected = Output(chr(0xD800))
@@ -539,31 +599,39 @@ def test_invalid_unicode_text_is_ignored_by_observational_capture(
     assert capture_on.evidence.interactions == ()
 
 
-def test_invalid_unicode_prompt_is_ignored_by_observational_capture(
+def test_invalid_unicode_recall_prompt_fails_identically_with_or_without_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unencodable prompt remains model input but never poisons evidence."""
+    """Recall rejects an invalid prompt while tracing stays observational."""
     monkeypatch.setattr(
         llm_clients,
         "model_from_config",
-        lambda _config: _PlainChat("done"),
+        lambda _config: pytest.fail("invalid recall context must precede the model"),
     )
     node = AgentNode("agent", prompt=chr(0xD800))
     node.memory_scope = _scope(node.id)
 
-    capture_off = eval_node(node, None, VariablePool())
+    capture_off = eval_node(
+        node,
+        None,
+        VariablePool(),
+        memory_recall=_empty_recall,
+    )
     capture_on = eval_node(
         node,
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
-    assert capture_off.outcome == capture_on.outcome == Output("done")
+    assert isinstance(capture_off.outcome, EvaluationFailure)
+    assert capture_on.outcome == capture_off.outcome
+    assert capture_on.outcome.failure.message == "memory recall context is invalid"
     assert capture_on.evidence is not None
     assert capture_on.evidence.base_system_prompt is None
     assert capture_on.evidence.prompt is None
-    assert capture_on.evidence.interactions == (ModelTextInteraction("done"),)
+    assert capture_on.evidence.interactions == ()
 
 
 def test_native_structured_agent_records_only_parsed_value(
@@ -586,6 +654,7 @@ def test_native_structured_agent_records_only_parsed_value(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert evaluated.outcome == Output(7)
@@ -612,6 +681,7 @@ def test_fallback_structured_records_every_raw_retry_without_parsed_duplicate(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert evaluated.outcome == Output(7)
@@ -644,6 +714,7 @@ def test_fallback_structured_parses_only_visible_text_blocks(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert evaluated.outcome == Output(13)
@@ -693,6 +764,7 @@ def test_invalid_unicode_fallback_trace_does_not_consume_a_retry(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert evaluated.outcome == Output({"value": chr(0xD800)})
@@ -730,6 +802,7 @@ def test_tool_mode_records_calls_results_and_final_text_in_visible_order(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert evaluated.outcome == Output("finished")
@@ -759,6 +832,7 @@ def test_tool_mode_records_valid_ungranted_call_before_failure(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert isinstance(evaluated.outcome, EvaluationFailure)
@@ -791,12 +865,18 @@ def test_recursive_ungranted_tool_arguments_do_not_change_failure_with_capture(
     node = AgentNode("agent", prompt="lookup", mode="tool_calling", tools=[])
     node.memory_scope = _scope(node.id)
 
-    capture_off = eval_node(node, None, VariablePool())
+    capture_off = eval_node(
+        node,
+        None,
+        VariablePool(),
+        memory_recall=_empty_recall,
+    )
     capture_on = eval_node(
         node,
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert isinstance(capture_off.outcome, EvaluationFailure)
@@ -835,12 +915,18 @@ def test_tool_name_subclass_has_capture_off_on_behavioral_parity(
     )
     node.memory_scope = _scope(node.id)
 
-    capture_off = eval_node(node, None, VariablePool())
+    capture_off = eval_node(
+        node,
+        None,
+        VariablePool(),
+        memory_recall=_empty_recall,
+    )
     capture_on = eval_node(
         node,
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert capture_off.outcome == capture_on.outcome == Output("finished")
@@ -902,6 +988,7 @@ def test_tool_trace_uses_the_same_effective_arguments_as_invocation(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert evaluated.outcome == Output("finished")
@@ -942,6 +1029,7 @@ def test_invalid_unicode_tool_result_is_ignored_by_observational_capture(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert evaluated.outcome == Output("finished")
@@ -988,6 +1076,7 @@ def test_tool_structured_output_retains_discovery_and_generation_order(
         None,
         VariablePool(),
         capture_evidence=True,
+        memory_recall=_empty_recall,
     )
 
     assert evaluated.outcome == Output(9)
@@ -1011,7 +1100,13 @@ def _inflight_state(node: Node):
         [node],
         [(START_ID, node.id), (node.id, END_ID)],
     )
-    engine = _engine(flow)
+    layout, snapshots = _learning_configuration(node)
+    engine = _engine(
+        flow,
+        memory_layout=layout,
+        memory_snapshots=snapshots,
+        learn=True,
+    )
     commit_prepared(
         engine.log,
         engine.state,
@@ -1067,7 +1162,7 @@ def test_state_validates_evidence_scope_and_trait_for_live_and_replay() -> None:
     ordinary = FuncNode("ordinary", lambda _inputs: "done")
     ordinary.memory_scope = _scope(ordinary.id)
     ordinary_evidence = EvaluationEvidence(ordinary.memory_scope, {}, None, None)
-    with pytest.raises(ValueError, match="does not declare evaluation evidence"):
+    with pytest.raises(ValueError, match="ineligible for evaluation evidence"):
         prepare_node_succeeded(
             _inflight_state(ordinary),
             ordinary.id,
@@ -1104,10 +1199,13 @@ def test_dispatcher_contract_failures_retain_the_same_evidence(arm: str) -> None
             raise GrowthRejected(error) from error
 
     node.memory_scope = _scope(node.id)
+    layout, snapshots = _learning_configuration(node)
     engine = _engine(
         _graph(nodes, edges),
-        capture_evidence=True,
         grow_builder=grow_builder,
+        memory_layout=layout,
+        memory_snapshots=snapshots,
+        learn=True,
     )
 
     list(engine.run())
@@ -1151,7 +1249,14 @@ def test_pooled_dispatch_discards_late_sibling_evidence_with_its_outcome() -> No
             (sibling.id, END_ID),
         ],
     )
-    engine = _engine(flow, num_workers=2, capture_evidence=True)
+    layout, snapshots = _learning_configuration(failing, sibling)
+    engine = _engine(
+        flow,
+        num_workers=2,
+        memory_layout=layout,
+        memory_snapshots=snapshots,
+        learn=True,
+    )
 
     list(engine.run())
 

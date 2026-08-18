@@ -15,13 +15,15 @@ from agent_composer.expr.template import render_template_record
 from agent_composer.memory.contracts import (
     EvaluationTrace,
     MemoryPolicySpec,
+    MemoryRecallError,
+    MemorySection,
     _iter_memory_policy_origin,
     _rewrite_memory_policy_origin,
 )
-from agent_composer.nodes.agent.modes import MODES, AgentRunContext
+from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunContext
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
-from agent_composer.nodes.base import Node, NodeKind, Output
+from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
 from agent_composer.nodes.contracts import ValueContract
 
 DEFAULT_MODE = "plain"
@@ -39,6 +41,7 @@ class AgentNode(Node):
     kind = NodeKind.AGENT
     needs_stop_event = True
     needs_evaluation_trace = True
+    needs_memory_recall = True
 
     def __init__(
         self,
@@ -112,6 +115,7 @@ class AgentNode(Node):
         *,
         stop_event=None,
         evaluation_trace: EvaluationTrace | None = None,
+        memory_sections: tuple[MemorySection, ...] = (),
     ) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
@@ -129,6 +133,7 @@ class AgentNode(Node):
             max_tool_iterations=self._max_tool_iterations(),
             stop_event=stop_event,
             evaluation_trace=evaluation_trace,
+            memory_sections=memory_sections,
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -137,6 +142,12 @@ class AgentNode(Node):
         Unrelated Pydantic errors, non-validation failures, and contracts without
         authored provenance retain the common node-origin fallback.
         """
+        if isinstance(exception, MemoryRecallError):
+            return (
+                exception.origin
+                if exception.origin is not None
+                else super().exception_origin(exception)
+            )
         contract = self.output_contract
         if type(contract) is not ValueContract:
             return super().exception_origin(exception)
@@ -152,13 +163,24 @@ class AgentNode(Node):
         *,
         stop_event=None,
         evaluation_trace: EvaluationTrace | None = None,
+        recall_memory: Callable[[str, str], tuple[MemorySection, ...]] | None = None,
     ) -> Output:
         """Render declared inputs and run the selected local mode to completion."""
         prompt = render_template_record(self.prompt, inputs)
+        if stop_event is not None and stop_event.is_set():
+            raise _HostStop(primary=False)
+        memory_sections = (
+            ()
+            if recall_memory is None
+            else recall_memory(DEFAULT_SYSTEM, prompt)
+        )
+        if stop_event is not None and stop_event.is_set():
+            raise _HostStop(primary=False)
         return MODES[self.mode](
             self._ctx(
                 prompt,
                 stop_event=stop_event,
                 evaluation_trace=evaluation_trace,
+                memory_sections=memory_sections,
             )
         )

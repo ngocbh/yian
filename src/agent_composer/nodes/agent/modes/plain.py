@@ -10,7 +10,12 @@ from __future__ import annotations
 from langchain_core.messages import HumanMessage, SystemMessage
 
 import agent_composer.llm_clients as llm_clients
-from agent_composer.nodes.agent.modes.common import DEFAULT_SYSTEM, AgentRunContext, register_mode
+from agent_composer.memory.contracts import ModelTextInteraction
+from agent_composer.nodes.agent.modes.common import (
+    DEFAULT_SYSTEM,
+    AgentRunContext,
+    register_mode,
+)
 from agent_composer.nodes.agent.modes.utils import text_of
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
 from agent_composer.nodes.base import Output
@@ -22,12 +27,17 @@ def plain(ctx: AgentRunContext) -> Output:
     model = llm_clients.model_from_config(ctx.llm_config or {})
     ctx.check_stopped()
     msgs = [SystemMessage(content=DEFAULT_SYSTEM), HumanMessage(content=ctx.prompt)]
+    if ctx.evaluation_trace is not None:
+        ctx.evaluation_trace.record_prompt(DEFAULT_SYSTEM, ctx.prompt)
     # A constrained type -> structured generation; only a bare str keeps the text path.
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
     if schema is None:
         reply = model.invoke(msgs)
         ctx.check_stopped()
-        return Output(value=text_of(reply))
+        text = text_of(reply)
+        if ctx.evaluation_trace is not None:
+            ctx.evaluation_trace.record_interaction(ModelTextInteraction(text))
+        return Output(value=text)
     return Output(
         value=generate_structured(
             model,
@@ -36,5 +46,6 @@ def plain(ctx: AgentRunContext) -> Output:
             max_retries=ctx.retries,
             llm_config=ctx.llm_config,
             check_stopped=ctx.check_stopped,
+            evaluation_trace=ctx.evaluation_trace,
         )
     )

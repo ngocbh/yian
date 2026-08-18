@@ -47,6 +47,7 @@ def _engine(
     on_event=None,
     on_stream=None,
     stop_event=None,
+    capture_evidence: bool = False,
 ) -> FlowEngine:
     """Prepare one in-memory authority and return the final direct engine surface."""
     inputs = dict(run_inputs or {})
@@ -77,6 +78,7 @@ def _engine(
         on_event=on_event,
         on_stream=on_stream,
         stop_event=stop_event,
+        capture_evidence=capture_evidence,
     )
 
 

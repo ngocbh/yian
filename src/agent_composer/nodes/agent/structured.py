@@ -25,6 +25,11 @@ from typing import Any, Callable, List, Literal, Optional
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, ValidationError, create_model
 
+from agent_composer.memory.contracts import (
+    EvaluationTrace,
+    ModelTextInteraction,
+    ModelValueInteraction,
+)
 from agent_composer.nodes.base import _HostStop
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -164,6 +169,7 @@ def generate_structured(
     max_retries: int = 2,
     llm_config: dict | None = None,
     check_stopped: Callable[[], None] | None = None,
+    evaluation_trace: EvaluationTrace | None = None,
 ) -> Any:
     """Generate a value conforming to `typ`, retrying on provider deviation up to a cap.
 
@@ -181,8 +187,24 @@ def generate_structured(
     check = check_stopped or (lambda: None)
     schema = type_to_schema(typ)
     if _supports_native_structured(llm_config or {}):
-        return _generate_native(model, messages, typ, schema, max_retries, check)
-    return _generate_fallback(model, messages, typ, schema, max_retries, check)
+        return _generate_native(
+            model,
+            messages,
+            typ,
+            schema,
+            max_retries,
+            check,
+            evaluation_trace,
+        )
+    return _generate_fallback(
+        model,
+        messages,
+        typ,
+        schema,
+        max_retries,
+        check,
+        evaluation_trace,
+    )
 
 
 def _generate_native(
@@ -192,6 +214,7 @@ def _generate_native(
     schema: type[BaseModel],
     max_retries: int,
     check_stopped: Callable[[], None],
+    evaluation_trace: EvaluationTrace | None,
 ) -> Any:
     """Native path: `with_structured_output(schema)` + capped self-correction retry."""
     msgs = list(messages)
@@ -218,6 +241,15 @@ def _generate_native(
                 )
             ]
         else:
+            if evaluation_trace is not None:
+                try:
+                    interaction = ModelValueInteraction(value)
+                except (TypeError, ValueError):
+                    # Evidence is observational. A value the dispatcher will reject must
+                    # retain its existing contract-failure classification.
+                    pass
+                else:
+                    evaluation_trace.record_interaction(interaction)
             return value
     raise last_err  # type: ignore[misc]
 
@@ -229,6 +261,7 @@ def _generate_fallback(
     schema: type[BaseModel],
     max_retries: int,
     check_stopped: Callable[[], None],
+    evaluation_trace: EvaluationTrace | None,
 ) -> Any:
     """Prompt-injection path for a provider with no native structured output: ask for JSON
     matching the schema, parse + validate the free-text reply, capped self-correction retry.
@@ -247,6 +280,8 @@ def _generate_fallback(
         try:
             text = _text_of(model.invoke(msgs))
             check_stopped()
+            if evaluation_trace is not None:
+                evaluation_trace.record_interaction(ModelTextInteraction(text))
             obj = schema.model_validate(json.loads(_strip_code_fence(text)))
             value = _unwrap(obj, typ)
         except _HostStop:

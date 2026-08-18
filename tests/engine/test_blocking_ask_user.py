@@ -51,7 +51,7 @@ def _tool_reply(name: str, args: dict, call_id: str) -> AIMessage:
 
 def _drive(node: AgentNode):
     """Return one raw direct-evaluation outcome."""
-    return eval_node(node, None, VariablePool())
+    return eval_node(node, None, VariablePool()).outcome
 
 
 def test_mode_resolves_model_factory_at_call_time(monkeypatch):

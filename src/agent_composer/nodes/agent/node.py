@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterator, Optional
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
 from agent_composer.memory.contracts import (
+    EvaluationTrace,
     MemoryPolicySpec,
     _iter_memory_policy_origin,
     _rewrite_memory_policy_origin,
@@ -37,6 +38,7 @@ class AgentNode(Node):
 
     kind = NodeKind.AGENT
     needs_stop_event = True
+    needs_evaluation_trace = True
 
     def __init__(
         self,
@@ -104,7 +106,13 @@ class AgentNode(Node):
             )
         return raw
 
-    def _ctx(self, prompt: str, *, stop_event=None) -> AgentRunContext:
+    def _ctx(
+        self,
+        prompt: str,
+        *,
+        stop_event=None,
+        evaluation_trace: EvaluationTrace | None = None,
+    ) -> AgentRunContext:
         """Build the complete process-local context for one mode invocation."""
         output_type = (
             self.output_contract.type
@@ -120,6 +128,7 @@ class AgentNode(Node):
             retries=self.retries,
             max_tool_iterations=self._max_tool_iterations(),
             stop_event=stop_event,
+            evaluation_trace=evaluation_trace,
         )
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -137,7 +146,19 @@ class AgentNode(Node):
         origin = contract.origins.at(path)
         return origin if origin is not None else super().exception_origin(exception)
 
-    def forward(self, inputs: dict, *, stop_event=None) -> Output:
+    def forward(
+        self,
+        inputs: dict,
+        *,
+        stop_event=None,
+        evaluation_trace: EvaluationTrace | None = None,
+    ) -> Output:
         """Render declared inputs and run the selected local mode to completion."""
         prompt = render_template_record(self.prompt, inputs)
-        return MODES[self.mode](self._ctx(prompt, stop_event=stop_event))
+        return MODES[self.mode](
+            self._ctx(
+                prompt,
+                stop_event=stop_event,
+                evaluation_trace=evaluation_trace,
+            )
+        )

@@ -317,11 +317,13 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         "on_event",
         "on_stream",
         "stop_event",
+        "capture_evidence",
     ]
     assert [parameter.kind for parameter in parameters] == [
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.KEYWORD_ONLY,
@@ -337,6 +339,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         None,
         None,
         None,
+        False,
     ]
     hints = get_type_hints(FlowEngine.__init__)
     assert set(hints) == {
@@ -347,6 +350,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         "on_event",
         "on_stream",
         "stop_event",
+        "capture_evidence",
         "return",
     }
     assert hints["state"] is RunState
@@ -369,6 +373,7 @@ def test_constructor_is_exactly_the_recorded_state_log_surface():
         types.NoneType,
     )
     assert _optional_inner(hints["stop_event"]) is threading.Event
+    assert hints["capture_evidence"] is bool
     assert hints["return"] is types.NoneType
 
 

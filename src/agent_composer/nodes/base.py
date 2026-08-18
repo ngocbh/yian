@@ -6,10 +6,10 @@ A node is a **pure function of its bound input record**: it implements
 kind, a generator that yields `StreamChunk` and then *returns* a `NodeResult`.
 The node never receives the pool: the engine's `runtime.eval_node` seam binds its
 inputs (the read boundary) and hands it a record. Narrow effects enter through trait-gated
-capabilities: MAP receives `bind_item`, and a cooperatively blocking node may receive
-`stop_event`. Failure is **not** a variant — a
-failing node `raise`s; expected evaluator rejection becomes a canonical
-`EvaluationFailure(Failure)` retained by the schema-3 failure record. A streaming
+capabilities: MAP receives `bind_item`, a cooperatively blocking node may receive
+`stop_event`, and AGENT may receive a write-only `evaluation_trace`. Failure is **not** a
+variant — a failing node `raise`s; expected evaluator rejection becomes a canonical
+`EvaluationFailure(Failure)` retained by the schema-4 failure record. A streaming
 kind is a generator that yields `StreamChunk` and *returns* its `NodeResult` (drained
 by `_drain_node_generator`).
 
@@ -273,6 +273,10 @@ class Node(ABC):
     # (`eval_node`) supplies the exact `caps['stop_event']` object owned by the run. Nodes that
     # do not opt in receive no stop capability, keeping the effect boundary explicit.
     needs_stop_event: ClassVar[bool] = False
+    # Declares "I can emit visible prompt/model/tool evidence". The evaluator supplies a
+    # write-only invocation-local trace only when evidence capture is enabled and this exact
+    # trait is True. AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
+    needs_evaluation_trace: ClassVar[bool] = False
 
     def __init__(
         self,

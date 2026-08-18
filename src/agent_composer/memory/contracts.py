@@ -1243,6 +1243,29 @@ class MemoryRecallError(Exception):
 
 
 @runtime_checkable
+class EvaluationTrace(Protocol):
+    """Write-only sink for visible evidence from one AGENT invocation.
+
+    Implementations accept only the exact source-neutral carriers declared by
+    this package.  The protocol deliberately exposes no read surface: the
+    evaluator owns freezing the invocation-local trace into durable evidence.
+    """
+
+    def record_prompt(
+        self,
+        base_system_prompt: str,
+        prompt: str,
+        memory_sections: tuple[MemorySection, ...] = (),
+    ) -> None:
+        """Record the one visible model prompt established by an AGENT mode."""
+        ...
+
+    def record_interaction(self, interaction: VisibleInteraction) -> None:
+        """Append one exact visible model or tool interaction."""
+        ...
+
+
+@runtime_checkable
 class MemoryFrame(Protocol):
     """One opened frame through which a policy recalls and proposes learning."""
 

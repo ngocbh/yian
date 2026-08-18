@@ -5,8 +5,9 @@ the read (bind the inputs from the pool) and the write (the dispatcher stores `O
 ``eval_node`` is the append-only dispatcher's evaluation seam: it binds the record,
 pre-resolves reserved keys, builds trait-gated capabilities, runs the node through its
 assert-owning ``run`` wrapper, forwards transient chunks through ``emit_stream``, and
-returns exactly ``Output | Route | Grow | EvaluationFailure``.  It emits no observer
-notifications; durable observer ordering belongs to the dispatcher.
+returns an ``EvaluatedOutcome`` containing exactly
+``Output | Route | Grow | EvaluationFailure`` plus optional visible evidence. It emits no
+observer notifications; durable observer ordering belongs to the dispatcher.
 
 Expected rejection is classified where its operation occurs: binding evaluation,
 supplied-input contracts, wrapper assertions, node execution, or node-result validation.
@@ -33,6 +34,13 @@ from typing import Any, TypeAlias
 
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import StreamChunk
+from agent_composer.memory import (
+    EvaluationEvidence,
+    EvaluationTrace,
+    MemoryScope,
+    MemorySection,
+    VisibleInteraction,
+)
 from agent_composer.nodes.base import (
     Grow,
     Node,
@@ -45,6 +53,7 @@ from agent_composer.nodes.base import (
     _NodeBodyError,
 )
 from agent_composer.nodes.binding import BindingError, bind_params
+from agent_composer.runtime.log import canonical_seed
 from agent_composer.typesys.pool import VariablePool
 
 
@@ -94,6 +103,113 @@ WorkerOutcome: TypeAlias = Output | Route | Grow | EvaluationFailure
 """Closed raw worker result consumed by the append-only dispatcher."""
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluatedOutcome:
+    """One raw worker outcome paired with its frozen invocation evidence."""
+
+    outcome: WorkerOutcome
+    evidence: EvaluationEvidence | None
+
+    def __post_init__(self) -> None:
+        """Require one closed raw outcome and exact optional evidence."""
+        if not isinstance(self.outcome, (Output, Route, Grow, EvaluationFailure)):
+            raise TypeError("outcome must be a WorkerOutcome")
+        if self.evidence is not None and type(self.evidence) is not EvaluationEvidence:
+            raise TypeError("evidence must be an EvaluationEvidence or None")
+
+
+class _EvaluationTraceCollector(EvaluationTrace):
+    """Private mutable trace frozen once at the evaluator return boundary."""
+
+    def __init__(self, scope: MemoryScope) -> None:
+        self._scope = scope
+        self._bound_inputs: dict[str, Any] | None = None
+        self._base_system_prompt: str | None = None
+        self._prompt: str | None = None
+        self._memory_sections: tuple[MemorySection, ...] = ()
+        self._interactions: list[VisibleInteraction] = []
+        self._prompt_recorded = False
+        self._frozen = False
+
+    def _require_open(self) -> None:
+        """Reject writes after the evaluator has frozen this invocation."""
+        if self._frozen:
+            raise RuntimeError("evaluation trace is already frozen")
+
+    def _set_bound_inputs(self, bound_inputs: dict[str, Any]) -> None:
+        """Retain the evaluator's canonical pre-execution input snapshot."""
+        self._require_open()
+        if type(bound_inputs) is not dict:
+            raise TypeError("bound_inputs must be an exact dict")
+        validated = EvaluationEvidence(self._scope, bound_inputs, None, None)
+        self._bound_inputs = validated.bound_inputs
+
+    def record_prompt(
+        self,
+        base_system_prompt: str,
+        prompt: str,
+        memory_sections: tuple[MemorySection, ...] = (),
+    ) -> None:
+        """Record one exact visible prompt and its ordered memory sections."""
+        self._require_open()
+        if self._prompt_recorded:
+            raise RuntimeError("evaluation trace prompt was already recorded")
+        validated = EvaluationEvidence(
+            self._scope,
+            None,
+            base_system_prompt,
+            prompt,
+            memory_sections,
+        )
+        self._base_system_prompt = validated.base_system_prompt
+        self._prompt = validated.prompt
+        self._memory_sections = validated.memory_sections
+        self._prompt_recorded = True
+
+    def record_interaction(self, interaction: VisibleInteraction) -> None:
+        """Append one exact visible interaction without exposing trace reads."""
+        self._require_open()
+        validated = EvaluationEvidence(
+            self._scope,
+            None,
+            None,
+            None,
+            interactions=(interaction,),
+        )
+        self._interactions.append(validated.interactions[0])
+
+    def _freeze(self) -> EvaluationEvidence:
+        """Close the collector and return its immutable durable carrier."""
+        self._require_open()
+        self._frozen = True
+        return EvaluationEvidence(
+            self._scope,
+            self._bound_inputs,
+            self._base_system_prompt,
+            self._prompt,
+            self._memory_sections,
+            tuple(self._interactions),
+        )
+
+
+def _new_evaluation_trace(
+    node: Node,
+    *,
+    capture_evidence: bool,
+) -> _EvaluationTraceCollector | None:
+    """Apply the exact kind-blind trait/scope capture gate."""
+    if not capture_evidence or node.needs_evaluation_trace is not True:
+        return None
+    scope = node.memory_scope
+    if (
+        type(scope) is not MemoryScope
+        or type(scope.frame_stack) is not tuple
+        or not scope.frame_stack
+    ):
+        return None
+    return _EvaluationTraceCollector(scope)
+
+
 def _result_contract_failure(node, message: str) -> EvaluationFailure:
     """Create one synthetic result-contract exception with a useful traceback."""
     try:
@@ -109,6 +225,7 @@ def _evaluate_node_stream(
     *,
     wiring_override=None,
     stop_event=None,
+    evaluation_trace: _EvaluationTraceCollector | None = None,
 ) -> Generator[StreamChunk, None, WorkerOutcome]:
     """Bind and run one node, yielding chunks and returning one normalized result.
 
@@ -157,6 +274,12 @@ def _evaluate_node_stream(
             origin=exc.origin,
         )
 
+    if evaluation_trace is not None:
+        bound_inputs = canonical_seed(record)[0]
+        if type(bound_inputs) is not dict:
+            raise TypeError("bound node inputs did not canonicalize to an exact dict")
+        evaluation_trace._set_bound_inputs(bound_inputs)
+
     # Build only the node-owned, trait-gated capabilities. Deferred MAP binding
     # raises the same binder-owned marker from inside its body and is preserved below.
     caps: dict[str, Any] = {}
@@ -177,6 +300,8 @@ def _evaluate_node_stream(
         if stop_event is None:
             stop_event = threading.Event()
         caps["stop_event"] = stop_event
+    if evaluation_trace is not None:
+        caps["evaluation_trace"] = evaluation_trace
 
     uses_base_template = type(node).run is Node.run
     try:
@@ -278,20 +403,29 @@ def eval_node(
     wiring_override=None,
     stop_event=None,
     emit_stream: Callable[[StreamChunk], None] | None = None,
-) -> WorkerOutcome:
-    """Evaluate one node into a raw worker result and transient stream callback.
+    capture_evidence: bool = False,
+) -> EvaluatedOutcome:
+    """Evaluate one node into a wrapped worker result and transient stream callback.
 
     ``emit_stream`` is called synchronously for each chunk yielded by the node and is
     deliberately invoked outside the node-failure funnel.  If it raises, that exact host
     exception escapes; it must never become a durable node failure.  When omitted, chunks
-    are discarded.  ``_HostStop`` likewise propagates unchanged.
+    are discarded. ``capture_evidence`` must be an exact bool; its default leaves tracing
+    dormant. ``_HostStop`` likewise propagates unchanged.
     """
+    if type(capture_evidence) is not bool:
+        raise TypeError("capture_evidence must be a bool")
+    evaluation_trace = _new_evaluation_trace(
+        node,
+        capture_evidence=capture_evidence,
+    )
     stream = _evaluate_node_stream(
         node,
         flow,
         pool,
         wiring_override=wiring_override,
         stop_event=stop_event,
+        evaluation_trace=evaluation_trace,
     )
     try:
         while True:
@@ -317,4 +451,5 @@ def eval_node(
     else:
         stream.close()
 
-    return result
+    evidence = evaluation_trace._freeze() if evaluation_trace is not None else None
+    return EvaluatedOutcome(result, evidence)

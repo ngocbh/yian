@@ -22,7 +22,11 @@ from agent_composer.nodes.base import (
     _HostStop,
 )
 from agent_composer.nodes.contracts import Parameter
-from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
+from agent_composer.runtime.eval_node import (
+    EvaluatedOutcome,
+    EvaluationFailure,
+    eval_node,
+)
 from agent_composer.typesys.pool import VariablePool
 from tests.engine._fakes import BranchNode, FailNode, FuncNode, StreamNode, derive_wiring
 
@@ -36,7 +40,7 @@ def _raw(node, *, emit_stream=None, stop_event=None):
         VariablePool(),
         emit_stream=emit_stream,
         stop_event=stop_event,
-    )
+    ).outcome
 
 
 class _Spawner(Node):
@@ -79,6 +83,23 @@ class _GeneratorRaisesHostStop(Node):
     def forward(self, inputs):
         yield StreamChunk(self.id, "output", "before-stop")
         raise self.expected
+
+
+def test_public_evaluation_always_returns_frozen_slotted_wrapper() -> None:
+    node = FuncNode("work", lambda _: "done")
+    flow = SimpleNamespace(wiring=derive_wiring({node.id: node}))
+
+    evaluated = eval_node(node, flow, VariablePool())
+
+    assert type(evaluated) is EvaluatedOutcome
+    assert evaluated == EvaluatedOutcome(Output("done"), None)
+    assert [field.name for field in fields(EvaluatedOutcome)] == [
+        "outcome",
+        "evidence",
+    ]
+    assert not hasattr(evaluated, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        evaluated.evidence = None
 
 
 def test_raw_evaluation_returns_closed_success_route_and_grow_values():

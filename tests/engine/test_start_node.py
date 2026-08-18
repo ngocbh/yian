@@ -54,7 +54,7 @@ def test_start_through_eval_node_coerces_and_defaults_into_a_record():
         }
     )
 
-    assert eval_node(node, flow, pool) == Output(
+    assert eval_node(node, flow, pool).outcome == Output(
         {"topic": "ACME", "offset": 7, "window": 30}
     )
 
@@ -72,7 +72,7 @@ def test_start_e08_type_mismatch_returns_generic_input_failure():
     pool.set(START_ID, {"n": ["not", "an", "int"]})
     flow = SimpleNamespace(wiring={"__start__": {"n": "${input.n}"}})
 
-    result = eval_node(node, flow, pool)
+    result = eval_node(node, flow, pool).outcome
 
     assert isinstance(result, EvaluationFailure)
     assert result.failure.code == "contract.input"
@@ -89,7 +89,7 @@ def test_start_through_eval_node_binds_from_wiring():
     pool = VariablePool()
     pool.set(START_ID, {"topic": "ACME"})  # the seed-stand-in source the wiring points at
     flow = SimpleNamespace(wiring={"__start__": {"topic": "${input.topic}"}})
-    assert eval_node(node, flow, pool) == Output({"topic": "ACME"})
+    assert eval_node(node, flow, pool).outcome == Output({"topic": "ACME"})
 
 
 def test_start_through_eval_node_fills_omitted_default():
@@ -109,7 +109,7 @@ def test_start_through_eval_node_fills_omitted_default():
     pool.set(START_ID, {"topic": "ACME"})
     # wiring binds ONLY topic — `window` has NO edge (the parent omitted it).
     flow = SimpleNamespace(wiring={"__start__": {"topic": "${input.topic}"}})
-    assert eval_node(node, flow, pool) == Output(
+    assert eval_node(node, flow, pool).outcome == Output(
         {"topic": "ACME", "window": 30}
     )
 
@@ -127,4 +127,4 @@ def test_start_through_eval_node_required_unbound_fails():
     )
     pool = VariablePool()
     flow = SimpleNamespace(wiring={"__start__": {}})  # nothing bound
-    assert isinstance(eval_node(node, flow, pool), EvaluationFailure)
+    assert isinstance(eval_node(node, flow, pool).outcome, EvaluationFailure)

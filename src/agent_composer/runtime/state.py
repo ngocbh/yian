@@ -34,6 +34,7 @@ from agent_composer.events import (
     RunSucceeded,
 )
 from agent_composer.expr import ExpressionError, expr_refs_of
+from agent_composer.memory import EvaluationEvidence, MemoryScope
 from agent_composer.nodes.base import Grow, Node
 from agent_composer.nodes.contracts import (
     OutputContract,
@@ -718,6 +719,7 @@ def prepare_node_succeeded(
     output: Any,
     *,
     commit_as: str | None = None,
+    evidence: EvaluationEvidence | None = None,
 ) -> PreparedTransition:
     """Prepare one canonical output commit and its newly-ready successors.
 
@@ -731,6 +733,8 @@ def prepare_node_succeeded(
         commit_as (`str | None`, *optional*):
             Explicit commit target.  ``None`` falls back to the executing node's baked
             target and then to ``node_id`` itself.
+        evidence (`EvaluationEvidence | None`, *optional*):
+            Frozen visible evidence captured during this exact evaluation.
 
     Returns:
         `PreparedTransition`:
@@ -785,6 +789,7 @@ def prepare_node_succeeded(
             node_id=node_id,
             commit_target=target,
             value=value_wire,
+            evidence=evidence,
         ),
         typed,
     )
@@ -794,6 +799,8 @@ def prepare_node_routed(
     state: RunState,
     node_id: str,
     handle: str,
+    *,
+    evidence: EvaluationEvidence | None = None,
 ) -> PreparedTransition:
     """Prepare one selected route and its derived recursive skip closure.
 
@@ -804,6 +811,8 @@ def prepare_node_routed(
             Exact non-empty ID of the executing router.
         handle (`str`):
             Exact non-empty handle selected by the router.
+        evidence (`EvaluationEvidence | None`, *optional*):
+            Frozen visible evidence captured during this exact evaluation.
 
     Returns:
         `PreparedTransition`:
@@ -829,7 +838,7 @@ def prepare_node_routed(
     _require_routing_node(state, node_id)
     return _prepare_route_transition(
         state,
-        NodeRoutedRecord(node_id=node_id, handle=handle),
+        NodeRoutedRecord(node_id=node_id, handle=handle, evidence=evidence),
         derive_terminal_failure=True,
     )
 
@@ -839,6 +848,8 @@ def prepare_expanded(
     node_id: str,
     grow: Grow,
     grow_builder: GrowBuilder,
+    *,
+    evidence: EvaluationEvidence | None = None,
 ) -> PreparedTransition:
     """Prepare one canonical flat graph expansion without mutating live state.
 
@@ -852,6 +863,8 @@ def prepare_expanded(
         grow_builder (`GrowBuilder`):
             Injected compile-owned interpreter from the spawner and canonical seed
             to one self-contained `Flow` fragment.
+        evidence (`EvaluationEvidence | None`, *optional*):
+            Frozen visible evidence captured during this exact evaluation.
 
     Returns:
         `PreparedTransition`:
@@ -907,6 +920,7 @@ def prepare_expanded(
             seed=seed_wire,
             prune_ids=tuple(sorted(grow.prune)),
             topology_digest=digest,
+            evidence=evidence,
         ),
         fragment,
         actual_digest=digest,
@@ -917,6 +931,8 @@ def prepare_expanded(
 def prepare_node_failed(
     state: RunState,
     failure: Failure,
+    *,
+    evidence: EvaluationEvidence | None = None,
 ) -> PreparedTransition:
     """Prepare one terminal node failure with its canonical durable authority.
 
@@ -926,6 +942,8 @@ def prepare_node_failed(
         failure (`Failure`):
             Immutable semantic failure whose non-empty ``node_id`` identifies
             the executing node.
+        evidence (`EvaluationEvidence | None`, *optional*):
+            Frozen visible evidence captured before the evaluation failed.
     Returns:
         `PreparedTransition`:
             Canonical ``NodeFailedRecord`` and detached append-before-apply plan.
@@ -940,7 +958,7 @@ def prepare_node_failed(
         raise TypeError("prepare_node_failed expects a RunState")
     if type(failure) is not Failure:
         raise TypeError("prepare_node_failed expects a Failure")
-    record = NodeFailedRecord(failure=failure)
+    record = NodeFailedRecord(failure=failure, evidence=evidence)
     _require_initialized_nonterminal(state)
     return _prepare_failure_transition(state, record)
 
@@ -1106,6 +1124,7 @@ def _prepare_success_transition(
     typed: TypedValue,
 ) -> PreparedTransition:
     """Freeze one fully validated success delta and its canonical public record."""
+    _validate_node_evidence(state, record.node_id, record.evidence)
     delta = _prepare_success_delta(state, record, typed)
     terminal = _prepare_terminal_delta(
         state,
@@ -1185,6 +1204,7 @@ def _prepare_route_transition(
     derive_terminal_failure: bool = False,
 ) -> PreparedTransition:
     """Freeze one fully validated route delta and its canonical public record."""
+    _validate_node_evidence(state, record.node_id, record.evidence)
     delta, edge_updates, causal_failure = _prepare_route_delta(
         state,
         record,
@@ -2019,6 +2039,7 @@ def _validate_growth_record(state: RunState, record: NodeExpandedRecord) -> None
     ):
         raise ValueError("NodeExpandedRecord topology_digest must be lowercase SHA-256")
     _require_expanding_node(state, record.spawner_id)
+    _validate_node_evidence(state, record.spawner_id, record.evidence)
 
 
 def _build_growth_fragment(
@@ -2776,6 +2797,37 @@ def _growth_adjacency(
     return incoming, outgoing
 
 
+def _validate_node_evidence(
+    state: RunState,
+    node_id: str,
+    evidence: EvaluationEvidence | None,
+) -> None:
+    """Validate optional evidence against one exact compiled executing node."""
+    if evidence is None:
+        return
+    if type(evidence) is not EvaluationEvidence:
+        raise TypeError("node evidence must be an EvaluationEvidence or None")
+    if node_id not in state.flow.nodes:
+        raise ValueError(f"evidence node {node_id!r} does not exist in the flow")
+    node = state.flow.nodes[node_id]
+    if node.needs_evaluation_trace is not True:
+        raise ValueError(f"node {node_id!r} does not declare evaluation evidence")
+    scope = node.memory_scope
+    if type(scope) is not MemoryScope:
+        raise ValueError(f"node {node_id!r} has no exact compiled memory scope")
+    MemoryScope(
+        scope.root_flow_id,
+        scope.static_path,
+        scope.frame_stack,
+        scope.occurrence_path,
+        scope.boundary,
+    )
+    if type(scope.frame_stack) is not tuple or not scope.frame_stack:
+        raise ValueError(f"node {node_id!r} has no memory frame stack")
+    if evidence.scope != scope:
+        raise ValueError(f"node {node_id!r} evidence scope does not match its layout")
+
+
 def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
     """Validate exact diagnostic carriers and the executing node for replay."""
     if type(record.failure) is not Failure:
@@ -2790,6 +2842,7 @@ def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
     if not node_id:
         raise ValueError("NodeFailedRecord failure node_id must be non-empty")
     _require_failing_node(state, node_id)
+    _validate_node_evidence(state, node_id, record.evidence)
 
 
 def _validate_route_record(state: RunState, record: NodeRoutedRecord) -> None:

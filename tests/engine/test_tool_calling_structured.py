@@ -109,7 +109,7 @@ class _DirectFallbackChat:
 
 
 def _run_node(node, pool=None):
-    return eval_node(node, None, pool or VariablePool())
+    return eval_node(node, None, pool or VariablePool()).outcome
 
 
 def test_tool_calling_final_answer_is_structured(monkeypatch):

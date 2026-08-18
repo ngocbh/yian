@@ -5,6 +5,11 @@ from __future__ import annotations
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 import agent_composer.llm_clients as llm_clients
+from agent_composer.memory.contracts import (
+    ModelTextInteraction,
+    ToolCallInteraction,
+    ToolResultInteraction,
+)
 from agent_composer.nodes.agent.modes.common import (
     DEFAULT_SYSTEM,
     AgentLoopError,
@@ -30,6 +35,8 @@ def tool_calling(ctx: AgentRunContext) -> Output:
     ctx.check_stopped()
     model = llm_clients.model_from_config(ctx.llm_config or {})
     ctx.check_stopped()
+    if ctx.evaluation_trace is not None:
+        ctx.evaluation_trace.record_prompt(DEFAULT_SYSTEM, ctx.prompt)
     schema = type_to_schema(ctx.output_type) if ctx.output_type is not None else None
     if not ctx.tools and schema is not None:
         return Output(
@@ -40,6 +47,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                 max_retries=ctx.retries,
                 llm_config=ctx.llm_config,
                 check_stopped=ctx.check_stopped,
+                evaluation_trace=ctx.evaluation_trace,
             )
         )
 
@@ -65,9 +73,13 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                         max_retries=ctx.retries,
                         llm_config=ctx.llm_config,
                         check_stopped=ctx.check_stopped,
+                        evaluation_trace=ctx.evaluation_trace,
                     )
                 )
-            return Output(value=text_of(reply))
+            text = text_of(reply)
+            if ctx.evaluation_trace is not None:
+                ctx.evaluation_trace.record_interaction(ModelTextInteraction(text))
+            return Output(value=text)
 
         for call in calls:
             ctx.check_stopped()
@@ -77,10 +89,25 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                     f"agent node {ctx.node_id!r} requested tool {name!r}, but it is not "
                     f"granted; granted tools: {ctx.tools}"
                 )
-            result = invoke_tool(name, call.get("args") or {})
+            arguments = call.get("args") or {}
+            if ctx.evaluation_trace is not None:
+                try:
+                    call_interaction = ToolCallInteraction(name, arguments)
+                except (TypeError, ValueError):
+                    # Evidence remains observational for malformed arguments; the
+                    # ordinary tool boundary below retains its established error.
+                    pass
+                else:
+                    ctx.evaluation_trace.record_interaction(call_interaction)
+            result = invoke_tool(name, arguments)
             ctx.check_stopped()
+            result_text = str(result)
+            if ctx.evaluation_trace is not None:
+                ctx.evaluation_trace.record_interaction(
+                    ToolResultInteraction(name, result_text)
+                )
             messages.append(
-                ToolMessage(content=str(result), tool_call_id=call.get("id") or "")
+                ToolMessage(content=result_text, tool_call_id=call.get("id") or "")
             )
 
     raise AgentLoopError(

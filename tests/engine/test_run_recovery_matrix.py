@@ -704,7 +704,7 @@ def test_recovered_wait_recomputes_from_the_authored_absolute_deadline(
             recovered.flow,
             recovered.pool,
             stop_event=event,
-        )
+        ).outcome
         assert outcome == Output(None)
         assert event.timeouts == [expected]
         observed_timeouts.append(event.timeouts[0])

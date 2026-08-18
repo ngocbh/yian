@@ -16,6 +16,7 @@ from types import TracebackType
 from typing import Any, Literal, cast
 from uuid import uuid4
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -461,8 +462,12 @@ class ReflectiveMemory:
         """Create one isolated memory namespace and validate its defaults."""
         self._default_max_items = _positive_int(max_items, "max_items")
         self._default_recall_limit = _positive_int(recall_limit, "recall_limit")
-        raw_config = {} if llm_config is None else _copy_json_object(llm_config, "llm_config")
+        raw_config = (
+            {} if llm_config is None else _copy_json_object(llm_config, "llm_config")
+        )
         validated = LLMConfig.model_validate(raw_config, strict=True)
+        if validated.model is not None and not validated.model.strip():
+            raise ValueError("llm_config.model must be non-empty")
         self._llm_config = cast(
             JsonObject, validated.model_dump(mode="json", exclude_none=True)
         )
@@ -485,24 +490,27 @@ class ReflectiveMemory:
     def _effective_llm_config(self) -> JsonObject:
         """Resolve ambient defaults exactly once for one fresh session."""
         config = _copy_json_object(self._llm_config, "llm_config")
-        provider_default = default_llm_provider()
-        model_default = default_llm_model()
         if config.get("provider") is None:
-            config["provider"] = provider_default
+            config["provider"] = default_llm_provider()
         if config.get("model") is None:
-            config["model"] = model_default
+            config["model"] = default_llm_model()
         try:
             validated = LLMConfig.model_validate(config, strict=True)
-        except ValidationError as exc:
+            complete = cast(
+                JsonObject, validated.model_dump(mode="json", exclude_none=False)
+            )
+            _nonempty_string(complete.get("provider"), "llm_config.provider")
+            model = _nonempty_string(complete.get("model"), "llm_config.model")
+            if not model.strip():
+                raise ValueError("llm_config.model must not be blank")
+        except (TypeError, ValueError, ValidationError) as exc:
             raise _operation_error(
                 "open_run",
                 "reflective.config",
                 f"invalid effective LLM configuration: {exc}",
                 retryable=False,
             ) from exc
-        return cast(
-            JsonObject, validated.model_dump(mode="json", exclude_none=False)
-        )
+        return complete
 
     def open_run(self, *, snapshot: JsonObject | None = None) -> _ReflectiveSession:
         """Open one immutable-read session, optionally from a recorded snapshot."""
@@ -753,10 +761,8 @@ class _ReflectiveSession:
             return state
         return _FrameState(self._opened[ref]._spec, ())
 
-    def _batch_material(
-        self, mutations: tuple[MemoryMutation, ...]
-    ) -> tuple[list[JsonObject], str]:
-        """Validate structural batch ownership and compute its canonical digest."""
+    def _batch_digest(self, mutations: tuple[MemoryMutation, ...]) -> str:
+        """Compute a canonical digest before generation-dependent validation."""
         if type(mutations) is not tuple:
             raise _operation_error(
                 "commit",
@@ -764,7 +770,6 @@ class _ReflectiveSession:
                 "mutations must be an exact tuple",
             )
         encoded: list[JsonObject] = []
-        mutation_ids: set[str] = set()
         for index, mutation in enumerate(mutations):
             if type(mutation) is not MemoryMutation:
                 raise _operation_error(
@@ -772,6 +777,27 @@ class _ReflectiveSession:
                     "reflective.invalid_batch",
                     f"mutations[{index}] must be a MemoryMutation",
                 )
+            encoded.append(
+                {
+                    "frame_ref": _frame_ref_json(mutation.frame_ref),
+                    "mutation_id": mutation.mutation_id,
+                    "payload": mutation.payload,
+                }
+            )
+        try:
+            material = _canonical_json(cast(JsonValue, encoded))
+        except (TypeError, ValueError) as exc:
+            raise _operation_error(
+                "commit", "reflective.invalid_batch", str(exc)
+            ) from exc
+        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+    def _validate_batch_ownership(
+        self, mutations: tuple[MemoryMutation, ...]
+    ) -> None:
+        """Validate session ownership and per-batch mutation identity."""
+        mutation_ids: set[str] = set()
+        for mutation in mutations:
             if mutation.frame_ref not in self._opened:
                 raise _operation_error(
                     "commit",
@@ -785,17 +811,6 @@ class _ReflectiveSession:
                     "mutation ids must be unique within a batch",
                 )
             mutation_ids.add(mutation.mutation_id)
-            encoded.append(
-                {
-                    "frame_ref": _frame_ref_json(mutation.frame_ref),
-                    "mutation_id": mutation.mutation_id,
-                    "payload": mutation.payload,
-                }
-            )
-        digest = hashlib.sha256(
-            _canonical_json(cast(JsonValue, encoded)).encode("utf-8")
-        ).hexdigest()
-        return encoded, digest
 
     def _validated_action(
         self,
@@ -886,7 +901,7 @@ class _ReflectiveSession:
                 raise _operation_error(
                     "commit", "reflective.invalid_commit_id", str(exc)
                 ) from exc
-            _, digest = self._batch_material(mutations)
+            digest = self._batch_digest(mutations)
 
             applied_digest = self._memory._applied_commits.get(commit_id)
             if applied_digest is not None:
@@ -898,6 +913,7 @@ class _ReflectiveSession:
                     "commit id collision with a different batch",
                 )
 
+            self._validate_batch_ownership(mutations)
             self._assert_current_generation("commit")
             frames = {
                 ref: _copy_frame_state(state)
@@ -958,13 +974,15 @@ class _ReflectiveSession:
                             f"lesson {lesson_id!r} does not exist",
                         )
                     lessons.pop(position)
-                if len(lessons) > state.spec.max_items:
+                frames[mutation.frame_ref] = _FrameState(state.spec, tuple(lessons))
+
+            for state in frames.values():
+                if len(state.lessons) > state.spec.max_items:
                     raise _operation_error(
                         "commit",
                         "reflective.max_items",
                         "mutation batch exceeds max_items",
                     )
-                frames[mutation.frame_ref] = _FrameState(state.spec, tuple(lessons))
 
             self._memory._frames = frames
             self._memory._applied_commits[commit_id] = digest
@@ -1192,7 +1210,7 @@ class _ReflectiveFrame:
             model = model_from_config(llm_config)
             structured = model.with_structured_output(_ReflectionResponse)
             raw_response = structured.invoke([system, human])
-        except ValidationError as exc:
+        except (OutputParserException, ValidationError) as exc:
             raise _operation_error(
                 "learn",
                 "reflective.contract",

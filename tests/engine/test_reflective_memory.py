@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from langchain_core.exceptions import OutputParserException
 
 from agent_composer.memory.contracts import (
     LearnContext,
@@ -67,6 +68,23 @@ def _context(
         frame_ref,
         (_episode(frame_ref, run_id=run_id, text=text),),
     )
+
+
+def _mutation(
+    ref: MemoryFrameRef,
+    mutation_id: str,
+    action: str,
+    lesson_id: str,
+    text: str | None = None,
+) -> MemoryMutation:
+    payload: dict[str, object] = {
+        "action": action,
+        "lesson_id": lesson_id,
+        "source": reflective._source_json("run-1", ref),
+    }
+    if text is not None:
+        payload["text"] = text
+    return MemoryMutation(mutation_id, ref, payload)
 
 
 class _StructuredModel:
@@ -129,6 +147,8 @@ def test_constructor_and_frame_configuration_are_exact() -> None:
         ReflectiveMemory(recall_limit=0)
     with pytest.raises(ValueError):
         ReflectiveMemory({"provider": "not-a-provider"})
+    with pytest.raises(ValueError, match="model"):
+        ReflectiveMemory({"model": ""})
 
     memory = ReflectiveMemory(max_items=7, recall_limit=3)
     with memory.open_run() as session:
@@ -179,6 +199,40 @@ def test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them(
     assert calls == []
 
 
+def test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(reflective, "default_llm_provider", lambda: "ollama")
+    monkeypatch.setattr(reflective, "default_llm_model", lambda: "")
+    with pytest.raises(MemoryOperationError) as exc:
+        ReflectiveMemory().open_run()
+    assert exc.value.code == "reflective.config"
+    assert exc.value.retryable is False
+
+    monkeypatch.setattr(reflective, "default_llm_model", lambda: "qwen")
+    memory = ReflectiveMemory()
+    session = memory.open_run()
+    frame = session.open_frame(_spec())
+    pinned = session.snapshot["llm_config"]
+    monkeypatch.setattr(
+        reflective,
+        "default_llm_provider",
+        lambda: pytest.fail("provider default was reread"),
+    )
+    monkeypatch.setattr(
+        reflective,
+        "default_llm_model",
+        lambda: pytest.fail("model default was reread"),
+    )
+    _, configs = _install_model(
+        monkeypatch,
+        {"actions": [{"action": "noop", "lesson_id": None, "text": None}]},
+    )
+    assert frame.learn(_context()) == []
+    assert configs == [pinned]
+    session.close()
+
+
 def test_snapshot_is_defensive_and_foreign_restore_is_conservative() -> None:
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
     with memory.open_run() as session:
@@ -215,6 +269,37 @@ def test_pristine_restore_keeps_recorded_effective_frame_defaults() -> None:
         frame = session.open_frame(_spec())
         assert frame.recall() == ""
         assert session.snapshot == snapshot
+
+
+def test_same_object_restore_accepts_recorded_snapshot() -> None:
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    with memory.open_run() as session:
+        session.open_frame(_spec())
+        session.commit(
+            "seed",
+            (_mutation(_ref(), "seed", "add", "one", "first"),),
+        )
+    with memory.open_run() as session:
+        snapshot = session.snapshot
+    with memory.open_run(snapshot=snapshot) as restored:
+        assert restored.open_frame(_spec()).recall() == "[one] first"
+        assert restored.snapshot == snapshot
+
+
+def test_populated_memory_rejects_foreign_snapshot() -> None:
+    source = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    with source.open_run() as session:
+        snapshot = session.snapshot
+
+    populated = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    with populated.open_run() as session:
+        session.open_frame(_spec())
+        session.commit(
+            "populate",
+            (_mutation(_ref(), "populate", "add", "one", "first"),),
+        )
+    with pytest.raises(MemoryOperationError, match="namespace"):
+        populated.open_run(snapshot=snapshot)
 
 
 def test_snapshot_rejects_noncanonical_scalars_and_circular_json() -> None:
@@ -382,6 +467,19 @@ def test_learn_provider_failure_is_retryable(monkeypatch: pytest.MonkeyPatch) ->
     assert exc.value.retryable is True
 
 
+def test_structured_output_parser_failure_is_a_final_contract_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    _install_model(monkeypatch, error=OutputParserException("malformed"))
+    with memory.open_run() as session:
+        frame = session.open_frame(_spec())
+        with pytest.raises(MemoryOperationError) as exc:
+            frame.learn(_context())
+    assert exc.value.code == "reflective.contract"
+    assert exc.value.retryable is False
+
+
 def test_episode_material_is_capped_in_one_model_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -449,6 +547,142 @@ def test_commit_is_atomic_idempotent_and_empty_batches_advance_revision(
         assert later.snapshot["revision"] == before + 1
 
 
+def test_revise_and_remove_are_learned_and_committed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    add = _learn_actions(
+        monkeypatch,
+        memory,
+        [{"action": "add", "lesson_id": "one", "text": "first"}],
+    )
+    with memory.open_run() as session:
+        session.open_frame(_spec())
+        session.commit("add", tuple(add))
+
+    revise = _learn_actions(
+        monkeypatch,
+        memory,
+        [{"action": "revise", "lesson_id": "one", "text": "revised"}],
+    )
+    with memory.open_run() as session:
+        session.open_frame(_spec())
+        session.commit("revise", tuple(revise))
+    with memory.open_run() as session:
+        assert session.open_frame(_spec()).recall() == "[one] revised"
+
+    remove = _learn_actions(
+        monkeypatch,
+        memory,
+        [{"action": "remove", "lesson_id": "one", "text": None}],
+    )
+    with memory.open_run() as session:
+        session.open_frame(_spec())
+        session.commit("remove", tuple(remove))
+    with memory.open_run() as session:
+        assert session.open_frame(_spec()).recall() == ""
+
+
+def test_learn_and_commit_enforce_final_max_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = ReflectiveMemory(
+        {"provider": "ollama", "model": "qwen"}, max_items=1
+    )
+    with memory.open_run() as session:
+        frame = session.open_frame(_spec())
+        session.commit(
+            "seed",
+            (_mutation(_ref(), "seed", "add", "old", "old lesson"),),
+        )
+
+    _install_model(
+        monkeypatch,
+        {
+            "actions": [
+                {"action": "add", "lesson_id": "new", "text": "new lesson"},
+                {"action": "remove", "lesson_id": "old", "text": None},
+            ]
+        },
+    )
+    with memory.open_run() as session:
+        frame = session.open_frame(_spec())
+        replacement = frame.learn(_context())
+        session.commit("replace", tuple(replacement))
+    with memory.open_run() as session:
+        assert session.open_frame(_spec()).recall() == "[new] new lesson"
+
+    _install_model(
+        monkeypatch,
+        {
+            "actions": [
+                {"action": "add", "lesson_id": "two", "text": "two"},
+                {"action": "add", "lesson_id": "three", "text": "three"},
+            ]
+        },
+    )
+    empty = ReflectiveMemory(
+        {"provider": "ollama", "model": "qwen"}, max_items=1
+    )
+    with empty.open_run() as session:
+        frame = session.open_frame(_spec())
+        with pytest.raises(MemoryOperationError) as learn_error:
+            frame.learn(_context())
+    assert learn_error.value.code == "reflective.max_items"
+
+    with empty.open_run() as session:
+        frame = session.open_frame(_spec())
+        with pytest.raises(MemoryOperationError) as commit_error:
+            session.commit(
+                "too-many",
+                (
+                    _mutation(_ref(), "two", "add", "two", "two"),
+                    _mutation(_ref(), "three", "add", "three", "three"),
+                ),
+            )
+        assert frame.recall() == ""
+        assert session.snapshot["revision"] == 0
+    assert commit_error.value.code == "reflective.max_items"
+
+
+def test_multi_frame_commit_failure_has_no_partial_effect() -> None:
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    left_ref = _ref("left")
+    right_ref = _ref("right")
+    with memory.open_run() as session:
+        left = session.open_frame(_spec("left"))
+        right = session.open_frame(_spec("right"))
+        with pytest.raises(MemoryOperationError) as exc:
+            session.commit(
+                "atomic",
+                (
+                    _mutation(left_ref, "left", "add", "one", "first"),
+                    _mutation(right_ref, "right", "revise", "missing", "bad"),
+                ),
+            )
+        assert left.recall() == ""
+        assert right.recall() == ""
+        assert session.snapshot["revision"] == 0
+    assert exc.value.code == "reflective.invalid_mutation"
+    with memory.open_run() as session:
+        assert session.open_frame(_spec("left")).recall() == ""
+        assert session.open_frame(_spec("right")).recall() == ""
+
+
+def test_commit_collision_precedes_unopened_frame_validation() -> None:
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    original = _mutation(_ref(), "original", "add", "one", "first")
+    with memory.open_run() as session:
+        session.open_frame(_spec())
+        session.commit("same-id", (original,))
+
+    changed = _mutation(_ref("unopened"), "changed", "add", "two", "second")
+    with memory.open_run() as session:
+        with pytest.raises(MemoryOperationError) as exc:
+            session.commit("same-id", (changed,))
+    assert exc.value.code == "reflective.commit_collision"
+
+
 def test_concurrent_same_generation_commits_have_one_winner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -496,12 +730,15 @@ def test_reset_preserves_commit_ledger_ordering_and_old_recall(
         memory,
         [{"action": "add", "lesson_id": "one", "text": "first"}],
     )
+    with memory.open_run() as seed:
+        seed.open_frame(_spec())
+        seed.commit("applied", tuple(add))
     old = memory.open_run()
     old_frame = old.open_frame(_spec())
-    old.commit("applied", tuple(add))
+    assert old_frame.recall() == "[one] first"
     memory.reset()
 
-    assert old_frame.recall() == ""
+    assert old_frame.recall() == "[one] first"
     old.commit("applied", tuple(add))
     with pytest.raises(MemoryOperationError, match="collision"):
         old.commit("applied", ())

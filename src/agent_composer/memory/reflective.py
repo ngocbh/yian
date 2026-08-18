@@ -38,8 +38,11 @@ from agent_composer.memory.contracts import (
 _SNAPSHOT_FORMAT = "agent_composer.reflective_memory"
 _SNAPSHOT_VERSION = 1
 _POLICY_NAME = "reflective"
-_MAX_EPISODE_MATERIAL_CHARS = 30_000
 _MAX_REFLECTION_PROMPT_CHARS = 32_000
+_MAX_FRAME_MATERIAL_CHARS = 1_000
+_MAX_LIMIT_MATERIAL_CHARS = 256
+_MAX_LESSON_MATERIAL_CHARS = 8_000
+_MAX_EPISODE_MATERIAL_CHARS = 20_000
 _WORD = re.compile(r"\w+", re.UNICODE)
 
 
@@ -203,6 +206,28 @@ def _frame_ref_from_json(value: object, name: str) -> MemoryFrameRef:
     return MemoryFrameRef(root_flow_id, tuple(path), owner)
 
 
+def _source_from_json(
+    value: object,
+    name: str,
+    expected_ref: MemoryFrameRef,
+) -> JsonObject:
+    """Decode one exact canonical lesson source for its containing frame."""
+    source = _copy_json_object(value, name)
+    if set(source) != {"frame_ref", "run_id"}:
+        raise ValueError(f"{name} has invalid fields")
+    run_id = _nonempty_string(source["run_id"], f"{name}.run_id")
+    source_ref = _frame_ref_from_json(source["frame_ref"], f"{name}.frame_ref")
+    if source_ref != expected_ref:
+        raise ValueError(f"{name}.frame_ref does not match its containing frame")
+    canonical: JsonObject = {
+        "frame_ref": _frame_ref_json(source_ref),
+        "run_id": run_id,
+    }
+    if _canonical_json(source) != _canonical_json(canonical):
+        raise ValueError(f"{name} must be canonical")
+    return canonical
+
+
 def _frame_sort_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
     """Return the canonical static-frame order."""
     return (ref.root_flow_id, ref.static_path, ref.owner.value)
@@ -359,7 +384,9 @@ def _parse_snapshot(
                 if lesson_id in lesson_ids:
                     raise ValueError("snapshot lesson ids must be unique per frame")
                 lesson_ids.add(lesson_id)
-                source = _copy_json_object(lesson["source"], "snapshot lesson source")
+                source = _source_from_json(
+                    lesson["source"], "snapshot lesson source", ref
+                )
                 lessons.append(_Lesson(lesson_id, text, source))
             if len(lessons) > max_items:
                 raise ValueError("snapshot frame exceeds max_items")
@@ -369,7 +396,7 @@ def _parse_snapshot(
     except MemoryOperationError:
         raise
     except (TypeError, ValueError, ValidationError) as exc:
-        raise _snapshot_error(str(exc)) from exc
+        raise _snapshot_error("recorded memory snapshot is invalid") from exc
 
 
 def _compatible_same_generation(
@@ -413,29 +440,37 @@ def _episode_json(episode: MemoryEpisode) -> JsonObject:
     }
 
 
+def _bounded_json_material(value: JsonValue, limit: int) -> str:
+    """Encode JSON under a deterministic cap while retaining both ends."""
+    material = _canonical_json(value)
+    if len(material) <= limit:
+        return material
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    chunk_chars = max(0, (limit - 200) // 2)
+    summary: JsonObject = {
+        "original_chars": len(material),
+        "prefix": material[:chunk_chars],
+        "sha256": digest,
+        "suffix": material[-chunk_chars:] if chunk_chars else "",
+        "truncated": True,
+    }
+    encoded = _canonical_json(summary)
+    while len(encoded) > limit and chunk_chars:
+        reduction = max(1, (len(encoded) - limit + 1) // 2)
+        chunk_chars = max(0, chunk_chars - reduction)
+        summary["prefix"] = material[:chunk_chars]
+        summary["suffix"] = material[-chunk_chars:] if chunk_chars else ""
+        encoded = _canonical_json(summary)
+    return encoded
+
+
 def _bounded_episode_material(context: LearnContext) -> str:
-    """Return deterministic JSON-safe episode material under one fixed cap."""
+    """Return deterministic episode material within its reserved prompt budget."""
     payload: JsonObject = {
         "episodes": [_episode_json(episode) for episode in context.episodes],
         "feedback": list(context.feedback),
     }
-    material = _canonical_json(payload)
-    if len(material) <= _MAX_EPISODE_MATERIAL_CHARS:
-        return material
-    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
-    prefix_limit = max(0, _MAX_EPISODE_MATERIAL_CHARS - 160)
-    summary: JsonObject = {
-        "original_chars": len(material),
-        "prefix": material[:prefix_limit],
-        "sha256": digest,
-        "truncated": True,
-    }
-    encoded = _canonical_json(summary)
-    while len(encoded) > _MAX_EPISODE_MATERIAL_CHARS and prefix_limit:
-        prefix_limit = max(0, prefix_limit - (len(encoded) - _MAX_EPISODE_MATERIAL_CHARS))
-        summary["prefix"] = material[:prefix_limit]
-        encoded = _canonical_json(summary)
-    return encoded
+    return _bounded_json_material(payload, _MAX_EPISODE_MATERIAL_CHARS)
 
 
 def _source_json(run_id: str, frame_ref: MemoryFrameRef) -> JsonObject:
@@ -498,11 +533,11 @@ class ReflectiveMemory:
     def _effective_llm_config(self) -> JsonObject:
         """Resolve ambient defaults exactly once for one fresh session."""
         config = _copy_json_object(self._llm_config, "llm_config")
-        if config.get("provider") is None:
-            config["provider"] = default_llm_provider()
-        if config.get("model") is None:
-            config["model"] = default_llm_model()
         try:
+            if config.get("provider") is None:
+                config["provider"] = default_llm_provider()
+            if config.get("model") is None:
+                config["model"] = default_llm_model()
             validated = LLMConfig.model_validate(config, strict=True)
             complete = cast(
                 JsonObject, validated.model_dump(mode="json", exclude_none=False)
@@ -511,11 +546,11 @@ class ReflectiveMemory:
             model = _nonempty_string(complete.get("model"), "llm_config.model")
             if not model.strip():
                 raise ValueError("llm_config.model must not be blank")
-        except (TypeError, ValueError, ValidationError) as exc:
+        except Exception as exc:
             raise _operation_error(
                 "open_run",
                 "reflective.config",
-                f"invalid effective LLM configuration: {exc}",
+                "reflective model configuration is invalid",
                 retryable=False,
             ) from exc
         return complete
@@ -688,7 +723,7 @@ class _ReflectiveSession:
             raise _operation_error(
                 "open_frame",
                 "reflective.invalid_frame_config",
-                f"unknown frame configuration: {', '.join(sorted(unknown))}",
+                "frame configuration contains unsupported fields",
             )
         try:
             default_max_items = (
@@ -713,7 +748,7 @@ class _ReflectiveSession:
             raise _operation_error(
                 "open_frame",
                 "reflective.invalid_frame_config",
-                str(exc),
+                "frame configuration values are invalid",
             ) from exc
         return _EffectiveFrameSpec(spec.ref, max_items, recall_limit)
 
@@ -778,12 +813,12 @@ class _ReflectiveSession:
                 "mutations must be an exact tuple",
             )
         encoded: list[JsonObject] = []
-        for index, mutation in enumerate(mutations):
+        for mutation in mutations:
             if type(mutation) is not MemoryMutation:
                 raise _operation_error(
                     "commit",
                     "reflective.invalid_batch",
-                    f"mutations[{index}] must be a MemoryMutation",
+                    "mutation batch contains an invalid value",
                 )
             encoded.append(
                 {
@@ -796,7 +831,9 @@ class _ReflectiveSession:
             material = _canonical_json(cast(JsonValue, encoded))
         except (TypeError, ValueError) as exc:
             raise _operation_error(
-                "commit", "reflective.invalid_batch", str(exc)
+                "commit",
+                "reflective.invalid_batch",
+                "mutation batch cannot be encoded canonically",
             ) from exc
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
@@ -849,37 +886,24 @@ class _ReflectiveSession:
             )
         try:
             lesson_id = _nonempty_string(payload["lesson_id"], "lesson_id")
-            source = _copy_json_object(payload["source"], "source")
+            source = _source_from_json(
+                payload["source"], "source", mutation.frame_ref
+            )
         except (TypeError, ValueError) as exc:
-            raise _operation_error(
-                "commit", "reflective.invalid_mutation", str(exc)
-            ) from exc
-        if set(source) != {"frame_ref", "run_id"}:
             raise _operation_error(
                 "commit",
                 "reflective.invalid_mutation",
-                "mutation source has invalid fields",
-            )
-        try:
-            _nonempty_string(source["run_id"], "source.run_id")
-            source_ref = _frame_ref_from_json(source["frame_ref"], "source.frame_ref")
-        except (TypeError, ValueError) as exc:
-            raise _operation_error(
-                "commit", "reflective.invalid_mutation", str(exc)
+                "mutation identity or source is invalid",
             ) from exc
-        if source_ref != mutation.frame_ref:
-            raise _operation_error(
-                "commit",
-                "reflective.invalid_mutation",
-                "mutation source frame does not match its owner",
-            )
         text: str | None = None
         if action in ("add", "revise"):
             try:
                 text = _nonempty_string(payload.get("text"), "text")
             except (TypeError, ValueError) as exc:
                 raise _operation_error(
-                    "commit", "reflective.invalid_mutation", str(exc)
+                    "commit",
+                    "reflective.invalid_mutation",
+                    "mutation text is invalid",
                 ) from exc
             if not text.strip():
                 raise _operation_error(
@@ -907,7 +931,9 @@ class _ReflectiveSession:
                 commit_id = _nonempty_string(commit_id, "commit_id")
             except (TypeError, ValueError) as exc:
                 raise _operation_error(
-                    "commit", "reflective.invalid_commit_id", str(exc)
+                    "commit",
+                    "reflective.invalid_commit_id",
+                    "commit id must be a nonempty string",
                 ) from exc
             digest = self._batch_digest(mutations)
 
@@ -963,7 +989,7 @@ class _ReflectiveSession:
                         raise _operation_error(
                             "commit",
                             "reflective.invalid_mutation",
-                            f"lesson {lesson_id!r} already exists",
+                            "add mutation targets an existing lesson",
                         )
                     lessons.append(_Lesson(lesson_id, cast(str, text), source))
                 elif action == "revise":
@@ -971,7 +997,7 @@ class _ReflectiveSession:
                         raise _operation_error(
                             "commit",
                             "reflective.invalid_mutation",
-                            f"lesson {lesson_id!r} does not exist",
+                            "revise mutation targets a missing lesson",
                         )
                     lessons[position] = _Lesson(lesson_id, cast(str, text), source)
                 else:
@@ -979,7 +1005,7 @@ class _ReflectiveSession:
                         raise _operation_error(
                             "commit",
                             "reflective.invalid_mutation",
-                            f"lesson {lesson_id!r} does not exist",
+                            "remove mutation targets a missing lesson",
                         )
                     lessons.pop(position)
                 frames[mutation.frame_ref] = _FrameState(state.spec, tuple(lessons))
@@ -1035,13 +1061,11 @@ class _ReflectiveFrame:
             )
         try:
             query = self._session._memory.rewrite_query(context)
-        except MemoryOperationError:
-            raise
         except Exception as exc:
             raise _operation_error(
                 "recall",
                 "reflective.query",
-                f"query rewriting failed: {exc}",
+                "memory query rewriting failed",
             ) from exc
         if type(query) is not str:
             raise _operation_error(
@@ -1071,17 +1095,22 @@ class _ReflectiveFrame:
             }
             for lesson in self._lessons()
         ]
-        prompt = (
-            f"Frame: {_canonical_json(_frame_ref_json(self._spec.ref))}\n"
-            f"Limits: {_canonical_json({'max_items': self._spec.max_items})}\n"
-            f"Current lessons: {_canonical_json(cast(JsonValue, lessons))}\n"
-            f"Episodes: {_bounded_episode_material(context)}"
+        frame_material = _bounded_json_material(
+            _frame_ref_json(self._spec.ref), _MAX_FRAME_MATERIAL_CHARS
         )
-        if len(prompt) > _MAX_REFLECTION_PROMPT_CHARS:
-            digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-            suffix = f'\n{{"prompt_sha256":"{digest}","truncated":true}}'
-            prompt = prompt[: _MAX_REFLECTION_PROMPT_CHARS - len(suffix)] + suffix
-        return prompt
+        lesson_material = _bounded_json_material(
+            cast(JsonValue, lessons), _MAX_LESSON_MATERIAL_CHARS
+        )
+        episode_material = _bounded_episode_material(context)
+        limit_material = _bounded_json_material(
+            {"max_items": self._spec.max_items}, _MAX_LIMIT_MATERIAL_CHARS
+        )
+        return (
+            f"Frame: {frame_material}\n"
+            f"Limits: {limit_material}\n"
+            f"Current lessons: {lesson_material}\n"
+            f"Episodes: {episode_material}"
+        )
 
     def _validate_actions(
         self,
@@ -1145,7 +1174,7 @@ class _ReflectiveFrame:
                     raise _operation_error(
                         "learn",
                         "reflective.contract",
-                        f"lesson {lesson_id!r} already exists",
+                        "reflector add action targets an existing lesson",
                     )
                 current[lesson_id] = _Lesson(lesson_id, cast(str, action.text), source)
             elif action.action == "revise":
@@ -1153,7 +1182,7 @@ class _ReflectiveFrame:
                     raise _operation_error(
                         "learn",
                         "reflective.contract",
-                        f"lesson {lesson_id!r} does not exist",
+                        "reflector revise action targets a missing lesson",
                     )
                 current[lesson_id] = _Lesson(lesson_id, cast(str, action.text), source)
             else:
@@ -1161,7 +1190,7 @@ class _ReflectiveFrame:
                     raise _operation_error(
                         "learn",
                         "reflective.contract",
-                        f"lesson {lesson_id!r} does not exist",
+                        "reflector remove action targets a missing lesson",
                     )
                 del current[lesson_id]
 
@@ -1216,20 +1245,38 @@ class _ReflectiveFrame:
         human = HumanMessage(content=prompt)
         try:
             model = model_from_config(llm_config)
+        except Exception as exc:
+            raise _operation_error(
+                "learn",
+                "reflective.model_construction",
+                "reflector model construction failed",
+                retryable=False,
+            ) from exc
+        try:
             structured = model.with_structured_output(_ReflectionResponse)
+            if not callable(getattr(structured, "invoke", None)):
+                raise TypeError("structured model must provide invoke()")
+        except Exception as exc:
+            raise _operation_error(
+                "learn",
+                "reflective.structured_output",
+                "reflector does not support the required structured output",
+                retryable=False,
+            ) from exc
+        try:
             raw_response = structured.invoke([system, human])
         except (OutputParserException, ValidationError) as exc:
             raise _operation_error(
                 "learn",
                 "reflective.contract",
-                f"reflector returned malformed structured output: {exc}",
+                "reflector returned invalid structured output",
                 retryable=False,
             ) from exc
         except Exception as exc:
             raise _operation_error(
                 "learn",
                 "reflective.provider",
-                f"reflector invocation failed: {exc}",
+                "reflector invocation failed",
                 retryable=True,
             ) from exc
         try:
@@ -1238,7 +1285,7 @@ class _ReflectiveFrame:
             raise _operation_error(
                 "learn",
                 "reflective.contract",
-                f"reflector returned malformed structured output: {exc}",
+                "reflector returned invalid structured output",
                 retryable=False,
             ) from exc
         proposals = self._validate_actions(context, response)

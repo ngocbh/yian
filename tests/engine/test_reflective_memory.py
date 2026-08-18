@@ -159,10 +159,12 @@ def test_constructor_and_frame_configuration_are_exact() -> None:
         with pytest.raises(MemoryOperationError, match="policy") as exc:
             session.open_frame(MemoryFrameSpec(_ref(), "other", {}))
         assert exc.value.retryable is False
-        with pytest.raises(MemoryOperationError, match="unknown"):
+        with pytest.raises(MemoryOperationError) as unknown_error:
             session.open_frame(_spec(config={"unknown": 1}))
-        with pytest.raises(MemoryOperationError, match="max_items"):
+        assert unknown_error.value.code == "reflective.invalid_frame_config"
+        with pytest.raises(MemoryOperationError) as value_error:
             session.open_frame(_spec(config={"max_items": True}))
+        assert value_error.value.code == "reflective.invalid_frame_config"
 
 
 def test_defaults_are_read_once_and_recorded_snapshot_never_rereads_them(
@@ -209,6 +211,28 @@ def test_empty_ambient_model_is_rejected_and_open_session_config_is_pinned(
     assert exc.value.code == "reflective.config"
     assert exc.value.retryable is False
 
+    default_failure = RuntimeError("default-resolution-secret")
+
+    def fail_default() -> str:
+        raise default_failure
+
+    monkeypatch.setattr(reflective, "default_llm_provider", fail_default)
+    with pytest.raises(MemoryOperationError) as default_error:
+        ReflectiveMemory().open_run()
+    assert default_error.value.code == "reflective.config"
+    assert "default-resolution-secret" not in str(default_error.value)
+    assert default_error.value.__cause__ is default_failure
+
+    secret = "secret-provider-value"
+    monkeypatch.setattr(reflective, "default_llm_provider", lambda: secret)
+    monkeypatch.setattr(reflective, "default_llm_model", lambda: "qwen")
+    with pytest.raises(MemoryOperationError) as config_error:
+        ReflectiveMemory().open_run()
+    assert config_error.value.code == "reflective.config"
+    assert secret not in str(config_error.value)
+    assert config_error.value.__cause__ is not None
+
+    monkeypatch.setattr(reflective, "default_llm_provider", lambda: "ollama")
     monkeypatch.setattr(reflective, "default_llm_model", lambda: "qwen")
     memory = ReflectiveMemory()
     session = memory.open_run()
@@ -312,15 +336,43 @@ def test_snapshot_rejects_noncanonical_scalars_and_circular_json() -> None:
     with memory.open_run() as session:
         snapshot = session.snapshot
     snapshot["version"] = True
-    with pytest.raises(MemoryOperationError, match="version"):
+    with pytest.raises(MemoryOperationError) as version_error:
         ReflectiveMemory().open_run(snapshot=snapshot)
+    assert version_error.value.code == "reflective.invalid_snapshot"
 
     with memory.open_run() as session:
         blank_model = session.snapshot
     blank_model["llm_config"]["model"] = "   "
-    with pytest.raises(MemoryOperationError, match="nonblank") as exc:
+    with pytest.raises(MemoryOperationError) as exc:
         ReflectiveMemory().open_run(snapshot=blank_model)
     assert exc.value.code == "reflective.invalid_snapshot"
+
+
+def test_snapshot_rejects_malformed_foreign_and_extra_lesson_sources() -> None:
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    with memory.open_run() as session:
+        session.open_frame(_spec())
+        session.commit(
+            "seed",
+            (_mutation(_ref(), "seed", "add", "one", "first"),),
+        )
+    with memory.open_run() as session:
+        base = session.snapshot
+
+    valid_source = reflective._source_json("run-1", _ref())
+    malformed_sources: list[object] = [
+        "not-an-object",
+        {"frame_ref": valid_source["frame_ref"]},
+        reflective._source_json("run-1", _ref("foreign")),
+        {**valid_source, "extra": "source-secret"},
+    ]
+    for malformed in malformed_sources:
+        snapshot = json.loads(json.dumps(base))
+        snapshot["frames"][0]["lessons"][0]["source"] = malformed
+        with pytest.raises(MemoryOperationError) as exc:
+            ReflectiveMemory().open_run(snapshot=snapshot)
+        assert exc.value.code == "reflective.invalid_snapshot"
+        assert "source-secret" not in str(exc.value)
 
 
 def test_frame_idempotency_and_closed_session_operations() -> None:
@@ -394,6 +446,23 @@ def test_subclass_controls_query_rewriting(monkeypatch: pytest.MonkeyPatch) -> N
         )
 
 
+def test_query_rewriting_failure_is_sanitized() -> None:
+    failure = RuntimeError("query-secret")
+
+    class _Memory(ReflectiveMemory):
+        def rewrite_query(self, context: RecallContext) -> str:
+            raise failure
+
+    memory = _Memory({"provider": "ollama", "model": "qwen"})
+    with memory.open_run() as session:
+        frame = session.open_frame(_spec())
+        with pytest.raises(MemoryOperationError) as exc:
+            frame.recall(RecallContext("", "hello", {}, ("root",)))
+    assert exc.value.code == "reflective.query"
+    assert "query-secret" not in str(exc.value)
+    assert exc.value.__cause__ is failure
+
+
 def test_learn_uses_pinned_config_and_returns_deterministic_proposals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -463,28 +532,107 @@ def test_learn_rejects_malformed_or_conflicting_actions(
     assert exc.value.retryable is False
 
 
-def test_learn_provider_failure_is_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_construction_failure_is_final_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("construction-secret")
+
+    def fail_construction(config: dict[str, object]) -> None:
+        raise failure
+
+    monkeypatch.setattr(reflective, "model_from_config", fail_construction)
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
-    _install_model(monkeypatch, error=RuntimeError("offline"))
+    with memory.open_run() as session:
+        frame = session.open_frame(_spec())
+        with pytest.raises(MemoryOperationError) as exc:
+            frame.learn(_context())
+    assert exc.value.code == "reflective.model_construction"
+    assert exc.value.retryable is False
+    assert "construction-secret" not in str(exc.value)
+    assert exc.value.__cause__ is failure
+
+
+def test_structured_binding_failure_is_final_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = NotImplementedError("binding-secret")
+
+    class UnsupportedModel:
+        def with_structured_output(self, schema: type[object]) -> None:
+            raise failure
+
+    monkeypatch.setattr(
+        reflective, "model_from_config", lambda config: UnsupportedModel()
+    )
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    with memory.open_run() as session:
+        frame = session.open_frame(_spec())
+        with pytest.raises(MemoryOperationError) as exc:
+            frame.learn(_context())
+    assert exc.value.code == "reflective.structured_output"
+    assert exc.value.retryable is False
+    assert "binding-secret" not in str(exc.value)
+    assert exc.value.__cause__ is failure
+
+
+def test_learn_provider_failure_is_retryable_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    failure = RuntimeError("provider-secret")
+    _install_model(monkeypatch, error=failure)
     with memory.open_run() as session:
         frame = session.open_frame(_spec())
         with pytest.raises(MemoryOperationError) as exc:
             frame.learn(_context())
     assert exc.value.code == "reflective.provider"
     assert exc.value.retryable is True
+    assert "provider-secret" not in str(exc.value)
+    assert exc.value.__cause__ is failure
 
 
 def test_structured_output_parser_failure_is_a_final_contract_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
-    _install_model(monkeypatch, error=OutputParserException("malformed"))
+    failure = OutputParserException("parser-secret")
+    _install_model(monkeypatch, error=failure)
     with memory.open_run() as session:
         frame = session.open_frame(_spec())
         with pytest.raises(MemoryOperationError) as exc:
             frame.learn(_context())
     assert exc.value.code == "reflective.contract"
     assert exc.value.retryable is False
+    assert "parser-secret" not in str(exc.value)
+    assert exc.value.__cause__ is failure
+
+
+def test_parsed_response_validation_failure_is_final_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_model(
+        monkeypatch,
+        {
+            "actions": [
+                {
+                    "action": "add",
+                    "lesson_id": "one",
+                    "text": "text-secret",
+                    "unexpected": "response-secret",
+                }
+            ]
+        },
+    )
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    with memory.open_run() as session:
+        frame = session.open_frame(_spec())
+        with pytest.raises(MemoryOperationError) as exc:
+            frame.learn(_context())
+    assert exc.value.code == "reflective.contract"
+    assert exc.value.retryable is False
+    assert "response-secret" not in str(exc.value)
+    assert "text-secret" not in str(exc.value)
+    assert exc.value.__cause__ is not None
 
 
 def test_episode_material_is_capped_in_one_model_call(
@@ -506,6 +654,43 @@ def test_episode_material_is_capped_in_one_model_call(
     assert isinstance(material, str)
     assert len(material) <= reflective._MAX_REFLECTION_PROMPT_CHARS
     assert "truncated" in material
+
+
+def test_huge_current_lessons_cannot_displace_new_episode_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model, _ = _install_model(
+        monkeypatch,
+        {"actions": [{"action": "noop", "lesson_id": None, "text": None}]},
+    )
+    memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
+    with memory.open_run() as session:
+        session.open_frame(_spec())
+        session.commit(
+            "large-lesson",
+            (
+                _mutation(
+                    _ref(),
+                    "large-lesson",
+                    "add",
+                    "large",
+                    "old-evidence-" + "x" * 40_000,
+                ),
+            ),
+        )
+    with memory.open_run() as session:
+        frame = session.open_frame(_spec())
+        assert frame.learn(_context(text="new-evidence")) == []
+
+    assert model.structured.messages is not None
+    prompt = model.structured.messages[-1].content
+    assert isinstance(prompt, str)
+    assert len(prompt) <= reflective._MAX_REFLECTION_PROMPT_CHARS
+    assert "Current lessons:" in prompt
+    assert "truncated" in prompt
+    assert "Episodes:" in prompt
+    assert "new-evidence" in prompt
+    assert "NEW-EVIDENCE" in prompt
 
 
 def test_learning_is_propose_only_and_rejects_a_stale_generation(

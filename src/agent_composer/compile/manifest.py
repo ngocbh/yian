@@ -1547,7 +1547,12 @@ def _memory_policy_manifest(
             raise TypeError(f"{path}.origin: expected OriginRef or None")
         OriginRef(value.origin.key)
     return {
-        "config": _sorted_mapping(value.config, ctx, f"{path}.config"),
+        "config": _sorted_mapping(
+            value.config,
+            ctx,
+            f"{path}.config",
+            redact_credentials=True,
+        ),
         "name": value.name,
     }
 

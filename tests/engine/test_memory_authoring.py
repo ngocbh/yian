@@ -301,14 +301,95 @@ def test_authored_identity_includes_flow_id_and_policy_but_excludes_origin() -> 
     assert flow_fingerprint(flow_policy_reconfigured) != flow_fingerprint(flow_policy)
     assert flow_fingerprint(agent_policy) != flow_fingerprint(plain)
     assert flow_manifest(flow_policy)["memory_policy"] == {
-        "config": {"max_items": {"type": "int", "value": "4"}},
+        "config": {
+            "entries": [
+                {
+                    "key": {"type": "str", "value": "max_items"},
+                    "value": {"type": "int", "value": "4"},
+                }
+            ],
+            "type": "mapping",
+        },
         "name": "reflective",
     }
     assert flow_manifest(agent_policy)["nodes"]["agent"]["memory_policy"] == {
-        "config": {},
+        "config": {"entries": [], "type": "mapping"},
         "name": "reflective",
     }
     assert expansion_digest(flow_policy) == expansion_digest(plain)
+
+
+@pytest.mark.parametrize("owner", ["flow", "agent"])
+def test_policy_identity_redacts_credentials_but_retains_semantic_config(
+    owner: str,
+) -> None:
+    def policy_flow(
+        *,
+        api_key: str,
+        client_secret: str,
+        max_items: int,
+    ) -> CompiledFlow:
+        spec = MemoryPolicySpec(
+            "reflective",
+            {
+                "api_key": api_key,
+                "backend": {
+                    "client_secret": client_secret,
+                    "max_items": max_items,
+                },
+            },
+        )
+        if owner == "flow":
+            return CompiledFlow({}, [], memory_policy=spec)
+        return CompiledFlow(
+            {"agent": AgentNode("agent", memory_policy=spec)},
+            [],
+        )
+
+    first = policy_flow(
+        api_key="first-api-secret",
+        client_secret="first-client-secret",
+        max_items=4,
+    )
+    other_credentials = policy_flow(
+        api_key="second-api-secret",
+        client_secret="second-client-secret",
+        max_items=4,
+    )
+    other_semantics = policy_flow(
+        api_key="first-api-secret",
+        client_secret="first-client-secret",
+        max_items=5,
+    )
+
+    first_manifest = flow_manifest(first)
+    rendered = repr(first_manifest)
+    assert "first-api-secret" not in rendered
+    assert "first-client-secret" not in rendered
+    assert flow_manifest(other_credentials) == first_manifest
+    assert flow_fingerprint(other_credentials) == flow_fingerprint(first)
+    assert flow_fingerprint(other_semantics) != flow_fingerprint(first)
+
+
+def test_expansion_digest_excludes_flow_id_and_agent_memory_policy() -> None:
+    plain_flow = CompiledFlow({}, [])
+    named_flow = CompiledFlow({}, [], flow_id="named")
+    plain_agent = CompiledFlow({"agent": AgentNode("agent")}, [])
+    memory_agent = CompiledFlow(
+        {
+            "agent": AgentNode(
+                "agent",
+                memory_policy=MemoryPolicySpec(
+                    "reflective",
+                    {"max_items": 4},
+                ),
+            )
+        },
+        [],
+    )
+
+    assert expansion_digest(named_flow) == expansion_digest(plain_flow)
+    assert expansion_digest(memory_agent) == expansion_digest(plain_agent)
 
 
 def test_compose_loaded_flow_id_changes_the_previous_memoryless_identity() -> None:

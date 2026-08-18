@@ -38,6 +38,7 @@ from agent_composer.memory import (
     EvaluationEvidence,
     MemoryFrameRef,
     MemoryFrameSpec,
+    MemoryMutation,
     MemoryOccurrenceRef,
     MemoryScope,
     MemorySnapshotEnvelope,
@@ -1693,6 +1694,12 @@ def _reduce_learning_record(
         ):
             raise ValueError("learning result must match the active memory frame")
         if isinstance(record, MemoryFrameLearnedRecord):
+            _validate_policy_mutation_ids(
+                layout,
+                learning,
+                spec,
+                record.mutations,
+            )
             return learning.with_frame_state(
                 record.frame_ref,
                 FrameLearningState(
@@ -1773,6 +1780,23 @@ def _reduce_learning_record(
             failure=record.failure,
         ),
     )
+
+
+def _validate_policy_mutation_ids(
+    layout: tuple[MemoryFrameSpec, ...],
+    learning: RuntimeLearningState,
+    spec: MemoryFrameSpec,
+    mutations: tuple[MemoryMutation, ...],
+) -> None:
+    """Reject policy-wide mutation identity collisions at reducer authority."""
+    prior_ids = {
+        mutation.mutation_id
+        for other in layout
+        if other.policy_name == spec.policy_name and other.ref != spec.ref
+        for mutation in learning.frame_state(other.ref).mutations
+    }
+    if any(mutation.mutation_id in prior_ids for mutation in mutations):
+        raise ValueError("memory mutation ids must be unique within one policy commit")
 
 
 def _memory_frame_spec(state: RunState, ref: MemoryFrameRef) -> MemoryFrameSpec:

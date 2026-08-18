@@ -809,6 +809,25 @@ def test_learning_records_validate_active_frame_inventory_policy_batch_and_id() 
         log,
         MemoryFrameLearningStartedRecord(_POLICY, agent, agent_occurrences),
     )
+    collision = MemoryFrameLearnedRecord(
+        _POLICY,
+        agent,
+        (MemoryMutation("outer", agent, {}),),
+    )
+    with pytest.raises(ValueError, match="unique within one policy"):
+        prepare_record(state, collision)
+
+    forged = MemoryRunLog(_RUN_ID)
+    for envelope in log:
+        forged.append(envelope.record)
+    forged.append(collision)
+    with pytest.raises(ValueError, match="unique within one policy"):
+        _replay_records(
+            RunState(copy.deepcopy(state.flow)),
+            tuple(forged),
+            grow_builder=build_grow,
+        )
+
     _commit_record(
         state,
         log,

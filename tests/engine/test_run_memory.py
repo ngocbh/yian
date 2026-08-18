@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from agent_composer.compose import load_flow
-from agent_composer.events import RunStarted
+from agent_composer.events import NodeExpanded, RunStarted
 from agent_composer.memory import (
     LearnContext,
     MemoryFrameSpec,
@@ -53,6 +53,27 @@ nodes:
       return 0
     output: int
 output: ${work.output}
+"""
+
+_MAP_FLOW = """id: memory-map
+name: memory_map
+memory_policy: test
+input:
+  values: list[int]
+defs:
+  increment:
+    input:
+      value: int
+    nodes: {}
+    output: ${input.value + 1}
+nodes:
+  each:
+    kind: map
+    call: increment
+    over: ${input.values}
+    input:
+      value: ${item}
+output: ${each.output}
 """
 
 
@@ -334,6 +355,60 @@ def test_retryable_learning_resumes_without_rerunning_settled_primary(
     assert silent.learning is not None
     assert silent.learning.status == "succeeded"
     assert len(_records(path)) == settled_count
+
+
+def test_learning_only_resume_uses_static_layout_after_map_growth(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "map-learning.jsonl"
+    retryable = MemoryOperationError("learn", "test.busy", "later", True)
+    memory = _Memory(learn_outcomes=[retryable, []])
+    flow = load_flow(_MAP_FLOW)
+
+    first = run_flow(
+        flow,
+        {"values": [1, 4]},
+        log=path,
+        memory={"test": memory},
+        learn=True,
+    )
+    resumed = resume_flow(flow, log=path, memory={"test": memory})
+
+    assert first.status == "succeeded"
+    assert first.output == [2, 5]
+    assert first.learning is not None
+    assert first.learning.status == "incomplete"
+    assert resumed.status == "succeeded"
+    assert resumed.output == [2, 5]
+    assert resumed.events == []
+    assert resumed.learning is not None
+    assert resumed.learning.status == "succeeded"
+
+
+def test_unfinished_primary_resume_uses_static_layout_after_map_growth(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "map-primary.jsonl"
+    memory = _Memory()
+    flow = load_flow(_MAP_FLOW)
+
+    def stop_after_growth(event: object) -> None:
+        if isinstance(event, NodeExpanded):
+            raise RuntimeError("host stop after map growth")
+
+    with pytest.raises(RuntimeError, match="host stop after map growth"):
+        run_flow(
+            flow,
+            {"values": [1, 4]},
+            log=path,
+            memory={"test": memory},
+            on_event=stop_after_growth,
+        )
+
+    resumed = resume_flow(flow, log=path, memory={"test": memory})
+
+    assert resumed.status == "succeeded"
+    assert resumed.output == [2, 5]
 
 
 def test_unfinished_primary_requires_recorded_memory_mapping_on_resume(

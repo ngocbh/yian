@@ -413,15 +413,15 @@ def _resume_flow_controlled(
                 raise MemorySetupError(
                     "resuming this run requires its enabled memory mapping"
                 )
-            memory_layout, memory_origins = _resolve_runtime_memory_layout(
-                state.flow
+            memory_layout, memory_origins = _resolve_authored_memory_layout(
+                flow
             )
             if memory_layout != state.memory_layout:
                 raise ValueError(
                     "recorded memory layout does not match the supplied flow"
                 )
             memory_runtime = MemoryRuntime.open(
-                layout=memory_layout,
+                layout=state.memory_layout,
                 origins=memory_origins,
                 memory=memory,
                 snapshots=state.memory_snapshots,
@@ -572,6 +572,18 @@ def _resolve_runtime_memory_layout(
         tuple(frame.spec for frame in ordered),
         {frame.spec.ref: frame.origin for frame in ordered},
     )
+
+
+def _resolve_authored_memory_layout(
+    flow: ComposedFlow,
+) -> tuple[
+    tuple[MemoryFrameSpec, ...],
+    dict[MemoryFrameRef, OriginRef | None],
+]:
+    """Resolve memory only on a fresh static copy, never replayed growth."""
+    if not isinstance(flow, ComposedFlow):
+        raise TypeError("memory layout resolution expects a ComposedFlow")
+    return _resolve_runtime_memory_layout(copy.deepcopy(flow.compiled))
 
 
 def _publish_boundary_observers(

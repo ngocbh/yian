@@ -7,6 +7,7 @@ These test `run`/`respawn` and compile-owned reconstruction directly (no engine)
 """
 from agent_composer.compile.expand import build_grow
 from agent_composer.diagnostics import OriginRef
+from agent_composer.memory import MemoryFrameRef, MemoryOwner, MemoryScope
 from agent_composer.nodes.base import Grow, NodeKind, Output
 from agent_composer.nodes.contracts import (
     Assertion,
@@ -125,6 +126,27 @@ def test_respawn_preserves_the_full_output_contract_carrier():
     assert clone.output_contract == contract
     assert clone.output_contract.origins is origins
     assert clone.output_contract.type is contract.type
+
+
+def test_respawn_preserves_the_derived_base_memory_scope() -> None:
+    node = LoopNode(
+        "loop",
+        flow_id="body",
+        child=object(),
+        predicate_kind="while",
+        predicate="${x}",
+        max_iters=3,
+    )
+    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
+    node.memory_scope = MemoryScope(
+        "root",
+        ("root", "loop"),
+        frame_stack=(frame,),
+    )
+
+    clone = node.respawn(1)
+
+    assert clone.memory_scope is node.memory_scope
 
 
 def test_until_do_while_continues_on_iteration_zero():

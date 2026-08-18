@@ -25,7 +25,13 @@ from agent_composer.compile.model import CompiledFlow, Edge, Flow, FlowOutput
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError, expr_refs, scan_template
 from agent_composer.expr.template import Literal, Span
-from agent_composer.memory.contracts import MemoryPolicySpec
+from agent_composer.memory.contracts import (
+    MemoryBoundary,
+    MemoryFrameRef,
+    MemoryOccurrenceSegment,
+    MemoryPolicySpec,
+    MemoryScope,
+)
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Node, NodeKind
 from agent_composer.nodes.call import CallNode
@@ -72,6 +78,7 @@ _IGNORED_NODE_FIELDS = frozenset(
     {
         "origin",
         "origin_context",
+        "memory_scope",
         "wiring_labels",
     }
 )
@@ -1557,6 +1564,144 @@ def _memory_policy_manifest(
     }
 
 
+def _relative_memory_path(
+    value: tuple[str, ...],
+    root_flow_id: str,
+    path: str,
+) -> list[str]:
+    """Project one memory path relative to its semantic root identity."""
+    if type(value) is not tuple or not value or value[0] != root_flow_id:
+        raise ValueError(f"{path}: expected a path rooted at root_flow_id")
+    if any(type(part) is not str or not part for part in value):
+        raise ValueError(f"{path}: expected non-empty exact string components")
+    return list(value[1:])
+
+
+def _memory_frame_topology(
+    frame: MemoryFrameRef,
+    root_flow_id: str,
+    path: str,
+) -> dict[str, Any]:
+    """Project one frame identity without policy or authored-root identity."""
+    if type(frame) is not MemoryFrameRef:
+        raise TypeError(
+            f"{path}: expected exact MemoryFrameRef, got {type(frame).__name__}"
+        )
+    if frame.root_flow_id != root_flow_id:
+        raise ValueError(f"{path}.root_flow_id: expected the scope root_flow_id")
+    MemoryFrameRef(
+        root_flow_id=frame.root_flow_id,
+        static_path=frame.static_path,
+        owner=frame.owner,
+    )
+    return {
+        "owner": frame.owner.value,
+        "static_path": _relative_memory_path(
+            frame.static_path,
+            root_flow_id,
+            f"{path}.static_path",
+        ),
+    }
+
+
+def _memory_occurrence_topology(
+    segment: MemoryOccurrenceSegment,
+    root_flow_id: str,
+    path: str,
+) -> dict[str, Any]:
+    """Project one dynamic occurrence segment without authored-root identity."""
+    if type(segment) is not MemoryOccurrenceSegment:
+        raise TypeError(
+            f"{path}: expected exact MemoryOccurrenceSegment, "
+            f"got {type(segment).__name__}"
+        )
+    MemoryOccurrenceSegment(
+        kind=segment.kind,
+        static_path=segment.static_path,
+        index=segment.index,
+    )
+    return {
+        "index": segment.index,
+        "kind": segment.kind.value,
+        "static_path": _relative_memory_path(
+            segment.static_path,
+            root_flow_id,
+            f"{path}.static_path",
+        ),
+    }
+
+
+def _memory_boundary_topology(
+    boundary: MemoryBoundary,
+    root_flow_id: str,
+    path: str,
+) -> dict[str, Any]:
+    """Project one flow boundary without policy or authored-root identity."""
+    if type(boundary) is not MemoryBoundary:
+        raise TypeError(
+            f"{path}: expected exact MemoryBoundary, got {type(boundary).__name__}"
+        )
+    MemoryBoundary(kind=boundary.kind, frame_ref=boundary.frame_ref)
+    return {
+        "frame": _memory_frame_topology(
+            boundary.frame_ref,
+            root_flow_id,
+            f"{path}.frame_ref",
+        ),
+        "kind": boundary.kind.value,
+    }
+
+
+def _memory_scope_topology(value: MemoryScope, path: str) -> dict[str, Any]:
+    """Project only memory topology needed for deterministic growth identity."""
+    if type(value) is not MemoryScope:
+        raise TypeError(
+            f"{path}: expected exact MemoryScope, got {type(value).__name__}"
+        )
+    # Replay the frozen carrier's public invariants in case an object was forged
+    # or mutated through ``object.__setattr__``.
+    MemoryScope(
+        root_flow_id=value.root_flow_id,
+        static_path=value.static_path,
+        frame_stack=value.frame_stack,
+        occurrence_path=value.occurrence_path,
+        boundary=value.boundary,
+    )
+    root_flow_id = value.root_flow_id
+    return {
+        "boundary": (
+            None
+            if value.boundary is None
+            else _memory_boundary_topology(
+                value.boundary,
+                root_flow_id,
+                f"{path}.boundary",
+            )
+        ),
+        "frame_stack": [
+            _memory_frame_topology(
+                frame,
+                root_flow_id,
+                f"{path}.frame_stack[{index}]",
+            )
+            for index, frame in enumerate(value.frame_stack)
+        ],
+        "occurrence_path": [
+            _memory_occurrence_topology(
+                segment,
+                root_flow_id,
+                f"{path}.occurrence_path[{index}]",
+            )
+            for index, segment in enumerate(value.occurrence_path)
+        ],
+        "static_path": _relative_memory_path(
+            value.static_path,
+            root_flow_id,
+            f"{path}.static_path",
+        ),
+    }
+
+
 def _node_manifest(
     node: Node,
     ctx: _ManifestContext,
@@ -1707,6 +1852,16 @@ def _node_manifest(
             )
     else:  # pragma: no cover - _check_node_fields exhausts the closed enum first
         raise ValueError(f"{path}: unsupported node kind {node.kind.value!r}")
+
+    # Derived memory state is never authored program identity. Dynamic fragment
+    # identity includes only its root-relative frame/occurrence topology so replay
+    # rejects a structurally different memory occurrence without persisting policy
+    # names, configs, source origins, or root flow ids.
+    if topology_only and node.memory_scope is not None:
+        manifest["memory_scope"] = _memory_scope_topology(
+            node.memory_scope,
+            f"{path}.memory_scope",
+        )
 
     return {key: manifest[key] for key in sorted(manifest)}
 

@@ -187,6 +187,7 @@ class LoopNode(Node):
         # authored loop origin, so copying that origin into the context would duplicate it
         # on every later iteration.
         clone.origin_context = self.origin_context
+        clone.memory_scope = self.memory_scope
         clone.params = self.params
         clone.output_contract = self.output_contract
         clone.pre_asserts = list(self.pre_asserts)

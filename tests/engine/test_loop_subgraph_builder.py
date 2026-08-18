@@ -8,6 +8,13 @@ durable reconstruction builds the SAME `L#k/…` namespace.
 from agent_composer.compile.expand import loop_continue_subgraph, map_callsite, ns
 from agent_composer.compile.model import CompiledFlow, Edge, END_ID, Flow, START_ID
 from agent_composer.diagnostics import OriginRef
+from agent_composer.memory import (
+    MemoryFrameRef,
+    MemoryOccurrenceKind,
+    MemoryOccurrenceSegment,
+    MemoryOwner,
+    MemoryScope,
+)
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.contracts import Binding, Parameter
 from agent_composer.nodes.loop import LoopNode
@@ -145,3 +152,51 @@ def test_continue_keys_body_on_origin_when_driver_id_differs():
     assert ns(map_callsite("lp", 2), child.start_id) in sg.nodes
     assert not any(nid.startswith("lp~2#") for nid in sg.nodes)
     assert "lp~3" in sg.nodes
+
+
+def test_continue_appends_body_iteration_but_driver_keeps_outer_occurrence() -> None:
+    child = _child_flow()
+    outer_frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
+    for node_id, node in child.nodes.items():
+        node.memory_scope = MemoryScope(
+            "root",
+            ("root", "lp", node_id),
+            frame_stack=(outer_frame,),
+        )
+    outer = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.MAP_ITEM,
+        ("root", "outer_map"),
+        1,
+    )
+    loop_scope = MemoryScope(
+        "root",
+        ("root", "lp"),
+        frame_stack=(outer_frame,),
+        occurrence_path=(outer,),
+    )
+    driver = _driver("lp", 3, child)
+    driver.memory_scope = loop_scope
+
+    fragment = loop_continue_subgraph(
+        child,
+        origin="lp",
+        carried={"x": 1},
+        k=2,
+        driver=driver,
+        memory_scope=loop_scope,
+    )
+
+    expected_body = (
+        outer,
+        MemoryOccurrenceSegment(
+            MemoryOccurrenceKind.LOOP_ITERATION,
+            ("root", "lp"),
+            2,
+        ),
+    )
+    assert {
+        node.memory_scope.occurrence_path
+        for node_id, node in fragment.nodes.items()
+        if node_id != driver.id
+    } == {expected_body}
+    assert fragment.nodes[driver.id].memory_scope.occurrence_path == (outer,)

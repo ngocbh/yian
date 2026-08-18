@@ -12,9 +12,19 @@ from pydantic import BaseModel, ConfigDict
 
 import agent_composer.compile.manifest as manifest_module
 from agent_composer.compile.manifest import expansion_digest, flow_fingerprint, flow_manifest
+from agent_composer.compile.memory_layout import apply_memory_layout, resolve_memory_layout
 from agent_composer.compile.model import START_ID, CompiledFlow, Edge, Flow, FlowOutput
 from agent_composer.compose import load_flow
 from agent_composer.diagnostics import OriginRef
+from agent_composer.memory import (
+    MemoryBoundary,
+    MemoryBoundaryKind,
+    MemoryFrameRef,
+    MemoryOccurrenceKind,
+    MemoryOccurrenceSegment,
+    MemoryOwner,
+    MemoryScope,
+)
 from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.agent.structured import type_to_schema
 from agent_composer.nodes.call import CallNode
@@ -2351,6 +2361,101 @@ def test_node_origin_context_does_not_affect_program_or_expansion_identity():
     assert flow_manifest(first) == flow_manifest(second)
     assert flow_fingerprint(first) == flow_fingerprint(second)
     assert expansion_digest(first) == expansion_digest(second)
+
+
+def test_memory_scope_is_not_authored_identity_but_is_expansion_topology():
+    plain = _fragment()
+    stamped = copy.deepcopy(plain)
+    stamped.nodes["body"].memory_scope = MemoryScope(
+        "root",
+        ("root", "body"),
+    )
+
+    assert flow_manifest(stamped) == flow_manifest(plain)
+    assert flow_fingerprint(stamped) == flow_fingerprint(plain)
+    assert expansion_digest(stamped) != expansion_digest(plain)
+
+
+def test_memory_expansion_projection_omits_root_and_policy_identity():
+    def compiled(root_id: str, policy: str, limit: int) -> CompiledFlow:
+        source = f"""id: {root_id}
+name: memory
+memory_policy:
+  name: {policy}
+  config: {{limit: {limit}}}
+nodes:
+  body:
+    kind: code
+    code: tests.engine._compose_codefns:echo
+    input: {{topic: hello}}
+    output: str
+output: ${{body.output}}
+"""
+        flow = load_flow(source).compiled
+        apply_memory_layout(flow, resolve_memory_layout(flow))
+        return flow
+
+    first = compiled("first", "reflective", 3)
+    second = compiled("second", "profile", 99)
+
+    assert flow_fingerprint(first) != flow_fingerprint(second)
+    assert expansion_digest(first) == expansion_digest(second)
+
+
+def test_memory_expansion_projection_covers_frame_occurrence_and_boundary_topology():
+    root = "root"
+    frame = MemoryFrameRef(root, (root,), MemoryOwner.FLOW)
+    baseline = _fragment()
+    baseline.nodes["body"].memory_scope = MemoryScope(
+        root,
+        (root, "body"),
+    )
+
+    with_frame = copy.deepcopy(baseline)
+    with_frame.nodes["body"].memory_scope = MemoryScope(
+        root,
+        (root, "body"),
+        frame_stack=(frame,),
+    )
+    with_other_frame_path = copy.deepcopy(with_frame)
+    other_frame = MemoryFrameRef(root, (root, "nested"), MemoryOwner.FLOW)
+    with_other_frame_path.nodes["body"].memory_scope = MemoryScope(
+        root,
+        (root, "body"),
+        frame_stack=(other_frame,),
+    )
+    with_occurrence = copy.deepcopy(with_frame)
+    with_occurrence.nodes["body"].memory_scope = MemoryScope(
+        root,
+        (root, "body"),
+        frame_stack=(frame,),
+        occurrence_path=(
+            MemoryOccurrenceSegment(
+                MemoryOccurrenceKind.MAP_ITEM,
+                (root, "map"),
+                0,
+            ),
+        ),
+    )
+    with_boundary = copy.deepcopy(with_frame)
+    with_boundary.nodes["body"].memory_scope = MemoryScope(
+        root,
+        (root, "body"),
+        frame_stack=(frame,),
+        boundary=MemoryBoundary(MemoryBoundaryKind.END, frame),
+    )
+
+    digests = {
+        expansion_digest(flow)
+        for flow in (
+            baseline,
+            with_frame,
+            with_other_frame_path,
+            with_occurrence,
+            with_boundary,
+        )
+    }
+    assert len(digests) == 5
 
 
 def test_case_predicate_origins_do_not_affect_program_or_expansion_identity():

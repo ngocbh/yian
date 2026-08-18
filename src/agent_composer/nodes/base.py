@@ -27,6 +27,7 @@ from typing import Any, Callable, ClassVar, Iterator, Optional, Union
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
+from agent_composer.memory.contracts import MemoryScope
 from agent_composer.nodes.binding import BindingError, apply_defaults
 from agent_composer.nodes.contracts import (
     Assertion,
@@ -231,6 +232,10 @@ class Node(ABC):
             node. Directly constructed nodes always start with an empty tuple;
             compile-owned expansion may derive a non-empty context from enclosing
             spawners. This diagnostic value is not a local authored-origin carrier.
+        memory_scope (`MemoryScope | None`):
+            Compile-derived static memory context. Authors cannot supply it;
+            memory layout resolution stamps it before execution when memory is
+            enabled, and ordinary nodes otherwise retain ``None``.
         env (`dict[str, Any]`):
             Author-supplied static per-node config (`{str -> literal}`), baked at build
             time from the flow-level `env:` default merged with the node's own `env:`
@@ -319,6 +324,9 @@ class Node(ABC):
         # or invents ancestry; compile-owned expansion derives it after authored origins
         # have been rewritten. It therefore stays outside local origin traversal.
         self.origin_context: tuple[OriginRef, ...] = ()
+        # Derived beside generated ancestry because neither value is authored node
+        # configuration. The compile layer owns all non-None assignments.
+        self.memory_scope: MemoryScope | None = None
         # Author-supplied static per-node config, opaque to the engine core (kind-blind): a
         # plain `{str -> literal}` map baked at build time from the flow-level `env:` default
         # merged with this node's own `env:` (node override wins; see the compose builder). The

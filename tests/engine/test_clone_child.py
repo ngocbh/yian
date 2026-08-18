@@ -1,7 +1,15 @@
+import pytest
+
 from agent_composer.compile.expand import clone_child
 from agent_composer.compile.model import CompiledFlow, Edge, FlowOutput, Flow, START_ID, END_ID
 from agent_composer.compose.helpers.types import read_type
 from agent_composer.diagnostics import OriginRef
+from agent_composer.memory import (
+    MemoryOccurrenceKind,
+    MemoryOccurrenceSegment,
+    MemoryScope,
+    MemorySetupError,
+)
 from agent_composer.nodes.base import NodeKind, Output
 from agent_composer.nodes.contracts import Assertion, Binding, Parameter, ValueContract
 from agent_composer.nodes.end import EndNode
@@ -96,6 +104,25 @@ def test_clone_child_prefixes_existing_generated_origin_context():
 
     assert cloned.nodes["each/head"].origin_context == (outer, nested)
     assert child.nodes["head"].origin_context == (nested,)
+
+
+def test_clone_child_rejects_a_dynamic_static_memory_template_atomically() -> None:
+    child = _single()
+    occurrence = MemoryOccurrenceSegment(
+        MemoryOccurrenceKind.MAP_ITEM,
+        ("root", "map"),
+        0,
+    )
+    child.nodes["head"].memory_scope = MemoryScope(
+        "root",
+        ("root", "call", "head"),
+        occurrence_path=(occurrence,),
+    )
+
+    with pytest.raises(MemorySetupError, match="static memory template"):
+        clone_child(child, callsite="call", record={"topic": "ACME"})
+
+    assert child.nodes["head"].memory_scope.occurrence_path == (occurrence,)
 
 
 def test_clone_child_rewrites_one_binding_layer_and_preserves_its_origin():

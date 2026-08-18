@@ -59,7 +59,7 @@ Hold this model whenever you design anything:
 - CASE registers every indexed `cases[N].when` plus optional `on:` site before
   lowering. Each ordered `Case` retains its predicate origin; generated wiring
   bindings retain the source occurrence that produced them. `CaseNode` attributes
-  a predicate exception by its own `_run_impl` frame and active `Case` identity,
+  a predicate exception by its own `forward` frame and active `Case` identity,
   with node fallback outside predicate evaluation. Extend CASE's local origin
   traversal/rewrite for these carriers; they remain manifest-neutral.
 - AGENT schema selection leaves only an untagged `str` on the free-text path. A tagged
@@ -252,7 +252,7 @@ Our north star is a *functional language of agents*. Design the feature as a
   variant and forces an exhaustive `match`. Our closed sets are `NodeKind` (kept
   closed, no registry/metaclass), `NodeResult`, the evaluator's worker result, and
   `RunRecord`. Note the runtime *core* matches on result/record variants, not on
-  `NodeKind`: ordinary behavior belongs in a node's own `_run_impl` or node-owned
+  `NodeKind`: ordinary behavior belongs in a node's own `forward` or node-owned
   traits/hooks. Growth construction has a
   sanctioned compile-layer match: the closed `build_grow` interpreter
   interprets node-produced seeds into fragments before the kind-blind runtime
@@ -331,7 +331,7 @@ Most are just the functional model (above) made enforceable:
   namespace is generic.
 - **Closed `NodeKind` vocabulary; the core is kind-BLIND** — `NodeKind` stays a closed enum (no
   registry/metaclass), but the engine core (`runtime/engine.py` + `runtime/eval_node.py`) does NOT
-  branch on it. Ordinary behavior lives in a node's own `_run_impl`; growth construction's
+  branch on it. Ordinary behavior lives in a node's own `forward`; growth construction's
   sanctioned kind match lives in `compile.expand.build_grow`. The core dispatches only on the
   closed worker-result and run-record sums and consults node-owned
   execution-semantic traits/hooks
@@ -353,9 +353,13 @@ Most are just the functional model (above) made enforceable:
   Compile-side origin traversal follows the separate node-owned
   `iter_local_origins`, `rewrite_local_origins`, and `origin_children` hooks; these
   are not runtime capabilities.
+- **`Node.backward` is reserved, not active** — the base no-op only reserves the
+  vocabulary for a future durable reverse-DAG pass. Do not call it from ordinary
+  execution or memory learning until producer lineage and feedback records define
+  its contract.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
-  only a node's own `_run_impl()` interprets known keys (e.g. AGENT's `max_tool_iterations`). It is the
+  only a node's own `forward()` interprets known keys (e.g. AGENT's `max_tool_iterations`). It is the
   kind-blind knob for "tune this node" — add a key by having the node read it, never by an engine
   branch. AGENT stays one live loop, so its node-local `env` remains on that one invocation.
 - **Single-writer invariant** — workers are pure executors; the dispatcher is the

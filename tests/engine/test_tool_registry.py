@@ -177,7 +177,7 @@ def test_tool_node_uses_public_invocation_path():
 
     node = ToolNode("probe", tool_id="tool_node_public_probe")
     with pytest.raises(ValueError, match="unsupported argument"):
-        node._run_impl({"question": "Approve?", "node_id": "model-injected"})
+        node.forward({"question": "Approve?", "node_id": "model-injected"})
 
 
 def test_generic_registration_rejects_reserved_ask_user_id():

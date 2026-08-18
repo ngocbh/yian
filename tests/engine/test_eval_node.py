@@ -54,7 +54,7 @@ class _CommitAsNode(Node):
         super().__init__(node_id)
         self._output = output
 
-    def _run_impl(self, inputs, **caps):
+    def forward(self, inputs, **caps):
         return self._output
 
 
@@ -169,7 +169,7 @@ class _NonSpawnerGrowNode(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         return Grow(seed={})
 
 
@@ -178,7 +178,7 @@ class _BadReturnNode(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         return {"not": "a NodeResult"}
 
 
@@ -191,7 +191,7 @@ class _MutatingNode(Node):
         super().__init__(node_id)
         stamp_reads(self, {"x": "${input.x}"})
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         inputs["x"] = 999
         return Output("done")
 
@@ -277,7 +277,7 @@ class _BodyRaisesAssertion(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         raise NodeAssertFailed("body chose this exception type")
 
 
@@ -286,7 +286,7 @@ class _BodyRaisesBinding(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         raise BindingError(
             "body chose this exception type",
             failure_code="contract.input",
@@ -299,7 +299,7 @@ class _GeneratorRaisesBinding(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         if False:
             yield None
         raise BindingError(
@@ -318,7 +318,7 @@ class _OperationOriginNode(Node):
         super().__init__(node_id, origin=OriginRef(f"node:{node_id}"))
         self.operation_origin = operation_origin
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         raise RuntimeError("operation failed")
 
     def exception_origin(self, exception: Exception) -> OriginRef | None:
@@ -334,7 +334,7 @@ class _OverrideRaisesStageShaped(Node):
         super().__init__(node_id, origin=OriginRef(f"node:{node_id}"))
         self.failure = failure
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         return Output("unused")
 
     def run(self, inputs, **caps):
@@ -461,7 +461,7 @@ def test_unbaked_composite_is_a_setup_fault(node: Node) -> None:
 
 def test_missing_node_implementation_is_a_setup_fault() -> None:
     """The base placeholder body is malformed executable setup."""
-    with pytest.raises(NotImplementedError, match="defines no _run_impl"):
+    with pytest.raises(NotImplementedError, match="defines no forward"):
         drive(Node("n"))
 
 

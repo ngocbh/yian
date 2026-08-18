@@ -59,7 +59,7 @@ class FuncNode(Node):
         self.fn = fn
         stamp_reads(self, reads)
 
-    def _run_impl(self, inputs: dict) -> Output:
+    def forward(self, inputs: dict) -> Output:
         return Output(value=self.fn(inputs))
 
 
@@ -83,7 +83,7 @@ class StreamNode(Node):
         super().__init__(node_id, **kw)
         self.chunks = chunks
 
-    def _run_impl(self, inputs: dict):
+    def forward(self, inputs: dict):
         text = ""
         for c in self.chunks:
             text += c
@@ -98,7 +98,7 @@ class FailNode(Node):
         super().__init__(node_id, **kw)
         self.message = message
 
-    def _run_impl(self, inputs: dict) -> Output:
+    def forward(self, inputs: dict) -> Output:
         raise RuntimeError(self.message)
 
 
@@ -109,7 +109,7 @@ class Policy(Exception):
 class ReturnsFailedNode(Node):
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs: dict) -> Output:
+    def forward(self, inputs: dict) -> Output:
         raise Policy("declined")
 
 
@@ -122,7 +122,7 @@ class BranchNode(Node):
         super().__init__(node_id, **kw)
         self.handle = handle
 
-    def _run_impl(self, inputs: dict) -> Route:
+    def forward(self, inputs: dict) -> Route:
         return Route(self.handle)
 
 

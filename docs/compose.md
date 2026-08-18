@@ -217,7 +217,7 @@ node_range, field_ranges = result.node_range, result.field_ranges
   unpadded wrapper and uses retained code-object identity to select the deepest
   owned traceback line; filenames and structural equality never establish ownership.
   CASE additionally carries one diagnostic-only origin on each ordered `Case`.
-  `CaseNode.exception_origin()` selects the active predicate by exact `_run_impl`,
+  `CaseNode.exception_origin()` selects the active predicate by exact `forward`,
   node, and `Case` identity, then falls back to the node origin.
 - the **wiring** is *flow-owned*: `{param → "${source}"}`. The node knows its parameter
   *names*; the flow knows where each one is *sourced from*. This is why a node is

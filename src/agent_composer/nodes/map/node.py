@@ -128,7 +128,7 @@ class MapNode(Node):
         """A MAP reserves `over` (its iteration-source author-wiring key)."""
         return {"over"}
 
-    def _run_impl(self, inputs: dict, *, bind_item: Optional[Callable[[Any], dict]] = None):
+    def forward(self, inputs: dict, *, bind_item: Optional[Callable[[Any], dict]] = None):
         # Per-element call-args RAW (no driver pre-default): the spliced child START_ID fills omitted
         # inputs from its params' declared defaults. The node describes growth with only the
         # per-element records; the compile-owned injected builder constructs the MAP fan-in.

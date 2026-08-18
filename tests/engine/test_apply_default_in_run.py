@@ -30,8 +30,8 @@ class _ParameterSubclass(Parameter):
 
 
 class _ImplNode(Node):
-    """A concrete node implementing `_run_impl` so the base `Node.run` template
-    method (default-fill + assert firing) is exercised. `_run_impl` records the
+    """A concrete node implementing `forward` so the base `Node.run` template
+    method (default-fill + assert firing) is exercised. `forward` records the
     input record it saw so a test can assert what the wrapper filled."""
 
     kind = NodeKind.CODE
@@ -40,7 +40,7 @@ class _ImplNode(Node):
         super().__init__(node_id, **kw)
         self.seen: dict | None = None
 
-    def _run_impl(self, inputs: dict, **caps: Any) -> Output:
+    def forward(self, inputs: dict, **caps: Any) -> Output:
         self.seen = dict(inputs)
         return Output(value=inputs)
 
@@ -143,7 +143,7 @@ def test_incompatible_stored_default_fails_without_string_coercion():
 
 def test_apply_default_idempotent_no_double_fill():
     """Running the wrapper's default-fill does not corrupt an already-present key:
-    a START-like node whose `_run_impl` also runs apply_defaults would default the
+    a START-like node whose `forward` also runs apply_defaults would default the
     same key twice, but apply_defaults only fills OMITTED keys, so the second call
     is a no-op — the default is filled exactly once, not corrupted."""
     from agent_composer.nodes.binding import apply_defaults
@@ -158,7 +158,7 @@ def test_apply_default_idempotent_no_double_fill():
         )
     ]
 
-    # First fill (what the wrapper does), then a second fill (what a START _run_impl
+    # First fill (what the wrapper does), then a second fill (what a START forward
     # would redundantly do): the value stays 5, not double-processed.
     once = apply_defaults(node.params, {})
     twice = apply_defaults(node.params, once)

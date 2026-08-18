@@ -45,7 +45,7 @@ class _Spawner(Node):
     kind = NodeKind.CODE
     is_spawner = True
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         return Grow(seed={"value": 1})
 
 
@@ -54,7 +54,7 @@ class _LeafGrow(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         return Grow(seed={})
 
 
@@ -63,7 +63,7 @@ class _RaisesHostStop(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         raise _HostStop("stop-now")
 
 
@@ -76,7 +76,7 @@ class _GeneratorRaisesHostStop(Node):
         super().__init__(node_id)
         self.expected = expected
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         yield StreamChunk(self.id, "output", "before-stop")
         raise self.expected
 
@@ -143,7 +143,7 @@ class _RaisingStreamNode(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         yield StreamChunk(self.id, "output", "first")
         raise ValueError("stream body failed")
 
@@ -153,7 +153,7 @@ class _InvalidStreamReturnNode(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         yield StreamChunk(self.id, "output", "before-invalid-return")
         return "invalid"
 
@@ -202,7 +202,7 @@ def test_raw_stream_callback_failure_closes_the_node_generator_before_returning(
 
         kind = NodeKind.CODE
 
-        def _run_impl(self, inputs):
+        def forward(self, inputs):
             try:
                 yield StreamChunk(self.id, "output", "first")
                 yield StreamChunk(self.id, "output", "second")
@@ -229,7 +229,7 @@ def test_raw_stream_cleanup_failure_does_not_replace_callback_failure():
 
         kind = NodeKind.CODE
 
-        def _run_impl(self, inputs):
+        def forward(self, inputs):
             try:
                 yield StreamChunk(self.id, "output", "first")
             finally:

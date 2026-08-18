@@ -183,7 +183,7 @@ class Node(ABC):
     """
     The base contract every node kind implements: a pure function of its input record.
 
-    A node implements its `_run_impl` body; the inherited
+    A node implements its `forward` body; the inherited
     [`run`][agent_composer.nodes.base.Node.run] template returns one of the closed sum
     `Output | Route | Grow` (or, for a streaming kind, a generator that yields `StreamChunk`
     and returns a `NodeResult`). The node never receives the pool — the engine's
@@ -206,9 +206,9 @@ class Node(ABC):
             The node-side declared params (no source — the flow owns the wiring); `None`
             for a node that declares no inputs.
         pre_asserts (`list[Assertion]`):
-            Ordered node-local contracts checked against the bound record before `_run_impl`.
+            Ordered node-local contracts checked against the bound record before `forward`.
         post_asserts (`list[Assertion]`):
-            Ordered node-local contracts (reading `${output}`) checked after `_run_impl`.
+            Ordered node-local contracts (reading `${output}`) checked after `forward`.
         commit_as (`str`, *optional*):
             Engine-baked commit redirect: write this node's Output under `commit_as`
             instead of its own id (and fire that target's out-edges). Set by the
@@ -235,7 +235,7 @@ class Node(ABC):
             Author-supplied static per-node config (`{str -> literal}`), baked at build
             time from the flow-level `env:` default merged with the node's own `env:`
             (node override wins). Opaque to the engine core — kind-blind: only a node's
-            own `_run_impl()` path reads the keys it understands (AGENT:
+            own `forward()` path reads the keys it understands (AGENT:
             `max_tool_iterations`).
             Unknown keys are carried but ignored. `{}` when none is authored.
     """
@@ -297,7 +297,7 @@ class Node(ABC):
         self.params: Optional[list[Parameter]] = None
         # Node-local `asserts:` (a per-node contract), classified + stamped by the loader and
         # enforced by the inherited `run` template: PRE checked against the bound input record
-        # before `_run_impl`; POST (reads `${output}`) afterward against `{**inputs, output}`.
+        # before `forward`; POST (reads `${output}`) afterward against `{**inputs, output}`.
         # Empty for most nodes.
         self.pre_asserts: list[Assertion] = []
         self.post_asserts: list[Assertion] = []
@@ -322,7 +322,7 @@ class Node(ABC):
         # Author-supplied static per-node config, opaque to the engine core (kind-blind): a
         # plain `{str -> literal}` map baked at build time from the flow-level `env:` default
         # merged with this node's own `env:` (node override wins; see the compose builder). The
-        # engine NEVER reads it — only a node's own `_run_impl()` path interprets understood keys
+        # engine NEVER reads it — only a node's own `forward()` path interprets understood keys
         # (e.g. AGENT reads `max_tool_iterations`); unknown keys are carried but ignored. `{}`
         # for a node that declares no `env:` and inherits no flow default.
         self.env: dict[str, Any] = {}
@@ -467,19 +467,19 @@ class Node(ABC):
     def validate_execution_setup(self) -> None:
         """Reject malformed node-owned execution setup before entering the body stage.
 
-        The base implementation requires a concrete ``_run_impl``. Composite kinds
+        The base implementation requires a concrete ``forward``. Composite kinds
         extend this hook for invariants such as requiring their compiled child flow.
         """
-        if type(self)._run_impl is Node._run_impl:
+        if type(self).forward is Node.forward:
             raise NotImplementedError(
-                f"node {self.id!r} ({type(self).__name__}) defines no _run_impl"
+                f"node {self.id!r} ({type(self).__name__}) defines no forward"
             )
 
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Run the node's complete pure-execution template.
 
         Declared defaults are filled first, node-owned setup is validated, pre-asserts
-        run against the bound record, ``_run_impl`` executes, and post-asserts inspect
+        run against the bound record, ``forward`` executes, and post-asserts inspect
         an ``Output`` against the pristine inputs. The method returns exactly
         ``Output | Route | Grow`` or a streaming generator with one of those terminal
         values. ``bind_item`` and ``stop_event`` are the only trait-gated capabilities.
@@ -502,7 +502,7 @@ class Node(ABC):
         **caps: Any,
     ) -> "NodeResult":
         """Template method: fill declared defaults for omitted inputs, fire pre-asserts
-        (record-only), run the kind's `_run_impl`, then fire post-asserts (record-only)
+        (record-only), run the kind's `forward`, then fire post-asserts (record-only)
         against `{**inputs, output}`.
 
         Default-fill runs FIRST — before the pre-asserts — so a pre-assert may read an
@@ -513,7 +513,7 @@ class Node(ABC):
         so the generic parameter seam is its sole default authority.
 
         Firing reads ONLY the bound `inputs` record — never the pool — so node purity is
-        preserved. `eval_node` drives this wrapper (not `_run_impl`), so firing happens
+        preserved. `eval_node` drives this wrapper (not `forward`), so firing happens
         EXACTLY ONCE, owned by the node. Record-only is sufficient because every assert
         reaching a node is node-local after the ref lowering (build-time flow-asserts + the
         grow-path spawner-asserts): a cross-node/namespaced ref is lowered to a synth param
@@ -563,13 +563,13 @@ class Node(ABC):
                 except NodeAssertFailed as original:
                     raise _AssertionStageError(original) from original
             raise failure
-        # Pristine snapshot for the post-asserts, taken BEFORE `_run_impl` runs: a leaf may
+        # Pristine snapshot for the post-asserts, taken BEFORE `forward` runs: a leaf may
         # mutate the dict it receives (a CODE body transforming its input in place), which must
         # not corrupt the post-assert scope — the contract check has to see the inputs as bound,
         # not as the body left them. Only paid when this node declares post-asserts.
         post_input = copy.deepcopy(inputs) if self.post_asserts else None
         try:
-            result = self._run_impl(inputs, **caps)
+            result = self.forward(inputs, **caps)
         except (_HostStop, _BindingStageError, _DeferredBindingFault, _NodeBodyError):
             raise
         except Exception as exc:
@@ -604,7 +604,7 @@ class Node(ABC):
                 raise failure
         return result
 
-    def _run_impl(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
+    def forward(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Execute the node as a pure function of its bound input record (the per-kind body
         the `run` template method wraps).
 
@@ -617,8 +617,16 @@ class Node(ABC):
         are passed only to nodes whose traits request them (`bind_item`, `stop_event`).
         A body exception is classified as ``node.execute`` by the evaluator."""
         raise NotImplementedError(
-            f"node {self.id!r} ({type(self).__name__}) defines no _run_impl"
+            f"node {self.id!r} ({type(self).__name__}) defines no forward"
         )
+
+    def backward(self, *args: Any, **caps: Any) -> None:
+        """Reserve the node-owned reverse hook without defining feedback semantics.
+
+        The runtime does not call this hook. A future reverse-DAG feature can narrow
+        its contract once producer lineage and durable feedback records exist.
+        """
+        return None
 
     def on_failure(self, exc: Exception, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Reserved error-strategy seam, not currently driven by ``eval_node``. Default: re-raise."""

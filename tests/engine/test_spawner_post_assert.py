@@ -3,7 +3,7 @@
 A `call` is a spawner: its `run()` returns `Grow`, and its `${output}` is committed when the
 cloned child END filler finishes. The grow builder lowers the call's node-level `asserts:`
 onto that END, where the inherited `Node.run` wrapper evaluates them after
-`EndNode._run_impl()` returns `Output`.
+`EndNode.forward()` returns `Output`.
 
 Because the assert now rides the cloned child END, a failing assert emits `NodeFailed`
 naming the CHILD END id (e.g. `research/__end__`), not the spawner id. The lowering mirrors

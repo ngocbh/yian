@@ -23,7 +23,7 @@ class _CapNode(Node):
         self.needs_stop_event = opted_in
         self.caps: dict = {}
 
-    def _run_impl(self, inputs, **caps):
+    def forward(self, inputs, **caps):
         self.caps = caps
         return Output("done")
 
@@ -37,7 +37,7 @@ class _NeverRunsNode(Node):
         super().__init__(node_id)
         self.ran = False
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         self.ran = True
         return Output("unexpected")
 
@@ -51,7 +51,7 @@ class _RaisesHostStop(Node):
         super().__init__(node_id)
         self.exception = exception
 
-    def _run_impl(self, inputs):
+    def forward(self, inputs):
         raise self.exception
 
 

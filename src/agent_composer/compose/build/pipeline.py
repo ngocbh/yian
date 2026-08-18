@@ -1167,7 +1167,7 @@ def _assemble(
     ]
     # Stamp each built node's effective static config: the flow-level `env:` default merged
     # under the node's own `env:` (node override wins), flow-local (a called child flow has its
-    # own flow env). The engine core never reads `Node.env` — only the node's `_run_impl()` path does.
+    # own flow env). The engine core never reads `Node.env` — only the node's `forward()` path does.
     _flow_env = flow_env or {}
     for nid, node in nodes_built.items():
         node.env = {**_flow_env, **getattr(descriptors[nid], "env", {})}

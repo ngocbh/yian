@@ -25,7 +25,7 @@ that survive lowering beyond the common node header. Build bottom-up by dependen
 
 Add a member to the `NodeKind` enum — the single source of the tag. It is a closed
 vocabulary (no registry/metaclass); the engine core does NOT dispatch on it, so a new
-leaf needs no engine change — its behavior is entirely in its own `_run_impl`. A
+leaf needs no engine change — its behavior is entirely in its own `forward`. A
 spawner additionally owns its growth traits/hooks (`is_spawner`,
 `grow_depth_delta`, `is_loop`) and the compile interpretation described in §2a.
 The other node-owned hooks split into execution-semantic capabilities
@@ -33,7 +33,7 @@ The other node-owned hooks split into execution-semantic capabilities
 `skipped_output_target`) and the identity-neutral diagnostic projections
 `exception_origin` and `failure_trace`. They remain available to either shape.
 The base `Node.run` is a concrete template method that fires the node's asserts
-around `_run_impl`; do not override it.
+around `forward`; do not override it.
 `skipped_output_target()` is a pure, deterministic topology hook: ordinary nodes
 inherit baked `commit_as` or their own id. A result-carried `Output.commit_as`
 redirects success only. If absence must cross that same boundary, override the
@@ -79,14 +79,14 @@ class NodeKind(str, Enum):
 ## 2. `nodes/xxx/` — the Node subclass + charter
 
 - `nodes/xxx/node.py` — copy `node.py.template`, rename `XxxNode`, set
-  `kind = NodeKind.XXX`, implement `_run_impl` (the base `Node.run` wrapper fires asserts
+  `kind = NodeKind.XXX`, implement `forward` (the base `Node.run` wrapper fires asserts
   around it — do not override `run`).
 - `nodes/xxx/__init__.py` — copy `__init__.py.template` (re-export only; the
   package charter per the `structure` skill).
 
 ### 2a. Spawner only — seed-first growth construction
 
-Skip this section for a simple leaf. A kind whose `_run_impl` may return `Grow`
+Skip this section for a simple leaf. A kind whose `forward` may return `Grow`
 must preserve the layer boundary:
 
 - Return only `Grow(seed=<canonical value>, prune=<ids>)`. The node owns and
@@ -209,7 +209,7 @@ If anything outside `compose/` references `XxxDescriptor`, add it to the imports
 
 ## 6. `tests/engine/test_xxx.py` — prove it
 
-Copy `test_node.py.template`. At minimum: a direct `_run_impl()` unit test and one
+Copy `test_node.py.template`. At minimum: a direct `forward()` unit test and one
 `load_flow` + `run_flow` end-to-end. A kind with extra source-origin carriers also
 tests source-free defaults, deterministic traversal/rewrite, external rebasing,
 and manifest/fingerprint neutrality. For ordered or lowered sites, also test duplicate

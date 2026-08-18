@@ -18,14 +18,18 @@ the authoring surface is [`docs/syntax.md`](../../../docs/syntax.md).
 ## The node contract (the most portable idea)
 
 A node is a **pure function of its bound input record**. A kind implements
-`_run_impl(inputs, **caps) -> NodeResult`; the base `Node.run` is a concrete
+`forward(inputs, **caps) -> NodeResult`; the base `Node.run` is a concrete
 **template method** the engine drives — it fires the node's asserts around the body:
-`apply_defaults(record) → pre_asserts(record) → _run_impl(record, **caps) →
+`apply_defaults(record) → pre_asserts(record) → forward(record, **caps) →
 post_asserts({**record, "output": value})`. Assert firing is **record-only** (no pool),
 so it preserves node purity, and it happens **exactly once** here in the node (not in
 `eval_node`). Both assertion lists contain ordered `Assertion` carriers: the wrapper
 evaluates `.expression`, reports `.display`, and diagnoses failure through the exact
-carrier's `.origin`. `_run_impl` returns ONE of the closed sum:
+carrier's `.origin`. `forward` returns ONE of the closed sum:
+
+`Node.backward(*args, **caps) -> None` is a dormant default hook. The runtime does
+not call it, and its argument contract remains deliberately unspecified until a
+future lineage-aware reverse pass is designed.
 
 | Return | Meaning |
 |--------|---------|
@@ -181,7 +185,7 @@ Runtime and compile validation read these node members instead of branching on
 | `binds_per_item: bool` | read boundary (`eval_node`): bind PER ELEMENT via a `bind_item` cap vs bind `params` once | `False` → `True` on `map` |
 | `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → `wait` `{"until": ts}`, `map` `{"over": [...]}` |
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
-| `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `_run_impl` → baked child on call/map/loop; complete predicates on case |
+| `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `forward` → baked child on call/map/loop; complete predicates on case |
 | `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate, AGENT generated-schema path |
 | `failure_trace(operation_origin=None)` | evaluator, dispatcher, and terminal-unreachable producers: combine generated ancestry with the best local origin | `origin_context + (operation origin or node origin)`; omit only an absent local suffix |
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
@@ -214,7 +218,7 @@ assert's display and origin stay together; its failure names the
 **child END id**, not the spawner.
 
 AGENT is now an ordinary non-spawner leaf. Its model/tool loop, including an
-explicitly granted `ask_user`, stays inside one live `_run_impl`; post-asserts fire
+explicitly granted `ask_user`, stays inside one live `forward`; post-asserts fire
 on the final `Output` through the base `Node.run` template. HUMAN_INPUT and WAIT
 are likewise live leaves returning `Output`.
 
@@ -224,7 +228,7 @@ are likewise live leaves returning `Output`.
 it** — `runtime/engine.py` + `runtime/eval_node.py` branch only on the closed
 worker-result and run-record sums, then consult node-owned execution-semantic
 traits/hooks and diagnostic projections (below). Ordinary
-behavior lives in each node's own `_run_impl`; growth construction's sanctioned
+behavior lives in each node's own `forward`; growth construction's sanctioned
 closed kind match lives in `compile.expand.build_grow`, which
 interprets node-produced seeds outside the runtime core. A ratchet test
 (`tests/engine/test_kind_census.py`) holds the core's `NodeKind`/`*Expansion` dispatch count at 0.
@@ -446,7 +450,7 @@ same selector for `SyntaxError.lineno`.
 `CaseNode` carries one optional origin on every ordered `Case`. Compose registers
 the exact indexed `cases[N].when` occurrences before lowering, so duplicate text
 remains distinct. `exception_origin` selects the active predicate from this node's
-own `_run_impl` traceback frame and `Case` identity; other failures use the node
+own `forward` traceback frame and `Case` identity; other failures use the node
 fallback. Generated searched bindings inherit the first predicate occurrence that
 introduced their reference, while `on:` owns the generated `__on` binding. All of
 these carriers are diagnostic-only and manifest-neutral.

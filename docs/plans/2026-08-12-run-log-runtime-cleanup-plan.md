@@ -602,7 +602,7 @@ PYTHONPATH=src conda run -n agentcomposer python -m pytest tests/engine tests/cl
 ### Slice 4.2: Route TOOL and AGENT calls through the shared boundary
 
 1. **Red test (2-5 min)**: extend `tests/engine/test_agent.py` for returned-order calls, ungranted globally registered tool rejection, hidden/unknown args, and tool exception propagation to node failure.
-2. **Implement (2-5 min)**: `ToolNode._run_impl` calls public `invoke_tool`; agent validates each requested name against `ctx.tools`, calls `invoke_tool` in returned order, and `str()`s only when constructing `ToolMessage`. Delete catch-to-string `run_tool` behavior, but retain control continuation temporarily.
+2. **Implement (2-5 min)**: `ToolNode.forward` calls public `invoke_tool`; agent validates each requested name against `ctx.tools`, calls `invoke_tool` in returned order, and `str()`s only when constructing `ToolMessage`. Delete catch-to-string `run_tool` behavior, but retain control continuation temporarily.
 3. **Green**:
 
    ```bash
@@ -625,7 +625,7 @@ PYTHONPATH=src conda run -n agentcomposer python -m pytest tests/engine tests/cl
 
 1. **Implement (2-5 min)**: remove `Fresh`, `Resume`, `AgentEntry`, `entry`, controls, spawner traits, `_ctx` continuation fields, `replay_grow`, message serialization, `agent_step`, and synthetic segment building. `AgentNode` stores `prompt` directly and runs one local mode loop.
 2. **Implement (2-5 min)**: remove `controls` from `AgentDescriptor`; author human access as `tools: [ask_user]`. Do not validate registry availability at load time.
-3. **Implement (2-5 min)**: make `HumanInputNode._run_impl` render/parse its existing surface, call `invoke_tool_trusted("ask_user", metadata)`, and return `Output(answer)`.
+3. **Implement (2-5 min)**: make `HumanInputNode.forward` render/parse its existing surface, call `invoke_tool_trusted("ask_user", metadata)`, and return `Output(answer)`.
 4. Run the replacement AGENT/HUMAN_INPUT tests until green before removing any old continuation tests.
 
 ### Slice 4.5: Make WAIT blocking and relocate the watchdog

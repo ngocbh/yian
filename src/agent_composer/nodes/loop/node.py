@@ -126,7 +126,7 @@ class LoopNode(Node):
         if self.child is None:
             raise RuntimeError(f"loop node {self.id!r} was not baked with a body child")
 
-    def _run_impl(self, inputs: dict[str, Any], **caps: Any):
+    def forward(self, inputs: dict[str, Any], **caps: Any):
         """Own the WHOLE loop policy (no engine `_loop_step`): decide continue-vs-stop on the
         carried record, and on continue emit a self-respawning `Grow` (body_k + a fresh `L~(k+1)`
         driver) that self-prunes this driver + the previous body.

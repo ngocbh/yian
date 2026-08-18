@@ -2,11 +2,11 @@
 
 ``Node.run`` is a concrete template method that fires ``pre_asserts`` against
 the bound record, calls the
-kind's `_run_impl`, then fires `post_asserts` against `{**record, output}`.
+kind's `forward`, then fires `post_asserts` against `{**record, output}`.
 Firing reads ONLY the bound record (never the pool) — preserving node purity.
 
 These tests exercise the wrapper directly. We define a tiny concrete node that
-implements `_run_impl` (the FuncNode fake still defines `run`, which would
+implements `forward` (the FuncNode fake still defines `run`, which would
 shadow the wrapper), so the wrapper's own firing is under test.
 """
 
@@ -25,8 +25,8 @@ from agent_composer.nodes.contracts import Assertion
 
 
 class _ImplNode(Node):
-    """A concrete node that implements `_run_impl` (not `run`) so the base
-    `Node.run` template method's assert firing is exercised. `_run_impl` records
+    """A concrete node that implements `forward` (not `run`) so the base
+    `Node.run` template method's assert firing is exercised. `forward` records
     whether it ran, so a pre-assert failure can be shown to short-circuit it."""
 
     kind = NodeKind.CODE
@@ -36,13 +36,31 @@ class _ImplNode(Node):
         self.value = value
         self.ran = False
 
-    def _run_impl(self, inputs: dict, **caps: Any) -> Output:
+    def forward(self, inputs: dict, **caps: Any) -> Output:
         self.ran = True
         return Output(value=self.value)
 
 
-def test_run_returns_impl_output_when_asserts_hold():
-    """Both pre and post hold -> `run()` returns the `Output` `_run_impl` produced."""
+def test_default_backward_is_a_dormant_noop():
+    """The reserved reverse hook has no behavior until a future reverse pass drives it."""
+    node = _ImplNode("n", value=None)
+
+    assert node.backward(object(), feedback="unused") is None
+
+
+def test_runtime_does_not_drive_backward():
+    """Forward execution remains the runtime's only node-body call."""
+    from tests.engine._fakes import drive
+
+    class _BackwardTrapNode(_ImplNode):
+        def backward(self, *args: Any, **caps: Any) -> None:
+            raise AssertionError("backward must remain dormant")
+
+    assert drive(_BackwardTrapNode("n", value="ok")) == Output("ok")
+
+
+def test_run_returns_forward_output_when_asserts_hold():
+    """Both pre and post hold -> `run()` returns the `Output` `forward` produced."""
     node = _ImplNode("n", value={"output": 42})
     node.pre_asserts = [Assertion("${x} > 0", "x is positive")]
     node.post_asserts = [Assertion("${output.output} == 42", "output is 42")]
@@ -54,8 +72,8 @@ def test_run_returns_impl_output_when_asserts_hold():
     assert node.ran is True
 
 
-def test_pre_assert_failure_raises_before_impl_runs():
-    """A violated pre-assert raises `NodeAssertFailed` before `_run_impl` runs."""
+def test_pre_assert_failure_raises_before_forward_runs():
+    """A violated pre-assert raises `NodeAssertFailed` before `forward` runs."""
     node = _ImplNode("n", value={"output": 1})
     assertion = Assertion(
         "${x} > 100",
@@ -124,13 +142,13 @@ def test_duplicate_assertions_retain_first_occurrence_origin():
 
 
 # The inherited `Node.run` wrapper is the entry point for real and fake kinds. With no
-# assertions, it delegates to the kind's `_run_impl` and returns each result category
+# assertions, it delegates to the kind's `forward` and returns each result category
 # (Output / Route / Grow) unchanged.
 
 
-def test_wrapper_delegates_to_real_code_node_run_impl():
+def test_wrapper_delegates_to_real_code_node_forward():
     """A real CodeNode (leaf -> Output): its `run` is the INHERITED base wrapper (it no
-    longer shadows it), and the wrapper delegates to the kind's `_run_impl`."""
+    longer shadows it), and the wrapper delegates to the kind's `forward`."""
     from agent_composer.nodes.code import CodeNode
 
     node = CodeNode("c", code="return inputs['v']")
@@ -143,7 +161,7 @@ def test_wrapper_delegates_to_real_code_node_run_impl():
 
 
 def test_wrapper_delegates_for_route_kind():
-    """A CASE fake (-> Route): `run` is the inherited wrapper and returns the Route from `_run_impl`."""
+    """A CASE fake (-> Route): `run` is the inherited wrapper and returns the Route from `forward`."""
     from agent_composer.nodes.base import Route
 
     from tests.engine._fakes import BranchNode
@@ -157,7 +175,7 @@ def test_wrapper_delegates_for_route_kind():
 
 
 def test_wrapper_delegates_for_grow_kind():
-    """A spawner (CALL -> Grow): `run` is the inherited wrapper and returns the Grow from `_run_impl`."""
+    """A spawner (CALL -> Grow): `run` is the inherited wrapper and returns the Grow from `forward`."""
     from agent_composer.nodes.base import Grow
     from agent_composer.nodes.call import CallNode
 
@@ -172,7 +190,7 @@ def test_wrapper_delegates_for_grow_kind():
 
 
 # --- eval_node NO LONGER fires asserts itself: the `run` wrapper owns firing. eval_node drives
-# `node.run` (not `_run_impl`), so a node whose `run` is overridden to bypass firing returns
+# `node.run` (not `forward`), so a node whose `run` is overridden to bypass firing returns
 # Output even with a would-be-failing post-assert — proving eval_node does not fire on its own.
 
 
@@ -195,7 +213,7 @@ class _BypassRunNode(Node):
         super().__init__(node_id, **kw)
         self.value = value
 
-    def _run_impl(self, inputs: dict, **caps: Any) -> Output:
+    def forward(self, inputs: dict, **caps: Any) -> Output:
         return Output(value=self.value)
 
     def run(self, inputs: dict, **caps: Any) -> Output:  # bypass the wrapper's firing

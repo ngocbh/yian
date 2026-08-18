@@ -317,8 +317,8 @@ def call_subgraph(child, callsite: str, record: dict, *,
     is the single cloned child START and whose `end_id` is the cloned child END filler. The child's
     asserts (a def's `asserts:` lowered onto its START/END at build) ride the cloned boundary nodes
     and fire through the ordinary `Node.run` wrapper — boundary asserts after the cloned
-    `StartNode._run_impl()` coerces its record, and post asserts after the cloned
-    `EndNode._run_impl()` returns `Output`.
+    `StartNode.forward()` coerces its record, and post asserts after the cloned
+    `EndNode.forward()` returns `Output`.
 
     `post_asserts`/`input_names` carry the SPAWNER's OWN node-level POST `asserts:`
     (a `call` node's `asserts:` reading `${output}` + declared inputs). They are lowered onto the

@@ -34,5 +34,5 @@ class ToolNode(Node):
         super().__init__(node_id, title=title)
         self.tool_id = tool_id
 
-    def _run_impl(self, inputs: dict) -> Output:
+    def forward(self, inputs: dict) -> Output:
         return Output(value=invoke_tool(self.tool_id, inputs))

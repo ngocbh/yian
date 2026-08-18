@@ -9,11 +9,11 @@ from agent_composer.nodes.xxx import XxxNode
 
 
 def test_xxx_runs_pure():
-    # The node is a pure function of its bound record — call the kind body `_run_impl()`
+    # The node is a pure function of its bound record — call the kind body `forward()`
     # directly. (Calling `run()` also works: it's the base template method that fires asserts
-    # around `_run_impl`; with no asserts declared it just forwards to the body.)
+    # around `forward`; with no asserts declared it just forwards to the body.)
     node = XxxNode("n", param="...")
-    out = node._run_impl({"a": 1})
+    out = node.forward({"a": 1})
     assert isinstance(out, Output)
     assert out.value == ...  # the one value
 

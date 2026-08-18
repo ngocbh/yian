@@ -88,9 +88,9 @@ def test_shipped_blocking_node_bodies_are_typed_to_output():
     from agent_composer.nodes.human_input import HumanInputNode
     from agent_composer.nodes.wait import WaitNode
 
-    assert get_type_hints(AgentNode._run_impl)["return"] is Output
-    assert get_type_hints(HumanInputNode._run_impl)["return"] is Output
-    assert get_type_hints(WaitNode._run_impl)["return"] is Output
+    assert get_type_hints(AgentNode.forward)["return"] is Output
+    assert get_type_hints(HumanInputNode.forward)["return"] is Output
+    assert get_type_hints(WaitNode.forward)["return"] is Output
     assert get_args(AgentMode)[-1] is Output
 
 

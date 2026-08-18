@@ -75,7 +75,7 @@ class _ActionNode(Node):
         super().__init__(node_id, output_contract=output_contract, origin=origin)
         self._action = action
 
-    def _run_impl(self, inputs: dict[str, Any]) -> Output:
+    def forward(self, inputs: dict[str, Any]) -> Output:
         return Output(self._action())
 
 
@@ -84,7 +84,7 @@ class _RouteNode(Node):
 
     kind = NodeKind.CASE
 
-    def _run_impl(self, inputs: dict[str, Any]) -> Route:
+    def forward(self, inputs: dict[str, Any]) -> Route:
         return Route("chosen")
 
 
@@ -93,7 +93,7 @@ class _InvalidRouteNode(Node):
 
     kind = NodeKind.CASE
 
-    def _run_impl(self, inputs: dict[str, Any]) -> Route:
+    def forward(self, inputs: dict[str, Any]) -> Route:
         return Route("absent")
 
 
@@ -102,7 +102,7 @@ class _InvalidCommitTargetNode(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs: dict[str, Any]) -> Output:
+    def forward(self, inputs: dict[str, Any]) -> Output:
         return Output("done", commit_as=42)  # type: ignore[arg-type]
 
 
@@ -113,7 +113,7 @@ class _ExplicitCommitNode(_ActionNode):
         super().__init__(node_id, action)
         self._target = target
 
-    def _run_impl(self, inputs: dict[str, Any]) -> Output:
+    def forward(self, inputs: dict[str, Any]) -> Output:
         return Output(self._action(), commit_as=self._target)
 
 
@@ -124,14 +124,14 @@ class _GrowNode(Node):
     is_spawner = True
     grow_depth_delta = 1
 
-    def _run_impl(self, inputs: dict[str, Any]) -> Grow:
+    def forward(self, inputs: dict[str, Any]) -> Grow:
         return Grow(seed={"canonical": (1, 2)})
 
 
 class _MalformedSeedGrowNode(_GrowNode):
     """Return a malformed seed while retaining one legal spawner kind."""
 
-    def _run_impl(self, inputs: dict[str, Any]) -> Grow:
+    def forward(self, inputs: dict[str, Any]) -> Grow:
         return Grow(seed=[])
 
 
@@ -151,7 +151,7 @@ class _StopAwareNode(Node):
         self._entered = entered
         self._released = released
 
-    def _run_impl(self, inputs: dict[str, Any], *, stop_event: threading.Event) -> Output:
+    def forward(self, inputs: dict[str, Any], *, stop_event: threading.Event) -> Output:
         self._entered.set()
         stop_event.wait(2)
         self._released.set()
@@ -174,7 +174,7 @@ class _PrimaryHostStopNode(Node):
         self._exception = exception
         self._wait_for = wait_for
 
-    def _run_impl(self, inputs: dict[str, Any]) -> Output:
+    def forward(self, inputs: dict[str, Any]) -> Output:
         if self._wait_for is not None:
             assert self._wait_for.wait(2)
         raise self._exception
@@ -190,7 +190,7 @@ class _LateStreamNode(Node):
         super().__init__(node_id)
         self._failure_may_run = failure_may_run
 
-    def _run_impl(self, inputs: dict[str, Any], *, stop_event: threading.Event):
+    def forward(self, inputs: dict[str, Any], *, stop_event: threading.Event):
         yield StreamChunk(self.id, "output", "early")
         self._failure_may_run.set()
         stop_event.wait(2)

@@ -599,22 +599,71 @@ same obligation: apply `RunStartedRecord` to a matching `RunState` and `RunLog`
 before driving the engine. The engine borrows this authority and never closes it;
 the boundary or direct caller owns its lifetime.
 
+## Host-injected workflow memory
+
+Authored `memory_policy` values name behavior; they never name Python classes,
+storage locations, credentials, or tenant identity. Compile resolves those values
+into one canonical static frame layout. A flow owns a frame inherited by its
+agents, and an AGENT may own one additional local frame. Dynamic MAP items and
+LOOP iterations contribute occurrences to those static frames rather than
+minting new frames. Runtime remains kind-blind: it consumes only each executing
+node's compiled `MemoryScope` and an injected recall callable.
+
+`run_flow(..., memory={name: implementation})` validates the host registry,
+opens one run session per referenced policy, opens every static frame, and stores
+the sessions' exact public snapshots in `RunStartedRecord`. `memory=None` leaves
+authored policies dormant. For each opted-in AGENT evaluation, recall returns an
+ordered tuple of source-neutral sections from outer flow to local agent. The
+agent mode renders those sections as canonical JSON-framed system material. The
+encoding prevents memory text from breaking or spoofing the envelope, but the
+text remains model-visible system material and is not isolated from prompt
+injection. Accepted invocation evidence is recorded beside the ordinary node
+outcome, including visible model retries within that invocation. Reducer-rejected
+node outcomes, discarded late siblings, and transient stream chunks do not become
+learning evidence.
+
+`learn=True` starts a separate post-terminal phase after either primary success
+or primary failure. For each static frame, runtime derives its exact occurrence
+inventory and episode set, records `MemoryFrameLearningStartedRecord`, calls that
+frame's `learn`, and records either its proposed mutations or a typed failure.
+Policy-raised `MemoryOperationError` messages are durable, so implementations
+must keep them safe; unexpected exceptions and invalid returns use stable
+sanitized failures. Once every frame for a policy is learned or finally failed, one
+deterministic idempotent commit batches that policy's mutations. Intent is durable
+before each external `learn`/`commit` effect. Retryable failures remain incomplete
+for a later `resume_flow`; final learning failures never replace the graph's
+primary result. `RunResult.learning` reports this independent disposition.
+
+Learning is behavior-only. It does not invoke the reserved `Node.backward`,
+traverse producer lineage, or mutate the authored graph. Each flow/AGENT frame
+writes only its own policy state. Concrete implementations live behind the
+source-neutral `Memory`/`MemorySession`/`MemoryFrame` protocols; the provided
+`ReflectiveMemory` is a process-local backend whose model call and query rewrite
+are policy-owned.
+
 ## Durable recovery
 
 `run_flow(..., log=path)` exclusively creates a new JSONL authority. Its first
 record captures the run ID, authored-flow fingerprint, complete initial typed
-pool, START wiring, worker count, and fully resolved LLM configuration. Expansion
+pool, START wiring, worker count, fully resolved LLM configuration, and optional
+memory layout/snapshots/learning flag. Expansion
 records retain canonical growth seeds plus topology digests, so replay rebuilds
 the same nested CALL/MAP/LOOP graph without re-running the spawner.
 
 `resume_flow(flow, log=path)` locks an existing log, durably removes bytes after
 the final complete newline, validates its canonical contiguous prefix, and checks
 the supplied flow fingerprint. It folds historical records silently through the
-same reducer and injected growth builder used live. A terminal prefix is returned
-without a write. A nonterminal prefix gets exactly one `RunResumedRecord`, which
-puts durably started nodes with no durable outcome back ahead of the ready
-frontier before dispatch continues. Recovery uses the recorded input, run ID, and
-complete LLM map rather than current ambient defaults.
+same reducer and injected growth builder used live. A nonterminal primary prefix
+gets exactly one `RunResumedRecord`, which puts durably started nodes with no
+durable outcome back ahead of the ready frontier before dispatch continues. A
+terminal primary with incomplete retryable learning appends only learning records;
+it does not append `RunResumedRecord` or execute graph nodes. Recovery uses the
+recorded input, run ID, and complete LLM map rather than current ambient defaults.
+
+When an unfinished recorded run enabled memory, recovery requires the named host
+implementations and verifies that opening each session reproduces the exact
+recorded snapshot. A terminal run whose primary execution and learning are both
+settled returns without opening memory or appending a record.
 
 This provides deterministic engine-state recovery, not exactly-once external
 effects: an interrupted node with a durable start and no outcome is retried.

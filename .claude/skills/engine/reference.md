@@ -259,10 +259,10 @@ WAIT are never timed by that watchdog.
 | `NodeFailedRecord` | retain the semantic `Failure` and optional evaluation evidence that make the run terminal-failed |
 | `MemoryFrameLearningStartedRecord` | start learning for one frame from its canonical occurrence set |
 | `MemoryFrameLearnedRecord` | retain one frame's proposed mutation batch |
-| `MemoryFrameLearningFailedRecord` | retain one sanitized frame-local learning failure |
+| `MemoryFrameLearningFailedRecord` | retain one frame-local learning failure; typed policy messages are durable, while unexpected/invalid results are sanitized |
 | `MemoryCommitRequestedRecord` | request one policy's atomic idempotent mutation commit |
 | `MemoryCommitSucceededRecord` | confirm one policy commit completed successfully |
-| `MemoryCommitFailedRecord` | retain one sanitized policy commit failure |
+| `MemoryCommitFailedRecord` | retain one policy commit failure under the same typed/unexpected boundary |
 
 `FlowEngine` borrows one initialized `RunState` plus a matching open `RunLog`.
 Workers only evaluate; the dispatcher prepares a total transition, appends its
@@ -271,12 +271,17 @@ explicitly non-durable. The engine never closes its log: package-root `run.py` o
 `MemoryRunLog`/`JsonlRunLog` creation, locking, recovery, tail repair, and closure.
 
 `run_flow(..., log=None)` uses process-local authority; a path selects a durable
-JSONL log. `resume_flow(flow, *, log=..., num_workers=None)` validates the authored
-flow fingerprint, silently folds the locked contiguous prefix through the same
-reducer, and either returns an already-terminal result unchanged or appends one
-`RunResumedRecord` before retrying unfinished starts in original dispatch order.
-`RunResult` exposes exactly `input`, `status`, `run_id`, `log`, `output`,
-`failure`, and this invocation's post-durable `events`.
+JSONL log. `memory={name: implementation}` opens one snapshot-isolated session
+per referenced authored policy; `learn=True` adds the record-authoritative
+post-terminal phase. `resume_flow(flow, *, log=..., num_workers=None,
+memory=None)` validates the authored flow fingerprint, silently folds the locked
+contiguous prefix through the same reducer. An unfinished primary appends one
+`RunResumedRecord` before retrying starts in original dispatch order; a terminal
+primary with retryable learning appends only learning records; and a fully settled
+run returns unchanged. An unfinished memory-enabled run also requires exact
+recorded snapshots. `RunResult` exposes exactly `input`,
+`status`, `run_id`, `log`, `output`, `failure`, this invocation's post-durable
+`events`, and the independent optional `learning` disposition.
 
 ## OCaml analogue map (design from this)
 

@@ -349,6 +349,18 @@ nodes:
 Keys in use: `max_tool_iterations` (agent) — tool-calling loop turns before an
 `AgentLoopError` (default `-1` = no cap; set a positive int to bound it).
 
+## Workflow memory — `memory_policy:`
+
+`memory_policy: NAME` is valid on a full flow (`nodes:` form) or an `agent`; the
+object form adds public literal behavior config as `{name: NAME, config: {...}}`. A flow frame is
+inherited by its agents, and an agent may add one local frame. Each frame writes
+only its own state. MAP items and LOOP iterations reuse static authored frames.
+Other node kinds and anonymous inline children cannot own a policy. The YAML
+contains no credentials, tenant/backend paths, persistence locations, or Python
+imports. A library host injects implementations by name with
+`run_flow(..., memory={NAME: implementation})`; `learn=True` enables the separate
+post-terminal learning phase. The CLI currently leaves policies dormant.
+
 ## Validate
 
 ```bash

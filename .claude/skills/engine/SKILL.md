@@ -357,6 +357,15 @@ Most are just the functional model (above) made enforceable:
   vocabulary for a future durable reverse-DAG pass. Do not call it from ordinary
   execution or memory learning until producer lineage and feedback records define
   its contract.
+- **Memory is host-injected and record-authoritative** — authored policies resolve
+  to static flow/AGENT frames; MAP items and LOOP iterations reuse those frames.
+  `memory=None` is dormant, while an injected registry opens snapshot-isolated
+  sessions and supplies a kind-blind recall callback. With `learn=True`, learning
+  runs only after primary success/failure, appends each intent before calling the
+  policy effect, commits per policy with an idempotent digest, and reports a
+  separate `RunResult.learning`. It never calls `Node.backward`, rewrites the
+  graph, or replaces the primary result. Recovery must reproduce recorded public
+  snapshots before unfinished execution/learning continues.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
   only a node's own `forward()` interprets known keys (e.g. AGENT's `max_tool_iterations`). It is the

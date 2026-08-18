@@ -96,8 +96,8 @@ Hold this model whenever you design anything:
   effective commit target's contract. Missing contract provenance falls back to
   the parameter or executing node, while invalid defaults retain their default
   origin. Non-type output canonicalization uses the contract default. Route and
-  growth use the executing node origin. All paths feed one schema-3
-  `NodeFailedRecord(failure)` boundary;
+  growth use the executing node origin. All paths feed one schema-4
+  `NodeFailedRecord(failure, optional evidence)` boundary;
   reducer state, `NodeFailed`, `RunFailed`, and `RunResult.failure` retain that
   same semantic authority without flattened aliases. That durable boundary
   collapses any valid `OriginRef` subclass to exact `OriginRef(key)`, because

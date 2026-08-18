@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
@@ -10,8 +11,44 @@ from agent_composer.compile.manifest import expansion_digest, flow_fingerprint, 
 from agent_composer.compile.model import CompiledFlow
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.diagnostics import OriginRef, SourceRange
-from agent_composer.memory import MemoryPolicySpec
+from agent_composer.memory import MemoryPolicySpec, MemorySnapshotEnvelope
 from agent_composer.nodes.agent import AgentNode
+
+
+_PRIVATE_CONFIG_CASES = (
+    {"nested": {"clientSecret": "private"}},
+    {"nested": {"secretKey": "private"}},
+    {"nested": {"PASSWORD": "private"}},
+    {"nested": {"passphrase": "private"}},
+    {"nested": {"passwd": "private"}},
+    {"nested": {"pwd": "private"}},
+    {"nested": {"access-token": "private"}},
+    {"nested": {"refreshToken": "private"}},
+    {"nested": {"session_key": "private"}},
+    {"nested": {"subscriptionKey": "private"}},
+    {"nested": {"authToken": "private"}},
+    {"nested": {"bearer-key": "private"}},
+    {"nested": {"api-key": "private"}},
+    {"nested": {"apiKey": "private"}},
+    {"nested": {"backend_token": "private"}},
+    {"nested": {"Authorization": "private"}},
+    {"nested": {"private-key": "private"}},
+    {"nested": {"connectionString": "private"}},
+    {"nested": {"credentials": "private"}},
+    {"nested": {"webhookURL": "private"}},
+    {"nested": {"webhookSignature": "private"}},
+    {"webhook": {"signature": "private"}},
+    {"nested": {"tenant_id": "private"}},
+    {"nested": {"orgTenantId": "private"}},
+    {"nested": {"pythonImport": "package.policy"}},
+    {"nested": {"modulePath": "package.policy"}},
+    {"nested": {"class-path": "package.Policy"}},
+    {"backend": {"path": "/private/backend"}},
+    {"backend": {"connection": "private-connection"}},
+    {"storage": {"location": "/private/storage"}},
+    {"database": {"dsn": "private-dsn"}},
+    {"persistence": {"uri": "private://state"}},
+)
 
 
 def _full_flow(policy: str) -> str:
@@ -319,29 +356,54 @@ def test_authored_identity_includes_flow_id_and_policy_but_excludes_origin() -> 
     assert expansion_digest(flow_policy) == expansion_digest(plain)
 
 
-@pytest.mark.parametrize("private_key", ["api_key", "backend_token", "tenant_id"])
-def test_policy_config_rejects_host_private_fields(private_key: str) -> None:
+@pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)
+def test_policy_config_rejects_host_private_fields(config: dict) -> None:
     with pytest.raises(ValueError, match="forbidden private key"):
-        MemoryPolicySpec(
-            "reflective",
-            {
-                "max_items": 4,
-                "backend": {private_key: "private"},
-            },
-        )
+        MemoryPolicySpec("reflective", config)
 
 
-@pytest.mark.parametrize("private_key", ["api_key", "backend_token", "tenant_id"])
-def test_authored_policy_config_rejects_host_private_fields(private_key: str) -> None:
+@pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)
+def test_authored_policy_config_rejects_host_private_fields(config: dict) -> None:
     source = _full_flow(
         "memory_policy:\n"
         "  name: reflective\n"
-        "  config:\n"
-        f"    nested: {{{private_key}: private}}\n"
+        f"  config: {json.dumps(config)}\n"
     )
 
     with pytest.raises(LoadError, match="forbidden private key"):
         load_flow(source, source_label="memory.yaml")
+
+
+def test_policy_config_keeps_public_behavior_options() -> None:
+    config = {
+        "max_items": 20,
+        "recall_limit": 5,
+        "query_options": {"strategy": "semantic", "path_filter": "docs/**"},
+        "backend": {"mode": "memory"},
+        "database_query_options": {"timeout": 3},
+    }
+
+    assert MemoryPolicySpec("reflective", config).config == config
+
+
+def test_manifest_redaction_remains_defense_in_depth_for_forged_policy() -> None:
+    policy = MemoryPolicySpec("reflective", {})
+    flow = CompiledFlow({}, [], memory_policy=policy)
+    private = MemorySnapshotEnvelope(
+        "opaque",
+        {"nested": {"api_key": "must-not-appear"}},
+    )
+    object.__setattr__(policy, "_config", private._snapshot)
+
+    first_manifest = flow_manifest(flow)
+    rendered = json.dumps(first_manifest, sort_keys=True)
+    assert "must-not-appear" not in rendered
+    replacement = MemorySnapshotEnvelope(
+        "opaque",
+        {"nested": {"api_key": "different-secret"}},
+    )
+    object.__setattr__(policy, "_config", replacement._snapshot)
+    assert flow_manifest(flow) == first_manifest
 
 
 def test_expansion_digest_excludes_flow_id_and_agent_memory_policy() -> None:

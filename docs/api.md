@@ -153,15 +153,19 @@ library callers use the same method when they need presentation-ready frames.
 
 ## Authoritative run logs
 
-Every execution is reduced from one ordered schema-3 `RunLog`, including
+Every execution is reduced from one ordered schema-4 `RunLog`, including
 process-local runs. The closed durable record vocabulary is `RunStartedRecord`,
 `RunResumedRecord`, `NodeStartedRecord`, `NodeSucceededRecord`,
-`NodeRoutedRecord`, `NodeExpandedRecord`, and `NodeFailedRecord`. Terminal
-success or failure is derived from those node transitions. `NodeFailedRecord`
-stores the nested `Failure` directly. A causal `NodeRoutedRecord` stores the
-optional derived terminal-unreachable `Failure` that replay revalidates before
-restoring; no separate terminal record exists. Earlier schemas are deliberately
-rejected rather than migrated.
+`NodeRoutedRecord`, `NodeExpandedRecord`, `NodeFailedRecord`,
+`MemoryFrameLearningStartedRecord`, `MemoryFrameLearnedRecord`,
+`MemoryFrameLearningFailedRecord`, `MemoryCommitRequestedRecord`,
+`MemoryCommitSucceededRecord`, and `MemoryCommitFailedRecord`. The four node
+outcome records may retain optional source-neutral evaluation evidence. Terminal
+success or failure is derived from node transitions. `NodeFailedRecord` stores
+the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
+stores the optional derived terminal-unreachable `Failure` that replay
+revalidates before restoring; no separate terminal record exists. Earlier
+schemas are deliberately rejected rather than migrated.
 
 For each transition, the dispatcher follows one authority order:
 

@@ -50,15 +50,114 @@ class _FrozenJsonObject:
 
 _FrozenJson: TypeAlias = _FrozenJsonScalar | _FrozenJsonArray | _FrozenJsonObject
 
-_FORBIDDEN_DURABLE_MEMORY_KEYS = frozenset(
+_PRIVATE_CREDENTIAL_KEYS = frozenset(
     {
         "api_key",
-        "backend_path",
+        "access_token",
+        "auth",
+        "auth_token",
+        "authorization",
+        "basic_auth",
         "backend_token",
+        "bearer_token",
+        "client_secret",
+        "connection_string",
+        "credential",
         "credentials",
-        "tenant_id",
+        "databricks_token",
+        "docker_auth_config",
+        "github_token",
+        "google_application_credentials",
+        "hf_token",
+        "id_token",
+        "mysql_pwd",
+        "npm_token",
+        "password",
+        "passphrase",
+        "passwd",
+        "pgpassword",
+        "private_key",
+        "proxy_auth",
+        "pwd",
+        "refresh_token",
+        "secret",
+        "secret_access_key",
+        "secret_key",
+        "session_token",
+        "shared_access_key",
+        "shared_access_signature",
+        "sig",
+        "signature",
+        "slack_bot_token",
+        "sslpassword",
+        "token",
+        "webhook_signature",
+        "webhook_url",
+        "x_amz_security_token",
+        "x_amz_signature",
+        "x_goog_signature",
     }
 )
+_PRIVATE_CREDENTIAL_SUFFIXES = frozenset(
+    {
+        "account_key",
+        "access_key",
+        "access_key_id",
+        "access_token",
+        "api_key",
+        "api_token",
+        "application_credentials",
+        "auth_key",
+        "auth_token",
+        "authorization",
+        "bearer_key",
+        "bearer_token",
+        "connection_string",
+        "credential",
+        "credentials",
+        "password",
+        "passphrase",
+        "private_key",
+        "refresh_key",
+        "refresh_token",
+        "secret",
+        "secret_access_key",
+        "secret_key",
+        "session_cookie",
+        "session_key",
+        "session_token",
+        "shared_access_key",
+        "shared_access_signature",
+        "subscription_key",
+        "webhook_url",
+    }
+)
+_PRIVATE_TENANT_KEYS = frozenset({"tenant_id"})
+_PRIVATE_PYTHON_KEYS = frozenset(
+    {
+        "class",
+        "class_path",
+        "import",
+        "import_path",
+        "module",
+        "module_path",
+        "python_class",
+        "python_import",
+        "python_module",
+        "python_path",
+    }
+)
+_PRIVATE_PYTHON_SUFFIXES = frozenset(
+    {"class_path", "import_path", "module_path", "python_path"}
+)
+_PRIVATE_LOCATION_ROOTS = frozenset(
+    {"backend", "database", "persistence", "storage"}
+)
+_PRIVATE_LOCATION_FIELDS = frozenset(
+    {"connection", "connection_string", "dsn", "location", "path", "uri", "url"}
+)
+_PRIVATE_WEBHOOK_FIELDS = frozenset({"signature", "url"})
+_PRIVATE_PYTHON_FIELDS = frozenset({"class", "import", "module", "path"})
 
 
 def _require_string(value: object, name: str, *, nonempty: bool = True) -> str:
@@ -169,17 +268,119 @@ def _thaw_json_object(value: _FrozenJsonObject) -> JsonObject:
     return {key: _thaw_json(item) for key, item in value.entries}
 
 
-def _reject_private_memory_keys(value: _FrozenJson, name: str) -> None:
-    """Reject the closed host-private key vocabulary from durable memory JSON."""
+def _normalize_config_key(value: str) -> str:
+    """Return one case-, camel-, and punctuation-neutral authored key."""
+    normalized: list[str] = []
+    for index, character in enumerate(value):
+        if not character.isalnum():
+            if normalized and normalized[-1] != "_":
+                normalized.append("_")
+            continue
+        previous = value[index - 1] if index else ""
+        following = value[index + 1] if index + 1 < len(value) else ""
+        if (
+            character.isupper()
+            and normalized
+            and normalized[-1] != "_"
+            and (
+                previous.islower()
+                or previous.isdigit()
+                or (previous.isupper() and following.islower())
+            )
+        ):
+            normalized.append("_")
+        normalized.append(character.casefold())
+    return "".join(normalized).strip("_")
+
+
+def _matches_exact_private_key(value: str, vocabulary: frozenset[str]) -> bool:
+    """Return whether one normalized key equals a spelling-neutral private key."""
+    compact = value.replace("_", "")
+    return any(
+        value == item or compact == item.replace("_", "")
+        for item in vocabulary
+    )
+
+
+def _matches_private_suffix(value: str, vocabulary: frozenset[str]) -> bool:
+    """Return whether one key equals or ends in a high-confidence private term."""
+    compact = value.replace("_", "")
+    return any(
+        value == item
+        or value.endswith(f"_{item}")
+        or compact == item.replace("_", "")
+        for item in vocabulary
+    )
+
+
+def _reject_private_memory_keys(
+    value: _FrozenJson,
+    name: str,
+    *,
+    location_context: bool = False,
+    python_context: bool = False,
+    webhook_context: bool = False,
+) -> None:
+    """Reject recognized host-private fields from authored memory config."""
     if isinstance(value, _FrozenJsonArray):
         for index, item in enumerate(value.values):
-            _reject_private_memory_keys(item, f"{name}[{index}]")
+            _reject_private_memory_keys(
+                item,
+                f"{name}[{index}]",
+                location_context=location_context,
+                python_context=python_context,
+                webhook_context=webhook_context,
+            )
         return
     if isinstance(value, _FrozenJsonObject):
         for key, item in value.entries:
-            if key.casefold() in _FORBIDDEN_DURABLE_MEMORY_KEYS:
+            normalized = _normalize_config_key(key)
+            tokens = frozenset(normalized.split("_"))
+            private_location = location_context or bool(
+                tokens & _PRIVATE_LOCATION_ROOTS
+            )
+            private_python = python_context or "python" in tokens
+            private_webhook = webhook_context or "webhook" in tokens
+            forbidden = (
+                _matches_exact_private_key(normalized, _PRIVATE_CREDENTIAL_KEYS)
+                or _matches_private_suffix(
+                    normalized,
+                    _PRIVATE_CREDENTIAL_SUFFIXES,
+                )
+                or _matches_private_suffix(normalized, _PRIVATE_TENANT_KEYS)
+                or _matches_exact_private_key(normalized, _PRIVATE_PYTHON_KEYS)
+                or _matches_private_suffix(normalized, _PRIVATE_PYTHON_SUFFIXES)
+                or (
+                    private_location
+                    and _matches_private_suffix(
+                        normalized,
+                        _PRIVATE_LOCATION_FIELDS,
+                    )
+                )
+                or (
+                    private_python
+                    and _matches_private_suffix(
+                        normalized,
+                        _PRIVATE_PYTHON_FIELDS,
+                    )
+                )
+                or (
+                    private_webhook
+                    and _matches_private_suffix(
+                        normalized,
+                        _PRIVATE_WEBHOOK_FIELDS,
+                    )
+                )
+            )
+            if forbidden:
                 raise ValueError(f"{name} contains forbidden private key {key!r}")
-            _reject_private_memory_keys(item, f"{name}.{key}")
+            _reject_private_memory_keys(
+                item,
+                f"{name}.{key}",
+                location_context=private_location,
+                python_context=private_python,
+                webhook_context=private_webhook,
+            )
 
 
 def _require_origin(value: object, name: str = "origin") -> OriginRef | None:
@@ -222,7 +423,7 @@ class MemoryEpisodeStatus(str, Enum):
 
 @dataclass(frozen=True, slots=True, init=False)
 class MemorySnapshotEnvelope:
-    """One backend-declared source-neutral snapshot for durable run recovery."""
+    """One opaque public durable snapshot declared by a memory backend."""
 
     policy_name: str
     _snapshot: _FrozenJsonObject = field(repr=False)
@@ -243,7 +444,7 @@ class MemorySnapshotEnvelope:
 
     @property
     def snapshot(self) -> JsonObject:
-        """Return a fresh plain-JSON copy of the recorded policy snapshot."""
+        """Return a fresh copy of the backend's source-neutral public export."""
         return _thaw_json_object(self._snapshot)
 
 
@@ -1060,7 +1261,11 @@ class MemorySession(Protocol):
 
     @property
     def snapshot(self) -> JsonObject:
-        """Return defensive source-neutral durable state sufficient for restore."""
+        """Return the backend-declared public durable source-neutral export.
+
+        The export MUST omit host credentials, live handles, backend paths, and
+        tenant identifiers. Its JSON is persisted verbatim for run recovery.
+        """
         ...
 
     def __enter__(self) -> MemorySession:

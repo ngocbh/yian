@@ -701,7 +701,7 @@ class _ReflectiveSession:
 
     @property
     def snapshot(self) -> JsonObject:
-        """Return a defensive canonical copy of the pinned session snapshot."""
+        """Return the public durable source-neutral state pinned for this run."""
         with self._memory._lock:
             self._ensure_open()
             frames = {

@@ -439,7 +439,7 @@ def _validate_mutations(
     *,
     frame_ref: MemoryFrameRef | None = None,
 ) -> None:
-    """Validate exact mutation carriers, ownership, IDs, and canonical order."""
+    """Validate carriers, ownership, unique IDs, and semantic proposal order."""
     if type(mutations) is not tuple:
         raise TypeError("mutations must be a tuple")
     for mutation in mutations:

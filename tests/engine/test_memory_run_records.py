@@ -58,6 +58,40 @@ from agent_composer.typesys import VariablePool
 
 _FINGERPRINT = "a" * 64
 _DIGEST = "b" * 64
+_PRIVATE_CONFIG_CASES = (
+    {"nested": {"clientSecret": "private"}},
+    {"nested": {"secretKey": "private"}},
+    {"nested": {"PASSWORD": "private"}},
+    {"nested": {"passphrase": "private"}},
+    {"nested": {"passwd": "private"}},
+    {"nested": {"pwd": "private"}},
+    {"nested": {"access-token": "private"}},
+    {"nested": {"refreshToken": "private"}},
+    {"nested": {"session_key": "private"}},
+    {"nested": {"subscriptionKey": "private"}},
+    {"nested": {"authToken": "private"}},
+    {"nested": {"bearer-key": "private"}},
+    {"nested": {"api-key": "private"}},
+    {"nested": {"apiKey": "private"}},
+    {"nested": {"backend_token": "private"}},
+    {"nested": {"Authorization": "private"}},
+    {"nested": {"private-key": "private"}},
+    {"nested": {"connectionString": "private"}},
+    {"nested": {"credentials": "private"}},
+    {"nested": {"webhookURL": "private"}},
+    {"nested": {"webhookSignature": "private"}},
+    {"webhook": {"signature": "private"}},
+    {"nested": {"tenant_id": "private"}},
+    {"nested": {"orgTenantId": "private"}},
+    {"nested": {"pythonImport": "package.policy"}},
+    {"nested": {"modulePath": "package.policy"}},
+    {"nested": {"class-path": "package.Policy"}},
+    {"backend": {"path": "/private/backend"}},
+    {"backend": {"connection": "private-connection"}},
+    {"storage": {"location": "/private/storage"}},
+    {"database": {"dsn": "private-dsn"}},
+    {"persistence": {"uri": "private://state"}},
+)
 
 
 def _flow_ref() -> MemoryFrameRef:
@@ -163,21 +197,40 @@ def test_source_neutral_carriers_are_defensive_and_frozen() -> None:
         evidence.prompt = "changed"  # type: ignore[misc]
 
 
-@pytest.mark.parametrize("private_key", ["api_key", "backend_token", "tenant_id"])
-def test_config_rejects_private_keys_while_snapshot_preserves_backend_state(
-    private_key: str,
+@pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)
+def test_frame_config_rejects_private_keys(config: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match="forbidden private key"):
+        MemoryFrameSpec(_agent_ref(), "reflective", config)
+
+
+@pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)
+def test_codec_revalidates_forged_private_frame_config(
+    config: dict[str, Any],
 ) -> None:
-    nested = {"safe": [{private_key: "private"}]}
+    frame = MemoryFrameSpec(_agent_ref(), "reflective", {})
+    started = _started(
+        layout=(frame,),
+        snapshots=(MemorySnapshotEnvelope("reflective", {"state": []}),),
+    )
+    private_snapshot = MemorySnapshotEnvelope("opaque", config)
+    object.__setattr__(frame, "_config", private_snapshot._snapshot)
 
     with pytest.raises(ValueError, match="forbidden private key"):
-        MemoryPolicySpec("reflective", nested)
-    with pytest.raises(ValueError, match="forbidden private key"):
-        MemoryFrameSpec(_agent_ref(), "reflective", nested)
-    assert MemorySnapshotEnvelope("reflective", nested).snapshot == nested
-    assert MemorySnapshotEnvelope(
-        "reflective",
-        {"lessons": [{"text": f"discuss {private_key} safely"}]},
-    ).snapshot == {"lessons": [{"text": f"discuss {private_key} safely"}]}
+        encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started))
+
+
+def test_snapshot_envelope_preserves_opaque_public_memory_state() -> None:
+    public_state = {
+        "lessons": [
+            {
+                "text": "Never place an api_key in durable memory configuration.",
+                "tags": ["security", "configuration"],
+            }
+        ],
+        "profile": {"preferred_runtime": "local"},
+    }
+
+    assert MemorySnapshotEnvelope("reflective", public_state).snapshot == public_state
 
 
 def test_evidence_requires_coherent_prompts_and_ordered_scope_sections() -> None:

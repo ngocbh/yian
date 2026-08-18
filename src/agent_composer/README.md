@@ -538,9 +538,10 @@ targets, and floods the target's outgoing edges.
 Failure is a `raise`, not another result variant. `eval_node` structurally turns
 expected binding, assertion, body, and result rejection into
 `EvaluationFailure(Failure)`. Result preparation constructs the same canonical
-value for expected output, route, and growth rejection. Schema 3 carries that
+value for expected output, route, and growth rejection. Schema 4 carries that
 value unchanged through the durable record, reducer, observer events, and public
-result. Host control, stream callbacks, unexpected binder faults, malformed
+result; the durable outcome may also retain optional source-neutral evaluation
+evidence. Host control, stream callbacks, unexpected binder faults, malformed
 setup, and arbitrary host/compiler faults escape. A streaming kind may yield
 transient `StreamChunk` values and then return one of the same three results.
 

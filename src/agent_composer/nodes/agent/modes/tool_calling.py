@@ -64,6 +64,9 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         messages.append(reply)
         calls = getattr(reply, "tool_calls", None) or []
         if not calls:
+            text = text_of(reply)
+            if ctx.evaluation_trace is not None:
+                ctx.evaluation_trace.record_interaction(ModelTextInteraction(text))
             if ctx.output_type is not None and schema is not None:
                 return Output(
                     value=generate_structured(
@@ -76,29 +79,28 @@ def tool_calling(ctx: AgentRunContext) -> Output:
                         evaluation_trace=ctx.evaluation_trace,
                     )
                 )
-            text = text_of(reply)
-            if ctx.evaluation_trace is not None:
-                ctx.evaluation_trace.record_interaction(ModelTextInteraction(text))
             return Output(value=text)
 
         for call in calls:
             ctx.check_stopped()
-            name = call.get("name") or ""
-            if name not in ctx.tools:
-                raise AgentLoopError(
-                    f"agent node {ctx.node_id!r} requested tool {name!r}, but it is not "
-                    f"granted; granted tools: {ctx.tools}"
-                )
-            arguments = call.get("args") or {}
+            raw_name = call.get("name") or ""
+            name = str(raw_name) if isinstance(raw_name, str) else raw_name
+            raw_arguments = call.get("args")
+            arguments = raw_arguments or {}
             if ctx.evaluation_trace is not None:
                 try:
                     call_interaction = ToolCallInteraction(name, arguments)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, RecursionError):
                     # Evidence remains observational for malformed arguments; the
                     # ordinary tool boundary below retains its established error.
                     pass
                 else:
                     ctx.evaluation_trace.record_interaction(call_interaction)
+            if name not in ctx.tools:
+                raise AgentLoopError(
+                    f"agent node {ctx.node_id!r} requested tool {name!r}, but it is not "
+                    f"granted; granted tools: {ctx.tools}"
+                )
             result = invoke_tool(name, arguments)
             ctx.check_stopped()
             result_text = str(result)

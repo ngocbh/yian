@@ -51,6 +51,10 @@ from tests.engine._fakes import FuncNode
 from tests.engine._graph_builder import _engine, _graph
 
 
+class _StringSubclass(str):
+    """A valid provider string whose carrier type is not exact ``str``."""
+
+
 def _scope(
     node_id: str,
     *,
@@ -99,6 +103,13 @@ class _PlainChat:
         )
 
 
+class _SubclassTextChat:
+    """Return visible content as a valid string subclass."""
+
+    def invoke(self, _messages):
+        return SimpleNamespace(content=_StringSubclass("subclass answer"))
+
+
 class _NativeStructuredChat:
     """Return one parsed value through LangChain's native structured seam."""
 
@@ -128,6 +139,20 @@ class _FallbackStructuredChat:
         return AIMessage(content=self.replies.pop(0))
 
 
+class _FallbackContentBlockChat:
+    """Return JSON text beside provider-private reasoning and metadata blocks."""
+
+    def invoke(self, _messages):
+        return SimpleNamespace(
+            content=[
+                {"type": "reasoning", "reasoning": "SECRET_REASONING"},
+                {"type": "text", "text": '{"value": 13}'},
+                {"type": "metadata", "value": "SECRET_BLOCK_METADATA"},
+            ],
+            response_metadata={"private": "SECRET_PROVIDER_METADATA"},
+        )
+
+
 class _ToolChat:
     """Run one tool turn and then return one final visible answer."""
 
@@ -146,6 +171,66 @@ class _ToolChat:
                 response_metadata={"usage": {"tokens": 5}},
             ),
             AIMessage(content="finished", response_metadata={"model": "secret"}),
+        ]
+
+    def bind_tools(self, _tools):
+        return self
+
+    def invoke(self, _messages):
+        return self.replies.pop(0)
+
+
+class _StructuredToolChat:
+    """Run a tool discovery loop followed by native or fallback generation."""
+
+    def __init__(self, *, native: bool) -> None:
+        self.replies = [
+            AIMessage(
+                content="hidden tool-turn prose",
+                tool_calls=[
+                    {
+                        "name": "lookup",
+                        "args": {"topic": "ACME"},
+                        "id": "provider-id",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="visible discovery reply"),
+        ]
+        if not native:
+            self.replies.append(AIMessage(content='{"value": 9}'))
+
+    def bind_tools(self, _tools):
+        return self
+
+    def invoke(self, _messages):
+        return self.replies.pop(0)
+
+    def with_structured_output(self, schema):
+        class _Bound:
+            def invoke(self, _messages):
+                return schema.model_validate({"value": 9})
+
+        return _Bound()
+
+
+class _SubclassToolChat:
+    """Return one accepted tool name as a valid string subclass."""
+
+    def __init__(self) -> None:
+        self.replies = [
+            SimpleNamespace(
+                content="",
+                tool_calls=[
+                    {
+                        "name": _StringSubclass("lookup"),
+                        "args": {"topic": "ACME"},
+                        "id": "provider-id",
+                    }
+                ],
+            ),
+            AIMessage(content="finished"),
         ]
 
     def bind_tools(self, _tools):
@@ -360,6 +445,34 @@ def test_plain_agent_records_only_visible_prompt_and_text(
     assert "tokens" not in repr(evidence)
 
 
+def test_visible_string_subclass_has_capture_off_on_behavioral_parity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _config: _SubclassTextChat(),
+    )
+    node = AgentNode("agent", prompt="answer")
+    node.memory_scope = _scope(node.id)
+
+    capture_off = eval_node(node, None, VariablePool())
+    capture_on = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    assert capture_off.outcome == capture_on.outcome == Output("subclass answer")
+    assert type(capture_on.outcome.value) is str
+    assert capture_on.evidence is not None
+    assert capture_on.evidence.interactions == (
+        ModelTextInteraction("subclass answer"),
+    )
+    assert type(capture_on.evidence.interactions[0].text) is str
+
+
 def test_native_structured_agent_records_only_parsed_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -416,6 +529,41 @@ def test_fallback_structured_records_every_raw_retry_without_parsed_duplicate(
     )
 
 
+def test_fallback_structured_parses_only_visible_text_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _config: _FallbackContentBlockChat(),
+    )
+    node = AgentNode(
+        "agent",
+        prompt="number",
+        retries=0,
+        llm_config={"provider": "vllm", "model": "no-structured-sentinel"},
+    )
+    node.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
+    node.memory_scope = _scope(node.id)
+
+    evaluated = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    assert evaluated.outcome == Output(13)
+    assert evaluated.evidence is not None
+    assert evaluated.evidence.interactions == (
+        ModelTextInteraction('{"value": 13}'),
+    )
+    rendered = repr(evaluated.evidence)
+    assert "SECRET_REASONING" not in rendered
+    assert "SECRET_BLOCK_METADATA" not in rendered
+    assert "SECRET_PROVIDER_METADATA" not in rendered
+
+
 def test_tool_mode_records_calls_results_and_final_text_in_visible_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -456,6 +604,229 @@ def test_tool_mode_records_calls_results_and_final_text_in_visible_order(
     )
     assert "provider-call-id" not in repr(evaluated.evidence)
     assert "private plan" not in repr(evaluated.evidence)
+
+
+def test_tool_mode_records_valid_ungranted_call_before_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _config: _ToolChat(),
+    )
+    node = AgentNode("agent", prompt="lookup", mode="tool_calling", tools=[])
+    node.memory_scope = _scope(node.id)
+
+    evaluated = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    assert isinstance(evaluated.outcome, EvaluationFailure)
+    assert "not granted" in evaluated.outcome.failure.message
+    assert evaluated.evidence is not None
+    assert evaluated.evidence.interactions == (
+        ToolCallInteraction("lookup", {"topic": "ACME"}),
+    )
+
+
+def test_recursive_ungranted_tool_arguments_do_not_change_failure_with_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arguments: dict = {}
+    for _ in range(2_000):
+        arguments = {"nested": arguments}
+
+    class _RecursiveCallChat:
+        def invoke(self, _messages):
+            return SimpleNamespace(
+                content="",
+                tool_calls=[{"name": "lookup", "args": arguments, "id": "1"}],
+            )
+
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _config: _RecursiveCallChat(),
+    )
+    node = AgentNode("agent", prompt="lookup", mode="tool_calling", tools=[])
+    node.memory_scope = _scope(node.id)
+
+    capture_off = eval_node(node, None, VariablePool())
+    capture_on = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    assert isinstance(capture_off.outcome, EvaluationFailure)
+    assert isinstance(capture_on.outcome, EvaluationFailure)
+    assert capture_on.outcome.failure.code == capture_off.outcome.failure.code
+    assert capture_on.outcome.failure.message == capture_off.outcome.failure.message
+    assert capture_on.evidence is not None
+    assert capture_on.evidence.interactions == ()
+
+
+def test_tool_name_subclass_has_capture_off_on_behavioral_parity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    def lookup(topic: str) -> str:
+        """Record one exact tool invocation."""
+        seen.append(topic)
+        return f"found:{topic}"
+
+    monkeypatch.setitem(
+        tools.TOOL_REGISTRY,
+        "lookup",
+        StructuredTool.from_function(lookup, name="lookup"),
+    )
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _config: _SubclassToolChat(),
+    )
+    node = AgentNode(
+        "agent",
+        prompt="lookup",
+        mode="tool_calling",
+        tools=["lookup"],
+    )
+    node.memory_scope = _scope(node.id)
+
+    capture_off = eval_node(node, None, VariablePool())
+    capture_on = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    assert capture_off.outcome == capture_on.outcome == Output("finished")
+    assert seen == ["ACME", "ACME"]
+    assert capture_on.evidence is not None
+    assert capture_on.evidence.interactions == (
+        ToolCallInteraction("lookup", {"topic": "ACME"}),
+        ToolResultInteraction("lookup", "found:ACME"),
+        ModelTextInteraction("finished"),
+    )
+    call, result, _ = capture_on.evidence.interactions
+    assert type(call.name) is str
+    assert type(result.name) is str
+
+
+def test_tool_trace_uses_the_same_effective_arguments_as_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def noop() -> str:
+        """Return one deterministic result without arguments."""
+        return "ok"
+
+    class _FalsyArgumentsChat:
+        def __init__(self) -> None:
+            self.replies = [
+                SimpleNamespace(
+                    content="",
+                    tool_calls=[{"name": "noop", "args": [], "id": "1"}],
+                ),
+                AIMessage(content="finished"),
+            ]
+
+        def bind_tools(self, _tools):
+            return self
+
+        def invoke(self, _messages):
+            return self.replies.pop(0)
+
+    monkeypatch.setitem(
+        tools.TOOL_REGISTRY,
+        "noop",
+        StructuredTool.from_function(noop, name="noop"),
+    )
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _config: _FalsyArgumentsChat(),
+    )
+    node = AgentNode(
+        "agent",
+        prompt="run",
+        mode="tool_calling",
+        tools=["noop"],
+    )
+    node.memory_scope = _scope(node.id)
+
+    evaluated = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    assert evaluated.outcome == Output("finished")
+    assert evaluated.evidence is not None
+    assert evaluated.evidence.interactions == (
+        ToolCallInteraction("noop", {}),
+        ToolResultInteraction("noop", "ok"),
+        ModelTextInteraction("finished"),
+    )
+
+
+@pytest.mark.parametrize("native", [True, False], ids=["native", "fallback"])
+def test_tool_structured_output_retains_discovery_and_generation_order(
+    monkeypatch: pytest.MonkeyPatch,
+    native: bool,
+) -> None:
+    def lookup(topic: str) -> str:
+        """Return one deterministic public tool result."""
+        return f"found:{topic}"
+
+    monkeypatch.setitem(
+        tools.TOOL_REGISTRY,
+        "lookup",
+        StructuredTool.from_function(lookup, name="lookup"),
+    )
+    chat = _StructuredToolChat(native=native)
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
+    node = AgentNode(
+        "agent",
+        prompt="lookup then score",
+        mode="tool_calling",
+        tools=["lookup"],
+        retries=0,
+        llm_config=(
+            {"provider": "anthropic", "model": "claude-sonnet-4-5"}
+            if native
+            else {"provider": "vllm", "model": "no-structured-sentinel"}
+        ),
+    )
+    node.output_contract = ValueContract(Type.scalar(ValueKind.INTEGER))
+    node.memory_scope = _scope(node.id)
+
+    evaluated = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    assert evaluated.outcome == Output(9)
+    assert evaluated.evidence is not None
+    prefix = (
+        ToolCallInteraction("lookup", {"topic": "ACME"}),
+        ToolResultInteraction("lookup", "found:ACME"),
+        ModelTextInteraction("visible discovery reply"),
+    )
+    expected_final = (
+        ModelValueInteraction(9)
+        if native
+        else ModelTextInteraction('{"value": 9}')
+    )
+    assert evaluated.evidence.interactions == prefix + (expected_final,)
 
 
 def _inflight_state(node: Node):

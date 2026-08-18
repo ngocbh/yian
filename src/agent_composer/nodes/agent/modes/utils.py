@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-from langchain_core.messages import BaseMessage
+from typing import Any
 
 
-def text_of(message: BaseMessage) -> str:
-    """Flatten a langchain message's content to plain text."""
-    content = message.content
+def text_of(message: Any) -> str:
+    """Return only model content explicitly represented as visible text."""
+    content = message if isinstance(message, str) else getattr(message, "content", None)
     if isinstance(content, str):
-        return content
+        return str(content)
     if isinstance(content, list):
-        return "\n".join(
-            part.get("text", "")
-            for part in content
-            if isinstance(part, dict) and part.get("type") == "text"
-        )
+        visible: list[str] = []
+        for part in content:
+            if type(part) is not dict or part.get("type") != "text":
+                continue
+            text = part.get("text")
+            if isinstance(text, str):
+                visible.append(str(text))
+        return "\n".join(visible)
     return ""

@@ -30,6 +30,7 @@ from agent_composer.memory.contracts import (
     ModelTextInteraction,
     ModelValueInteraction,
 )
+from agent_composer.nodes.agent.modes.utils import text_of
 from agent_composer.nodes.base import _HostStop
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -135,12 +136,6 @@ def _supports_native_structured(llm_config: Any) -> bool:
     return supports_native_structured(provider, model)
 
 
-def _text_of(reply: Any) -> str:
-    """The text content of a model reply (a langchain message or a bare string)."""
-    content = getattr(reply, "content", reply)
-    return content if isinstance(content, str) else str(content)
-
-
 def _strip_code_fence(text: str) -> str:
     """Strip a single wrapping Markdown code fence from `text`, returning the inner text.
 
@@ -244,7 +239,7 @@ def _generate_native(
             if evaluation_trace is not None:
                 try:
                     interaction = ModelValueInteraction(value)
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, RecursionError):
                     # Evidence is observational. A value the dispatcher will reject must
                     # retain its existing contract-failure classification.
                     pass
@@ -278,7 +273,7 @@ def _generate_fallback(
     for _ in range(max_retries + 1):
         check_stopped()
         try:
-            text = _text_of(model.invoke(msgs))
+            text = text_of(model.invoke(msgs))
             check_stopped()
             if evaluation_trace is not None:
                 evaluation_trace.record_interaction(ModelTextInteraction(text))

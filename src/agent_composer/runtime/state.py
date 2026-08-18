@@ -34,7 +34,14 @@ from agent_composer.events import (
     RunSucceeded,
 )
 from agent_composer.expr import ExpressionError, expr_refs_of
-from agent_composer.memory import EvaluationEvidence, MemoryScope
+from agent_composer.memory import (
+    EvaluationEvidence,
+    MemoryFrameRef,
+    MemoryFrameSpec,
+    MemoryOccurrenceRef,
+    MemoryScope,
+    MemorySnapshotEnvelope,
+)
 from agent_composer.nodes.base import Grow, Node
 from agent_composer.nodes.contracts import (
     OutputContract,
@@ -48,6 +55,12 @@ from agent_composer.nodes.contracts import (
 )
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
+    MemoryCommitFailedRecord,
+    MemoryCommitRequestedRecord,
+    MemoryCommitSucceededRecord,
+    MemoryFrameLearnedRecord,
+    MemoryFrameLearningFailedRecord,
+    MemoryFrameLearningStartedRecord,
     NodeExpandedRecord,
     NodeFailedRecord,
     NodeRoutedRecord,
@@ -64,6 +77,15 @@ from agent_composer.runtime.log import (
     decode_record,
     encode_pool,
     encode_record,
+)
+from agent_composer.runtime.learning import (
+    FrameLearningState,
+    FrameLearningStatus,
+    PolicyCommitState,
+    PolicyCommitStatus,
+    RuntimeLearningState,
+    memory_commit_id,
+    project_outcome_episodes,
 )
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import (
@@ -98,6 +120,18 @@ def _canonical_output_value(
     if type(contract) is PartialRecordContract:
         validate_output_contract(contract, output)
     return canonical_typed(output, declared_type)
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryAuthority:
+    """Immutable identity roots established by canonical RunStarted decoding."""
+
+    layout: tuple[MemoryFrameSpec, ...] | None
+    snapshots: tuple[MemorySnapshotEnvelope, ...] | None
+    learn: bool
+    frame_order: tuple[MemoryFrameRef, ...]
+    policy_order: tuple[str, ...]
+    policy_frame_indices: tuple[tuple[int, ...], ...]
 
 
 class _NodeDataError(Exception):
@@ -184,6 +218,14 @@ class RunState:
             Canonical caller-supplied START priming record retained across START's commit.
         effective_llm_by_static_path (`dict[str, dict[str, Any]]`):
             Run-resolved agent configuration keyed by stable static node path.
+        memory_layout (`tuple[MemoryFrameSpec, ...] | None`):
+            Canonical recorded frame inventory, or ``None`` when memory is disabled.
+        memory_snapshots (`tuple[MemorySnapshotEnvelope, ...] | None`):
+            Canonical recorded policy snapshots, paired with ``memory_layout``.
+        learn (`bool`):
+            Whether accepted eligible outcomes must project durable learning evidence.
+        learning_state (`RuntimeLearningState`):
+            Immutable episode, frame-learning, and policy-commit reducer projection.
         initial_static_ids (`frozenset[str]`):
             Immutable node IDs adopted before any runtime expansion.  Safe pruning
             may retire only later dynamic-overlay nodes.
@@ -213,6 +255,18 @@ class RunState:
         self.num_workers = 0
         self.input: dict[str, Any] = {}
         self.effective_llm_by_static_path: dict[str, dict[str, Any]] = {}
+        self.memory_layout: tuple[MemoryFrameSpec, ...] | None = None
+        self.memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
+        self.learn = False
+        self.learning_state = RuntimeLearningState()
+        self._memory_authority = _MemoryAuthority(
+            layout=None,
+            snapshots=None,
+            learn=False,
+            frame_order=self.learning_state.frame_order,
+            policy_order=self.learning_state.policy_order,
+            policy_frame_indices=self.learning_state.policy_frame_indices,
+        )
         self.initial_static_ids = frozenset(flow.nodes)
 
 
@@ -233,6 +287,12 @@ class RunStartData:
             Complete resolved LLM configuration by stable static path.
         num_workers (`int`):
             Exact non-negative dispatcher worker count.
+        memory_layout (`tuple[MemoryFrameSpec, ...] | None`, *optional*):
+            Canonical static frame inventory, or ``None`` to disable memory.
+        memory_snapshots (`tuple[MemorySnapshotEnvelope, ...] | None`, *optional*):
+            Canonical policy snapshots paired with an enabled frame inventory.
+        learn (`bool`, *optional*, defaults to `False`):
+            Whether eligible accepted outcomes must carry learning evidence.
     """
 
     run_id: str
@@ -241,6 +301,9 @@ class RunStartData:
     start_wiring_override: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
     num_workers: int
+    memory_layout: tuple[MemoryFrameSpec, ...] | None = None
+    memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
+    learn: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +341,11 @@ class _RunStartedApply:
     num_workers: int
     input: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
+    memory_layout: tuple[MemoryFrameSpec, ...] | None
+    memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None
+    learn: bool
+    learning_state: RuntimeLearningState
+    memory_authority: _MemoryAuthority
     observers: tuple[Any, ...]
 
 
@@ -328,6 +396,8 @@ class _SuccessPlan:
     end_node_identity: int | None
     delta: _SuccessDelta
     terminal: _TerminalDelta | None
+    originating_learning_state: RuntimeLearningState
+    next_learning_state: RuntimeLearningState
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,6 +434,8 @@ class _RoutePlan:
     end_node_identity: int | None
     delta: _RouteDelta
     terminal: _TerminalDelta | None
+    originating_learning_state: RuntimeLearningState
+    next_learning_state: RuntimeLearningState
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,6 +492,8 @@ class _FailurePlan:
     end_id: str
     end_node_identity: int | None
     failure: Failure
+    originating_learning_state: RuntimeLearningState
+    next_learning_state: RuntimeLearningState
 
 
 @dataclass(slots=True)
@@ -443,6 +517,23 @@ class _GrowthPlan:
     end_node_identity: int | None
     delta: _GrowthDelta
     topology: _GrowthTopology
+    originating_learning_state: RuntimeLearningState
+    next_learning_state: RuntimeLearningState
+
+
+@dataclass(frozen=True, slots=True)
+class _LearningPlan:
+    """Opaque authority anchors and one immutable post-terminal learning state."""
+
+    originating_state: RunState
+    originating_flow: CompiledFlow
+    envelope_bytes: bytes
+    start_id: str
+    start_node_identity: int
+    end_id: str
+    end_node_identity: int | None
+    originating_learning_state: RuntimeLearningState
+    next_learning_state: RuntimeLearningState
 
 
 @dataclass(frozen=True, slots=True)
@@ -539,6 +630,7 @@ class PreparedTransition:
         | _RoutePlan
         | _FailurePlan
         | _GrowthPlan
+        | _LearningPlan
     )
     observers: tuple[Any, ...]
 
@@ -648,6 +740,9 @@ def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransiti
         start_wiring_override=data.start_wiring_override,
         effective_llm_by_static_path=data.effective_llm_by_static_path,
         num_workers=data.num_workers,
+        memory_layout=data.memory_layout,
+        memory_snapshots=data.memory_snapshots,
+        learn=data.learn,
     )
     # The public envelope codec is the sole payload authority.  Decode its canonical
     # bytes immediately so the prepared record is exactly what either log will retain.
@@ -1008,16 +1103,16 @@ def prepare_record(
     """Validate one supported authoritative record against the current frontier.
 
     This is the shared reducer seam for live dispatch and later historical replay.
-    Dispatch, recovery-frontier, successful-output, route, graph-expansion, and
-    terminal-failure records are supported here.
+    Graph records require an initialized nonterminal state. Memory learning and
+    commit records require an initialized primary terminal with learning enabled.
 
     Args:
         state (`RunState`):
-            Initialized nonterminal state immediately before ``record``.
+            Initialized reducer state immediately before ``record``.
         record (`RunRecord`):
-            A ``NodeStartedRecord``, ``RunResumedRecord``,
-            ``NodeSucceededRecord``, ``NodeRoutedRecord``, ``NodeExpandedRecord``,
-            or ``NodeFailedRecord`` to validate and copy.
+            One supported graph/frontier record, or one of the six durable
+            ``MemoryFrameLearning*`` / ``MemoryFrameLearned`` /
+            ``MemoryCommit*`` post-terminal records, to validate and copy.
         grow_builder (`GrowBuilder | None`, *optional*):
             Required only for ``NodeExpandedRecord`` replay; rebuilds and verifies
             the recorded fragment through the same injected path used live.
@@ -1034,6 +1129,20 @@ def prepare_record(
     """
     if type(state) is not RunState:
         raise TypeError("prepare_record expects a RunState")
+
+    if isinstance(
+        record,
+        (
+            MemoryFrameLearningStartedRecord,
+            MemoryFrameLearnedRecord,
+            MemoryFrameLearningFailedRecord,
+            MemoryCommitRequestedRecord,
+            MemoryCommitSucceededRecord,
+            MemoryCommitFailedRecord,
+        ),
+    ):
+        return _prepare_learning_transition(state, record)
+
     _require_initialized_nonterminal(state)
 
     if isinstance(record, NodeSucceededRecord):
@@ -1152,6 +1261,9 @@ def _prepare_success_transition(
         raise TypeError("node-success envelope decoded to a different record kind")
     if canonical_record != record:
         raise ValueError("NodeSucceededRecord is not in canonical wire form")
+    next_learning_state = state.learning_state.append_episodes(
+        project_outcome_episodes(run_id, canonical_record)
+    )
 
     start_id = state.flow.start_id
     end_id = state.flow.end_id
@@ -1167,6 +1279,8 @@ def _prepare_success_transition(
         ),
         delta=delta,
         terminal=terminal,
+        originating_learning_state=state.learning_state,
+        next_learning_state=next_learning_state,
     )
     observer_value = ANY_VALUE_ADAPTER.validate_json(
         delta.value_bytes,
@@ -1242,6 +1356,9 @@ def _prepare_route_transition(
             delta,
             terminal_unreachable_failure=canonical_record.terminal_failure,
         )
+    next_learning_state = state.learning_state.append_episodes(
+        project_outcome_episodes(run_id, canonical_record)
+    )
 
     terminal = _prepare_terminal_delta(
         state,
@@ -1267,6 +1384,8 @@ def _prepare_route_transition(
         ),
         delta=delta,
         terminal=terminal,
+        originating_learning_state=state.learning_state,
+        next_learning_state=next_learning_state,
     )
     observers = (NodeRouted(delta.node_id, delta.handle),) + tuple(
         NodeSkipped(node_id) for node_id in delta.skipped_node_ids
@@ -1311,6 +1430,9 @@ def _prepare_failure_transition(
         raise ValueError("NodeFailedRecord is not in canonical wire form")
 
     failure = canonical_record.failure
+    next_learning_state = state.learning_state.append_episodes(
+        project_outcome_episodes(run_id, canonical_record)
+    )
     start_id = state.flow.start_id
     end_id = state.flow.end_id
     plan = _FailurePlan(
@@ -1324,6 +1446,8 @@ def _prepare_failure_transition(
             id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
         ),
         failure=failure,
+        originating_learning_state=state.learning_state,
+        next_learning_state=next_learning_state,
     )
     return PreparedTransition(
         record=canonical_record,
@@ -1411,6 +1535,9 @@ def _prepare_growth_transition(
         raise TypeError("node-expansion envelope decoded to a different record kind")
     if canonical_record != record:
         raise ValueError("NodeExpandedRecord is not in canonical wire form")
+    next_learning_state = state.learning_state.append_episodes(
+        project_outcome_episodes(run_id, canonical_record)
+    )
 
     start_id = state.flow.start_id
     end_id = state.flow.end_id
@@ -1426,6 +1553,8 @@ def _prepare_growth_transition(
         ),
         delta=delta,
         topology=topology,
+        originating_learning_state=state.learning_state,
+        next_learning_state=next_learning_state,
     )
     return PreparedTransition(
         record=canonical_record,
@@ -1434,6 +1563,228 @@ def _prepare_growth_transition(
         _plan=plan,
         observers=(_growth_observer(canonical_record),),
     )
+
+
+def _prepare_learning_transition(
+    state: RunState,
+    record: (
+        MemoryFrameLearningStartedRecord
+        | MemoryFrameLearnedRecord
+        | MemoryFrameLearningFailedRecord
+        | MemoryCommitRequestedRecord
+        | MemoryCommitSucceededRecord
+        | MemoryCommitFailedRecord
+    ),
+) -> PreparedTransition:
+    """Freeze one validated post-terminal learning or commit transition."""
+    _require_initialized_terminal_learning(state)
+    run_id = state.run_id
+    if not isinstance(run_id, str):  # established by initialized-state validation
+        raise ValueError("run state is not initialized")
+    canonical_bytes = encode_record(
+        RecordEnvelope(
+            schema=SCHEMA_VERSION,
+            run_id=run_id,
+            seq=state.next_sequence,
+            record=record,
+        )
+    )
+    canonical_envelope = decode_record(canonical_bytes)
+    canonical_record = canonical_envelope.record
+    if type(canonical_record) is not type(record) or canonical_record != record:
+        raise ValueError(
+            f"{type(record).__name__} is not in canonical wire form"
+        )
+    if not isinstance(
+        canonical_record,
+        (
+            MemoryFrameLearningStartedRecord,
+            MemoryFrameLearnedRecord,
+            MemoryFrameLearningFailedRecord,
+            MemoryCommitRequestedRecord,
+            MemoryCommitSucceededRecord,
+            MemoryCommitFailedRecord,
+        ),
+    ):
+        raise TypeError("learning envelope decoded to a different record kind")
+
+    next_learning_state = _reduce_learning_record(state, canonical_record)
+    start_id = state.flow.start_id
+    end_id = state.flow.end_id
+    plan = _LearningPlan(
+        originating_state=state,
+        originating_flow=state.flow,
+        envelope_bytes=canonical_bytes,
+        start_id=start_id,
+        start_node_identity=id(state.flow.nodes[start_id]),
+        end_id=end_id,
+        end_node_identity=(
+            id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
+        ),
+        originating_learning_state=state.learning_state,
+        next_learning_state=next_learning_state,
+    )
+    return PreparedTransition(
+        record=canonical_record,
+        expected_run_id=canonical_envelope.run_id,
+        expected_sequence=canonical_envelope.seq,
+        _plan=plan,
+        observers=(),
+    )
+
+
+def _reduce_learning_record(
+    state: RunState,
+    record: (
+        MemoryFrameLearningStartedRecord
+        | MemoryFrameLearnedRecord
+        | MemoryFrameLearningFailedRecord
+        | MemoryCommitRequestedRecord
+        | MemoryCommitSucceededRecord
+        | MemoryCommitFailedRecord
+    ),
+) -> RuntimeLearningState:
+    """Return the immutable next learning projection for one canonical record."""
+    learning = state.learning_state
+    layout = state.memory_layout
+    if type(layout) is not tuple:
+        raise ValueError("learning requires an enabled recorded memory layout")
+
+    if isinstance(
+        record,
+        (
+            MemoryFrameLearningStartedRecord,
+            MemoryFrameLearnedRecord,
+            MemoryFrameLearningFailedRecord,
+        ),
+    ):
+        spec = _memory_frame_spec(state, record.frame_ref)
+        if record.policy_name != spec.policy_name:
+            raise ValueError(
+                "learning record policy_name does not match recorded frame policy"
+            )
+        current = learning.frame_state(record.frame_ref)
+
+        if isinstance(record, MemoryFrameLearningStartedRecord):
+            if learning.active_frame is not None:
+                raise ValueError("another memory frame learning operation is active")
+            if current.status not in (
+                FrameLearningStatus.PENDING,
+                FrameLearningStatus.FAILED_RETRYABLE,
+            ):
+                raise ValueError(
+                    f"frame learning cannot start from {current.status.value}"
+                )
+            expected = learning.occurrence_inventory(record.frame_ref)
+            if record.occurrences != expected:
+                raise ValueError(
+                    "learning start occurrences must exactly equal accepted inventory"
+                )
+            return learning.with_frame_state(
+                record.frame_ref,
+                FrameLearningState(
+                    status=FrameLearningStatus.STARTED,
+                    occurrences=record.occurrences,
+                ),
+            )
+
+        if learning.active_frame != record.frame_ref or (
+            current.status is not FrameLearningStatus.STARTED
+        ):
+            raise ValueError("learning result must match the active memory frame")
+        if isinstance(record, MemoryFrameLearnedRecord):
+            return learning.with_frame_state(
+                record.frame_ref,
+                FrameLearningState(
+                    status=FrameLearningStatus.LEARNED,
+                    occurrences=current.occurrences,
+                    mutations=record.mutations,
+                ),
+            )
+        status = (
+            FrameLearningStatus.FAILED_RETRYABLE
+            if record.failure.retryable
+            else FrameLearningStatus.FAILED_FINAL
+        )
+        return learning.with_frame_state(
+            record.frame_ref,
+            FrameLearningState(
+                status=status,
+                occurrences=current.occurrences,
+                failure=record.failure,
+            ),
+        )
+
+    policy_name = record.policy_name
+    current_commit = learning.commit_state(policy_name)
+    if isinstance(record, MemoryCommitRequestedRecord):
+        if current_commit.status not in (
+            PolicyCommitStatus.UNREQUESTED,
+            PolicyCommitStatus.FAILED_RETRYABLE,
+        ):
+            raise ValueError(
+                f"memory commit cannot be requested from {current_commit.status.value}"
+            )
+        expected_mutations = learning.policy_mutations(policy_name)
+        if record.mutations != expected_mutations:
+            raise ValueError(
+                "memory commit batch must exactly aggregate learned frame mutations"
+            )
+        expected_commit_id = memory_commit_id(
+            state.run_id,
+            policy_name,
+            expected_mutations,
+        )
+        if record.commit_id != expected_commit_id:
+            raise ValueError("memory commit_id does not match its canonical batch")
+        return learning.with_commit_state(
+            policy_name,
+            PolicyCommitState(
+                status=PolicyCommitStatus.REQUESTED,
+                commit_id=record.commit_id,
+                mutations=record.mutations,
+            ),
+        )
+
+    if current_commit.status is not PolicyCommitStatus.REQUESTED:
+        raise ValueError("memory commit result requires one active request")
+    if record.commit_id != current_commit.commit_id:
+        raise ValueError("memory commit result does not match the active commit_id")
+    if isinstance(record, MemoryCommitSucceededRecord):
+        return learning.with_commit_state(
+            policy_name,
+            PolicyCommitState(
+                status=PolicyCommitStatus.SUCCEEDED,
+                commit_id=current_commit.commit_id,
+                mutations=current_commit.mutations,
+            ),
+        )
+    status = (
+        PolicyCommitStatus.FAILED_RETRYABLE
+        if record.failure.retryable
+        else PolicyCommitStatus.FAILED_FINAL
+    )
+    return learning.with_commit_state(
+        policy_name,
+        PolicyCommitState(
+            status=status,
+            commit_id=current_commit.commit_id,
+            mutations=current_commit.mutations,
+            failure=record.failure,
+        ),
+    )
+
+
+def _memory_frame_spec(state: RunState, ref: MemoryFrameRef) -> MemoryFrameSpec:
+    """Return the exact recorded frame specification for one identity."""
+    layout = state.memory_layout
+    if type(layout) is not tuple:
+        raise ValueError("memory layout is disabled")
+    index = state.learning_state._frame_index(ref)
+    spec = layout[index]
+    if spec.ref != ref:
+        raise ValueError("memory frame is absent from recorded layout")
+    return spec
 
 
 def commit_prepared(
@@ -1486,6 +1837,8 @@ def commit_prepared(
         return _commit_failure(log, state, prepared)
     if isinstance(prepared._plan, _GrowthPlan):
         return _commit_growth(log, state, prepared)
+    if isinstance(prepared._plan, _LearningPlan):
+        return _commit_learning(log, state, prepared)
     raise TypeError("unsupported prepared transition plan")
 
 
@@ -1560,6 +1913,9 @@ def _replay_records(
             start_wiring_override=start.start_wiring_override,
             effective_llm_by_static_path=start.effective_llm_by_static_path,
             num_workers=start.num_workers,
+            memory_layout=start.memory_layout,
+            memory_snapshots=start.memory_snapshots,
+            learn=start.learn,
         ),
     )
     commit_prepared(cursor, state, prepared)
@@ -1650,6 +2006,7 @@ def _commit_success(
     if not isinstance(prepared.record, NodeSucceededRecord):
         raise TypeError("success plan requires a NodeSucceededRecord")
     _require_prepared_origin(state, plan)
+    _require_learning_plan_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
@@ -1670,6 +2027,7 @@ def _commit_success(
     state.ready.extend(delta.newly_ready_ids)
     if apply.terminal is not None:
         state.result = apply.terminal.result
+    state.learning_state = plan.next_learning_state
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
 
@@ -1686,6 +2044,7 @@ def _commit_route(
     if not isinstance(prepared.record, NodeRoutedRecord):
         raise TypeError("route plan requires a NodeRoutedRecord")
     _require_prepared_origin(state, plan)
+    _require_learning_plan_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
@@ -1713,6 +2072,7 @@ def _commit_route(
     state.terminal_unreachable_failure = delta.terminal_unreachable_failure
     if apply.terminal is not None:
         state.result = apply.terminal.result
+    state.learning_state = plan.next_learning_state
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
 
@@ -1729,6 +2089,7 @@ def _commit_failure(
     if not isinstance(prepared.record, NodeFailedRecord):
         raise TypeError("failure plan requires a NodeFailedRecord")
     _require_prepared_origin(state, plan)
+    _require_learning_plan_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
@@ -1743,6 +2104,7 @@ def _commit_failure(
     state.node_state[node_id] = NodeState.TAKEN
     del state.in_flight[node_id]
     state.result = apply.result
+    state.learning_state = plan.next_learning_state
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
 
@@ -1759,6 +2121,7 @@ def _commit_growth(
     if not isinstance(prepared.record, NodeExpandedRecord):
         raise TypeError("growth plan requires a NodeExpandedRecord")
     _require_prepared_origin(state, plan)
+    _require_learning_plan_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
@@ -1784,8 +2147,49 @@ def _commit_growth(
     state.in_flight = apply.in_flight
     state.depth = apply.depth
     state.wiring_overrides = apply.wiring_overrides
+    state.learning_state = plan.next_learning_state
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
+
+
+def _commit_learning(
+    log: RunLog,
+    state: RunState,
+    prepared: PreparedTransition,
+) -> tuple[Any, ...]:
+    """Validate, append, and install one post-terminal learning transition."""
+    plan = prepared._plan
+    if not isinstance(plan, _LearningPlan):
+        raise TypeError("learning commit requires a learning plan")
+    if not isinstance(
+        prepared.record,
+        (
+            MemoryFrameLearningStartedRecord,
+            MemoryFrameLearnedRecord,
+            MemoryFrameLearningFailedRecord,
+            MemoryCommitRequestedRecord,
+            MemoryCommitSucceededRecord,
+            MemoryCommitFailedRecord,
+        ),
+    ):
+        raise TypeError("learning plan requires a memory learning record")
+    _require_prepared_origin(state, plan)
+    _require_learning_plan_origin(state, plan)
+    _require_initialized_terminal_learning(state)
+    _require_authority_coordinates(log, state, prepared, initialized=True)
+    _require_unchanged_record(prepared, plan.envelope_bytes)
+    if not (
+        plan.next_learning_state.frame_order
+        is state._memory_authority.frame_order
+        and plan.next_learning_state.policy_order
+        is state._memory_authority.policy_order
+    ):
+        raise ValueError("learning plan changed RunStarted memory inventories")
+
+    _append_and_verify(log, prepared)
+    state.learning_state = plan.next_learning_state
+    state.next_sequence = prepared.expected_sequence + 1
+    return ()
 
 
 def _require_prepared_origin(
@@ -1797,6 +2201,7 @@ def _require_prepared_origin(
         | _RoutePlan
         | _FailurePlan
         | _GrowthPlan
+        | _LearningPlan
     ),
 ) -> None:
     """Require the exact state, adopted flow, and boundary objects from preparation."""
@@ -1805,6 +2210,15 @@ def _require_prepared_origin(
             "prepared transition belongs to a different originating RunState"
         )
     _require_originating_flow(state, plan)
+
+
+def _require_learning_plan_origin(
+    state: RunState,
+    plan: _SuccessPlan | _RoutePlan | _FailurePlan | _GrowthPlan | _LearningPlan,
+) -> None:
+    """Require the exact immutable learning projection used during preparation."""
+    if state.learning_state is not plan.originating_learning_state:
+        raise ValueError("prepared transition has stale learning-state authority")
 
 
 def _require_authority_coordinates(
@@ -1869,8 +2283,8 @@ def _append_and_verify(log: RunLog, prepared: PreparedTransition) -> None:
         raise ValueError("run-log append result does not match prepared transition")
 
 
-def _require_initialized_nonterminal(state: RunState) -> None:
-    """Check the initialized reducer roots without scanning run-sized contents."""
+def _require_initialized(state: RunState) -> None:
+    """Check initialized reducer roots and recorded memory authority."""
     exact_containers = (
         type(state.pool) is VariablePool
         and type(state.node_state) is dict
@@ -1881,10 +2295,12 @@ def _require_initialized_nonterminal(state: RunState) -> None:
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
+        and type(state.learning_state) is RuntimeLearningState
+        and type(state._memory_authority) is _MemoryAuthority
         and type(state.initial_static_ids) is frozenset
     )
     if not exact_containers:
-        raise ValueError("dispatch requires initialized reducer frontier containers")
+        raise ValueError("transition requires initialized reducer containers")
     if type(state.run_id) is not str or not state.run_id:
         raise ValueError("run state is not initialized")
     if type(state.flow_fingerprint) is not str or not state.flow_fingerprint:
@@ -1905,14 +2321,51 @@ def _require_initialized_nonterminal(state: RunState) -> None:
             raise ValueError(
                 "terminal-unreachable latch requires a causal node ID"
             )
-    if state.result is not None:
-        raise ValueError("terminal run state cannot prepare another transition")
     if state.flow.start_id not in state.flow.nodes:
         raise ValueError("initialized run state is missing its START boundary")
     if state.pool.start_id != state.flow.start_id:
         raise ValueError("initialized pool START must match the adopted flow")
     if state.flow.start_id not in state.initial_static_ids:
         raise ValueError("initialized run state START is not an initial static node")
+    _validate_runtime_memory_configuration(state)
+
+
+def _require_initialized_nonterminal(state: RunState) -> None:
+    """Require initialized graph state before its primary terminal outcome."""
+    _require_initialized(state)
+    if state.result is not None:
+        raise ValueError("terminal run state cannot prepare another graph transition")
+
+
+def _require_initialized_terminal_learning(state: RunState) -> None:
+    """Require an initialized primary terminal with durable learning enabled."""
+    _require_initialized(state)
+    if not isinstance(state.result, (RunSucceeded, RunFailed)):
+        raise ValueError("memory learning records require a primary terminal result")
+    if state.learn is not True or state.memory_layout is None:
+        raise ValueError("memory learning records require enabled learning")
+
+
+def _validate_runtime_memory_configuration(state: RunState) -> None:
+    """Require constant-time identity roots from canonical RunStarted decoding."""
+    authority = state._memory_authority
+    if type(authority) is not _MemoryAuthority:
+        raise TypeError("run-state memory authority has the wrong type")
+    if not (
+        state.memory_layout is authority.layout
+        and state.memory_snapshots is authority.snapshots
+        and type(state.learn) is bool
+        and state.learn is authority.learn
+        and state.learning_state.frame_order is authority.frame_order
+        and state.learning_state.policy_order is authority.policy_order
+        and (
+            state.learning_state.policy_frame_indices
+            is authority.policy_frame_indices
+        )
+    ):
+        raise ValueError("run-state memory roots disagree with RunStarted authority")
+    if state.learning_state.episode_run_id not in (None, state.run_id):
+        raise ValueError("run-state learning episodes belong to another run")
 
 
 def _validate_node_started(state: RunState, record: NodeStartedRecord) -> None:
@@ -2802,17 +3255,28 @@ def _validate_node_evidence(
     node_id: str,
     evidence: EvaluationEvidence | None,
 ) -> None:
-    """Validate optional evidence against one exact compiled executing node."""
-    if evidence is None:
-        return
-    if type(evidence) is not EvaluationEvidence:
-        raise TypeError("node evidence must be an EvaluationEvidence or None")
+    """Enforce recorded learning authority for one accepted graph outcome."""
     if node_id not in state.flow.nodes:
         raise ValueError(f"evidence node {node_id!r} does not exist in the flow")
     node = state.flow.nodes[node_id]
-    if node.needs_evaluation_trace is not True:
-        raise ValueError(f"node {node_id!r} does not declare evaluation evidence")
     scope = node.memory_scope
+
+    if state.memory_layout is None or state.learn is not True:
+        if evidence is not None:
+            raise ValueError("node evidence requires enabled memory learning")
+        return
+    if not state.memory_layout:
+        if evidence is not None:
+            raise ValueError(
+                f"node {node_id!r} is ineligible for evaluation evidence"
+            )
+        return
+    if node.needs_evaluation_trace is not True:
+        if evidence is not None:
+            raise ValueError(
+                f"node {node_id!r} is ineligible for evaluation evidence"
+            )
+        return
     if type(scope) is not MemoryScope:
         raise ValueError(f"node {node_id!r} has no exact compiled memory scope")
     MemoryScope(
@@ -2822,10 +3286,30 @@ def _validate_node_evidence(
         scope.occurrence_path,
         scope.boundary,
     )
-    if type(scope.frame_stack) is not tuple or not scope.frame_stack:
-        raise ValueError(f"node {node_id!r} has no memory frame stack")
+    expected_stack = state.learning_state.applicable_frames(
+        scope.root_flow_id,
+        scope.static_path,
+    )
+    if scope.frame_stack != expected_stack:
+        raise ValueError(
+            f"node {node_id!r} memory scope must carry its exact recorded frame stack"
+        )
+    if not expected_stack:
+        if evidence is not None:
+            raise ValueError(
+                f"node {node_id!r} is ineligible for evaluation evidence"
+            )
+        return
+    if evidence is None:
+        raise ValueError(
+            f"eligible node {node_id!r} requires evaluation evidence while learning"
+        )
+    if type(evidence) is not EvaluationEvidence:
+        raise TypeError("node evidence must be an EvaluationEvidence or None")
     if evidence.scope != scope:
         raise ValueError(f"node {node_id!r} evidence scope does not match its layout")
+    for frame_ref in scope.frame_stack:
+        MemoryOccurrenceRef(frame_ref, scope.occurrence_path)
 
 
 def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
@@ -3666,6 +4150,8 @@ def _require_pristine(state: RunState) -> None:
         and type(state.wiring_overrides) is dict
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
+        and type(state.learning_state) is RuntimeLearningState
+        and type(state._memory_authority) is _MemoryAuthority
         and type(state.initial_static_ids) is frozenset
     )
     if not exact_containers:
@@ -3693,6 +4179,19 @@ def _require_pristine(state: RunState) -> None:
         and state.num_workers == 0
         and not state.input
         and not state.effective_llm_by_static_path
+        and state.memory_layout is None
+        and state.memory_snapshots is None
+        and state.learn is False
+        and state.learning_state == RuntimeLearningState()
+        and state._memory_authority.layout is None
+        and state._memory_authority.snapshots is None
+        and state._memory_authority.learn is False
+        and state._memory_authority.frame_order is state.learning_state.frame_order
+        and state._memory_authority.policy_order is state.learning_state.policy_order
+        and (
+            state._memory_authority.policy_frame_indices
+            is state.learning_state.policy_frame_indices
+        )
         and state.initial_static_ids == frozenset(state.flow.nodes)
     ):
         raise ValueError("RunStarted requires a pristine RunState at sequence 0")
@@ -3707,6 +4206,7 @@ def _require_originating_flow(
         | _RoutePlan
         | _FailurePlan
         | _GrowthPlan
+        | _LearningPlan
     ),
 ) -> None:
     """Reject replacement of the adopted flow object or either boundary identity.
@@ -3767,6 +4267,15 @@ def _materialize_run_started(
     if not isinstance(canonical_input, dict):
         raise TypeError("canonical START input is not a dict")
 
+    learning_state = RuntimeLearningState.for_layout(record.memory_layout)
+    memory_authority = _MemoryAuthority(
+        layout=record.memory_layout,
+        snapshots=record.memory_snapshots,
+        learn=record.learn,
+        frame_order=learning_state.frame_order,
+        policy_order=learning_state.policy_order,
+        policy_frame_indices=learning_state.policy_frame_indices,
+    )
     return _RunStartedApply(
         pool=pool,
         node_state=dict(state.node_state),
@@ -3782,6 +4291,11 @@ def _materialize_run_started(
         num_workers=record.num_workers,
         input=canonical_input,
         effective_llm_by_static_path=canonical_effective,
+        memory_layout=record.memory_layout,
+        memory_snapshots=record.memory_snapshots,
+        learn=record.learn,
+        learning_state=learning_state,
+        memory_authority=memory_authority,
         observers=(RunStarted(),),
     )
 
@@ -3802,6 +4316,11 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.num_workers = apply.num_workers
     state.input = apply.input
     state.effective_llm_by_static_path = apply.effective_llm_by_static_path
+    state.memory_layout = apply.memory_layout
+    state.memory_snapshots = apply.memory_snapshots
+    state.learn = apply.learn
+    state.learning_state = apply.learning_state
+    state._memory_authority = apply.memory_authority
     state.next_sequence = apply.next_sequence
 
 

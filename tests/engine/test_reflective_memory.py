@@ -315,6 +315,13 @@ def test_snapshot_rejects_noncanonical_scalars_and_circular_json() -> None:
     with pytest.raises(MemoryOperationError, match="version"):
         ReflectiveMemory().open_run(snapshot=snapshot)
 
+    with memory.open_run() as session:
+        blank_model = session.snapshot
+    blank_model["llm_config"]["model"] = "   "
+    with pytest.raises(MemoryOperationError, match="nonblank") as exc:
+        ReflectiveMemory().open_run(snapshot=blank_model)
+    assert exc.value.code == "reflective.invalid_snapshot"
+
 
 def test_frame_idempotency_and_closed_session_operations() -> None:
     memory = ReflectiveMemory()

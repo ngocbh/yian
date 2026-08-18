@@ -301,8 +301,16 @@ def _parse_snapshot(
         )
         if _canonical_json(llm_config) != _canonical_json(complete_llm):
             raise ValueError("snapshot.llm_config must be complete and canonical")
-        if not complete_llm.get("provider") or not complete_llm.get("model"):
-            raise ValueError("snapshot.llm_config must pin provider and model")
+        provider = _nonempty_string(
+            complete_llm.get("provider"), "snapshot.llm_config.provider"
+        )
+        model = _nonempty_string(
+            complete_llm.get("model"), "snapshot.llm_config.model"
+        )
+        if not provider.strip() or not model.strip():
+            raise ValueError(
+                "snapshot.llm_config must pin nonblank provider and model"
+            )
 
         frames_raw = data["frames"]
         if type(frames_raw) is not list:

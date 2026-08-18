@@ -58,6 +58,14 @@ from agent_composer.typesys import VariablePool
 
 _FINGERPRINT = "a" * 64
 _DIGEST = "b" * 64
+_PLURAL_PRIVATE_CONFIG_CASES = (
+    {"nested": {"secretTokens": ["private"]}},
+    {"nested": {"apiKeys": ["private"]}},
+    {"nested": {"backendPaths": ["/private/backend"]}},
+    {"nested": {"pythonModules": ["package.policy"]}},
+)
+
+
 _PRIVATE_CONFIG_CASES = (
     {"nested": {"clientSecret": "private"}},
     {"nested": {"secretKey": "private"}},
@@ -89,6 +97,7 @@ _PRIVATE_CONFIG_CASES = (
     {"nested": {"modulePath": "package.policy"}},
     {"nested": {"class-path": "package.Policy"}},
     {"nested": {"secretToken": "private"}},
+    *_PLURAL_PRIVATE_CONFIG_CASES,
     {"nested": {"credentialFile": "/private/credentials"}},
     {"nested": {"apiKeyPath": "/private/api-key"}},
     {"nested": {"orgtenantid": "private"}},
@@ -226,6 +235,26 @@ def test_codec_revalidates_forged_private_frame_config(
 
     with pytest.raises(ValueError, match="forbidden private key"):
         encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started))
+
+
+def test_public_token_policy_options_round_trip_durably() -> None:
+    config = {
+        "stop_token": "semantic-stop-marker",
+        "continuationToken": "semantic-continuation-marker",
+    }
+    started = _started(
+        layout=(MemoryFrameSpec(_agent_ref(), "reflective", config),),
+        snapshots=(MemorySnapshotEnvelope("reflective", {"state": []}),),
+    )
+
+    encoded = encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started))
+    decoded = decode_record(encoded).record
+
+    assert b"semantic-stop-marker" in encoded
+    assert b"semantic-continuation-marker" in encoded
+    assert type(decoded) is RunStartedRecord
+    assert decoded.memory_layout is not None
+    assert decoded.memory_layout[0].config == config
 
 
 def test_snapshot_envelope_preserves_opaque_public_memory_state() -> None:
@@ -766,6 +795,23 @@ def test_schema_four_rejects_origin_and_extra_memory_operation_fields() -> None:
     failed_wire["payload"]["failure"]["credentials"] = "secret"
     with pytest.raises(ValueError):
         decode_record(json.dumps(failed_wire))
+
+
+@pytest.mark.parametrize("config", _PLURAL_PRIVATE_CONFIG_CASES)
+def test_schema_four_rejects_plural_private_frame_config(
+    config: dict[str, Any],
+) -> None:
+    started = _started(
+        layout=(MemoryFrameSpec(_flow_ref(), "reflective", {}),),
+        snapshots=(MemorySnapshotEnvelope("reflective", {}),),
+    )
+    wire = json.loads(
+        encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started))
+    )
+    wire["payload"]["memory_layout"][0]["config"] = config
+
+    with pytest.raises(ValueError, match="forbidden private key"):
+        decode_record(json.dumps(wire))
 
 
 def test_run_log_copying_isolated_from_new_carrier_accessors() -> None:

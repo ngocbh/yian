@@ -15,6 +15,14 @@ from agent_composer.memory import MemoryPolicySpec, MemorySnapshotEnvelope
 from agent_composer.nodes.agent import AgentNode
 
 
+_PLURAL_PRIVATE_CONFIG_CASES = (
+    {"nested": {"secretTokens": ["private"]}},
+    {"nested": {"apiKeys": ["private"]}},
+    {"nested": {"backendPaths": ["/private/backend"]}},
+    {"nested": {"pythonModules": ["package.policy"]}},
+)
+
+
 _PRIVATE_CONFIG_CASES = (
     {"nested": {"clientSecret": "private"}},
     {"nested": {"secretKey": "private"}},
@@ -46,6 +54,7 @@ _PRIVATE_CONFIG_CASES = (
     {"nested": {"modulePath": "package.policy"}},
     {"nested": {"class-path": "package.Policy"}},
     {"nested": {"secretToken": "private"}},
+    *_PLURAL_PRIVATE_CONFIG_CASES,
     {"nested": {"credentialFile": "/private/credentials"}},
     {"nested": {"apiKeyPath": "/private/api-key"}},
     {"nested": {"orgtenantid": "private"}},
@@ -388,12 +397,22 @@ def test_policy_config_keeps_public_behavior_options() -> None:
         "max_items": 20,
         "recall_limit": 5,
         "token_budget": 4096,
+        "stop_token": "semantic-stop-marker",
+        "continuationToken": "semantic-continuation-marker",
         "query_options": {"strategy": "semantic", "path_filter": "docs/**"},
         "backend": {"mode": "memory"},
         "database_query_options": {"timeout": 3},
     }
 
-    assert MemoryPolicySpec("reflective", config).config == config
+    policy = MemoryPolicySpec("reflective", config)
+
+    assert policy.config == config
+    rendered = json.dumps(
+        flow_manifest(CompiledFlow({}, [], memory_policy=policy)),
+        sort_keys=True,
+    )
+    assert "semantic-stop-marker" in rendered
+    assert "semantic-continuation-marker" in rendered
 
 
 def test_manifest_redaction_remains_defense_in_depth_for_forged_policy() -> None:

@@ -53,6 +53,24 @@ class _FrozenJsonObject:
 
 _FrozenJson: TypeAlias = _FrozenJsonScalar | _FrozenJsonArray | _FrozenJsonObject
 
+
+def _with_high_confidence_plurals(
+    vocabulary: frozenset[str],
+) -> frozenset[str]:
+    """Add predictable plural forms to one private-term vocabulary."""
+    plurals: set[str] = set()
+    for item in vocabulary:
+        if item.endswith("class"):
+            plurals.add(f"{item}es")
+        elif item.endswith("directory"):
+            plurals.add(f"{item[:-1]}ies")
+        elif item.endswith("s"):
+            plurals.add(item)
+        else:
+            plurals.add(f"{item}s")
+    return vocabulary | frozenset(plurals)
+
+
 _PRIVATE_CREDENTIAL_KEYS = frozenset(
     {
         "api_key",
@@ -101,40 +119,42 @@ _PRIVATE_CREDENTIAL_KEYS = frozenset(
         "x_goog_signature",
     }
 )
-_PRIVATE_CREDENTIAL_SUFFIXES = frozenset(
-    {
-        "account_key",
-        "access_key",
-        "access_key_id",
-        "access_token",
-        "api_key",
-        "api_token",
-        "application_credentials",
-        "auth_key",
-        "auth_token",
-        "authorization",
-        "bearer_key",
-        "bearer_token",
-        "connection_string",
-        "credential",
-        "credentials",
-        "password",
-        "passphrase",
-        "private_key",
-        "refresh_key",
-        "refresh_token",
-        "secret",
-        "secret_access_key",
-        "secret_key",
-        "session_cookie",
-        "session_key",
-        "session_token",
-        "shared_access_key",
-        "shared_access_signature",
-        "subscription_key",
-        "token",
-        "webhook_url",
-    }
+_PRIVATE_CREDENTIAL_SUFFIXES = _with_high_confidence_plurals(
+    frozenset(
+        {
+            "account_key",
+            "access_key",
+            "access_key_id",
+            "access_token",
+            "api_key",
+            "api_token",
+            "application_credentials",
+            "auth_key",
+            "auth_token",
+            "authorization",
+            "bearer_key",
+            "bearer_token",
+            "connection_string",
+            "credential",
+            "credentials",
+            "password",
+            "passphrase",
+            "private_key",
+            "refresh_key",
+            "refresh_token",
+            "secret",
+            "secret_access_key",
+            "secret_key",
+            "secret_token",
+            "session_cookie",
+            "session_key",
+            "session_token",
+            "shared_access_key",
+            "shared_access_signature",
+            "subscription_key",
+            "webhook_url",
+        }
+    )
 )
 _PRIVATE_TENANT_KEYS = frozenset({"tenant_id"})
 _PRIVATE_PYTHON_KEYS = frozenset(
@@ -152,30 +172,36 @@ _PRIVATE_PYTHON_KEYS = frozenset(
         "python_path",
     }
 )
-_PRIVATE_PYTHON_SUFFIXES = frozenset(
-    {"class_path", "import_path", "imports", "module_path", "python_path"}
+_PRIVATE_PYTHON_SUFFIXES = _with_high_confidence_plurals(
+    frozenset({"class_path", "import_path", "imports", "module_path", "python_path"})
 )
-_PRIVATE_LOCATION_ROOTS = frozenset(
-    {"backend", "database", "persistence", "storage"}
+_PRIVATE_LOCATION_ROOTS = _with_high_confidence_plurals(
+    frozenset({"backend", "database", "persistence", "storage"})
 )
-_PRIVATE_LOCATION_FIELDS = frozenset(
-    {
-        "connection",
-        "connection_string",
-        "dir",
-        "directory",
-        "dsn",
-        "file",
-        "location",
-        "path",
-        "root",
-        "uri",
-        "url",
-    }
+_PRIVATE_LOCATION_FIELDS = _with_high_confidence_plurals(
+    frozenset(
+        {
+            "connection",
+            "connection_string",
+            "dir",
+            "directory",
+            "dsn",
+            "file",
+            "location",
+            "path",
+            "root",
+            "uri",
+            "url",
+        }
+    )
 )
-_PRIVATE_INDIRECTION_FIELDS = frozenset({"dir", "directory", "file", "path"})
+_PRIVATE_INDIRECTION_FIELDS = _with_high_confidence_plurals(
+    frozenset({"dir", "directory", "file", "path"})
+)
 _PRIVATE_WEBHOOK_FIELDS = frozenset({"signature", "url"})
-_PRIVATE_PYTHON_FIELDS = frozenset({"class", "import", "module", "path"})
+_PRIVATE_PYTHON_FIELDS = _with_high_confidence_plurals(
+    frozenset({"class", "import", "module", "path"})
+)
 
 
 def _require_string(value: object, name: str, *, nonempty: bool = True) -> str:

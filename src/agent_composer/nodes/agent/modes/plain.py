@@ -10,13 +10,12 @@ from __future__ import annotations
 from langchain_core.messages import HumanMessage, SystemMessage
 
 import agent_composer.llm_clients as llm_clients
-from agent_composer.memory.contracts import ModelTextInteraction
 from agent_composer.nodes.agent.modes.common import (
     DEFAULT_SYSTEM,
     AgentRunContext,
     register_mode,
 )
-from agent_composer.nodes.agent.modes.utils import text_of
+from agent_composer.nodes.agent.modes.utils import record_model_text, text_of
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
 from agent_composer.nodes.base import Output
 
@@ -35,8 +34,7 @@ def plain(ctx: AgentRunContext) -> Output:
         reply = model.invoke(msgs)
         ctx.check_stopped()
         text = text_of(reply)
-        if ctx.evaluation_trace is not None:
-            ctx.evaluation_trace.record_interaction(ModelTextInteraction(text))
+        record_model_text(ctx.evaluation_trace, text)
         return Output(value=text)
     return Output(
         value=generate_structured(

@@ -34,8 +34,10 @@ from agent_composer.memory import (
     MemoryScope,
     MemorySession,
     MemorySetupError,
+    ModelTextInteraction,
     ModelValueInteraction,
     RecallContext,
+    ToolCallInteraction,
 )
 
 
@@ -360,6 +362,38 @@ def test_json_contracts_reject_cycles() -> None:
 
     with pytest.raises(ValueError, match="circular"):
         MemoryPolicySpec("reflective", config)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: ModelTextInteraction(chr(0xD800)),
+        lambda: MemoryPolicySpec("reflective", {"text": chr(0xD800)}),
+        lambda: MemoryPolicySpec("reflective", {chr(0xD800): "text"}),
+    ],
+)
+def test_memory_strings_must_have_a_canonical_utf8_representation(factory: Any) -> None:
+    """Memory carriers reject strings the durable JSON boundary cannot encode."""
+    with pytest.raises(ValueError, match="Unicode surrogate"):
+        factory()
+
+
+@pytest.mark.parametrize("carrier", ["value", "arguments"])
+def test_memory_json_rejects_nesting_beyond_the_durable_wire_limit(
+    carrier: str,
+) -> None:
+    """A conservative evidence bound stays below the schema-4 wire ceiling."""
+    nested: JsonObject = {}
+    for _ in range(300):
+        nested = {"nested": nested}
+
+    factory = (
+        lambda: ModelValueInteraction(nested)
+        if carrier == "value"
+        else ToolCallInteraction("lookup", nested)
+    )
+    with pytest.raises(ValueError, match="nesting"):
+        factory()
 
 
 def test_context_episode_and_mutation_keep_json_snapshots() -> None:

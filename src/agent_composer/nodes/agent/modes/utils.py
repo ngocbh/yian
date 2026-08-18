@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent_composer.memory.contracts import (
+    EvaluationTrace,
+    ModelTextInteraction,
+    ToolResultInteraction,
+)
+
 
 def text_of(message: Any) -> str:
     """Return only model content explicitly represented as visible text."""
@@ -20,3 +26,32 @@ def text_of(message: Any) -> str:
                 visible.append(str(text))
         return "\n".join(visible)
     return ""
+
+
+def record_model_text(
+    trace: EvaluationTrace | None,
+    text: str,
+) -> None:
+    """Record encodable visible model text without affecting node behavior."""
+    if trace is None:
+        return
+    try:
+        interaction = ModelTextInteraction(text)
+    except (TypeError, ValueError):
+        return
+    trace.record_interaction(interaction)
+
+
+def record_tool_result(
+    trace: EvaluationTrace | None,
+    name: str,
+    text: str,
+) -> None:
+    """Record an encodable visible tool result without affecting its invocation."""
+    if trace is None:
+        return
+    try:
+        interaction = ToolResultInteraction(name, text)
+    except (TypeError, ValueError):
+        return
+    trace.record_interaction(interaction)

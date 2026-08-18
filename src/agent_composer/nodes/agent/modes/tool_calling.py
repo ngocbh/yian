@@ -6,9 +6,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, To
 
 import agent_composer.llm_clients as llm_clients
 from agent_composer.memory.contracts import (
-    ModelTextInteraction,
     ToolCallInteraction,
-    ToolResultInteraction,
 )
 from agent_composer.nodes.agent.modes.common import (
     DEFAULT_SYSTEM,
@@ -16,7 +14,11 @@ from agent_composer.nodes.agent.modes.common import (
     AgentRunContext,
     register_mode,
 )
-from agent_composer.nodes.agent.modes.utils import text_of
+from agent_composer.nodes.agent.modes.utils import (
+    record_model_text,
+    record_tool_result,
+    text_of,
+)
 from agent_composer.nodes.agent.structured import generate_structured, type_to_schema
 from agent_composer.nodes.base import Output
 from agent_composer.tools import invoke_tool, resolve_tools
@@ -65,8 +67,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
         calls = getattr(reply, "tool_calls", None) or []
         if not calls:
             text = text_of(reply)
-            if ctx.evaluation_trace is not None:
-                ctx.evaluation_trace.record_interaction(ModelTextInteraction(text))
+            record_model_text(ctx.evaluation_trace, text)
             if ctx.output_type is not None and schema is not None:
                 return Output(
                     value=generate_structured(
@@ -104,10 +105,7 @@ def tool_calling(ctx: AgentRunContext) -> Output:
             result = invoke_tool(name, arguments)
             ctx.check_stopped()
             result_text = str(result)
-            if ctx.evaluation_trace is not None:
-                ctx.evaluation_trace.record_interaction(
-                    ToolResultInteraction(name, result_text)
-                )
+            record_tool_result(ctx.evaluation_trace, name, result_text)
             messages.append(
                 ToolMessage(content=result_text, tool_call_id=call.get("id") or "")
             )

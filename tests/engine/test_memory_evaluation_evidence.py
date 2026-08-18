@@ -110,6 +110,13 @@ class _SubclassTextChat:
         return SimpleNamespace(content=_StringSubclass("subclass answer"))
 
 
+class _SurrogateTextChat:
+    """Return provider text that has no valid canonical UTF-8 representation."""
+
+    def invoke(self, _messages):
+        return SimpleNamespace(content=chr(0xD800))
+
+
 class _NativeStructuredChat:
     """Return one parsed value through LangChain's native structured seam."""
 
@@ -426,6 +433,39 @@ def test_binding_failure_captures_scope_with_absent_inputs_and_no_prompt(
     assert evaluated.evidence.interactions == ()
 
 
+def test_wire_safe_but_oversized_bound_inputs_do_not_change_capture_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A conservative evidence bound may omit inputs without aborting execution."""
+    nested: dict = {}
+    for _ in range(160):
+        nested = {"nested": nested}
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _config: _PlainChat("done"),
+    )
+    node = AgentNode("agent", prompt="answer")
+    node.params = [Parameter(name="payload", required=True)]
+    node.memory_scope = _scope(node.id)
+    pool = VariablePool()
+    pool.set("source", nested)
+    flow = SimpleNamespace(wiring={node.id: {"payload": "${source.output}"}})
+
+    capture_off = eval_node(node, flow, pool)
+    capture_on = eval_node(
+        node,
+        flow,
+        pool,
+        capture_evidence=True,
+    )
+
+    assert capture_off.outcome == capture_on.outcome == Output("done")
+    assert capture_on.evidence is not None
+    assert capture_on.evidence.bound_inputs is None
+    assert capture_on.evidence.interactions == (ModelTextInteraction("done"),)
+
+
 def test_plain_agent_records_only_visible_prompt_and_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -471,6 +511,32 @@ def test_visible_string_subclass_has_capture_off_on_behavioral_parity(
         ModelTextInteraction("subclass answer"),
     )
     assert type(capture_on.evidence.interactions[0].text) is str
+
+
+def test_invalid_unicode_text_is_ignored_by_observational_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed trace material cannot change the underlying AGENT outcome."""
+    monkeypatch.setattr(
+        llm_clients,
+        "model_from_config",
+        lambda _config: _SurrogateTextChat(),
+    )
+    node = AgentNode("agent", prompt="answer")
+    node.memory_scope = _scope(node.id)
+
+    capture_off = eval_node(node, None, VariablePool())
+    capture_on = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    expected = Output(chr(0xD800))
+    assert capture_off.outcome == capture_on.outcome == expected
+    assert capture_on.evidence is not None
+    assert capture_on.evidence.interactions == ()
 
 
 def test_native_structured_agent_records_only_parsed_value(
@@ -562,6 +628,50 @@ def test_fallback_structured_parses_only_visible_text_blocks(
     assert "SECRET_REASONING" not in rendered
     assert "SECRET_BLOCK_METADATA" not in rendered
     assert "SECRET_PROVIDER_METADATA" not in rendered
+
+
+def test_invalid_unicode_fallback_trace_does_not_consume_a_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Evidence rejection stays outside structured provider/parse retry semantics."""
+    text = '{"value":"' + chr(0xD800) + '"}'
+
+    class _SurrogateStructuredChat:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def invoke(self, _messages):
+            self.calls += 1
+            return SimpleNamespace(content=text)
+
+    chat = _SurrogateStructuredChat()
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
+    node = AgentNode(
+        "agent",
+        prompt="text",
+        retries=2,
+        llm_config={"provider": "vllm", "model": "no-structured-sentinel"},
+    )
+    node.output_contract = ValueContract(
+        Type(
+            kind=ValueKind.OBJECT,
+            fields={"value": Type.scalar(ValueKind.STRING)},
+            required=frozenset({"value"}),
+        )
+    )
+    node.memory_scope = _scope(node.id)
+
+    evaluated = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    assert evaluated.outcome == Output({"value": chr(0xD800)})
+    assert chat.calls == 1
+    assert evaluated.evidence is not None
+    assert evaluated.evidence.interactions == ()
 
 
 def test_tool_mode_records_calls_results_and_final_text_in_visible_order(
@@ -772,6 +882,45 @@ def test_tool_trace_uses_the_same_effective_arguments_as_invocation(
     assert evaluated.evidence.interactions == (
         ToolCallInteraction("noop", {}),
         ToolResultInteraction("noop", "ok"),
+        ModelTextInteraction("finished"),
+    )
+
+
+def test_invalid_unicode_tool_result_is_ignored_by_observational_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unencodable visible tool result does not abort the ordinary tool loop."""
+    def lookup() -> str:
+        """Return one intentionally unencodable tool result."""
+        return chr(0xD800)
+
+    chat = _ToolChat()
+    chat.replies[0].tool_calls[0]["args"] = {}
+    monkeypatch.setitem(
+        tools.TOOL_REGISTRY,
+        "lookup",
+        StructuredTool.from_function(lookup, name="lookup"),
+    )
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: chat)
+    node = AgentNode(
+        "agent",
+        prompt="lookup",
+        mode="tool_calling",
+        tools=["lookup"],
+    )
+    node.memory_scope = _scope(node.id)
+
+    evaluated = eval_node(
+        node,
+        None,
+        VariablePool(),
+        capture_evidence=True,
+    )
+
+    assert evaluated.outcome == Output("finished")
+    assert evaluated.evidence is not None
+    assert evaluated.evidence.interactions == (
+        ToolCallInteraction("lookup", {}),
         ModelTextInteraction("finished"),
     )
 

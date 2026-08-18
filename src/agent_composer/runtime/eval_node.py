@@ -141,7 +141,13 @@ class _EvaluationTraceCollector(EvaluationTrace):
         self._require_open()
         if type(bound_inputs) is not dict:
             raise TypeError("bound_inputs must be an exact dict")
-        validated = EvaluationEvidence(self._scope, bound_inputs, None, None)
+        try:
+            validated = EvaluationEvidence(self._scope, bound_inputs, None, None)
+        except (TypeError, ValueError, RecursionError):
+            # Evidence is observational. The run-log can carry deeper ordinary
+            # values than the deliberately conservative memory JSON boundary.
+            self._bound_inputs = None
+            return
         self._bound_inputs = validated.bound_inputs
 
     def record_prompt(

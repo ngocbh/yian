@@ -15,6 +15,9 @@ JsonScalar: TypeAlias = NoneType | bool | int | float | str
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
+_MAX_JSON_NESTING = 128
+"""Conservative memory JSON nesting bound that remains schema-4 wire-safe."""
+
 
 class _FrozenJsonScalarKind(Enum):
     """Exact scalar types retained by a private frozen JSON snapshot."""
@@ -166,6 +169,10 @@ def _require_string(value: object, name: str, *, nonempty: bool = True) -> str:
         raise TypeError(f"{name} must be a string")
     if nonempty and not value:
         raise ValueError(f"{name} must be non-empty")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Unicode surrogate is not valid canonical JSON") from exc
     return value
 
 
@@ -181,10 +188,7 @@ def _require_path(
     if not allow_empty and not value:
         raise ValueError(f"{name} must be non-empty")
     for part in value:
-        if type(part) is not str:
-            raise TypeError(f"{name} components must be strings")
-        if not part:
-            raise ValueError(f"{name} components must be non-empty")
+        _require_string(part, f"{name} components")
     return value
 
 
@@ -193,6 +197,7 @@ def _freeze_json(
     *,
     name: str,
     active: set[int] | None = None,
+    nesting: int = 0,
 ) -> _FrozenJson:
     """Validate and snapshot one exact recursive JSON value."""
     value_type = type(value)
@@ -203,6 +208,7 @@ def _freeze_json(
     if value_type is int:
         return _FrozenJsonScalar(_FrozenJsonScalarKind.INTEGER, value)
     if value_type is str:
+        _require_string(value, name, nonempty=False)
         return _FrozenJsonScalar(_FrozenJsonScalarKind.STRING, value)
     if value_type is float:
         if not isfinite(value):
@@ -211,6 +217,11 @@ def _freeze_json(
 
     if value_type not in (list, dict):
         raise TypeError(f"{name} must contain exact JSON values")
+    if nesting >= _MAX_JSON_NESTING:
+        raise ValueError(
+            f"{name} JSON nesting exceeds the conservative wire-safe limit "
+            f"of {_MAX_JSON_NESTING}"
+        )
 
     active = set() if active is None else active
     identity = id(value)
@@ -221,7 +232,12 @@ def _freeze_json(
         if value_type is list:
             return _FrozenJsonArray(
                 tuple(
-                    _freeze_json(item, name=f"{name}[{index}]", active=active)
+                    _freeze_json(
+                        item,
+                        name=f"{name}[{index}]",
+                        active=active,
+                        nesting=nesting + 1,
+                    )
                     for index, item in enumerate(value)
                 )
             )
@@ -230,11 +246,17 @@ def _freeze_json(
         for key in value:
             if type(key) is not str:
                 raise TypeError(f"{name} JSON object keys must be strings")
+            _require_string(key, f"{name} JSON object key", nonempty=False)
         for key in sorted(value):
             entries.append(
                 (
                     key,
-                    _freeze_json(value[key], name=f"{name}.{key}", active=active),
+                    _freeze_json(
+                        value[key],
+                        name=f"{name}.{key}",
+                        active=active,
+                        nesting=nesting + 1,
+                    ),
                 )
             )
         return _FrozenJsonObject(tuple(entries))

@@ -27,10 +27,9 @@ from pydantic import BaseModel, ValidationError, create_model
 
 from agent_composer.memory.contracts import (
     EvaluationTrace,
-    ModelTextInteraction,
     ModelValueInteraction,
 )
-from agent_composer.nodes.agent.modes.utils import text_of
+from agent_composer.nodes.agent.modes.utils import record_model_text, text_of
 from agent_composer.nodes.base import _HostStop
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -275,8 +274,7 @@ def _generate_fallback(
         try:
             text = text_of(model.invoke(msgs))
             check_stopped()
-            if evaluation_trace is not None:
-                evaluation_trace.record_interaction(ModelTextInteraction(text))
+            record_model_text(evaluation_trace, text)
             obj = schema.model_validate(json.loads(_strip_code_fence(text)))
             value = _unwrap(obj, typ)
         except _HostStop:

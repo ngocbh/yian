@@ -95,7 +95,7 @@ class CallNode(Node):
         if self.child is None:
             raise RuntimeError(f"CALL node {self.id!r}: child flow {self.flow_id!r} not baked")
 
-    def _run_impl(self, inputs: dict, **caps: Any):
+    def forward(self, inputs: dict, **caps: Any):
         # Pass the call-args RAW: the spliced child START_ID owns omitted-input defaulting now (its
         # params carry default/required), so the driver no longer pre-defaults. The node describes
         # growth with only the durable builder input; the compile-owned injected builder constructs

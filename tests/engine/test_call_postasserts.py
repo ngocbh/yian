@@ -2,7 +2,7 @@
 
 A `call` is a spawner: its `run()` returns `Grow`, and its `${output}` is committed when the
 cloned child END filler finishes (`commit_as=callsite`). `call_subgraph` lowers the call's
-node-level post-asserts onto that END. When `EndNode._run_impl()` returns `Output`, the inherited
+node-level post-asserts onto that END. When `EndNode.forward()` returns `Output`, the inherited
 `Node.run` wrapper evaluates them against the END's bound inputs and output. A false assertion
 therefore fails the child END (for example `research/__end__`), which owns the committed call
 output and its postconditions.

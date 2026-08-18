@@ -45,7 +45,7 @@ while state.result is None:
 def Node.run(self, inputs, **caps):      # the generic template — IDENTICAL for every kind
     inputs = apply_defaults(self.params, inputs)
     check_assertions(self.pre_asserts, inputs)           # expression executes; display reports
-    out = self._run_impl(inputs, **caps)                # the ONLY kind-specific step
+    out = self.forward(inputs, **caps)                   # the ONLY kind-specific step
     if isinstance(out, Output):
         check_assertions(self.post_asserts, {**inputs, "output": out.value})
     return out
@@ -58,7 +58,7 @@ inputs, source ranges, and streaming-generator cleanup.
 `Node.run` is a fixed recipe applied to *every* node. The read boundary is kind-blind
 but **node-configured** — a node declares *how* to bind rather than the engine branching
 on kind (e.g. `binds_per_item` on `map`, `bind_reserved` for a `wait`'s `until` or a
-`map`'s `over`). The only kind-specific step is `_run_impl`.
+`map`'s `over`). The only kind-specific step is `forward`.
 
 A flow's own top-level `asserts:` are not a separate engine phase: at build they are
 lowered onto the synthesized `__start__`/`__end__` boundary nodes. A boundary assert
@@ -227,7 +227,7 @@ before the run boundary releases the log.
 | `node.id`, `node.params` | physical execution identity; input *names* (the flow owns their sources) |
 | `node.pre_asserts` / `node.post_asserts` | conditions the base `run` template checks around the body |
 | `node.run(inputs, **caps) → NodeResult` | the shared template the engine drives |
-| `node._run_impl(inputs, **caps) → NodeResult` | the one kind-specific body step |
+| `node.forward(inputs, **caps) → NodeResult` | the one kind-specific body step |
 | `node.is_spawner` | may it return `Grow`? |
 | read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event` |
 | growth traits | `grow_depth_delta`, `is_loop` |
@@ -246,7 +246,7 @@ invocation site, then the base node fallback.
 
 CASE implements the same hook for ordered predicates. Each compiled `Case` carries
 the origin of its exact `cases[N].when` occurrence. The hook identifies this node's
-active `_run_impl` frame and `Case` by identity, so duplicate predicate text remains
+active `forward` frame and `Case` by identity, so duplicate predicate text remains
 distinct; failures outside predicate evaluation use the node fallback. The carriers
 are diagnostic-only, participate in ordinary graph rebasing, and do not affect flow
 identity.

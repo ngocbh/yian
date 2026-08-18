@@ -333,7 +333,7 @@ class CodeNode(Node):
             node_origin=self.origin,
         )
 
-    def _run_impl(self, inputs: dict) -> Output:
+    def forward(self, inputs: dict) -> Output:
         # Only CODE needs the soft-budget diagnostic: its author Python executes in-process
         # and cannot be killed safely. Expected blocking in other node kinds is not timed.
         with node_watchdog(self.id):

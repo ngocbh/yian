@@ -306,7 +306,7 @@ node invocation.
 
 → **[engine.md](engine.md)** covers the scheduler, reducer, run log, recovery, and
 growth. **[nodes.md](nodes.md)** covers the node contract and each kind's
-`_run_impl`.
+`forward`.
 
 ---
 
@@ -436,7 +436,7 @@ teach `runtime/` about a `NodeKind`**.
 
 - :material-cog: **[compose.md](compose.md)** — Phase 1 in depth: how YAML is lowered to a `CompiledFlow`.
 - :material-play: **[engine.md](engine.md)** — Phase 2 in depth: records, reducer, scheduler, and recovery.
-- :material-cube: **[nodes.md](nodes.md)** — every node kind and what its `_run_impl` returns.
+- :material-cube: **[nodes.md](nodes.md)** — every node kind and what its `forward` returns.
 - :material-shape: **[typing.md](typing.md)** — the typed value system and the variable pool.
 - :material-code-braces: **[expressions.md](expressions.md)** — the `${...}` grammar.
 

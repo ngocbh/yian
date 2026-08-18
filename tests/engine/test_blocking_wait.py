@@ -65,7 +65,7 @@ class _FailAfterWaitStarts(Node):
         super().__init__(node_id)
         self._wait_entered = wait_entered
 
-    def _run_impl(self, inputs: dict) -> Output:
+    def forward(self, inputs: dict) -> Output:
         assert self._wait_entered.wait(timeout=_JOIN_TIMEOUT)
         raise RuntimeError("sibling failed")
 
@@ -79,7 +79,7 @@ class _CompleteAfterWaitStarts(Node):
         super().__init__(node_id)
         self._wait_entered = wait_entered
 
-    def _run_impl(self, inputs: dict) -> Output:
+    def forward(self, inputs: dict) -> Output:
         assert self._wait_entered.wait(timeout=_JOIN_TIMEOUT)
         return Output("done")
 

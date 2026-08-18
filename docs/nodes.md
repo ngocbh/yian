@@ -1,6 +1,6 @@
 # Nodes — the unit of work
 
-> The node side of the [engine contract](engine.md). Each kind supplies `_run_impl`
+> The node side of the [engine contract](engine.md). Each kind supplies `forward`
 > plus a few static traits and inherits the shared `run` template; the engine reads
 > only those and the returned `NodeResult`, never the kind.
 
@@ -25,7 +25,7 @@ still consult an LLM, a human, or the wall clock, but its only graph-visible res
 ## The contract
 
 Each kind implements exactly one body method and declares a few static fields. The base
-`Node.run` template wraps `_run_impl` with default filling and pre/post assertions; the
+`Node.run` template wraps `forward` with default filling and pre/post assertions; the
 engine always drives that shared wrapper.
 
 ```python
@@ -40,13 +40,16 @@ class Node:
     def run(self, inputs, **caps) -> NodeResult:   # shared template; do not override
         inputs = apply_defaults(self.params, inputs)
         check_assertions(self.pre_asserts, inputs)  # evaluate expression; report display
-        outcome = self._run_impl(inputs, **caps)   # the ONE kind-specific step
+        outcome = self.forward(inputs, **caps)      # the ONE kind-specific step
         if isinstance(outcome, Output):
             check_assertions(self.post_asserts, {**inputs, "output": outcome.value})
         return outcome
 
-    def _run_impl(self, inputs, **caps) -> NodeResult:
+    def forward(self, inputs, **caps) -> NodeResult:
         ...
+
+    def backward(self, *args, **caps) -> None:
+        return None  # reserved; the runtime does not call this hook
 
     def skipped_output_target(self) -> NodeId:
         return self.id if self.commit_as is None else self.commit_as
@@ -63,9 +66,13 @@ class Node:
   only traits a node explicitly requests. The AGENT node is the documented exception for
   model access: its mode builds the configured model directly through `llm_clients`.
 
-**Why only `_run_impl`?** Default filling and assertion checks are identical for every
+**Why only `forward`?** Default filling and assertion checks are identical for every
 kind — so they are protocol, not kind behavior, and live in the base template. See
 [the engine loop](engine.md#the-loop-read-eval-record-reduce).
+
+`backward` only reserves the name for future reverse-DAG feedback. Its default is a
+no-op, its argument contract is intentionally not yet defined, and neither the runtime
+nor memory learning calls it today.
 
 `skipped_output_target()` is a pure, deterministic topology hook, not another
 effectful body method. It must derive only from execution state represented in
@@ -98,24 +105,24 @@ what `run` returns:
   `commit_as` and the inherited skip-target hook). See
   [growth](engine.md#growth-a-node-that-is-really-a-subflow).
 
-## A kind is one `_run_impl`
+## A kind is one `forward`
 
 ```python
 class CodeNode(Node):                  # LEAF — run a Python function
-    def _run_impl(self, inputs, **caps):
+    def forward(self, inputs, **caps):
         return Output(self.fn(inputs))
 
 class AgentNode(Node):                 # LEAF — one live model/tool loop
-    def _run_impl(self, inputs, **caps):
+    def forward(self, inputs, **caps):
         return Output(self.run_model_loop(inputs))
 
 class CaseNode(Node):                  # ROUTER — pick a branch, produce no value
-    def _run_impl(self, inputs, **caps):
+    def forward(self, inputs, **caps):
         return Route(self.select(inputs))
 
 class MapNode(Node):                   # SUBFLOW — run a child once per item
     is_spawner = True
-    def _run_impl(self, inputs, **caps):
+    def forward(self, inputs, **caps):
         records = [caps["bind_item"](item) for item in inputs["over"]]
         return Grow(seed=records)       # compile.build_grow clones + wires the child flow
 ```
@@ -147,7 +154,7 @@ OR-join/multi-writer contract.
 
 ## Why this shape
 
-- **One method to add a kind** — implement `_run_impl`; the wrapper is supplied unchanged.
+- **One method to add a kind** — implement `forward`; the wrapper is supplied unchanged.
 - **Structural purity** — nodes never mutate shared graph state, so scheduling and
   run-record replay remain reproducible even when a leaf performs an external effect.
 - **The engine stays kind-blind** — all that varies is the `NodeResult` a `run` returns.

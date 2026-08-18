@@ -64,6 +64,6 @@ class StartNode(Node):
                 )
         self.params = parameters
 
-    def _run_impl(self, inputs: dict) -> Output:
+    def forward(self, inputs: dict) -> Output:
         """Return the record already bound by the generic node input seam."""
         return Output(value=inputs)

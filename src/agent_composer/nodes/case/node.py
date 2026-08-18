@@ -123,7 +123,7 @@ class CaseNode(Node):
         """Return the exact ordered predicate whose evaluation raised.
 
         The original exception and traceback remain unchanged. Selection uses
-        the identity of this node's ``_run_impl`` frame and its active ``Case``;
+        the identity of this node's ``forward`` frame and its active ``Case``;
         duplicate predicate text therefore remains independently locatable.
         Failures outside predicate evaluation, and source-free predicates, fall
         back to the authored node origin.
@@ -133,7 +133,7 @@ class CaseNode(Node):
         while traceback is not None:
             frame = traceback.tb_frame
             if (
-                frame.f_code is CaseNode._run_impl.__code__
+                frame.f_code is CaseNode.forward.__code__
                 and frame.f_locals.get("self") is self
             ):
                 candidate = frame.f_locals.get("case")
@@ -150,7 +150,7 @@ class CaseNode(Node):
             else super().exception_origin(exception)
         )
 
-    def _run_impl(self, inputs: dict) -> Route:
+    def forward(self, inputs: dict) -> Route:
         # Strict CASE: route on the bound input record only — each `when:`
         # interpolates this node's declared inputs as bare `${name}`, not the pool.
         # Routing-only: returns a Route carrying the chosen case handle (no value).

@@ -17,10 +17,11 @@ shape of it:
   monolith.
 - Computation is **pure at the boundary**: a node returns an outcome and the
   engine binds it; a node never receives or mutates the shared pool. Each kind
-  implements `_run_impl`; the base `Node.run` template applies defaults and fires
+  implements `forward`; the base `Node.run` template applies defaults and fires
   record-only asserts around that body. A flow's own asserts are lowered onto its
   synthesized START/END boundary nodes, so top-level and nested-flow asserts use
-  the same ordinary node path.
+  the same ordinary node path. `Node.backward` is a dormant no-op reserved for a
+  future lineage-aware reverse pass; current execution never calls it.
 - The **program structure is fixed by the author**, as a function's call graph is
   fixed by its source. The LLM fills leaf boxes; it does not rewrite the graph at
   runtime. That structural referential transparency makes execution reproducible
@@ -225,7 +226,7 @@ registers those indexed sites before lowering and preserves the origin on the
 rewritten predicate; searched CASE also assigns each generated input `Binding`
 the origin of the first predicate that introduced its reference, while `on:`
 owns the generated `__on` binding origin. `CaseNode.exception_origin()` locates
-its own active `_run_impl` frame by code-object and node identity, then selects
+its own active `forward` frame by code-object and node identity, then selects
 the active `Case` by identity. Failures outside predicate evaluation fall back
 to `Node.origin`. These origins participate in ordinary traversal and rebasing,
 but remain diagnostic-only and manifest-neutral.

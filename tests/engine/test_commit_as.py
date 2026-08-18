@@ -14,7 +14,7 @@ class _BareNode(Node):
 
     kind = NodeKind.CODE
 
-    def _run_impl(self, inputs, **caps):
+    def forward(self, inputs, **caps):
         return Output(None)
 
 

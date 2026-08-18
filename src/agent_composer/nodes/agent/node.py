@@ -102,7 +102,7 @@ class AgentNode(Node):
         origin = contract.origins.at(path)
         return origin if origin is not None else super().exception_origin(exception)
 
-    def _run_impl(self, inputs: dict, *, stop_event=None) -> Output:
+    def forward(self, inputs: dict, *, stop_event=None) -> Output:
         """Render declared inputs and run the selected local mode to completion."""
         prompt = render_template_record(self.prompt, inputs)
         return MODES[self.mode](self._ctx(prompt, stop_event=stop_event))

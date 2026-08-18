@@ -51,7 +51,7 @@ class ModelNode(Node):
         self.weights_uri = weights_uri
         self.runtime_name = runtime
 
-    def _run_impl(self, inputs: dict) -> Output:
+    def forward(self, inputs: dict) -> Output:
         """Raise because no ML-serving implementation is available."""
         raise NotImplementedError(
             f"MODEL node {self.id!r}: ML serving is not wired yet — the model_runtime "

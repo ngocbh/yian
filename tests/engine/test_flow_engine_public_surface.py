@@ -63,7 +63,7 @@ class _StreamingNode(Node):
 
     kind = NodeKind.AGENT
 
-    def _run_impl(self, inputs: dict[str, Any]):
+    def forward(self, inputs: dict[str, Any]):
         """Emit the scripted token fragments and return their combined value."""
         yield StreamChunk(self.id, "output", "hel")
         yield StreamChunk(self.id, "output", "lo", final=True)

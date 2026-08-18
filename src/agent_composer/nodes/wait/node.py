@@ -67,7 +67,7 @@ class WaitNode(Node):
     """Block until the resolved absolute ``until`` deadline.
 
     The ``until`` source lives in ``CompiledFlow.wiring[id]["until"]`` and is
-    pre-resolved by :meth:`bind_reserved`. ``_run_impl`` receives that concrete
+    pre-resolved by :meth:`bind_reserved`. ``forward`` receives that concrete
     ISO value plus the exact run-owned stop event. A normal timeout returns
     ``Output(None)``; a lifecycle wake raises the private ``_HostStop`` signal so
     the engine discards the node outcome while draining.
@@ -91,7 +91,7 @@ class WaitNode(Node):
         """Declare the required author-owned ``until`` wiring key."""
         return {"until"}
 
-    def _run_impl(self, inputs: dict, *, stop_event) -> Output:
+    def forward(self, inputs: dict, *, stop_event) -> Output:
         """Wait for the remaining absolute duration or unwind on lifecycle stop."""
         deadline = _deadline_utc(inputs["until"])
         remaining = (deadline - _utc_now()).total_seconds()

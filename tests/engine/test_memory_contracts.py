@@ -174,6 +174,47 @@ def test_policy_specs_preserve_origin_and_isolate_canonical_json() -> None:
     )
 
 
+def test_json_scalar_identity_preserves_exact_types_at_every_depth() -> None:
+    """Boolean, integer, and float JSON values remain distinct frozen values."""
+    values = (True, 1, 1.0)
+    policies = tuple(
+        MemoryPolicySpec(
+            "reflective",
+            {"nested": [value, {"value": value}]},
+        )
+        for value in values
+    )
+    contexts = tuple(
+        RecallContext("base", "prompt", {"value": value}, ("root", "agent"))
+        for value in values
+    )
+    mutations = tuple(
+        MemoryMutation("same", _agent_ref(), [value, {"value": value}])
+        for value in values
+    )
+
+    assert len(set(policies)) == 3
+    assert len({hash(policy) for policy in policies}) == 3
+    assert len(set(contexts)) == 3
+    assert len({hash(context) for context in contexts}) == 3
+    assert len(set(mutations)) == 3
+    assert len({hash(mutation) for mutation in mutations}) == 3
+
+    for expected_type, policy, context, mutation in zip(
+        (bool, int, float),
+        policies,
+        contexts,
+        mutations,
+    ):
+        nested = policy.config["nested"]
+        assert type(nested[0]) is expected_type  # type: ignore[index]
+        assert type(nested[1]["value"]) is expected_type  # type: ignore[index]
+        assert type(context.inputs["value"]) is expected_type
+        payload = mutation.payload
+        assert type(payload[0]) is expected_type  # type: ignore[index]
+        assert type(payload[1]["value"]) is expected_type  # type: ignore[index]
+
+
 class _DictSubclass(dict[str, object]):
     """A mapping subclass that is deliberately not an exact JSON object."""
 
@@ -431,6 +472,24 @@ def test_memory_recall_error_preserves_an_explicit_exception_cause() -> None:
 
     assert caught.value.origin is origin
     assert caught.value.__cause__ is cause
+
+
+class _ForgedOrigin(OriginRef):
+    """An OriginRef subclass that bypasses the base key validation."""
+
+    def __post_init__(self) -> None:
+        """Deliberately skip base validation to exercise contract hardening."""
+
+
+def test_memory_origins_revalidate_subclass_keys_without_losing_identity() -> None:
+    """Valid origin subclasses survive while forged invalid keys fail closed."""
+    valid = _ForgedOrigin("valid")
+
+    assert MemoryPolicySpec("reflective", {}, valid).origin is valid
+    with pytest.raises(ValueError, match="origin key"):
+        MemoryPolicySpec("reflective", {}, _ForgedOrigin(""))
+    with pytest.raises(ValueError, match="origin key"):
+        MemoryPolicySpec("reflective", {}, _ForgedOrigin(1))  # type: ignore[arg-type]
 
 
 def test_importing_memory_contracts_does_not_load_heavy_backends() -> None:

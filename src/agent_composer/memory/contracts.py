@@ -16,6 +16,24 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 
+class _FrozenJsonScalarKind(Enum):
+    """Exact scalar types retained by a private frozen JSON snapshot."""
+
+    NULL = "null"
+    BOOLEAN = "boolean"
+    INTEGER = "integer"
+    NUMBER = "number"
+    STRING = "string"
+
+
+@dataclass(frozen=True, slots=True)
+class _FrozenJsonScalar:
+    """One private JSON scalar whose exact Python type remains significant."""
+
+    kind: _FrozenJsonScalarKind
+    value: JsonScalar
+
+
 @dataclass(frozen=True, slots=True)
 class _FrozenJsonArray:
     """One private immutable JSON-array snapshot."""
@@ -30,7 +48,7 @@ class _FrozenJsonObject:
     entries: tuple[tuple[str, _FrozenJson], ...]
 
 
-_FrozenJson: TypeAlias = JsonScalar | _FrozenJsonArray | _FrozenJsonObject
+_FrozenJson: TypeAlias = _FrozenJsonScalar | _FrozenJsonArray | _FrozenJsonObject
 
 
 def _require_string(value: object, name: str, *, nonempty: bool = True) -> str:
@@ -69,12 +87,18 @@ def _freeze_json(
 ) -> _FrozenJson:
     """Validate and snapshot one exact recursive JSON value."""
     value_type = type(value)
-    if value is None or value_type in (bool, int, str):
-        return value  # type: ignore[return-value]
+    if value is None:
+        return _FrozenJsonScalar(_FrozenJsonScalarKind.NULL, None)
+    if value_type is bool:
+        return _FrozenJsonScalar(_FrozenJsonScalarKind.BOOLEAN, value)
+    if value_type is int:
+        return _FrozenJsonScalar(_FrozenJsonScalarKind.INTEGER, value)
+    if value_type is str:
+        return _FrozenJsonScalar(_FrozenJsonScalarKind.STRING, value)
     if value_type is float:
         if not isfinite(value):
             raise ValueError(f"{name} JSON number must be finite")
-        return value
+        return _FrozenJsonScalar(_FrozenJsonScalarKind.NUMBER, value)
 
     if value_type not in (list, dict):
         raise TypeError(f"{name} must contain exact JSON values")
@@ -121,6 +145,8 @@ def _freeze_json_object(value: object, name: str) -> _FrozenJsonObject:
 
 def _thaw_json(value: _FrozenJson) -> JsonValue:
     """Return a fresh plain-JSON copy of an immutable snapshot."""
+    if isinstance(value, _FrozenJsonScalar):
+        return value.value
     if isinstance(value, _FrozenJsonArray):
         return [_thaw_json(item) for item in value.values]
     if isinstance(value, _FrozenJsonObject):
@@ -137,6 +163,9 @@ def _require_origin(value: object, name: str = "origin") -> OriginRef | None:
     """Return one optional opaque source identity."""
     if value is not None and not isinstance(value, OriginRef):
         raise TypeError(f"{name} must be an OriginRef or None")
+    if value is not None:
+        # A subclass can bypass OriginRef.__post_init__; replay the base contract.
+        OriginRef(value.key)
     return value
 
 

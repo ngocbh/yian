@@ -18,10 +18,11 @@ and hands them over as a plain dict; the node computes and returns a `NodeResult
 ```
 
 This is a boundary rule, not a claim that every node is mathematically pure. The
-graph state is reproducible because no node mutates it directly. An effectful
-leaf may still consult an LLM, a human, or the wall clock, but its only
-graph-visible outcome is the `NodeResult` it returns. See [Agent](agent.md) for
-how nodes and flows fit the same conceptual model.
+engine can deterministically apply and replay recorded graph-state transitions
+because nodes do not mutate that state directly. An effectful leaf may still
+consult an LLM, a human, or the wall clock, but its only graph-visible outcome
+is the `NodeResult` it returns. See [Agent](agent.md) for how nodes and flows fit
+the same conceptual model.
 
 ## The contract
 
@@ -113,7 +114,7 @@ class CodeNode(Node):                  # LEAF — run a Python function
     def forward(self, inputs, **caps):
         return Output(self.fn(inputs))
 
-class AgentNode(Node):                 # AGENT LEAF — one live model/tool loop
+class AgentNode(Node):                 # AGENT node — one live model/tool loop
     def forward(self, inputs, **caps):
         return Output(self.run_model_loop(inputs))
 
@@ -157,7 +158,8 @@ OR-join/multi-writer contract.
 
 - **One method to add a kind** — implement `forward`; the wrapper is supplied unchanged.
 - **Structural purity** — nodes never mutate shared graph state, so scheduling and
-  run-record replay remain reproducible even when a leaf performs an external effect.
+  recorded engine-state replay stay deterministic even when a leaf performs an
+  external effect. Replaying that effect itself is a separate concern.
 - **The engine stays kind-blind** — all that varies is the `NodeResult` a `run` returns.
 
 For the authoring surface of each kind (`kind:`, its fields, examples), see

@@ -89,7 +89,7 @@ Everywhere you wire data you use a `${...}` reference:
 | `${input.X}` | field `X` of the flow's input |
 | `${node.output}` | node `node`'s whole value |
 | `${node.output.field}` | dot into an object value |
-| `${name}` / bare `name` | that node's own declared input — as `${name}` inside an AGENT/HUMAN_INPUT `prompt:`, or bare `name` in a `case` `when:` |
+| `${name}` / bare `name` | that node's own declared input — as `${name}` inside an AGENT node's or HUMAN_INPUT node's `prompt:`, or bare `name` in a `case` `when:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is stringified.

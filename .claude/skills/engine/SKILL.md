@@ -280,9 +280,8 @@ and anything that fights the functional model above.
 Decide keep / simplify / drop against these **non-negotiable engine invariants**.
 Most are just the functional model (above) made enforceable:
 
-- **Deterministic flow engine** *(referential transparency at the structure
-  level)* — the author fixes the call graph; the LLM fills leaf boxes. A flow
-  never rewrites itself at runtime. No agentic routing.
+- **Deterministic authored structure** — the author fixes the call graph; the LLM
+  fills leaf boxes. A flow never rewrites itself at runtime. No agentic routing.
 - **A flow is a function — clear typed inputs and outputs** — every flow has an
   explicit input/output signature. “Agent” is the conceptual umbrella; the
   concrete AGENT node gets no special graph contract.

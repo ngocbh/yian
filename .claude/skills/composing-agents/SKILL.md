@@ -19,7 +19,7 @@ parts that bite.
 
 **Companions:** [`reference.md`](reference.md) — operators, the three expression
 contexts, type forms, recipes, and gotchas. [`templates/`](templates/) — minimal
-loadable starter flows for each shape (single AGENT node, AGENT→CODE pipeline,
+loadable starter flows for each shape (single AGENT node, AGENT node → CODE node pipeline,
 branch+join, tool use, human gate, named and inline `call`/`map`/`loop`
 composition); copy one and edit.
 

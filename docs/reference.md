@@ -92,11 +92,12 @@ records.
 
 ## Nodes
 
-Every node implements one contract — a pure function of its bound input record —
-and reports its kind through the closed [`NodeKind`][agent_composer.nodes.base.NodeKind]
-vocabulary. A node returns one of the closed sum
-`Output | Route | Grow` and never touches the variable pool. Failure is a
-raised exception, not a node-result variant.
+Every node implements one graph-state-isolated contract: it receives a bound
+input record and explicitly granted capabilities, then returns one of the closed
+sum `Output | Route | Grow` without touching the variable pool. Each node
+declares one member of the closed
+[`NodeKind`][agent_composer.nodes.base.NodeKind] vocabulary. Failure is a raised
+exception, not a node-result variant.
 
 ::: agent_composer.nodes.base.NodeKind
 

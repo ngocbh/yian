@@ -1,4 +1,4 @@
-# Tool use — a TOOL node (deterministic, no LLM) feeds an AGENT.
+# Tool use — a TOOL node (deterministic, no LLM) feeds an AGENT node.
 # A `tool` uses `tool_id:` + `input:` (a tool declares no output:). The id must be
 # registered in Python before the flow runs:
 #

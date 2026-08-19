@@ -48,13 +48,13 @@ See [Agent](docs/agent.md) for the conceptual model and
 
 ## Install
 
-> **Early stage.** Agent Composer is under active development and is not yet on
-> PyPI. The API, YAML surface, and CLI may change quickly.
+> **Early stage.** Agent Composer is under active development. The API, YAML
+> surface, and CLI may change quickly.
 
-Install from GitHub:
+Install from PyPI:
 
 ```console
-pip install "agent-composer[all] @ git+https://github.com/ngocbh/agent-composer.git"
+pip install "agent-composer[all]"
 ```
 
 Or develop from a clone:

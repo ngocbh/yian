@@ -1,10 +1,10 @@
-# Minimal flow — one AGENT, text in, text out.
+# Minimal flow — one AGENT node, text in, text out.
 # Run:  ac run minimal.yaml --input topic=clouds   (needs a model provider configured)
 # Copy this as the starting point for any single-call flow.
 
 id: minimal
 name: minimal
-description: A one-agent flow — a topic in, a paragraph out.
+description: A one-node flow — a topic in, a paragraph out.
 
 input:
   topic: str

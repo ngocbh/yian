@@ -88,8 +88,8 @@ Adopt the monorepo. For a small team the simpler cross-project refactors and sin
 - **Flows compose** — CALL, MAP, and LOOP apply child flows nested to any depth.
 - **Pure at the boundary** — a node *returns* its output and the engine *binds* it; a
   node never mutates shared state. Outputs are immutable, typed, serializable values.
-  Together with the append-only run log, that referential transparency makes runs
-  reproducible and recoverable from a validated record prefix.
+  The append-only run log makes engine state recoverable from a validated record
+  prefix. External effects are not automatically replay-safe.
 - **Effects stay inside explicit leaves** — an AGENT node's granted `ask_user` tool and a
   `human_input` gate block in their live node call; `wait` blocks until an absolute UTC
   deadline. `ask_user` returns its answer into the same model/tool loop; the graph sees each

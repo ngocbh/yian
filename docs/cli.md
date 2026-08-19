@@ -212,10 +212,10 @@ ac run examples/debate.yaml --input question="Adopt a monorepo?" --num-workers 4
   drain. A resumed run with no flag preserves the latest count in its log.
 - On resume, an explicit `-w N` records `N` for the new segment and changes only
   future scheduling; it does not rewrite historical work.
-- `>=1` spawns that many workers. Nodes are pure executors and a single-writer
-  dispatcher owns all state, so the **terminal output is the same** whatever the
-  worker count — only the intra-run scheduling changes (and wall-clock time, when a
-  flow has parallel branches that each do real work, e.g. separate LLM calls).
+- `>=1` spawns that many workers. Nodes cannot mutate graph state, and a
+  single-writer dispatcher commits their outcomes. The worker count changes only
+  ready-work scheduling, not the graph or output binding; effectful nodes may
+  still be nondeterministic.
 - Each blocking HUMAN_INPUT, `ask_user` call from an AGENT node, or future-deadline WAIT occupies one worker;
   independent ready nodes use any remaining workers and wait when all are occupied.
 

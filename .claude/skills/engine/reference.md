@@ -4,7 +4,8 @@ Lookup companion to [`SKILL.md`](SKILL.md). The skill is the *workflow* (design
 from the functional model → fit invariants → plan → implement); this is the
 quick-reference and the [`templates/`](templates/) index. The canonical design
 text is [`src/agent_composer/README.md`](../../../src/agent_composer/README.md);
-the authoring surface is [`docs/syntax.md`](../../../docs/syntax.md).
+the conceptual vocabulary is [`docs/agent.md`](../../../docs/agent.md); and the
+authoring surface is [`docs/syntax.md`](../../../docs/syntax.md).
 
 ## Templates
 
@@ -17,12 +18,14 @@ the authoring surface is [`docs/syntax.md`](../../../docs/syntax.md).
 
 ## The node contract (the most portable idea)
 
-A node is a **pure function of its bound input record**. A kind implements
-`forward(inputs, **caps) -> NodeResult`; the base `Node.run` is a concrete
+A node is **pure at the graph-state boundary**: it transforms its bound input
+record and explicitly granted capabilities into a `NodeResult` without reading
+or writing engine-owned state. A kind implements `forward(inputs, **caps) ->
+NodeResult`; the base `Node.run` is a concrete
 **template method** the engine drives — it fires the node's asserts around the body:
 `apply_defaults(record) → pre_asserts(record) → forward(record, **caps) →
 post_asserts({**record, "output": value})`. Assert firing is **record-only** (no pool),
-so it preserves node purity, and it happens **exactly once** here in the node (not in
+so it preserves that boundary, and it happens **exactly once** here in the node (not in
 `eval_node`). Both assertion lists contain ordered `Assertion` carriers: the wrapper
 evaluates `.expression`, reports `.display`, and diagnoses failure through the exact
 carrier's `.origin`. `forward` returns ONE of the closed sum:
@@ -142,8 +145,8 @@ rejected rather than migrated.
 
 **Invariants:** a node never receives the pool (the `eval_node` seam binds its
 inputs); a node never writes the pool (it *describes* `Output(value)`, the engine
-records it, and the reducer performs the write). Nodes stay pure; the dispatcher
-is the sole live state writer. `Node.origin` is optional opaque diagnostic
+records it, and the reducer performs the write). Nodes stay graph-state
+isolated; the dispatcher is the sole live state writer. `Node.origin` is optional opaque diagnostic
 provenance for the authored node context, not execution state; it is unrelated to
 the LOOP-only `origin_id` attribution field. Generated `Node.origin_context` is
 not another authored provenance slot.
@@ -168,10 +171,11 @@ prune-policy rejection as `contract.growth`.
 
 **Capabilities (`caps`)** are narrow, engine-owned effects passed as keyword args to
 `run`; each is gated by a node trait. A mapped call gets `caps['bind_item']`
-(per-element bind, gated on `binds_per_item`). AGENT and WAIT get the exact run-owned
-`caps['stop_event']` (gated on `needs_stop_event`): AGENT checks it between external
-model/tool effects, while WAIT blocks on it so host shutdown or sibling failure wakes
-the deadline wait. AGENT is the deliberate model-access exception: its mode imports
+(per-element bind, gated on `binds_per_item`). The AGENT and WAIT nodes get the exact
+run-owned `caps['stop_event']` (gated on `needs_stop_event`): the AGENT node checks it
+between external model/tool effects, while WAIT blocks on it so host shutdown or
+sibling failure wakes the deadline wait. The AGENT node is the deliberate
+model-access exception: its mode imports
 `llm_clients` and calls `model_from_config` directly, while its granted tools use the
 ordinary tool registry.
 
@@ -187,7 +191,7 @@ Runtime and compile validation read these node members instead of branching on
 | `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → `wait` `{"until": ts}`, `map` `{"over": [...]}` |
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
 | `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `forward` → baked child on call/map/loop; complete predicates on case |
-| `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate, AGENT generated-schema path |
+| `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate, generated-schema path in the AGENT node |
 | `failure_trace(operation_origin=None)` | evaluator, dispatcher, and terminal-unreachable producers: combine generated ancestry with the best local origin | `origin_context + (operation origin or node origin)`; omit only an absent local suffix |
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
 | `grow_depth_delta: int\|None` | growth core: nested-call depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
@@ -218,7 +222,7 @@ the same injected `compile.expand.build_grow`, so lowering is identical on resum
 assert's display and origin stay together; its failure names the
 **child END id**, not the spawner.
 
-AGENT is now an ordinary non-spawner leaf. Its model/tool loop, including an
+The AGENT node is an ordinary non-spawner leaf. Its model/tool loop, including an
 explicitly granted `ask_user`, stays inside one live `forward`; post-asserts fire
 on the final `Output` through the base `Node.run` template. HUMAN_INPUT and WAIT
 are likewise live leaves returning `Output`.
@@ -288,7 +292,8 @@ recorded snapshots. `RunResult` exposes exactly `input`,
 | Our construct | OCaml concept | Why it holds |
 |---------------|---------------|--------------|
 | a flow | a function `'a -> 'b` | typed in, typed out; composes |
-| an agent | a flow whose leaf is an LLM loop | no special contract |
+| an agent | a composable transformation `'a -> 'b` | conceptual umbrella represented by a node, flow, or child flow |
+| an AGENT node | an effectful leaf computation | concrete LLM-backed node; no separate flow contract |
 | `call:` / `uses:` | function application / a module ref | nests to any depth |
 | the variable pool bind | `let (node_id, key) = ...` | immutable, no mutation |
 | `NodeKind` + `match` | a variant + exhaustive `match` | closed set, no registry; runtime matches on worker-result/record variants and traits, while compile's `build_grow` interprets spawner seeds by kind |
@@ -311,10 +316,12 @@ model made enforceable.
 
 - **Deterministic structure** — the author fixes the call graph; the LLM fills
   leaf boxes. A flow never rewrites itself. No agentic routing.
-- **A flow is a function** — explicit typed input/output signature; an agent gets
-  no special contract.
-- **Composable / recursive** — a node can *be* a flow (`call:`/`uses:`), nestable
-  to any depth. Never assume a node is a leaf; preserve recursion through
+- **A flow is a function** — explicit typed input/output signature. **Agent** is
+  the conceptual umbrella for that composable transformation, not another runtime
+  contract.
+- **Composable / recursive** — CALL/MAP/LOOP nodes apply child flows
+  (`call:`/`uses:`), nestable to any depth. Never flatten an applied child flow;
+  preserve recursion through
   compile + run; run-record replay must rebuild and verify recorded growth.
 - **Privileges no output type or domain** — prefer the most general primitive that
   composes over a use-case-specific feature.
@@ -334,7 +341,7 @@ model made enforceable.
   and exposes observers only afterward. Recovery validates a contiguous prefix, folds
   it through that same path, and records the ordered retry frontier in
   `RunResumedRecord` before continuing.
-- **Blocking authorable effects are live** — AGENT `ask_user`, HUMAN_INPUT, and
+- **Blocking authorable effects are live** — an AGENT node's `ask_user`, HUMAN_INPUT, and
   WAIT return `Output` from the same invocation and never create continuation topology.
 - **Dependency-light core** — no DB / heavy frameworks; external capabilities enter
   through injected seams (plain callables). *Exception:* the AGENT node imports
@@ -374,7 +381,7 @@ model made enforceable.
 - **Single-process CLI target** — dispatch and workers stay in-process. The durable
   seam is `RunLog` with memory and locked JSONL implementations, not a DB, server, or
   remote scheduler.
-- **AGENT structured output** — only an untagged `str` keeps an agent on the text path.
+- **AGENT node structured output** — only an untagged `str` keeps an AGENT node on the text path.
   `type_to_schema` (`nodes/agent/structured.py`) derives a pydantic schema for supported
   constrained outputs, the mode generates a conforming value (native
   `with_structured_output`, or a JSON prompt-injection fallback gated by
@@ -386,7 +393,7 @@ model made enforceable.
   declared type on both ordinary and `commit_as` paths), **retry-catches** (a deviation
   is fed back and re-asked).
   If retries exhaust with a Pydantic error, or a native parser wraps one directly,
-  AGENT attributes it only when exact generator and generated-schema validation
+  The AGENT node attributes it only when exact generator and generated-schema validation
   frames prove ownership. It does not traverse deeper cause chains. It normalizes
   only the first location (record unchanged; remove scalar `value` / list `items`),
   validates the result against the expected `Type`, and asks the existing output
@@ -525,7 +532,7 @@ output-contract provenance.
 `ValueContract`, a closed `PartialRecordContract`, or `None` for an unenforced output.
 The partial arm lists every record field and attaches a `ValueContract` only where a
 type is proven. Runtime success and replay validate the effective commit target through
-the same sum; structured agent generation reads `.type` only from the exact arm. Growth
+the same sum; structured generation in an AGENT node reads `.type` only from the exact arm. Growth
 clones retain the carrier so its origins survive lexical rewrites. Manifests encode exact
 or partial semantics but deliberately omit `ContractOrigins`, keeping provenance changes
 identity-neutral. Live output validation resolves a `TypeCheckError.path` through the
@@ -831,7 +838,7 @@ never runtime ids, graph topology, or a text heuristic.
   `assertion.failed`; the same class raised by node code remains `node.execute`.
   Body exceptions become `node.execute`, using the node's `exception_origin`
   projection: CODE selects its deepest owned wrapped line, while CASE selects the
-  exact active predicate by frame/node/`Case` identity, and AGENT selects a proven
+  exact active predicate by frame/node/`Case` identity, and the AGENT node selects a proven
   generated-schema path through its output contract. Invalid terminal values from
   ordinary or generator bodies and a non-spawner `Grow` become
   `contract.node_result`. Every producer

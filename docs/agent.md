@@ -73,10 +73,10 @@ outcome.
 At a full-flow boundary, top-level `input:` declares parameter types and
 top-level `output:` binds the returned value. Within the graph, a node's
 `input:` binds values from flow inputs or earlier nodes; value-producing AGENT
-and CODE nodes use `output:` to declare the value they produce. References such
+nodes and CODE nodes use `output:` to declare the value they produce. References such
 as `${draft.output}` both move data and define graph edges.
 
-### One node: compact AGENT
+### One node: compact AGENT node
 
 When one LLM call is enough, compact mode makes the flow and its single AGENT
 node share one definition:

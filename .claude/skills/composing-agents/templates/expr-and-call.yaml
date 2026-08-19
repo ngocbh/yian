@@ -27,7 +27,7 @@ input:
   bonus: int = 0            # default-fill: omitted -> 0
 
 defs:
-  critique:                 # an in-file callable (resolver-free) — a one-agent sub-flow
+  critique:                 # an in-file callable (resolver-free) — a one-node child flow
     input:
       text: str
     nodes:

@@ -26,7 +26,7 @@ pip install "agent-composer[ollama]"      # local   (langchain-ollama)
 pip install "agent-composer[all]"         # all four
 ```
 
-Provider SDKs are imported **lazily** — only when a flow actually runs an AGENT
+Provider SDKs are imported **lazily** — only when a flow actually runs an AGENT node
 against that provider. Importing a provider you haven't installed raises a clear
 `pip install agent-composer[...]` hint rather than a bare `ImportError`.
 

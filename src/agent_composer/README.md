@@ -28,8 +28,8 @@ know the shape of it:
   future lineage-aware reverse pass; current execution never calls it.
 - The **program structure is fixed by the author**, as a function's call graph is
   fixed by its source. The LLM fills leaf boxes; it does not rewrite the graph at
-  runtime. That structural referential transparency makes execution reproducible
-  and makes an interrupted run recoverable from its authoritative record prefix.
+  runtime. The authoritative record prefix makes engine state recoverable; it
+  does not make arbitrary external effects exactly once.
 
 ## Layout
 

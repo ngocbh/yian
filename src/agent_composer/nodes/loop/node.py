@@ -42,7 +42,7 @@ class LoopNode(Node):
     """A higher-order `('a -> 'a) -> 'a -> 'a` driver over a carried record.
 
     Fields (baked at load by `compose.nodes.loop.build`; copied onto every clone by `respawn`):
-      child          the compiled body subflow (`'a -> 'a`) used by the injected growth builder.
+      child          the compiled body child flow (`'a -> 'a`) used by the injected growth builder.
       child_inputs   the body's canonical parameters (subset of the carried record).
       predicate_kind one of "while" | "until" | "times".
       predicate      the boolean source for `while`/`until`, e.g. "not ${exited}" (bare =

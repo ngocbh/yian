@@ -199,8 +199,8 @@ class CompiledFlow(Flow):
             node value.
         flow_llm_config (`dict[str, Any]`):
             The flow's authored `llm_config:` model-selection defaults (the cascade's flow
-            layer); `{}` when absent. `resolve_llm_cascade` gap-fills each agent's effective
-            config from this, the parent chain, the CLI layer, and explicit process defaults
+            layer); `{}` when absent. `resolve_llm_cascade` gap-fills each AGENT node's
+            effective config from this, the parent chain, the CLI layer, and process defaults
             captured once at run initialization. It returns the complete static-path map.
         flow_id (`str | None`):
             Stable authored semantic identity. Direct memoryless Python graphs may omit it.

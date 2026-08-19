@@ -6,7 +6,7 @@
 # flow-local (a called child flow does NOT inherit this flow's env), literals only.
 #
 # Keys in use today:
-#   max_tool_iterations (agent) — tool-calling loop turns before an AgentLoopError
+#   max_tool_iterations (AGENT node) — tool-calling loop turns before an AgentLoopError
 #                                 (default -1 = no cap; set a positive int to bound it).
 
 id: node-env-config

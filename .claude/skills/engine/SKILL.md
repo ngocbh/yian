@@ -12,8 +12,8 @@ description: >-
 # Engine development workflow
 
 The goal is a *functional language of agents* — a small, general language for
-data transformation whose leaf computations may be LLM agents. Every engine
-change follows the same loop — **never jump straight to code.**
+data transformation whose leaf computations may be LLM-backed AGENT nodes.
+Every engine change follows the same loop — **never jump straight to code.**
 
 **Companions:** [`reference.md`](reference.md) — the node contract
 (`Output | Route | Grow`), the `NodeKind` table, the OCaml-analogue map, the
@@ -26,16 +26,19 @@ authorable node kind.
 
 The engine is a **small functional language for data transformation** (full
 framing + OCaml concept map in [`src/agent_composer/README.md`](../../../src/agent_composer/README.md)).
-Hold this model whenever you design anything:
+The public vocabulary lives in [`docs/agent.md`](../../../docs/agent.md). Hold
+this model whenever you design anything:
 
-- A **flow is a function** — typed inputs in, typed outputs out. An **agent is
-  just a flow** whose leaf is an LLM loop. Same contract, same composability.
-- Flows **compose** (a node can *be* a flow, via a `call:`/`uses:` reference) and
-  nest to any depth. A CALL/MAP/LOOP `nodes:` + `output:` body is front-end sugar
-  for the same application: compose lowers it to a file-private child flow; it
-  does not introduce a runtime kind.
-- Computation is **pure at the boundary**: a node *returns* outputs, the engine
-  *binds* them under `(node_id, key)` like `let`-bindings — never a mutation.
+- A **flow is a function** — typed inputs in and one typed output value out. An
+  **agent** is the conceptual umbrella for a composable transformation represented
+  by a node, a flow, or a child flow. The concrete **AGENT node** (`kind: agent`)
+  is the LLM-backed leaf.
+- Flows **compose**: CALL/MAP/LOOP apply child flows recursively within the
+  runtime depth limit. Their `nodes:` + `output:` form is front-end sugar for
+  the same application: Compose
+  lowers it to a file-private child flow; it does not introduce a runtime kind.
+- Computation is **pure at the boundary**: a node returns one `Output | Route |
+  Grow`; the engine records and applies that outcome. Only `Output` binds a value.
 - Source-neutral semantic operations live in `nodes/contracts.py`: `Binding`,
   `Parameter`, `Assertion`, `ValueContract`, and `PartialRecordContract` carry
   optional opaque origins;
@@ -62,7 +65,7 @@ Hold this model whenever you design anything:
   a predicate exception by its own `forward` frame and active `Case` identity,
   with node fallback outside predicate evaluation. Extend CASE's local origin
   traversal/rewrite for these carriers; they remain manifest-neutral.
-- AGENT schema selection leaves only an untagged `str` on the free-text path. A tagged
+- AGENT node schema selection leaves only an untagged `str` on the free-text path. A tagged
   string (`Literal[...]`) uses the generated scalar `value` wrapper, structured retries,
   and unwrapping to the bare tag. Structured-output failures reuse
   `Node.output_contract.origins`; do not add another carrier. On retry exhaustion, accept
@@ -222,7 +225,7 @@ Hold this model whenever you design anything:
 - The **author fixes the structure** (the call graph); the LLM fills leaf boxes,
   it does not rewrite the graph at runtime.
 
-So a new construct isn't "a workflow feature" — it's "a language construct," held
+So a new construct isn't merely “a flow feature”—it's a language construct, held
 to a language's bar: **does it have a clear type, does it compose, is it pure
 where it should be?** If a proposed primitive only works at the top level, or
 only for one flow shape, or needs to mutate the pool — stop; that's a smell.
@@ -278,16 +281,15 @@ and anything that fights the functional model above.
 Decide keep / simplify / drop against these **non-negotiable engine invariants**.
 Most are just the functional model (above) made enforceable:
 
-- **Deterministic workflow engine** *(referential transparency at the structure
-  level)* — the author fixes the call graph; the LLM fills leaf boxes. A flow
-  never rewrites itself at runtime. No agentic routing.
+- **Deterministic authored structure** — the author fixes the call graph; the LLM
+  fills leaf boxes. A flow never rewrites itself at runtime. No agentic routing.
 - **A flow is a function — clear typed inputs and outputs** — every flow has an
-  explicit input/output signature. An agent is one kind of flow; it gets no
-  special contract.
-- **Hierarchical / composable** *(function composition)* — a node can *be*
-  another flow (a `call:`/`uses:` reference → a child subgraph seeded from the
-  parent's pool), nestable to arbitrary depth. This is how an agent calls another
-  agent and how composite nodes are built. One-off inline composite bodies must
+  explicit input/output signature. “Agent” is the conceptual umbrella; the
+  concrete AGENT node gets no special graph contract.
+- **Hierarchical / composable** *(function composition)* — a composite node can
+  apply another flow (a `call:`/`uses:` reference → a child subgraph seeded from
+  the parent's pool), recursively within the runtime depth limit. This is how one
+  agent composes another and how composite nodes are built. One-off inline composite bodies must
   lower to that same child contract with stable lexical identity and a closed
   generated-input scope. A spawner returns only a canonical
   `Grow(seed, prune)`; the compile-owned `build_grow` interprets that seed after the
@@ -298,8 +300,8 @@ Most are just the functional model (above) made enforceable:
   node emits) and no domain. When adding a primitive, prefer the most general form
   that composes over a use-case-specific feature. If a real flow can't be
   expressed, that's an engine gap — fix the primitive, don't special-case the flow.
-- **Node never writes the pool** *(purity)* — it returns outputs; the engine binds
-  them under the resolved logical target, like an immutable `let`. No node
+- **Node never writes the pool** *(purity)* — it returns `Output | Route | Grow`;
+  the engine binds an `Output` value under the resolved logical target. No node
   mutates shared state.
 - **Typed, losslessly-serializable state** *(the type system)* —
   `TypedValue` / `VariablePool`; the basis for canonical run-record payloads and
@@ -314,9 +316,10 @@ Most are just the functional model (above) made enforceable:
   appended to its `RunLog`, and only then applied to `RunState`; observers become
   visible after append + apply. Recovery validates a contiguous prefix and folds
   it through the same reducer path before recording the ordered retry frontier.
-- **Blocking authorable effects return ordinary outputs** — an AGENT's explicitly
+- **Blocking authorable effects return ordinary outputs** — an AGENT node's
+  explicitly
   granted `ask_user` tool and HUMAN_INPUT call the process-owned handler inside
-  their live invocation; AGENT checks the run-owned stop event between external
+  their live invocation; the AGENT node checks the run-owned stop event between external
   model/tool effects, and WAIT blocks on that event until its absolute UTC deadline.
   All three return `Output`; none creates continuation topology.
 - **Dependency-light core (with a deliberate exception)** — keep the engine free
@@ -357,8 +360,9 @@ Most are just the functional model (above) made enforceable:
   vocabulary for a future durable reverse-DAG pass. Do not call it from ordinary
   execution or memory learning until producer lineage and feedback records define
   its contract.
-- **Memory is host-injected and record-authoritative** — authored policies resolve
-  to static flow/AGENT frames; MAP items and LOOP iterations reuse those frames.
+- **Memory is host-injected and record-authoritative** — authored policies
+  resolve to static frames owned by flows or AGENT nodes; MAP items and LOOP
+  iterations reuse those frames.
   `memory=None` is dormant, while an injected registry opens snapshot-isolated
   sessions and supplies a kind-blind recall callback. With `learn=True`, learning
   runs only after primary success/failure, appends each intent before calling the
@@ -368,9 +372,9 @@ Most are just the functional model (above) made enforceable:
   snapshots before unfinished execution/learning continues.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
-  only a node's own `forward()` interprets known keys (e.g. AGENT's `max_tool_iterations`). It is the
+  only a node's own `forward()` interprets known keys (e.g. an AGENT node's `max_tool_iterations`). It is the
   kind-blind knob for "tune this node" — add a key by having the node read it, never by an engine
-  branch. AGENT stays one live loop, so its node-local `env` remains on that one invocation.
+  branch. An AGENT node stays one live loop, so its node-local `env` remains on that invocation.
 - **Single-writer invariant** — workers are pure executors; the dispatcher is the
   only ready-frontier consumer and state mutator. It durably records each start before
   submission and each accepted outcome before applying it. A pooled drive owns workers
@@ -501,7 +505,7 @@ is the sole runtime presentation authority; load diagnostics are resolved before
 they leave Compose.
 
 Inline composite implementation stays wholly in `compose`: `desugar/` retains
-and masks located bodies, the loader owns the file-private callable table/cache,
+and masks located bodies, the loader owns the file-private child-flow table/cache,
 and `build/` proves generated parameter types and assembles the child. The child
-then enters the ordinary compiled CALL/MAP/LOOP path; never add private-callable
+then enters the ordinary compiled CALL/MAP/LOOP path; never add private-child-flow
 resolution or inline-body handling to runtime.

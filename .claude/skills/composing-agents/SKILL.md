@@ -3,20 +3,23 @@ name: composing-agents
 description: Use when authoring an Agent Composer flow — writing or editing a flow YAML, building an agent workflow, wiring nodes (agent / code / tool / case / human_input / wait / call / map), or answering "how do I write a flow that …". Trigger on "create an agent", "write a flow", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow", or any `ac run` flow-authoring request.
 ---
 
-# Composing an agent workflow
+# Composing an agent flow
 
-An Agent Composer **flow is a function**: a typed `input:`, a graph of `nodes:`,
-and a typed `output:`. You never draw edges — the engine **infers the graph from
-the `${...}` references** between nodes. The human owns the structure; the LLM
-only fills the leaf boxes.
+In Agent Composer, an **agent** is a composable typed transformation represented
+by a node, a flow, or a child flow. A **flow is a function**: a typed `input:`, a
+graph of `nodes:`, and a typed `output:`. The concrete **AGENT node**
+(`kind: agent`) is the LLM-backed leaf. `${...}` references infer data edges;
+`depends_on:` and `runs_after:` add ordering-only edges. The human owns the
+structure; the LLM only fills the AGENT node leaves.
 
-Full reference: [`docs/syntax.md`](../../../docs/syntax.md). Working flows:
-[`examples/`](../../../examples). This skill is the authoring workflow + the parts
-that bite.
+Conceptual vocabulary: [`docs/agent.md`](../../../docs/agent.md). Full authoring
+reference: [`docs/syntax.md`](../../../docs/syntax.md). Working flows:
+[`examples/`](../../../examples). This skill is the authoring workflow + the
+parts that bite.
 
 **Companions:** [`reference.md`](reference.md) — operators, the three expression
 contexts, type forms, recipes, and gotchas. [`templates/`](templates/) — minimal
-loadable starter flows for each shape (single agent, agent→code pipeline,
+loadable starter flows for each shape (single AGENT node, AGENT node → CODE node pipeline,
 branch+join, tool use, human gate, named and inline `call`/`map`/`loop`
 composition); copy one and edit.
 
@@ -164,7 +167,7 @@ typedefs:
 
 ## Node kinds (the closed set — you compose these, you don't define new ones)
 
-### `agent` — an LLM leaf
+### `agent` — the LLM-backed AGENT node
 ```yaml
 classify:
   kind: agent
@@ -176,31 +179,32 @@ classify:
     Classify the sentiment of: ${text}
     Answer with exactly one of: positive, neutral, negative.
 ```
-**An AGENT's `output:` may be any shape.** Only a bare, untagged `str` keeps the
-agent a text producer. A `Literal[...]` enum, record, non-string scalar, or list
+**An AGENT node's `output:` may be any shape.** Only a bare, untagged `str` keeps the
+node a text producer. A `Literal[...]` enum, record, non-string scalar, or list
 switches it to **structured generation** — the engine derives a schema from
 `output:` and the model emits a conforming value (native structured output, or a
 JSON fallback for providers that lack it), validated at the write boundary and
 retried up to `retries:` times (default 2) on deviation. A root `Literal[...]`
 returns its bare tag to the flow.
 Use a downstream `code`/`model` node only for deterministic post-processing. To give
-an agent ordinary tools: `tools: [tool_id, ...]` (requires `mode: tool_calling`).
+an AGENT node ordinary tools: `tools: [tool_id, ...]` (requires `mode: tool_calling`).
 A node may pin its model via `llm_config:`; otherwise the process defaults captured
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +
 per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
-agent's tool-calling loop (default `-1` = no cap).
+AGENT node's tool-calling loop (default `-1` = no cap).
 
-### Workflow memory — `memory_policy:`
+### Agent memory — `memory_policy:`
 
-Put `memory_policy: NAME` on a full flow (`nodes:` form) or an `agent` when a
+Put `memory_policy: NAME` on a full flow (`nodes:` form) or an AGENT node when a
 Python host will inject that named memory implementation. The object form is
 `memory_policy: {name: NAME, config: {...}}`; config is public behavior only, so
 never author credentials, tenant/backend locations, or Python imports there.
-Flow frames are inherited by every agent in that flow, and an agent may add its
-own local frame. Each frame writes only itself. MAP/LOOP executions reuse their
-authored flow/agent frames rather than creating per-item/per-iteration frames.
+Flow frames are inherited by every AGENT node in that flow, and an AGENT node
+may add its own local frame. Each frame writes only itself. MAP/LOOP executions
+reuse the frames authored on their flows and AGENT nodes rather than creating
+per-item/per-iteration frames.
 Other node kinds and anonymous inline child flows cannot own a policy. The YAML
 declaration remains dormant under ordinary `ac run`; library hosts enable recall
 with `run_flow(..., memory={NAME: implementation})` and opt into post-terminal
@@ -216,7 +220,7 @@ verdict:
   kind: code
   input:
     s: ${score.output.signal}
-  output: Signal               # one typed value; AGENT supports this shape too
+  output: Signal               # one typed value; an AGENT node supports this too
   code: pkg.mod:fn             # a reference — OR an inline `code: |` body that returns
 ```
 
@@ -281,7 +285,8 @@ AskUserQuestion-shaped) — the answer is a record keyed by each `header`; `outp
 then defaults to `object`. `prompt:` is optional; `questions:` and
 `adaptive_questions:` are mutually exclusive. The gate itself never chooses or
 calls an LLM: `adaptive_questions:` is LOAD-TIME sugar that lowers to a
-compose-agent + gate; the gate only calls the host's installed interaction tool.
+synthetic composer AGENT node + gate; the gate only calls the host's installed
+interaction tool.
 ```yaml
 ask:                                  # static questions list
   kind: human_input
@@ -371,7 +376,7 @@ fields keep their outer-node meaning (LOOP drivers, `env:`, and CALL/LOOP
 asserts; MAP asserts remain invalid); `parallel:` remains accepted but inert.
 Inline child flow configuration is not a separate surface, and `llm_config:`
 remains invalid on composite nodes. The enclosing flow's LLM cascade still
-reaches body agents. See
+reaches body AGENT nodes. See
 [`templates/inline-composites.yaml`](templates/inline-composites.yaml).
 
 ### `loop` — iterate a body until a predicate goes false (the engine's `while`)
@@ -404,7 +409,7 @@ required for `while:`/`until:` but **redundant and rejected** with `times:`.
 #### Conversational REPL — the `loop` shape used by `ac chat`
 A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
 `case` routes exact `/exit` and `/quit` values to an exit record before the
-`reply` agent. The normal branch builds the next transcript; the body's output
+`reply` AGENT node. The normal branch builds the next transcript; the body's output
 bindings rejoin the exit record or normal transcript into the carried
 `{transcript: str, exited: bool}` record. Typed exit is flow-owned — a host must
 not intercept it — while terminal EOF may be normalized to `/exit`. **Gotcha:**
@@ -449,7 +454,7 @@ embedded flow call to a named `call` node, and split a coalesce-of-calls
 inside `${}`.
 
 Do not confuse this with an inline child body: `call(f, ...)` invokes an already
-named callable and synthesizes a CALL node; `kind: call` + `nodes:` defines a
+named child flow and synthesizes a CALL node; `kind: call` + `nodes:` defines a
 one-off child's body on that node.
 
 ## Prompts see only LOCAL inputs
@@ -458,14 +463,14 @@ Inside a `prompt:` you may reference only names the node declares in its own
 `${other.output}`) go in the `input:` block — bind there, then use the local name
 in the prompt.
 
-## Effects from inside an agent — `ask_user`
-A `tool_calling` agent granted `tools: [ask_user]` can synchronously ask the human
+## Effects from inside an AGENT node — `ask_user`
+A `tool_calling` AGENT node granted `tools: [ask_user]` can synchronously ask the human
 **only if the model decides it needs to**. The tool blocks inside the same live
-agent loop and its returned answer becomes the ordinary tool result. For a
+model/tool loop and its returned answer becomes the ordinary tool result. For a
 *guaranteed* gate use `human_input`; for "ask only if needed" use `ask_user`.
-AGENT `ask_user` returns its answer to the same live tool loop; HUMAN_INPUT and
+`ask_user` on an AGENT node returns its answer to the same live tool loop; HUMAN_INPUT and
 WAIT return ordinary node outputs from their live calls. There is no authored
-agent `entry:`/`controls:` field or event-mode WAIT.
+`entry:`/`controls:` field on an AGENT node or event-mode WAIT.
 
 ## Validate & run
 - **Quick validate** (loads + compiles, no model): `ac run <flow>.yaml` will load
@@ -497,7 +502,7 @@ agent `entry:`/`controls:` field or event-mode WAIT.
 
 ## Authoring checklist
 - [ ] `input:` and `output:` are fully typed; every type used is a scalar/form or a `typedefs:` entry.
-- [ ] Every node consumes upstream values via `${...}` in its `input:` (the edges are inferred).
+- [ ] Every data dependency uses `${...}` in `input:`; ordering-only dependencies use `depends_on:` or `runs_after:`.
 - [ ] Every `agent` `output:` is typed — bare `str` for free text, or a
   `Literal[...]`/other supported shape for structured generation.
 - [ ] Every prompt references only the node's own local input names.

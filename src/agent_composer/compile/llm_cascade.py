@@ -31,10 +31,10 @@ def resolve_llm_cascade(
     *,
     defaults: dict[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    """Bake and return every agent's complete effective configuration.
+    """Bake and return every AGENT node's complete effective configuration.
 
     The normal precedence is node, current flow, enclosing flows, caller layer, then
-    ``defaults``.  An agent with ``llm_inherit=False`` skips the flow/enclosing/caller
+    ``defaults``. An AGENT node with ``llm_inherit=False`` skips the flow/enclosing/caller
     layers but still receives explicit defaults so its provider and model are concrete.
     Every returned value and every node-owned value is an independent deep copy.
 

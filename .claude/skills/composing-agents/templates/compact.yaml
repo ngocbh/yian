@@ -13,7 +13,7 @@
 
 id: greet
 name: greet
-description: A one-agent flow written inline — a name in, a greeting out.
+description: A one-node flow written inline — a name in, a greeting out.
 
 input:
   name: str                  # auto-wired into the node as ${input.name}

@@ -1,39 +1,41 @@
 # Examples
 
 The [`examples/`](https://github.com/ngocbh/agent-composer/tree/main/examples)
-directory ships a set of generic flows, smallest first. Run any of them with
+directory in the repository contains a set of generic flows, smallest first.
+After cloning the repository, run them from its root with
 `ac run examples/<file> --input ...` (set a provider/model first — see
-[Installation](installation.md)).
+[Installation](installation.md)). The directory is not bundled in the current
+Python package.
 
 ## `hello.yaml` — the smallest flow
 
-One AGENT, a string in and a string out.
+One AGENT node, a string in and a string out.
 
 ```yaml
+id: hello
+name: hello
+description: Greet someone with a short, friendly one-liner.
+
 input:
   name: str
-nodes:
-  greet:
-    kind: agent
-    input:
-      name: ${input.name}
-    output: str
-    prompt: |-
-      Write a short, warm one-sentence greeting addressed to ${name}.
-output: ${greet.output}
+output: str
+kind: agent
+prompt: |-
+  Write a short, warm one-sentence greeting addressed to ${name}.
+  Just the greeting, no preamble.
 ```
 
 ```console
 ac run examples/hello.yaml --input name=Ada
 ```
 
-Shows the core shape: typed `input:`, a single AGENT leaf, a local prompt
-reference (`${name}`), and the flow `output:`.
+Shows compact mode: the flow and its single AGENT node share the typed `input:`
+and `output:` boundary, and the prompt reads the auto-wired local `${name}`.
 
 ## `summarize.yaml` — one transform
 
-A single AGENT that condenses a block of text into one sentence. Same shape as
-`hello`, with a longer prompt.
+A single AGENT node that condenses a block of text into one sentence. Unlike compact
+`hello`, it shows the equivalent full `nodes:` form with explicit input and output wiring.
 
 ```console
 ac run examples/summarize.yaml --input text="...long text..."
@@ -41,10 +43,15 @@ ac run examples/summarize.yaml --input text="...long text..."
 
 ## `classify.yaml` — a constrained output
 
-An AGENT whose `output:` is a `Literal[...]` enum, so the model must answer with
-exactly one tag, and the flow returns a multi-field object.
+An AGENT node whose `output:` is a `Literal[...]` enum, so the model must answer with
+exactly one tag, and the flow returns a one-field object.
 
 ```yaml
+id: classify
+name: classify
+input:
+  text: str
+
 nodes:
   label:
     kind: agent
@@ -62,7 +69,7 @@ ac run examples/classify.yaml --input text="I love this!"
 
 ## `human-approval.yaml` — a deterministic human gate
 
-Exercises the **`human_input`** node. An agent drafts a plan, a `human_input`
+Exercises the **`human_input`** node. An AGENT node drafts a plan, a `human_input`
 node always blocks for an `approve` / `revise` answer (a `Literal` typedef),
 `case ... on` routes on the typed answer, and a coalesce joins whichever branch
 ran. The gate returns the answer as an ordinary node output from the same live
@@ -77,7 +84,7 @@ Run it from the CLI to see the guaranteed blocking gate.
 
 ## `ask-user.yaml` — a model-chosen clarifying question
 
-Exercises the **`ask_user` tool** on a `tool_calling` agent. The agent calls the
+Exercises the **`ask_user` tool** on a `tool_calling` AGENT node. The node calls the
 blocking tool **only if** it judges the request ambiguous — otherwise it answers
 outright. Whether the call happens depends on the prompt and the model.
 
@@ -87,35 +94,35 @@ ac run examples/ask-user.yaml --input request="Book me a table for dinner"
 
 Contrast with `human-approval.yaml`: `human_input` always asks; `ask_user` asks
 only if the model decides to. When it does, the answer returns to the same live
-agent tool loop.
+model/tool loop.
 
 ## `decision-brief.yaml` — a realistic multi-stage flow
 
 The fullest example. Given a decision question it:
 
-1. **fans out** to three independent angle agents (the case for, against, the
-   risks) — no edges between them, so they run in parallel;
-2. **fans in** to a synth agent that picks a typed `Decision` enum;
+1. **fans out** to three independent angle AGENT nodes (the case for, against, the
+   risks) — no edges between them, so a worker pool can run them in parallel;
+2. **fans in** to a synth AGENT node that picks a typed `Decision` enum;
 3. **routes** on that decision with `case ... on` to a decision-specific brief;
 4. **finalizes** by combining the decision with whichever brief ran (an n-ary
    `|` coalesce consumed downstream);
 5. returns a **multi-field object**, guarded by an `assert`.
 
 ```console
-ac run examples/decision-brief.yaml --input question="Should a small team adopt a monorepo?"
+ac run examples/decision-brief.yaml --input question="Should a small team adopt a monorepo?" --num-workers 4
 ```
 
-It uses a `Literal` typedef, an `Optional` input with a default, fan-out +
-fan-in, a typed enum output, `case ... on` with `else`, a coalesce, multi-output,
+It uses a `Literal` typedef, an `Optional` input with an expression fallback, fan-out +
+fan-in, a typed enum output, `case ... on` with `else`, a coalesce, a multi-field output,
 and asserts — all with AGENT nodes, so it runs against any provider with no extra
 Python.
 
 !!! note "Why the example uses an enum"
     The synth node's verdict is a `Decision` enum because the following `case`
     routes directly on those tags. The enum itself uses structured generation,
-    as do AGENT record, number, boolean, and list outputs; only a bare `str` stays
+    as do record, number, boolean, and list outputs from AGENT nodes; only a bare `str` stays
     on the free-text path. See
-    [Flow syntax → `agent`](syntax.md#agent-an-llm-leaf).
+    [Flow syntax → `agent`](syntax.md#agent-the-llm-backed-agent-node).
 
 ## Next
 

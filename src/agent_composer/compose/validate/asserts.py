@@ -303,7 +303,7 @@ def validate_node_asserts(
     `node.pre_asserts` / `node.post_asserts`. ``assertion_site_at`` optionally supplies each
     carrier's opaque origin and validation range from the same authored occurrence, keyed by
     node id and original authored index. Runs in the shared `_assemble`, so a `defs:`
-    subflow's internal nodes get this too. Accumulates all errors into one `LoadError`, located
+    child flow's internal nodes get this too. Accumulates all errors into one `LoadError`, located
     at the first available exact assertion, offending field, or node range.
     """
     diagnostics = diagnostics or LoadDiagnostics()

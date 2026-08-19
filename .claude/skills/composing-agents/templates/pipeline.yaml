@@ -1,6 +1,6 @@
-# Pipeline — an AGENT drafts TEXT, a CODE node parses it into a TYPED record.
-# Use this when you want DETERMINISTIC post-processing of an agent's text (parsing,
-# arithmetic, validation in code). To have the agent emit a structured value directly,
+# Pipeline — an AGENT node drafts TEXT, a CODE node parses it into a TYPED record.
+# Use this when you want DETERMINISTIC post-processing of an AGENT node's text (parsing,
+# arithmetic, validation in code). To have the AGENT node emit a structured value directly,
 # declare the typed shape as its `output:` instead — see `typed_output.yaml`.
 #
 # Customize: point `code:` at an importable `module:function` on your PYTHONPATH.
@@ -10,7 +10,7 @@
 
 id: pipeline
 name: pipeline
-description: Agent drafts text; code parses it into a typed record.
+description: An AGENT node drafts text; a CODE node parses it into a typed record.
 
 typedefs:
   Parsed:                          # a record — fields recurse
@@ -32,7 +32,7 @@ nodes:
     kind: code
     input:
       text: ${draft.output}        # the reference IS the edge draft -> parse
-    output: Parsed                 # one typed value; AGENT supports records too
+    output: Parsed                 # one typed value; an AGENT node supports records too
     code: your_package.parsing:parse_note
 
 output: ${parse.output}

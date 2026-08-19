@@ -29,7 +29,8 @@ Fixes #<!-- issue number -->
       `diagnostics` / `typesys` / `expr` before `compile <- compose`); runtime
       consumes contracts below compose, and the run boundary stays above both.
 - [ ] Engine core stays **kind-blind** — no new `match node.kind` in `runtime/`; `tests/engine/test_kind_census.py` still passes.
-- [ ] Nodes stay **pure** — a node returns `Output | Route | Grow` and never writes the pool.
+- [ ] Nodes stay **pure at the graph-state boundary** — a node returns
+      `Output | Route | Grow` and never writes the pool.
 - [ ] Runtime state stays **record-authoritative** — prepare, append to `RunLog`, then
       apply through the reducer; recovery replays that same reducer.
 - [ ] No self-rewriting graph / agentic routing (structural determinism preserved).

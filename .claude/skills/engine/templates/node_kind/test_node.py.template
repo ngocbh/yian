@@ -8,9 +8,9 @@ from agent_composer.nodes.base import Output
 from agent_composer.nodes.xxx import XxxNode
 
 
-def test_xxx_runs_pure():
-    # The node is a pure function of its bound record — call the kind body `forward()`
-    # directly. (Calling `run()` also works: it's the base template method that fires asserts
+def test_xxx_runs_from_bound_record():
+    # The node cannot access graph state — call the kind body `forward()` directly.
+    # (Calling `run()` also works: it is the base template method that fires asserts
     # around `forward`; with no asserts declared it just forwards to the body.)
     node = XxxNode("n", param="...")
     out = node.forward({"a": 1})

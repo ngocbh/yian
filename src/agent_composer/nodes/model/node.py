@@ -2,8 +2,8 @@
 
 A MODEL node holds a `model_id` (+ optional weights/runtime hints) and is meant to
 delegate the actual inference to an injected ML-serving seam — the MODEL analogue of
-AGENT's LLM. The node kind is first-class and parseable/buildable, but running one raises
-until an ML-serving implementation is available.
+an AGENT node's LLM. The node kind is first-class and parseable/buildable, but running
+one raises until an ML-serving implementation is available.
 
 An implementation must be injected through load/run/build and into baked call/map children,
 then invoked over the node's bound input record.
@@ -19,7 +19,7 @@ class ModelNode(Node):
     An ML-inference node — the kind is first-class, but the serving seam is not wired yet.
 
     A MODEL node holds a `model_id` (+ optional weights/runtime hints) and is meant to delegate
-    inference to an injected ML-serving seam (the MODEL analogue of AGENT's LLM).
+    inference to an injected ML-serving seam (the MODEL analogue of an AGENT node's LLM).
     [`Node.run`][agent_composer.nodes.base.Node.run] raises until that seam is implemented.
 
     Args:

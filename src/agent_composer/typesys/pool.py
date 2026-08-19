@@ -1,7 +1,8 @@
 """VariablePool — the runtime state primitive for a flow run.
 
-A node produces exactly ONE value: `store[node_id]` is a single typed `TypedValue`
-(scalar, object, or list) — "multiple outputs" are fields of one object. `${input.X}`
+Each node id has at most one stored value: an `Output` commits one typed `TypedValue`
+(scalar, object, or list), while a CASE `Route` commits none. "Multiple outputs" are
+fields of one object. `${input.X}`
 resolves to `store[<start_id>].X` — the synthesized START_ID node's committed bound-input
 record IS the flow's run-arguments object (the standalone `inputs` namespace is
 retired). The one side namespace is `system` (host-injected ambient — run id / clock /
@@ -35,10 +36,11 @@ class VariablePool(BaseModel):
     """
     The runtime variable store for one flow run.
 
-    A node produces exactly one typed value (`store[node_id]`), so "multiple outputs"
-    are fields of one object. `${input.X}` reads the synthesized START node's committed
-    record; `${system.X}` reads host-injected ambients. Backs the `${...}` resolver and
-    serializes losslessly for canonical run-record payloads and recovery.
+    Each node id has at most one stored typed value (`store[node_id]`); a routing-only
+    node can have none. "Multiple outputs" are fields of one object. `${input.X}` reads
+    the synthesized START node's committed record; `${system.X}` reads host-injected
+    ambients. Backs the `${...}` resolver and serializes losslessly for canonical
+    run-record payloads and recovery.
 
     Attributes:
         store (`dict[str, AnyValue]`):

@@ -6,6 +6,8 @@ gotchas) plus the [`templates/`](templates/) index. The authoritative grammar is
 [`docs/syntax.md`](../../../docs/syntax.md); runnable end-to-end flows are in
 [`examples/`](../../../examples).
 
+Conceptual vocabulary: [`docs/agent.md`](../../../docs/agent.md).
+
 ## Templates (copy one as a starting point)
 
 Each file in [`templates/`](templates/) is a minimal, loadable flow for one shape.
@@ -13,13 +15,13 @@ Copy, rename, and edit.
 
 | Template | Shape it shows |
 |----------|----------------|
-| [`minimal.yaml`](templates/minimal.yaml) | one AGENT, `str` in/out |
-| [`compact.yaml`](templates/compact.yaml) | the SAME one-agent flow in compact form (no `nodes:` map) |
-| [`pipeline.yaml`](templates/pipeline.yaml) | AGENT → CODE (typed record) — deterministic post-processing |
+| [`minimal.yaml`](templates/minimal.yaml) | one AGENT node, `str` in/out |
+| [`compact.yaml`](templates/compact.yaml) | the same one-node flow in compact form (no `nodes:` map) |
+| [`pipeline.yaml`](templates/pipeline.yaml) | AGENT node → CODE node (typed record) — deterministic post-processing |
 | [`inline-code.yaml`](templates/inline-code.yaml) | inline `code:` source — a bare body run in-process (no `module:function`) |
-| [`typed_output.yaml`](templates/typed_output.yaml) | AGENT with a record `output:` — structured generation + `retries:` |
+| [`typed_output.yaml`](templates/typed_output.yaml) | AGENT node with a record `output:` — structured generation + `retries:` |
 | [`branching.yaml`](templates/branching.yaml) | classify → `case` route → `\|` join |
-| [`tool-use.yaml`](templates/tool-use.yaml) | a `tool` node (no LLM) feeding an AGENT |
+| [`tool-use.yaml`](templates/tool-use.yaml) | a TOOL node (no LLM) feeding an AGENT node |
 | [`human-in-loop.yaml`](templates/human-in-loop.yaml) | a blocking `human_input` gate (typed approve/revise answer) |
 | [`human-questions.yaml`](templates/human-questions.yaml) | a `human_input` gate with multiple questions — static `questions:` + `adaptive_questions:` |
 | [`wait-until.yaml`](templates/wait-until.yaml) | an absolute UTC WAIT ordered before downstream CODE |
@@ -29,7 +31,7 @@ Copy, rename, and edit.
 | [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list and collect in source order |
 | [`inline-composites.yaml`](templates/inline-composites.yaml) | provider-free inline CALL, MAP, and LOOP child bodies (no `defs:`) |
 | [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — chat-shaped blocking turn |
-| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — `human_input` → exit CASE → agent/code, with flow-owned exit, the shape `ac chat` runs |
+| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → exit CASE → AGENT/CODE nodes, with flow-owned exit, the shape `ac chat` runs |
 | [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml) | flow-level `llm_config:`, per-node override, `inherit: false` |
 | [`node-env-config.yaml`](templates/node-env-config.yaml) | flow-level `env:` default + per-node override (node wins), e.g. `max_tool_iterations` |
 
@@ -96,8 +98,8 @@ node; split a coalesce-of-calls into
 per-node outputs. Pure builtins (`${upper(x)}`) stay legal inside `${}`.
 
 This is distinct from an **inline child body**. `call(f, ...)` invokes an existing
-named callable and synthesizes the CALL node around that invocation. An explicit
-`kind: call`/`map`/`loop` node with `nodes:` defines a one-off callable body on
+named child flow and synthesizes the CALL node around that invocation. An explicit
+`kind: call`/`map`/`loop` node with `nodes:` defines a one-off child-flow body on
 the node itself.
 
 ## Inline CALL / MAP / LOOP child bodies
@@ -161,8 +163,8 @@ Contract:
   MAP field but is currently inert; run-level workers control concurrency.
   There is no inline child flow-level `llm_config:`/`env:`/`asserts:` block, and
   `llm_config:` remains invalid on composite nodes. The enclosing flow's LLM
-  cascade reaches body agents exactly as for an unconfigured named child;
-  configure an individual agent or factor a `defs:` child when it needs its own
+  cascade reaches body AGENT nodes exactly as for an unconfigured named child;
+  configure an individual AGENT node or factor a `defs:` child when it needs its own
   supported flow-level surface.
 
 ## Type forms
@@ -199,9 +201,9 @@ so `float = 30` remains an integer.
 
 ## Recipes
 
-**Get a structured / numeric value out of an agent.** Declare the typed shape directly
-as the AGENT's `output:` — a `Literal[...]`, record, non-string scalar, or list switches
-the agent to **structured generation** (the engine derives a schema and the model emits a
+**Get a structured or numeric value out of an AGENT node.** Declare the typed shape directly
+as the node's `output:` — a `Literal[...]`, record, non-string scalar, or list switches
+the AGENT node to **structured generation** (the engine derives a schema and the model emits a
 conforming value, retried up to `retries:` times on deviation; see `typed_output.yaml`).
 Use a downstream `code` node only when you need deterministic post-processing of the
 value.
@@ -222,19 +224,19 @@ that value is committed as its ordinary node output. See `wait-until.yaml`.
 
 **Ask the human.** For a *guaranteed* gate use a `human_input` node (it blocks its
 worker until the host answers). For "ask only if the model decides it needs to",
-give a `tool_calling` agent `tools: [ask_user]`. Both calls stay inside their live
+give a tool-calling AGENT node `tools: [ask_user]`. Both calls stay inside their live
 node execution. A `human_input` gate can present multiple-choice questions
 (static `questions:`), have an LLM compose them
-(`adaptive_questions:`, which desugars to a compose-agent + gate at load), or read
+(`adaptive_questions:`, which desugars to a synthetic composer AGENT node + gate at load), or read
 them from an upstream node (`questions: ${name}`); the answer is then a record
 keyed by each question's `header`. The adaptive desugar owns the `__questions`
 input name, so authors cannot bind that name on an adaptive gate.
 
-These are live authoring surfaces: AGENT has no authored `entry:`/`controls:`
+These are live authoring surfaces: the AGENT node has no authored `entry:`/`controls:`
 fields, HUMAN_INPUT has no control fields, and WAIT has no event-watch form. Each
 completes through the ordinary node-output path in the active run.
 
-**Reuse a sub-flow.** Factor the repeated work into its own flow file, bind it with
+**Reuse a child flow.** Factor the repeated work into its own flow file, bind it with
 `uses: <alias>: <filename>`, and `call:` it (once) or `map:` it (per list element).
 A CALL record supports `${node.output.field}`; MAP returns a list at
 `${node.output}`, so project fields in a downstream CODE/MAP step. If the body is
@@ -274,14 +276,15 @@ prove `bool`. This is the shape `ac chat` runs; see `chat.yaml` (and
   input:
     x: ${input.x}
   ```
-- **AGENT `output:` may be any shape** — only a bare, untagged `str` keeps it a text
+- **An AGENT node's `output:` may be any shape** — only a bare, untagged `str` keeps it a text
   producer; a `Literal[...]`/record/non-string scalar/list switches it to structured
   generation (schema-checked at the write boundary, `retries:`-capped self-correction).
 - **Prompts see only LOCAL inputs.** Inside `prompt:` you may reference only names
   the node declares in its own `input:` block, written bare (`${name}`). Pool refs
   (`${input.x}`, `${other.output}`) go in the `input:` block first.
-- **No `edges:` block, no per-node `id:`, no body wrappers.** The graph is inferred
-  from `${...}` references; a node body is flat.
+- **No `edges:` block, no per-node `id:`, no body wrappers.** `${...}` references
+  infer data edges; `depends_on:` / `runs_after:` add ordering-only edges. A node
+  body is flat.
 - **`call:` resolves defs-first, else a `uses:` alias** (a sibling file by name on
   the search path). `alias@v1` adds a version guard.
 - **MODEL nodes aren't wired** — `kind: model` parses but running one raises. Use
@@ -310,11 +313,11 @@ prove `bool`. This is the shape `ac chat` runs; see `chat.yaml` (and
 
 ## Model selection — the `llm_config` cascade
 
-Model fields resolve **per field, most-specific wins**. An agent fills only the fields
+Model fields resolve **per field, most-specific wins**. An AGENT node fills only the fields
 it leaves unset from the layer outside it. Precedence (most specific first):
 
-1. the agent's own `llm_config:`
-2. the enclosing (sub)flow's `llm_config:`, then each parent flow outward
+1. the AGENT node's own `llm_config:`
+2. the enclosing flow's `llm_config:`, then each parent flow outward
 3. the CLI `--provider` / `--model` flags
 4. process provider/model defaults, read exactly once when the run initializes
 
@@ -346,15 +349,16 @@ nodes:
   r: {kind: agent, prompt: hi, tools: [search], env: {max_tool_iterations: 300}}  # node override
 ```
 
-Keys in use: `max_tool_iterations` (agent) — tool-calling loop turns before an
+Keys in use: `max_tool_iterations` (AGENT node) — tool-calling loop turns before an
 `AgentLoopError` (default `-1` = no cap; set a positive int to bound it).
 
-## Workflow memory — `memory_policy:`
+## Agent memory — `memory_policy:`
 
-`memory_policy: NAME` is valid on a full flow (`nodes:` form) or an `agent`; the
-object form adds public literal behavior config as `{name: NAME, config: {...}}`. A flow frame is
-inherited by its agents, and an agent may add one local frame. Each frame writes
-only its own state. MAP items and LOOP iterations reuse static authored frames.
+`memory_policy: NAME` is valid on a full flow (`nodes:` form) or an AGENT node; the
+object form adds public literal behavior config as `{name: NAME, config: {...}}`. A flow
+frame is inherited by its AGENT nodes, and an AGENT node may add one local frame.
+Each flow or AGENT node writes only its own frame. MAP items and LOOP iterations
+reuse static authored frames.
 Other node kinds and anonymous inline children cannot own a policy. The YAML
 contains no credentials, tenant/backend paths, persistence locations, or Python
 imports. A library host injects implementations by name with
@@ -387,5 +391,5 @@ before setup. Supply explicit null and native structures through `--inputs`; `--
 remains a string/scalar surface.
 
 From Python: `load_flow(text, search_paths=[flow_dir])` loads + compiles without a
-model. A flow with only `code`/`tool` nodes runs with no provider; any `agent` node
+model. A flow with only `code`/`tool` nodes runs with no provider; any AGENT node
 needs a provider/model configured.

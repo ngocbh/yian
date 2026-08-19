@@ -2,9 +2,10 @@
 
 > Phase 2 of the [lifecycle](architecture.md). The [front end](compose.md) produced a
 > typed graph; the engine *interprets* it. The core (`runtime/engine.py` +
-> `runtime/eval_node.py`) is **kind-blind**: it branches on the closed `NodeResult`
-> sum and consults node-owned execution traits plus diagnostic projections, never
-> a node's `NodeKind`. The node side of the same contract is in [Nodes](nodes.md).
+> `runtime/eval_node.py`) is **kind-blind for behavior**: it branches on the closed
+> `NodeResult` sum and consults node-owned execution traits plus diagnostic
+> projections; it never dispatches execution or scheduling on `NodeKind`. The node side of the same contract is in
+> [Runtime nodes](nodes.md).
 
 ## Two actors, one narrow contract
 
@@ -14,7 +15,7 @@ The node and dispatcher meet at one narrow method.
    ┌────────────── DISPATCHER ──────────────┐      node.run(inputs) → NodeResult
    │ sole ready-frontier consumer + writer  │  ───────────────────────────────▶
    │   • RunState (pool, graph, frontier)    │        ┌──────── NODE ────────┐
-   │   • RunLog   (append-only authority)    │        │ a PURE function of   │
+   │   • RunLog   (append-only authority)    │        │ graph-boundary pure  │
    │   • post-durable observer publication   │  ◀──── │ its inputs. Never    │
    └──────────────────────────────────────────┘ inputs │ touches the pool.    │
                                                        └──────────────────────┘
@@ -22,7 +23,7 @@ The node and dispatcher meet at one narrow method.
 
 The dispatcher owns *state and scheduling*; the node owns *computation*. The node is
 **pure at the graph boundary** — handed a plain dict plus declared capabilities,
-it returns a result and cannot read or write shared memory. An LLM/human/clock leaf
+it returns a node outcome and cannot read or write engine-owned graph state. An LLM/human/clock leaf
 may perform an external effect, but all graph state still lives in one place the
 engine controls. The matching `RunLog` is authoritative: a transition is appended
 before the reducer applies it to `RunState` or publishes its observer.
@@ -77,7 +78,7 @@ vocabulary the engine branches on:
 NodeResult =
   | Output(value, commit_as=None)   # "here is my result"    → bind at its success target
   | Route(handle)                   # "route only, no value" → branch + redirect-aware skip
-  | Grow(seed, prune=∅)             # "I'm really a subflow"  → build + splice more nodes
+  | Grow(seed, prune=∅)             # "apply a child flow"     → build + splice more nodes
 ```
 
 ```python
@@ -92,8 +93,8 @@ def prepare_result(state, node_id, result):
 ```
 
 `Output` covers ordinary steps. `Route` covers a pure router (`case`): it stores nothing
-and only selects a live out-edge. `Grow` is how a node that *is really a subflow*
-expands. Failure is not a `NodeResult`: `eval_node` turns an exception into an
+and only selects a live out-edge. `Grow` is how a composite node asks the engine
+to expand a child flow. Failure is not a `NodeResult`: `eval_node` turns an exception into an
 `EvaluationFailure`, which the dispatcher prepares as a `NodeFailedRecord`.
 
 ### Logical output redirects
@@ -119,22 +120,24 @@ those rules before mutation, marks the physical node skipped, deduplicates
 logical targets, and skip-floods the target's outgoing edges. Settled expansion
 residue is inert and no longer owns a future logical output.
 
-## Growth: a node that is really a subflow
+## Growth: expanding a child flow
 
-`call`, `map`, and `loop` are not single steps — each *is a smaller flow*. A spawner
+`call`, `map`, and `loop` are composite nodes that apply a child flow. A spawner
 returns only a canonical, kind-shaped seed; no node imports the compile layer or builds
 topology. `compile.expand.build_grow` is the sole kind-aware interpreter that turns the
 spawner and seed into a self-describing `Flow`. Package-root `run.py` injects that
 callable into the kind-blind runtime for both live growth and historical record replay.
 
-One convention unifies all three constructed fragments: **the subgraph is a
-well-formed sub-flow with a single `__start__` and `__end__`**. The engine schedules
-the `start`, and the builder bakes `commit_as=<spawner id>` onto the terminal — so
-however many inner nodes run, downstream sees one clean output committed under the
-spawner's id. The terminal's inherited `skipped_output_target()` follows that
-same baked redirect when its output is absent. Runtime may consume
-`compile.model` topology but never imports
-`compile.expand`.
+CALL and MAP fragments clone a child flow with one `__start__` and `__end__`.
+The engine schedules the start, and the builder bakes `commit_as=<spawner id>`
+onto the derived terminal. Its inherited `skipped_output_target()` follows the
+same redirect when output is absent.
+
+A LOOP continuation instead clones the body without a terminal redirect and
+wires its END to the next driver. When the loop stops, that driver returns
+`Output(carried, commit_as=origin_id)`; its `skipped_output_target()` also resolves
+to the authored loop origin. Downstream therefore sees one logical loop output.
+Runtime may consume `compile.model` topology but never imports `compile.expand`.
 
 The splice carries a few extra concerns (stamp recursion depth, loop bookkeeping),
 but the growth core reads **node-owned traits**
@@ -209,9 +212,10 @@ explicit node failure still wins immediately.
 
 `resume_flow(flow, log=path)` locks and validates an existing contiguous prefix,
 checks the authored-flow fingerprint, rebuilds a private graph, and folds every record
-through the same reducer used live. A terminal prefix is returned without a write. For
-a nonterminal prefix, one `RunResumedRecord` places durably started nodes with no durable
-outcome ahead of the ready frontier, then dispatch continues. Original inputs, run ID,
+through the same reducer used live. After any incomplete-tail repair, a terminal prefix
+is returned without appending a record. For a nonterminal prefix, one
+`RunResumedRecord` places durably started nodes with no durable outcome ahead of the
+ready frontier, then dispatch continues. Original inputs, run ID,
 worker count, typed values, growth seeds, and resolved LLM configuration all come from
 the log rather than current process defaults. See the [Python API](api.md).
 
@@ -224,7 +228,7 @@ number of nodes in flight differs. A pooled drive owns its workers through a ful
 abnormal dispatch exit first signals cooperative stop, then joins every submitted worker
 before the run boundary releases the log.
 
-## The entire interface the engine sees
+## The core node interface
 
 | The engine sees | Meaning |
 |---|---|
@@ -235,12 +239,15 @@ before the run boundary releases the log.
 | `node.forward(inputs, **caps) → NodeResult` | the one kind-specific body step |
 | `node.is_spawner` | may it return `Grow`? |
 | read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event` |
+| memory/evidence traits | `needs_memory_recall`, `needs_evaluation_trace`, and `memory_scope` gate injected recall and trace capture |
+| output metadata | `output_contract` validates committed values; `commit_as` selects a logical success target |
 | growth traits | `grow_depth_delta`, `is_loop` |
 | diagnostic-only projections | `exception_origin(exc)` selects the local origin; `failure_trace(operation_origin=None)` combines it with ordered ancestry without affecting program identity |
 | `node.skipped_output_target()` | logical output whose successors observe this physical node's absence |
 
-That is the complete list — a small set of traits/hooks plus the run/body pair. No `NodeKind` is
-visible to the engine.
+The pattern is a small set of traits and hooks around the shared run/body pair.
+Runtime may read `NodeKind` for diagnostic text, but behavior and scheduling never
+branch on it.
 
 Inline CODE implements `exception_origin(exc)` by retaining its recursive compiled
 code-object tree and selecting the deepest traceback frame owned by identity (`is`).
@@ -256,7 +263,7 @@ distinct; failures outside predicate evaluation use the node fallback. The carri
 are diagnostic-only, participate in ordinary graph rebasing, and do not affect flow
 identity.
 
-AGENT also specializes `exception_origin(exc)` without adding a new carrier. A
+The AGENT node also specializes `exception_origin(exc)` without adding a new carrier. A
 retry-exhausted Pydantic error, or its directly wrapped native-parser cause, is
 accepted only when exact traceback frames prove the generated structured-output
 schema performed the validation; deeper cause chains are not traversed. The first

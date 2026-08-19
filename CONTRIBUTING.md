@@ -152,11 +152,12 @@ Read [`src/agent_composer/README.md`](src/agent_composer/README.md) before an
 engine change.
 
 - Keep `runtime/` kind-blind.
-- Keep nodes pure: they return `Output`, `Route`, or `Grow` and do not write the
-  variable pool.
+- Keep nodes pure at the graph-state boundary: they return `Output`, `Route`, or
+  `Grow` and do not write the variable pool.
 - Keep runtime transitions record-authoritative: prepare and validate, append to
   `RunLog`, then apply through the reducer. Recovery folds the same reducer.
-- Keep the graph fixed while it runs.
+- Keep the authored structure fixed; runtime growth only instantiates authored
+  child flows.
 - Keep package imports acyclic.
 - Prefer general, domain-neutral nodes and combinators over one-off behavior.
 

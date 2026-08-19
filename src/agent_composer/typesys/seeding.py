@@ -33,7 +33,7 @@ def seed_system_clock(pool: "VariablePool") -> None:
     """Seed the host-ambient clock into the pool's `system` namespace, once per run.
 
     `${system.today}` is a `date`; `${system.now}` a `datetime`. Computed once here and
-    inherited by call/map children (they copy `pool.system`), so every node, sub-flow,
+    inherited by call/map children (they copy `pool.system`), so every node, child flow,
     and MAP element observes one consistent clock. The clock is the only seam through
     which a flow may read "now" (the engine never resolves date words).
     """

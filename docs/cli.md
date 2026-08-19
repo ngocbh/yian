@@ -9,10 +9,14 @@ ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [-w N] [--
 ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
 ```
 
+Commands below that use `examples/...` assume a repository clone and run from
+its root; those files are not installed with the Python package.
+
 ## Durable logs and recovery
 
-Every fresh CLI run writes an authoritative JSONL log and reports its path on
-stderr, including under `--quiet`:
+Before execution, a fresh invocation reports its selected JSONL path on stderr,
+including under `--quiet`. The file becomes authoritative once runtime
+initialization durably commits `RunStarted`:
 
 ```console
 # fresh log: ~/.agent_composer/runs/<run_id>.jsonl
@@ -33,9 +37,10 @@ commit or publish it.
 
 Recovery reads the original inputs, run identity, and resolved model map from the
 log. `--resume` therefore rejects `--input`, `--inputs`, `--provider`, `--model`,
-and `--log` before input prompts or provider setup. An already terminal log is
-read-only and prints its recorded result. An unfinished log appends a resume
-segment and retries any node with a durable start but no durable outcome.
+and `--log` before input prompts or provider setup. After repairing any incomplete
+tail, an already terminal log gets no new records and prints its recorded result.
+An unfinished log appends a resume segment and retries any node with a durable
+start but no durable outcome.
 
 Expected host-side failures while creating or recovering a log (for example a
 corrupt, mismatched, or locked log) are reported as concise errors. Pass
@@ -154,12 +159,12 @@ source rather than the prompt's blank path.
 
 ## Blocking interactions
 
-`human_input` and an agent's authored `ask_user` tool are blocking interactions
+`human_input` and an AGENT node's authored `ask_user` tool are blocking interactions
 inside live node calls. They are separate from initial input gathering and are
 unchanged by its non-TTY omission policy. `ac` runs the flow behind a main-thread
 terminal broker: the node's worker waits, the broker reads the answer from the
 host input stream, and the answer returns into that same live node call. A
-`human_input` always asks; an agent calls `ask_user` only when its model chooses
+`human_input` always asks; an AGENT node calls `ask_user` only when its model chooses
 to.
 
 ```console
@@ -187,14 +192,14 @@ does not cancel the surrounding conversation.
   terminal each running node shows an animated spinner that is rewritten in place
   as a green `✓ node_id` on success, or a red `✗ node_id` (with the error on the
   next line) on failure. Off a terminal (a pipe, CI) only the final `✓`/`✗` line
-  per node is printed. Nodes that fan out run concurrently, so several spinners
-  can be live at once.
+  per node is printed. With a worker pool, fan-out nodes can run concurrently, so
+  several spinners can be live at once.
 - Pass `--quiet` / `-q` to suppress progress entirely.
 - Pass `--verbose` / `-v` to also print **each node's output** under its check as
   it finishes — handy for seeing the intermediate values a multi-node flow
   produces, not just the final result.
-- The durable log path is always reported, even under `--quiet`, so an interrupted
-  run remains discoverable.
+- Once an invocation reaches run-log setup, the path is reported even under
+  `--quiet`, so an interrupted run remains discoverable.
 
 ## Concurrency (`--num-workers`)
 
@@ -212,11 +217,11 @@ ac run examples/debate.yaml --input question="Adopt a monorepo?" --num-workers 4
   drain. A resumed run with no flag preserves the latest count in its log.
 - On resume, an explicit `-w N` records `N` for the new segment and changes only
   future scheduling; it does not rewrite historical work.
-- `>=1` spawns that many workers. Nodes are pure executors and a single-writer
-  dispatcher owns all state, so the **terminal output is the same** whatever the
-  worker count — only the intra-run scheduling changes (and wall-clock time, when a
-  flow has parallel branches that each do real work, e.g. separate LLM calls).
-- Each blocking HUMAN_INPUT, agent `ask_user`, or future-deadline WAIT occupies one worker;
+- `>=1` sets the maximum concurrent worker count. Nodes cannot mutate graph state, and a
+  single-writer dispatcher commits their outcomes. The worker count changes only
+  ready-work scheduling, not the graph or output binding; effectful nodes may
+  still be nondeterministic.
+- Each blocking HUMAN_INPUT, `ask_user` call from an AGENT node, or future-deadline WAIT occupies one worker;
   independent ready nodes use any remaining workers and wait when all are occupied.
 
 The dispatcher appends every node start and outcome to the selected authoritative

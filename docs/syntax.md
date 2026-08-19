@@ -1,9 +1,10 @@
 # Flow syntax
 
 A flow is a **function**: a typed `input:`, a graph of `nodes:`, and a typed
-`output:`. You never draw edges — the graph is *inferred* from the `${...}`
-references between nodes. The human owns the structure; the LLM only fills the
-leaf boxes.
+`output:`. `${...}` references infer data edges; `depends_on:` and `runs_after:`
+add ordering-only edges. The human owns the structure; the LLM only fills the
+AGENT node leaves. See [Agent](agent.md) for the conceptual model and terminology;
+this page is the YAML reference.
 
 ## The flow shape
 
@@ -88,7 +89,7 @@ Everywhere you wire data you use a `${...}` reference:
 | `${input.X}` | field `X` of the flow's input |
 | `${node.output}` | node `node`'s whole value |
 | `${node.output.field}` | dot into an object value |
-| `${name}` / bare `name` | that node's own declared input — as `${name}` inside an AGENT/HUMAN_INPUT `prompt:`, or bare `name` in a `case` `when:` |
+| `${name}` / bare `name` | that node's own declared input — as `${name}` inside an AGENT node's or HUMAN_INPUT node's `prompt:`, or bare `name` in a `case` `when:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is stringified.
@@ -211,10 +212,10 @@ Keys in use today:
 |-----|-----------|---------|
 | `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it gives up with an `AgentLoopError`. Default `-1` (**no cap** — run until a final answer). Set a positive int to bound it; `0` and other negatives are rejected. |
 
-## Workflow memory — `memory_policy:`
+## Agent memory — `memory_policy:`
 
 `memory_policy:` declares a named behavior policy on a full flow (the ordinary
-`nodes:` form) or an `agent`. The declaration contains public behavior only; the
+`nodes:` form) or an AGENT node. The declaration contains public behavior only; the
 Python host supplies the matching implementation at run time.
 
 ```yaml
@@ -242,12 +243,12 @@ The short form is `memory_policy: reflective`. The mapping form accepts exactly
 tenant IDs, Python imports, backend paths, or persistence locations in YAML;
 those belong to the host-created memory object.
 
-A flow policy creates one flow-owned frame inherited by every agent executed in
-that flow. An agent policy creates a second, local frame for that agent. Recall
+A flow policy creates one flow-owned frame inherited by every AGENT node executed in
+that flow. A policy on an AGENT node creates a second, local frame. Recall
 stacks those sections from the outer flow inward, while each frame learns and
 writes only its own state. CALL enters the called flow's frames. MAP items and
 LOOP iterations do not create frames of their own; repeated executions contribute
-occurrences to the same statically authored flow/agent frame. `memory_policy:` is
+occurrences to the same static frame authored on the flow or AGENT node. `memory_policy:` is
 invalid on other node kinds and on anonymous inline CALL/MAP/LOOP bodies; use a
 named `defs:` flow when the child itself needs a flow frame.
 
@@ -262,7 +263,7 @@ implementations or expose learning flags yet.
 Every node has a `kind:`. The set is closed — you compose flows from these, you
 do not define new kinds.
 
-### `agent` — an LLM leaf
+### `agent` — the LLM-backed AGENT node
 
 ```yaml
 classify:
@@ -275,9 +276,9 @@ classify:
     Answer with exactly one of: positive, neutral, negative.
 ```
 
-An AGENT's `output:` may be any declared shape. Only a bare, untagged `str` keeps
-the agent a **text producer**. A `Literal[...]` enum, record, non-string scalar,
-or list switches the agent to **structured generation**: the engine derives a
+An AGENT node's `output:` may be any declared shape. Only a bare, untagged `str`
+keeps the node a **text producer**. A `Literal[...]` enum, record, non-string scalar,
+or list switches the node to **structured generation**: the engine derives a
 schema from the declared `output:` and asks the model to emit a conforming value
 (via the provider's native structured output, or a JSON prompt-injection fallback
 for providers that lack it). A root `Literal[...]` is constrained internally as a
@@ -314,18 +315,18 @@ when the run initializes apply (see [Installation](installation.md)).
 #### `llm_config` — the model-selection cascade
 
 Model selection cascades **per field, most-specific wins**. Each field (provider,
-model, temperature, …) is resolved independently: an agent fills only the fields
+model, temperature, …) is resolved independently: an AGENT node fills only the fields
 it leaves unset from the layer outside it. Precedence, most specific first:
 
-1. the agent's own `llm_config:`
-2. the enclosing (sub)flow's `llm_config:`, then each parent flow outward
+1. the AGENT node's own `llm_config:`
+2. the enclosing flow's `llm_config:`, then each parent flow outward
 3. the CLI `--provider` / `--model` flags (`ac run … --provider anthropic`)
 4. process provider/model defaults, read exactly once when the run initializes
 
-A flow can set defaults for every agent under it with a top-level `llm_config:`:
+A flow can set defaults for every AGENT node under it with a top-level `llm_config:`:
 
 ```yaml
-llm_config:                     # flow layer — every agent inherits these
+llm_config:                     # flow layer — every AGENT node inherits these
   provider: anthropic
   temperature: 0.2
 nodes:
@@ -337,8 +338,8 @@ nodes:
 ```
 
 The CLI flags are the *outermost authored* layer — they fill gaps, they do **not**
-override an agent or flow that set the field. The run resolves the complete static
-agent tree up front, so later environment changes cannot alter a model selection.
+override an AGENT node or flow that set the field. The run resolves the complete
+static tree of AGENT nodes up front, so later environment changes cannot alter a model selection.
 To ignore the authored outer layers, set `inherit: false` in a node's
 `llm_config:`. The node then uses its own dict plus the snapshotted process
 provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
@@ -500,7 +501,7 @@ ask:
 ```
 
 **Adaptive questions** — an LLM composes the questions from context. The block
-**desugars at load** into a synth compose-agent (`<node>__compose`, output
+**desugars at load** into a synthetic composer AGENT node (`<node>__compose`, output
 `list[Question]`) wired into the gate; the runtime gate never calls an LLM.
 The input name `__questions` is reserved for that generated wire and cannot be
 authored on an adaptive gate.
@@ -557,7 +558,7 @@ each:
 ```
 
 The `input:` map contains the child's arguments. A `call` re-exports the child's
-result (`None` when the child declares no output value); a `map` requires one
+output (`None` when the child declares no output value); a `map` requires one
 child output value and returns `list[U]` in `over:` order.
 `parallel:` is accepted but currently inert; MAP concurrency is controlled by
 the run's `num_workers`, while collection order remains the `over:` order.
@@ -566,7 +567,7 @@ the run's `num_workers`, while collection order remains the `over:` order.
 
 When a CALL, MAP, or LOOP body is used only once, put the child graph directly
 on the composite node. This is load-time sugar for a private child flow; the
-result uses the same compiled-child execution path as a named `defs:` body, while
+output uses the same compiled-child execution path as a named `defs:` body, while
 keeping occurrence-local identity and diagnostics.
 
 ```yaml
@@ -637,9 +638,9 @@ Inline-body rules:
   keep their normal semantics, and MAP node-local asserts remain invalid.
   `parallel:` remains an accepted outer MAP field but is currently inert.
   `llm_config:` remains invalid on a composite node; the enclosing flow's LLM
-  cascade still descends into body agents exactly as it does for an unconfigured
+  cascade still descends into body AGENT nodes exactly as it does for an unconfigured
   named child. There is no separate inline-child
-  `llm_config:`/`env:`/`asserts:` surface; configure individual body agents or use
+  `llm_config:`/`env:`/`asserts:` surface; configure individual body AGENT nodes or use
   `defs:` when the child needs its own supported flow-level configuration or
   assertions.
 
@@ -683,8 +684,8 @@ Rules:
 
 This directive and an inline child body solve different verbosity problems.
 `call(named, x=...)` is a whole-value binding that invokes an already named
-`defs:`/`uses:` callable and synthesizes the surrounding CALL node. A
-`kind: call` node with `nodes:` defines that one-off callable body in place. It
+`defs:`/`uses:` child flow and synthesizes the surrounding CALL node. A
+`kind: call` node with `nodes:` defines that one-off child body in place. It
 is invalid to combine `call:` and `nodes:` on the same node.
 
 ### `loop` — re-run a body under a predicate or a fixed count
@@ -804,12 +805,12 @@ carried record forward, that iteration's expanded body is **pruned** from the li
 graph, so only one iteration is resident at a time (a thousand-turn loop costs the
 same as a two-turn one).
 
-## Effects from inside an agent — the `ask_user` tool
+## Effects from inside an AGENT node — the `ask_user` tool
 
-A `tool_calling` agent can be granted the ordinary `ask_user` tool. Unlike
-`human_input` (which always asks), `ask_user` is *model-chosen*: the agent calls it
+A `tool_calling` AGENT node can be granted the ordinary `ask_user` tool. Unlike
+`human_input` (which always asks), `ask_user` is *model-chosen*: the node calls it
 **only if** it decides it needs a fact it cannot supply. The tool blocks inside
-the same live agent loop, then its returned answer is fed back as the tool result.
+the same live model/tool loop, then its returned answer is fed back as the tool result.
 
 ```yaml
 assistant:
@@ -829,9 +830,9 @@ For a *guaranteed* gate use `human_input`; for "ask only if needed" use
 `ask_user`.
 
 All three authorable blocking surfaces are live calls: `ask_user` returns the
-human's answer to the same AGENT tool loop, HUMAN_INPUT returns it as the node's
+human's answer to the same model/tool loop, HUMAN_INPUT returns it as the node's
 output, and WAIT returns `None` at its deadline.
-There is no authored agent `entry:`/`controls:` surface and no event-mode WAIT.
+There is no authored `entry:`/`controls:` surface on an AGENT node and no event-mode WAIT.
 
 ## Expression contexts
 

@@ -31,7 +31,7 @@ nodes:
     # output omitted -> defaults to object: {Framework: ..., Notes: ...}
 
   # ADAPTIVE — an LLM composes the questions from context. This block
-  # DESUGARS at load into a synth compose-agent (ask_adaptive__compose, output
+  # DESUGARS at load into a synthetic composer AGENT node (ask_adaptive__compose, output
   # list[Question]) wired into the gate; the runtime gate never calls an LLM.
   ask_adaptive:
     kind: human_input

@@ -7,8 +7,8 @@
 
 ## One grammar, three readers
 
-Everywhere a flow wires data — a node input, a `when:` condition, a flow `output:`, an
-agent `prompt:` — the author writes `${...}`. There is **one** grammar, and the same parse
+Everywhere a flow wires data—a node input, a `when:` condition, a flow `output:`,
+or an AGENT node's task `prompt:`—the author writes `${...}`. There is **one** grammar, and the same parse
 tree is read three ways:
 
 - **evaluate** it against a `resolve` callable → a value (at run time), and

@@ -1,4 +1,4 @@
-"""LLM client wrappers + the per-AGENT `LLMConfig` — agent_composer's model seam.
+"""LLM client wrappers and `LLMConfig` for AGENT nodes — agent_composer's model seam.
 
 The single place the engine reaches a chat model: `LLMConfig` (the selection
 carrier) and `model_from_config` (resolve it to a ready `BaseChatModel`), plus the

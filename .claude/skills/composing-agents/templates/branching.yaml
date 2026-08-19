@@ -8,7 +8,7 @@ name: branching
 description: Classify a review, route to a matching reply, join the branches.
 
 typedefs:
-  Sentiment: Literal[positive, negative]    # an enum — the AGENT answers one tag
+  Sentiment: Literal[positive, negative]    # an enum — the AGENT node answers one tag
 
 input:
   review: str

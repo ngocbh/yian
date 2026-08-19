@@ -5,18 +5,22 @@ authored as **Docker-Compose-shaped YAML**, read by the `compose/` loader into a
 compiled IR, and executed by the engine's own scheduler — there is no compilation
 down to a third-party graph runtime.
 
-The engine is, at heart, a **small functional programming language** — one whose
-leaf computations may be LLM agents. If you know OCaml, you already know the
-shape of it:
+The public terminology and node/flow/child-flow distinction are defined in
+[`docs/agent.md`](../../docs/agent.md).
 
-- A **flow is a function**: typed inputs in, typed outputs out, and nothing
-  hidden. An **agent is just a flow** whose leaf computation happens to be an LLM
-  loop — same contract, same composability.
-- Flows **compose**. A node can be another flow, so a large transformation is
-  built from small ones nested to any depth — function composition, not a
-  monolith.
+The engine is, at heart, a **small functional programming language**—one whose
+leaf computations may be LLM-backed AGENT nodes. If you know OCaml, you already
+know the shape of it:
+
+- A **flow is a function**: typed inputs in and one typed output value out. An
+  **agent** is the broader conceptual unit—a composable transformation that may
+  be represented by one node, a flow, or a child flow. The concrete **AGENT
+  node** (`kind: agent`) is the LLM-backed leaf.
+- Flows **compose**. CALL, MAP, and LOOP apply child flows, so a large
+  transformation is built from small ones nested to any depth—function
+  composition, not a monolith.
 - Computation is **pure at the boundary**: a node returns an outcome and the
-  engine binds it; a node never receives or mutates the shared pool. Each kind
+  engine binds it; a node never receives or mutates the variable pool. Each kind
   implements `forward`; the base `Node.run` template applies defaults and fires
   record-only asserts around that body. A flow's own asserts are lowered onto its
   synthesized START/END boundary nodes, so top-level and nested-flow asserts use
@@ -231,7 +235,8 @@ the active `Case` by identity. Failures outside predicate evaluation fall back
 to `Node.origin`. These origins participate in ordinary traversal and rebasing,
 but remain diagnostic-only and manifest-neutral.
 
-AGENT adds no provenance carrier for structured output: it reuses the existing
+The AGENT node adds no provenance carrier for structured output: it reuses the
+existing
 `ValueContract.origins` on `Node.output_contract`. After structured-generation
 retries are exhausted, `AgentNode.exception_origin()` accepts a Pydantic error
 or its directly wrapped native-parser cause only when tracebacks prove both the
@@ -305,7 +310,8 @@ on `Node.output_contract`, including when compact/flat lowering generates the re
 The partial arm is a closed record: every field name is enforced, proven fields retain
 their recursive contracts, and opaque fields retain presence without pretending their
 type is `None`. Runtime success and replay validate the effective commit target through
-this same sum. Exact contracts also drive node-owned structured generation. For AGENT,
+this same sum. Exact contracts also drive node-owned structured generation. For
+an AGENT node,
 only an untagged `str` opts out to free text; a tagged string (`Literal[...]`) uses the
 generated scalar `value` wrapper and is unwrapped back to its bare tag. A live type
 rejection resolves its contract-relative structural path through the matching exact or
@@ -486,7 +492,7 @@ parse/build/validate pipeline runs. YAML anchors, aliases, and merged mappings
 are not mutated: extraction works on occurrence-local cursor projections while
 keeping the original child cursors and source ranges read-only.
 
-Each source file owns one callable scope. Alongside its authored `defs:` and
+Each source file owns one child-flow scope. Alongside its authored `defs:` and
 `uses:` namespace, that scope has a resolver-private table for retained inline
 children. A child's stable identity is `__inline_flow_` plus a digest of its
 complete lexical owner path (root or def, enclosing node, and nested inline
@@ -495,7 +501,7 @@ and call targets cannot use that reserved prefix, and author-facing diagnostics
 show the lexical child label rather than the opaque digest.
 
 Private child builders are registered during assembly and invoked lazily. The
-file scope builds each callable at most once on successful resolution, shares
+file scope builds each child flow at most once on successful resolution, shares
 the same cache across private children/defs/uses, and guards private/def
 construction in progress. The default file resolver's load context guards
 cross-file recursion; an injected resolver is responsible for any equivalent
@@ -513,10 +519,11 @@ the same kind-blind `Grow`/record/reducer path as named children.
 
 ## Node contract
 
-A node is a pure function of its bound input record. It returns exactly one member
-of the closed result sum:
+A node is pure at the graph-state boundary: it receives a bound input record and
+cannot mutate engine-owned state. It returns exactly one member of the closed
+node-outcome sum:
 
-| Result | Meaning |
+| Node outcome | Meaning |
 |--------|---------|
 | `Output(value, commit_as=None)` | one value for the engine to type-check and bind under the resolved success target |
 | `Route(handle)` | one named outgoing branch, with redirect-aware sibling skip-flooding |
@@ -599,21 +606,21 @@ same obligation: apply `RunStartedRecord` to a matching `RunState` and `RunLog`
 before driving the engine. The engine borrows this authority and never closes it;
 the boundary or direct caller owns its lifetime.
 
-## Host-injected workflow memory
+## Host-injected agent memory
 
 Authored `memory_policy` values name behavior; they never name Python classes,
 storage locations, credentials, or tenant identity. Compile resolves those values
 into one canonical static frame layout. A flow owns a frame inherited by its
-agents, and an AGENT may own one additional local frame. Dynamic MAP items and
-LOOP iterations contribute occurrences to those static frames rather than
+AGENT nodes, and an AGENT node may own one additional local frame. Dynamic MAP
+items and LOOP iterations contribute occurrences to those static frames rather than
 minting new frames. Runtime remains kind-blind: it consumes only each executing
 node's compiled `MemoryScope` and an injected recall callable.
 
 `run_flow(..., memory={name: implementation})` validates the host registry,
 opens one run session per referenced policy, opens every static frame, and stores
 the sessions' exact public snapshots in `RunStartedRecord`. `memory=None` leaves
-authored policies dormant. For each opted-in AGENT evaluation, recall returns an
-ordered tuple of source-neutral sections from outer flow to local agent. The
+authored policies dormant. For each opted-in AGENT node evaluation, recall
+returns an ordered tuple of source-neutral sections from outer flow to local node. The
 agent mode renders those sections as canonical JSON-framed system material. The
 encoding prevents memory text from breaking or spoofing the envelope, but the
 text remains model-visible system material and is not isolated from prompt
@@ -635,9 +642,9 @@ for a later `resume_flow`; final learning failures never replace the graph's
 primary result. `RunResult.learning` reports this independent disposition.
 
 Learning is behavior-only. It does not invoke the reserved `Node.backward`,
-traverse producer lineage, or mutate the authored graph. Each flow/AGENT frame
-writes only its own policy state. Concrete implementations live behind the
-source-neutral `Memory`/`MemorySession`/`MemoryFrame` protocols; the provided
+traverse producer lineage, or mutate the authored graph. Each frame owned by a
+flow or AGENT node writes only its own policy state. Concrete implementations
+live behind the source-neutral `Memory`/`MemorySession`/`MemoryFrame` protocols; the provided
 `ReflectiveMemory` is a process-local backend whose model call and query rewrite
 are policy-owned.
 
@@ -670,9 +677,9 @@ effects: an interrupted node with a durable start and no outcome is retried.
 
 ## Blocking effects and structured drain
 
-Authorable blocking effects stay inside their node calls. An AGENT may invoke the
+Authorable blocking effects stay inside their node calls. An AGENT node may invoke the
 explicitly granted `ask_user` tool, HUMAN_INPUT always invokes the same host-owned
-interaction seam, and WAIT blocks on its absolute UTC deadline. AGENT checks the
+interaction seam, and WAIT blocks on its absolute UTC deadline. The AGENT node checks the
 run-owned stop signal between model/tool effects; WAIT blocks on that signal. Each
 returns `Output` from the same invocation.
 
@@ -703,7 +710,7 @@ dynamic fragments. CODE identity includes its executable `code` text but exclude
 while CASE identity includes predicate handle/expression semantics but excludes
 each predicate origin. Thus source formatting, origin rebasing, and Python object
 identity cannot change program or expansion identity. `resolve_llm_cascade` returns a
-complete map keyed by slash-separated static agent paths. The run boundary reads
+complete map keyed by slash-separated paths of static AGENT nodes. The run boundary reads
 process provider/model defaults once at fresh-run initialization;
 `apply_effective_llm_map` restores the
 recorded map during recovery without consulting the environment.

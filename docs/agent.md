@@ -63,36 +63,41 @@ every component into one prompt string:
 flowchart TB
     subgraph request["Agent Composer request"]
         direction LR
-        messages["messages (ordered)<br/>[ SystemMessage: system prompt | root-flow memory | child-flow memory ... | AGENT-local memory ]<br/>[ HumanMessage: rendered prompt ]<br/>[ optional later messages: tool history | fallback schema / retry correction ]"]
-        fields["turn-dependent request fields<br/>[ tools: name | description | input schema ]<br/>[ native response schema ]"]
+        messages["messages (ordered)<br/>[ SystemMessage: system prompt | root-flow memory | child-flow memory ... | AGENT-local memory ]<br/>[ HumanMessage: rendered prompt ]<br/>[ optional additional messages: tool history | fallback schema / retry correction ]"]
+        fields["turn-dependent request fields<br/>[ tools: name | description | input schema ]<br/>[ structured-output binding ]"]
         messages ~~~ fields
     end
 
     request --> serializer["Provider/API serialization"]
-    serializer --> invocation["Model invocation<br/>[ provider-defined context tokens | tools | decoding controls ]"]
+    serializer --> invocation["Model invocation<br/>[ provider-defined context tokens | tool/function schemas | output controls ]"]
 ```
 
 Every invocation receives the ordered messages. Depending on the mode and turn,
-it may also receive tool schemas or a native response schema; those fields are
-not necessarily present together. When a tool-calling AGENT also has structured
-output, Composer finishes the tool loop and then performs structured generation
-against the accumulated messages. A provider without native structured output
-instead receives an added schema-instruction message.
+it may also receive tool schemas or a structured-output binding; those fields
+are not necessarily present together. The model adapter may encode structured
+output as a tool/function schema, JSON mode, or a provider response-schema
+feature. When no supported binding is available, Composer instead adds a schema
+instruction message.
+
+When a tool-calling AGENT also has structured output, Composer finishes the tool
+loop and then performs structured generation against the accumulated messages.
 
 Only `messages` has a Composer-defined sequence. The eventual token or control
 representation belongs to the provider, so Agent Composer makes no claim that
 tool descriptions occur before or after memory in a flattened token stream.
 
-The initial messages are ordered as follows:
+Every path starts with these messages:
 
 1. The **system message** contains the framework system instruction followed by
    recalled memory sections, ordered from the outermost flow to the local AGENT
    node.
 2. The **human message** contains the rendered `prompt:`.
-3. Fallback structured generation adds its schema instruction after the visible
-   task context.
-4. In tool-calling mode, a later request also contains the model's prior tool
-   call and the corresponding `ToolMessage` result.
+
+Tool-calling invocations append the model's prior tool calls and corresponding
+`ToolMessage` results. Before a structured fallback invocation—which may be the
+first model invocation—Composer appends a schema instruction; a retry appends a
+correction. In the combined tool/structured path, the tool history is
+accumulated before the schema instruction.
 
 ### How YAML becomes the request
 
@@ -102,7 +107,7 @@ The initial messages are ordered as follows:
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
 | `memory_policy:` plus host `memory={...}` | Recalls frame text and appends it to the system message as labelled canonical sections. |
 | `tools: [name, ...]` | Resolves registered tool schemas and binds them beside the messages in `tool_calling` mode. |
-| Structured `output:` | Selects native structured output or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
+| Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
 | `mode:`, `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
 
 The framework system instruction is fixed today. Authored `system_prompt:` is
@@ -159,9 +164,11 @@ output: ${run_research.output}
 For `investigate`, recall is ordered root-flow → child-flow → AGENT-local. The
 YAML only names the `reflective` policy; a Python host enables it by passing
 `memory={"reflective": implementation}` to `run_flow`. No `${memory}` reference
-is required. `learn=True` runs learning after the primary flow terminates, so
-new lessons affect later fresh runs—not a later node in the same run. See
-[Injecting agent memory](api.md#injecting-agent-memory) for the host API.
+is required. `learn=True` runs learning after the primary flow terminates, so it
+does not change a later node in the same run. New lessons can affect later fresh
+runs when the host reuses the same memory implementation or supplies one that
+persists its state. See [Injecting agent memory](api.md#injecting-agent-memory)
+for the host API.
 
 ## Representing agents in YAML
 
@@ -173,8 +180,8 @@ as `${draft.output}` both move data and define graph edges.
 
 ### One node: compact AGENT node
 
-When one LLM call is enough, compact mode makes the flow and its single AGENT
-node share one definition:
+When one AGENT node is enough, compact mode makes the flow and that node share
+one definition:
 
 ```yaml
 id: classify

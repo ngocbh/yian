@@ -90,6 +90,18 @@ records.
 
 ::: agent_composer.runtime.log.NodeFailedRecord
 
+::: agent_composer.runtime.log.MemoryFrameLearningStartedRecord
+
+::: agent_composer.runtime.log.MemoryFrameLearnedRecord
+
+::: agent_composer.runtime.log.MemoryFrameLearningFailedRecord
+
+::: agent_composer.runtime.log.MemoryCommitRequestedRecord
+
+::: agent_composer.runtime.log.MemoryCommitSucceededRecord
+
+::: agent_composer.runtime.log.MemoryCommitFailedRecord
+
 ## Nodes
 
 Every node implements one graph-state-isolated contract: it receives a bound

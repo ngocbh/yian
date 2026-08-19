@@ -212,7 +212,7 @@ class ComposedFlow:
             `uses: ref@<version>` pin against the resolved file.
         name (`str`, *optional*, defaults to `None`):
             The flow's declared `name:` — human-facing metadata (e.g. the CLI's
-            interactive-prompt header). `None` for a `defs:` sub-flow, which has no name.
+            interactive-prompt header). `None` for a `defs:` child flow, which has no name.
         description (`str`, *optional*, defaults to `None`):
             The flow's declared `description:`, or `None` if absent — human-facing
             metadata (e.g. the CLI's interactive-prompt header).

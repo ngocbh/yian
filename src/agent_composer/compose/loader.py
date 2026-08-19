@@ -183,7 +183,7 @@ def _single_node_def_cursor(
     return def_cursor.project_mapping({name: (node_body, body_cursor)})
 
 
-# A `defs:` callable accepts either a multi-node sub-flow or a flat single-node `kind:`
+# A `defs:` child flow accepts either a multi-node body or a flat single-node `kind:`
 # body. Both share the file-scoped metadata and type registry rather than declaring
 # `id`/`name`/`typedefs` themselves.
 # `asserts:` are allowed: the call/map child seam enforces a def's two-phase asserts
@@ -547,11 +547,11 @@ def load_flow(
     Load Compose YAML text into a runnable `ComposedFlow`.
 
     Parses, compiles, and validates the flow in one pass. A `call:` resolves
-    **defs-first** (an in-file `defs:` callable), then a **`uses:` alias** (external, with
-    the ref's `@<version>`), then a legacy bare name. With neither `search_paths` nor
-    `child_resolver`, a `call:`/`uses:` to a non-def callable raises — external resolution
-    is additive. The loader derives each callable's signature for the binding checks and
-    bakes its compiled flow onto the built `CallNode` so `run` drives it.
+    **defs-first** (an in-file `defs:` child flow), then a **`uses:` alias** (external,
+    with the ref's `@<version>`), then a legacy bare name. With neither `search_paths`
+    nor `child_resolver`, a `call:`/`uses:` to a non-def child flow raises — external
+    resolution is additive. The loader derives each child flow's signature for binding
+    checks and bakes its compiled graph onto the built `CallNode` so `run` drives it.
 
     Args:
         text (`str`):
@@ -1019,9 +1019,9 @@ def _load_def(
     scope: _CallableScope,
     def_cursor: SourceCursor | None = None,
 ) -> ComposedFlow:
-    """Build one in-file `defs:` entry into a `ComposedFlow` (a callable / sub-flow inline).
+    """Build one in-file `defs:` entry into a `ComposedFlow` (an inline child flow).
 
-    Supports both a multi-node sub-flow (`{input?, nodes, output?, asserts?}`)
+    Supports both a multi-node child flow (`{input?, nodes, output?, asserts?}`)
     and a flat single-node body (`{kind, ...}`). Both share the file's typedef
     registry and callable scope. ``def_cursor`` is the occurrence-local authored
     body: it retains absolute locations used by assembly and source diagnosis.
@@ -1042,7 +1042,7 @@ def _load_def(
                 def_cursor,
             )
         raise diagnostics.error(
-            f"defs entry {name!r}: a callable needs a `nodes:` sub-flow body "
+            f"defs entry {name!r}: a child flow needs a `nodes:` body "
             f"(inputs?/nodes/outputs?) OR a single-node `kind:` form",
             range=(def_cursor.range if def_cursor is not None else None),
         )
@@ -1124,7 +1124,7 @@ def _load_single_node_def(
     each auto-bound by name into the single node (`p = ${input.p}`); `output:` is the
     node's output TYPE (the codomain). Everything except `input:`/`output:` is the node
     body (kind + its logic fields + any node-local `asserts:`). It desugars to a one-node
-    sub-flow and runs through the same `_assemble` as the multi-node form. The synthetic
+    child flow and runs through the same `_assemble` as the multi-node form. The synthetic
     node projects its header, logic, generated bindings, and output type onto the flat
     authored def cursor without mutating that source."""
     diagnostics = scope.diagnostics

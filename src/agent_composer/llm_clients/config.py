@@ -1,4 +1,4 @@
-"""LLMConfig — per-AGENT model selection (the carrier `model_from_config` resolves).
+"""LLMConfig — model selection for an AGENT node.
 
 Lives with the clients that consume it: the AGENT node and the Compose loader's
 `llm_config:` field carry an `LLMConfig` (or the plain dict that normalizes to one),
@@ -41,7 +41,7 @@ LLMProvider = Literal[SUPPORTED_LLM_PROVIDERS]  # type: ignore[valid-type]
 
 class LLMConfig(BaseModel):
     """
-    Per-AGENT LLM selection — the carrier `model_from_config` resolves into a chat model.
+    LLM selection for an AGENT node — resolved into a chat model by `model_from_config`.
 
     Every field is optional: an unset `provider`/`model` falls back to the package's
     env-based defaults, and the reasoning knobs apply only when they match the selected

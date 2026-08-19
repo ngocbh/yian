@@ -2,9 +2,9 @@
 
 > Phase 2 of the [lifecycle](architecture.md). The [front end](compose.md) produced a
 > typed graph; the engine *interprets* it. The core (`runtime/engine.py` +
-> `runtime/eval_node.py`) is **kind-blind**: it branches on the closed `NodeResult`
-> sum and consults node-owned execution traits plus diagnostic projections, never
-> a node's `NodeKind`. The node side of the same contract is in
+> `runtime/eval_node.py`) is **kind-blind for behavior**: it branches on the closed
+> `NodeResult` sum and consults node-owned execution traits plus diagnostic
+> projections; it never dispatches execution or scheduling on `NodeKind`. The node side of the same contract is in
 > [Runtime nodes](nodes.md).
 
 ## Two actors, one narrow contract
@@ -128,14 +128,16 @@ topology. `compile.expand.build_grow` is the sole kind-aware interpreter that tu
 spawner and seed into a self-describing `Flow`. Package-root `run.py` injects that
 callable into the kind-blind runtime for both live growth and historical record replay.
 
-One convention unifies all three constructed fragments: **the subgraph is a
-well-formed child flow with a single `__start__` and `__end__`**. The engine schedules
-the `start`, and the builder bakes `commit_as=<spawner id>` onto the terminal — so
-however many inner nodes run, downstream sees one clean output committed under the
-spawner's id. The terminal's inherited `skipped_output_target()` follows that
-same baked redirect when its output is absent. Runtime may consume
-`compile.model` topology but never imports
-`compile.expand`.
+CALL and MAP fragments clone a child flow with one `__start__` and `__end__`.
+The engine schedules the start, and the builder bakes `commit_as=<spawner id>`
+onto the derived terminal. Its inherited `skipped_output_target()` follows the
+same redirect when output is absent.
+
+A LOOP continuation instead clones the body without a terminal redirect and
+wires its END to the next driver. When the loop stops, that driver returns
+`Output(carried, commit_as=origin_id)`; its `skipped_output_target()` also resolves
+to the authored loop origin. Downstream therefore sees one logical loop output.
+Runtime may consume `compile.model` topology but never imports `compile.expand`.
 
 The splice carries a few extra concerns (stamp recursion depth, loop bookkeeping),
 but the growth core reads **node-owned traits**
@@ -210,9 +212,10 @@ explicit node failure still wins immediately.
 
 `resume_flow(flow, log=path)` locks and validates an existing contiguous prefix,
 checks the authored-flow fingerprint, rebuilds a private graph, and folds every record
-through the same reducer used live. A terminal prefix is returned without a write. For
-a nonterminal prefix, one `RunResumedRecord` places durably started nodes with no durable
-outcome ahead of the ready frontier, then dispatch continues. Original inputs, run ID,
+through the same reducer used live. After any incomplete-tail repair, a terminal prefix
+is returned without appending a record. For a nonterminal prefix, one
+`RunResumedRecord` places durably started nodes with no durable outcome ahead of the
+ready frontier, then dispatch continues. Original inputs, run ID,
 worker count, typed values, growth seeds, and resolved LLM configuration all come from
 the log rather than current process defaults. See the [Python API](api.md).
 
@@ -225,7 +228,7 @@ number of nodes in flight differs. A pooled drive owns its workers through a ful
 abnormal dispatch exit first signals cooperative stop, then joins every submitted worker
 before the run boundary releases the log.
 
-## The entire interface the engine sees
+## The core node interface
 
 | The engine sees | Meaning |
 |---|---|
@@ -236,12 +239,15 @@ before the run boundary releases the log.
 | `node.forward(inputs, **caps) → NodeResult` | the one kind-specific body step |
 | `node.is_spawner` | may it return `Grow`? |
 | read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event` |
+| memory/evidence traits | `needs_memory_recall`, `needs_evaluation_trace`, and `memory_scope` gate injected recall and trace capture |
+| output metadata | `output_contract` validates committed values; `commit_as` selects a logical success target |
 | growth traits | `grow_depth_delta`, `is_loop` |
 | diagnostic-only projections | `exception_origin(exc)` selects the local origin; `failure_trace(operation_origin=None)` combines it with ordered ancestry without affecting program identity |
 | `node.skipped_output_target()` | logical output whose successors observe this physical node's absence |
 
-That is the complete list — a small set of traits/hooks plus the run/body pair. No `NodeKind` is
-visible to the engine.
+The pattern is a small set of traits and hooks around the shared run/body pair.
+Runtime may read `NodeKind` for diagnostic text, but behavior and scheduling never
+branch on it.
 
 Inline CODE implements `exception_origin(exc)` by retaining its recursive compiled
 code-object tree and selecting the deepest traceback frame owned by identity (`is`).

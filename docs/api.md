@@ -17,7 +17,11 @@ loaded = load_flow(
     search_paths=[flow_path.parent],
     source_label=flow_path.name,
 )
-result = run_flow(loaded, {"name": "Ada"})
+result = run_flow(
+    loaded,
+    {"name": "Ada"},
+    llm_config={"provider": "ollama", "model": "llama3.2:3b"},
+)
 print(result.status, result.output)
 ```
 
@@ -55,15 +59,18 @@ the package-root functions below own that setup for normal callers.
 load_flow(
     text: str,
     *,
-    search_paths: list[str | Path] = ...,
+    child_resolver: ChildResolver | None = None,
+    search_paths: list[str | Path] | None = None,
     source_label: str = "<flow>",
 ) -> ComposedFlow
 ```
 
 Parses, compiles, and validates the flow `text`, including every authored input
 default. Pass `search_paths` so that a flow's `call:` / `uses:` references resolve
-relative to the flow file's directory — typically `search_paths=[flow_dir]`.
-Pass the filename as `source_label` when `text` came from a file. Raises
+relative to the flow file's directory — typically `search_paths=[flow_dir]`—or
+inject `child_resolver` for host-provided external flow resolution. An injected
+resolver takes precedence over local search paths. Pass the filename as
+`source_label` when `text` came from a file. Raises
 `LoadError` on a bad flow (compile-time errors surface here, not at run time);
 its immutable `.diagnostic` owns the message, notes, and every ordered
 `DiagnosticFrame`, including frames from imported files.
@@ -160,12 +167,12 @@ and lifetime:
 ```python
 from agent_composer.memory.reflective import ReflectiveMemory
 
-reflective = ReflectiveMemory(
-    {"provider": "ollama", "model": "qwen3:30b-a3b-instruct-2507-q4_K_M"}
-)
+model = {"provider": "ollama", "model": "qwen3:30b-a3b-instruct-2507-q4_K_M"}
+reflective = ReflectiveMemory(model)
 result = run_flow(
     loaded,
     {"question": "What did we learn?"},
+    llm_config=model,
     memory={"reflective": reflective},
     learn=True,
 )
@@ -268,7 +275,12 @@ loaded = load_flow(
 )
 
 # In the original process. `run.jsonl` must not already exist.
-result = run_flow(loaded, {"question": "..."}, log=run_log)
+result = run_flow(
+    loaded,
+    {"question": "..."},
+    log=run_log,
+    llm_config={"provider": "ollama", "model": "llama3.2:3b"},
+)
 
 # Safe in a later process, whether the prefix is terminal or unfinished.
 recovered = resume_flow(loaded, log=run_log)
@@ -308,10 +320,10 @@ Fresh inputs, `run_id`, and LLM configuration cannot be supplied during recovery
 
 If the primary result is terminal but learning has a retryable failure,
 `resume_flow` appends only the next learning intent/result records; it does not
-append `RunResumedRecord` or execute graph nodes. Recovery is read-only and
-silent only when both the primary result and learning are settled. In every
-case, `RunResult.events` contains only primary observers published in the current
-call; learning records do not emit observers.
+append `RunResumedRecord` or execute graph nodes. After any incomplete-tail
+repair, recovery appends no records and is silent when both the primary result
+and learning are settled. In every case, `RunResult.events` contains only primary
+observers published in the current call; learning records do not emit observers.
 
 !!! important "Recovery may retry an interrupted node"
     A durable `NodeStarted` with no durable outcome is intentionally run again.
@@ -325,9 +337,9 @@ The Python API remains path-neutral: `run_flow(..., log=None)` uses memory and a
 caller chooses any durable path explicitly. The `ac` host adds a user-facing
 policy on top:
 
-- fresh `ac run FLOW` creates and reports
-  `~/.agent_composer/runs/<run_id>.jsonl` unless `--log PATH` selects another new
-  file;
+- fresh `ac run FLOW` selects and reports
+  `~/.agent_composer/runs/<run_id>.jsonl` unless `--log PATH` selects another
+  path; once runtime commits `RunStarted`, that file is authoritative;
 - `ac run FLOW --resume PATH` calls the same recovery boundary without accepting
   fresh inputs, a second log path, or provider/model configuration;
 - omitting `-w` on resume preserves the recorded worker count, while an explicit
@@ -358,7 +370,11 @@ def ask(**request):
     return input(request["question"] + " ")
 
 with install_ask_user(ask):
-    result = run_flow(approval, {"task": "Plan a team offsite"})
+    result = run_flow(
+        approval,
+        {"task": "Plan a team offsite"},
+        llm_config={"provider": "ollama", "model": "llama3.2:3b"},
+    )
 ```
 
 The handler receives `question`, `questions`, `answer_schema`, `title`, and
@@ -383,6 +399,7 @@ The terminal outcome of a fresh or recovered run has exactly these fields:
 | `output` | terminal flow value on success; otherwise `None` |
 | `failure` | canonical `Failure` on failure; otherwise `None` |
 | `events` | post-durable observer events published during this call only |
+| `learning` | independent post-terminal learning result, or `None` when learning is disabled |
 
 ## Next
 

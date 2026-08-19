@@ -1,39 +1,41 @@
 # Examples
 
 The [`examples/`](https://github.com/ngocbh/agent-composer/tree/main/examples)
-directory ships a set of generic flows, smallest first. Run any of them with
+directory in the repository contains a set of generic flows, smallest first.
+After cloning the repository, run them from its root with
 `ac run examples/<file> --input ...` (set a provider/model first — see
-[Installation](installation.md)).
+[Installation](installation.md)). The directory is not bundled in the current
+Python package.
 
 ## `hello.yaml` — the smallest flow
 
 One AGENT node, a string in and a string out.
 
 ```yaml
+id: hello
+name: hello
+description: Greet someone with a short, friendly one-liner.
+
 input:
   name: str
-nodes:
-  greet:
-    kind: agent
-    input:
-      name: ${input.name}
-    output: str
-    prompt: |-
-      Write a short, warm one-sentence greeting addressed to ${name}.
-output: ${greet.output}
+output: str
+kind: agent
+prompt: |-
+  Write a short, warm one-sentence greeting addressed to ${name}.
+  Just the greeting, no preamble.
 ```
 
 ```console
 ac run examples/hello.yaml --input name=Ada
 ```
 
-Shows the core shape: typed `input:`, a single AGENT node, a local prompt
-reference (`${name}`), and the flow `output:`.
+Shows compact mode: the flow and its single AGENT node share the typed `input:`
+and `output:` boundary, and the prompt reads the auto-wired local `${name}`.
 
 ## `summarize.yaml` — one transform
 
-A single AGENT node that condenses a block of text into one sentence. Same shape as
-`hello`, with a longer prompt.
+A single AGENT node that condenses a block of text into one sentence. Unlike compact
+`hello`, it shows the equivalent full `nodes:` form with explicit input and output wiring.
 
 ```console
 ac run examples/summarize.yaml --input text="...long text..."
@@ -42,9 +44,14 @@ ac run examples/summarize.yaml --input text="...long text..."
 ## `classify.yaml` — a constrained output
 
 An AGENT node whose `output:` is a `Literal[...]` enum, so the model must answer with
-exactly one tag, and the flow returns a multi-field object.
+exactly one tag, and the flow returns a one-field object.
 
 ```yaml
+id: classify
+name: classify
+input:
+  text: str
+
 nodes:
   label:
     kind: agent
@@ -94,7 +101,7 @@ model/tool loop.
 The fullest example. Given a decision question it:
 
 1. **fans out** to three independent angle AGENT nodes (the case for, against, the
-   risks) — no edges between them, so they run in parallel;
+   risks) — no edges between them, so a worker pool can run them in parallel;
 2. **fans in** to a synth AGENT node that picks a typed `Decision` enum;
 3. **routes** on that decision with `case ... on` to a decision-specific brief;
 4. **finalizes** by combining the decision with whichever brief ran (an n-ary
@@ -102,11 +109,11 @@ The fullest example. Given a decision question it:
 5. returns a **multi-field object**, guarded by an `assert`.
 
 ```console
-ac run examples/decision-brief.yaml --input question="Should a small team adopt a monorepo?"
+ac run examples/decision-brief.yaml --input question="Should a small team adopt a monorepo?" --num-workers 4
 ```
 
-It uses a `Literal` typedef, an `Optional` input with a default, fan-out +
-fan-in, a typed enum output, `case ... on` with `else`, a coalesce, multi-output,
+It uses a `Literal` typedef, an `Optional` input with an expression fallback, fan-out +
+fan-in, a typed enum output, `case ... on` with `else`, a coalesce, a multi-field output,
 and asserts — all with AGENT nodes, so it runs against any provider with no extra
 Python.
 

@@ -17,8 +17,8 @@ know the shape of it:
   be represented by one node, a flow, or a child flow. The concrete **AGENT
   node** (`kind: agent`) is the LLM-backed leaf.
 - Flows **compose**. CALL, MAP, and LOOP apply child flows, so a large
-  transformation is built from small ones nested to any depth—function
-  composition, not a monolith.
+  transformation is built recursively from small ones within the runtime depth
+  limit—function composition, not a monolith.
 - Computation is **pure at the boundary**: a node returns an outcome and the
   engine binds it; a node never receives or mutates the variable pool. Each kind
   implements `forward`; the base `Node.run` template applies defaults and fires
@@ -555,9 +555,11 @@ transient `StreamChunk` values and then return one of the same three results.
 The runtime core is **kind-blind**. It dispatches on this result sum and consults
 node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
-`needs_stop_event`, and `skipped_output_target`) plus the diagnostic-only
-projections `exception_origin` and `failure_trace`, never on `NodeKind`. The
-diagnostic projections do not affect program identity. The closed kind-aware
+`needs_stop_event`, `needs_memory_recall`, `needs_evaluation_trace`,
+`memory_scope`, and `skipped_output_target`) plus the diagnostic-only projections
+`exception_origin` and `failure_trace`; it never branches behavior on `NodeKind`.
+A kind label may appear in diagnostic text. The diagnostic projections do not
+affect program identity. The closed kind-aware
 growth match lives in `compile.expand.build_grow`, outside runtime.
 `compile.model.GrowthRejected` crosses that boundary only when a legal
 CALL/MAP/LOOP kind supplies a malformed seed. Unsupported kinds and builder or

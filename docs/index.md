@@ -16,11 +16,11 @@ after an error; so can the model. The human owns the graph; the LLMs only fill t
 boxes — they never rewrite the structure at runtime.
 
 A flow is a function: it has a typed `input:`, a graph of `nodes:`, and an `output:`.
-The graph between nodes is *inferred* from the `${...}` references — you never draw
-edges by hand.
+Data edges are inferred from `${...}` references. Authors may add ordering-only
+edges with `depends_on:` or `runs_after:` when no value passes between nodes.
 
 ```yaml
-# debate.yaml — frame a question, argue both sides in parallel, then decide
+# debate.yaml — frame a question, branch into both sides, then decide
 id: debate
 name: debate
 input:
@@ -41,7 +41,7 @@ nodes:
   against_case:
     kind: agent
     input:
-      brief: ${frame.output}            # frame -> against_case (runs parallel to for_case)
+      brief: ${frame.output}            # independent of for_case
     output: str
     prompt: "Make the strongest case AGAINST, against these criteria: ${brief}"
   verdict:
@@ -67,12 +67,12 @@ frame ──┤                ├──> verdict
 ```
 
 `for_case` and `against_case` both read `${frame.output}` but never reference each
-other, so the engine runs them **in parallel**; `verdict` reads both, so it **waits
-for both** before it runs. The structure is fixed by the author: every run argues
-both sides before deciding — you can read that guarantee straight off the file.
+other, so a worker pool can run them **in parallel**; `verdict` reads both, so it
+**waits for both** before it runs. The structure is fixed by the author: every run
+argues both sides before deciding — you can read that guarantee straight off the file.
 
 ```console
-$ ac run debate.yaml --input question="Should a small team adopt a monorepo?"
+$ ac run debate.yaml --input question="Should a small team adopt a monorepo?" --num-workers 4
 Adopt the monorepo. For a small team the simpler cross-project refactors and single ...
 ```
 
@@ -82,12 +82,15 @@ Adopt the monorepo. For a small team the simpler cross-project refactors and sin
   it before it runs, spot a bug in the structure, and refine it after an error — and an
   LLM can do the same, because the surface is small and explicit.
 - **The structure is fixed by the author** — the LLM fills leaf boxes; it does not
-  rewrite the graph. The same flow runs the same way every time, so a fix stays fixed.
+  rewrite the graph. The authored graph stays fixed across runs, so a structural
+  fix stays fixed.
 - **An agent is a typed transformation** — it can be represented by one node, a
   flow, or a child flow. The LLM-backed `kind: agent` is one concrete node kind.
-- **Flows compose** — CALL, MAP, and LOOP apply child flows nested to any depth.
-- **Pure at the boundary** — a node *returns* its output and the engine *binds* it; a
-  node never mutates shared state. Outputs are immutable, typed, serializable values.
+- **Flows compose** — CALL, MAP, and LOOP apply child flows recursively within
+  the runtime depth limit.
+- **Pure at the boundary** — a node *returns* an outcome and the engine records
+  and applies it; a node never mutates shared state. Values are typed, losslessly
+  serializable, and copied at node boundaries.
   The append-only run log makes engine state recoverable from a validated record
   prefix. External effects are not automatically replay-safe.
 - **Effects stay inside explicit leaves** — an AGENT node's granted `ask_user` tool and a
@@ -99,7 +102,7 @@ Adopt the monorepo. For a small team the simpler cross-project refactors and sin
 
 <div class="grid cards" markdown>
 
-- :material-download: **[Installation](installation.md)** — `pip install agent-composer`, provider extras, and picking a model.
+- :material-download: **[Installation](installation.md)** — install the current source, choose provider extras, and pick a model.
 - :material-console: **[The `ac` CLI](cli.md)** — run a flow from the terminal, supply inputs, and serve blocking human requests.
 - :material-file-code: **[Flow syntax](syntax.md)** — the full Compose-YAML reference: types, `${...}` refs, node kinds, `case`, coalesce, asserts.
 - :material-robot: **[Agent](agent.md)** — the framework's agent model, vocabulary, and YAML representations.

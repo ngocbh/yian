@@ -294,7 +294,7 @@ recorded snapshots. `RunResult` exposes exactly `input`,
 | a flow | a function `'a -> 'b` | typed in, typed out; composes |
 | an agent | a composable transformation `'a -> 'b` | conceptual umbrella represented by a node, flow, or child flow |
 | an AGENT node | an effectful leaf computation | concrete LLM-backed node; no separate flow contract |
-| `call:` / `uses:` | function application / a module ref | nests to any depth |
+| `call:` / `uses:` | function application / a module ref | nests recursively within the runtime depth limit |
 | the variable pool bind | `let (node_id, key) = ...` | immutable, no mutation |
 | `NodeKind` + `match` | a variant + exhaustive `match` | closed set, no registry; runtime matches on worker-result/record variants and traits, while compile's `build_grow` interprets spawner seeds by kind |
 | `Output \| Route \| Grow` | a sum type (the node result) | failure is a `raise`, not a case |
@@ -320,9 +320,9 @@ model made enforceable.
   the conceptual umbrella for that composable transformation, not another runtime
   contract.
 - **Composable / recursive** — CALL/MAP/LOOP nodes apply child flows
-  (`call:`/`uses:`), nestable to any depth. Never flatten an applied child flow;
-  preserve recursion through
-  compile + run; run-record replay must rebuild and verify recorded growth.
+  (`call:`/`uses:`) recursively within the runtime depth limit. Never flatten an
+  applied child flow; preserve recursion through compile + run; run-record replay
+  must rebuild and verify recorded growth.
 - **Privileges no output type or domain** — prefer the most general primitive that
   composes over a use-case-specific feature.
 - **Node never writes the pool** (purity); **typed, losslessly-serializable state**
@@ -372,8 +372,8 @@ model made enforceable.
   and predicate expressions affect identity, while ordered predicate origins do not.
 - **Closed `NodeKind`; the core is kind-blind** — `NodeKind` stays a closed enum, but the engine
   core dispatches on worker-result/run-record variants and consults node-owned
-  execution-semantic traits/hooks plus diagnostic projections, never `node.kind`
-  (ratchet: census 0).
+  execution-semantic traits/hooks plus diagnostic projections; it never branches
+  behavior on `node.kind` (ratchet: census 0). Message-only kind reads are allowed.
 - **Single writer** — workers are pure executors; the dispatcher is the only
   ready-frontier consumer and mutator. A pooled drive records starts before submission,
   records accepted outcomes before applying them, and signals cooperative stop before
@@ -732,7 +732,7 @@ and runtime:
   lexical owner path. Authored defs/uses/call targets cannot enter that reserved
   namespace, while diagnostics use the friendly enclosing-node label rather than
   the digest.
-- One loader-owned callable scope contains authored `defs:`/`uses:` plus a
+- One loader-owned child-flow scope contains authored `defs:`/`uses:` plus a
   private table. Private builders register during assembly and run lazily;
   private/def/uses resolution shares one success cache. Private children and
   defs share the scope's in-progress guard, while the default file resolver's

@@ -3,8 +3,9 @@
 [![Documentation](https://readthedocs.org/projects/agent-composer/badge/?version=latest)](https://agent-composer.readthedocs.io)
 
 Agent Composer is a small language and runtime for readable agent flows. You
-author a fixed graph in Docker-Compose-shaped YAML; the framework infers its
-edges, validates its types, and runs it through an append-only log.
+author a fixed graph in Docker-Compose-shaped YAML; the framework infers data
+dependencies, applies explicit ordering constraints, validates types, and runs
+through an append-only log.
 
 In this framework, an **agent** is a composable transformation from a named
 input record to an output value. It can be represented by one node, a flow of
@@ -38,8 +39,8 @@ See [Agent](docs/agent.md) for the conceptual model and
 - **Readable:** the flow is the plan. Humans and models can inspect the same
   artifact before it runs.
 - **Composable:** typed nodes build flows; CALL, MAP, and LOOP apply child flows
-  at any depth.
-- **Predictable:** data references determine the edges, and the LLM never
+  recursively within the runtime depth limit.
+- **Predictable:** data references determine the data edges, and the LLM never
   changes the authored call graph.
 - **Recoverable:** every accepted transition is appended before it is applied,
   so an interrupted run can replay a validated record prefix.
@@ -51,19 +52,17 @@ See [Agent](docs/agent.md) for the conceptual model and
 > **Early stage.** Agent Composer is under active development. The API, YAML
 > surface, and CLI may change quickly.
 
-Install from PyPI:
-
-```console
-pip install "agent-composer[all]"
-```
-
-Or develop from a clone:
+The current documentation describes the `main` branch. PyPI release `0.0.1`
+contains an older, incompatible package, so install the current version from a
+clone until the next release:
 
 ```console
 git clone https://github.com/ngocbh/agent-composer.git
 cd agent-composer
-pip install -e ".[all,dev]"
+python -m pip install ".[all]"
 ```
+
+For development, use `python -m pip install -e ".[all,dev]"` instead.
 
 Provider extras can be installed separately: `anthropic`, `openai`, `google`,
 or `ollama`. The core engine and CLI do not require a provider SDK; a flow needs
@@ -80,8 +79,10 @@ ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
 Repeatable `--input k=v` supplies scalar overrides. In a terminal, the CLI
 prompts for declared inputs that are still missing.
 
-Every CLI run writes an authoritative JSONL log. The default path is reported as
-`~/.agent_composer/runs/<run_id>.jsonl`; choose another new path with `--log`.
+The CLI reports its selected JSONL path before execution. Once runtime
+initialization commits `RunStarted`, that file is the authoritative log. The
+default is `~/.agent_composer/runs/<run_id>.jsonl`; choose another new path with
+`--log`.
 Resume an interrupted run against the same flow:
 
 ```console
@@ -115,7 +116,11 @@ flow = load_flow(
     search_paths=[path.parent],
     source_label=path.name,
 )
-result = run_flow(flow, {"name": "Ada"})
+result = run_flow(
+    flow,
+    {"name": "Ada"},
+    llm_config={"provider": "ollama", "model": "llama3.2:3b"},
+)
 print(result.status, result.output)
 ```
 

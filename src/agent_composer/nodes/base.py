@@ -71,7 +71,7 @@ class Output:
     under `commit_as` instead of the node's own id and fires that target's out-edges.
     A `str` target id, or `None` (the common case) to commit under the node's own id.
     LOOP uses it when its final driver commits under the compiled origin; the baked
-    `Node.commit_as` field covers subflow-terminal redirects.
+    `Node.commit_as` field covers child-flow terminal redirects.
     """
 
     value: Any = None
@@ -223,7 +223,7 @@ class Node(ABC):
         commit_as (`str`, *optional*):
             Engine-baked commit redirect: write this node's Output under `commit_as`
             instead of its own id (and fire that target's out-edges). Set by the
-            compile-owned growth builders on a subflow terminal (a CALL/MAP child END
+            compile-owned growth builders on a child-flow terminal (a CALL/MAP child END
             filler or a MAP END-list filler) to point back at the
             spawner id; `None` for an ordinary node (commit under its own id).
         origin_id (`str`, *optional*):
@@ -325,7 +325,7 @@ class Node(ABC):
         # Empty for most nodes.
         self.pre_asserts: list[Assertion] = []
         self.post_asserts: list[Assertion] = []
-        # Engine-baked commit redirect (see the class docstring): a subflow terminal
+        # Engine-baked commit redirect (see the class docstring): a child-flow terminal
         # commits its Output under this spawner id instead of its own id. Stamped by the
         # compile-owned growth builders; `None` for an ordinary node.
         self.commit_as: Optional[str] = None

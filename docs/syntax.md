@@ -1,10 +1,10 @@
 # Flow syntax
 
 A flow is a **function**: a typed `input:`, a graph of `nodes:`, and a typed
-`output:`. You never draw edges — the graph is *inferred* from the `${...}`
-references between nodes. The human owns the structure; the LLM only fills the
-AGENT node leaves. See [Agent](agent.md) for the conceptual model and
-terminology; this page is the YAML reference.
+`output:`. `${...}` references infer data edges; `depends_on:` and `runs_after:`
+add ordering-only edges. The human owns the structure; the LLM only fills the
+AGENT node leaves. See [Agent](agent.md) for the conceptual model and terminology;
+this page is the YAML reference.
 
 ## The flow shape
 
@@ -319,7 +319,7 @@ model, temperature, …) is resolved independently: an AGENT node fills only the
 it leaves unset from the layer outside it. Precedence, most specific first:
 
 1. the AGENT node's own `llm_config:`
-2. the enclosing child flow's `llm_config:`, then each parent flow outward
+2. the enclosing flow's `llm_config:`, then each parent flow outward
 3. the CLI `--provider` / `--model` flags (`ac run … --provider anthropic`)
 4. process provider/model defaults, read exactly once when the run initializes
 
@@ -501,7 +501,7 @@ ask:
 ```
 
 **Adaptive questions** — an LLM composes the questions from context. The block
-**desugars at load** into a synthetic compose AGENT node (`<node>__compose`, output
+**desugars at load** into a synthetic composer AGENT node (`<node>__compose`, output
 `list[Question]`) wired into the gate; the runtime gate never calls an LLM.
 The input name `__questions` is reserved for that generated wire and cannot be
 authored on an adaptive gate.

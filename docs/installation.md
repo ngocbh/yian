@@ -2,12 +2,18 @@
 
 Agent Composer needs **Python 3.10+**.
 
+The current documentation describes the `main` branch. PyPI release `0.0.1`
+contains an older, incompatible package, so install the current version from a
+clone until the next release:
+
 ```console
-pip install agent-composer
+git clone https://github.com/ngocbh/agent-composer.git
+cd agent-composer
+python -m pip install .
 ```
 
-The distribution name on PyPI is `agent-composer`; the import name is
-`agent_composer`; the CLI is `ac`.
+The current source uses distribution name `agent-composer`, import name
+`agent_composer`, and CLI command `ac`.
 
 ```console
 ac --help
@@ -19,12 +25,14 @@ The core (engine + `ac` CLI) installs with **no LLM SDK**. Each provider is an
 optional extra — install the one(s) you actually use:
 
 ```console
-pip install "agent-composer[anthropic]"   # Claude  (langchain-anthropic)
-pip install "agent-composer[openai]"      # GPT     (langchain-openai)
-pip install "agent-composer[google]"      # Gemini  (langchain-google-genai)
-pip install "agent-composer[ollama]"      # local   (langchain-ollama)
-pip install "agent-composer[all]"         # all four
+python -m pip install ".[anthropic]"   # Claude  (langchain-anthropic)
+python -m pip install ".[openai]"      # GPT     (langchain-openai)
+python -m pip install ".[google]"      # Gemini  (langchain-google-genai)
+python -m pip install ".[ollama]"      # local   (langchain-ollama)
+python -m pip install ".[all]"         # all four
 ```
+
+Run these commands from the repository root.
 
 Provider SDKs are imported **lazily** — only when a flow actually runs an AGENT node
 against that provider. Importing a provider you haven't installed raises a clear
@@ -60,6 +68,8 @@ export AGENT_COMPOSER_DEFAULT_MODEL=llama3.2:3b
 export OLLAMA_BASE_URL=http://localhost:11434
 ac run examples/hello.yaml --input name=Ada
 ```
+
+The example path exists in the clone; run this command from its repository root.
 
 ## Development install
 

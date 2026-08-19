@@ -40,7 +40,11 @@ from agent_composer import load_flow, run_flow
 
 path = Path("flow.yaml")
 flow = load_flow(path.read_text(), source_label=path.name)
-result = run_flow(flow, {"question": "What changed?"})
+result = run_flow(
+    flow,
+    {"question": "What changed?"},
+    llm_config={"provider": "ollama", "model": "llama3.2:3b"},
+)
 ```
 
 `load_flow()` returns a `ComposedFlow`; `run_flow()` returns a `RunResult` when
@@ -57,7 +61,7 @@ construction instead of reparsing text to recover values or locations. A shared
 load context also caches successfully compiled external `uses:` files by
 resolved path.
 
-Compose then lowers authoring conveniences, builds nodes, infers edges from
+Compose then lowers authoring conveniences, builds nodes, infers data edges from
 `${...}` references, validates contracts and the DAG, and synthesizes the flow
 boundary. The result separates two responsibilities:
 
@@ -162,8 +166,8 @@ canonically and fsynced. `resume_flow(flow, log=path)` then:
 2. validates its contiguous records and the supplied flow fingerprint;
 3. rebuilds a private graph and folds the prefix through the same reducer used
    during live execution;
-4. returns a fully settled run without writing, or continues the unfinished
-   part.
+4. after any incomplete-tail repair, returns a fully settled run without
+   appending records, or continues the unfinished part.
 
 If primary execution is unfinished, recovery appends one `RunResumedRecord`,
 retries nodes that have a durable start but no durable outcome, and continues
@@ -184,7 +188,7 @@ object:
 | Boundary | Owner | What crosses it |
 | --- | --- | --- |
 | Source presentation | `compose/` | `SourceDocument`, source cursors, load diagnostics, and an optional origin resolver |
-| Semantic program | `compile/` | `CompiledFlow` plus opaque origins; no YAML ranges or mutable values |
+| Semantic program | `compile/` | `CompiledFlow` plus opaque origins; no YAML ranges or mutable run state |
 | Node execution | `nodes/` | Plain bound inputs and one `Output`, `Route`, or `Grow`; no shared-state access |
 | Run setup | `run.py` | Private graph, injected host capabilities, initialized state/log pair, and final `RunResult` |
 | Runtime authority | `runtime/` | `RunRecord` sequence reduced into `RunState`; no YAML parsing or node-kind dispatch |

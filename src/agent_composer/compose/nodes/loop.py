@@ -31,7 +31,7 @@ from agent_composer.compose.nodes.resolver import (
 class LoopDescriptor(NodeDescriptor):
     """kind=loop — a `('a -> 'a) -> 'a -> 'a` driver over a carried record.
 
-    `call` names the body subflow (defs-first, else external — same resolution as
+    `call` names the body child flow (defs-first, else external — same resolution as
     `call`/`map`). The authored `input:` mapping seeds the carried record at turn 0. Exactly one of
     `while_`/`until_`/`times` carries the predicate; `max` is the runaway guard (required for
     while/until). `while`/`until` are Python keywords, so they land here as `while_`/`until_`.
@@ -46,7 +46,7 @@ class LoopDescriptor(NodeDescriptor):
     deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
 
     Class attrs: `kind="loop"`; `allowed` adds `call`, normalized `inputs`, `while`/`until`/`times`/`max`, and
-    `asserts` to the commons; `required` is `{"call"}` (the body subflow);
+    `asserts` to the commons; `required` is `{"call"}` (the body child flow);
     `binding_fields=("inputs",)` — a loop's carried-record seed bindings participate in
     inline-call and case-output desugaring.
     `keyword_remap` is loop-owned: it maps the surface Python keywords `while:`/`until:` onto the
@@ -76,7 +76,7 @@ class LoopDescriptor(NodeDescriptor):
         `('a -> 'a) -> 'a -> 'a` driver — resolve-and-bake, then retain Compose-only ranges
         via `_finish`.
 
-        `loop` is a higher-order driver: the body subflow (`call:`) reads a subset of the
+        `loop` is a higher-order driver: the body child flow (`call:`) reads a subset of the
         carried record (`input:`) and returns the WHOLE next carried record. Returns a
         `BuildResult` (the split): the node carries `params`; the flow owns the carried-record
         seed sources in `wiring`. Resolves the callable through `ctx.resolver` (required — a loop

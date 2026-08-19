@@ -45,7 +45,8 @@ nodes during a run.
 | Capability | YAML representation | Owner |
 | --- | --- | --- |
 | Task instructions | `prompt:` | AGENT node |
-| Model behavior | `mode:`, `llm_config:`, `retries:`, `env:` | AGENT node, with flow-level defaults where supported |
+| Model behavior | `mode:`, `llm_config:`, `retries:` | AGENT node, with flow-level defaults where supported |
+| Static node configuration | `env:` | Any node, with defaults from its enclosing flow |
 | Tool access | `tools: [name, ...]` | Tool-calling AGENT node; the host registers implementations |
 | Memory | `memory_policy:` | Flow or AGENT node; the host injects the named implementation |
 | Composition | `nodes:` plus `kind: call`, `kind: map`, or `kind: loop` | Flow or composite node |

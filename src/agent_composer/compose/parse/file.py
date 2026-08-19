@@ -115,7 +115,7 @@ class ComposeFile(BaseModel):
     `inputs` / `nodes` / `typedefs` / `defs` stay raw dicts and `outputs` raw `Any` (a
     `${...}` binding string or a name -> binding map); downstream parsers read each
     section into its typed form. `defs` holds in-file callables (each entry an authored
-    sub-flow `{input?, nodes, output?, asserts?}`), resolved by a `call:` defs-first.
+    child flow `{input?, nodes, output?, asserts?}`), resolved by a `call:` defs-first.
 
     A `model_validator(mode='before')` maps authored `input:`/`output:` keys to the
     plural Python carrier fields at the top level and recursively in node/definition

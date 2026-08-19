@@ -7,17 +7,19 @@
 
 ## Why a flow is typed
 
-A flow is a function: typed values in, a typed value out, and every node produces a typed
-value the next one reads. Two forces make the typing non-negotiable:
+A flow is a function: typed values in and a typed value out. Value-producing
+nodes pass typed values to consumers; routing nodes govern control without
+binding a value. Two forces make the typing non-negotiable:
 
 - **Durability.** A run can be recovered in another process by replaying its
   authoritative record prefix. The initial record carries the whole pool and later
   success records carry typed outputs. JSON alone is lossy — `1` and `1.0` can collapse
   to the same representation — so every value carries its own type tag and decodes back
   to *exactly* the type it had.
-- **Loud failure at the boundary.** A node returns a plain value; the engine checks it
-  against the node's declared output type before appending its success record and reducing
-  the write into the pool — so a wrong shape fails there, not three nodes later.
+- **Loud failure at the boundary.** A value-producing node returns a plain value;
+  the engine checks it against the declared output type before appending its success
+  record and reducing the write into the pool — so a wrong shape fails there, not
+  three nodes later.
 
 ```
    types.py  → authoring surface: "list[Signal]" / typedefs: → a runtime Type
@@ -133,8 +135,9 @@ origin-free.
 
 The runtime state primitive the engine owns. Narrow by design:
 
-- **A node produces exactly ONE value.** `store[node_id]` is a single `TypedValue`;
-  "multiple outputs" are fields of one `object`. Writes are **write-once** and typed.
+- **Each node id has at most one value slot.** A value-producing node commits one
+  `TypedValue`; CASE routes without binding a value. "Multiple outputs" are fields
+  of one `object`. The engine binds each logical target once; stored values are typed.
 - **Three read namespaces**, all via `${...}`:
 
   | Reference | Resolves to |

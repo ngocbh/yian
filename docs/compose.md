@@ -1,7 +1,7 @@
 # compose — how YAML becomes a `CompiledFlow`
 
 > The front end. `compose/` is the **only** package that knows YAML exists. It takes
-> flow text and lowers it to a `CompiledFlow` — the typed, frozen graph the
+> flow text and lowers it to a `CompiledFlow` — the typed, reusable source-neutral graph the
 > [engine](engine.md) runs. Everything domain- or syntax-specific lives here so the
 > layers below stay generic. For the authoring surface (what you *write*), see
 > [Flow syntax](syntax.md); this page is how that surface is *compiled*.
@@ -9,7 +9,7 @@
 ## The shape of the phase
 
 One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
-**parse → desugar → build → wire → check → freeze.**
+**parse → desugar → build → wire → check → finalize.**
 
 ```
  text
@@ -36,8 +36,9 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ stamp node wiring       → ordinary Parameter key origins + ordinary/reserved
   │                             final Binding value origins
   │
-  ├─ infer_data_edges       → read every ${...} → draw the edges (nobody draws them by hand);
+  ├─ infer_data_edges       → read every ${...} and add the corresponding data edges;
   │                            append each case's own data+control edges from its build
+  ├─ infer_ordering_edges   → add authored depends_on/runs_after ordering-only edges
   ├─ validate_references    → every ${...} resolves and type-checks
   ├─ stamp node assertions → validate/classify one originated carrier per list position
   ├─ stamp flow outputs     → source-backed bare/mapped values on final
@@ -303,9 +304,9 @@ different carriers: `FlowOutput.binding` locates the reexport expression, while
 
 ---
 
-## Edges are inferred, never drawn
+## Data edges are inferred; ordering can be explicit
 
-You never write an edge. You write a reference:
+A data edge comes from a reference:
 
 ```yaml
 verdict:
@@ -316,10 +317,10 @@ verdict:
 
 `infer_data_edges` (in `edges/data.py`) ref-walks every binding, reads out the node ids each
 `${...}` depends on, and adds exactly those edges. The graph is a
-*consequence* of the data references — it cannot drift out of sync with them, and
-parallelism is automatic: two nodes that don't reference each other simply have no edge
-between them, so the engine runs them concurrently. (`depends_on`/`runs_after` add
-ordering-only edges for the rare case with no data dependency.)
+*consequence* of the data references — it cannot drift out of sync with them.
+Two nodes that do not reference each other have no data edge, so a worker-pooled run
+may execute them concurrently. (`depends_on`/`runs_after` add ordering-only edges
+for the rare case with no data dependency.)
 
 The same `${...}` grammar is *evaluated* at run time and *ref-walked* here at load
 time — one grammar, two readers. See [Expressions](expressions.md).
@@ -349,7 +350,7 @@ corresponds to them; authored nodes inside retained inline bodies are stamped no
 
 `load_flow()` returns a **`ComposedFlow`**:
 
-- `compiled` — the `CompiledFlow` (immutable topology: nodes, inferred edges, wiring,
+- `compiled` — the `CompiledFlow` (reusable source-neutral topology: nodes, compiled edges, wiring,
   synthesized `start`/`end` boundaries, and ordered node/boundary assertion carriers),
 - `input` — the canonical typed `Parameter` values. Authored defaults are
   validated at load; supplied values are checked when the boundary binds them,

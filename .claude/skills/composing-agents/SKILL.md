@@ -8,9 +8,9 @@ description: Use when authoring an Agent Composer flow — writing or editing a 
 In Agent Composer, an **agent** is a composable typed transformation represented
 by a node, a flow, or a child flow. A **flow is a function**: a typed `input:`, a
 graph of `nodes:`, and a typed `output:`. The concrete **AGENT node**
-(`kind: agent`) is the LLM-backed leaf. You never draw edges—the engine infers
-the graph from `${...}` references. The human owns the structure; the LLM only
-fills the AGENT node leaves.
+(`kind: agent`) is the LLM-backed leaf. `${...}` references infer data edges;
+`depends_on:` and `runs_after:` add ordering-only edges. The human owns the
+structure; the LLM only fills the AGENT node leaves.
 
 Conceptual vocabulary: [`docs/agent.md`](../../../docs/agent.md). Full authoring
 reference: [`docs/syntax.md`](../../../docs/syntax.md). Working flows:
@@ -502,7 +502,7 @@ WAIT return ordinary node outputs from their live calls. There is no authored
 
 ## Authoring checklist
 - [ ] `input:` and `output:` are fully typed; every type used is a scalar/form or a `typedefs:` entry.
-- [ ] Every node consumes upstream values via `${...}` in its `input:` (the edges are inferred).
+- [ ] Every data dependency uses `${...}` in `input:`; ordering-only dependencies use `depends_on:` or `runs_after:`.
 - [ ] Every `agent` `output:` is typed — bare `str` for free text, or a
   `Literal[...]`/other supported shape for structured generation.
 - [ ] Every prompt references only the node's own local input names.

@@ -6,13 +6,17 @@
   {{ super() }}
   <script>
     document$.subscribe(() => {
-      document.querySelectorAll("pre.mermaid").forEach(diagram => {
+      const diagrams = document.querySelectorAll(
+        'pre.mermaid:not([data-processed="true"])'
+      )
+      diagrams.forEach(diagram => {
         if (diagram.parentElement.classList.contains("mermaid-scroll")) return
         const scroller = document.createElement("div")
         scroller.className = "mermaid-scroll"
         diagram.replaceWith(scroller)
         scroller.append(diagram)
       })
+      mermaid.run({ nodes: diagrams })
     })
   </script>
 {% endblock %}

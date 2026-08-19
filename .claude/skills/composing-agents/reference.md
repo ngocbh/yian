@@ -282,8 +282,9 @@ prove `bool`. This is the shape `ac chat` runs; see `chat.yaml` (and
 - **Prompts see only LOCAL inputs.** Inside `prompt:` you may reference only names
   the node declares in its own `input:` block, written bare (`${name}`). Pool refs
   (`${input.x}`, `${other.output}`) go in the `input:` block first.
-- **No `edges:` block, no per-node `id:`, no body wrappers.** The graph is inferred
-  from `${...}` references; a node body is flat.
+- **No `edges:` block, no per-node `id:`, no body wrappers.** `${...}` references
+  infer data edges; `depends_on:` / `runs_after:` add ordering-only edges. A node
+  body is flat.
 - **`call:` resolves defs-first, else a `uses:` alias** (a sibling file by name on
   the search path). `alias@v1` adds a version guard.
 - **MODEL nodes aren't wired** — `kind: model` parses but running one raises. Use
@@ -316,7 +317,7 @@ Model fields resolve **per field, most-specific wins**. An AGENT node fills only
 it leaves unset from the layer outside it. Precedence (most specific first):
 
 1. the AGENT node's own `llm_config:`
-2. the enclosing child flow's `llm_config:`, then each parent flow outward
+2. the enclosing flow's `llm_config:`, then each parent flow outward
 3. the CLI `--provider` / `--model` flags
 4. process provider/model defaults, read exactly once when the run initializes
 

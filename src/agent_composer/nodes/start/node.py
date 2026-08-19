@@ -7,7 +7,7 @@ inputs, and defaults; START's body is the identity over that bound record.
 The flow's PRE `asserts:` are lowered onto START's ordinary `post_asserts` (each `${input.X}`
 rewritten to `${output.X}`) and fire through the generic wrapper/`eval_node` seam against START's
 COERCED output record — START is an ordinary scheduled node, not a bypass. This unifies top-level
-and child (subflow) boundary asserts: both flow through the same post-assert seam. NOT START_ID's
+and child-flow boundary asserts: both flow through the same post-assert seam. NOT START_ID's
 job: system/clock/run_id. Hidden from authors: a reserved __-prefixed id, never parseable.
 """
 

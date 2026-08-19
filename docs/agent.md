@@ -69,7 +69,15 @@ flowchart TB
     end
 
     request --> serializer["Provider/API serialization"]
-    serializer --> invocation["Model invocation<br/>[ provider-defined context tokens | tool/function schemas | output controls ]"]
+    subgraph invocation["Model invocation"]
+        direction LR
+        context_tokens["provider-defined<br/>context tokens"]
+        tool_schemas["tool/function schemas"]
+        output_controls["output controls"]
+        context_tokens ~~~ tool_schemas
+        tool_schemas ~~~ output_controls
+    end
+    serializer --> invocation
 ```
 
 Every invocation receives the ordered messages. Depending on the mode and turn,

@@ -10,7 +10,7 @@
 
 id: pipeline
 name: pipeline
-description: Agent drafts text; code parses it into a typed record.
+description: An AGENT node drafts text; a CODE node parses it into a typed record.
 
 typedefs:
   Parsed:                          # a record — fields recurse

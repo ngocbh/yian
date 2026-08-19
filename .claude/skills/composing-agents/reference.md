@@ -31,7 +31,7 @@ Copy, rename, and edit.
 | [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list and collect in source order |
 | [`inline-composites.yaml`](templates/inline-composites.yaml) | provider-free inline CALL, MAP, and LOOP child bodies (no `defs:`) |
 | [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — chat-shaped blocking turn |
-| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — `human_input` → exit CASE → agent/code, with flow-owned exit, the shape `ac chat` runs |
+| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → exit CASE → AGENT/CODE nodes, with flow-owned exit, the shape `ac chat` runs |
 | [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml) | flow-level `llm_config:`, per-node override, `inherit: false` |
 | [`node-env-config.yaml`](templates/node-env-config.yaml) | flow-level `env:` default + per-node override (node wins), e.g. `max_tool_iterations` |
 
@@ -227,7 +227,7 @@ worker until the host answers). For "ask only if the model decides it needs to",
 give a tool-calling AGENT node `tools: [ask_user]`. Both calls stay inside their live
 node execution. A `human_input` gate can present multiple-choice questions
 (static `questions:`), have an LLM compose them
-(`adaptive_questions:`, which desugars to a compose-agent + gate at load), or read
+(`adaptive_questions:`, which desugars to a synthetic composer AGENT node + gate at load), or read
 them from an upstream node (`questions: ${name}`); the answer is then a record
 keyed by each question's `header`. The adaptive desugar owns the `__questions`
 input name, so authors cannot bind that name on an adaptive gate.

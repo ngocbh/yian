@@ -1,9 +1,9 @@
 # LLM config cascade — per-field fill-the-gap, most-specific wins.
 #
-# A flow-level `llm_config:` sets defaults for every agent below it. Each agent fills only
-# the fields it leaves unset from the flow layer (then the parent flow, then the CLI
+# A flow-level `llm_config:` sets defaults for every AGENT node below it. Each AGENT node
+# fills only the fields it leaves unset from the flow layer (then the parent flow, then the CLI
 # `--provider`/`--model`, then process provider/model defaults captured once when the run
-# initializes). An agent's own field always wins. `inherit: false` skips the authored
+# initializes). An AGENT node's own field always wins. `inherit: false` skips the authored
 # flow/parent/CLI layers but still receives those process defaults.
 #
 # Try the CLI layer (fills the gaps nothing else set):
@@ -13,7 +13,7 @@ id: llm-config-cascade
 name: llm_config_cascade
 description: Show the llm_config cascade — flow default, per-node override, inherit:false.
 
-llm_config:                       # the flow layer: every agent inherits these by default
+llm_config:                       # the flow layer: every AGENT node inherits these defaults
   provider: anthropic
   temperature: 0.2
 

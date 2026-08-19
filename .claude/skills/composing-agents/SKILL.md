@@ -285,7 +285,8 @@ AskUserQuestion-shaped) — the answer is a record keyed by each `header`; `outp
 then defaults to `object`. `prompt:` is optional; `questions:` and
 `adaptive_questions:` are mutually exclusive. The gate itself never chooses or
 calls an LLM: `adaptive_questions:` is LOAD-TIME sugar that lowers to a
-compose AGENT node + gate; the gate only calls the host's installed interaction tool.
+synthetic composer AGENT node + gate; the gate only calls the host's installed
+interaction tool.
 ```yaml
 ask:                                  # static questions list
   kind: human_input

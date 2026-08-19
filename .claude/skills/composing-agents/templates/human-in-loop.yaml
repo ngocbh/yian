@@ -1,7 +1,7 @@
 # Human in the loop — draft, BLOCK for a person, then finalize.
 # A `human_input` node ALWAYS blocks its worker for a typed answer (validated
 # against its `output:`). `ac run` serves the prompt while the flow remains live.
-# For "ask only if the model decides it needs to", grant an agent the `ask_user`
+# For "ask only if the model decides it needs to", grant an AGENT node the `ask_user`
 # tool instead (see ask-user in examples/).
 
 id: human-in-loop

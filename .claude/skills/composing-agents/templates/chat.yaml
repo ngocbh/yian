@@ -10,7 +10,7 @@
 
 id: chat
 name: chat
-description: A turn-by-turn conversational assistant (plain agent, deterministic transcript).
+description: A turn-by-turn assistant (plain-mode AGENT node, deterministic transcript).
 
 input:
   opening: str            # seed transcript; `ac chat` passes "" (empty)

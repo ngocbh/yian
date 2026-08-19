@@ -1,7 +1,7 @@
-# Typed output — an agent that emits a structured value, not just text.
+# Typed output — an AGENT node that emits a structured value, not just text.
 #
-# An agent's `output:` may be any declared shape. Only a bare `str` keeps the agent a
-# text producer; a `Literal[...]`, record, non-string scalar, or list switches it to
+# An AGENT node's `output:` may be any declared shape. Only a bare `str` keeps the
+# node a text producer; a `Literal[...]`, record, non-string scalar, or list switches it to
 # STRUCTURED GENERATION — the engine derives a schema from `output:` and asks the model
 # to emit a conforming value (native structured output, or a JSON prompt-injection
 # fallback for providers that lack it), validated at the write boundary like any other
@@ -14,7 +14,7 @@
 
 id: typed-output
 name: typed_output
-description: An agent declaring a record output -> structured generation.
+description: An AGENT node declaring a record output -> structured generation.
 
 input:
   text: str

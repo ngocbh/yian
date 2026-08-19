@@ -11,7 +11,7 @@
 
 id: tool-use
 name: tool_use
-description: Call a registered tool, then have an agent write from the result.
+description: Call a registered tool, then have an AGENT node write from the result.
 
 input:
   subject: str

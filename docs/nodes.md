@@ -1,10 +1,10 @@
-# Nodes — the unit of work
+# Runtime nodes — the unit of work
 
 > The node side of the [engine contract](engine.md). Each kind supplies `forward`
 > plus a few static traits and inherits the shared `run` template; the engine reads
 > only those and the returned `NodeResult`, never the kind.
 
-## A node is a pure function
+## Pure at the graph-state boundary
 
 A flow is a graph of steps; **a node is one step** — "ask an LLM", "run a Python
 function", "repeat until good enough". The engine reads the node's inputs out of the pool
@@ -17,10 +17,11 @@ and hands them over as a plain dict; the node computes and returns a `NodeResult
                             └──────────┘
 ```
 
-Purity here is a boundary rule: the graph state is reproducible and can be reconstructed
-from its authoritative records because no node mutates it directly. An effectful leaf may
-still consult an LLM, a human, or the wall clock, but its only graph-visible result is the
-`NodeResult` it returns.
+This is a boundary rule, not a claim that every node is mathematically pure. The
+graph state is reproducible because no node mutates it directly. An effectful
+leaf may still consult an LLM, a human, or the wall clock, but its only
+graph-visible outcome is the `NodeResult` it returns. See [Agent](agent.md) for
+how nodes and flows fit the same conceptual model.
 
 ## The contract
 
@@ -94,16 +95,16 @@ what `run` returns:
    human_input, wait, start, end
 ```
 
-- An ordinary **value-producing leaf** does one thing and returns `Output`. AGENT
-  `ask_user`, HUMAN_INPUT, and WAIT may block inside the live invocation, but
+- An ordinary **value-producing leaf** does one thing and returns `Output`.
+  `ask_user` on an AGENT node, HUMAN_INPUT, and WAIT may block inside the live invocation, but
   still return `Output`. WAIT returns `None` after its absolute UTC deadline.
 - A **router** (`case`) is a leaf that returns `Route(handle)` — no value, it just selects
   the live out-edge (siblings skip-flood). Still `is_spawner=False`; routing isn't growth.
 - A **spawner** returns `Grow` with a canonical seed describing the requested work.
   Compile-owned `build_grow` turns it into a subgraph with one `__start__` and
-  `__end__` (whose result and absence cross this node's boundary via baked
+  `__end__` (whose output and absence cross this node's boundary via baked
   `commit_as` and the inherited skip-target hook). See
-  [growth](engine.md#growth-a-node-that-is-really-a-subflow).
+  [growth](engine.md#growth-expanding-a-child-flow).
 
 ## A kind is one `forward`
 
@@ -112,7 +113,7 @@ class CodeNode(Node):                  # LEAF — run a Python function
     def forward(self, inputs, **caps):
         return Output(self.fn(inputs))
 
-class AgentNode(Node):                 # LEAF — one live model/tool loop
+class AgentNode(Node):                 # AGENT LEAF — one live model/tool loop
     def forward(self, inputs, **caps):
         return Output(self.run_model_loop(inputs))
 
@@ -120,7 +121,7 @@ class CaseNode(Node):                  # ROUTER — pick a branch, produce no va
     def forward(self, inputs, **caps):
         return Route(self.select(inputs))
 
-class MapNode(Node):                   # SUBFLOW — run a child once per item
+class MapNode(Node):                   # SPAWNER — apply a child flow per item
     is_spawner = True
     def forward(self, inputs, **caps):
         records = [caps["bind_item"](item) for item in inputs["over"]]

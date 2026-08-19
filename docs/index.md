@@ -2,13 +2,13 @@
 
 **Bridging the trust gap between humans and agents.**
 
-Hand an agent a complex task and it improvises a plan on the fly — calling tools,
-branching, looping — in whatever shape the context happens to produce. That flexibility
-is also the problem: the workflow is *opaque*. You don't see the plan the agent chose,
+Hand a free-form LLM agent a complex task and it improvises a plan on the fly—calling tools,
+branching, looping—in whatever shape the context happens to produce. That flexibility
+is also the problem: the plan is *opaque*. You don't see the structure the model chose,
 you can't tell whether it has a bug, and the next run might quietly do something else.
 When the stakes are real, "it usually works" isn't trust.
 
-The Agent Composer makes the workflow a **first-class artifact that both you and the
+Agent Composer makes the flow a **first-class artifact that both you and the
 model can read**. Instead of the agent inventing its plan at runtime, the flow is
 written out as a small Docker-Compose-shaped YAML file — by you, by an LLM, or by the
 two of you together. You can see exactly what runs, inspect it for bugs, and refine it
@@ -78,21 +78,21 @@ Adopt the monorepo. For a small team the simpler cross-project refactors and sin
 
 ## Why this shape
 
-- **The workflow is readable** — the flow *is* the plan, in plain YAML. You can review
+- **The flow is readable** — it *is* the plan, in plain YAML. You can review
   it before it runs, spot a bug in the structure, and refine it after an error — and an
   LLM can do the same, because the surface is small and explicit.
 - **The structure is fixed by the author** — the LLM fills leaf boxes; it does not
   rewrite the graph. The same flow runs the same way every time, so a fix stays fixed.
-- **A flow is a function** — typed inputs in, typed outputs out, nothing hidden. An
-  agent is just a flow whose leaf computation happens to be an LLM loop.
-- **Flows compose** — a node can *be* another flow, nested to any depth.
+- **An agent is a typed transformation** — it can be represented by one node, a
+  flow, or a child flow. The LLM-backed `kind: agent` is one concrete node kind.
+- **Flows compose** — CALL, MAP, and LOOP apply child flows nested to any depth.
 - **Pure at the boundary** — a node *returns* its output and the engine *binds* it; a
   node never mutates shared state. Outputs are immutable, typed, serializable values.
   Together with the append-only run log, that referential transparency makes runs
   reproducible and recoverable from a validated record prefix.
-- **Effects stay inside explicit leaves** — an agent's granted `ask_user` tool and a
+- **Effects stay inside explicit leaves** — an AGENT node's granted `ask_user` tool and a
   `human_input` gate block in their live node call; `wait` blocks until an absolute UTC
-  deadline. `ask_user` returns its answer into the same agent loop; the graph sees each
+  deadline. `ask_user` returns its answer into the same model/tool loop; the graph sees each
   leaf's eventual ordinary output instead of a graph rewrite or continuation.
 
 ## Where to go next
@@ -102,6 +102,7 @@ Adopt the monorepo. For a small team the simpler cross-project refactors and sin
 - :material-download: **[Installation](installation.md)** — `pip install agent-composer`, provider extras, and picking a model.
 - :material-console: **[The `ac` CLI](cli.md)** — run a flow from the terminal, supply inputs, and serve blocking human requests.
 - :material-file-code: **[Flow syntax](syntax.md)** — the full Compose-YAML reference: types, `${...}` refs, node kinds, `case`, coalesce, asserts.
+- :material-robot: **[Agent](agent.md)** — the framework's agent model, vocabulary, and YAML representations.
 - :material-lightbulb: **[Examples](examples.md)** — walk through the flows that ship in `examples/`.
 - :material-language-python: **[Python API](api.md)** — use the engine as a library (`load_flow` / `run_flow` / `resume_flow`).
 

@@ -154,12 +154,12 @@ source rather than the prompt's blank path.
 
 ## Blocking interactions
 
-`human_input` and an agent's authored `ask_user` tool are blocking interactions
+`human_input` and an AGENT node's authored `ask_user` tool are blocking interactions
 inside live node calls. They are separate from initial input gathering and are
 unchanged by its non-TTY omission policy. `ac` runs the flow behind a main-thread
 terminal broker: the node's worker waits, the broker reads the answer from the
 host input stream, and the answer returns into that same live node call. A
-`human_input` always asks; an agent calls `ask_user` only when its model chooses
+`human_input` always asks; an AGENT node calls `ask_user` only when its model chooses
 to.
 
 ```console
@@ -216,7 +216,7 @@ ac run examples/debate.yaml --input question="Adopt a monorepo?" --num-workers 4
   dispatcher owns all state, so the **terminal output is the same** whatever the
   worker count — only the intra-run scheduling changes (and wall-clock time, when a
   flow has parallel branches that each do real work, e.g. separate LLM calls).
-- Each blocking HUMAN_INPUT, agent `ask_user`, or future-deadline WAIT occupies one worker;
+- Each blocking HUMAN_INPUT, `ask_user` call from an AGENT node, or future-deadline WAIT occupies one worker;
   independent ready nodes use any remaining workers and wait when all are occupied.
 
 The dispatcher appends every node start and outcome to the selected authoritative

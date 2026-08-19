@@ -130,7 +130,7 @@ defs and eagerly resolved but uncalled aliases contribute no public routes.
 External `uses:` resolution adds one reuse boundary. During a load graph, successfully
 compiled external flows are cached by resolved absolute path. A repeated alias or diamond
 dependency therefore reuses the same canonical `ComposedFlow`; it does not reread,
-reparse, or recompile that physical file. The file-local callable scope validates that
+reparse, or recompile that physical file. The file-local child-flow scope validates that
 canonical child's resolver and creates one immutable, lexically rebased view per `uses:`
 alias before CALL/MAP/LOOP bake the child graph. Repeated calls through one alias reuse its
 view; distinct aliases and diamond branches receive disjoint origin keys. Only successfully

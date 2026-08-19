@@ -1,9 +1,10 @@
 # Python API
 
 Use the engine as a library: load a flow, run it, and optionally retain an
-authoritative append-only log for recovery. An AGENT's `ask_user` call,
+authoritative append-only log for recovery. An AGENT node's `ask_user` call,
 HUMAN_INPUT, and WAIT stay inside live node calls; their enclosing nodes return
-ordinary outputs.
+ordinary outputs. For the node/flow/agent distinction, start with
+[Agent](agent.md).
 
 ```python
 from pathlib import Path
@@ -114,11 +115,11 @@ terminal. Stored defaults are not coerced.
 - `on_event` — receives post-durable observer events as they occur.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
   durable records nor members of `RunResult.events`.
-- `llm_config` — the outer authored layer of the per-agent configuration cascade.
+- `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
   The resolved map and process defaults are captured at initialization.
 - `memory` — host-created implementations keyed by authored `memory_policy`
   name. `None` leaves all policies dormant. A mapping opens one snapshot-isolated
-  session per referenced policy, enables agent recall, and records the exact
+  session per referenced policy, enables recall for AGENT nodes, and records the exact
   public snapshots needed by recovery.
 - `learn` — when true, run durable learning after the graph reaches either
   success or failure. It requires `memory`; learning failures are reported
@@ -134,7 +135,7 @@ There are no `error`, `error_type`, or standalone `traceback` aliases.
 Host-control, callback, log I/O, and internal reducer errors propagate after the
 engine has drained active workers and released the boundary-owned log.
 
-## Injecting workflow memory
+## Injecting agent memory
 
 YAML names a policy without importing its implementation:
 
@@ -184,8 +185,9 @@ learning, and idempotent policy commits behind those interfaces.
 of `RunResult.status` and has status `succeeded`, `failed`, or `incomplete`.
 Failures identify the policy and the exact frame for `learn`, or the policy-wide
 `commit`; `incomplete` means a retryable operation remains for `resume_flow`.
-Every flow/agent frame learns only from its own accepted occurrences, while flow
-frames are recalled by descendant agents before an optional agent-local frame.
+Every frame owned by a flow or AGENT node learns only from its own accepted
+occurrences. Descendant AGENT nodes recall flow frames before an optional local
+frame owned by that node.
 
 ## Diagnosing a failed run
 
@@ -339,7 +341,7 @@ and the log-sensitivity warning.
 
 ## Blocking human interaction
 
-An authored `human_input` node and an agent granted `tools: [ask_user]` call the
+An authored `human_input` node and an AGENT node granted `tools: [ask_user]` call the
 same process-owned tool synchronously. A library host installs one handler for the
 whole live run; the calling node remains active until the handler returns or
 raises:

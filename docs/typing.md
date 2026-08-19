@@ -22,7 +22,7 @@ value the next one reads. Two forces make the typing non-negotiable:
 ```
    types.py  → authoring surface: "list[Signal]" / typedefs: → a runtime Type
    values.py → the leaf: ValueKind, the TypedValue containers, the write-boundary check
-   pool.py   → VariablePool: the run's typed memory + the ${...} resolver
+   pool.py   → VariablePool: the run's typed value store + the ${...} resolver
 ```
 
 ## `ValueKind` — the closed vocabulary
@@ -129,7 +129,7 @@ expression on `FlowOutput.binding`. A compact root or flat single-node definitio
 has authored contract origins even though its generated flow-output reexport remains
 origin-free.
 
-## `VariablePool` — the run's typed memory
+## `VariablePool` — the run's typed value store
 
 The runtime state primitive the engine owns. Narrow by design:
 
@@ -155,4 +155,5 @@ The runtime state primitive the engine owns. Narrow by design:
 - **Durable by construction** — the discriminated union makes canonical record replay
   lossless.
 - **One vocabulary** — `ValueKind.value` is author token, wire tag, and display name at once.
-- **Fail at the boundary** — nodes stay pure; `build_value_as` catches a wrong type early.
+- **Fail at the boundary** — nodes cannot mutate graph state; `build_value_as`
+  catches a wrong type early.

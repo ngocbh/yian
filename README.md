@@ -2,257 +2,107 @@
 
 [![Documentation](https://readthedocs.org/projects/agent-composer/badge/?version=latest)](https://agent-composer.readthedocs.io)
 
-Hand an agent a complex task and it improvises a plan on the fly — calling tools,
-branching, looping — in whatever shape the context happens to produce. That flexibility
-is also the problem: the workflow is *opaque*. You don't see the plan the agent chose,
-you can't tell whether it has a bug, and the next run might quietly do something else.
-When the stakes are real, "it usually works" isn't trust.
+Agent Composer is a small language and runtime for readable agent flows. You
+author a fixed graph in Docker-Compose-shaped YAML; the framework infers its
+edges, validates its types, and runs it through an append-only log.
 
-The Agent Composer makes the workflow a **first-class artifact that both you and the
-model can read**. Instead of the agent inventing its plan at runtime, the flow is
-written out as a small Docker-Compose-shaped YAML file — by you, by an LLM, or by the
-two of you together. You can see exactly what runs, inspect it for bugs, and refine it
-after an error; so can the model. The human owns the graph; the LLMs only fill the leaf
-boxes — they never rewrite the structure at runtime.
+In this framework, an **agent** is a composable transformation from a named
+input record to an output value. It can be represented by one node, a flow of
+nodes, or a child flow used inside another flow. The YAML **AGENT node**
+(`kind: agent`) is one concrete implementation: an LLM-backed node with a task
+prompt and optional tool grants, model configuration, and memory policy.
 
-A flow is a function: it has a typed `input:`, a graph of `nodes:`, and an `output:`.
-The graph between nodes is *inferred* from the `${...}` references — you never draw
-edges by hand.
+The author fixes the graph. LLMs generate values and may choose among explicitly
+granted tools, but they do not rewrite the flow structure at run time.
 
 ```yaml
-# debate.yaml — frame a question, argue both sides in parallel, then decide
-id: debate
-name: debate
+# hello.yaml — a compact one-node flow
+id: hello
+name: hello
 input:
-  question: str
-nodes:
-  frame:
-    kind: agent
-    input:
-      question: ${input.question}
-    output: str
-    prompt: "Restate '${question}' and list the 2-3 criteria that should drive it."
-  for_case:
-    kind: agent
-    input:
-      brief: ${frame.output}            # edge: frame -> for_case
-    output: str
-    prompt: "Make the strongest case FOR, against these criteria: ${brief}"
-  against_case:
-    kind: agent
-    input:
-      brief: ${frame.output}            # frame -> against_case (runs parallel to for_case)
-    output: str
-    prompt: "Make the strongest case AGAINST, against these criteria: ${brief}"
-  verdict:
-    kind: agent
-    input:
-      for_case: ${for_case.output}      # fan-in: verdict waits for BOTH sides
-      against_case: ${against_case.output}
-    output: str
-    prompt: |-
-      Weigh both sides and recommend in 2-3 sentences, with the key reason.
-      For: ${for_case}
-      Against: ${against_case}
-output: ${verdict.output}
+  name: str
+output: str
+kind: agent
+prompt: Write a warm one-sentence greeting to ${name}.
 ```
-
-The four nodes form a **diamond**, inferred entirely from the `${...}` references —
-no edges are drawn by hand:
-
-```
-        ┌─> for_case ────┐
-frame ──┤                ├──> verdict
-        └─> against_case ┘
-```
-
-`for_case` and `against_case` both read `${frame.output}` but never reference each
-other, so the engine runs them **in parallel**; `verdict` reads both, so it **waits
-for both** before it runs. The structure is fixed by the author: every run argues
-both sides before deciding — you can read that guarantee straight off the file.
 
 ```console
-$ ac run debate.yaml --input question="Should a small team adopt a monorepo?"
-Adopt the monorepo. For a small team the simpler cross-project refactors and single ...
+ac run hello.yaml --input name=Ada --provider ollama --model llama3.2:3b
 ```
+
+See [Agent](docs/agent.md) for the conceptual model and
+[Flow syntax](docs/syntax.md) for the complete YAML surface.
+
+## Why fixed flows?
+
+- **Readable:** the flow is the plan. Humans and models can inspect the same
+  artifact before it runs.
+- **Composable:** typed nodes build flows; CALL, MAP, and LOOP apply child flows
+  at any depth.
+- **Predictable:** data references determine the edges, and the LLM never
+  changes the authored call graph.
+- **Recoverable:** every accepted transition is appended before it is applied,
+  so an interrupted run can replay a validated record prefix.
+- **Extensible:** nodes return outcomes; the engine owns graph state and remains
+  independent of node kinds.
 
 ## Install
 
-> **Early stage.** Agent Composer is under active development and not yet on PyPI.
-> The API, YAML surface, and CLI may move or change quickly between commits.
+> **Early stage.** Agent Composer is under active development and is not yet on
+> PyPI. The API, YAML surface, and CLI may change quickly.
 
-Install directly from the repository:
+Install from GitHub:
 
 ```console
-pip install "git+https://github.com/ngocbh/agent-composer.git"
+pip install "agent-composer[all] @ git+https://github.com/ngocbh/agent-composer.git"
 ```
 
-Or clone and install in editable mode:
+Or develop from a clone:
 
 ```console
 git clone https://github.com/ngocbh/agent-composer.git
 cd agent-composer
-pip install -e .
+pip install -e ".[all,dev]"
 ```
 
-Provider SDKs are optional extras — install the one(s) you use:
+Provider extras can be installed separately: `anthropic`, `openai`, `google`,
+or `ollama`. The core engine and CLI do not require a provider SDK; a flow needs
+one only when it contains an AGENT node.
+
+## Run a flow
 
 ```console
-pip install "agent-composer[anthropic] @ git+https://github.com/ngocbh/agent-composer.git"   # Claude
-pip install "agent-composer[openai]    @ git+https://github.com/ngocbh/agent-composer.git"   # GPT
-pip install "agent-composer[google]    @ git+https://github.com/ngocbh/agent-composer.git"   # Gemini
-pip install "agent-composer[ollama]    @ git+https://github.com/ngocbh/agent-composer.git"   # local models
-pip install "agent-composer[all]       @ git+https://github.com/ngocbh/agent-composer.git"   # everything
+ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
+  [--provider P] [--model M] [-w N] [--log PATH]
 ```
 
-From a clone, the extras are simply `pip install -e ".[anthropic]"`, `".[all]"`, etc.
+`--inputs` accepts a JSON object, including lists, records, and explicit nulls.
+Repeatable `--input k=v` supplies scalar overrides. In a terminal, the CLI
+prompts for declared inputs that are still missing.
 
-The core (engine + CLI) installs with no provider SDK; importing a provider you
-haven't installed raises a clear `pip install agent-composer[...]` hint.
-
-## The `ac` CLI
+Every CLI run writes an authoritative JSONL log. The default path is reported as
+`~/.agent_composer/runs/<run_id>.jsonl`; choose another new path with `--log`.
+Resume an interrupted run against the same flow:
 
 ```console
-ac run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [-w N] [--provider P] [--model M] [--quiet] [--verbose] [--engine-trace]
-ac run FLOW.yaml --resume PATH [-w N] [--quiet] [--verbose] [--engine-trace]
+ac run FLOW.yaml --resume PATH
 ```
 
-- Every fresh CLI run is durable. By default its reported log is
-  `~/.agent_composer/runs/<run_id>.jsonl`; `--log PATH` selects a different new
-  file. Existing files are never overwritten. The default directories use mode
-  `0700` and JSONL files use `0600`; logs can contain inputs, model/tool/human
-  data, outputs, configuration, and tracebacks, so do not publish them.
-- `--resume PATH` recovers that log with the same flow. It rejects `--input`,
-  `--inputs`, `--provider`, `--model`, and `--log`, so recovery cannot replace
-  recorded inputs or model configuration.
-- `--inputs file.json` loads inputs from a JSON object, including native
-  list/object values and explicit `null`.
-- Repeatable `--input k=v` flags override individual JSON keys. This is a
-  string/scalar surface: values are coerced, where supported, against scalar
-  input types; stored defaults are not coerced. It does not parse list/object
-  JSON or explicit null, so use `--inputs` for those values outside an
-  interactive prompt.
-- At run start a boxed **banner** (to stderr) names the flow being run — its
-  `name`, `version`, and `description` — unless `--quiet`.
-- With an interactive stdin (TTY), each declared input still missing is
-  **prompted interactively**. Each prompt is labelled with its canonical resolved
-  type, a required (`*`)/optional mark, and any default. The four outcomes are an
-  explicit value, `Set null` when the type accepts null, omit/use-default when
-  allowed, and cancellation. Nullable boolean and `Literal[...]` prompts embed
-  `Set null` in their value select. Null-capable open scalar/list/object prompts
-  first show omit/default (when allowed), `Set null`, and `Enter value`; Enter
-  opens the existing scalar or typed-JSON editor. An optional blank there returns
-  to the palette instead of silently omitting, while a non-null-capable direct
-  optional/defaulted text editor still treats blank as omission. The null-only
-  `None` type offers `Set null` (and omission when allowed) but no Enter action.
-  String text `null` and a `Literal` tag named `null` remain ordinary strings.
-  A structured editor still rejects root `null`—choose `Set null` instead—while
-  nested null remains valid wherever the nested contract accepts it. Cancelling
-  any prompt cancels the run.
-  Without a TTY, missing optional/defaulted declarations stay absent so START owns
-  defaults and optional absence. Missing required declarations are rejected
-  together as invalid CLI input (exit code `2`) before provider or run-log setup;
-  native list/object values and explicit null require `--inputs`, while ordinary
-  scalars may use `--input` or `--inputs`.
-- `HUMAN_INPUT` and an authored agent `ask_user` tool are separate live-run
-  interactions, unchanged by the initial-input omission policy. They block inside
-  the live node call while the CLI's main-thread broker reads the answer from the
-  host input stream. `WAIT` does not prompt; it blocks a worker until its absolute
-  UTC deadline and returns `None`. Each interaction completes inside the same live
-  node invocation.
-- Per-node progress prints to **stderr**: each running node shows a spinner that
-  becomes a green `✓` on success or a red `✗` (plus the error) on failure.
-  `--quiet`/`-q` suppresses it; `--verbose`/`-v` also prints each node's output.
-- `--num-workers`/`-w N` — engine worker pool size. A fresh run defaults to `0`,
-  the single-threaded deterministic drain. Resume without this flag preserves
-  the latest recorded count; an explicit value changes only future scheduling.
-  `>=1` runs independent ready nodes (a fan-out) concurrently. The output is the
-  same either way.
-- The **current working directory is added to `sys.path`** for the run, so a flow's
-  `code: pkg.mod:fn` refs to packages under the dir you invoke `ac` from resolve
-  without exporting `PYTHONPATH` (like `python script.py` makes its dir importable).
-- A flow that fails to **compile** prints a **located** error — a boxed `.yaml`
-  source frame (line numbers, the offending line(s) highlighted; a multi-node error
-  like a cycle highlights every implicated node and prints a legend of the dependency
-  edges that close the loop) titled `file:line`, with the message below — instead of an
-  engine traceback; `--engine-trace` adds the Python traceback for debugging the engine
-  itself.
-- A **runtime** failure resolves its opaque origin trace through the loaded flow and uses
-  the same diagnostic renderer as load failures. Nested `defs:`, external `uses:`, CALL,
-  MAP, and LOOP failures show source-owned frames in outermost-to-innermost order, down to
-  the exact operation origin. If source presentation is missing or broken, the original
-  failure remains unlocated instead of the CLI inferring a range from runtime ids or graphs.
+Run logs can contain inputs, model/tool/human data, outputs, memory snapshots,
+configuration, and tracebacks. Treat them as sensitive. See [The `ac`
+CLI](docs/cli.md) for input behavior, diagnostics, concurrency, and recovery.
 
-### Choosing a provider/model
-
-The default provider and model are read from the environment:
+For an interactive flow-backed chat:
 
 ```console
-export AGENT_COMPOSER_DEFAULT_PROVIDER=anthropic        # or openai / google / ollama
-export AGENT_COMPOSER_DEFAULT_MODEL=claude-sonnet-4-5
-export ANTHROPIC_API_KEY=...                            # provider's own key var
+ac chat [FLOW] [--workspace DIR] [--provider P] [--model M]
 ```
 
-For a local Ollama endpoint:
+The default composer chat can inspect, validate, run, and—after explicit
+approval—write flows inside its workspace. A supplied chat flow owns its own
+typed exit behavior.
 
-```console
-export AGENT_COMPOSER_DEFAULT_PROVIDER=ollama
-export AGENT_COMPOSER_DEFAULT_MODEL=llama3.2:3b
-export OLLAMA_BASE_URL=http://localhost:11434
-ac run examples/hello.yaml --input name=Ada
-```
-
-### `ac chat` — an interactive REPL, built as a flow
-
-```console
-ac chat [FLOW] [--workspace/-C DIR] [--provider P] [--model M]
-```
-
-An interactive chat session. The REPL is itself an Agent Composer flow — a
-`loop` node runs one turn per iteration. Its blocking `human_input` feeds a
-`case`: exact `/exit` and `/quit` values route to an exit record before the
-reply model, while ordinary text runs `agent` and deterministic transcript code.
-The assistant's reply prints before the next `You:` prompt.
-
-- `FLOW` (optional) — a chat flow `.yaml`. The **default** is the bundled
-  *composer chat*: a `tool_calling` agent with flow-op tools
-  (`list_flows`, `read_flow`, `validate_flow`, `run_flow`, `write_flow`) so you
-  can build and run flows conversationally. `write_flow` validates proposed YAML,
-  then shows the target plus a full create preview or overwrite diff; it writes only
-  after the host receives an explicit **Approve** answer. Non-interactive use,
-  rejection, cancellation, an unavailable approval host, or a target changed while
-  the prompt is open fails closed without writing. The secure commit requires
-  directory-descriptor/no-follow support and a single-link target; unsupported hosts
-  and multiply hard-linked targets also fail closed.
-- `--workspace`/`-C DIR` — the directory the flow-op tools are confined to
-  (default: the current directory).
-- `--provider P` / `--model M` — fill-the-gap overrides for agents that set no
-  provider/model of their own (the outermost cascade layer, same as `ac run`).
-- The bundled flow ends on exact `/exit` or `/quit`; the broker normalizes EOF
-  (Ctrl-D) to `/exit`. A user-supplied flow must author the same route — otherwise
-  typed or EOF-normalized `/exit` is ordinary input. `ac chat` never intercepts
-  typed text.
-- A single bad turn does not end the session: if the reply agent errors mid-turn
-  (a raise, or hitting its tool-iteration cap), the CLI prints the failure and
-  continues from your conversation so far. The initial attempt and every restart
-  receive separate reported logs under the default runs directory.
-- Ctrl-C propagates into a flow running through the bundled `run_flow` tool (including
-  a blocking WAIT); a nested flow failure remains a tool result and does not cancel chat.
-
-## Examples
-
-The [`examples/`](examples/) directory ships a few generic flows:
-
-- `hello.yaml` — the smallest agent flow (one AGENT, string in/out), in compact form.
-- `debate.yaml` — frame → argue for/against in parallel → verdict (a fan-out/fan-in diamond).
-- `summarize.yaml` — condense a block of text into one sentence.
-- `classify.yaml` — label text with a constrained `Literal[...]` output.
-- `triage-ticket.yaml` — extract a structured record from a support message, then draft a reply.
-- `decision-brief.yaml` — fan-out to three angles, pick a verdict, route, and finalize.
-- `ask-user.yaml` / `human-approval.yaml` — model-chosen vs. always-on blocking human interaction.
-- `chat.yaml` — a turn-by-turn conversational REPL (a `loop` per turn; deterministic transcript) — the shape `ac chat` runs.
-
-## Use it as a library
+## Use the Python API
 
 ```python
 from pathlib import Path
@@ -260,85 +110,48 @@ from pathlib import Path
 from agent_composer import load_flow, run_flow
 
 path = Path("hello.yaml")
-loaded = load_flow(
+flow = load_flow(
     path.read_text(),
     search_paths=[path.parent],
     source_label=path.name,
 )
-result = run_flow(loaded, {"name": "Ada"})
+result = run_flow(flow, {"name": "Ada"})
 print(result.status, result.output)
 ```
 
-`source_label` gives load-time diagnostics ownership of the text they frame.
-`LoadError.diagnostic` is a canonical `Diagnostic`, including ordered source
-frames for definitions and imported files; callers never need to combine an
-error range with separately retained YAML text.
+`load_flow` parses, validates, and compiles the YAML into a reusable
+`ComposedFlow`. `run_flow` makes a private graph for one run and returns a
+`RunResult` with either the flow output or an expected `Failure`. Host, control,
+log, and invariant faults propagate as exceptions.
 
-Failed runs return `result.failure`, an immutable `Failure` also exported from
-`agent_composer`. Use its stable `code` for control flow and `message` for
-display; node identity, opaque origin trace, and optional debugging cause stay
-on that same value rather than parallel error fields.
+A library host can inject tool handlers, provider configuration, and named
+memory implementations. Passing `learn=True` enables a separate post-terminal
+learning phase; its status never replaces the primary flow result. See the
+[Python API](docs/api.md) for recovery, diagnostics, tools, and memory.
 
-Library callers can resolve that opaque trace with
-`loaded.diagnose(result.failure)`, which returns the canonical presentation-only
-`Diagnostic` defined in `agent_composer.diagnostics` (it is not a package-root
-export). The method copies `code`, `message`, `node_id`, `cause_type`, and
-`traceback`, then resolves the complete trace atomically. The CLI uses this same
-method for runtime failures before passing the result to the shared diagnostic
-renderer; it does not resolve runtime ids or graph topology itself.
+## Documentation
 
-`loaded.origin_resolver` is the source-neutral authority for every origin reachable
-from the compiled Compose graph. It is `None` only when that graph is source-free;
-otherwise it resolves local, nested, and external-file origins to diagnostic frames.
-Resolver metadata does not affect flow equality, fingerprints, or growth digests.
+- [Agent](docs/agent.md) — what “agent,” node, flow, child flow, memory, and run
+  mean in this framework.
+- [Architecture](docs/architecture.md) — how YAML becomes a compiled flow and a
+  `RunResult`.
+- [Flow syntax](docs/syntax.md) — the complete authoring reference.
+- [Examples](docs/examples.md) — annotated flows from `examples/`.
+- [Compose](docs/compose.md) — parsing, lowering, validation, and source origins.
+- [The engine](docs/engine.md) — scheduling, records, recovery, and learning.
+- [Runtime nodes](docs/nodes.md) — the `Node` / `NodeResult` contract.
+- [Engine design](src/agent_composer/README.md) — contributor invariants and
+  package ownership.
 
-Library hosts can enable named workflow memory without putting Python imports,
-credentials, or backend locations in YAML. Declare `memory_policy: reflective`
-on a flow or agent, create the implementation in Python, and inject it by name:
-
-```python
-from agent_composer.memory.reflective import ReflectiveMemory
-
-memory = ReflectiveMemory({"provider": "ollama", "model": "qwen3:30b"})
-result = run_flow(
-    loaded,
-    {"name": "Ada"},
-    memory={"reflective": memory},
-    learn=True,
-)
-```
-
-Supplying `memory` enables recall; `learn=True` adds durable post-terminal
-learning after either success or failure. Learning has a separate
-`result.learning` status and never replaces the primary result. The CLI leaves
-authored policies dormant for now. See the [Python API](docs/api.md) for recovery
-and snapshot semantics.
-
-Lower-level Python graph builders and tooling can import the source-neutral
-`Binding`, `Parameter`, `Assertion`, `ValueContract`, `ContractOrigins`, and
-`ValuePath` vocabulary from `agent_composer.nodes`. Origins are optional; these
-definitions are being adopted by engine consumers incrementally.
-
-Pass `log="run.jsonl"` to create an authoritative append-only schema-4 JSONL history for
-the run. If the process is interrupted, load the same flow in a later process and
-recover the durable prefix with `resume_flow(loaded, log="run.jsonl")` from
-`agent_composer.run`. A fresh durable run never overwrites an existing path.
-Earlier schemas are not migrated. Run logs retain canonical inputs, node outputs
-(including human/tool/model data), resolved model configuration, memory snapshots,
-recalled interaction evidence, mutation proposals, and failure tracebacks. Treat them as sensitive:
-choose an access-controlled path and do not commit or publish them.
-
-## Develop & test
+## Develop and test
 
 ```console
 pip install -e ".[all,dev]"
-pytest
+PYTHONPATH=src python -m pytest
 ```
 
-For a per-directory dev environment — a `.env` you can `source` (or auto-load
-with direnv) plus venv activation — copy `.env.example` to `.env` and see
-[Local development environment](docs/installation.md#local-development-environment).
-Note that `ac` does not read `.env` automatically; you source it or let direnv load it.
+See [Contributing](CONTRIBUTING.md) for the issue/branch/PR workflow and
+[Installation](docs/installation.md) for local environment setup.
 
 ## License
 

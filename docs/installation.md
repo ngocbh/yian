@@ -44,7 +44,7 @@ export ANTHROPIC_API_KEY=...                            # the provider's own key
 A flow can also pin its own model per AGENT node; the environment defaults apply
 only where a node leaves the model unset.
 
-When you `ac run` a flow whose agents need a provider key that isn't set, the CLI
+When you `ac run` a flow whose AGENT nodes need a provider key that isn't set, the CLI
 prompts for it up front (in an interactive terminal) and continues once entered —
 so a missing key surfaces as a prompt rather than a failure on the first model
 call. Off a terminal (CI, a pipe) a missing required key is a clean error before

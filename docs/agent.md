@@ -9,48 +9,33 @@ a route, or a request to expand a child flow.
 transformation can be represented by one node, a flow of nodes, or a child flow
 used inside another flow.
 
-```mermaid
-flowchart TB
-    agent["Agent<br/>typed input record → output"]
-    node["Node<br/>one schedulable step"]
-    flow["Flow<br/>a graph behind one boundary"]
-    child["Child flow<br/>a flow composed inside another"]
-    agent --> node
-    agent --> flow
-    flow --> child
-```
+## What an agent is composed of
 
-## What an agent contains
+Every agent has two parts:
 
-Every agent has:
+1. A **boundary** says what may enter and what must leave. A flow boundary is a
+   named, typed `input:` record plus one `output:` value. A node boundary is its
+   bound local input record plus one node outcome.
+2. **Behavior** performs the transformation behind that boundary.
 
-- a **boundary**: named inputs and a declared output or node outcome;
-- **behavior**: one node or a graph of nodes that performs the transformation.
+The shape of the behavior depends on the representation:
 
-Depending on its representation, it may also have:
+| Representation | Shape of its behavior |
+| --- | --- |
+| Node | One operation, atomic at the graph-state boundary. |
+| Flow | A workflow graph whose structure is fixed by the author and whose nodes are connected by data and ordering dependencies. |
+| Child flow | A flow graph entered from another flow through CALL, MAP, or LOOP. |
 
-- task instructions in `prompt:` and model selection in `llm_config:` on an
-  AGENT node;
-- explicit `tools:` granted to a tool-calling AGENT node;
-- a `memory_policy:` on a flow or AGENT node;
-- assertions and static execution configuration;
-- child agents, represented as child flows.
+Atomic at the graph-state boundary does not mean “one machine instruction” or
+even “one external call.” For example, one AGENT node may make several model and
+tool calls before returning. The scheduler still sees one node evaluation with
+one outcome. For example, other node kinds provide different atomic behavior:
+CODE runs a Python function, TOOL invokes a registered capability, CASE chooses
+a route, HUMAN_INPUT asks a person, and WAIT blocks until a deadline.
 
-These capabilities are optional. For example, a CODE node has no task prompt,
-and a flow does not need memory. Flow memory is inherited by the AGENT nodes in
-that flow; an AGENT node may also have its own memory. This agent memory is
-distinct from the engine's typed value store, which carries values between
-nodes during a run.
-
-| Capability | YAML representation | Owner |
-| --- | --- | --- |
-| Task instructions | `prompt:` | AGENT node |
-| Model behavior | `mode:`, `llm_config:`, `retries:` | AGENT node, with flow-level defaults where supported |
-| Static node configuration | `env:` | Any node, with defaults from its enclosing flow |
-| Tool access | `tools: [name, ...]` | Tool-calling AGENT node; the host registers implementations |
-| Memory | `memory_policy:` | Flow or AGENT node; the host injects the named implementation |
-| Composition | `nodes:` plus `kind: call`, `kind: map`, or `kind: loop` | Flow or composite node |
-| Invariants | `asserts:` and typed `input:` / `output:` | Flow or supported node |
+The concrete **AGENT node** (`kind: agent`) is the LLM-backed atomic behavior.
+Its model request deserves a closer look because prompt text, memory, tools, and
+the output contract enter that request in different ways.
 
 ## Terms
 
@@ -69,6 +54,122 @@ routes execution, and CALL/MAP/LOOP expand an authored child graph whose termina
 value becomes their output. The engine, not the node, records and applies that
 outcome.
 
+## Inside an AGENT node
+
+Agent Composer constructs a structured model request. It does not concatenate
+every component into one prompt string:
+
+```mermaid
+flowchart TB
+    subgraph request["Agent Composer request"]
+        direction LR
+        messages["messages (ordered)<br/>[ SystemMessage: system prompt | root-flow memory | child-flow memory ... | AGENT-local memory ]<br/>[ HumanMessage: rendered prompt ]<br/>[ optional additional messages: tool history | fallback schema / retry correction ]"]
+        fields["turn-dependent request fields<br/>[ tools: name | description | input schema ]<br/>[ structured-output binding ]"]
+        messages ~~~ fields
+    end
+
+    request --> serializer["Provider/API serialization"]
+    serializer --> invocation["Model invocation<br/>[ provider-defined context tokens | tool/function schemas | output controls ]"]
+```
+
+Every invocation receives the ordered messages. Depending on the mode and turn,
+it may also receive tool schemas or a structured-output binding; those fields
+are not necessarily present together. The model adapter may encode structured
+output as a tool/function schema, JSON mode, or a provider response-schema
+feature. When no supported binding is available, Composer instead adds a schema
+instruction message.
+
+When a tool-calling AGENT also has structured output, Composer finishes the tool
+loop and then performs structured generation against the accumulated messages.
+
+Only `messages` has a Composer-defined sequence. The eventual token or control
+representation belongs to the provider, so Agent Composer makes no claim that
+tool descriptions occur before or after memory in a flattened token stream.
+
+Every path starts with these messages:
+
+1. The **system message** contains the framework system instruction followed by
+   recalled memory sections, ordered from the outermost flow to the local AGENT
+   node.
+2. The **human message** contains the rendered `prompt:`.
+
+Tool-calling invocations append the model's prior tool calls and corresponding
+`ToolMessage` results. Before a structured fallback invocation—which may be the
+first model invocation—Composer appends a schema instruction; a retry appends a
+correction. In the combined tool/structured path, the tool history is
+accumulated before the schema instruction.
+
+### How YAML becomes the request
+
+| YAML or host value | Role in execution |
+| --- | --- |
+| Node `input:` | Binds the local values available to prompt rendering and memory recall. It is not independently dumped into a message. |
+| `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
+| `memory_policy:` plus host `memory={...}` | Recalls frame text and appends it to the system message as labelled canonical sections. |
+| `tools: [name, ...]` | Resolves registered tool schemas and binds them beside the messages in `tool_calling` mode. |
+| Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
+| `mode:`, `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
+
+The framework system instruction is fixed today. Authored `system_prompt:` is
+tracked in [#259](https://github.com/ngocbh/agent-composer/issues/259).
+
+### Memory is an outer-to-local stack
+
+An AGENT node may see zero or more memory frames:
+
+1. the root flow's frame, if that flow declares `memory_policy:`;
+2. one frame for each entered child flow that declares a policy;
+3. the AGENT node's local frame, if it declares its own policy.
+
+Only frames that return recalled text contribute a section. Each frame owns and
+writes only its own state. MAP items and LOOP iterations reuse the statically
+authored frames rather than creating a new frame per occurrence.
+
+```yaml
+id: layered_memory
+name: layered_memory
+memory_policy: reflective
+input:
+  topic: str
+
+defs:
+  research:
+    memory_policy:
+      name: reflective
+      config:
+        recall_limit: 8
+    input:
+      topic: str
+    nodes:
+      investigate:
+        kind: agent
+        mode: plain
+        memory_policy: reflective
+        input:
+          topic: ${input.topic}
+        output: str
+        prompt: "Investigate ${topic}."
+    output: ${investigate.output}
+
+nodes:
+  run_research:
+    kind: call
+    call: research
+    input:
+      topic: ${input.topic}
+
+output: ${run_research.output}
+```
+
+For `investigate`, recall is ordered root-flow → child-flow → AGENT-local. The
+YAML only names the `reflective` policy; a Python host enables it by passing
+`memory={"reflective": implementation}` to `run_flow`. No `${memory}` reference
+is required. `learn=True` runs learning after the primary flow terminates, so it
+does not change a later node in the same run. New lessons can affect later fresh
+runs when the host reuses the same memory implementation or supplies one that
+persists its state. See [Injecting agent memory](api.md#injecting-agent-memory)
+for the host API.
+
 ## Representing agents in YAML
 
 At a full-flow boundary, top-level `input:` declares parameter types and
@@ -79,8 +180,8 @@ as `${draft.output}` both move data and define graph edges.
 
 ### One node: compact AGENT node
 
-When one LLM call is enough, compact mode makes the flow and its single AGENT
-node share one definition:
+When one AGENT node is enough, compact mode makes the flow and that node share
+one definition:
 
 ```yaml
 id: classify
@@ -169,6 +270,14 @@ output: ${run_review.output}
 `review` is a child flow with its own boundary and graph. CALL runs it once;
 MAP applies a child flow to a list, and LOOP repeatedly applies one while
 threading a carried record.
+
+## Planned extensions
+
+The current AGENT surface grants registered tools but has no `skills:` field.
+[#260](https://github.com/ngocbh/agent-composer/issues/260) tracks reuse of
+Codex/Claude `SKILL.md` packages and host-controlled discovery of project-local
+tools. Until those issues are implemented, `system_prompt:` and `skills:` are
+not valid Agent Composer YAML.
 
 ## The authored structure stays fixed
 

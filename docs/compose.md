@@ -334,7 +334,7 @@ the pipeline only ever sees a small set of kinds:
 | You write | Lowered to |
 |---|---|
 | inline `${ f(x) }` in a binding | a synthetic `call` node; the binding rewritten to `${synth.output}` |
-| `human_input` with `adaptive_questions:` | a synthetic composer `agent` + the rewritten gate |
+| `human_input` with `adaptive_questions:` | a synthetic composer AGENT node + the rewritten gate |
 | `case` branch `then: ${child}` | a synthetic `call` node as the branch target |
 | `${some_case.output}` | a coalesce over the case's branch targets |
 

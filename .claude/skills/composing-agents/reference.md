@@ -98,8 +98,8 @@ node; split a coalesce-of-calls into
 per-node outputs. Pure builtins (`${upper(x)}`) stay legal inside `${}`.
 
 This is distinct from an **inline child body**. `call(f, ...)` invokes an existing
-named callable and synthesizes the CALL node around that invocation. An explicit
-`kind: call`/`map`/`loop` node with `nodes:` defines a one-off callable body on
+named child flow and synthesizes the CALL node around that invocation. An explicit
+`kind: call`/`map`/`loop` node with `nodes:` defines a one-off child-flow body on
 the node itself.
 
 ## Inline CALL / MAP / LOOP child bodies

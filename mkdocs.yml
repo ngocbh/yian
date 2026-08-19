@@ -8,6 +8,9 @@ edit_uri: edit/main/docs/
 # This config lives at the repo root; docs sources are in docs/.
 docs_dir: docs
 site_dir: site
+# Design/implementation plans are repository history, not reader documentation.
+exclude_docs: |
+  plans/
 
 theme:
   name: material
@@ -84,10 +87,11 @@ nav:
   - Flow syntax: syntax.md
   - Examples: examples.md
   - Internals:
+    - Agent: agent.md
     - Architecture: architecture.md
     - Compose (YAML → IR): compose.md
     - The engine: engine.md
-    - Nodes: nodes.md
+    - Runtime nodes: nodes.md
     - Types: typing.md
     - Expressions: expressions.md
   - Python API: api.md

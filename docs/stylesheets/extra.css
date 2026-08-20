@@ -26,9 +26,23 @@
 .md-typeset :is(.ac-request-visual, .ac-turn-visual) {
   --ac-visual-border: var(--md-default-fg-color--lighter);
   --ac-visual-panel: var(--md-code-bg-color);
-  --ac-visual-muted: var(--md-default-fg-color--light);
+  --ac-visual-muted: color-mix(
+    in srgb,
+    var(--md-default-fg-color--light) 95%,
+    var(--md-default-fg-color) 5%
+  );
   --ac-visual-accent: var(--md-accent-fg-color);
   margin: 1.5rem 0;
+}
+
+[data-md-color-scheme="slate"]
+  .md-typeset
+  :is(.ac-request-visual, .ac-turn-visual) {
+  --ac-visual-accent: color-mix(
+    in srgb,
+    var(--md-accent-fg-color) 90%,
+    white 10%
+  );
 }
 
 .md-typeset :is(.ac-request-visual, .ac-turn-visual) > figcaption {
@@ -169,7 +183,9 @@
   border-radius: 0.35rem;
 }
 
-.md-typeset :is(.ac-request-content-block, .ac-request-memory, .ac-request-field) span,
+.md-typeset
+  :is(.ac-request-content-block, .ac-request-memory, .ac-request-field)
+  span:not(.ac-request-badge),
 .md-typeset .ac-request-memory small {
   color: var(--ac-visual-muted);
   font-size: 0.68rem;

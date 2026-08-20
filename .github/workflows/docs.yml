@@ -216,11 +216,39 @@ jobs:
 
             await page.setViewport({ width: 1440, height: 900 })
             for (const scheme of ["default", "slate"]) {
-              const colors = await page.evaluate(selectedScheme => {
+              const visualContrast = await page.evaluate(selectedScheme => {
                 document.body.dataset.mdColorScheme = selectedScheme
-                const parse = value => value.match(/[\d.]+/g).map(Number)
-                const luminance = value => {
-                  const [red, green, blue] = parse(value).slice(0, 3).map(channel => {
+                const canvas = document.createElement("canvas")
+                canvas.width = 1
+                canvas.height = 1
+                const context = canvas.getContext("2d", { willReadFrequently: true })
+
+                const color = value => {
+                  context.clearRect(0, 0, 1, 1)
+                  context.fillStyle = value
+                  context.fillRect(0, 0, 1, 1)
+                  const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data
+                  return [red, green, blue, alpha / 255]
+                }
+                const composite = (foreground, background) => {
+                  const alpha = foreground[3] + background[3] * (1 - foreground[3])
+                  if (alpha === 0) return [0, 0, 0, 0]
+                  const channels = [0, 1, 2].map(index => (
+                    foreground[index] * foreground[3]
+                    + background[index] * background[3] * (1 - foreground[3])
+                  ) / alpha)
+                  return [...channels, alpha]
+                }
+                const backdrop = element => {
+                  let result = [0, 0, 0, 0]
+                  for (let current = element; current; current = current.parentElement) {
+                    result = composite(result, color(getComputedStyle(current).backgroundColor))
+                    if (result[3] >= 0.999) break
+                  }
+                  return composite(result, [255, 255, 255, 1])
+                }
+                const luminance = rgba => {
+                  const [red, green, blue] = rgba.slice(0, 3).map(channel => {
                     channel /= 255
                     return channel <= 0.04045
                       ? channel / 12.92
@@ -228,26 +256,110 @@ jobs:
                   })
                   return 0.2126 * red + 0.7152 * green + 0.0722 * blue
                 }
-                const foreground = getComputedStyle(
-                  document.querySelector(".ac-request-content-block strong")
-                ).color
-                const block = getComputedStyle(document.querySelector(".ac-request-content-block"))
-                const high = Math.max(luminance(foreground), luminance(block.backgroundColor))
-                const low = Math.min(luminance(foreground), luminance(block.backgroundColor))
+                const contrast = (first, second) => {
+                  const high = Math.max(luminance(first), luminance(second))
+                  const low = Math.min(luminance(first), luminance(second))
+                  return (high + 0.05) / (low + 0.05)
+                }
+                const textContrast = element => {
+                  const background = backdrop(element)
+                  const foreground = composite(color(getComputedStyle(element).color), background)
+                  return {
+                    label: element.textContent.trim().replace(/\s+/g, " ").slice(0, 80),
+                    contrast: contrast(foreground, background)
+                  }
+                }
+                const borderContrast = (selector, side, minimum) => {
+                  const element = document.querySelector(selector)
+                  const style = getComputedStyle(element)
+                  const property = side[0].toUpperCase() + side.slice(1)
+                  const background = backdrop(element.parentElement)
+                  const border = composite(color(style[`border${property}Color`]), background)
+                  return {
+                    selector,
+                    side,
+                    minimum,
+                    width: Number.parseFloat(style[`border${property}Width`]),
+                    style: style[`border${property}Style`],
+                    contrast: contrast(border, background)
+                  }
+                }
+
+                const textSelectors = [
+                  ".ac-request-visual > figcaption > *",
+                  ".ac-turn-visual > figcaption > *",
+                  ".ac-request-section-title h3",
+                  ".ac-request-badge",
+                  ".ac-request-step",
+                  ".ac-request-message-heading code",
+                  ".ac-request-message-heading strong",
+                  ".ac-request-content-block > strong",
+                  ".ac-request-content-block > span",
+                  ".ac-request-memory-title > strong",
+                  ".ac-request-memory-frames li",
+                  ".ac-request-memory > small",
+                  ".ac-request-field > strong",
+                  ".ac-request-field > span",
+                  ".ac-request-adapter > *",
+                  ".ac-request-model > strong",
+                  ".ac-request-note",
+                  ".ac-turn-timeline strong",
+                  ".ac-turn-timeline p"
+                ]
+                const text = [...document.querySelectorAll(textSelectors.join(","))]
+                  .map(textContrast)
+                const borders = [
+                  borderContrast(".ac-request-frame", "top", 1.5),
+                  borderContrast(".ac-request-messages", "top", 1.5),
+                  borderContrast(".ac-request-content-block", "top", 1.5),
+                  borderContrast(".ac-request-field", "left", 3),
+                  borderContrast(".ac-request-model", "top", 3),
+                  borderContrast(".ac-turn-visual", "top", 1.5),
+                  borderContrast(".ac-turn-timeline > li", "left", 1.5)
+                ]
+
+                const memoryFrame = document.querySelector(".ac-request-memory-frames li")
+                const memoryConnector = getComputedStyle(memoryFrame, "::after")
+                const memoryBackground = backdrop(memoryFrame.parentElement)
+                const routeConnectors = [...document.querySelectorAll(".ac-request-route-arrow")]
+                  .map(element => ({
+                    content: element.textContent.trim(),
+                    contrast: textContrast(element).contrast
+                  }))
                 return {
-                  contrast: (high + 0.05) / (low + 0.05),
-                  borderAlpha: parse(
-                    getComputedStyle(document.querySelector(".ac-request-frame")).borderTopColor
-                  )[3] ?? 1,
-                  connectorAlpha: parse(getComputedStyle(
-                    document.querySelector(".ac-request-memory-frames li"),
-                    "::after"
-                  ).color)[3] ?? 1
+                  text,
+                  borders,
+                  connectors: [{
+                    content: memoryConnector.content.replaceAll('"', ""),
+                    contrast: contrast(
+                      composite(color(memoryConnector.color), memoryBackground),
+                      memoryBackground
+                    )
+                  }, ...routeConnectors]
                 }
               }, scheme)
-              assert.ok(colors.contrast >= 4.5)
-              assert.notEqual(colors.borderAlpha, 0)
-              assert.notEqual(colors.connectorAlpha, 0)
+              for (const sample of visualContrast.text) {
+                assert.ok(
+                  sample.contrast >= 4.5,
+                  `${scheme} text contrast ${sample.contrast.toFixed(2)}: ${sample.label}`
+                )
+              }
+              for (const border of visualContrast.borders) {
+                assert.ok(border.width >= 1, `${border.selector} has no ${border.side} border`)
+                assert.notEqual(border.style, "none")
+                assert.ok(
+                  border.contrast >= border.minimum,
+                  `${scheme} ${border.selector} ${border.side} border contrast `
+                    + `${border.contrast.toFixed(2)}`
+                )
+              }
+              for (const connector of visualContrast.connectors) {
+                assert.ok(connector.content.length > 0)
+                assert.ok(
+                  connector.contrast >= 3,
+                  `${scheme} connector contrast ${connector.contrast.toFixed(2)}`
+                )
+              }
             }
           } finally {
             await browser.close()

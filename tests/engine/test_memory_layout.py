@@ -31,16 +31,16 @@ from agent_composer.nodes.start import StartNode
 
 _NESTED = """id: root
 name: root
-memory_policy: outer
+long_term_memory: outer
 defs:
   child:
-    memory_policy:
+    long_term_memory:
       name: inner
       config: {limit: 3}
     nodes:
       answer:
         kind: agent
-        memory_policy: local
+        long_term_memory: local
         prompt: answer
         output: str
       normalize:
@@ -214,7 +214,7 @@ def test_only_memory_owning_flow_boundaries_are_marked() -> None:
 
     without_child_policy = load_flow(
         _NESTED.replace(
-            "    memory_policy:\n      name: inner\n      config: {limit: 3}\n",
+            "    long_term_memory:\n      name: inner\n      config: {limit: 3}\n",
             "",
         )
     ).compiled
@@ -255,7 +255,7 @@ def test_repeated_definition_and_inline_children_get_callsite_paths() -> None:
 name: root
 defs:
   child:
-    memory_policy: reflective
+    long_term_memory: reflective
     nodes:
       answer:
         kind: code
@@ -284,7 +284,7 @@ nodes:
     nodes:
       answer:
         kind: agent
-        memory_policy: reflective
+        long_term_memory: reflective
         prompt: left
         output: str
     output: ${answer.output}
@@ -293,7 +293,7 @@ nodes:
     nodes:
       answer:
         kind: agent
-        memory_policy: reflective
+        long_term_memory: reflective
         prompt: right
         output: str
     output: ${answer.output}
@@ -412,7 +412,7 @@ def test_apply_rejects_shared_child_targets_before_stamping() -> None:
     child = load_flow(
         """id: child
 name: child
-memory_policy: reflective
+long_term_memory: reflective
 nodes:
   answer:
     kind: code

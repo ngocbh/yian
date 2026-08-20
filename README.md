@@ -11,7 +11,7 @@ In this framework, an **agent** is a composable transformation from a named
 input record to an output value. It can be represented by one node, a flow of
 nodes, or a child flow used inside another flow. The YAML **AGENT node**
 (`kind: agent`) is one concrete implementation: an LLM-backed node with a task
-prompt and optional tool grants, model configuration, and memory policy.
+prompt and optional tool grants, model configuration, and long-term memory.
 
 The author fixes the graph. LLMs generate values and may choose among explicitly
 granted tools, but they do not rewrite the flow structure at run time.

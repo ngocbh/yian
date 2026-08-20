@@ -5,7 +5,7 @@ cursor, copy its semantic value into a strict Pydantic model, and raise
 `LoadError` on any violation. Three surface rules shape it:
 
 - **Top-level sections only** (`id`/`name`/`description?`/`input`/`nodes`/
-  `output`/`asserts`/`memory_policy`/`typedefs`/`defs`/`uses`/`system`).
+  `output`/`asserts`/`long_term_memory`/`typedefs`/`defs`/`uses`/`system`).
   `extra="forbid"` on the
   strict body makes a typo'd top-level key (e.g. `nodez:`) loud rather than silently
   dropped. (`uses:` = external callables; `system: paths:` = the resolution search
@@ -61,11 +61,12 @@ def _normalize_section_keys(
     diagnostics: LoadDiagnostics | None = None,
     range_for_key: Callable[[str], SourceRange | None] | None = None,
 ) -> Any:
-    """Reject legacy `inputs:`/`outputs:` section keywords AT THE TOP LEVEL.
+    """Reject retired top-level flow-key spellings.
 
-    Post-alias-delete: the dual-arm normalizer is a REJECTOR. A top-level flow with a
-    legacy `inputs:` / `outputs:` section keyword raises a bespoke `LoadError` naming the
-    retirement. The new singular `input:` / `output:` form is the only accepted spelling.
+    Post-alias-delete, the normalizer is a REJECTOR. A top-level flow with legacy
+    `inputs:` / `outputs:` or retired `memory_policy:` raises a bespoke `LoadError`
+    naming the replacement. Only `input:` / `output:` and `long_term_memory:` are
+    accepted.
 
     NOTE: this function does NOT recurse into nested per-node or `defs:` bodies — the
     descriptor dataclasses (AgentDescriptor, CodeDescriptor, ...) keep their internal
@@ -84,6 +85,16 @@ def _normalize_section_keys(
                 f"(rename the section)",
                 range=(range_for_key(legacy) if range_for_key is not None else None),
             )
+    if "memory_policy" in body:
+        raise diagnostics.error(
+            "unknown top-level key 'memory_policy' — `memory_policy:` was renamed "
+            "to `long_term_memory:`",
+            range=(
+                range_for_key("memory_policy")
+                if range_for_key is not None
+                else None
+            ),
+        )
     return body
 
 
@@ -119,7 +130,7 @@ class ComposeFile(BaseModel):
 
     A `model_validator(mode='before')` maps authored `input:`/`output:` keys to the
     plural Python carrier fields at the top level and recursively in node/definition
-    bodies. `_normalize_section_keys` rejects legacy plural top-level section keywords.
+    bodies. `_normalize_section_keys` rejects retired top-level spellings.
     """
 
     model_config = _STRICT
@@ -151,7 +162,7 @@ class ComposeFile(BaseModel):
     # Full flows retain this raw occurrence for the shared located policy parser.
     # Compact flows project it into their synthesized node because it intentionally
     # stays outside ``_COMPACT_FLOW_KEYS`` below.
-    memory_policy: Any = None
+    long_term_memory: Any = None
 
     @model_validator(mode="before")
     @classmethod
@@ -193,7 +204,7 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
     - the flow `output:` is the node's output TYPE (the codomain), re-exported as the
       flow output (`output: ${<id>.output}`), so the author skips the redundant wiring;
     - everything else (the `kind:` + its logic fields, e.g. `prompt:`/`asserts:`/
-      `llm_config:`) is the node body.
+      `llm_config:`/`long_term_memory:`) is the node body.
 
     The returned dict is the canonical compose body (with a `nodes:` map) the strict
     `ComposeFile` schema then validates unchanged. Raises `LoadError` on a non-leaf

@@ -124,10 +124,11 @@ terminal. Stored defaults are not coerced.
   durable records nor members of `RunResult.events`.
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
   The resolved map and process defaults are captured at initialization.
-- `memory` — host-created implementations keyed by authored `memory_policy`
-  name. `None` leaves all policies dormant. A mapping opens one snapshot-isolated
-  session per referenced policy, enables recall for AGENT nodes, and records the exact
-  public snapshots needed by recovery.
+- `memory` — host-created implementations keyed by the policy name selected by
+  each authored `long_term_memory` declaration. `None` leaves all declarations
+  dormant. A mapping opens one snapshot-isolated session per referenced policy,
+  enables recall for AGENT nodes, and records the exact public snapshots needed
+  by recovery.
 - `learn` — when true, run durable learning after the graph reaches either
   success or failure. It requires `memory`; learning failures are reported
   separately and never replace the primary result.
@@ -144,12 +145,13 @@ engine has drained active workers and released the boundary-owned log.
 
 ## Injecting agent memory
 
-YAML names a policy without importing its implementation:
+YAML declares long-term memory and selects a host policy without importing its
+implementation:
 
 ```yaml
 id: remembered-answer
 name: remembered_answer
-memory_policy: reflective
+long_term_memory: reflective
 input:
   question: str
 nodes:

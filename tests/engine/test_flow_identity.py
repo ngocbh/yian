@@ -2380,7 +2380,7 @@ def test_memory_expansion_projection_omits_root_and_policy_identity():
     def compiled(root_id: str, policy: str, limit: int) -> CompiledFlow:
         source = f"""id: {root_id}
 name: memory
-memory_policy:
+long_term_memory:
   name: {policy}
   config: {{limit: {limit}}}
 nodes:

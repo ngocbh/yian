@@ -360,9 +360,9 @@ Most are just the functional model (above) made enforceable:
   vocabulary for a future durable reverse-DAG pass. Do not call it from ordinary
   execution or memory learning until producer lineage and feedback records define
   its contract.
-- **Memory is host-injected and record-authoritative** — authored policies
-  resolve to static frames owned by flows or AGENT nodes; MAP items and LOOP
-  iterations reuse those frames.
+- **Memory is host-injected and record-authoritative** — authored
+  `long_term_memory:` declarations select policies that resolve to static frames
+  owned by flows or AGENT nodes; MAP items and LOOP iterations reuse those frames.
   `memory=None` is dormant, while an injected registry opens snapshot-isolated
   sessions and supplies a kind-blind recall callback. With `learn=True`, learning
   runs only after primary success/failure, appends each intent before calling the

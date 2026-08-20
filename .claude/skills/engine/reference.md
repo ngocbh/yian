@@ -276,10 +276,11 @@ explicitly non-durable. The engine never closes its log: package-root `run.py` o
 
 `run_flow(..., log=None)` uses process-local authority; a path selects a durable
 JSONL log. `memory={name: implementation}` opens one snapshot-isolated session
-per referenced authored policy; `learn=True` adds the record-authoritative
-post-terminal phase. `resume_flow(flow, *, log=..., num_workers=None,
-memory=None)` validates the authored flow fingerprint, silently folds the locked
-contiguous prefix through the same reducer. An unfinished primary appends one
+per policy selected by an authored `long_term_memory:` declaration; `learn=True`
+adds the record-authoritative post-terminal phase.
+`resume_flow(flow, *, log=..., num_workers=None, memory=None)` validates the
+authored flow fingerprint, silently folds the locked contiguous prefix through
+the same reducer. An unfinished primary appends one
 `RunResumedRecord` before retrying starts in original dispatch order; a terminal
 primary with retryable learning appends only learning records; and a fully settled
 run returns unchanged. An unfinished memory-enabled run also requires exact

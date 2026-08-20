@@ -356,8 +356,8 @@ class NodeDescriptor:
     def _normalize_cursor(cls, cursor: SourceCursor) -> SourceCursor:
         """Return the cursor view inspected by `_check_keys`; default unchanged.
 
-        A hook the template `parse` calls first, before any key is inspected. Only `case`
-        overrides it to project YAML 1.1's `on:` boolean key back to its schema name.
+        A hook the template `parse` calls first, before any key is inspected. Kinds may
+        override it for source-aware projection or retired-key checks.
         """
 
         return cursor

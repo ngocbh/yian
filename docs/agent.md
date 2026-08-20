@@ -208,7 +208,7 @@ tool loop and uses the accumulated message history.
 | --- | --- |
 | Node `input:` | Binds the local values available to prompt rendering and memory recall. It is not independently dumped into a message. |
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
-| `memory_policy:` plus host `memory={...}` | Recalls frame text and appends it to the system message as labelled canonical sections. |
+| `long_term_memory:` plus host `memory={...}` | Recalls frame text and appends it to the system message as labelled canonical sections. |
 | `tools: [name, ...]` | Resolves registered tool schemas and binds them beside the messages in `tool_calling` mode. |
 | Structured `output:` | Selects a provider-supported structured-output binding or a fallback schema instruction, then validates the returned value. A bare `str` remains free text. |
 | `mode:`, `llm_config:`, `retries:`, `env:` | Controls execution; these values are not additional prompt messages. |
@@ -220,9 +220,9 @@ tracked in [#259](https://github.com/ngocbh/agent-composer/issues/259).
 
 An AGENT node may see zero or more memory frames:
 
-1. the root flow's frame, if that flow declares `memory_policy:`;
-2. one frame for each entered child flow that declares a policy;
-3. the AGENT node's local frame, if it declares its own policy.
+1. the root flow's frame, if that flow declares `long_term_memory:`;
+2. one frame for each entered child flow that declares long-term memory;
+3. the AGENT node's local frame, if it has its own declaration.
 
 Only frames that return recalled text contribute a section. Each frame owns and
 writes only its own state. MAP items and LOOP iterations reuse the statically
@@ -231,13 +231,13 @@ authored frames rather than creating a new frame per occurrence.
 ```yaml
 id: layered_memory
 name: layered_memory
-memory_policy: reflective
+long_term_memory: reflective
 input:
   topic: str
 
 defs:
   research:
-    memory_policy:
+    long_term_memory:
       name: reflective
       config:
         recall_limit: 8
@@ -247,7 +247,7 @@ defs:
       investigate:
         kind: agent
         mode: plain
-        memory_policy: reflective
+        long_term_memory: reflective
         input:
           topic: ${input.topic}
         output: str
@@ -264,14 +264,14 @@ nodes:
 output: ${run_research.output}
 ```
 
-For `investigate`, recall is ordered root-flow → child-flow → AGENT-local. The
-YAML only names the `reflective` policy; a Python host enables it by passing
-`memory={"reflective": implementation}` to `run_flow`. No `${memory}` reference
-is required. `learn=True` runs learning after the primary flow terminates, so it
-does not change a later node in the same run. New lessons can affect later fresh
-runs when the host reuses the same memory implementation or supplies one that
-persists its state. See [Injecting agent memory](api.md#injecting-agent-memory)
-for the host API.
+For `investigate`, recall is ordered root-flow → child-flow → AGENT-local.
+Each YAML declaration selects the `reflective` host policy by name; a Python host
+enables it by passing `memory={"reflective": implementation}` to `run_flow`. No
+`${memory}` reference is required. `learn=True` runs learning after the primary
+flow terminates, so it does not change a later node in the same run. New lessons
+can affect later fresh runs when the host reuses the same memory implementation
+or supplies one that persists its state. See
+[Injecting agent memory](api.md#injecting-agent-memory) for the host API.
 
 ## Representing agents in YAML
 

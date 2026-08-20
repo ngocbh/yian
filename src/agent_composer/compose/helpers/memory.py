@@ -1,4 +1,4 @@
-"""Source-aware validation for authored named memory-policy references."""
+"""Source-aware validation for authored long-term-memory declarations."""
 
 from __future__ import annotations
 
@@ -19,14 +19,14 @@ def parse_memory_policy(
     if type(value) is str:
         if not value:
             raise diagnostics.error(
-                "memory_policy name must be non-empty",
+                "long_term_memory name must be non-empty",
                 range=source_range,
             )
         return MemoryPolicySpec(value, {})
 
     if type(value) is not dict:
         raise diagnostics.error(
-            "memory_policy must be a non-empty string or a mapping",
+            "long_term_memory must be a non-empty string or a mapping",
             range=source_range,
         )
 
@@ -35,31 +35,31 @@ def parse_memory_policy(
     )
     if extras:
         raise diagnostics.error(
-            f"memory_policy has unknown key(s) {extras} (allowed: name, config)",
+            f"long_term_memory has unknown key(s) {extras} (allowed: name, config)",
             range=source_range,
         )
     if "name" not in value:
         raise diagnostics.error(
-            "memory_policy mapping requires 'name'",
+            "long_term_memory mapping requires 'name'",
             range=source_range,
         )
     name = value["name"]
     if type(name) is not str or not name:
         raise diagnostics.error(
-            "memory_policy name must be a non-empty string",
+            "long_term_memory name must be a non-empty string",
             range=source_range,
         )
     config = value.get("config", {})
     if type(config) is not dict:
         raise diagnostics.error(
-            "memory_policy config must be a mapping",
+            "long_term_memory config must be a mapping",
             range=source_range,
         )
     try:
         return MemoryPolicySpec(name, config)
     except (TypeError, ValueError) as exc:
         raise diagnostics.error(
-            f"memory_policy config: {exc}",
+            f"long_term_memory config: {exc}",
             range=source_range,
         ) from exc
 

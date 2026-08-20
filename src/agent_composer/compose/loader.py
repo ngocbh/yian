@@ -189,7 +189,7 @@ def _single_node_def_cursor(
 # `asserts:` are allowed: the call/map child seam enforces a def's two-phase asserts
 # against the child pool (boundary before the child runs, post after it terminates).
 _DEF_ALLOWED = frozenset(
-    {"inputs", "nodes", "outputs", "asserts", "llm_config", "memory_policy"}
+    {"inputs", "nodes", "outputs", "asserts", "llm_config", "long_term_memory"}
 )
 
 
@@ -657,11 +657,11 @@ def _load_flow(
     )
     root_memory_policy = (
         parse_memory_policy(
-            f.memory_policy,
+            f.long_term_memory,
             diagnostics=diagnostics,
-            source_range=root.range_of("memory_policy"),
+            source_range=root.range_of("long_term_memory"),
         )
-        if root.has("nodes") and root.has("memory_policy")
+        if root.has("nodes") and root.has("long_term_memory")
         else None
     )
     callable_scope.eager_load_defs()
@@ -695,8 +695,8 @@ def _load_flow(
         flow_id=f.id,
         memory_policy=root_memory_policy,
         memory_policy_cursor=(
-            root.child("memory_policy")
-            if root.has("nodes") and root.has("memory_policy")
+            root.child("long_term_memory")
+            if root.has("nodes") and root.has("long_term_memory")
             else None
         ),
     )
@@ -1046,6 +1046,16 @@ def _load_def(
             f"(inputs?/nodes/outputs?) OR a single-node `kind:` form",
             range=(def_cursor.range if def_cursor is not None else None),
         )
+    if "memory_policy" in body:
+        raise diagnostics.error(
+            f"defs entry {name!r}: field `memory_policy:` was renamed to "
+            "`long_term_memory:`",
+            range=(
+                def_cursor.key_range_of("memory_policy")
+                if def_cursor is not None
+                else None
+            ),
+        )
     extra = sorted(set(body) - _DEF_ALLOWED)
     if extra:
         raise diagnostics.error(
@@ -1061,15 +1071,15 @@ def _load_def(
     try:
         memory_policy = (
             parse_memory_policy(
-                body["memory_policy"],
+                body["long_term_memory"],
                 diagnostics=diagnostics,
                 source_range=(
-                    def_cursor.range_of("memory_policy")
+                    def_cursor.range_of("long_term_memory")
                     if def_cursor is not None
                     else None
                 ),
             )
-            if "memory_policy" in body
+            if "long_term_memory" in body
             else None
         )
         return _assemble(
@@ -1098,7 +1108,7 @@ def _load_def(
             ),
             flow_id=name,
             memory_policy=memory_policy,
-            memory_policy_cursor=_source_child(def_cursor, "memory_policy"),
+            memory_policy_cursor=_source_child(def_cursor, "long_term_memory"),
         )
     except LoadError as exc:
         raise diagnostics.prepend(

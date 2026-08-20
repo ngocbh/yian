@@ -1,4 +1,4 @@
-"""Authored flow and AGENT memory-policy semantics."""
+"""Authored flow and AGENT long-term-memory semantics."""
 
 from __future__ import annotations
 
@@ -88,9 +88,9 @@ def _full_flow(policy: str) -> str:
 @pytest.mark.parametrize(
     ("policy", "expected_config", "line"),
     [
-        ("memory_policy: reflective\n", {}, 3),
+        ("long_term_memory: reflective\n", {}, 3),
         (
-            "memory_policy:\n"
+            "long_term_memory:\n"
             "  name: reflective\n"
             "  config:\n"
             "    max_items: 20\n"
@@ -128,7 +128,7 @@ def test_full_nested_definition_retains_flow_owned_policy_and_semantic_id() -> N
 name: parent
 defs:
   child:
-    memory_policy:
+    long_term_memory:
       name: reflective
       config: {max_items: 8}
     nodes:
@@ -157,7 +157,7 @@ def test_compact_root_projects_policy_to_its_agent() -> None:
     loaded = load_flow(
         """id: compact_agent
 name: compact_agent
-memory_policy: reflective
+long_term_memory: reflective
 output: str
 kind: agent
 prompt: answer
@@ -178,7 +178,7 @@ name: parent
 defs:
   child:
     kind: agent
-    memory_policy: reflective
+    long_term_memory: reflective
     prompt: answer
     output: str
 nodes:
@@ -200,7 +200,7 @@ output: ${invoke.output}
     [
         """id: compact-code
 name: compact_code
-memory_policy: reflective
+long_term_memory: reflective
 output: str
 kind: code
 code: tests.engine._compose_codefns:echo
@@ -210,7 +210,7 @@ name: ordinary_code
 nodes:
   echo:
     kind: code
-    memory_policy: reflective
+    long_term_memory: reflective
     code: tests.engine._compose_codefns:echo
     output: str
 output: ${echo.output}
@@ -218,26 +218,26 @@ output: ${echo.output}
     ],
     ids=["compact", "ordinary"],
 )
-def test_non_agent_node_rejects_memory_policy_at_the_authored_value(source: str) -> None:
-    with pytest.raises(LoadError, match="memory_policy.*not allowed") as caught:
+def test_non_agent_node_rejects_long_term_memory_at_the_authored_value(source: str) -> None:
+    with pytest.raises(LoadError, match="long_term_memory.*not allowed") as caught:
         load_flow(source)
 
     frame = caught.value.diagnostic.frames[-1]
     assert frame.text.splitlines()[frame.range.start_line - 1].strip().startswith(
-        "memory_policy:"
+        "long_term_memory:"
     )
 
 
 @pytest.mark.parametrize(
     ("surface", "message"),
     [
-        ("memory_policy: ''\n", "name must be non-empty"),
-        ("memory_policy: null\n", "string or a mapping"),
-        ("memory_policy: {name: 3}\n", "name must be a non-empty string"),
-        ("memory_policy: {name: reflective, config: []}\n", "config must be a mapping"),
-        ("memory_policy: {name: reflective, extra: true}\n", "unknown key"),
-        ("memory_policy: {name: reflective, 1: true}\n", "unknown key"),
-        ("memory_policy: {config: {}}\n", "requires 'name'"),
+        ("long_term_memory: ''\n", "name must be non-empty"),
+        ("long_term_memory: null\n", "string or a mapping"),
+        ("long_term_memory: {name: 3}\n", "name must be a non-empty string"),
+        ("long_term_memory: {name: reflective, config: []}\n", "config must be a mapping"),
+        ("long_term_memory: {name: reflective, extra: true}\n", "unknown key"),
+        ("long_term_memory: {name: reflective, 1: true}\n", "unknown key"),
+        ("long_term_memory: {config: {}}\n", "requires 'name'"),
     ],
 )
 def test_malformed_flow_policy_is_located_at_its_authored_occurrence(
@@ -250,13 +250,114 @@ def test_malformed_flow_policy_is_located_at_its_authored_occurrence(
     assert caught.value.diagnostic.frames[-1].range.start_line == 3
 
 
+@pytest.mark.parametrize(
+    ("source", "line"),
+    [
+        (
+            """id: full
+name: full
+memory_policy: reflective
+nodes: {}
+""",
+            3,
+        ),
+        (
+            """id: compact
+name: compact
+memory_policy: reflective
+kind: agent
+prompt: answer
+output: str
+""",
+            3,
+        ),
+        (
+            """id: ordinary
+name: ordinary
+nodes:
+  answer:
+    kind: agent
+    memory_policy: reflective
+    prompt: answer
+    output: str
+""",
+            6,
+        ),
+        (
+            """id: parent
+name: parent
+defs:
+  child:
+    memory_policy: reflective
+    nodes: {}
+nodes: {}
+""",
+            5,
+        ),
+        (
+            """id: parent
+name: parent
+defs:
+  child:
+    kind: agent
+    memory_policy: reflective
+    prompt: answer
+    output: str
+nodes: {}
+""",
+            6,
+        ),
+        (
+            """id: both-old-first
+name: both_old_first
+memory_policy: reflective
+long_term_memory: episodic
+nodes: {}
+""",
+            3,
+        ),
+        (
+            """id: both-new-first
+name: both_new_first
+long_term_memory: episodic
+memory_policy: reflective
+nodes: {}
+""",
+            4,
+        ),
+    ],
+    ids=[
+        "full-root",
+        "compact-root",
+        "ordinary-agent",
+        "multi-node-def",
+        "flat-agent-def",
+        "both-old-first",
+        "both-new-first",
+    ],
+)
+def test_retired_memory_policy_is_a_located_migration_error(
+    source: str,
+    line: int,
+) -> None:
+    with pytest.raises(
+        LoadError,
+        match="memory_policy.*renamed.*long_term_memory",
+    ) as caught:
+        load_flow(source)
+
+    frame = caught.value.diagnostic.frames[-1]
+    assert frame.range.start_line == line
+    assert frame.text.splitlines()[line - 1].strip().startswith("memory_policy:")
+
+
 def test_inline_body_rejects_flow_policy_but_allows_child_agent_policy() -> None:
     rejected = """id: inline-policy
 name: inline_policy
 nodes:
   wrapper:
     kind: call
-    memory_policy: reflective
+    long_term_memory: reflective
     nodes:
       answer:
         kind: agent
@@ -265,13 +366,13 @@ nodes:
     output: ${answer.output}
 output: ${wrapper.output}
 """
-    with pytest.raises(LoadError, match="memory_policy.*not allowed") as caught:
+    with pytest.raises(LoadError, match="long_term_memory.*not allowed") as caught:
         load_flow(rejected)
-    assert caught.value.diagnostic.frames[-1].range == SourceRange(6, 20, 6, 30)
+    assert caught.value.diagnostic.frames[-1].range == SourceRange(6, 23, 6, 33)
 
-    allowed = rejected.replace("    memory_policy: reflective\n", "").replace(
+    allowed = rejected.replace("    long_term_memory: reflective\n", "").replace(
         "        prompt: answer\n",
-        "        memory_policy: reflective\n        prompt: answer\n",
+        "        long_term_memory: reflective\n        prompt: answer\n",
     )
     loaded = load_flow(allowed)
     child = loaded.compiled.nodes["wrapper"].child
@@ -383,7 +484,7 @@ def test_policy_config_rejects_host_private_fields(config: dict) -> None:
 @pytest.mark.parametrize("config", _PRIVATE_CONFIG_CASES)
 def test_authored_policy_config_rejects_host_private_fields(config: dict) -> None:
     source = _full_flow(
-        "memory_policy:\n"
+        "long_term_memory:\n"
         "  name: reflective\n"
         f"  config: {json.dumps(config)}\n"
     )

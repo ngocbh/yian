@@ -610,18 +610,19 @@ the boundary or direct caller owns its lifetime.
 
 ## Host-injected agent memory
 
-Authored `memory_policy` values name behavior; they never name Python classes,
-storage locations, credentials, or tenant identity. Compile resolves those values
-into one canonical static frame layout. A flow owns a frame inherited by its
-AGENT nodes, and an AGENT node may own one additional local frame. Dynamic MAP
-items and LOOP iterations contribute occurrences to those static frames rather than
-minting new frames. Runtime remains kind-blind: it consumes only each executing
-node's compiled `MemoryScope` and an injected recall callable.
+Authored `long_term_memory` declarations select named behavior policies; they
+never name Python classes, storage locations, credentials, or tenant identity.
+Compile resolves those declarations into one canonical static frame layout. A
+flow owns a frame inherited by its AGENT nodes, and an AGENT node may own one
+additional local frame. Dynamic MAP items and LOOP iterations contribute
+occurrences to those static frames rather than minting new frames. Runtime
+remains kind-blind: it consumes only each executing node's compiled `MemoryScope`
+and an injected recall callable.
 
 `run_flow(..., memory={name: implementation})` validates the host registry,
 opens one run session per referenced policy, opens every static frame, and stores
 the sessions' exact public snapshots in `RunStartedRecord`. `memory=None` leaves
-authored policies dormant. For each opted-in AGENT node evaluation, recall
+authored declarations dormant. For each opted-in AGENT node evaluation, recall
 returns an ordered tuple of source-neutral sections from outer flow to local node. The
 agent mode renders those sections as canonical JSON-framed system material. The
 encoding prevents memory text from breaking or spoofing the envelope, but the

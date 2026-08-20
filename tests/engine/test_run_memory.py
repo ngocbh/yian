@@ -32,7 +32,7 @@ from agent_composer.runtime.log import (
 
 _FLOW = """id: memory-run
 name: memory_run
-memory_policy: test
+long_term_memory: test
 nodes:
   work:
     kind: code
@@ -43,7 +43,7 @@ output: ${work.output}
 
 _FAILED_FLOW = """id: memory-run-failed
 name: memory_run_failed
-memory_policy: test
+long_term_memory: test
 nodes:
   work:
     kind: code
@@ -57,7 +57,7 @@ output: ${work.output}
 
 _MAP_FLOW = """id: memory-map
 name: memory_map
-memory_policy: test
+long_term_memory: test
 input:
   values: list[int]
 defs:

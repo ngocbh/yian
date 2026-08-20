@@ -195,20 +195,21 @@ Tune a node's non-model behavior with a static `env:` block (flow-level default 
 per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
 AGENT node's tool-calling loop (default `-1` = no cap).
 
-### Agent memory — `memory_policy:`
+### Agent memory — `long_term_memory:`
 
-Put `memory_policy: NAME` on a full flow (`nodes:` form) or an AGENT node when a
-Python host will inject that named memory implementation. The object form is
-`memory_policy: {name: NAME, config: {...}}`; config is public behavior only, so
-never author credentials, tenant/backend locations, or Python imports there.
+Put `long_term_memory: NAME` on a full flow (`nodes:` form) or an AGENT node to
+declare long-term memory and select a named host policy. The object form is
+`long_term_memory: {name: NAME, config: {...}}`; config is public behavior only,
+so never author credentials, tenant/backend locations, or Python imports there.
 Flow frames are inherited by every AGENT node in that flow, and an AGENT node
 may add its own local frame. Each frame writes only itself. MAP/LOOP executions
 reuse the frames authored on their flows and AGENT nodes rather than creating
 per-item/per-iteration frames.
-Other node kinds and anonymous inline child flows cannot own a policy. The YAML
-declaration remains dormant under ordinary `ac run`; library hosts enable recall
-with `run_flow(..., memory={NAME: implementation})` and opt into post-terminal
-learning with `learn=True`.
+Other node kinds and anonymous inline child flows cannot carry this declaration.
+It remains dormant under ordinary `ac run`; library hosts enable recall by
+registering the selected policy with
+`run_flow(..., memory={NAME: implementation})` and opt into post-terminal learning
+with `learn=True`.
 
 ### `code` — deterministic Python
 `code:` is either a **`module:function`** reference (import + call) or **inline source** —
@@ -506,7 +507,7 @@ WAIT return ordinary node outputs from their live calls. There is no authored
 - [ ] Every `agent` `output:` is typed — bare `str` for free text, or a
   `Literal[...]`/other supported shape for structured generation.
 - [ ] Every prompt references only the node's own local input names.
-- [ ] Every `memory_policy:` is on a flow or `agent`, names a host-registered implementation, and contains only public behavior config.
+- [ ] Every `long_term_memory:` declaration is on a flow or `agent`, selects a host-registered memory policy by name, and contains only public behavior config.
 - [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.
 - [ ] `tool` ids are registered; a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.

@@ -88,8 +88,8 @@ configuration, and optionally opens host-injected memory sessions. It creates:
 - a **`RunLog`**, either process-local or durable JSONL.
 
 The variable pool is runtime graph state, not agent memory. Agent memory is an
-optional host capability selected by authored `memory_policy` names and injected
-through `run_flow(memory=...)`.
+optional host capability configured by authored `long_term_memory` declarations.
+Each declaration selects a policy name resolved through `run_flow(memory=...)`.
 
 Initialization becomes real only when its complete `RunStartedRecord` is
 appended and applied. That record fixes the run identity, initial typed values,

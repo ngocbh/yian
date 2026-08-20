@@ -414,8 +414,8 @@ def test_memory_policy_origin_rebase_routes_the_single_shared_site() -> None:
     )
     frame = DiagnosticFrame(
         label="memory.yaml",
-        text="memory_policy: reflective\n",
-        range=SourceRange(1, 16, 1, 26),
+        text="long_term_memory: reflective\n",
+        range=SourceRange(1, 19, 1, 29),
     )
 
     class Resolver:

@@ -352,18 +352,20 @@ nodes:
 Keys in use: `max_tool_iterations` (AGENT node) — tool-calling loop turns before an
 `AgentLoopError` (default `-1` = no cap; set a positive int to bound it).
 
-## Agent memory — `memory_policy:`
+## Agent memory — `long_term_memory:`
 
-`memory_policy: NAME` is valid on a full flow (`nodes:` form) or an AGENT node; the
-object form adds public literal behavior config as `{name: NAME, config: {...}}`. A flow
-frame is inherited by its AGENT nodes, and an AGENT node may add one local frame.
-Each flow or AGENT node writes only its own frame. MAP items and LOOP iterations
-reuse static authored frames.
-Other node kinds and anonymous inline children cannot own a policy. The YAML
-contains no credentials, tenant/backend paths, persistence locations, or Python
-imports. A library host injects implementations by name with
-`run_flow(..., memory={NAME: implementation})`; `learn=True` enables the separate
-post-terminal learning phase. The CLI currently leaves policies dormant.
+`long_term_memory: NAME` is valid on a full flow (`nodes:` form) or an AGENT node;
+the declaration selects a named host policy, and the object form adds public
+literal behavior config as `{name: NAME, config: {...}}`. A flow frame is
+inherited by its AGENT nodes, and an AGENT node may add one local frame. Each flow
+or AGENT node writes only its own frame. MAP items and LOOP iterations reuse
+static authored frames.
+Other node kinds and anonymous inline children cannot carry the declaration. The
+YAML contains no credentials, tenant/backend paths, persistence locations, or
+Python imports. A library host injects implementations under the selected policy
+name with `run_flow(..., memory={NAME: implementation})`; `learn=True` enables the
+separate post-terminal learning phase. The CLI currently leaves declarations
+dormant.
 
 ## Validate
 

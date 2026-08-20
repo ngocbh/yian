@@ -86,12 +86,12 @@ class AgentDescriptor(NodeDescriptor):
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `input:`/
-    `output:` node-signature surface and the template `parse` (no custom parse hook — agent's
-    field legality is the default allowed/required key check + the asserts-list check). Only the
-    agent-specific fields are declared here; `inputs`/`outputs` come from the base.
+    `output:` node-signature surface and the template `parse`. Its cursor hook rejects the
+    retired memory key before the default allowed/required key check; only the agent-specific
+    fields are declared here, while `inputs`/`outputs` come from the base.
 
     Class attrs: `kind="agent"`; `allowed` adds normalized `inputs`/`outputs` plus `prompt`/`tools`/
-    `mode`/`llm_config`/`memory_policy`/`retries`/`asserts` to the commons;
+    `mode`/`llm_config`/`long_term_memory`/`retries`/`asserts` to the commons;
     `required` is empty (no mandatory flat field); `binding_fields=("inputs",)` — a
     `prompt:`'s `${...}` refs are handled by
     template scanning, not the inline-call desugar, so only `inputs` is walked.
@@ -105,12 +105,13 @@ class AgentDescriptor(NodeDescriptor):
         "tools",
         "mode",
         "llm_config",
-        "memory_policy",
+        "long_term_memory",
         "retries",
         "asserts",
     )
     required = NodeDescriptor.require()
     binding_fields = ("inputs",)
+    keyword_remap = {"long_term_memory": "memory_policy"}
 
     prompt: Optional[str] = None
     tools: list[str] = field(default_factory=list)
@@ -134,6 +135,17 @@ class AgentDescriptor(NodeDescriptor):
             )
 
     @classmethod
+    def _normalize_cursor(cls, cursor: SourceCursor) -> SourceCursor:
+        """Reject the retired authored memory key before generic key checking."""
+        if cursor.has("memory_policy"):
+            diagnostics = LoadDiagnostics.from_cursor(cursor)
+            raise diagnostics.error(
+                "node field `memory_policy:` was renamed to `long_term_memory:`",
+                range=cursor.key_range_of("memory_policy"),
+            )
+        return cursor
+
+    @classmethod
     def _validate_fields(
         cls,
         node_id: str,
@@ -147,7 +159,7 @@ class AgentDescriptor(NodeDescriptor):
             kwargs["memory_policy"] = parse_memory_policy(
                 kwargs["memory_policy"],
                 diagnostics=diagnostics,
-                source_range=ranges.get(("field", "memory_policy")),
+                source_range=ranges.get(("field", "long_term_memory")),
             )
         super()._validate_fields(
             node_id,
@@ -164,13 +176,13 @@ class AgentDescriptor(NodeDescriptor):
         site_path: tuple[str | int, ...],
         catalog_builder: "_SourceCatalogBuilder",
     ) -> "AgentDescriptor":
-        """Attach the one authored ``memory_policy:`` value occurrence."""
+        """Attach the one authored ``long_term_memory:`` value occurrence."""
         spec = self.memory_policy
-        if spec is None or not cursor.has("memory_policy"):
+        if spec is None or not cursor.has("long_term_memory"):
             return self
         origin = catalog_builder.register(
             (*site_path, "field", "memory_policy"),
-            cursor.child("memory_policy"),
+            cursor.child("long_term_memory"),
         )
         return replace(
             self,

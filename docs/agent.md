@@ -63,21 +63,17 @@ every component into one prompt string:
 flowchart TB
     subgraph request["Agent Composer request"]
         direction LR
-        messages["messages (ordered)<br/>[ SystemMessage: system prompt | root-flow memory | child-flow memory ... | AGENT-local memory ]<br/>[ HumanMessage: rendered prompt ]<br/>[ optional additional messages: tool history | fallback schema / retry correction ]"]
+        messages["<table style='border-collapse:collapse;border:2px solid currentColor;background:transparent;white-space:nowrap'><tr><th colspan='4' style='padding:6px;border-bottom:1px solid currentColor'>messages (ordered)</th></tr><tr><td style='padding:8px;border-right:1px solid currentColor;border-bottom:1px solid currentColor'><b>SystemMessage</b>: system prompt</td><td style='padding:8px;border-right:1px solid currentColor;border-bottom:1px solid currentColor'>root-flow memory</td><td style='padding:8px;border-right:1px solid currentColor;border-bottom:1px solid currentColor'>child-flow memory …</td><td style='padding:8px;border-bottom:1px solid currentColor'>AGENT-local memory</td></tr><tr><td colspan='4' style='padding:8px;border-bottom:1px solid currentColor'><b>HumanMessage</b>: rendered prompt</td></tr><tr><td colspan='2' style='padding:8px;border-right:1px solid currentColor'><b>optional additional messages</b>: tool history</td><td colspan='2' style='padding:8px'>fallback schema / retry correction</td></tr></table>"]
         fields["turn-dependent request fields<br/>[ tools: name | description | input schema ]<br/>[ structured-output binding ]"]
         messages ~~~ fields
     end
 
     request --> serializer["Provider/API serialization"]
-    subgraph invocation["Model invocation"]
-        direction LR
-        context_tokens["provider-defined<br/>context tokens"]
-        tool_schemas["tool/function schemas"]
-        output_controls["output controls"]
-        context_tokens ~~~ tool_schemas
-        tool_schemas ~~~ output_controls
-    end
+    invocation["<table style='border-collapse:collapse;border:2px solid currentColor;background:transparent;white-space:nowrap'><tr><th colspan='3' style='padding:6px;border-bottom:1px solid currentColor'>Model invocation</th></tr><tr><td style='padding:8px;border-right:1px solid currentColor'>provider-defined<br/>context tokens</td><td style='padding:8px;border-right:1px solid currentColor'>tool/function schemas</td><td style='padding:8px'>output controls</td></tr></table>"]
     serializer --> invocation
+
+    style messages fill:transparent,stroke:transparent,padding:0px
+    style invocation fill:transparent,stroke:transparent,padding:0px
 ```
 
 Every invocation receives the ordered messages. Depending on the mode and turn,
@@ -86,6 +82,11 @@ are not necessarily present together. The model adapter may encode structured
 output as a tool/function schema, JSON mode, or a provider response-schema
 feature. When no supported binding is available, Composer instead adds a schema
 instruction message.
+
+The shared horizontal lines mark message boundaries. Within the SystemMessage,
+vertical lines mark the assembled system-prompt and outer-to-local memory
+sections. The Model invocation columns are parallel provider request channels,
+not an execution or flattened-token order.
 
 When a tool-calling AGENT also has structured output, Composer finishes the tool
 loop and then performs structured generation against the accumulated messages.

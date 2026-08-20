@@ -44,8 +44,9 @@ See [Agent](docs/agent.md) for the conceptual model and
   changes the authored call graph.
 - **Recoverable:** every accepted transition is appended before it is applied,
   so an interrupted run can replay a validated record prefix.
-- **Extensible:** nodes return outcomes; the engine owns graph state and remains
-  independent of node kinds.
+- **Evolvable:** fixed flow and node identities give learning stable targets, so
+  recorded outcomes from completed runs can improve later behavior without
+  mutating the graph mid-run.
 
 ## Install
 

@@ -81,7 +81,7 @@ jobs:
           assert html.index(material) < html.index(scroller), "Scroller must subscribe after Material"
           PY
 
-      - name: Exercise Mermaid in Material
+      - name: Exercise documentation visuals in Material
         shell: bash
         env:
           MERMAID_TOOLS: ${{ runner.temp }}/mermaid-tools
@@ -114,34 +114,140 @@ jobs:
           try {
             const page = await browser.newPage()
             await page.setViewport({ width: 1440, height: 900 })
-            const pages = [
-              ["architecture", 2],
-              ["agent", 1]
-            ]
-            for (const [route, expected] of pages) {
-              await page.goto(`http://127.0.0.1:8000/${route}/`, {
-                waitUntil: "networkidle0"
-              })
-              await page.waitForFunction(
-                count => document.querySelectorAll(".mermaid-scroll > div.mermaid").length === count,
-                {},
-                expected
-              )
-              const diagrams = await page.evaluate(() =>
-                [...document.querySelectorAll(".mermaid-scroll")].map(scroller => ({
-                  hostTag: scroller.firstElementChild.tagName,
-                  hostWidth: scroller.firstElementChild.getBoundingClientRect().width,
-                  viewportWidth: scroller.clientWidth,
-                  scrollWidth: scroller.scrollWidth
-                }))
-              )
-              assert.equal(diagrams.length, expected)
-              for (const diagram of diagrams) {
-                assert.equal(diagram.hostTag, "DIV")
-                assert.ok(diagram.hostWidth >= 1280)
-                assert.ok(diagram.scrollWidth >= diagram.hostWidth)
-                assert.ok(diagram.viewportWidth < diagram.scrollWidth)
+            await page.goto("http://127.0.0.1:8000/architecture/", {
+              waitUntil: "networkidle0"
+            })
+            await page.waitForFunction(
+              () => document.querySelectorAll(".mermaid-scroll > div.mermaid").length === 2
+            )
+            const diagrams = await page.evaluate(() =>
+              [...document.querySelectorAll(".mermaid-scroll")].map(scroller => ({
+                hostTag: scroller.firstElementChild.tagName,
+                hostWidth: scroller.firstElementChild.getBoundingClientRect().width,
+                viewportWidth: scroller.clientWidth,
+                scrollWidth: scroller.scrollWidth
+              }))
+            )
+            assert.equal(diagrams.length, 2)
+            for (const diagram of diagrams) {
+              assert.equal(diagram.hostTag, "DIV")
+              assert.ok(diagram.hostWidth >= 1280)
+              assert.ok(diagram.scrollWidth >= diagram.hostWidth)
+              assert.ok(diagram.viewportWidth < diagram.scrollWidth)
+            }
+
+            await page.goto("http://127.0.0.1:8000/agent/", {
+              waitUntil: "networkidle0"
+            })
+            const semantics = await page.evaluate(() => {
+              const request = document.querySelector(".ac-request-visual")
+              const timeline = document.querySelector(".ac-turn-visual")
+              const messages = request?.querySelector(".ac-request-messages")
+              const fields = request?.querySelector(".ac-request-fields")
+              const stack = messages?.querySelector(".ac-request-message-stack")
+              const frames = messages?.querySelector(".ac-request-memory-frames")
+              const turns = timeline?.querySelector(".ac-turn-timeline")
+              return {
+                requestCount: document.querySelectorAll(".ac-request-visual").length,
+                timelineCount: document.querySelectorAll(".ac-turn-visual").length,
+                stackTag: stack?.tagName,
+                messages: [...(stack?.children ?? [])].map(item => item.dataset.message),
+                frameTag: frames?.tagName,
+                frames: [...(frames?.children ?? [])].map(item => item.textContent.trim()),
+                fieldsFollowMessages: messages?.nextElementSibling === fields,
+                fieldsShareFrame: messages?.parentElement === fields?.parentElement,
+                timelineTag: turns?.tagName,
+                turnCount: turns?.children.length
               }
+            })
+            assert.equal(semantics.requestCount, 1)
+            assert.equal(semantics.timelineCount, 1)
+            assert.equal(semantics.stackTag, "OL")
+            assert.deepEqual(semantics.messages, ["system", "human", "additional"])
+            assert.equal(semantics.frameTag, "OL")
+            assert.deepEqual(semantics.frames, [
+              "Root-flow frame",
+              "Child-flow frame(s)",
+              "AGENT-local frame"
+            ])
+            assert.ok(semantics.fieldsFollowMessages)
+            assert.ok(semantics.fieldsShareFrame)
+            assert.equal(semantics.timelineTag, "OL")
+            assert.equal(semantics.turnCount, 4)
+
+            const inspectLayout = () => page.evaluate(() => {
+              const bounds = item => {
+                const { top, right, bottom, left } = item.getBoundingClientRect()
+                return { top, right, bottom, left }
+              }
+              const rect = selector => bounds(document.querySelector(selector))
+              const fieldCards = [...document.querySelectorAll(".ac-request-field")].map(
+                bounds
+              )
+              const memoryFrames = [...document.querySelectorAll(".ac-request-memory-frames li")].map(
+                bounds
+              )
+              return {
+                messages: rect(".ac-request-messages"),
+                fields: rect(".ac-request-fields"),
+                fieldCards,
+                memoryFrames,
+                overflow: [...document.querySelectorAll(".ac-request-visual, .ac-turn-visual")].map(
+                  item => item.scrollWidth - item.clientWidth
+                )
+              }
+            })
+
+            const desktop = await inspectLayout()
+            assert.ok(desktop.fields.top >= desktop.messages.bottom)
+            assert.ok(Math.abs(desktop.fieldCards[0].top - desktop.fieldCards[1].top) < 2)
+            assert.ok(desktop.fieldCards[1].left > desktop.fieldCards[0].right)
+            assert.ok(desktop.memoryFrames.every(
+              frame => Math.abs(frame.top - desktop.memoryFrames[0].top) < 2
+            ))
+            assert.ok(desktop.memoryFrames[1].left > desktop.memoryFrames[0].right)
+            assert.ok(desktop.overflow.every(amount => amount <= 1))
+
+            await page.setViewport({ width: 390, height: 844 })
+            const mobile = await inspectLayout()
+            assert.ok(mobile.fieldCards[1].top >= mobile.fieldCards[0].bottom)
+            assert.ok(mobile.memoryFrames[1].top >= mobile.memoryFrames[0].bottom)
+            assert.ok(mobile.overflow.every(amount => amount <= 1))
+
+            await page.setViewport({ width: 1440, height: 900 })
+            for (const scheme of ["default", "slate"]) {
+              const colors = await page.evaluate(selectedScheme => {
+                document.body.dataset.mdColorScheme = selectedScheme
+                const parse = value => value.match(/[\d.]+/g).map(Number)
+                const luminance = value => {
+                  const [red, green, blue] = parse(value).slice(0, 3).map(channel => {
+                    channel /= 255
+                    return channel <= 0.04045
+                      ? channel / 12.92
+                      : ((channel + 0.055) / 1.055) ** 2.4
+                  })
+                  return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+                }
+                const foreground = getComputedStyle(
+                  document.querySelector(".ac-request-content-block strong")
+                ).color
+                const block = getComputedStyle(document.querySelector(".ac-request-content-block"))
+                const high = Math.max(luminance(foreground), luminance(block.backgroundColor))
+                const low = Math.min(luminance(foreground), luminance(block.backgroundColor))
+                return {
+                  contrast: (high + 0.05) / (low + 0.05),
+                  borderAlpha: parse(
+                    getComputedStyle(document.querySelector(".ac-request-frame")).borderTopColor
+                  )[3] ?? 1,
+                  connectorAlpha: parse(getComputedStyle(
+                    document.querySelector(".ac-request-memory-frames li"),
+                    "::after"
+                  ).color)[3] ?? 1
+                }
+              }, scheme)
+              assert.ok(colors.contrast >= 4.5)
+              assert.notEqual(colors.borderAlpha, 0)
+              assert.notEqual(colors.connectorAlpha, 0)
             }
           } finally {
             await browser.close()

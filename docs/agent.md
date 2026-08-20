@@ -56,57 +56,151 @@ outcome.
 
 ## Inside an AGENT node
 
-Agent Composer constructs a structured model request. It does not concatenate
-every component into one prompt string:
+An AGENT node may make one or more model requests before returning. Each request
+has ordered messages and may have turn-dependent fields alongside them.
 
-```mermaid
-flowchart TB
-    subgraph request["Agent Composer request"]
-        direction LR
-        messages["<table style='border-collapse:collapse;border:2px solid currentColor;background:transparent;white-space:nowrap'><tr><th colspan='4' style='padding:6px;border-bottom:1px solid currentColor'>messages (ordered)</th></tr><tr><td style='padding:8px;border-right:1px solid currentColor;border-bottom:1px solid currentColor'><b>SystemMessage</b>: system prompt</td><td style='padding:8px;border-right:1px solid currentColor;border-bottom:1px solid currentColor'>root-flow memory</td><td style='padding:8px;border-right:1px solid currentColor;border-bottom:1px solid currentColor'>child-flow memory …</td><td style='padding:8px;border-bottom:1px solid currentColor'>AGENT-local memory</td></tr><tr><td colspan='4' style='padding:8px;border-bottom:1px solid currentColor'><b>HumanMessage</b>: rendered prompt</td></tr><tr><td colspan='2' style='padding:8px;border-right:1px solid currentColor'><b>optional additional messages</b>: tool history</td><td colspan='2' style='padding:8px'>fallback schema / retry correction</td></tr></table>"]
-        fields["turn-dependent request fields<br/>[ tools: name | description | input schema ]<br/>[ structured-output binding ]"]
-        messages ~~~ fields
-    end
+<figure class="ac-request-visual" aria-labelledby="ac-request-visual-title">
+  <figcaption id="ac-request-visual-title">
+    <strong>What one model request contains</strong>
+    <span>Only messages have a Composer-defined order.</span>
+  </figcaption>
 
-    request --> serializer["Provider/API serialization"]
-    invocation["<table style='border-collapse:collapse;border:2px solid currentColor;background:transparent;white-space:nowrap'><tr><th colspan='3' style='padding:6px;border-bottom:1px solid currentColor'>Model invocation</th></tr><tr><td style='padding:8px;border-right:1px solid currentColor'>provider-defined<br/>context tokens</td><td style='padding:8px;border-right:1px solid currentColor'>tool/function schemas</td><td style='padding:8px'>output controls</td></tr></table>"]
-    serializer --> invocation
+  <div class="ac-request-frame">
+    <section class="ac-request-messages" aria-labelledby="ac-request-messages-title">
+      <header class="ac-request-section-title">
+        <h3 id="ac-request-messages-title">Messages</h3>
+        <span class="ac-request-badge">ordered</span>
+      </header>
 
-    style messages fill:transparent,stroke:transparent,padding:0px
-    style invocation fill:transparent,stroke:transparent,padding:0px
-```
+      <ol class="ac-request-message-stack">
+        <li class="ac-request-message" data-message="system">
+          <div class="ac-request-message-heading">
+            <span class="ac-request-step" aria-hidden="true">1</span>
+            <code>SystemMessage</code>
+          </div>
+          <div class="ac-request-system-content">
+            <div class="ac-request-content-block">
+              <strong>System instruction</strong>
+              <span>Framework instruction for the AGENT node</span>
+            </div>
+            <div class="ac-request-memory">
+              <div class="ac-request-memory-title">
+                <strong>Recalled long-term memory</strong>
+                <span class="ac-request-badge">outer → local</span>
+              </div>
+              <ol class="ac-request-memory-frames" aria-label="Long-term memory recall order">
+                <li>Root-flow frame</li>
+                <li>Child-flow frame(s)</li>
+                <li>AGENT-local frame</li>
+              </ol>
+              <small>Only non-empty recalled frames appear.</small>
+            </div>
+          </div>
+        </li>
 
-Every invocation receives the ordered messages. Depending on the mode and turn,
-it may also receive tool schemas or a structured-output binding; those fields
-are not necessarily present together. The model adapter may encode structured
-output as a tool/function schema, JSON mode, or a provider response-schema
-feature. When no supported binding is available, Composer instead adds a schema
-instruction message.
+        <li class="ac-request-message" data-message="human">
+          <div class="ac-request-message-heading">
+            <span class="ac-request-step" aria-hidden="true">2</span>
+            <code>HumanMessage</code>
+          </div>
+          <div class="ac-request-content-block">
+            <strong>Current task</strong>
+            <span>Rendered <code>prompt:</code></span>
+          </div>
+        </li>
 
-The shared horizontal lines mark message boundaries. Within the SystemMessage,
-vertical lines mark the assembled system-prompt and outer-to-local memory
-sections. The Model invocation columns are parallel provider request channels,
-not an execution or flattened-token order.
+        <li class="ac-request-message ac-request-message--optional" data-message="additional">
+          <div class="ac-request-message-heading">
+            <span class="ac-request-step" aria-hidden="true">3</span>
+            <strong>Additional messages</strong>
+            <span class="ac-request-badge">when needed</span>
+          </div>
+          <div class="ac-request-additions">
+            <div class="ac-request-content-block">
+              <strong>In-node interaction history</strong>
+              <span>Assistant tool call + <code>ToolMessage</code> result</span>
+            </div>
+            <div class="ac-request-content-block">
+              <strong>Structured-output guidance</strong>
+              <span>Fallback schema instruction or retry correction</span>
+            </div>
+          </div>
+        </li>
+      </ol>
+    </section>
 
-When a tool-calling AGENT also has structured output, Composer finishes the tool
-loop and then performs structured generation against the accumulated messages.
+    <aside class="ac-request-fields" aria-labelledby="ac-request-fields-title">
+      <header class="ac-request-section-title">
+        <h3 id="ac-request-fields-title">Alongside messages</h3>
+        <span class="ac-request-badge">turn-dependent</span>
+      </header>
+      <div class="ac-request-field">
+        <strong>Tool/function schemas</strong>
+        <span>Name · description · input schema, bound on tool-calling turns</span>
+      </div>
+      <div class="ac-request-field">
+        <strong>Structured-output binding</strong>
+        <span>Provider-supported schema/control; otherwise guidance becomes a message</span>
+      </div>
+    </aside>
+  </div>
 
-Only `messages` has a Composer-defined sequence. The eventual token or control
-representation belongs to the provider, so Agent Composer makes no claim that
-tool descriptions occur before or after memory in a flattened token stream.
+  <div class="ac-request-route" aria-label="The provider adapter serializes the request for the model">
+    <span class="ac-request-route-arrow" aria-hidden="true">↓</span>
+    <div class="ac-request-adapter">
+      <strong>Provider adapter</strong>
+      <span>Chooses the API and wire representation</span>
+    </div>
+    <span class="ac-request-route-arrow" aria-hidden="true">↓</span>
+    <div class="ac-request-model"><strong>Model invocation</strong></div>
+  </div>
 
-Every path starts with these messages:
+  <p class="ac-request-note">
+    <strong>Long-term</strong> means memory that can be recalled across runs.
+    Storage lifetime and persistence come from the host memory implementation;
+    built-in <code>ReflectiveMemory</code> is process-local.
+  </p>
+</figure>
 
-1. The **system message** contains the framework system instruction followed by
-   recalled memory sections, ordered from the outermost flow to the local AGENT
-   node.
-2. The **human message** contains the rendered `prompt:`.
+Only the messages have a Composer-defined sequence. The provider adapter owns
+the eventual token and control representation, so Agent Composer does not claim
+that tool descriptions occur before or after recalled memory in a flattened
+token stream.
 
-Tool-calling invocations append the model's prior tool calls and corresponding
-`ToolMessage` results. Before a structured fallback invocation—which may be the
-first model invocation—Composer appends a schema instruction; a retry appends a
-correction. In the combined tool/structured path, the tool history is
-accumulated before the schema instruction.
+<figure class="ac-turn-visual" aria-labelledby="ac-turn-visual-title">
+  <figcaption id="ac-turn-visual-title">
+    <strong>One AGENT node may make several model requests</strong>
+    <span>The scheduler still observes one node evaluation.</span>
+  </figcaption>
+
+  <ol class="ac-turn-timeline">
+    <li>
+      <strong>Recall and build the initial request</strong>
+      <p>Recall long-term memory once, then create the system and human messages.</p>
+    </li>
+    <li>
+      <div class="ac-turn-title">
+        <strong>Tool rounds</strong>
+        <span class="ac-request-badge">optional · repeatable</span>
+      </div>
+      <p>Assistant tool call → execute a granted tool → append the call and result → request again.</p>
+    </li>
+    <li>
+      <div class="ac-turn-title">
+        <strong>Structured generation and correction</strong>
+        <span class="ac-request-badge">optional</span>
+      </div>
+      <p>Use a provider binding or add fallback schema guidance. Invalid output adds a correction and retries. Without a tool loop, this may be the initial model request.</p>
+    </li>
+    <li>
+      <strong>Return one AGENT node outcome</strong>
+      <p>The validated value crosses the graph-state boundary.</p>
+    </li>
+  </ol>
+</figure>
+
+With both tools and structured output, structured generation starts after the
+tool loop and uses the accumulated message history.
 
 ### How YAML becomes the request
 

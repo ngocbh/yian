@@ -9,8 +9,8 @@ separates request structure from how the request evolves across model turns.
 
 Replace the Agent page's Mermaid diagram with two semantic HTML/CSS figures:
 
-1. **One request contains** — a two-lane card with ordered messages on the left
-   and turn-dependent request fields on the right, followed by a small provider
+1. **One request contains** — a full-width ordered message card followed by two
+   sibling cards for turn-dependent request fields, then a small provider
    adapter → model invocation path.
 2. **One AGENT node may make several requests** — a vertical ordered timeline
    for initial construction, optional/repeatable tool rounds, optional structured
@@ -47,10 +47,12 @@ Use semantic `<figure>`, `<figcaption>`, `<section>`, and ordered-list markup in
 `docs/agent.md`. Put narrowly namespaced `.ac-request-*` styles in the existing
 `docs/stylesheets/extra.css`; do not add a new asset package.
 
-At desktop width, ordered messages and parallel request fields occupy two
-columns. Below 48rem they stack without horizontal scrolling. Use Material theme
-variables for foreground, background, border, and accent colors. Optional states
-must be labelled in text and not communicated by color alone.
+The documentation column is too narrow for readable side-by-side message and
+field lanes, even on a desktop viewport. Ordered messages therefore use the
+full content width; the two parallel field cards sit beneath them in two columns.
+Below 48rem the field cards stack without horizontal scrolling. Use Material
+theme variables for foreground, background, border, and accent colors. Optional
+states must be labelled in text and not communicated by color alone.
 
 ## Verification
 
@@ -59,7 +61,7 @@ Keep strict MkDocs and repository tests. Update the existing Puppeteer docs job:
 - Mermaid runtime checks cover only pages that still contain Mermaid;
 - assert semantic order and sibling relationships in the new figures;
 - at desktop and mobile widths, assert no component overflow and the expected
-  two-column/stacked layout;
+  field-card row/stacked layout;
 - in light and dark schemes, assert readable representative contrast and visible
   borders/connectors.
 

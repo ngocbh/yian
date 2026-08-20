@@ -26,7 +26,7 @@ structure, responsiveness, and theme readability.
 **File**: `docs/stylesheets/extra.css`
 
 1. Define narrowly scoped request-card variables from Material theme variables.
-2. Add desktop two-column request layout and bordered message rows.
+2. Add full-width bordered message rows and a two-column request-field row.
 3. Add memory-frame chips, request-field cards, adapter path, and vertical
    timeline markers.
 4. At 48rem and below, stack request lanes and prevent horizontal overflow.
@@ -39,8 +39,8 @@ structure, responsiveness, and theme readability.
 1. Stop expecting a Mermaid host on the Agent page.
 2. Assert the request and timeline figures exist with ordered semantic content.
 3. Assert request fields are siblings of, not children of, messages.
-4. At 1440px assert two request columns; at 390px assert one stacked column and
-   no component overflow.
+4. At 1440px assert the request fields form a row below the messages; at 390px
+   assert those fields stack and neither figure overflows.
 5. Exercise default and slate schemes and assert representative 4.5:1 text
    contrast plus visible borders/connectors.
 

@@ -11,11 +11,13 @@ operator is a truthiness test (not an error).
 """
 
 import re
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Callable
 
 from lark import Token, Tree
 
+from agent_composer.expr.lineage import ResolvedValue, SourceRef, TracedValue, ValueRoute
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import Type, ValueKind
 
@@ -321,6 +323,14 @@ def _value_add(lhs: Any, rhs: Any) -> Any:
     return lhs + rhs
 
 
+@dataclass
+class _TraceFrame:
+    """Routes collected by the current expression evaluation frame."""
+
+    children: list[ValueRoute] = field(default_factory=list)
+    route: ValueRoute | None = None
+
+
 class _EvalExpr:
     """Recursive walker for a `parse_expr` tree, parameterised by `resolve`, `item`,
     and `mode`. Hand-written (not a Lark `Transformer`) so coalesce / default /
@@ -330,14 +340,21 @@ class _EvalExpr:
     consumer (operators, comparisons, the top-level entry) maps `_MISSING` to `None`
     for non-strict modes or raises for `STRICT_RAISE`."""
 
-    def __init__(self, resolve: Callable[[str], Any], item: Any, mode: ResolveMode):
+    def __init__(
+        self, resolve: Callable[[str], Any], item: Any, mode: ResolveMode,
+        *, trace: bool = False,
+    ):
         self._resolve = resolve
         self._item = item
         self._mode = mode
+        self._trace = trace
+        self._frames: list[_TraceFrame] = []
+        self._last_route: ValueRoute | None = None
 
     # --- top-level entry: coerce a `_MISSING` head to a value per mode --- #
     def eval(self, node: "Tree | Token") -> Any:
-        return self._as_value(self._walk(node))
+        value = self._as_value(self._walk(node))
+        return TracedValue(value, self._last_route) if self._trace else value
 
     def _as_value(self, v: Any) -> Any:
         """Turn an internal `_MISSING` into a mode-appropriate value: `None` for the
@@ -350,6 +367,44 @@ class _EvalExpr:
 
     # --- dispatch --- #
     def _walk(self, node: "Tree | Token") -> Any:
+        if not self._trace:
+            return self._dispatch(node)
+        frame = _TraceFrame()
+        self._frames.append(frame)
+        try:
+            value = self._dispatch(node)
+            route = frame.route
+            if route is None:
+                captured = None if value is _MISSING else value
+                route = replace(
+                    ValueRoute.literal(captured), kind="scalar",
+                    children=tuple(frame.children), expression=self._describe(node, frame.children),
+                ) if frame.children else ValueRoute.literal(captured)
+        finally:
+            self._frames.pop()
+        self._last_route = route
+        if self._frames:
+            self._frames[-1].children.append(route)
+        return value
+
+    def _describe(self, node: "Tree | Token", children: list[ValueRoute]) -> str:
+        """Describe the evaluated operands without another expression walk."""
+        kind = str(node.data)
+        symbol = {
+            "add": "+", "sub": "-", "mul": "*", "div": "/", "mod": "%",
+            "power": "**", "or_expr": "or", "and_expr": "and",
+            "compare_in": "in", "compare_notin": "not in",
+        }.get(kind)
+        if kind == "compare":
+            symbol = str(node.children[1])
+        if symbol is not None:
+            return "(" + f" {symbol} ".join(child.expression for child in children) + ")"
+        if kind in ("neg", "negate"):
+            prefix = "-" if kind == "neg" else "not "
+            return f"({prefix}{children[0].expression})"
+        return f"{kind}({', '.join(child.expression for child in children)})"
+
+    def _dispatch(self, node: "Tree | Token") -> Any:
         if isinstance(node, Token):
             return self._token(node)
         handler = getattr(self, f"_do_{node.data}", None)
@@ -396,6 +451,22 @@ class _EvalExpr:
         after = [c for c in children if isinstance(c, Tree) and c.data == "trailer"]
         for tr in after:
             value = self._dotted_step(value, str(tr.children[0]))
+        if self._trace:
+            routes = tuple(self._frames[-1].children)
+            names = tuple(
+                str(arg.children[0]) if len(arg.children) == 2 else ""
+                for arg in call_suffix.children
+            )
+            args = ", ".join(
+                f"{key}={route.expression}" if key else route.expression
+                for key, route in zip(names, routes)
+            )
+            suffix = "".join(f".{tr.children[0]}" for tr in after)
+            self._frames[-1].route = replace(
+                ValueRoute.literal(None if value is _MISSING else value),
+                kind="opaque", children=routes, names=names,
+                expression=f"{name}({args}){suffix}",
+            )
         return value
 
     def _reference(self, path: str) -> Any:
@@ -406,14 +477,47 @@ class _EvalExpr:
         do today). A miss (`item` miss, or `resolve` -> None) yields `_MISSING`."""
         parts = path.split(".")
         if parts[0] == "item":  # MAP-body-local scope (not a resolver head)
-            if self._item is None:
-                return _MISSING
-            value: Any = self._item
+            item = self._item
+            if self._trace and isinstance(item, ResolvedValue):
+                present, value = item.present, item.value
+                source = item.source
+            else:
+                present, value = item is not None, item
+                source = None
+            if value is None or not present:
+                value = _MISSING
             for step in parts[1:]:
+                if self._trace and source is not None:
+                    present = (
+                        present and isinstance(value, dict)
+                        and dict.__contains__(value, step)
+                    )
                 value = self._dotted_step(value, step)
+            if self._trace and source is None:
+                self._frames[-1].route = replace(
+                    ValueRoute.literal(None if value is _MISSING else value),
+                    expression=path,
+                )
+            elif self._trace and present:
+                route = self._resolved_route(item, "item")
+                self._frames[-1].route = route.project(tuple(parts[1:]))
             return value  # `_dotted_step` already yields `_MISSING` on a walk miss
         resolved = self._resolve(path)
+        if self._trace:
+            if not isinstance(resolved, ResolvedValue):
+                raise TypeError("a traced resolver must return ResolvedValue")
+            if resolved.present:
+                self._frames[-1].route = self._resolved_route(resolved, path)
+            resolved = resolved.value if resolved.present else None
         return _MISSING if resolved is None else resolved
+
+    def _resolved_route(self, resolved: ResolvedValue, path: str) -> ValueRoute:
+        source = resolved.source
+        if isinstance(source, SourceRef):
+            return ValueRoute("source", source=source, expression=path)
+        if isinstance(source, ValueRoute):
+            return ValueRoute("selected", children=(source,), expression=path)
+        return ValueRoute.literal(resolved.value)
 
     def _dotted_step(self, value: Any, step: str) -> Any:
         """One dotted step — dict `.get` ONLY, never `getattr` (SAFETY-CRITICAL: so
@@ -452,13 +556,22 @@ class _EvalExpr:
             raise ExpressionError(f"expression function {callee!r} failed: {exc}") from exc
 
     # --- coalesce / default / required (short-circuit) --- #
+    def _select_route(self, expression: str) -> None:
+        if self._trace:
+            self._frames[-1].route = ValueRoute(
+                "selected", children=(self._last_route,), expression=expression,
+            )
+
     def _do_coalesce(self, node: Tree) -> Any:
         """`a | b | c` — first operand that resolves to a non-None value wins; a
         present falsy value (0 / "" / False) wins, only `None`/miss falls through."""
         for child in node.children:
             v = self._as_value(self._walk(child))
             if v is not None:
+                self._select_route("|")
                 return v
+        if self._trace:
+            self._frames[-1].route = ValueRoute.literal(None)
         return None
 
     def _do_default_expr(self, node: Tree) -> Any:
@@ -466,9 +579,10 @@ class _EvalExpr:
         resolves to None."""
         head, fallback = node.children
         v = self._as_value(self._walk(head))
-        if v is not None:
-            return v
-        return self._as_value(self._walk(fallback))
+        if v is None:
+            v = self._as_value(self._walk(fallback))
+        self._select_route(":-")
+        return v
 
     def _do_required_expr(self, node: Tree) -> Any:
         """`head :? message` — raise `RequiredError` (with `message`) when `head`
@@ -477,6 +591,7 @@ class _EvalExpr:
         v = self._as_value(self._walk(head))
         if v is None:
             raise RequiredError(self._as_value(self._walk(message)))
+        self._select_route(":?")
         return v
 
     # --- boolean combinators --- #
@@ -523,11 +638,29 @@ class _EvalExpr:
         lhs = self._as_value(self._walk(node.children[0]))
         rhs = self._as_value(self._walk(node.children[1]))
         try:
-            return op(lhs, rhs)
+            value = op(lhs, rhs)
         except ZeroDivisionError as exc:
             raise ExpressionError(f"division by zero: {lhs!r} {symbol} {rhs!r}") from exc
         except TypeError as exc:
             raise ExpressionError(f"type error evaluating {lhs!r} {symbol} {rhs!r}: {exc}") from exc
+        if self._trace and symbol == "+" and type(lhs) is list and type(rhs) is list:
+            self._frames[-1].route = ValueRoute(
+                "concat", children=tuple(self._frames[-1].children),
+                expression=self._describe(node, self._frames[-1].children), sizes=(len(lhs), len(rhs)),
+            )
+        elif self._trace and symbol == "*" and (
+            (type(lhs) is list and isinstance(rhs, int))
+            or (isinstance(lhs, int) and type(rhs) is list)
+        ):
+            content_index = 0 if type(lhs) is list else 1
+            content, count = (lhs, rhs) if content_index == 0 else (rhs, lhs)
+            self._frames[-1].route = ValueRoute(
+                "repeat", children=tuple(self._frames[-1].children),
+                expression=self._describe(node, self._frames[-1].children),
+                sizes=(len(content),), count=int.__int__(count),
+                content_index=content_index,
+            )
+        return value
 
     def _do_add(self, node: Tree) -> Any:
         return self._binop(node, _value_add, "+")
@@ -555,7 +688,14 @@ class _EvalExpr:
             raise ExpressionError(f"unary minus on non-number {v!r}: {exc}") from exc
 
     def _do_list_lit(self, node: Tree) -> Any:
-        return [self._as_value(self._walk(c)) for c in node.children]
+        value = [self._as_value(self._walk(c)) for c in node.children]
+        if self._trace:
+            children = tuple(self._frames[-1].children)
+            self._frames[-1].route = ValueRoute(
+                "list", children=children,
+                expression="[" + ", ".join(child.expression for child in children) + "]",
+            )
+        return value
 
 
 def eval_expr(
@@ -563,6 +703,8 @@ def eval_expr(
     resolve: Callable[[str], Any],
     item: Any = None,
     mode: ResolveMode = ResolveMode.BINDING_NONE,
+    *,
+    trace: bool = False,
 ) -> Any:
     """
     Evaluate a unified `${...}` expression tree (from `expr.grammar.parse_expr`).
@@ -588,17 +730,23 @@ def eval_expr(
         resolve (`Callable[[str], Any]`):
             Resolves a reference path to its value; a path it maps to `None` is a MISS
             (the pool-agnostic seam). `item`-headed paths bypass this (see `item`).
+            With `trace=True`, returns one `ResolvedValue` containing the value,
+            actual presence, and a `SourceRef` or existing `ValueRoute`.
         item (`Any`, *optional*, defaults to `None`):
             The MAP-body-local scope for `item` / `item.path` (dict-only walk). `None`
-            means no item scope.
+            means no item scope. With tracing enabled, a `ResolvedValue` may
+            supply the item's presence and route through a composed collection.
         mode (`ResolveMode`, *optional*, defaults to `BINDING_NONE`):
             How a missing reference is treated — raise (`STRICT_RAISE`) or become
             `None` (`BINDING_NONE` / `CONDITION_FALSY`).
+        trace (`bool`, *optional*, defaults to `False`):
+            Internal retention switch. Collect a compositional route during this
+            evaluation and return `TracedValue(value, route)`.
 
     Returns:
         `Any`:
             The evaluated value (typed): a number / string / bool / list / dict, or
-            `None`.
+            `None`. With tracing enabled, the same value inside `TracedValue`.
 
     Raises:
         `ExpressionError`:
@@ -606,8 +754,10 @@ def eval_expr(
             over an incompatible operand (incl. `None`), or a strict-mode miss.
         `RequiredError`:
             When a `head :? message` required atom's head misses / is None.
+        `TypeError`:
+            When a traced resolver does not return `ResolvedValue`.
     """
-    return _EvalExpr(resolve, item, mode).eval(tree)
+    return _EvalExpr(resolve, item, mode, trace=trace).eval(tree)
 
 
 # --------------------------------------------------------------------------- #

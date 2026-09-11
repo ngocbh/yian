@@ -12,8 +12,12 @@ The engine is three layers, all pool-agnostic (they take a `resolve` callable):
   spans, then drives the engine per span (`eval_binding`, `eval_template`,
   `expr_refs_of`, `prompt_refs`, `render_template_record`, `scan_template`).
 
-`lineage` owns ordinary feedback values and validation relative to recorded
-value shapes. Its contracts stay independent of nodes, memory, and runtime.
+`lineage` owns ordinary feedback values, immutable expression routes, and
+source-relative feedback transfer. Optional tracing in the same evaluator walk
+retains selected value arms, container mappings, and opaque function boundaries.
+Routes reference accepted source identities; the caller supplies recorded values
+when transferring feedback. This leaf uses only the standard library and stays
+independent of nodes, memory, and runtime.
 
 Flow invocation is NO LONGER a `${...}` construct — it is the compile-time
 whole-value `call(...)` directive (in `compose.calls`), not part of this engine.

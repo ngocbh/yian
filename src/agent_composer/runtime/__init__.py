@@ -8,6 +8,8 @@ source-neutral frame contracts and injected policy sessions; its learning intent
 follow the same append-before-apply reducer path. Pooled drives own their workers
 through a full join and signal cooperative stop before that join when dispatch
 exits abnormally.
+Shared backward failure and outcome contracts live below the log and driver;
+they keep reverse-operation status separate from forward execution status.
 
 Knows about:   events, memory contracts, typesys, nodes, and compile
                topology/identity/validation contracts.
@@ -15,6 +17,7 @@ Never imports: compile.expand, compose, the package-root run boundary, CLI, or p
                SDKs.
 """
 
+from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
 from agent_composer.runtime.engine import FlowEngine
 from agent_composer.runtime.log import JsonlRunLog, MemoryRunLog, RunLog
 from agent_composer.runtime.state import (
@@ -25,6 +28,8 @@ from agent_composer.runtime.state import (
 )
 
 __all__ = [
+    "BackwardFailure",
+    "BackwardOutcome",
     "FlowEngine",
     "JsonlRunLog",
     "MemoryRunLog",

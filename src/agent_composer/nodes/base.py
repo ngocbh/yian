@@ -21,17 +21,20 @@ Invariant: a node never writes the pool. It *describes* its one output value as
 import copy
 from abc import ABC
 from collections.abc import Generator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
+from math import isfinite
 from typing import Any, Callable, ClassVar, Iterator, Optional, Union
 
-from agent_composer.diagnostics import OriginRef
+from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
+from agent_composer.expr.lineage import FeedbackValue, validate_feedback
 from agent_composer.memory.contracts import MemoryScope
 from agent_composer.nodes.binding import BindingError, apply_defaults
 from agent_composer.nodes.contracts import (
     Assertion,
+    ExecutionScope,
     OutputContract,
     Parameter,
     PartialRecordContract,
@@ -106,6 +109,297 @@ class Grow:
 
 # The closed sum a pure `run(inputs)` returns.
 NodeResult = Union[Output, Route, Grow]
+
+
+def _validate_text_feedback(messages: tuple[str, ...], name: str) -> None:
+    """Require an immutable batch of independent textual messages."""
+    if type(messages) is not tuple:
+        raise TypeError(f"{name} must be a tuple")
+    if any(type(message) is not str for message in messages):
+        raise TypeError(f"{name} messages must be strings")
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class BackwardResult:
+    """Independent feedback for an owner's inputs, behavior, and local variables.
+
+    Input messages retain ordinary dictionaries and positional lists. Public
+    container properties return detached copies so callers cannot alter the
+    retained result.
+
+    Attributes:
+        input_feedback (`dict[str, tuple[FeedbackValue, ...]]`): Authored input
+            names mapped to ordered batches of independent feedback values.
+        self_feedback (`tuple[str, ...]`): Observations about this owner's behavior.
+        variable_feedback (`dict[str, tuple[str, ...]]`): Textual messages for
+            declared local variables; these do not update variable values.
+    """
+
+    _input_feedback: dict[str, tuple[FeedbackValue, ...]] = field(repr=False)
+    self_feedback: tuple[str, ...]
+    _variable_feedback: dict[str, tuple[str, ...]] = field(repr=False)
+
+    def __init__(
+        self,
+        input_feedback: dict[str, tuple[FeedbackValue, ...]] | None = None,
+        self_feedback: tuple[str, ...] = (),
+        variable_feedback: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
+        """Validate channel values and retain detached feedback snapshots.
+
+        Args:
+            input_feedback (`dict[str, tuple[FeedbackValue, ...]]`, *optional*,
+                defaults to `None`): Input message batches; `None` creates an
+                empty channel. Lists represent a single positional message.
+            self_feedback (`tuple[str, ...]`, *optional*, defaults to `()`):
+                Independent messages about the owner's behavior.
+            variable_feedback (`dict[str, tuple[str, ...]]`, *optional*,
+                defaults to `None`): Local variable message batches; `None`
+                creates an empty channel.
+
+        Raises:
+            `TypeError`: Raised for invalid channel, key, batch, or message types.
+            `ValueError`: Raised for an invalid nested feedback selection.
+        """
+        inputs = {} if input_feedback is None else input_feedback
+        variables = {} if variable_feedback is None else variable_feedback
+        if type(inputs) is not dict:
+            raise TypeError("input_feedback must be a dictionary")
+        for name, messages in inputs.items():
+            if type(name) is not str:
+                raise TypeError("input_feedback keys must be strings")
+            if type(messages) is not tuple:
+                raise TypeError(f"input_feedback[{name!r}] must be a tuple")
+            for message in messages:
+                validate_feedback(message, message, path=(name,))
+        _validate_text_feedback(self_feedback, "self_feedback")
+        if type(variables) is not dict:
+            raise TypeError("variable_feedback must be a dictionary")
+        for name, messages in variables.items():
+            if type(name) is not str:
+                raise TypeError("variable_feedback keys must be strings")
+            _validate_text_feedback(messages, f"variable_feedback[{name!r}]")
+        object.__setattr__(self, "_input_feedback", copy.deepcopy(inputs))
+        object.__setattr__(self, "self_feedback", self_feedback)
+        object.__setattr__(self, "_variable_feedback", variables.copy())
+
+    @property
+    def input_feedback(self) -> dict[str, tuple[FeedbackValue, ...]]:
+        """Return fresh ordinary values with independent message order preserved."""
+        return copy.deepcopy(self._input_feedback)
+
+    @property
+    def variable_feedback(self) -> dict[str, tuple[str, ...]]:
+        """Return local variable messages without exposing the retained mapping."""
+        return self._variable_feedback.copy()
+
+
+def _copy_backward_value(value: Any, name: str) -> Any:
+    """Copy one retained JSON value without coercing keys or container types."""
+    if value is None or type(value) in (str, bool, int):
+        return value
+    if type(value) is float:
+        if not isfinite(value):
+            raise ValueError(f"{name} must contain only finite JSON numbers")
+        return value
+    if type(value) is list:
+        return [
+            _copy_backward_value(item, f"{name}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    if type(value) is dict:
+        if any(type(key) is not str for key in value):
+            raise TypeError(f"{name} object keys must be strings")
+        return {
+            key: _copy_backward_value(item, f"{name}[{key!r}]")
+            for key, item in value.items()
+        }
+    raise TypeError(f"{name} must contain only JSON values")
+
+
+def _validate_declared_names(names: tuple[str, ...], field_name: str) -> None:
+    """Require one immutable inventory of distinct authored names."""
+    if type(names) is not tuple:
+        raise TypeError(f"{field_name} must be a tuple")
+    if any(type(name) is not str for name in names):
+        raise TypeError(f"{field_name} must contain only strings")
+    if len(set(names)) != len(names):
+        raise ValueError(f"{field_name} must contain unique names")
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class BackwardContext:
+    """Detached forward material and attribution supplied to one backward hook.
+
+    Input declarations stay separate from recorded values: an early binding
+    failure has ``inputs=None`` even when the owner declares input names.
+    Mutable JSON values are copied on construction and on every public read.
+    Failure traces retain canonical origin keys without front-end subclass state.
+    """
+
+    _inputs: dict[str, Any] | None = field(repr=False)
+    input_names: tuple[str, ...]
+    variable_names: tuple[str, ...]
+    _output: Any = field(repr=False)
+    failure: Failure | None
+    scope: ExecutionScope | None
+    run_id: str | None
+    node_id: str | None
+    node_started_seq: int | None
+    _node_data: dict[str, Any] = field(repr=False)
+    _downstream_context: tuple[dict[str, Any], ...] = field(repr=False)
+
+    def __init__(
+        self,
+        inputs: dict[str, Any] | None,
+        *,
+        input_names: tuple[str, ...] = (),
+        variable_names: tuple[str, ...] = (),
+        output: Any = None,
+        failure: Failure | None = None,
+        scope: ExecutionScope | None = None,
+        run_id: str | None = None,
+        node_id: str | None = None,
+        node_started_seq: int | None = None,
+        node_data: dict[str, Any] | None = None,
+        downstream_context: tuple[dict[str, Any], ...] = (),
+    ) -> None:
+        """Validate the available invocation metadata and snapshot its values.
+
+        Args:
+            inputs (`dict[str, Any] | None`): Canonical bound JSON input record;
+                `None` means no usable input record was retained.
+            input_names (`tuple[str, ...]`, *optional*, defaults to `()`):
+                Authored input names this owner may address, including defaults.
+            variable_names (`tuple[str, ...]`, *optional*, defaults to `()`):
+                Declared local variables. An empty inventory rejects all targets.
+            output (`Any`, *optional*, defaults to `None`): Recorded JSON output,
+                when the forward invocation produced one.
+            failure (`Failure | None`, *optional*, defaults to `None`):
+                The recorded forward failure, independent of backward's outcome.
+            scope (`ExecutionScope | None`, *optional*, defaults to `None`):
+                Authored path and structured child position, when available.
+            run_id (`str | None`, *optional*, defaults to `None`): Recorded run ID.
+            node_id (`str | None`, *optional*, defaults to `None`): Display ID of
+                the executing node; it is never parsed to infer scope.
+            node_started_seq (`int | None`, *optional*, defaults to `None`):
+                Positive accepted node-start sequence, paired with the run ID.
+            node_data (`dict[str, Any]`, *optional*, defaults to `None`):
+                Node-owned JSON material retained for backward; `None` uses `{}`.
+            downstream_context (`tuple[dict[str, Any], ...]`, *optional*, defaults
+                to `()`): Ordered JSON attribution accompanying feedback messages.
+
+        Raises:
+            `TypeError`: Raised for malformed metadata or non-JSON values.
+            `ValueError`: Raised for duplicate declarations, invalid positions,
+                or non-finite JSON numbers.
+        """
+        if inputs is not None and type(inputs) is not dict:
+            raise TypeError("inputs must be a dictionary or None")
+        _validate_declared_names(input_names, "input_names")
+        _validate_declared_names(variable_names, "variable_names")
+        if failure is not None:
+            if type(failure) is not Failure:
+                raise TypeError("failure must be a Failure or None")
+            Failure.__post_init__(failure)
+            failure = replace(
+                failure, trace=tuple(OriginRef(origin.key) for origin in failure.trace)
+            )
+        if scope is not None:
+            if type(scope) is not ExecutionScope:
+                raise TypeError("scope must be an ExecutionScope or None")
+            ExecutionScope.__post_init__(scope)
+        if run_id is not None and type(run_id) is not str:
+            raise TypeError("run_id must be a string or None")
+        if node_id is not None and type(node_id) is not str:
+            raise TypeError("node_id must be a string or None")
+        if node_started_seq is not None:
+            if type(node_started_seq) is not int:
+                raise TypeError("node_started_seq must be an integer or None")
+            if node_started_seq <= 0:
+                raise ValueError("node_started_seq must be positive")
+        data = {} if node_data is None else node_data
+        if type(data) is not dict:
+            raise TypeError("node_data must be a dictionary")
+        if type(downstream_context) is not tuple:
+            raise TypeError("downstream_context must be a tuple")
+        if any(type(item) is not dict for item in downstream_context):
+            raise TypeError("downstream_context must contain dictionaries")
+
+        object.__setattr__(self, "_inputs", _copy_backward_value(inputs, "inputs"))
+        object.__setattr__(self, "input_names", input_names)
+        object.__setattr__(self, "variable_names", variable_names)
+        object.__setattr__(self, "_output", _copy_backward_value(output, "output"))
+        object.__setattr__(self, "failure", failure)
+        object.__setattr__(self, "scope", scope)
+        object.__setattr__(self, "run_id", run_id)
+        object.__setattr__(self, "node_id", node_id)
+        object.__setattr__(self, "node_started_seq", node_started_seq)
+        object.__setattr__(self, "_node_data", _copy_backward_value(data, "node_data"))
+        object.__setattr__(
+            self,
+            "_downstream_context",
+            tuple(
+                _copy_backward_value(item, f"downstream_context[{index}]")
+                for index, item in enumerate(downstream_context)
+            ),
+        )
+
+    @property
+    def inputs(self) -> dict[str, Any] | None:
+        """Return a detached bound input record, or no usable record."""
+        return copy.deepcopy(self._inputs)
+
+    @property
+    def output(self) -> Any:
+        """Return a detached copy of the recorded forward output."""
+        return copy.deepcopy(self._output)
+
+    @property
+    def node_data(self) -> dict[str, Any]:
+        """Return a detached copy of node-owned backward material."""
+        return copy.deepcopy(self._node_data)
+
+    @property
+    def downstream_context(self) -> tuple[dict[str, Any], ...]:
+        """Return detached attribution in the order accompanying feedback."""
+        return copy.deepcopy(self._downstream_context)
+
+
+def validate_backward_result(result: BackwardResult, context: BackwardContext) -> None:
+    """Validate every feedback channel before routing any input message.
+
+    Args:
+        result (`BackwardResult`): The owner's proposed feedback channels.
+        context (`BackwardContext`): Recorded bound values and the owner's
+            declared input and local variable inventories.
+
+    Raises:
+        `TypeError`: Raised for an invalid result, context, or message type.
+        `ValueError`: Raised for an undeclared target, unavailable input value,
+            or nested feedback shape mismatch.
+    """
+    if type(result) is not BackwardResult:
+        raise TypeError("result must be a BackwardResult")
+    if type(context) is not BackwardContext:
+        raise TypeError("context must be a BackwardContext")
+    checked = BackwardResult(
+        result.input_feedback, result.self_feedback, result.variable_feedback
+    )
+    inputs = context.inputs
+    input_feedback = checked.input_feedback
+    if input_feedback and inputs is None:
+        raise ValueError("input_feedback requires usable recorded inputs")
+    for name, messages in input_feedback.items():
+        if name not in context.input_names:
+            raise ValueError(f"input_feedback selects undeclared input {name!r}")
+        if inputs is None or name not in inputs:
+            raise ValueError(f"input_feedback has no recorded input {name!r}")
+        for message in messages:
+            validate_feedback(message, inputs[name], path=(name,))
+    for name in checked.variable_feedback:
+        if name not in context.variable_names:
+            raise ValueError(f"variable_feedback selects undeclared variable {name!r}")
 
 
 class _HostStop(Exception):

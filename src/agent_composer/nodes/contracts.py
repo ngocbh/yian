@@ -2,15 +2,16 @@
 
 These frozen carriers attach opaque origins to executable meanings without
 depending on Compose/YAML or runtime state. Compiled wiring, node assertions,
-node parameters, and node outputs use their canonical carriers. Compose output
-derivation preserves those carriers and projects exact field/value types only inside
-type algorithms.
+node parameters, and node outputs use their canonical carriers. Execution scopes
+identify authored locations and structured occurrences independently of memory.
+Compose output derivation preserves those carriers and projects exact field/value
+types only inside type algorithms.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, TypeAlias, cast
+from typing import Any, Callable, Iterator, Literal, TypeAlias, cast
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.typesys import (
@@ -60,6 +61,86 @@ def _path_sort_key(path: ValuePath) -> tuple[tuple[int, str | int], ...]:
     return tuple(
         (0, segment) if type(segment) is str else (1, segment) for segment in path
     )
+
+
+def _validate_authored_path(path: tuple[str, ...], name: str) -> None:
+    """Require immutable authored names while allowing the empty root path."""
+    if type(path) is not tuple:
+        raise TypeError(f"{name} must be a tuple")
+    if any(type(part) is not str or not part for part in path):
+        raise ValueError(f"{name} components must be non-empty strings")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionPosition:
+    """One structured position in an instantiated child computation.
+
+    Attributes:
+        kind (`Literal["call", "map_item", "loop_body", "loop_driver"]`):
+            The authored composition operation and, for LOOP, its execution role.
+        static_path (`tuple[str, ...]`): Root-relative path of the owning spawner.
+        index (`int | None`): Non-negative item or iteration index. CALL uses
+            `None` because it instantiates exactly one child per execution.
+    """
+
+    kind: Literal["call", "map_item", "loop_body", "loop_driver"]
+    static_path: tuple[str, ...]
+    index: int | None = None
+
+    def __post_init__(self) -> None:
+        """Validate structured positions without interpreting runtime display IDs."""
+        if type(self.kind) is not str or self.kind not in (
+            "call",
+            "map_item",
+            "loop_body",
+            "loop_driver",
+        ):
+            raise ValueError("unknown execution position kind")
+        _validate_authored_path(self.static_path, "static_path")
+        if self.kind == "call":
+            if self.index is not None:
+                raise ValueError("a call position cannot have an index")
+        elif type(self.index) is not int:
+            raise TypeError("execution position index must be an integer")
+        elif self.index < 0:
+            raise ValueError("execution position index must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionScope:
+    """An authored execution location independent of memory policy declarations.
+
+    Attributes:
+        static_path (`tuple[str, ...]`): Root-relative authored node or flow path.
+            The empty tuple identifies the root itself, including unnamed flows.
+        flow_path (`tuple[str, ...]`): Root-relative path of the containing flow;
+            the empty tuple denotes the root flow.
+        occurrence_path (`tuple[ExecutionPosition, ...]`): Outer-to-inner child
+            positions. Exact dynamic identity additionally uses the run ID and
+            accepted node-start sequence, supplied by the runtime.
+        boundary (`Literal["start", "end"] | None`): This location's role as
+            a flow boundary, when it has one.
+    """
+
+    static_path: tuple[str, ...]
+    flow_path: tuple[str, ...] = ()
+    occurrence_path: tuple[ExecutionPosition, ...] = ()
+    boundary: Literal["start", "end"] | None = None
+
+    def __post_init__(self) -> None:
+        """Require immutable paths and explicit source-neutral occurrence data."""
+        _validate_authored_path(self.static_path, "static_path")
+        _validate_authored_path(self.flow_path, "flow_path")
+        if type(self.occurrence_path) is not tuple:
+            raise TypeError("occurrence_path must be a tuple")
+        for position in self.occurrence_path:
+            if type(position) is not ExecutionPosition:
+                raise TypeError("occurrence_path items must be ExecutionPosition values")
+            ExecutionPosition(position.kind, position.static_path, position.index)
+        if self.boundary is not None and (
+            type(self.boundary) is not str or self.boundary not in ("start", "end")
+        ):
+            raise ValueError("execution boundary must be 'start', 'end', or None")
 
 
 @dataclass(frozen=True)
@@ -633,6 +714,8 @@ __all__ = [
     "Assertion",
     "Binding",
     "ContractOrigins",
+    "ExecutionPosition",
+    "ExecutionScope",
     "OutputContract",
     "Parameter",
     "PartialRecordContract",

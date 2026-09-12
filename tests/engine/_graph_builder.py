@@ -17,6 +17,8 @@ from typing import Any, Optional
 
 from agent_composer.compile.model import END_ID, START_ID, CompiledFlow, Edge, FlowOutput
 from agent_composer.compile.expand import build_grow
+from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+from agent_composer.compile.llm_cascade import resolve_llm_cascade
 from agent_composer.compose.edges.producers import _binding_producers
 from agent_composer.expr import binding_co_skips, expr_refs_of
 from agent_composer.memory import MemoryFrameSpec, MemorySnapshotEnvelope
@@ -39,6 +41,16 @@ _TEST_RUN_ID = "direct-engine-test"
 _TEST_FINGERPRINT = "f" * 64
 
 
+def _forward_capture(node, inputs):
+    """Give directly prepared test outcomes explicit canonical binding data."""
+    from agent_composer.expr.lineage import ValueRoute
+    from agent_composer.runtime.contracts import ForwardCapture
+
+    return ForwardCapture(inputs, ValueRoute.record(
+        (name, ValueRoute.literal(value)) for name, value in (inputs or {}).items()
+    ), scope=node.execution_scope)
+
+
 def _engine(
     flow: CompiledFlow,
     run_inputs: Optional[dict[str, Any]] = None,
@@ -55,6 +67,9 @@ def _engine(
 ) -> FlowEngine:
     """Prepare one in-memory authority and return the final direct engine surface."""
     inputs = dict(run_inputs or {})
+    if learn:
+        resolve_llm_cascade(flow, {}, defaults={"provider": "test", "model": "test"})
+        apply_execution_layout(flow, resolve_execution_layout(flow))
     state = RunState(flow)
     pool = VariablePool(start_id=flow.start_id)
     pool.set(flow.start_id, inputs)

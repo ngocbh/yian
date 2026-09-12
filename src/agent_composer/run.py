@@ -22,6 +22,7 @@ import threading
 from typing import Any, Callable
 
 from agent_composer._settings import default_llm_model, default_llm_provider
+from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
 from agent_composer.compile.expand import build_grow
 from agent_composer.compile.llm_cascade import (
     apply_effective_llm_map,
@@ -238,6 +239,9 @@ def _run_flow_controlled(
         llm_config or {},
         defaults=defaults,
     )
+
+    if learn:
+        apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
 
     canonical_run_id = run_id if run_id is not None else default_run_id()
     # Canonicalize supplied boundary strings before RunStarted persists its input.
@@ -533,6 +537,8 @@ def _replay_run_log(flow: ComposedFlow, log: RunLog) -> RunState:
         private_flow,
         first.record.effective_llm_by_static_path,
     )
+    if first.record.learn:
+        apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
     if first.record.memory_layout is not None:
         replay_layout, _ = _resolve_runtime_memory_layout(private_flow)
         if replay_layout != first.record.memory_layout:

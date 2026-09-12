@@ -147,7 +147,7 @@ class EvaluatedOutcome:
 class _EvaluationTraceCollector(EvaluationTrace):
     """Private mutable trace frozen once at the evaluator return boundary."""
 
-    def __init__(self, scope: MemoryScope) -> None:
+    def __init__(self, scope: MemoryScope | None) -> None:
         self._scope = scope
         self._bound_inputs: dict[str, Any] | None = None
         self._base_system_prompt: str | None = None
@@ -238,12 +238,8 @@ def _new_evaluation_trace(
     if not capture_evidence or node.needs_evaluation_trace is not True:
         return None
     scope = node.memory_scope
-    if (
-        type(scope) is not MemoryScope
-        or type(scope.frame_stack) is not tuple
-        or not scope.frame_stack
-    ):
-        return None
+    if scope is not None and type(scope) is not MemoryScope:
+        raise TypeError("node memory_scope must be an exact MemoryScope or None")
     return _EvaluationTraceCollector(scope)
 
 

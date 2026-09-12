@@ -61,6 +61,68 @@ def messages(routed):
     return [(c.source, c.feedback) for c in routed.contributions]
 
 
+@pytest.mark.parametrize("temporary", [float("inf"), float("nan")])
+def test_nonfinite_temporary_keeps_a_valid_final_interpolation(temporary, monkeypatch):
+    calls = []
+
+    def score():
+        calls.append(None)
+        return temporary
+
+    monkeypatch.setitem(TEMPLATE_FNS, "score", score)
+    traced = eval_binding("score: ${score()}", lambda _: None, trace=True)
+    assert traced.value == f"score: {temporary}"
+    opaque = traced.route.children[0]
+    assert opaque.kind == "opaque"
+    assert opaque.value_json is None
+    assert opaque.result_type == "builtins.float"
+    assert calls == [None]
+    stopped = route_feedback(traced.route, "Check the score.", lambda _: None).stopped
+    assert stopped[0].context[-1].result is None
+
+
+@pytest.mark.parametrize("temporary,result_type,snapshot_kind", [
+    pytest.param("\ud800", "builtins.str", None, id="string"),
+    pytest.param(["kept", "\ud800"], "builtins.list", "list", id="list"),
+    pytest.param({"kept": 1, "lost": "\ud800"}, "builtins.dict", "record", id="record-value"),
+    pytest.param({"\ud800": 1}, "builtins.dict", None, id="record-key"),
+    pytest.param({"kept": 1, "lost": {"\ud800": 1}}, "builtins.dict", "record", id="nested-key"),
+])
+def test_noncanonical_unicode_temporary_preserves_comparison_and_partial_snapshot(
+    temporary, result_type, snapshot_kind, monkeypatch,
+):
+    calls = []
+
+    def bad_text():
+        calls.append(None)
+        return temporary
+
+    monkeypatch.setitem(TEMPLATE_FNS, "bad_text", bad_text)
+    traced = eval_binding("${bad_text() == bad_text()}", lambda _: None, trace=True)
+    assert traced.value is True
+    assert calls == [None, None]
+    json.dumps(asdict(traced.route), ensure_ascii=False, allow_nan=False).encode("utf-8")
+    for opaque in traced.route.children:
+        assert opaque.kind == "opaque" and opaque.value_json is None
+        assert opaque.result_type == result_type
+        if snapshot_kind is None:
+            assert opaque.snapshot is None
+        else:
+            assert opaque.snapshot.kind == snapshot_kind
+            assert json.loads(opaque.snapshot.children[0].value_json) == (
+                "kept" if snapshot_kind == "list" else 1
+            )
+            unavailable = opaque.snapshot.children[1]
+            assert unavailable.value_json is None
+            assert unavailable.result_type in ("builtins.str", "builtins.dict")
+    routed = route_feedback(traced.route, "Explain the comparison.", lambda _: None)
+    assert routed.contributions == ()
+    assert len(routed.stopped) == 2
+    assert all(stop.context[0].result is True for stop in routed.stopped)
+    assert all(stop.context[-1].result is None for stop in routed.stopped)
+    assert calls == [None, None]
+
+
 def test_reserved_map_over_uses_the_same_capture_path():
     from agent_composer.compile.model import Flow
     from agent_composer.nodes.map import MapNode

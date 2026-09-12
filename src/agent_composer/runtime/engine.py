@@ -28,6 +28,8 @@ from agent_composer.runtime.eval_node import (
     MemoryRecall,
     eval_node,
 )
+from agent_composer.runtime.contracts import ForwardCapture
+from agent_composer.runtime.trace import capture_bindings
 from agent_composer.runtime.log import RunLog
 from agent_composer.runtime.state import (
     GrowBuilder,
@@ -266,15 +268,21 @@ class FlowEngine:
         """Prepare node data, append its record, and apply the total reducer plan.
 
         Evaluator and dispatcher rejection paths both hand one canonical
-        ``Failure`` to the schema-4 reducer boundary.
+        ``Failure`` to the schema-5 reducer boundary.
         """
         if type(evaluated) is not EvaluatedOutcome:
             raise TypeError("FlowEngine outcome must be an EvaluatedOutcome")
         outcome = evaluated.outcome
         evidence = evaluated.evidence
+        forward_capture = (
+            capture_bindings(evaluated.bindings, self.state.flow.nodes[node_id].execution_scope)
+            if self.state.learn else None
+        )
         if isinstance(outcome, EvaluationFailure):
             failure = outcome.failure
-            prepared = self._prepare_failure(node_id, failure, evidence=evidence)
+            prepared = self._prepare_failure(
+                node_id, failure, evidence=evidence, forward_capture=forward_capture,
+            )
             return commit_prepared(self.log, self.state, prepared)
 
         if not isinstance(outcome, (Output, Route, Grow)):
@@ -289,7 +297,7 @@ class FlowEngine:
                     node_id,
                     outcome.value,
                     commit_as=outcome.commit_as,
-                    evidence=evidence,
+                    evidence=evidence, forward_capture=forward_capture,
                 )
             except _NodeDataError as wrapped:
                 prepared = self._prepare_contract_failure(
@@ -298,7 +306,7 @@ class FlowEngine:
                     wrapped.original,
                     origin=wrapped.origin,
                     traceback_text=self._format_exception(wrapped.original),
-                    evidence=evidence,
+                    evidence=evidence, forward_capture=forward_capture,
                 )
         elif isinstance(outcome, Route):
             try:
@@ -306,7 +314,7 @@ class FlowEngine:
                     self.state,
                     node_id,
                     outcome.handle,
-                    evidence=evidence,
+                    evidence=evidence, forward_capture=forward_capture,
                 )
             except _NodeDataError as wrapped:
                 prepared = self._prepare_contract_failure(
@@ -315,7 +323,7 @@ class FlowEngine:
                     wrapped.original,
                     origin=wrapped.origin,
                     traceback_text=self._format_exception(wrapped.original),
-                    evidence=evidence,
+                    evidence=evidence, forward_capture=forward_capture,
                 )
         else:
             try:
@@ -324,7 +332,7 @@ class FlowEngine:
                     node_id,
                     outcome,
                     self.grow_builder,
-                    evidence=evidence,
+                    evidence=evidence, forward_capture=forward_capture,
                 )
             except GrowthRejected as wrapped:
                 prepared = self._prepare_contract_failure(
@@ -332,7 +340,7 @@ class FlowEngine:
                     "contract.growth",
                     wrapped.original,
                     traceback_text=self._format_exception(wrapped.original),
-                    evidence=evidence,
+                    evidence=evidence, forward_capture=forward_capture,
                 )
         return commit_prepared(self.log, self.state, prepared)
 
@@ -342,6 +350,7 @@ class FlowEngine:
         failure: Failure,
         *,
         evidence: EvaluationEvidence | None = None,
+        forward_capture: ForwardCapture | None = None,
     ) -> PreparedTransition:
         """Prepare one canonical failure without flattening its semantic fields."""
         if failure.node_id != node_id:
@@ -349,7 +358,9 @@ class FlowEngine:
                 "raw evaluation failure node identity mismatch: "
                 f"expected {node_id!r}, found {failure.node_id!r}"
             )
-        return prepare_node_failed(self.state, failure, evidence=evidence)
+        return prepare_node_failed(
+            self.state, failure, evidence=evidence, forward_capture=forward_capture,
+        )
 
     def _prepare_contract_failure(
         self,
@@ -360,6 +371,7 @@ class FlowEngine:
         origin: OriginRef | None = None,
         traceback_text: str | None = None,
         evidence: EvaluationEvidence | None = None,
+        forward_capture: ForwardCapture | None = None,
     ) -> PreparedTransition:
         """Construct and project one expected dispatcher contract rejection."""
         node = self.state.flow.nodes[node_id]
@@ -373,7 +385,9 @@ class FlowEngine:
                 traceback_text if traceback_text is not None else _tb.format_exc()
             ),
         )
-        return self._prepare_failure(node_id, failure, evidence=evidence)
+        return self._prepare_failure(
+            node_id, failure, evidence=evidence, forward_capture=forward_capture,
+        )
 
     @staticmethod
     def _format_exception(exception: Exception) -> str:
@@ -402,6 +416,8 @@ class FlowEngine:
             stop_event=self.stop_event,
             emit_stream=emit_stream,
             capture_evidence=self.state.learn,
+            capture_bindings=self.state.learn,
+            source_resolver=None if self.state.trace is None else self.state.trace.resolve,
             memory_recall=self.memory_recall,
         )
 

@@ -52,6 +52,9 @@ from agent_composer.memory import (
     ToolResultInteraction,
     VisibleInteraction,
 )
+from agent_composer.runtime.contracts import ForwardCapture, _validate_route
+from agent_composer.expr.lineage import SourceRef, ValueRoute
+from agent_composer.nodes.contracts import ExecutionPosition, ExecutionScope
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import (
     ANY_VALUE_ADAPTER,
@@ -63,7 +66,7 @@ from agent_composer.typesys.values import (
 )
 
 
-SCHEMA_VERSION: Final = 4
+SCHEMA_VERSION: Final = 5
 """The one run-record wire schema understood by this release."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -128,10 +131,12 @@ class NodeSucceededRecord:
     commit_target: str
     value: dict[str, Any]
     evidence: EvaluationEvidence | None = None
+    forward_capture: ForwardCapture | None = None
 
     def __post_init__(self) -> None:
-        """Require exact source-neutral evidence when it is present."""
+        """Validate optional visible evidence and canonical forward capture."""
         _validate_optional_evidence(self.evidence)
+        _validate_optional_capture(self.forward_capture)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,10 +147,12 @@ class NodeRoutedRecord:
     handle: str
     terminal_failure: Failure | None = None
     evidence: EvaluationEvidence | None = None
+    forward_capture: ForwardCapture | None = None
 
     def __post_init__(self) -> None:
-        """Require exact source-neutral evidence when it is present."""
+        """Validate optional visible evidence and canonical forward capture."""
         _validate_optional_evidence(self.evidence)
+        _validate_optional_capture(self.forward_capture)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,10 +164,12 @@ class NodeExpandedRecord:
     prune_ids: tuple[str, ...]
     topology_digest: str
     evidence: EvaluationEvidence | None = None
+    forward_capture: ForwardCapture | None = None
 
     def __post_init__(self) -> None:
-        """Require exact source-neutral evidence when it is present."""
+        """Validate optional visible evidence and canonical forward capture."""
         _validate_optional_evidence(self.evidence)
+        _validate_optional_capture(self.forward_capture)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,10 +178,12 @@ class NodeFailedRecord:
 
     failure: Failure
     evidence: EvaluationEvidence | None = None
+    forward_capture: ForwardCapture | None = None
 
     def __post_init__(self) -> None:
-        """Require exact source-neutral evidence when it is present."""
+        """Validate optional visible evidence and canonical forward capture."""
         _validate_optional_evidence(self.evidence)
+        _validate_optional_capture(self.forward_capture)
 
 
 @dataclass(frozen=True, slots=True)
@@ -400,8 +411,6 @@ def _validate_run_memory_configuration(
             "memory_layout and memory_snapshots must both be enabled or disabled"
         )
     if layout is None:
-        if learn:
-            raise ValueError("learn requires enabled memory")
         return
     if type(layout) is not tuple or type(snapshots) is not tuple:
         raise TypeError(
@@ -859,6 +868,76 @@ class _NodeStartedPayload(_StrictModel):
     node_id: str = Field(min_length=1)
 
 
+class _SourceRefPayload(_StrictModel):
+    """Strict source identity and value-relative projection."""
+
+    run_id: str = Field(min_length=1)
+    execution_seq: int = Field(ge=0)
+    path: list[str | int]
+
+
+class _ValueRoutePayload(_StrictModel):
+    """Strict recursive route shape; variant invariants validate on construction."""
+
+    kind: Literal["literal", "source", "selected", "list", "record", "concat",
+                  "repeat", "scalar", "interpolation", "opaque", "project"]
+    source: _SourceRefPayload | None
+    value_json: str | None
+    children: list[_ValueRoutePayload]
+    expression: str
+    names: list[str]
+    sizes: list[int]
+    count: int
+    content_index: int
+    spans: list[list[int]]
+    path: list[str | int]
+    result_type: str | None
+    snapshot: _ValueRoutePayload | None
+
+
+class _ExecutionPositionPayload(_StrictModel):
+    """Strict instantiated execution position."""
+
+    kind: Literal["call", "map_item", "loop_body", "loop_driver"]
+    static_path: list[str]
+    index: int | None
+
+
+class _ExecutionScopePayload(_StrictModel):
+    """Strict memory-independent authored execution scope."""
+
+    static_path: list[str]
+    flow_path: list[str]
+    occurrence_path: list[_ExecutionPositionPayload]
+    boundary: Literal["start", "end"] | None
+
+
+class _ItemCapturePayload(_StrictModel):
+    """One explicitly indexed MAP seed binding."""
+
+    index: int = Field(ge=0)
+    capture: _ForwardCapturePayload
+
+
+class _ForwardCapturePayload(_StrictModel):
+    """Strict canonical inputs and binding metadata on an accepted record."""
+
+    bound_inputs: dict[str, Any] | None
+    route: _ValueRoutePayload
+    evaluated_keys: list[str]
+    items: list[_ItemCapturePayload]
+    scope: _ExecutionScopePayload | None
+    node_data: Any
+
+    @field_validator("evaluated_keys")
+    @classmethod
+    def _ordered_keys(cls, value: list[str]) -> list[str]:
+        """Require the sorted set representation of evaluated binding keys."""
+        if value != sorted(set(value)):
+            raise ValueError("evaluated_keys must be sorted and unique")
+        return value
+
+
 class _NodeSucceededPayload(_StrictModel):
     """Strict wire payload for :class:`NodeSucceededRecord`."""
 
@@ -866,6 +945,7 @@ class _NodeSucceededPayload(_StrictModel):
     commit_target: str = Field(min_length=1)
     value: dict[str, Any]
     evidence: _EvaluationEvidencePayload | None
+    forward_capture: _ForwardCapturePayload | None
 
 
 class _OriginRefPayload(_StrictModel):
@@ -1013,7 +1093,7 @@ _VisibleInteractionPayload = Annotated[
 class _EvaluationEvidencePayload(_StrictModel):
     """Strict wire form of one source-neutral accepted evaluation trace."""
 
-    scope: _MemoryScopePayload
+    scope: _MemoryScopePayload | None
     bound_inputs: dict[str, Any] | None
     base_system_prompt: str | None
     prompt: str | None
@@ -1045,6 +1125,7 @@ class _NodeRoutedPayload(_StrictModel):
     handle: str = Field(min_length=1)
     terminal_failure: _FailurePayload | None
     evidence: _EvaluationEvidencePayload | None
+    forward_capture: _ForwardCapturePayload | None
 
 
 class _NodeExpandedPayload(_StrictModel):
@@ -1055,6 +1136,7 @@ class _NodeExpandedPayload(_StrictModel):
     prune_ids: list[str]
     topology_digest: str = Field(pattern=_SHA256_PATTERN)
     evidence: _EvaluationEvidencePayload | None
+    forward_capture: _ForwardCapturePayload | None
 
     @field_validator("prune_ids")
     @classmethod
@@ -1072,6 +1154,7 @@ class _NodeFailedPayload(_StrictModel):
 
     failure: _FailurePayload
     evidence: _EvaluationEvidencePayload | None
+    forward_capture: _ForwardCapturePayload | None
 
 
 class _MemoryFrameLearningStartedPayload(_StrictModel):
@@ -1610,6 +1693,100 @@ def _interaction_from_payload(payload: dict[str, Any]) -> VisibleInteraction:
     raise ValueError(f"unknown visible interaction kind: {kind!r}")
 
 
+def _validate_optional_capture(capture: ForwardCapture | None) -> None:
+    """Revalidate frozen capture carriers before they cross durable authority."""
+    if capture is None:
+        return
+    if type(capture) is not ForwardCapture:
+        raise TypeError("forward_capture must be a ForwardCapture or None")
+    ForwardCapture(capture.bound_inputs, capture.route, capture.evaluated_keys,
+                   capture.items, capture.scope, capture.node_data)
+
+
+def _route_payload(route: ValueRoute) -> dict[str, Any]:
+    """Encode an exact immutable route without accepting normalized forgeries."""
+    _validate_route(route)
+    return {
+        "kind": route.kind,
+        "source": None if route.source is None else {
+            "run_id": route.source.run_id,
+            "execution_seq": route.source.execution_seq,
+            "path": list(route.source.path),
+        },
+        "value_json": route.value_json,
+        "children": [_route_payload(child) for child in route.children],
+        "expression": route.expression,
+        "names": list(route.names),
+        "sizes": list(route.sizes),
+        "count": route.count,
+        "content_index": route.content_index,
+        "spans": [list(span) for span in route.spans],
+        "path": list(route.path),
+        "result_type": route.result_type,
+        "snapshot": None if route.snapshot is None else _route_payload(route.snapshot),
+    }
+
+
+def _route_from_payload(payload: dict[str, Any]) -> ValueRoute:
+    """Decode a strictly shaped route, then check its exact variant invariants."""
+    source = payload["source"]
+    route = ValueRoute(
+        kind=payload["kind"],
+        source=None if source is None else SourceRef(
+            source["run_id"], source["execution_seq"], tuple(source["path"]),
+        ),
+        value_json=payload["value_json"],
+        children=tuple(_route_from_payload(child) for child in payload["children"]),
+        expression=payload["expression"], names=tuple(payload["names"]),
+        sizes=tuple(payload["sizes"]), count=payload["count"],
+        content_index=payload["content_index"],
+        spans=tuple(tuple(span) for span in payload["spans"]),
+        path=tuple(payload["path"]), result_type=payload["result_type"],
+        snapshot=None if payload["snapshot"] is None else _route_from_payload(payload["snapshot"]),
+    )
+    _validate_route(route)
+    return route
+
+
+def _capture_payload(capture: ForwardCapture | None) -> dict[str, Any] | None:
+    """Encode canonical binding data without duplicating accepted outcomes."""
+    if capture is None:
+        return None
+    _validate_optional_capture(capture)
+    scope = capture.scope
+    return {
+        "bound_inputs": capture.bound_inputs,
+        "route": _route_payload(capture.route),
+        "evaluated_keys": sorted(capture.evaluated_keys),
+        "items": [{"index": index, "capture": _capture_payload(item)} for index, item in capture.items],
+        "scope": None if scope is None else {
+            "static_path": list(scope.static_path), "flow_path": list(scope.flow_path),
+            "occurrence_path": [{"kind": position.kind, "static_path": list(position.static_path),
+                                 "index": position.index} for position in scope.occurrence_path],
+            "boundary": scope.boundary,
+        },
+        "node_data": capture.node_data,
+    }
+
+
+def _capture_from_payload(payload: dict[str, Any] | None) -> ForwardCapture | None:
+    """Decode validated capture data and preserve unavailable-input markers."""
+    if payload is None:
+        return None
+    scope = payload["scope"]
+    return ForwardCapture(
+        payload["bound_inputs"], _route_from_payload(payload["route"]),
+        frozenset(payload["evaluated_keys"]),
+        tuple((item["index"], _capture_from_payload(item["capture"])) for item in payload["items"]),
+        None if scope is None else ExecutionScope(
+            tuple(scope["static_path"]), tuple(scope["flow_path"]),
+            tuple(ExecutionPosition(position["kind"], tuple(position["static_path"]), position["index"])
+                  for position in scope["occurrence_path"]), scope["boundary"],
+        ),
+        payload["node_data"],
+    )
+
+
 def _evidence_payload(evidence: EvaluationEvidence | None) -> dict[str, Any] | None:
     """Encode optional exact evaluation evidence."""
     if evidence is None:
@@ -1625,7 +1802,7 @@ def _evidence_payload(evidence: EvaluationEvidence | None) -> dict[str, Any] | N
         evidence.interactions,
     )
     return {
-        "scope": _scope_payload(evidence.scope),
+        "scope": None if evidence.scope is None else _scope_payload(evidence.scope),
         "bound_inputs": evidence.bound_inputs,
         "base_system_prompt": evidence.base_system_prompt,
         "prompt": evidence.prompt,
@@ -1643,7 +1820,7 @@ def _evidence_from_payload(payload: dict[str, Any] | None) -> EvaluationEvidence
     if payload is None:
         return None
     return EvaluationEvidence(
-        scope=_scope_from_payload(payload["scope"]),
+        scope=None if payload["scope"] is None else _scope_from_payload(payload["scope"]),
         bound_inputs=(
             None
             if payload["bound_inputs"] is None
@@ -1737,6 +1914,7 @@ def _revalidate_run_record(record: RunRecord) -> None:
             record.commit_target,
             record.value,
             record.evidence,
+            record.forward_capture,
         )
         return
     if type(record) is NodeRoutedRecord:
@@ -1745,6 +1923,7 @@ def _revalidate_run_record(record: RunRecord) -> None:
             record.handle,
             record.terminal_failure,
             record.evidence,
+            record.forward_capture,
         )
         if record.terminal_failure is not None:
             _failure_payload(record.terminal_failure, carrier="NodeRoutedRecord")
@@ -1756,10 +1935,11 @@ def _revalidate_run_record(record: RunRecord) -> None:
             record.prune_ids,
             record.topology_digest,
             record.evidence,
+            record.forward_capture,
         )
         return
     if type(record) is NodeFailedRecord:
-        NodeFailedRecord(record.failure, record.evidence)
+        NodeFailedRecord(record.failure, record.evidence, record.forward_capture)
         _failure_payload(record.failure, carrier="NodeFailedRecord")
         return
     if type(record) is MemoryFrameLearningStartedRecord:
@@ -1853,6 +2033,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             "commit_target": record.commit_target,
             "value": _copy_json(canonical),
             "evidence": _evidence_payload(record.evidence),
+            "forward_capture": _capture_payload(record.forward_capture),
         }
     elif isinstance(record, NodeRoutedRecord):
         raw = {
@@ -1867,6 +2048,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                 else None
             ),
             "evidence": _evidence_payload(record.evidence),
+            "forward_capture": _capture_payload(record.forward_capture),
         }
     elif isinstance(record, NodeExpandedRecord):
         raw = {
@@ -1877,6 +2059,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             ),
             "topology_digest": record.topology_digest,
             "evidence": _evidence_payload(record.evidence),
+            "forward_capture": _capture_payload(record.forward_capture),
         }
     elif isinstance(record, NodeFailedRecord):
         raw = {
@@ -1885,6 +2068,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                 carrier="NodeFailedRecord",
             ),
             "evidence": _evidence_payload(record.evidence),
+            "forward_capture": _capture_payload(record.forward_capture),
         }
     elif isinstance(record, MemoryFrameLearningStartedRecord):
         raw = {
@@ -1984,6 +2168,7 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             commit_target=values["commit_target"],
             value=_copy_json(canonical),
             evidence=_evidence_from_payload(values["evidence"]),
+            forward_capture=_capture_from_payload(values["forward_capture"]),
         )
     if kind == "node_routed":
         terminal_payload = values["terminal_failure"]
@@ -1996,6 +2181,7 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
                 else None
             ),
             evidence=_evidence_from_payload(values["evidence"]),
+            forward_capture=_capture_from_payload(values["forward_capture"]),
         )
     if kind == "node_expanded":
         seed = canonical_seed(values["seed"])[0]
@@ -2005,12 +2191,14 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             prune_ids=tuple(values["prune_ids"]),
             topology_digest=values["topology_digest"],
             evidence=_evidence_from_payload(values["evidence"]),
+            forward_capture=_capture_from_payload(values["forward_capture"]),
         )
     if kind == "node_failed":
         failure_payload = values["failure"]
         return NodeFailedRecord(
             failure=_failure_from_payload(failure_payload),
             evidence=_evidence_from_payload(values["evidence"]),
+            forward_capture=_capture_from_payload(values["forward_capture"]),
         )
     if kind == "memory_frame_learning_started":
         return MemoryFrameLearningStartedRecord(

@@ -1,22 +1,225 @@
-"""Immutable backward outcomes shared by runtime records and their consumers.
+"""Immutable forward captures and backward outcomes shared by runtime consumers.
 
-These values depend only on lower node, memory, and diagnostic contracts. They
+These values depend only on lower node, expression, memory, and diagnostic contracts. They
 never import the runtime log, state, trace, driver, or public run boundary.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+import json
 from typing import Literal
 
 from agent_composer.diagnostics import Failure, OriginRef
+from agent_composer.expr.lineage import SourceRef, ValueRoute
 from agent_composer.memory.contracts import (
     LearningResult,
     MemoryFrameRef,
     MemoryOperationFailure,
+    JsonObject,
+    JsonValue,
 )
-from agent_composer.nodes.base import BackwardResult
+from agent_composer.nodes.base import BackwardResult, _copy_backward_value
 from agent_composer.nodes.contracts import ExecutionScope
+
+
+def _validate_source(source: SourceRef) -> None:
+    """Validate a source identity without normalizing forged carrier fields."""
+    if type(source) is not SourceRef:
+        raise TypeError("source must be an exact SourceRef")
+    if type(source.run_id) is not str or not source.run_id:
+        raise ValueError("source run_id must be non-empty")
+    if type(source.execution_seq) is not int or source.execution_seq < 0:
+        raise ValueError("source execution_seq must be a non-negative integer")
+    _validate_route_path(source.path)
+
+
+def _validate_route_path(path: tuple[str | int, ...]) -> None:
+    """Require an immutable field/index path with exact scalar components."""
+    if type(path) is not tuple:
+        raise TypeError("route path must be a tuple")
+    if any(type(part) is not str and (type(part) is not int or part < 0) for part in path):
+        raise ValueError("route path components must be strings or non-negative integers")
+
+
+def _route_object_without_duplicates(pairs: list[tuple[str, JsonValue]]) -> JsonObject:
+    """Reject ambiguous object keys inside an embedded route result snapshot."""
+    result: JsonObject = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError(f"duplicate JSON object key: {name!r}")
+        result[name] = value
+    return result
+
+
+def _validate_route(route: ValueRoute) -> None:
+    """Validate every route field and variant at the durable capture boundary."""
+    if type(route) is not ValueRoute:
+        raise TypeError("route must be an exact ValueRoute")
+    variants = {
+        "literal": {"value_json", "result_type", "snapshot"},
+        "source": {"source"},
+        "selected": {"children"},
+        "list": {"children"},
+        "record": {"children", "names"},
+        "concat": {"children", "sizes"},
+        "repeat": {"children", "sizes", "count", "content_index"},
+        "scalar": {"children", "value_json", "result_type", "snapshot"},
+        "interpolation": {"children", "value_json", "spans"},
+        "opaque": {"children", "names", "value_json", "result_type", "snapshot"},
+        "project": {"children", "path"},
+    }
+    if type(route.kind) is not str or route.kind not in variants:
+        raise ValueError("unknown route kind")
+    if type(route.expression) is not str:
+        raise TypeError("route expression must be a string")
+    defaults = ValueRoute(route.kind)
+    for name in (
+        "source", "value_json", "children", "names", "sizes", "count",
+        "content_index", "spans", "path", "result_type", "snapshot",
+    ):
+        if name not in variants[route.kind] and getattr(route, name) != getattr(defaults, name):
+            raise ValueError(f"route {route.kind} cannot carry {name}")
+    for name in ("children", "names", "sizes", "spans", "path"):
+        if type(getattr(route, name)) is not tuple:
+            raise TypeError(f"route {name} must be a tuple")
+    for name in ("count", "content_index"):
+        if type(getattr(route, name)) is not int:
+            raise TypeError(f"route {name} must be an integer")
+    _validate_route_path(route.path)
+    for child in route.children:
+        _validate_route(child)
+    if any(type(name) is not str for name in route.names):
+        raise ValueError("route names must be strings")
+    if route.kind == "record" and len(set(route.names)) != len(route.names):
+        raise ValueError("record route names must be unique")
+    if any(type(size) is not int or size < 0 for size in route.sizes):
+        raise ValueError("route sizes must be non-negative integers")
+    if route.kind == "source":
+        _validate_source(route.source)
+    if route.kind in ("selected", "project") and len(route.children) != 1:
+        raise ValueError("selected and project routes require one child")
+    if route.kind == "project" and not route.path:
+        raise ValueError("project route requires a path")
+    if route.kind in ("record", "opaque") and len(route.names) != len(route.children):
+        raise ValueError(f"{route.kind} route names must match its children")
+    if route.kind == "concat" and (len(route.children) != 2 or len(route.sizes) != 2):
+        raise ValueError("concat route requires two children and sizes")
+    if route.kind == "repeat" and (
+        len(route.children) != 2 or len(route.sizes) != 1 or route.content_index not in (0, 1)
+    ):
+        raise ValueError("repeat route requires two children, one size and a content index")
+    if route.kind == "scalar" and not route.children:
+        raise ValueError("scalar route requires operands")
+    result = None
+    if route.value_json is not None:
+        if type(route.value_json) is not str:
+            raise TypeError("route value_json must be a string or None")
+        result = json.loads(route.value_json, object_pairs_hook=_route_object_without_duplicates)
+        _copy_backward_value(result, "route result")
+        json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if route.result_type is not None and (type(route.result_type) is not str or not route.result_type):
+        raise ValueError("route result_type must be a non-empty string or None")
+    if route.kind in ("literal", "scalar", "opaque"):
+        if (route.value_json is None) == (route.result_type is None):
+            raise ValueError("route requires either a JSON result or an unavailable type")
+    if route.snapshot is not None:
+        if route.result_type is None or route.value_json is not None:
+            raise ValueError("partial snapshot requires an unavailable result")
+        _validate_route(route.snapshot)
+        pending = [route.snapshot]
+        while pending:
+            current = pending.pop()
+            if current.kind not in ("literal", "list", "record"):
+                raise ValueError("partial snapshot cannot contain source routes")
+            pending.extend(current.children)
+    if route.kind == "interpolation":
+        if type(result) is not str or not route.children or len(route.spans) != len(route.children):
+            raise ValueError("interpolation requires a string result and one span per child")
+        previous_end = 0
+        for span in route.spans:
+            if type(span) is not tuple or len(span) != 2 or any(type(i) is not int for i in span):
+                raise TypeError("interpolation spans must be integer pairs")
+            start, end = span
+            if not previous_end <= start <= end <= len(result):
+                raise ValueError("interpolation spans must be ordered within the result")
+            previous_end = end
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ForwardCapture:
+    """Detached canonical inputs and routes from one actual binding operation.
+
+    A missing input record marks unfinished binding; safe partial routes remain
+    inspectable. Item captures retain explicit indices and actual second-template
+    evaluation flags. Outcomes and visible interactions stay on their accepted
+    record. Scope may be absent for synthetic nodes awaiting instantiation.
+    """
+
+    _bound_inputs: JsonObject | None = field(repr=False)
+    route: ValueRoute
+    evaluated_keys: frozenset[str]
+    items: tuple[tuple[int, ForwardCapture], ...]
+    scope: ExecutionScope | None
+    _node_data: JsonValue = field(repr=False)
+
+    def __init__(
+        self,
+        bound_inputs: JsonObject | None,
+        route: ValueRoute,
+        evaluated_keys: frozenset[str] = frozenset(),
+        items: tuple[tuple[int, ForwardCapture], ...] = (),
+        scope: ExecutionScope | None = None,
+        node_data: JsonValue = None,
+    ) -> None:
+        """Validate immutable routes and detach already-canonical input data."""
+        _validate_route(route)
+        if route.kind != "record":
+            raise ValueError("input route must be a record")
+        if type(evaluated_keys) is not frozenset or any(type(key) is not str for key in evaluated_keys):
+            raise TypeError("evaluated_keys must be a frozenset of strings")
+        if not evaluated_keys <= set(route.names):
+            raise ValueError("evaluated_keys must name captured routes")
+        if bound_inputs is not None and type(bound_inputs) is not dict:
+            raise TypeError("bound_inputs must be a JSON object or None")
+        if bound_inputs is not None and set(bound_inputs) != set(route.names):
+            raise ValueError("bound_inputs keys must match input routes")
+        if type(items) is not tuple:
+            raise TypeError("items must be a tuple")
+        previous_index = -1
+        for pair in items:
+            if type(pair) is not tuple or len(pair) != 2:
+                raise TypeError("item captures must be index/capture pairs")
+            index, capture = pair
+            if type(index) is not int or index <= previous_index:
+                raise ValueError("item indices must be non-negative and increasing")
+            if type(capture) is not ForwardCapture:
+                raise TypeError("item capture must be a ForwardCapture")
+            ForwardCapture(capture.bound_inputs, capture.route, capture.evaluated_keys,
+                           capture.items, capture.scope, capture.node_data)
+            if bound_inputs is None and capture.bound_inputs is not None:
+                raise ValueError("unfinished binding cannot retain usable item inputs")
+            previous_index = index
+        if scope is not None:
+            if type(scope) is not ExecutionScope:
+                raise TypeError("scope must be an ExecutionScope or None")
+            ExecutionScope(scope.static_path, scope.flow_path, scope.occurrence_path, scope.boundary)
+        object.__setattr__(self, "_bound_inputs", _copy_backward_value(bound_inputs, "bound_inputs"))
+        object.__setattr__(self, "route", route)
+        object.__setattr__(self, "evaluated_keys", evaluated_keys)
+        object.__setattr__(self, "items", items)
+        object.__setattr__(self, "scope", scope)
+        object.__setattr__(self, "_node_data", _copy_backward_value(node_data, "node_data"))
+
+    @property
+    def bound_inputs(self) -> JsonObject | None:
+        """Return a detached canonical input record, or an unfinished marker."""
+        return _copy_backward_value(self._bound_inputs, "bound_inputs")
+
+    @property
+    def node_data(self) -> JsonValue:
+        """Return detached optional data reserved for the node's backward hook."""
+        return _copy_backward_value(self._node_data, "node_data")
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,4 +356,4 @@ class BackwardOutcome:
                 raise ValueError("succeeded backward requires succeeded learning")
 
 
-__all__ = ["BackwardFailure", "BackwardOutcome"]
+__all__ = ["BackwardFailure", "BackwardOutcome", "ForwardCapture"]

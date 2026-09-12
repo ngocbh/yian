@@ -16,7 +16,7 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 _MAX_JSON_NESTING = 128
-"""Conservative memory JSON nesting bound that remains schema-4 wire-safe."""
+"""Conservative memory JSON nesting bound for nested record payloads."""
 
 
 class _FrozenJsonScalarKind(Enum):
@@ -864,7 +864,7 @@ def _revalidate_visible_interaction(interaction: VisibleInteraction) -> None:
 class EvaluationEvidence:
     """Source-neutral visible evidence accepted with one node outcome."""
 
-    scope: MemoryScope
+    scope: MemoryScope | None
     _bound_inputs: _FrozenJsonObject | None = field(repr=False)
     base_system_prompt: str | None
     prompt: str | None
@@ -873,7 +873,7 @@ class EvaluationEvidence:
 
     def __init__(
         self,
-        scope: MemoryScope,
+        scope: MemoryScope | None,
         bound_inputs: JsonObject | None,
         base_system_prompt: str | None,
         prompt: str | None,
@@ -881,17 +881,16 @@ class EvaluationEvidence:
         interactions: tuple[VisibleInteraction, ...] = (),
     ) -> None:
         """Validate visible inputs, prompts, sections, and interactions."""
-        if type(scope) is not MemoryScope:
-            raise TypeError("scope must be a MemoryScope")
-        MemoryScope(
-            scope.root_flow_id,
-            scope.static_path,
-            scope.frame_stack,
-            scope.occurrence_path,
-            scope.boundary,
-        )
-        if not scope.frame_stack:
-            raise ValueError("evaluation evidence requires a non-empty frame_stack")
+        if scope is not None:
+            if type(scope) is not MemoryScope:
+                raise TypeError("scope must be a MemoryScope or None")
+            MemoryScope(
+                scope.root_flow_id,
+                scope.static_path,
+                scope.frame_stack,
+                scope.occurrence_path,
+                scope.boundary,
+            )
         object.__setattr__(self, "scope", scope)
         if bound_inputs is not None and type(bound_inputs) is not dict:
             raise TypeError("bound_inputs must be an exact JSON object or None")
@@ -915,7 +914,7 @@ class EvaluationEvidence:
         if type(memory_sections) is not tuple:
             raise TypeError("memory_sections must be a tuple")
         stack_positions = {
-            frame: index for index, frame in enumerate(scope.frame_stack)
+            frame: index for index, frame in enumerate(scope.frame_stack if scope is not None else ())
         }
         seen_frames: set[MemoryFrameRef] = set()
         positions: list[int] = []

@@ -95,7 +95,8 @@ class ValueRoute:
         """
         if _uses_only_json_builtins(value):
             try:
-                encoded = json.dumps(value, ensure_ascii=False)
+                encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+                encoded.encode("utf-8")
             except (ValueError, RecursionError):
                 pass
             else:
@@ -297,7 +298,8 @@ def _capture_literal(value: Any, active: set[int], depth: int = 0) -> ValueRoute
     )
     if value_type in (type(None), bool, int, float, str):
         try:
-            encoded = json.dumps(value, ensure_ascii=False)
+            encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+            encoded.encode("utf-8")
         except (ValueError, RecursionError):
             return unavailable
         return ValueRoute("literal", value_json=encoded, expression=encoded)
@@ -305,8 +307,14 @@ def _capture_literal(value: Any, active: set[int], depth: int = 0) -> ValueRoute
         return unavailable
     if depth >= _MAX_SNAPSHOT_DEPTH or id(value) in active:
         return unavailable
-    if value_type is dict and any(type(name) is not str for name in value):
-        return unavailable
+    if value_type is dict:
+        for name in value:
+            if type(name) is not str:
+                return unavailable
+            try:
+                name.encode("utf-8")
+            except UnicodeEncodeError:
+                return unavailable
     active.add(id(value))
     try:
         if value_type is dict:

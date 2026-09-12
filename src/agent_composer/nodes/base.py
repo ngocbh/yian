@@ -10,7 +10,7 @@ capabilities: MAP receives `bind_item`, a cooperatively blocking node may receiv
 `stop_event`, and a scoped AGENT may receive narrow recall plus a write-only
 `evaluation_trace`. Failure is **not** a variant — a failing node `raise`s; expected
 evaluator rejection becomes a canonical `EvaluationFailure(Failure)` retained by the
-schema-4 failure record. A streaming
+schema-5 failure record. A streaming
 kind is a generator that yields `StreamChunk` and *returns* its `NodeResult` (drained
 by `_drain_node_generator`).
 

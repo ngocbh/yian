@@ -1,4 +1,4 @@
-"""Schema-5 run-record contracts for source-neutral memory evidence and learning."""
+"""Run-record contracts for source-neutral memory evidence and learning."""
 
 from __future__ import annotations
 
@@ -515,6 +515,22 @@ def test_every_memory_learning_record_round_trips() -> None:
 
     for record in records:
         assert _round_trip(record) == record
+
+
+@pytest.mark.parametrize("attempt_id", [None, 2])
+def test_memory_commit_wire_requires_an_explicit_nullable_attempt_slot(attempt_id):
+    failure = MemoryOperationFailure("backend", "failed", "Failed.", False)
+    records = (
+        MemoryCommitRequestedRecord("history", "commit-1", (), attempt_id=attempt_id),
+        MemoryCommitSucceededRecord("history", "commit-1", attempt_id=attempt_id),
+        MemoryCommitFailedRecord("history", "commit-1", failure, attempt_id=attempt_id),
+    )
+    for record in records:
+        wire = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, record)))
+        assert wire["payload"]["attempt_id"] == attempt_id
+        del wire["payload"]["attempt_id"]
+        with pytest.raises(ValueError, match="attempt_id"):
+            decode_record(json.dumps(wire).encode())
 
 
 def test_learning_records_reject_wrong_ownership_order_and_duplicate_ids() -> None:

@@ -323,7 +323,7 @@ def test_backward_context_and_outcome_do_not_expose_mutable_authority() -> None:
         traceback="debugging detail",
     )
     learning = LearningResult(
-        "incomplete", (LearningFailure("history", "learn", cause, frame),)
+        "failed", (LearningFailure("history", "learn", cause, frame),)
     )
     feedback = BackwardResult(input_feedback={"tags": ([None, "Irrelevant."],)})
     outcome = BackwardOutcome("failed", feedback, failure, learning)
@@ -446,3 +446,21 @@ def test_backward_outcome_can_succeed_without_memory() -> None:
     assert outcome.feedback == result
     assert outcome.failure is None
     assert outcome.learning is None
+
+
+def test_backward_outcome_copy_preserves_ordered_policy_dispositions() -> None:
+    from dataclasses import replace
+    from agent_composer.memory import PolicyCommitOutcome
+
+    policies = (PolicyCommitOutcome("second", "unknown", "commit-2"),
+                PolicyCommitOutcome("first", "unrequested"))
+    learning = LearningResult("incomplete", (), policies)
+    feedback = BackwardResult()
+    outcome = BackwardOutcome("failed", feedback,
+                              BackwardFailure("commit", "interrupted", ""), learning)
+    copied = replace(outcome)
+    assert copied.feedback == feedback
+    assert copied.learning == learning
+    assert copied.learning is not learning
+    assert copied.learning.policies == policies
+    assert copied.learning.policies[0] is not policies[0]

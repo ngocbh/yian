@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError, dataclass
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, get_args
 
 import pytest
 
@@ -20,6 +20,7 @@ from agent_composer.runtime.log import (
     NodeSucceededRecord,
     RecordEnvelope,
     RunLog,
+    RunRecord,
     RunResumedRecord,
     RunStartedRecord,
     canonical_seed,
@@ -38,8 +39,18 @@ _TOPOLOGY_DIGEST = "b" * 64
 
 def _records():
     """Return one representative value for every closed run-record variant."""
+    from agent_composer.memory import MemoryFrameRef, MemoryMutation, MemoryOperationFailure, MemoryOwner
+    from agent_composer.runtime.log import (
+        MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
+        MemoryFrameLearnedRecord, MemoryFrameLearningFailedRecord, MemoryFrameLearningStartedRecord,
+    )
+    from tests.engine.test_backward_records import _backward_records
+
     pool = VariablePool(start_id="start")
     pool.set("start", {"name": "Ada"})
+    frame = MemoryFrameRef("root", ("root", "agent"), MemoryOwner.AGENT)
+    mutations = (MemoryMutation("m1", frame, {"text": "Remember."}),)
+    failure = MemoryOperationFailure("backend", "backend.failed", "Failed.", True)
     return [
         RunStartedRecord(
             flow_fingerprint=_FINGERPRINT,
@@ -74,6 +85,13 @@ def _records():
                 traceback="Traceback (most recent call last): ...",
             ),
         ),
+        MemoryFrameLearningStartedRecord("history", frame, ()),
+        MemoryFrameLearnedRecord("history", frame, mutations),
+        MemoryFrameLearningFailedRecord("history", frame, failure),
+        MemoryCommitRequestedRecord("history", "commit-1", mutations, attempt_id=1),
+        MemoryCommitSucceededRecord("history", "commit-1", attempt_id=1),
+        MemoryCommitFailedRecord("history", "commit-1", failure, attempt_id=1),
+        *_backward_records(),
     ]
 
 
@@ -93,6 +111,10 @@ def test_every_record_round_trips_through_a_validated_envelope(record):
     assert encode_record(decoded) == encoded
     assert decoded.kind
     assert isinstance(decoded.payload, dict)
+
+
+def test_record_wire_examples_cover_the_closed_record_inventory():
+    assert {type(record) for record in _records()} == set(get_args(RunRecord))
 
 
 def test_record_encoding_is_canonical_newline_free_and_byte_stable():

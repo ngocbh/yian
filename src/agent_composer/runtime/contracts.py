@@ -17,7 +17,9 @@ from agent_composer.expr.lineage import (
 from agent_composer.memory.contracts import (
     LearningResult,
     MemoryFrameRef,
+    MemoryMutation,
     MemoryOperationFailure,
+    _validate_mutations,
     JsonObject,
     JsonValue,
 )
@@ -428,6 +430,30 @@ class AttributedBackwardResult:
 
 
 @dataclass(frozen=True, slots=True)
+class FrameProposal:
+    """Detached ordered mutations proposed for one recorded owning frame.
+
+    Attributes:
+        frame_ref (`MemoryFrameRef`): Exact ownership identity; policy membership
+            comes from the recorded layout.
+        mutations (`tuple[MemoryMutation, ...]`): Frame-local mutations with unique
+            IDs, retained in proposal order. An empty batch is valid.
+    """
+
+    frame_ref: MemoryFrameRef
+    mutations: tuple[MemoryMutation, ...]
+
+    def __post_init__(self) -> None:
+        """Validate ownership and retain independent canonical mutation payloads."""
+        if type(self.frame_ref) is not MemoryFrameRef:
+            raise TypeError("frame_ref must be a MemoryFrameRef")
+        object.__setattr__(self, "frame_ref", replace(self.frame_ref))
+        object.__setattr__(
+            self, "mutations", _validate_mutations(self.mutations, frame_ref=self.frame_ref),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class BackwardFailure:
     """An attributed failure from one backward or memory operation.
 
@@ -556,12 +582,12 @@ class BackwardOutcome:
         if self.learning is not None:
             if type(self.learning) is not LearningResult:
                 raise TypeError("learning must be a LearningResult or None")
-            LearningResult.__post_init__(self.learning)
+            object.__setattr__(self, "learning", replace(self.learning))
             if self.status == "succeeded" and self.learning.status != "succeeded":
                 raise ValueError("succeeded backward requires succeeded learning")
 
 
 __all__ = [
     "AttributedBackwardResult", "BackwardAttribution", "BackwardCapture",
-    "BackwardFailure", "BackwardOutcome", "ForwardCapture",
+    "BackwardFailure", "BackwardOutcome", "ForwardCapture", "FrameProposal",
 ]

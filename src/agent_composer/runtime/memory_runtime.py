@@ -5,10 +5,15 @@ their optional authored origins.  This module validates the host registry, opens
 exactly one session per referenced policy, opens every static frame, captures the
 public recovery snapshots, and exposes ordered recall to the evaluator.  It does
 not resolve YAML, inspect node kinds, or construct a concrete memory backend.
+The explicit backward path stages complete frame proposals and performs accepted
+commit requests separately; the attempt driver owns their records and ordering.
 """
 
 from __future__ import annotations
 
+from asyncio import CancelledError as AsyncCancelledError
+from concurrent.futures import CancelledError as FutureCancelledError
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,6 +21,7 @@ from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
     LearningFailure,
     LearningResult,
+    LearnContext,
     Memory,
     MemoryFrame,
     MemoryFrameRef,
@@ -31,6 +37,9 @@ from agent_composer.memory import (
     MemorySnapshotEnvelope,
     RecallContext,
 )
+from agent_composer.memory.contracts import _validate_mutations
+from agent_composer.nodes.base import _CapabilityFault, _HostStop
+from agent_composer.runtime.contracts import FrameProposal
 from agent_composer.runtime.learning import (
     FrameLearningStatus,
     PolicyCommitStatus,
@@ -207,6 +216,50 @@ class _OpenedFrame:
     spec: MemoryFrameSpec
     frame: MemoryFrame
     origin: OriginRef | None
+
+
+class _LearningProposalError(Exception):
+    """One known frame-local proposal failure before any commit request."""
+
+    def __init__(self, frame_ref: MemoryFrameRef, failure: MemoryOperationFailure) -> None:
+        """Keep the owning frame and sanitized failure at the proposal boundary."""
+        self.frame_ref = frame_ref
+        self.failure = failure
+        super().__init__(failure.message)
+
+
+def _raise_host_error(error: BaseException) -> None:
+    """Preserve host controls even when a backend wrapped them as ordinary errors."""
+    pending = [(error, False)]
+    seen: set[int] = set()
+    saw_capability = False
+    while pending:
+        current, raise_original = pending.pop()
+        if raise_original:
+            raise current.with_traceback(current.__traceback__) from None
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if not isinstance(current, Exception) or isinstance(current, (
+            _HostStop, AsyncCancelledError, FutureCancelledError, MemoryError, RecursionError,
+        )):
+            raise current.with_traceback(current.__traceback__) from None
+        if current.__context__ is not None:
+            pending.append((current.__context__, False))
+        if current.__cause__ is not None:
+            pending.append((current.__cause__, False))
+        if isinstance(current, _CapabilityFault):
+            saw_capability = True
+            original = current.original
+            if not isinstance(original, BaseException):
+                raise TypeError("capability fault requires an original exception")
+            # Inspect its chain before raising the original; nested controls may
+            # have been wrapped by the injected capability itself.
+            if not isinstance(original, _CapabilityFault):
+                pending.append((original, True))
+            pending.append((original, False))
+    if saw_capability:
+        raise RuntimeError("cyclic capability fault has no original exception")
 
 
 class MemoryRuntime:
@@ -410,6 +463,88 @@ class MemoryRuntime:
                 sections.append(section)
         return tuple(sections)
 
+    def propose_learning(self, contexts: tuple[LearnContext, ...]) -> tuple[FrameProposal, ...]:
+        """Stage every owned frame's proposal without writing records or memory.
+
+        Args:
+            contexts (`tuple[LearnContext, ...]`): Complete detached owner contexts
+                in this runtime's recorded layout order, including empty frames.
+
+        Returns:
+            `tuple[FrameProposal, ...]`: Validated owned mutations in layout order.
+
+        Raises:
+            `TypeError`, `ValueError`: For invalid context coverage or carriers.
+            `RuntimeError`: If this runtime is closed.
+            `_LearningProposalError`: For a typed backend error or invalid proposal.
+                Host controls and unexpected backend exceptions propagate unchanged.
+        """
+        if self._closed:
+            raise RuntimeError("memory runtime is closed")
+        if type(contexts) is not tuple or any(type(context) is not LearnContext for context in contexts):
+            raise TypeError("learning contexts must be a tuple of exact LearnContext values")
+        copied = tuple(deepcopy(LearnContext(
+            context.run_id, context.frame_ref, context.episodes, context.feedback,
+        )) for context in contexts)
+        if tuple(context.frame_ref for context in copied) != tuple(spec.ref for spec in self._layout):
+            raise ValueError("learning contexts must cover the complete recorded layout in order")
+        if len({context.run_id for context in copied}) > 1:
+            raise ValueError("learning contexts must belong to one run")
+
+        proposals = []
+        policy_ids: dict[str, set[str]] = {}
+        for spec, context in zip(self._layout, copied):
+            try:
+                raw = self._frames[spec.ref].frame.learn(context)
+            except MemoryOperationError as exc:
+                _raise_host_error(exc)
+                raise _LearningProposalError(spec.ref, _operation_failure("learn", exc)) from exc
+            try:
+                if type(raw) is not list:
+                    raise TypeError("memory learn() must return an exact list")
+                proposal = FrameProposal(spec.ref, tuple(raw))
+                known_ids = policy_ids.setdefault(spec.policy_name, set())
+                if any(mutation.mutation_id in known_ids for mutation in proposal.mutations):
+                    raise ValueError("memory mutation ids must be unique within one policy commit")
+            except (AttributeError, TypeError, ValueError) as exc:
+                _raise_host_error(exc)
+                raise _LearningProposalError(spec.ref, _invalid_result_failure("learn")) from exc
+            known_ids.update(mutation.mutation_id for mutation in proposal.mutations)
+            proposals.append(proposal)
+        return tuple(proposals)
+
+    def commit_learning(self, request: MemoryCommitRequestedRecord) -> MemoryOperationFailure | None:
+        """Perform one already accepted backward request without writing its observation.
+
+        Args:
+            request (`MemoryCommitRequestedRecord`): The accepted attempt-aware
+                request, with its exact policy, stable ID, and ordered batch.
+
+        Returns:
+            `MemoryOperationFailure | None`: A known backend/return-contract failure,
+                or None on success. Unexpected exceptions and host controls escape.
+
+        Raises:
+            `TypeError`, `ValueError`: For a malformed or foreign request.
+            `RuntimeError`: If this runtime is closed.
+        """
+        if self._closed:
+            raise RuntimeError("memory runtime is closed")
+        if type(request) is not MemoryCommitRequestedRecord:
+            raise TypeError("backward commit requires an exact MemoryCommitRequestedRecord")
+        request = MemoryCommitRequestedRecord(
+            request.policy_name, request.commit_id, request.mutations, attempt_id=request.attempt_id,
+        )
+        if request.attempt_id is None or request.policy_name not in self._sessions:
+            raise ValueError("backward commit requires an enabled policy and attempt")
+        mutations = _validate_mutations(request.mutations)
+        try:
+            result = self._sessions[request.policy_name].commit(request.commit_id, mutations)
+        except MemoryOperationError as exc:
+            _raise_host_error(exc)
+            return _operation_failure("commit", exc)
+        return None if result is None else _invalid_result_failure("commit")
+
     def drive_learning(self, state: RunState, log: RunLog) -> None:
         """Run each unfinished frame and policy operation at most once.
 
@@ -582,10 +717,14 @@ class MemoryRuntime:
 
     def close(self) -> None:
         """Close every opened session in reverse policy order exactly once."""
+        self._close_preserving(None)
+
+    def _close_preserving(self, primary_error: BaseException | None) -> None:
+        """Close resources without replacing an initiating backward/host failure."""
         if self._closed:
             return
         self._closed = True
-        _close_sessions(self._sessions, None)
+        _close_sessions(self._sessions, primary_error)
 
 
 def _close_sessions(

@@ -660,6 +660,9 @@ class Node(ABC):
     # write-only invocation-local trace only when evidence capture is enabled and this exact
     # trait is True. AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
     needs_evaluation_trace: ClassVar[bool] = False
+    # Declares "I can publish actual render locals for retained backward context".
+    # The evaluator supplies a single-write capture callable only during retention.
+    needs_render_capture: ClassVar[bool] = False
 
     def __init__(
         self,

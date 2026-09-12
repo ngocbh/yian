@@ -344,7 +344,7 @@ def test_custom_run_uses_its_existing_pre_run_capture_boundary():
     assert node.captures == 1
 
 
-def test_agent_capture_retains_only_the_declared_variable_inventory(monkeypatch):
+def test_agent_capture_keeps_variable_inventory_separate_from_delivered_inputs(monkeypatch):
     import agent_composer.nodes.agent.node as agent_module
     from agent_composer.compose.helpers.types import read_variables
     from agent_composer.nodes.agent import AgentNode
@@ -360,5 +360,6 @@ def test_agent_capture_retains_only_the_declared_variable_inventory(monkeypatch)
     evaluated = eval_node(node, None, VariablePool(), wiring_override={"topic": "reefs"}, capture_bindings=True)
     assert evaluated.outcome.value == "reefs: Summarize clearly"
     assert evaluated.backward_capture.variable_names == ("instruction",)
-    assert evaluated.backward_capture.node_data == {}
+    assert evaluated.backward_capture.node_data["variables"] == {"instruction": "Summarize clearly"}
+    assert evaluated.backward_capture.node_data["rendered_prompt"] == "reefs: Summarize clearly"
     assert evaluated.bindings.bound_inputs == {"topic": "reefs"}

@@ -114,6 +114,120 @@ def test_raw_evaluation_returns_closed_success_route_and_grow_values():
     assert grown == Grow(seed={"value": 1})
 
 
+def test_render_capture_is_opt_in_single_write_and_detached_until_close():
+    retained = []
+    supplied = {"local": {"items": [1]}}
+
+    class Capturing(Node):
+        needs_render_capture = True
+
+        def capture_backward_context(self):
+            return {"static": "recorded"}
+
+        def forward(self, inputs, *, capture_render=None):
+            if capture_render is not None:
+                retained.append(capture_render)
+                capture_render(supplied)
+                supplied["local"]["items"].append(2)
+            return Output("done")
+
+    node = Capturing("custom")
+    assert eval_node(node, None, VariablePool()).backward_capture is None
+    assert retained == []
+    evaluated = eval_node(node, None, VariablePool(), capture_bindings=True)
+    assert evaluated.outcome == Output("done")
+    assert evaluated.backward_capture.node_data == {
+        "static": "recorded", "local": {"items": [1]}, "effective_llm_config": None,
+    }
+    with pytest.raises(RuntimeError, match="closed"):
+        retained[0]({"late": "write"})
+    assert evaluated.backward_capture.node_data["local"] == {"items": [1]}
+
+
+@pytest.mark.parametrize("publication,match", [
+    ("duplicate", "already recorded"),
+    ("reserved", "recorded runtime authority"),
+    ("static", "replace static"),
+    ("nonfinite", "non-finite"),
+])
+def test_invalid_render_capture_is_a_host_fault(publication, match):
+    closed = []
+
+    class Capturing(Node):
+        needs_render_capture = True
+
+        def capture_backward_context(self):
+            return {"static": "recorded"}
+
+        def forward(self, inputs, *, capture_render):
+            closed.append(capture_render)
+            if publication == "duplicate":
+                capture_render({"first": 1})
+                capture_render({"second": 2})
+            elif publication == "reserved":
+                capture_render({"effective_llm_config": {"model": "invented"}})
+            elif publication == "static":
+                capture_render({"static": "changed"})
+            else:
+                capture_render({"variables": {"nested": (float("inf"),)}})
+            return Output("must not run")
+
+    with pytest.raises((RuntimeError, ValueError), match=match):
+        eval_node(Capturing("custom"), None, VariablePool(), capture_bindings=True)
+    with pytest.raises(RuntimeError, match="closed"):
+        closed[0]({})
+
+
+def test_render_capture_preserves_original_host_exception_and_closes(monkeypatch):
+    import agent_composer.runtime.eval_node as evaluator
+
+    expected = MemoryError("capture allocation failed")
+    closed = []
+    canonical = evaluator.canonical_seed
+
+    def fail_dynamic(value, **kwargs):
+        if kwargs.get("reject_nonfinite"):
+            raise expected
+        return canonical(value, **kwargs)
+
+    class Capturing(Node):
+        needs_render_capture = True
+
+        def forward(self, inputs, *, capture_render):
+            closed.append(capture_render)
+            capture_render({})
+            return Output("must not run")
+
+    monkeypatch.setattr(evaluator, "canonical_seed", fail_dynamic)
+    with pytest.raises(MemoryError) as caught:
+        eval_node(Capturing("custom"), None, VariablePool(), capture_bindings=True)
+    assert caught.value is expected
+    with pytest.raises(RuntimeError, match="closed"):
+        closed[0]({})
+
+
+def test_scoped_render_capture_requires_recorded_model_map_entry(monkeypatch):
+    import agent_composer.nodes.agent.node as agent_module
+    from agent_composer.nodes.agent import AgentNode
+    from agent_composer.nodes.contracts import ExecutionScope
+
+    node = AgentNode("a/runtime/id", prompt="hello", llm_config={"model": "ambient"})
+    node.execution_scope = ExecutionScope(("authored", "agent"))
+    calls = []
+    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
+    with pytest.raises(ValueError, match="missing static path 'authored/agent'"):
+        eval_node(node, None, VariablePool(), capture_bindings=True, effective_llm_by_static_path={})
+    assert calls == []
+    config = {"provider": "test", "model": "recorded", "temperature": 0.5}
+    evaluated = eval_node(node, None, VariablePool(), capture_bindings=True,
+                          effective_llm_by_static_path={"authored/agent": config})
+    config["model"] = "later mutation"
+    assert evaluated.backward_capture.node_data["effective_llm_config"]["model"] == "recorded"
+    ordinary = eval_node(node, None, VariablePool(), effective_llm_by_static_path={})
+    assert ordinary.outcome == evaluated.outcome
+    assert ordinary.backward_capture is None
+
+
 def test_raw_streaming_uses_only_the_injected_transient_callback():
     chunks = []
 

@@ -163,6 +163,192 @@ def test_static_capture_host_fault_does_not_append_a_node_outcome():
     assert engine.state.pool.get("work") is None
 
 
+def test_nested_agent_render_capture_uses_authored_model_map_and_replays_without_execution(monkeypatch):
+    import copy
+    import agent_composer.nodes.agent.node as agent_module
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.compose import load_flow
+    from agent_composer.events import RunSucceeded
+    from agent_composer.nodes.agent import AgentNode
+    from agent_composer.nodes.base import Output
+    from agent_composer.runtime.state import RunState, _replay_records
+    from tests.engine._graph_builder import _engine
+
+    flow = load_flow("""id: captured_models
+name: captured_models
+llm_config: {provider: test, model: root, temperature: 0.2}
+defs:
+  leaf:
+    input: {topic: str}
+    nodes:
+      writer:
+        kind: agent
+        mode: plain
+        input: {topic: '${input.topic}'}
+        prompt: '${topic}: ${instruction}'
+        variables: {instruction: 'str = clearly'}
+        output: {topic: str}
+    output: ${writer.output}
+  repeat_left:
+    llm_config: {model: left}
+    input: {topic: str}
+    nodes:
+      twice:
+        kind: loop
+        call: leaf
+        times: 2
+        input: {topic: '${input.topic}'}
+    output: ${twice.output}
+  repeat_right:
+    llm_config: {model: right}
+    input: {topic: str}
+    nodes:
+      twice:
+        kind: loop
+        call: leaf
+        times: 2
+        input: {topic: '${input.topic}'}
+    output: ${twice.output}
+nodes:
+  left:
+    kind: call
+    call: repeat_left
+    input: {topic: reefs}
+  right:
+    kind: map
+    call: repeat_right
+    over: [reefs, reefs]
+    input: {topic: '${item}'}
+output: {left: '${left.output}', right: '${right.output}'}
+""").compiled
+    rendered = []
+
+    def mode(ctx):
+        rendered.append((ctx.prompt, dict(ctx.llm_config)))
+        return Output({"topic": ctx.prompt})
+
+    monkeypatch.setitem(agent_module.MODES, "plain", mode)
+    engine = _engine(flow, learn=True)
+    original = copy.deepcopy(engine.state.flow)
+    list(engine.run())
+    assert isinstance(engine.state.result, RunSucceeded), engine.state.result
+    trace = engine.state.trace
+    agents = [item for item in trace.occurrences if item.record.forward_capture.variable_names == ("instruction",)]
+    assert len(agents) == len(rendered) == 6
+    assert engine.state.effective_llm_by_static_path == {
+        "left/twice/writer": {"provider": "test", "model": "left", "temperature": 0.2},
+        "right/twice/writer": {"provider": "test", "model": "right", "temperature": 0.2},
+    }
+    positions = set()
+    for occurrence in agents:
+        capture = occurrence.record.forward_capture
+        scope, data = capture.scope, capture.node_data
+        expected = engine.state.effective_llm_by_static_path["/".join(scope.static_path)]
+        assert data["effective_llm_config"] == expected
+        assert data["prompt_template"] == "${topic}: ${instruction}"
+        assert data["variables"] == {"instruction": "clearly"}
+        assert data["rendered_prompt"] == capture.bound_inputs["topic"] + ": clearly"
+        assert scope.static_path in (("left", "twice", "writer"), ("right", "twice", "writer"))
+        assert [item.kind for item in scope.occurrence_path] == (
+            ["call", "loop_body"] if scope.static_path[0] == "left" else ["map_item", "loop_body"]
+        )
+        positions.add((scope.static_path, scope.occurrence_path))
+    assert len(positions) == 6
+    assert any(item.node_id not in engine.state.flow.nodes for item in agents)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("replay tried to resolve, render, capture, or invoke a model")
+
+    monkeypatch.setattr(AgentNode, "_resolve_variables", forbidden)
+    monkeypatch.setattr(AgentNode, "capture_backward_context", forbidden)
+    monkeypatch.setattr(agent_module, "render_template_record", forbidden)
+    monkeypatch.setitem(agent_module.MODES, "plain", forbidden)
+    replay = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
+    assert replay.trace.occurrences == trace.occurrences
+    for occurrence in agents:
+        handler = replay.trace.backward_handlers[occurrence.source].__self__
+        handler.prompt = "later prompt"
+        handler.llm_config["model"] = "later model"
+        assert replay.trace.backward_context(occurrence.source).node_data == occurrence.record.forward_capture.node_data
+
+
+@pytest.mark.parametrize("failure_at", ["capture", "append"])
+def test_agent_render_capture_host_and_append_failures_do_not_install_worker_data(monkeypatch, failure_at):
+    import agent_composer.nodes.agent.node as agent_module
+    import agent_composer.runtime.eval_node as evaluator
+    from agent_composer.compile.model import END_ID, START_ID
+    from agent_composer.nodes.agent import AgentNode
+    from agent_composer.nodes.base import Output
+    from agent_composer.runtime.log import NodeStartedRecord
+    from tests.engine._graph_builder import _engine, _graph
+
+    expected = OSError("capture or append unavailable")
+    node = AgentNode("writer", prompt="actual prompt")
+    modes = []
+    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: modes.append(ctx.prompt) or Output(ctx.prompt))
+    engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learn=True)
+    canonical, append = evaluator.canonical_seed, engine.log.append
+
+    def fail_capture(value, **kwargs):
+        if type(value) is dict and "rendered_prompt" in value:
+            raise expected
+        return canonical(value, **kwargs)
+
+    def fail_append(record):
+        if type(record) is NodeSucceededRecord and record.node_id == "writer":
+            assert record.forward_capture.node_data["rendered_prompt"] == "actual prompt"
+            raise expected
+        return append(record)
+
+    if failure_at == "capture":
+        monkeypatch.setattr(evaluator, "canonical_seed", fail_capture)
+    else:
+        monkeypatch.setattr(engine.log, "append", fail_append)
+    with pytest.raises(OSError) as caught:
+        list(engine.run())
+    assert caught.value is expected
+    assert modes == ([] if failure_at == "capture" else ["actual prompt"])
+    assert tuple(engine.log)[-1].record == NodeStartedRecord("writer")
+    assert all(item.node_id != "writer" for item in engine.state.trace.occurrences)
+    assert "writer" not in engine.state.trace.current_writers
+    assert engine.state.pool.get("writer") is None
+
+
+def test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace(monkeypatch):
+    import threading
+    import agent_composer.nodes.agent.node as agent_module
+    from agent_composer.compile.model import END_ID, START_ID
+    from agent_composer.nodes.agent import AgentNode
+    from agent_composer.nodes.base import Output
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _engine, _graph
+
+    entered, stop = threading.Event(), threading.Event()
+    rendered = []
+
+    def mode(ctx):
+        rendered.append(ctx.prompt)
+        entered.set()
+        assert stop.wait(5)
+        return Output(ctx.prompt)
+
+    def fail(_inputs):
+        assert entered.wait(5)
+        raise ValueError("sibling failed")
+
+    monkeypatch.setitem(agent_module.MODES, "plain", mode)
+    slow = AgentNode("slow", prompt="captured but discarded")
+    flow = _graph([slow, FuncNode("bad", fail)], [
+        (START_ID, "slow"), (START_ID, "bad"), ("slow", END_ID), ("bad", END_ID),
+    ])
+    engine = _engine(flow, learn=True, num_workers=2, stop_event=stop)
+    list(engine.run())
+    assert rendered == ["captured but discarded"]
+    assert "slow" in engine.state.trace.started
+    assert [item.node_id for item in engine.state.trace.occurrences] == [START_ID, "bad"]
+    assert "slow" not in engine.state.trace.current_writers
+
+
 def test_forward_capture_round_trips_without_memory_scope():
     from agent_composer.runtime.contracts import ForwardCapture
 

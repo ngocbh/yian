@@ -737,6 +737,80 @@ def test_seed_canonicalizes_tuple_date_and_file_ref():
     assert canonical_seed(decoded)[0] == wire
 
 
+def test_strict_seed_keeps_supported_values_and_independent_canonical_copies():
+    value = {"files": (FileRef(uri="memory://answer"),), "count": 4, "ratio": 0.5}
+    wire, decoded = canonical_seed(value, reject_nonfinite=True)
+    assert wire == canonical_seed(value)[0] == decoded
+    assert type(decoded["count"]) is int
+    decoded["files"][0]["uri"] = "changed"
+    assert wire["files"][0]["uri"] == "memory://answer"
+    assert value["files"][0].uri == "memory://answer"
+    with pytest.raises(TypeError, match="reject_nonfinite"):
+        canonical_seed(value, reject_nonfinite=1)
+
+
+@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize("container", ["raw", "dict", "tuple", "model", "dataclass", "typed"])
+def test_strict_seed_rejects_nonfinite_before_json_mode_normalization(number, container):
+    from pydantic import BaseModel
+    from agent_composer.typesys.values import ObjectValue
+
+    class Model(BaseModel):
+        value: float
+
+    @dataclass
+    class Box:
+        value: float
+
+    value = {
+        "raw": number,
+        "dict": {"nested": [number]},
+        "tuple": (number,),
+        "model": Model(value=number),
+        "dataclass": Box(number),
+        "typed": ObjectValue(value={"nested": number}),
+    }[container]
+    with pytest.raises(ValueError, match="non-finite"):
+        canonical_seed(value, reject_nonfinite=True)
+    if container == "raw":
+        assert canonical_seed(value) == (None, None)
+
+
+@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
+@pytest.mark.parametrize("nested", [False, True])
+def test_strict_seed_rejects_nonfinite_pydantic_extras(number, nested):
+    from pydantic import BaseModel, ConfigDict, RootModel
+
+    class Extras(BaseModel):
+        model_config = ConfigDict(extra="allow")
+        declared: int = 1
+
+    value = Extras(lost=number)
+    if nested:
+        value = RootModel[Extras](Extras(child={"items": (value,)}))
+    with pytest.raises(ValueError, match="non-finite"):
+        canonical_seed(value, reject_nonfinite=True)
+    expected = {"declared": 1, "lost": None}
+    if nested:
+        expected = {"declared": 1, "child": {"items": [expected]}}
+    assert canonical_seed(value) == (expected, expected)
+
+
+def test_strict_seed_preserves_finite_pydantic_extras_and_file_values():
+    from pydantic import BaseModel, ConfigDict, RootModel
+
+    class Extras(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+    value = RootModel[Extras](Extras(child=Extras(score=0.5, file=FileRef(uri="memory://answer"))))
+    expected = {"child": {"score": 0.5, "file": {"uri": "memory://answer", "mime": None, "name": None}}}
+    wire, decoded = canonical_seed(value, reject_nonfinite=True)
+    assert wire == decoded == expected
+    decoded["child"]["score"] = 1
+    assert wire == expected
+    assert value.root.child.score == 0.5
+
+
 def test_canonical_helpers_reject_unordered_containers():
     @dataclass
     class Box:

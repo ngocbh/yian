@@ -367,6 +367,7 @@ def _evaluate_node_stream(
     memory_recall: MemoryRecall | None = None,
     binding_collector: BindingCollector | None = None,
     capture_inputs: Callable[[dict[str, Any]], None] | None = None,
+    capture_render: Callable[[dict[str, Any]], None] | None = None,
     source_resolver: SourceResolver | None = None,
 ) -> Generator[StreamChunk, None, WorkerOutcome]:
     """Bind and run one node, yielding chunks and returning one normalized result.
@@ -503,6 +504,8 @@ def _evaluate_node_stream(
         caps["evaluation_trace"] = evaluation_trace
     if recall_memory is not None:
         caps["recall_memory"] = recall_memory
+    if capture_render is not None:
+        caps["capture_render"] = capture_render
 
     try:
         outcome = (
@@ -616,6 +619,7 @@ def eval_node(
     memory_recall: MemoryRecall | None = None,
     capture_bindings: bool = False,
     source_resolver: SourceResolver | None = None,
+    effective_llm_by_static_path: dict[str, dict[str, Any]] | None = None,
 ) -> EvaluatedOutcome:
     """Evaluate one node into a wrapped worker result and transient stream callback.
 
@@ -631,6 +635,10 @@ def eval_node(
     template captures node-owned static material after defaults and before
     assertions or body; custom run overrides retain the evaluator's
     completed-binding, pre-run capture boundary.
+    Retained nodes opting into render capture receive a single-write local sink;
+    it freezes their actual render data and the selected recorded model config.
+    ``effective_llm_by_static_path`` supplies accepted RunStarted configuration,
+    selected only by the captured root-relative static scope, never node IDs.
     Capture and serialization errors propagate as host faults. Its default
     leaves these hooks dormant and does not require a memory frame.
     """
@@ -642,6 +650,8 @@ def eval_node(
         raise TypeError("source_resolver must be callable or None")
     if memory_recall is not None and not callable(memory_recall):
         raise TypeError("memory_recall must be callable or None")
+    if effective_llm_by_static_path is not None and type(effective_llm_by_static_path) is not dict:
+        raise TypeError("effective_llm_by_static_path must be a dict or None")
     evaluation_trace = _new_evaluation_trace(
         node,
         capture_evidence=capture_evidence,
@@ -655,6 +665,18 @@ def eval_node(
         )
         if capture_bindings else None
     )
+    render_enabled = capture_bindings and node.needs_render_capture is True
+    render_closed = False
+    render_recorded = False
+    effective_config = None
+    if render_enabled and backward_capture.scope is not None and effective_llm_by_static_path is not None:
+        key = "/".join(backward_capture.scope.static_path)
+        if key not in effective_llm_by_static_path:
+            raise ValueError(f"recorded effective model configuration is missing static path {key!r}")
+        config = effective_llm_by_static_path[key]
+        if type(config) is not dict:
+            raise TypeError("recorded effective model configuration must be a dictionary")
+        effective_config = canonical_seed(config, reject_nonfinite=True)[1]
 
     def capture_inputs(inputs):
         """Snapshot completed inputs and static material before the body can mutate them."""
@@ -670,6 +692,32 @@ def eval_node(
         canonical_seed(captured.node_data)
         backward_capture = captured
 
+    def capture_render(data):
+        """Freeze one actual render publication independently from visible evidence."""
+        nonlocal backward_capture, render_recorded
+        if render_closed:
+            raise RuntimeError("render capture is already closed")
+        try:
+            if render_recorded:
+                raise RuntimeError("render capture was already recorded")
+            if type(data) is not dict:
+                raise TypeError("render capture must be a dictionary")
+            if "effective_llm_config" in data:
+                raise ValueError("effective_llm_config belongs to recorded runtime authority")
+            snapshot = canonical_seed(data, reject_nonfinite=True)[1]
+            static_data = backward_capture.node_data
+            if static_data.keys() & snapshot.keys():
+                raise ValueError("render capture cannot replace static node data")
+            backward_capture = BackwardCapture(
+                backward_capture.input_names, backward_capture.variable_names, backward_capture.scope,
+                {**static_data, **snapshot, "effective_llm_config": effective_config},
+            )
+            render_recorded = True
+        except (_CapabilityFault, _HostStop):
+            raise
+        except Exception as exc:
+            raise _CapabilityFault(exc) from exc
+
     stream = _evaluate_node_stream(
         node,
         flow,
@@ -680,6 +728,7 @@ def eval_node(
         memory_recall=memory_recall,
         binding_collector=binding_collector,
         capture_inputs=capture_inputs if capture_bindings else None,
+        capture_render=capture_render if render_enabled else None,
         source_resolver=source_resolver,
     )
     try:
@@ -705,6 +754,8 @@ def eval_node(
         raise
     else:
         stream.close()
+    finally:
+        render_closed = True
 
     evidence = evaluation_trace._freeze() if evaluation_trace is not None else None
     bindings = binding_collector.freeze() if binding_collector is not None else None

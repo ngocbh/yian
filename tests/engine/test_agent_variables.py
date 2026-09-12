@@ -10,6 +10,228 @@ from agent_composer.nodes.base import Node, Output
 from agent_composer.nodes.contracts import Parameter
 
 
+def _retained_agent(node, inputs=None, **engine_options):
+    from agent_composer.compile.model import START_ID, FlowOutput
+    from tests.engine._graph_builder import _engine, _graph
+
+    supplied = inputs or {}
+    node.params = [Parameter(name) for name in supplied]
+    flow = _graph([node], [(START_ID, node.id)],
+                  wiring={node.id: {name: f"${{input.{name}}}" for name in supplied}},
+                  outputs=[FlowOutput("answer", f"${{{node.id}.output}}")])
+    engine = _engine(flow, supplied, learn=True, **engine_options)
+    list(engine.run())
+    occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == node.id)
+    return engine, occurrence.record
+
+
+def test_retained_agent_captures_actual_render_locals_once(monkeypatch):
+    node = AgentNode("writer", prompt="${instruction}: ${topic}; ${count}/${count}",
+                     llm_config={"provider": "test", "model": "chosen", "temperature": 0.8},
+                     variables=read_variables({
+                         "count": "float[0,4] = 4", "instruction": "str = ${input.topic}",
+                     }, {}))
+    resolve, render = agent_module.apply_defaults, agent_module.render_template_record
+    resolutions, renders = [], []
+
+    def resolve_once(declarations, values):
+        resolutions.append(declarations)
+        return resolve(declarations, values)
+
+    def render_once(template, values):
+        renders.append((template, values))
+        return render(template, values)
+
+    monkeypatch.setattr(agent_module, "apply_defaults", resolve_once)
+    monkeypatch.setattr(agent_module, "render_template_record", render_once)
+    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: Output(ctx.prompt))
+    engine, record = _retained_agent(node, {"topic": "reefs"})
+    data = record.forward_capture.node_data
+    assert data == {
+        "prompt_template": "${instruction}: ${topic}; ${count}/${count}",
+        "variables": {"count": 4, "instruction": "${input.topic}"},
+        "variable_domains": {"count": "float[0,4]", "instruction": "str"},
+        "rendered_prompt": "${input.topic}: reefs; 4/4",
+        "effective_llm_config": {"provider": "test", "model": "chosen", "temperature": 0.8},
+    }
+    assert len(resolutions) == len(renders) == 1
+    assert type(data["variables"]["count"]) is int
+    assert record.forward_capture.bound_inputs == {"topic": "reefs"}
+    assert engine.state.effective_llm_by_static_path["writer"] == data["effective_llm_config"]
+
+
+def test_retained_render_locals_are_detached_before_render_and_model_callbacks(monkeypatch):
+    node = AgentNode("writer", prompt="${settings}",
+                     llm_config={"provider": "test", "model": "original"},
+                     variables=read_variables({"settings": "object = {items: [original]}"}, {}))
+    render = agent_module.render_template_record
+
+    def mutating_render(template, values):
+        values["settings"]["items"].append("render mutation")
+        return render(template, values)
+
+    def mutating_mode(ctx):
+        node.prompt = "different template"
+        node.variables[0].default["items"].append("default mutation")
+        ctx.llm_config["model"] = "different model"
+        return Output(ctx.prompt)
+
+    monkeypatch.setattr(agent_module, "render_template_record", mutating_render)
+    monkeypatch.setitem(agent_module.MODES, "plain", mutating_mode)
+    engine, record = _retained_agent(node)
+    data = record.forward_capture.node_data
+    assert data["variables"] == {"settings": {"items": ["original"]}}
+    assert data["prompt_template"] == "${settings}"
+    assert "render mutation" in data["rendered_prompt"]
+    assert data["effective_llm_config"] == {"provider": "test", "model": "original"}
+    assert engine.state.effective_llm_by_static_path["writer"] == data["effective_llm_config"]
+    data["variables"]["settings"]["items"].append("reader mutation")
+    assert record.forward_capture.node_data["variables"] == {"settings": {"items": ["original"]}}
+
+
+@pytest.mark.parametrize("stage", ["resolve", "render", "empty"])
+def test_retained_agent_distinguishes_partial_and_empty_render_locals(monkeypatch, stage):
+    from agent_composer.runtime.log import NodeFailedRecord
+
+    node = AgentNode("writer", prompt="" if stage == "empty" else "${note}",
+                     variables=[] if stage == "empty" else read_variables({"note": "Optional[str] = null"}, {}))
+    calls = []
+    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
+    if stage == "resolve":
+        def fail_resolution():
+            raise ValueError("variable resolution failed")
+        monkeypatch.setattr(node, "_resolve_variables", fail_resolution)
+    _, record = _retained_agent(node)
+    data = record.forward_capture.node_data
+    assert data["prompt_template"] == node.prompt
+    assert data["variable_domains"] == ({} if stage == "empty" else {"note": "Optional[str]"})
+    assert data["variables"] == (None if stage == "resolve" else {} if stage == "empty" else {"note": None})
+    assert data["rendered_prompt"] == ("" if stage == "empty" else None)
+    assert record.forward_capture.bound_inputs == {}
+    assert calls == ([""] if stage == "empty" else [])
+    if stage != "empty":
+        assert type(record) is NodeFailedRecord
+        assert record.failure.code == "node.execute"
+
+
+def test_retained_agent_canonicalizes_supported_file_variable_without_changing_default(monkeypatch):
+    from agent_composer.nodes.contracts import ValueContract
+    from agent_composer.runtime.log import RecordEnvelope, SCHEMA_VERSION, decode_record, encode_record
+    from agent_composer.typesys import FileRef, Type, ValueKind
+
+    file = FileRef(uri="file:///tmp/artifact.txt")
+    node = AgentNode("writer", prompt="Inspect the attachment.", variables=[
+        Parameter("artifact", ValueContract(Type(ValueKind.FILE)), has_default=True, default=file),
+    ])
+    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: Output(ctx.prompt))
+    _, record = _retained_agent(node)
+    assert record.forward_capture.node_data["variables"] == {
+        "artifact": {"uri": "file:///tmp/artifact.txt", "mime": None, "name": None},
+    }
+    assert record.forward_capture.node_data["variable_domains"] == {"artifact": "file"}
+    assert node.variables[0].default is file
+    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 3, record)
+    assert decode_record(encode_record(envelope)) == envelope
+
+
+@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
+def test_render_capture_rejects_nonfinite_variable_defaults_without_changing_capture_off(monkeypatch, number):
+    from agent_composer.nodes.contracts import ValueContract
+    from agent_composer.runtime.eval_node import eval_node
+    from agent_composer.typesys import Type, ValueKind, VariablePool
+
+    node = AgentNode("writer", prompt="ready", variables=[
+        Parameter("score", ValueContract(Type(ValueKind.NUMBER)), has_default=True, default=number),
+    ])
+    calls = []
+    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
+    assert eval_node(node, None, VariablePool()).outcome == Output("ready")
+    with pytest.raises(ValueError, match="non-finite"):
+        eval_node(node, None, VariablePool(), capture_bindings=True)
+    assert calls == ["ready"]
+
+
+@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
+def test_retained_agent_rejects_nonfinite_variable_model_extras_before_acceptance(monkeypatch, number):
+    from pydantic import BaseModel, ConfigDict
+    from agent_composer.compile.model import START_ID, END_ID
+    from agent_composer.nodes.contracts import ValueContract
+    from agent_composer.runtime.log import NodeStartedRecord
+    from agent_composer.typesys import Type, ValueKind
+    from tests.engine._graph_builder import _engine, _graph
+
+    class Extras(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+    node = AgentNode("writer", prompt="ready", variables=[
+        Parameter("settings", ValueContract(Type(ValueKind.OBJECT)), has_default=True,
+                  default={"nested": Extras(child=Extras(lost=number))}),
+    ])
+    calls = []
+    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
+    assert node.forward({}) == Output("ready")
+    engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learn=True)
+    with pytest.raises(ValueError, match="non-finite"):
+        list(engine.run())
+    assert calls == ["ready"]
+    assert tuple(engine.log)[-1].record == NodeStartedRecord("writer")
+    assert all(item.node_id != "writer" for item in engine.state.trace.occurrences)
+
+
+@pytest.mark.parametrize("phase", ["domains", "copy"])
+def test_render_capture_preparation_faults_escape_with_original_host_identity(monkeypatch, phase):
+    from agent_composer.runtime.eval_node import eval_node
+    from agent_composer.typesys import VariablePool
+
+    expected = MemoryError("capture preparation failed")
+    node = AgentNode("writer", prompt="${settings}", variables=read_variables({
+        "settings": "object = {items: [1]}",
+    }, {}))
+    copy = agent_module.deepcopy
+    calls = []
+
+    def copy_or_fail(value):
+        calls.append(value)
+        if len(calls) == 2:
+            raise expected
+        return copy(value)
+
+    def fail_domain(_type):
+        raise expected
+
+    if phase == "domains":
+        monkeypatch.setattr(agent_module, "canonical_type_label", fail_domain)
+    else:
+        monkeypatch.setattr(agent_module, "deepcopy", copy_or_fail)
+    monkeypatch.setitem(agent_module.MODES, "plain", lambda _ctx: pytest.fail("model ran after capture fault"))
+    with pytest.raises(MemoryError) as caught:
+        eval_node(node, None, VariablePool(), capture_bindings=True)
+    assert caught.value is expected
+
+
+def test_retained_agent_keeps_early_binding_unavailable_and_capture_off_dormant(monkeypatch):
+    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
+    from agent_composer.typesys import VariablePool
+
+    node = AgentNode("writer", prompt="${topic}", variables=read_variables({"tone": "str = concise"}, {}))
+    node.params = [Parameter("topic", required=True)]
+    calls = []
+    monkeypatch.setattr(node, "_resolve_variables", lambda: calls.append("resolve") or {"tone": "concise"})
+    monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: Output(ctx.prompt))
+    missing = eval_node(node, None, VariablePool(), capture_bindings=True)
+    assert type(missing.outcome) is EvaluationFailure
+    assert missing.bindings.bound_inputs is None
+    assert missing.backward_capture.node_data == {}
+    assert missing.backward_capture.variable_names == ("tone",)
+    assert calls == []
+    ordinary = eval_node(node, None, VariablePool(), wiring_override={"topic": "reefs"})
+    retained = eval_node(node, None, VariablePool(), wiring_override={"topic": "reefs"}, capture_bindings=True)
+    assert ordinary.outcome == retained.outcome == Output("reefs")
+    assert ordinary.backward_capture is None
+    assert retained.backward_capture.node_data["effective_llm_config"] is None
+    assert calls == ["resolve", "resolve"]
+
+
 def test_declared_variable_inventory_preserves_canonical_declarations():
     declarations = read_variables({"tone": "str = concise", "count": "int[1,12] = 4"}, {})
     node = AgentNode("writer", variables=declarations)

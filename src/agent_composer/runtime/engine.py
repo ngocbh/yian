@@ -417,6 +417,7 @@ class FlowEngine:
             emit_stream=emit_stream,
             capture_evidence=self.state.learn,
             capture_bindings=self.state.learn,
+            effective_llm_by_static_path=self.state.effective_llm_by_static_path,
             source_resolver=None if self.state.trace is None else self.state.trace.resolve,
             memory_recall=self.memory_recall,
         )

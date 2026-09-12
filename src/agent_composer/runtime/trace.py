@@ -45,7 +45,7 @@ def capture_bindings(
         bindings (`BindingCapture`): Actual delivered values, routes, and indexed
             item bindings frozen by the evaluator.
         backward (`BackwardCapture`): The same invocation's declared names, scope,
-            and static node data. Item seeds have no separate node inventory.
+            and captured node data. Item seeds have no separate node inventory.
 
     Returns:
         `ForwardCapture`: Canonical material ready for accepted-record validation.

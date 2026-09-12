@@ -154,7 +154,7 @@ def _validate_route(route: ValueRoute) -> None:
 
 @dataclass(frozen=True, slots=True, init=False)
 class BackwardCapture:
-    """Transient detached inventories, scope, and static material from one invocation.
+    """Transient detached inventories, scope, and node material from one invocation.
 
     This worker-owned snapshot becomes durable only through an accepted
     ForwardCapture. It contains neither bound values nor outcomes.
@@ -172,7 +172,7 @@ class BackwardCapture:
         scope: ExecutionScope | None = None,
         node_data: JsonObject | None = None,
     ) -> None:
-        """Validate common declarations and copy optional node-owned static data.
+        """Validate common declarations and copy optional node-owned invocation data.
 
         Args:
             input_names (`tuple[str, ...]`, *optional*, defaults to `()`): Distinct
@@ -182,8 +182,8 @@ class BackwardCapture:
             scope (`ExecutionScope | None`, *optional*, defaults to `None`):
                 This invocation's authored path and dynamic positions, if known.
             node_data (`JsonObject | None`, *optional*, defaults to `None`):
-                Finite JSON static material captured after defaults and before
-                the body. `None` uses `{}`, including on early binding failure.
+                Finite JSON static material and optional actual render data.
+                `None` uses `{}`, including on early binding failure.
 
         Raises:
             `TypeError`: If inventories, scope, or JSON containers are malformed.
@@ -207,7 +207,7 @@ class BackwardCapture:
 
     @property
     def node_data(self) -> JsonObject:
-        """Return detached static data without exposing the worker's snapshot."""
+        """Return detached invocation data without exposing the worker's snapshot."""
         return _copy_backward_value(self._node_data, "node_data")
 
 

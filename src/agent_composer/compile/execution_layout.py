@@ -2,8 +2,8 @@
 
 This module assigns root-relative authored paths to private compiled node
 templates. Resolution is pure; application validates the complete layout and
-its current targets before stamping any node. Dynamic occurrence paths belong
-to growth preparation, outside this static layout.
+its current targets before stamping any node. LOOP templates begin at driver
+zero; all other dynamic occurrence paths belong to growth preparation.
 
 Knows about: compile.model, nodes.base, nodes.contracts, nodes.start, nodes.end.
 Never imports: memory, compose, runtime, or the package-root run boundary.
@@ -16,7 +16,7 @@ from typing import Iterator
 
 from agent_composer.compile.model import CompiledFlow, Flow
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import ExecutionScope
+from agent_composer.nodes.contracts import ExecutionPosition, ExecutionScope
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 
@@ -52,10 +52,11 @@ class ResolvedExecutionTarget:
             raise ValueError("target scope static_path must match its locator")
         if self.scope.flow_path != self.locator[:-1]:
             raise ValueError("target scope flow_path must name its containing flow")
-        if self.scope.occurrence_path:
-            raise ValueError("static execution layout cannot contain dynamic occurrences")
         if not isinstance(self.node, Node):
             raise TypeError("target node must be a Node")
+        initial = (ExecutionPosition("loop_driver", self.locator, 0),) if self.node.is_loop else ()
+        if self.scope.occurrence_path != initial:
+            raise ValueError("static execution layout requires only the initial driver position")
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +133,10 @@ def _walk_targets(
                 boundary = "end"
             yield ResolvedExecutionTarget(
                 locator=locator,
-                scope=ExecutionScope(locator, flow_path=flow_path, boundary=boundary),
+                scope=ExecutionScope(
+                    locator, flow_path=flow_path, boundary=boundary,
+                    occurrence_path=(ExecutionPosition("loop_driver", locator, 0),) if node.is_loop else (),
+                ),
                 node=node,
             )
             child = _node_child(node)

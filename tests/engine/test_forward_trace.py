@@ -346,14 +346,541 @@ def test_reducer_requires_capture_exactly_when_learning():
 def _trace_snapshot(trace):
     return (
         trace.occurrences, dict(trace.sources), dict(trace.current_writers),
-        dict(trace.started), trace.next_sequence,
+        dict(trace.started), trace.next_sequence, trace.boundaries, dict(trace.pending_connections),
         {source: (handler.__self__.id, handler.__self__.execution_scope,
                   handler.__func__.__qualname__)
          for source, handler in trace.backward_handlers.items()},
     )
 
 
-@pytest.mark.parametrize("kind", ["output", "route", "failure", "call", "map", "loop"])
+def _seed_call_flow(sources=None, extra_nodes=(), *, extra_first=False):
+    from agent_composer.compile.model import START_ID, END_ID, CompiledFlow, Edge
+    from agent_composer.nodes.call import CallNode
+    from agent_composer.nodes.contracts import Parameter
+    from agent_composer.nodes.end import EndNode
+    from agent_composer.nodes.start import StartNode
+    from tests.engine._graph_builder import _graph
+
+    sources = {"x": "${input.seed}"} if sources is None else sources
+    parameters = [Parameter(name) for name in sources]
+    child = CompiledFlow({
+        START_ID: StartNode(START_ID, params=parameters),
+        END_ID: EndNode.record(END_ID, output_names=[]),
+    }, [Edge("order", START_ID, END_ID, ordering=True)], wiring={
+        START_ID: {name: "${input." + name + "}" for name in sources}, END_ID: {},
+    })
+    node = CallNode("spawn", flow_id="child", child=child)
+    node.params = parameters
+    entries = [(START_ID, item.id) for item in extra_nodes]
+    entries.insert(len(entries) if extra_first else 0, (START_ID, "spawn"))
+    return _graph([node, *extra_nodes], [*entries, ("spawn", END_ID)], wiring={"spawn": sources})
+
+
+def _nested_growth_flow(kind):
+    from agent_composer.compose import load_flow
+
+    over = "    over: '${[input.n, input.n]}'\n" if kind == "map" else ""
+    seed = "${item}" if kind == "map" else "${input.n}"
+    return load_flow(f"""
+id: nested-seeds
+name: nested-seeds
+input: {{n: int}}
+defs:
+  leaf:
+    input: {{n: int}}
+    nodes:
+      work:
+        kind: code
+        input: {{n: '${{input.n}}'}}
+        code: tests.engine._compose_codefns:loop_countdown
+        output: {{n: int}}
+    output: ${{work.output}}
+  body:
+    input: {{n: int}}
+    nodes:
+      invoke:
+        kind: call
+        call: leaf
+        input: {{n: '${{input.n}}'}}
+    output: ${{invoke.output}}
+  repeated:
+    input: {{n: int}}
+    nodes:
+      repeat:
+        kind: loop
+        call: body
+        times: 2
+        input: {{n: '${{input.n}}'}}
+    output: ${{repeat.output}}
+nodes:
+  outer:
+    kind: {kind}
+    call: repeated
+{over}    input: {{n: '{seed}'}}
+output: ${{outer.output}}
+""").compiled
+
+
+@pytest.mark.parametrize("kind", ["call", "map"])
+def test_nested_growth_preserves_authored_paths_and_local_driver_zero(kind):
+    from agent_composer.compile.model import START_ID
+    from agent_composer.nodes.contracts import ExecutionPosition
+    from tests.engine._graph_builder import _engine
+
+    engine = _engine(_nested_growth_flow(kind), {"n": 9}, learn=True)
+    list(engine.run())
+    trace = engine.state.trace
+    occurrences = {item.node_id: item for item in trace.occurrences}
+    loop_path = ("outer", "repeat")
+    invoke_path = (*loop_path, "invoke")
+    for item in range(2 if kind == "map" else 1):
+        prefix = f"outer#{item}" if kind == "map" else "outer"
+        outer = ExecutionPosition("map_item", ("outer",), item) if kind == "map" else ExecutionPosition("call", ("outer",))
+        for iteration in range(3):
+            driver_id = f"{prefix}/repeat" + (f"~{iteration}" if iteration else "")
+            driver = occurrences[driver_id]
+            assert driver.record.forward_capture.scope.static_path == loop_path
+            assert driver.record.forward_capture.scope.occurrence_path == (
+                outer, ExecutionPosition("loop_driver", loop_path, iteration),
+            )
+        for iteration in range(2):
+            body_start = occurrences[f"{prefix}/repeat#{iteration}/{START_ID}"]
+            call_id = f"{prefix}/repeat#{iteration}/invoke"
+            leaf_start = occurrences[f"{call_id}/{START_ID}"]
+            position = (outer, ExecutionPosition("loop_body", loop_path, iteration))
+            assert body_start.record.forward_capture.scope.occurrence_path == position
+            assert leaf_start.record.forward_capture.scope.occurrence_path == (
+                *position, ExecutionPosition("call", invoke_path),
+            )
+            assert leaf_start.record.forward_capture.scope.flow_path == invoke_path
+            assert leaf_start.input_route.children[0].source == SourceRef(
+                body_start.source.run_id, body_start.source.execution_seq, ("n",),
+            )
+        driver_node = trace.backward_handlers[occurrences[f"{prefix}/repeat"].source].__self__
+        assert driver_node.child.nodes["invoke"].execution_scope.occurrence_path == ()
+    assert all(boundary.start_source is not None and boundary.end_source is not None for boundary in trace.boundaries)
+
+
+@pytest.mark.parametrize("path", [("absent",), (9, "x")])
+def test_missing_seed_selector_is_an_accepted_growth_failure(path):
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.nodes.contracts import SeedConnection
+    from agent_composer.runtime.log import NodeFailedRecord
+    from tests.engine._graph_builder import _engine
+
+    def invalid_selector(spawner, seed):
+        fragment = build_grow(spawner, seed)
+        fragment.input_connections = (SeedConnection(fragment.start_id, "x", path),)
+        return fragment
+
+    engine = _engine(_seed_call_flow(), {"seed": 7}, learn=True, grow_builder=invalid_selector)
+    list(engine.run())
+    record = engine.state.trace.occurrences[-1].record
+    assert isinstance(record, NodeFailedRecord)
+    assert record.failure.code == "contract.growth"
+    assert record.failure == engine.state.result.failure
+    assert record.forward_capture.bound_inputs == {"x": 7}
+    assert not engine.state.trace.pending_connections and not engine.state.trace.boundaries
+
+
+@pytest.mark.parametrize("change", ["selector-digest", "missing-field", "missing-item", "mutable-path", "boundary-role"])
+def test_growth_recipe_tampering_fails_replay_before_apply(change):
+    import copy
+    from dataclasses import replace
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.compile.manifest import expansion_digest
+    from agent_composer.compile.model import START_ID
+    from agent_composer.nodes.contracts import ChildFlowBoundary, SeedConnection
+    from agent_composer.runtime.state import RunState, _replay_records, prepare_record
+    from tests.engine._graph_builder import _engine
+
+    engine = _engine(_seed_call_flow(), {"seed": 7}, learn=True)
+    original = copy.deepcopy(engine.state.flow)
+    for node_id in (START_ID, "spawn"):
+        engine._commit_started(node_id)
+        engine._commit_outcome(node_id, engine._evaluate(node_id, emit_stream=None))
+    record = tuple(engine.log)[-1].record
+
+    def changed_builder(spawner, seed):
+        fragment = build_grow(spawner, seed)
+        path = (9, "x") if change == "missing-item" else ("absent",)
+        fragment.input_connections = (SeedConnection(fragment.start_id, "x", path),)
+        if change == "mutable-path":
+            object.__setattr__(fragment.input_connections[0], "seed_path", ["x"])
+        elif change == "boundary-role":
+            fragment.child_boundaries = (ChildFlowBoundary(fragment.end_id, fragment.start_id),)
+        return fragment
+
+    if change in ("missing-field", "missing-item"):
+        changed = changed_builder(engine.state.flow.nodes["spawn"], {"x": 7})
+        record = replace(record, topology_digest=expansion_digest(changed))
+    replay = _replay_records(RunState(copy.deepcopy(original)), tuple(engine.log)[:-1], grow_builder=build_grow)
+    before = (_trace_snapshot(replay.trace), tuple(replay.flow.nodes), replay.next_sequence)
+    with pytest.raises((TypeError, ValueError)):
+        prepare_record(replay, record, grow_builder=changed_builder)
+    assert (_trace_snapshot(replay.trace), tuple(replay.flow.nodes), replay.next_sequence) == before
+
+
+@pytest.mark.parametrize("seed,expected,early_peer", [
+    ("${peer.output | null}", 11, False),
+    ("${peer.output | null}", None, False),
+    ("${peer.output}", 11, True),
+])
+def test_reference_looking_seed_strings_use_actual_forward_binding(seed, expected, early_peer):
+    from agent_composer.compile.model import START_ID
+    from agent_composer.expr.lineage import route_feedback
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _engine
+
+    peer = FuncNode("peer", lambda _: expected)
+    engine = _engine(_seed_call_flow(extra_nodes=(peer,), extra_first=early_peer), {"seed": seed}, learn=True)
+    list(engine.run())
+    trace = engine.state.trace
+    occurrences = {item.node_id: item for item in trace.occurrences}
+    parent = occurrences["spawn"]
+    child = occurrences[f"spawn/{START_ID}"]
+    assert parent.record.forward_capture.bound_inputs == {"x": seed}
+    capture = child.record.forward_capture
+    assert capture.bound_inputs == {"x": expected}
+    assert capture.evaluated_keys == frozenset({"x"})
+    assert child.input_route == capture.route
+    if early_peer:
+        assert occurrences["peer"].outcome_seq < parent.outcome_seq < child.outcome_seq
+    else:
+        assert parent.outcome_seq < occurrences["peer"].outcome_seq < child.outcome_seq
+    routed = route_feedback(child.input_route, {"x": "Change."}, trace.lookup_source)
+    assert [(item.source, item.feedback) for item in routed.contributions] == (
+        [(occurrences["peer"].source, "Change.")] if expected is not None else []
+    )
+    if expected is None:
+        assert capture.route.children[0].kind == "literal"
+
+
+def test_incomplete_child_binding_joins_only_safe_captured_fields():
+    from agent_composer.compile.model import START_ID
+    from agent_composer.runtime.log import NodeFailedRecord
+    from tests.engine._graph_builder import _engine
+
+    engine = _engine(_seed_call_flow({"safe": "${input.safe}", "x": "${input.seed}"}),
+                     {"safe": 7, "seed": '${null :? "missing"}'}, learn=True)
+    list(engine.run())
+    trace = engine.state.trace
+    child = trace.occurrences[-1]
+    assert child.node_id == f"spawn/{START_ID}", child.record
+    assert isinstance(child.record, NodeFailedRecord)
+    assert child.record.failure == engine.state.result.failure
+    assert child.record.forward_capture.bound_inputs is None
+    assert child.input_route.names == child.record.forward_capture.route.names == ("safe",)
+    root = next(item for item in trace.occurrences if item.node_id == START_ID)
+    assert child.input_route.children[0].source == SourceRef(root.source.run_id, root.source.execution_seq, ("safe",))
+    boundary, = trace.boundaries
+    assert boundary.start_source == child.source and boundary.end_source is None
+    assert not trace.pending_connections
+
+
+def test_seed_connections_wait_for_append_and_survive_unfinished_start_retry(monkeypatch):
+    from agent_composer.compile.model import START_ID
+    from agent_composer.runtime.state import commit_prepared, prepare_expanded, prepare_run_resumed
+    from agent_composer.runtime.trace import capture_bindings
+    from tests.engine._graph_builder import _engine
+
+    engine = _engine(_seed_call_flow(), {"seed": 7}, learn=True)
+    engine._commit_started(START_ID)
+    engine._commit_outcome(START_ID, engine._evaluate(START_ID, emit_stream=None))
+    engine._commit_started("spawn")
+    evaluated = engine._evaluate("spawn", emit_stream=None)
+    prepared = prepare_expanded(
+        engine.state, "spawn", evaluated.outcome, engine.grow_builder,
+        forward_capture=capture_bindings(evaluated.bindings, engine.state.flow.nodes["spawn"].execution_scope),
+    )
+    before = (_trace_snapshot(engine.state.trace), tuple(engine.state.flow.nodes), engine.state.next_sequence)
+    original_append = engine.log.append
+
+    def reject(_):
+        raise OSError("append failed")
+
+    monkeypatch.setattr(engine.log, "append", reject)
+    with pytest.raises(OSError, match="append failed"):
+        commit_prepared(engine.log, engine.state, prepared)
+    assert (_trace_snapshot(engine.state.trace), tuple(engine.state.flow.nodes), engine.state.next_sequence) == before
+    monkeypatch.setattr(engine.log, "append", original_append)
+    commit_prepared(engine.log, engine.state, prepared)
+    target = f"spawn/{START_ID}"
+    pending = engine.state.trace.pending_connections[target]
+    engine._commit_started(target)
+    abandoned = engine.state.trace.started[target]
+    commit_prepared(engine.log, engine.state, prepare_run_resumed(engine.state, num_workers=0))
+    assert engine.state.trace.pending_connections[target] is pending
+    list(engine.run())
+    child = next(item for item in engine.state.trace.occurrences if item.node_id == target)
+    assert child.source.execution_seq != abandoned
+    assert child.input_route.children[0].source is not None
+    assert not engine.state.trace.pending_connections
+
+
+@pytest.mark.parametrize("skip_first", [False, True])
+def test_pruned_seed_connections_do_not_leak_into_reused_node_ids(skip_first):
+    import copy
+    from agent_composer.compile.expand import call_subgraph, clone_child
+    from agent_composer.compile.model import START_ID, END_ID, Edge, Flow
+    from agent_composer.events import NodeExpanded, RunSucceeded
+    from agent_composer.nodes.base import Grow, Node, NodeKind
+    from agent_composer.nodes.call import CallNode
+    from agent_composer.nodes.case import CaseNode
+    from agent_composer.nodes.contracts import ChildFlowBoundary, Parameter, SeedConnection
+    from agent_composer.nodes.end import EndNode
+    from agent_composer.nodes.start import StartNode
+    from tests.engine._graph_builder import _engine, _graph
+
+    shared_start, shared_end = f"shared/{START_ID}", f"shared/{END_ID}"
+    child = _seed_call_flow().nodes["spawn"].child
+    empty_child = _seed_call_flow({}).nodes["spawn"].child
+
+    class Prune(Node):
+        kind = NodeKind.CODE
+        is_spawner = True
+
+        def forward(self, inputs):
+            return Grow({}, prune=frozenset({shared_start, shared_end}))
+
+    first = CallNode("first", flow_id="child", child=copy.deepcopy(child))
+    again = CallNode("again", flow_id="child", child=copy.deepcopy(child))
+    first.params = again.params = [Parameter("x")]
+
+    def builder(spawner, seed):
+        if spawner.id == "prune":
+            return call_subgraph(empty_child, "prune", {})
+        if spawner.id == "first" and skip_first:
+            finish = EndNode.record("finish", output_names=[])
+            finish.commit_as = "first"
+            return Flow({
+                "entry": StartNode("entry", params=[]), "choice": CaseNode("choice", []),
+                shared_start: StartNode(shared_start, params=[Parameter("x")]),
+                shared_end: EndNode.record(shared_end, output_names=[]), "finish": finish,
+            }, [
+                Edge("enter", "entry", "choice", ordering=True),
+                Edge("chosen", "choice", "finish", source_handle="default"),
+                Edge("skipped", "choice", shared_start, source_handle="other"),
+                Edge("child", shared_start, shared_end, ordering=True),
+            ], wiring={"entry": {}, "choice": {}, shared_start: {"x": seed["x"]},
+                       shared_end: {}, "finish": {}}, start_id="entry", end_id="finish",
+                input_connections=(SeedConnection(shared_start, "x", ("x",)),),
+                child_boundaries=(ChildFlowBoundary(shared_start, shared_end),))
+        fragment = clone_child(spawner.child, "shared", seed)
+        fragment.nodes[fragment.end_id].commit_as = spawner.id
+        return fragment
+
+    seen = {}
+
+    def observe(event):
+        if isinstance(event, NodeExpanded):
+            seen[event.node_id] = dict(engine.state.trace.pending_connections)
+
+    flow = _graph([first, Prune("prune"), again], [
+        (START_ID, "first"), ("first", "prune"), ("prune", "again"), ("again", END_ID),
+    ], wiring={"first": {"x": "${input.first}"}, "prune": {}, "again": {"x": "${input.second}"}})
+    engine = _engine(flow, {"first": 7, "second": 11}, learn=True, grow_builder=builder, on_event=observe)
+    list(engine.run())
+    assert isinstance(engine.state.result, RunSucceeded)
+    trace = engine.state.trace
+    assert shared_start in seen["first"] and shared_start not in seen["prune"]
+    assert seen["again"][shared_start].owner != seen["first"][shared_start].owner
+    reused = [item for item in trace.occurrences if item.node_id == shared_start]
+    assert len(reused) == (1 if skip_first else 2)
+    root = next(item for item in trace.occurrences if item.node_id == START_ID)
+    assert reused[-1].input_route.children[0].source == SourceRef(
+        root.source.run_id, root.source.execution_seq, ("second",),
+    )
+    boundaries = [item for item in trace.boundaries if item.start_id == shared_start]
+    assert len(boundaries) == 2 and boundaries[0].owner != boundaries[1].owner
+    assert boundaries[0].start_source == (None if skip_first else reused[0].source)
+    assert boundaries[1].start_source == reused[-1].source
+    assert not trace.pending_connections
+
+
+def test_call_seed_routes_survive_materialized_values():
+    from agent_composer.compile.model import START_ID, END_ID
+    from agent_composer.compose import load_flow
+    from agent_composer.expr.lineage import route_feedback
+    from agent_composer.nodes.contracts import ExecutionPosition
+    from tests.engine._graph_builder import _engine
+
+    flow = load_flow("""
+id: seed-call
+name: seed-call
+input: {n: int}
+defs:
+  child:
+    input: {n: int}
+    nodes:
+      work:
+        kind: code
+        input: {n: '${input.n}'}
+        code: tests.engine._compose_codefns:loop_countdown
+        output: {n: int}
+    output: ${work.output}
+nodes:
+  spawn:
+    kind: call
+    call: child
+    input: {n: '${input.n}'}
+output: ${spawn.output}
+""").compiled
+    engine = _engine(flow, {"n": 9}, learn=True)
+    list(engine.run())
+    trace = engine.state.trace
+    occurrences = {item.node_id: item for item in trace.occurrences}
+    child = occurrences[f"spawn/{START_ID}"]
+    raw_capture = child.record.forward_capture
+    assert raw_capture.bound_inputs == {"n": 9}
+    assert raw_capture.route.children[0].kind == "literal"
+    routed = route_feedback(child.input_route, {"n": "Use another seed."}, trace.lookup_source)
+    assert [(item.source, item.feedback) for item in routed.contributions] == [
+        (occurrences[START_ID].source, {"n": "Use another seed."}),
+    ]
+    assert raw_capture.scope.occurrence_path == (ExecutionPosition("call", ("spawn",)),)
+    boundary, = trace.boundaries
+    assert boundary.owner == occurrences["spawn"].source
+    assert (boundary.start_id, boundary.end_id) == (f"spawn/{START_ID}", f"spawn/{END_ID}")
+    assert (boundary.start_source, boundary.end_source) == (
+        child.source, occurrences[f"spawn/{END_ID}"].source,
+    )
+    assert not trace.pending_connections
+
+
+@pytest.mark.parametrize("kind", ["call", "map"])
+def test_null_materialized_seed_keeps_its_selected_source(kind):
+    from agent_composer.compile.model import START_ID, END_ID
+    from agent_composer.expr.lineage import route_feedback
+    from agent_composer.nodes.contracts import Parameter
+    from agent_composer.nodes.map import MapNode
+    from tests.engine._graph_builder import _engine, _graph
+
+    flow = _seed_call_flow()
+    if kind == "map":
+        node = MapNode("spawn", flow_id="child", child=flow.nodes["spawn"].child)
+        node.params = [Parameter("x")]
+        flow = _graph([node], [(START_ID, "spawn"), ("spawn", END_ID)],
+                      wiring={"spawn": {"over": "${[input.seed]}", "x": "${item}"}})
+    engine = _engine(flow, {"seed": None}, learn=True)
+    list(engine.run())
+    trace = engine.state.trace
+    root = next(item for item in trace.occurrences if item.node_id == START_ID)
+    child_id = f"spawn#0/{START_ID}" if kind == "map" else f"spawn/{START_ID}"
+    child = next(item for item in trace.occurrences if item.node_id == child_id)
+    assert child.record.forward_capture.bound_inputs == {"x": None}
+    assert child.record.forward_capture.route.children[0].kind == "literal"
+    routed = route_feedback(child.input_route, {"x": "Fill this value."}, trace.lookup_source)
+    assert [(item.source, item.feedback) for item in routed.contributions] == [
+        (root.source, {"seed": "Fill this value."}),
+    ]
+
+
+@pytest.mark.parametrize("over,inputs,expected", [
+    ("${input.left}", {"left": [7, 7]}, [{"left": ["Change.", None]}, {"left": [None, "Change."]}]),
+    ("${input.left + input.right * 2}", {"left": [7, 7], "right": [7]}, [
+        {"left": ["Change.", None]}, {"left": [None, "Change."]},
+        {"right": ["Change."]}, {"right": ["Change."]},
+    ]),
+    ("${input.left}", {"left": []}, []),
+])
+def test_map_seed_routes_preserve_equal_item_positions(over, inputs, expected):
+    from agent_composer.compile.model import START_ID, END_ID
+    from agent_composer.expr.lineage import route_feedback
+    from agent_composer.nodes.contracts import ExecutionPosition, Parameter
+    from agent_composer.nodes.map import MapNode
+    from tests.engine._graph_builder import _engine, _graph
+    from tests.engine.test_expand import _child_flow
+
+    node = MapNode("spawn", flow_id="child", child=_child_flow())
+    node.params = [Parameter("x")]
+    flow = _graph([node], [(START_ID, "spawn"), ("spawn", END_ID)],
+                  wiring={"spawn": {"over": over, "x": "${item}"}})
+    engine = _engine(flow, inputs, learn=True)
+    list(engine.run())
+    trace = engine.state.trace
+    occurrences = {item.node_id: item for item in trace.occurrences}
+    for index, feedback in enumerate(expected):
+        child = occurrences[f"spawn#{index}/{START_ID}"]
+        assert child.record.forward_capture.bound_inputs == {"x": 7}
+        assert child.record.forward_capture.route.children[0].kind == "literal"
+        routed = route_feedback(child.input_route, {"x": "Change."}, trace.lookup_source)
+        assert [(item.source, item.feedback) for item in routed.contributions] == [
+            (occurrences[START_ID].source, feedback),
+        ]
+        assert child.record.forward_capture.scope.occurrence_path == (
+            ExecutionPosition("map_item", ("spawn",), index),
+        )
+    assert len(trace.boundaries) == len(expected)
+    for node_id in (f"spawn/{START_ID}", f"spawn/{END_ID}"):
+        assert occurrences[node_id].record.forward_capture.scope == ExecutionScope(("spawn",))
+    assert not trace.pending_connections
+
+
+@pytest.mark.parametrize("times", [0, 3])
+def test_loop_carried_routes_survive_live_pruning(times):
+    from agent_composer.compile.model import START_ID, END_ID
+    from agent_composer.compose import load_flow
+    from agent_composer.expr.lineage import route_feedback
+    from agent_composer.nodes.contracts import ExecutionPosition
+    from tests.engine._graph_builder import _engine
+
+    loop_policy = f"times: {times}" if times else "while: '${n < 0}'\n    max: 3"
+    flow = load_flow(f"""
+id: seed-loop
+name: seed-loop
+input: {{n: int}}
+defs:
+  child:
+    input: {{n: int}}
+    nodes:
+      work:
+        kind: code
+        input: {{n: '${{input.n}}'}}
+        code: tests.engine._compose_codefns:loop_countdown
+        output: {{n: int}}
+    output: ${{work.output}}
+nodes:
+  spawn:
+    kind: loop
+    call: child
+    {loop_policy}
+    input: {{n: '${{input.n}}'}}
+output: ${{spawn.output}}
+""").compiled
+    engine = _engine(flow, {"n": 9}, learn=True)
+    list(engine.run())
+    trace = engine.state.trace
+    occurrences = {item.node_id: item for item in trace.occurrences}
+    drivers = [occurrences["spawn"], *(occurrences[f"spawn~{i}"] for i in range(1, times + 1))]
+    assert len({item.source for item in drivers}) == times + 1
+    for index, driver in enumerate(drivers):
+        assert driver.record.forward_capture.scope.occurrence_path == (
+            ExecutionPosition("loop_driver", ("spawn",), index),
+        )
+    assert trace.current_writers["spawn"].source == drivers[-1].source
+    for index in range(times):
+        child = occurrences[f"spawn#{index}/{START_ID}"]
+        previous = occurrences[START_ID if index == 0 else f"spawn#{index - 1}/{END_ID}"]
+        assert child.record.forward_capture.bound_inputs == {"n": 9 - index}
+        routed = route_feedback(child.input_route, {"n": "Change."}, trace.lookup_source)
+        assert [(item.source, item.feedback) for item in routed.contributions] == [
+            (previous.source, {"n": "Change."}),
+        ]
+        assert child.record.forward_capture.scope.occurrence_path == (
+            ExecutionPosition("loop_body", ("spawn",), index),
+        )
+        boundary = trace.boundaries[index]
+        assert boundary.owner == drivers[index].source
+        assert boundary.start_source == child.source
+        assert boundary.end_source == occurrences[f"spawn#{index}/{END_ID}"].source
+        if index < times - 1:
+            assert child.node_id not in engine.state.flow.nodes
+            assert child.source in trace.sources
+    assert not trace.pending_connections
+
+
+@pytest.mark.parametrize("kind", ["output", "route", "failure", "call", "map", "loop", "nested-call", "nested-map"])
 def test_trace_replay_matches_live_accepted_prefixes(kind, monkeypatch):
     import copy
     from agent_composer.compile.expand import build_grow
@@ -364,7 +891,9 @@ def test_trace_replay_matches_live_accepted_prefixes(kind, monkeypatch):
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
-    if kind in ("call", "map", "loop"):
+    if kind.startswith("nested-"):
+        flow = _nested_growth_flow(kind.removeprefix("nested-"))
+    elif kind in ("call", "map", "loop"):
         extra = "    over: [1, 1]\n" if kind == "map" else ""
         extra += "    times: 3\n" if kind == "loop" else ""
         binding = "${item}" if kind == "map" else "1"
@@ -404,7 +933,7 @@ output: ${{spawn.output}}
         snapshots[engine.state.next_sequence] = _trace_snapshot(engine.state.trace)
         actual_nodes.update(engine.state.flow.nodes)
 
-    engine = _engine(flow, learn=True, on_event=observe)
+    engine = _engine(flow, {"n": 9} if kind.startswith("nested-") else None, learn=True, on_event=observe)
     original = copy.deepcopy(engine.state.flow)
     observe(None)
     list(engine.run())

@@ -305,3 +305,39 @@ def test_only_the_containing_flows_actual_boundaries_are_marked():
     assert {target.locator: target.scope.boundary for target in layout.targets} == {
         ("entry",): "start", ("helper",): None, ("result",): "end",
     }
+
+
+def test_static_loop_scope_starts_at_driver_zero_and_reapplies_atomically():
+    from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+    from agent_composer.nodes.loop import LoopNode
+
+    node = LoopNode("loop", flow_id="body", times=0, max_iters=0, predicate_kind="times")
+    flow = Flow({"first": CodeNode("first", code="return 1"), "loop": node}, [])
+    layout = resolve_execution_layout(flow)
+    target = next(item for item in layout.targets if item.node is node)
+    assert target.scope.occurrence_path == (ExecutionPosition("loop_driver", ("loop",), 0),)
+    assert flow.nodes["first"].execution_scope is None
+    apply_execution_layout(flow, layout)
+    apply_execution_layout(flow, layout)
+    assert resolve_execution_layout(flow) == layout
+    assert flow.nodes["first"].execution_scope.occurrence_path == ()
+
+
+@pytest.mark.parametrize("position", [
+    (), (ExecutionPosition("loop_driver", ("loop",), 1),),
+    (ExecutionPosition("loop_driver", ("other",), 0),),
+    (ExecutionPosition("loop_body", ("loop",), 0),),
+    (ExecutionPosition("call", ("outer",)), ExecutionPosition("loop_driver", ("loop",), 0)),
+])
+def test_static_loop_layout_rejects_nonbootstrap_positions_before_stamping(position):
+    from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+    from agent_composer.nodes.loop import LoopNode
+
+    node = LoopNode("loop", flow_id="body")
+    flow = Flow({"first": CodeNode("first", code="return 1"), "loop": node}, [])
+    layout = resolve_execution_layout(flow)
+    target = next(item for item in layout.targets if item.node is node)
+    object.__setattr__(target.scope, "occurrence_path", position)
+    with pytest.raises(ValueError):
+        apply_execution_layout(flow, layout)
+    assert all(item.execution_scope is None for item in flow.nodes.values())

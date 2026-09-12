@@ -18,7 +18,7 @@ from typing import Any, NoReturn
 
 from agent_composer._state import NodeState
 from agent_composer.compile.manifest import expansion_digest
-from agent_composer.compile.model import CompiledFlow, Edge, Flow, GrowthRejected
+from agent_composer.compile.model import CompiledFlow, Edge, Flow, GrowthRejected, validate_growth_metadata
 from agent_composer.compile.validation import _classify_path
 from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.events import (
@@ -45,9 +45,11 @@ from agent_composer.memory import (
 )
 from agent_composer.nodes.base import Grow, Node
 from agent_composer.nodes.contracts import (
+    ChildFlowBoundary,
     OutputContract,
     Parameter,
     PartialRecordContract,
+    SeedConnection,
     binding_source,
     missing_output_contract_field,
     output_contract_origin,
@@ -55,7 +57,7 @@ from agent_composer.nodes.contracts import (
     validate_output_contract,
 )
 from agent_composer.runtime.contracts import ForwardCapture
-from agent_composer.runtime.trace import RetainedTrace, TraceDelta, prepare_trace
+from agent_composer.runtime.trace import RetainedTrace, TraceDelta, prepare_trace, select_seed_route
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
     MemoryCommitFailedRecord,
@@ -1566,6 +1568,12 @@ def _prepare_growth_transition(
         raise TypeError("node-expansion envelope decoded to a different record kind")
     if canonical_record != record:
         raise ValueError("NodeExpandedRecord is not in canonical wire form")
+    if state.learn and type(canonical_record.forward_capture) is ForwardCapture:
+        for connection in fragment.input_connections:
+            if select_seed_route(canonical_record.forward_capture, connection) is None:
+                _raise_growth_rejected(ValueError(
+                    f"seed connection {connection.seed_path!r} was not captured"
+                ))
     next_learning_state = state.learning_state.append_episodes(
         project_outcome_episodes(run_id, canonical_record)
     )
@@ -1591,7 +1599,10 @@ def _prepare_growth_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
+        _plan=replace(plan, trace_delta=_prepare_record_trace(
+            state, canonical_envelope, input_connections=fragment.input_connections,
+            child_boundaries=fragment.child_boundaries,
+        )),
         observers=(_growth_observer(canonical_record),),
     )
 
@@ -1908,7 +1919,11 @@ def commit_prepared(
     return observers
 
 
-def _prepare_record_trace(state: RunState, envelope: RecordEnvelope) -> TraceDelta | None:
+def _prepare_record_trace(
+    state: RunState, envelope: RecordEnvelope, *,
+    input_connections: tuple[SeedConnection, ...] = (),
+    child_boundaries: tuple[ChildFlowBoundary, ...] = (),
+) -> TraceDelta | None:
     """Prepare accepted trace data while the actual executing node still exists."""
     record = envelope.record
     if isinstance(record, NodeFailedRecord):
@@ -1919,7 +1934,8 @@ def _prepare_record_trace(state: RunState, envelope: RecordEnvelope) -> TraceDel
         node_id = record.node_id
     else:
         node_id = None
-    return prepare_trace(state.trace, envelope, state.flow.nodes.get(node_id))
+    return prepare_trace(state.trace, envelope, state.flow.nodes.get(node_id),
+                         input_connections=input_connections, child_boundaries=child_boundaries)
 
 
 def _replay_records(
@@ -2818,6 +2834,10 @@ def _validate_growth_fragment_data(
                 "growth fragment wiring keys must exactly equal fragment nodes"
             )
         )
+    try:
+        validate_growth_metadata(fragment)
+    except (TypeError, ValueError) as exc:
+        _raise_growth_rejected(exc)
     combined_nodes = dict(state.flow.nodes)
     combined_nodes.update(fragment.nodes)
     combined_node_ids = set(combined_nodes)

@@ -18,12 +18,15 @@ Per-iteration (driver@k = `L` when k==0 else `L~k`, run on the carried record):
 The compile-owned injected builder constructs body/driver at the ORIGIN callsite
 (`self.origin_id`), never `self.id`, so live and durable-replay windows are byte-identical.
 """
+from dataclasses import replace
 from typing import Any, Callable, ClassVar, Iterator, Optional
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.nodes.base import Grow, Node, NodeKind, Output
 from agent_composer.nodes.contracts import (
+    ExecutionPosition,
+    ExecutionScope,
     Parameter,
     _iter_origin_carrier,
     _rewrite_origin_carrier,
@@ -188,6 +191,17 @@ class LoopNode(Node):
         # on every later iteration.
         clone.origin_context = self.origin_context
         clone.memory_scope = self.memory_scope
+        if self.execution_scope is not None:
+            scope = self.execution_scope
+            if type(scope) is not ExecutionScope:
+                raise TypeError("loop execution scope must be an ExecutionScope")
+            ExecutionScope(scope.static_path, scope.flow_path, scope.occurrence_path, scope.boundary)
+            current = ExecutionPosition("loop_driver", scope.static_path, self.iteration)
+            if not scope.occurrence_path or scope.occurrence_path[-1] != current:
+                raise ValueError("loop scope must end in its current driver position")
+            clone.execution_scope = replace(scope, occurrence_path=(
+                *scope.occurrence_path[:-1], ExecutionPosition("loop_driver", scope.static_path, k),
+            ))
         clone.params = self.params
         clone.output_contract = self.output_contract
         clone.pre_asserts = list(self.pre_asserts)

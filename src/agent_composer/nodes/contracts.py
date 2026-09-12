@@ -4,6 +4,8 @@ These frozen carriers attach opaque origins to executable meanings without
 depending on Compose/YAML or runtime state. Compiled wiring, node assertions,
 node parameters, and node outputs use their canonical carriers. Execution scopes
 identify authored locations and structured occurrences independently of memory.
+Seed connections and child boundary pairs describe growth topology without values
+or runtime producer identities.
 Compose output derivation preserves those carriers and projects exact field/value
 types only inside type algorithms.
 """
@@ -141,6 +143,49 @@ class ExecutionScope:
             type(self.boundary) is not str or self.boundary not in ("start", "end")
         ):
             raise ValueError("execution boundary must be 'start', 'end', or None")
+
+
+@dataclass(frozen=True, slots=True)
+class SeedConnection:
+    """Connect a child START parameter to a materialized parent seed route.
+
+    ``seed_path`` is a parameter name, or an explicit item index followed by a
+    parameter name. Producer identities are supplied only by accepted runtime
+    captures; this recipe contains no seed value or expression.
+    """
+
+    child_start_id: str
+    input_name: str
+    seed_path: tuple[str | int, ...]
+
+    def __post_init__(self) -> None:
+        """Require exact immutable names and a closed materialized-seed selector."""
+        for name in (self.child_start_id, self.input_name):
+            if type(name) is not str or not name:
+                raise ValueError("seed connection identifiers must be non-empty strings")
+        if type(self.seed_path) is not tuple or len(self.seed_path) not in (1, 2):
+            raise ValueError("seed_path must be a name or an index/name tuple")
+        if type(self.seed_path[-1]) is not str or not self.seed_path[-1]:
+            raise ValueError("seed_path must end in a non-empty parameter name")
+        if len(self.seed_path) == 2 and (
+            type(self.seed_path[0]) is not int or self.seed_path[0] < 0
+        ):
+            raise ValueError("seed_path item index must be a non-negative integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ChildFlowBoundary:
+    """The actual START and END of one instantiated authored child flow."""
+
+    start_id: str
+    end_id: str
+
+    def __post_init__(self) -> None:
+        """Require distinct exact identifiers without interpreting their spelling."""
+        if any(type(name) is not str or not name for name in (self.start_id, self.end_id)):
+            raise ValueError("child boundary identifiers must be non-empty strings")
+        if self.start_id == self.end_id:
+            raise ValueError("child START and END must be distinct")
 
 
 @dataclass(frozen=True)
@@ -714,11 +759,13 @@ __all__ = [
     "Assertion",
     "Binding",
     "ContractOrigins",
+    "ChildFlowBoundary",
     "ExecutionPosition",
     "ExecutionScope",
     "OutputContract",
     "Parameter",
     "PartialRecordContract",
+    "SeedConnection",
     "ValueContract",
     "ValuePath",
     "as_binding",

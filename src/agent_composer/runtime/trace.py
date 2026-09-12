@@ -5,11 +5,16 @@ after acceptance. Records own outcome data; private callable references live in 
 separate index and never cross the wire. This module depends on runtime contracts
 and codecs plus lower node/expression/value contracts, never the driver, public
 run boundary, or compile expansion implementation.
+
+Accepted growth metadata installs pending child seed routes. Child outcomes keep
+their exact recorded capture while deriving an effective input route, with actual
+second expression evaluations taking precedence. Historical boundary associations
+survive consumption and live graph pruning.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
@@ -17,7 +22,7 @@ from agent_composer.expr.expressions import ExpressionError
 from agent_composer.expr.lineage import ResolvedValue, SourceRef, ValueRoute
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.binding import BindingCapture
-from agent_composer.nodes.contracts import ExecutionScope
+from agent_composer.nodes.contracts import ChildFlowBoundary, ExecutionScope, SeedConnection
 from agent_composer.runtime.contracts import ForwardCapture
 from agent_composer.runtime.log import (
     NodeExpandedRecord, NodeFailedRecord, NodeRoutedRecord, NodeStartedRecord,
@@ -58,17 +63,47 @@ class SourceEntry:
 
 @dataclass(frozen=True, slots=True)
 class TraceOccurrence:
-    """One accepted outcome identified by its earlier accepted start record."""
+    """One accepted outcome and its derived route, identified by its accepted start."""
 
     source: SourceRef
     node_id: str
     outcome_seq: int
     _record_bytes: bytes = field(repr=False)
+    input_route: ValueRoute
 
     @property
     def record(self):
         """Return a detached view of the authoritative accepted outcome record."""
         return decode_record(self._record_bytes).record
+
+
+@dataclass(frozen=True, slots=True)
+class TraceBoundary:
+    """One accepted expansion's child flow and its actual accepted endpoints."""
+
+    owner: SourceRef
+    start_id: str
+    end_id: str
+    start_source: SourceRef | None = None
+    end_source: SourceRef | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SeedRoutes:
+    """Candidate input routes owned by one accepted growth occurrence."""
+
+    owner: SourceRef
+    fields: tuple[tuple[str, ValueRoute], ...]
+
+
+def select_seed_route(capture: ForwardCapture, connection: SeedConnection) -> ValueRoute | None:
+    """Select one captured field by explicit item/name metadata, preserving nulls."""
+    binding = capture
+    if len(connection.seed_path) == 2:
+        binding = dict(capture.items).get(connection.seed_path[0])
+        if binding is None:
+            return None
+    return dict(zip(binding.route.names, binding.route.children)).get(connection.seed_path[-1])
 
 
 class RetainedTrace:
@@ -89,6 +124,19 @@ class RetainedTrace:
         self._started: dict[str, int] = {}
         self._backward_handlers: dict[SourceRef, Callable[..., Any]] = {}
         self._system: dict[str, bytes] = {}
+        self._pending_connections: dict[str, _SeedRoutes] = {}
+        self._boundaries: list[TraceBoundary] = []
+        self._current_boundaries: dict[str, tuple[int, str]] = {}
+
+    @property
+    def pending_connections(self) -> Mapping[str, _SeedRoutes]:
+        """Expose unconsumed child seed candidates without a writable index."""
+        return MappingProxyType(self._pending_connections)
+
+    @property
+    def boundaries(self) -> tuple[TraceBoundary, ...]:
+        """Retain accepted child associations even after their live nodes are pruned."""
+        return tuple(self._boundaries)
 
     @property
     def occurrences(self) -> tuple[TraceOccurrence, ...]:
@@ -169,6 +217,10 @@ class TraceDelta:
     handler: Callable[..., Any] | None = field(default=None, repr=False, compare=False)
     writer: tuple[str, SourceEntry] | None = None
     prune_ids: tuple[str, ...] = ()
+    connections: tuple[tuple[str, _SeedRoutes], ...] = ()
+    consumed_connection: tuple[str, _SeedRoutes] | None = None
+    boundaries: tuple[TraceBoundary, ...] = ()
+    boundary_update: tuple[int, TraceBoundary] | None = None
 
     def validate_origin(self, trace: RetainedTrace | None) -> None:
         """Reject stale or replaced trace authority before durable append."""
@@ -176,6 +228,10 @@ class TraceDelta:
             raise ValueError("trace transition requires its originating trace")
         if trace is not None and trace.next_sequence != self.sequence:
             raise ValueError("trace transition has a stale sequence")
+        if self.consumed_connection is not None:
+            node_id, routes = self.consumed_connection
+            if trace is None or trace._pending_connections.get(node_id) is not routes:
+                raise ValueError("seed connection no longer has its prepared owner")
 
     def apply(self) -> RetainedTrace:
         """Install only prevalidated index updates after accepted reducer apply."""
@@ -189,8 +245,23 @@ class TraceDelta:
             trace._occurrences.append(self.occurrence)
             trace._backward_handlers[self.occurrence.source] = self.handler
             del trace._started[self.occurrence.node_id]
+            trace._current_boundaries.pop(self.occurrence.node_id, None)
+        if self.consumed_connection is not None:
+            node_id, _routes = self.consumed_connection
+            del trace._pending_connections[node_id]
+        if self.boundary_update is not None:
+            index, boundary = self.boundary_update
+            trace._boundaries[index] = boundary
         for node_id in self.prune_ids:
             trace._current_writers.pop(node_id, None)
+            trace._pending_connections.pop(node_id, None)
+            trace._current_boundaries.pop(node_id, None)
+        trace._pending_connections.update(self.connections)
+        for boundary in self.boundaries:
+            index = len(trace._boundaries)
+            trace._boundaries.append(boundary)
+            trace._current_boundaries[boundary.start_id] = (index, "start_source")
+            trace._current_boundaries[boundary.end_id] = (index, "end_source")
         if self.writer is not None:
             target, entry = self.writer
             trace._current_writers[target] = entry
@@ -203,6 +274,9 @@ def prepare_trace(
     trace: RetainedTrace | None,
     envelope: RecordEnvelope,
     node: Node | None,
+    *,
+    input_connections: tuple[SeedConnection, ...] = (),
+    child_boundaries: tuple[ChildFlowBoundary, ...] = (),
 ) -> TraceDelta | None:
     """Validate capture authority and prepare a detached accepted-record delta."""
     record = envelope.record
@@ -247,7 +321,37 @@ def prepare_trace(
         _validate_sources(trace, binding.route, envelope.seq)
         pending.extend(item for _, item in binding.items)
     source = SourceRef(envelope.run_id, trace._started[node.id])
-    occurrence = TraceOccurrence(source, node.id, envelope.seq, encode_record(envelope))
+    candidates = trace._pending_connections.get(node.id)
+    input_route = capture.route
+    if candidates is not None:
+        fields = dict(candidates.fields)
+        input_route = ValueRoute.record(
+            (name, route if name in capture.evaluated_keys else fields.get(name, route))
+            for name, route in zip(capture.route.names, capture.route.children)
+        )
+    _validate_sources(trace, input_route, envelope.seq)
+    occurrence = TraceOccurrence(source, node.id, envelope.seq, encode_record(envelope), input_route)
+    boundary_update = None
+    boundary_target = trace._current_boundaries.get(node.id)
+    if boundary_target is not None:
+        index, role = boundary_target
+        boundary_update = (index, replace(trace._boundaries[index], **{role: source}))
+    connections: dict[str, list[tuple[str, ValueRoute]]] = {}
+    for connection in sorted(input_connections, key=lambda item: (item.child_start_id, item.input_name)):
+        route = select_seed_route(capture, connection)
+        if route is None:
+            raise ValueError("seed connection field or item was not captured")
+        connections.setdefault(connection.child_start_id, []).append((connection.input_name, route))
+    for node_id in connections:
+        if node_id in trace._pending_connections:
+            raise ValueError("seed connection target already has an accepted owner")
+    boundaries = tuple(
+        TraceBoundary(source, boundary.start_id, boundary.end_id)
+        for boundary in sorted(child_boundaries, key=lambda item: (item.start_id, item.end_id))
+    )
+    if any(node_id in trace._current_boundaries for boundary in boundaries
+           for node_id in (boundary.start_id, boundary.end_id)):
+        raise ValueError("child boundary target already has an accepted owner")
     handler = node.backward
     if not callable(handler):
         raise TypeError("node backward handler must be callable")
@@ -260,6 +364,10 @@ def prepare_trace(
     return TraceDelta(
         trace, envelope.seq, occurrence=occurrence, handler=handler, writer=writer,
         prune_ids=record.prune_ids if type(record) is NodeExpandedRecord else (),
+        connections=tuple((node_id, _SeedRoutes(source, tuple(fields)))
+                          for node_id, fields in connections.items()),
+        consumed_connection=None if candidates is None else (node.id, candidates),
+        boundaries=boundaries, boundary_update=boundary_update,
     )
 
 
@@ -279,4 +387,4 @@ def _validate_sources(trace: RetainedTrace, route: ValueRoute, outcome_seq: int)
         _validate_sources(trace, child, outcome_seq)
 
 
-__all__ = ["RetainedTrace", "SourceEntry", "TraceOccurrence"]
+__all__ = ["RetainedTrace", "SourceEntry", "TraceBoundary", "TraceOccurrence"]

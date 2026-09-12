@@ -47,8 +47,9 @@ class BuildContext:
 
     ``resolver`` resolves child flows for composites. ``output_contract_reader``
     optionally compiles one authored node-output declaration at its established
-    build position. ``resolve_origin`` presents an origin registered before file
-    finalization. Source-free and direct programmatic builds leave both seams unset.
+    build position; ``variable_declaration_reader`` does the same for local declarations.
+    ``resolve_origin`` presents an origin registered before file finalization.
+    Source-free and direct programmatic builds leave these optional seams unset.
     """
 
     registry: TypeRegistry  # flow's read_typedefs map
@@ -57,6 +58,7 @@ class BuildContext:
     resolve_origin: Callable[[OriginRef], DiagnosticFrame | None] | None = None
     diagnostics: LoadDiagnostics = field(default_factory=LoadDiagnostics)
     output_contract_reader: Callable[[str, Any], ValueContract | None] | None = None
+    variable_declaration_reader: Callable[[str, Any], list[Parameter] | None] | None = None
 
 
 @dataclass(frozen=True)

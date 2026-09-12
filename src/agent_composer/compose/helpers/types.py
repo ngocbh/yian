@@ -253,15 +253,19 @@ def _read_flow_parameter(
     parameter_origin: OriginRef | None = None,
     default_origin: Callable[[], OriginRef | None] | None = None,
     diagnostics: LoadDiagnostics,
+    declaration_label: str = "input",
+    require_default: bool = False,
 ) -> Parameter:
-    """Read one flow-input declaration using an injected contract compiler."""
+    """Read one typed declaration using an injected compiler and default policy."""
     if isinstance(value, str):
         type_part, default_part = _split_default(value)
         contract = read_contract(type_part)
         typ = contract.type
         has_default = default_part is not None
+        if require_default and not has_default:
+            raise diagnostics.error(f"{declaration_label} {name!r}: a default is required")
         if has_default and default_part == "":
-            raise diagnostics.error(f"input {name!r}: default cannot be empty")
+            raise diagnostics.error(f"{declaration_label} {name!r}: default cannot be empty")
         default: Any = None
         if has_default:
             assert default_part is not None
@@ -269,13 +273,13 @@ def _read_flow_parameter(
                 default = parse_yaml_literal(default_part)
             except SourceSyntaxError as exc:
                 raise diagnostics.error(
-                    f"input {name!r}: bad default {default_part!r}: {exc}"
+                    f"{declaration_label} {name!r}: bad default {default_part!r}: {exc}"
                 ) from exc
             try:
                 build_value_as(typ, default)
             except ValueError as exc:
                 raise diagnostics.error(
-                    f"input {name!r}: default {default!r} does not satisfy "
+                    f"{declaration_label} {name!r}: default {default!r} does not satisfy "
                     f"the declared type: {exc}"
                 ) from exc
         return Parameter(
@@ -291,7 +295,7 @@ def _read_flow_parameter(
             ),
         )
 
-    if isinstance(value, dict):
+    if isinstance(value, dict) and not require_default:
         contract = read_contract(value)
         return Parameter(
             name=name,
@@ -301,8 +305,9 @@ def _read_flow_parameter(
             origin=parameter_origin,
         )
 
+    form = "a TYPE = default string" if require_default else "a type string or a record map"
     raise diagnostics.error(
-        f"input {name!r}: declaration must be a type string or a record map, "
+        f"{declaration_label} {name!r}: declaration must be {form}, "
         f"got {type(value).__name__}"
     )
 
@@ -347,6 +352,35 @@ def read_flow_inputs(
     return parameters
 
 
+def read_variables(
+    mapping: Any,
+    registry: TypeRegistry,
+    *,
+    diagnostics: LoadDiagnostics | None = None,
+) -> list[Parameter]:
+    """Read source-free local declarations, each requiring a typed literal default."""
+    diagnostics = diagnostics or LoadDiagnostics()
+    if not isinstance(mapping, Mapping):
+        raise diagnostics.error("variables must be a mapping")
+    parameters: list[Parameter] = []
+    for name, value in mapping.items():
+        if type(name) is not str or not name:
+            raise diagnostics.error("variable names must be non-empty strings")
+        parameters.append(
+            _read_flow_parameter(
+                name,
+                value,
+                read_contract=lambda type_node: ValueContract(
+                    read_type(type_node, registry, diagnostics=diagnostics)
+                ),
+                diagnostics=diagnostics,
+                declaration_label="variable",
+                require_default=True,
+            )
+        )
+    return parameters
+
+
 def read_source_flow_inputs(
     cursor: SourceCursor,
     registry: TypeRegistry,
@@ -355,17 +389,42 @@ def read_source_flow_inputs(
     catalog_builder: "_SourceCatalogBuilder",
     diagnostics: LoadDiagnostics | None = None,
 ) -> list[Parameter]:
-    """Compile authored flow inputs into located semantic parameters.
+    """Compile authored flow inputs using the shared located declaration reader."""
+    return read_source_parameters(
+        cursor,
+        registry,
+        site_path=site_path,
+        catalog_builder=catalog_builder,
+        diagnostics=diagnostics,
+    )
 
-    ``site_path`` identifies the containing flow. Each parameter receives
+
+def read_source_parameters(
+    cursor: SourceCursor,
+    registry: TypeRegistry,
+    *,
+    site_path: tuple[str | int, ...],
+    catalog_builder: "_SourceCatalogBuilder",
+    diagnostics: LoadDiagnostics | None = None,
+    field_name: str = "input",
+    declaration_label: str = "input",
+    require_default: bool = False,
+) -> list[Parameter]:
+    """Compile authored input or variable declarations into located parameters.
+
+    ``site_path`` identifies the containing owner; ``field_name`` its section.
+    ``declaration_label`` names individual errors, and ``require_default``
+    selects declarations whose values must include a typed literal default.
+    Each parameter receives
     stable child identities for its key declaration, contract tree, and packed
     default. The resulting carriers retain only ``OriginRef`` values.
     """
     diagnostics = diagnostics or LoadDiagnostics.from_cursor(cursor)
     mapping = cursor.value
+    section_label = "flow input" if field_name == "input" else field_name
     if not isinstance(mapping, Mapping):
         raise diagnostics.error(
-            f"flow input must be a mapping, got {type(mapping).__name__}",
+            f"{section_label} must be a mapping, got {type(mapping).__name__}",
             range=cursor.range,
         )
 
@@ -375,10 +434,10 @@ def read_source_flow_inputs(
             declaration_cursor = cursor.child(name)
             if type(name) is not str or not name:
                 raise diagnostics.error(
-                    "flow input names must be non-empty strings",
+                    f"{section_label} names must be non-empty strings",
                     range=declaration_cursor.key_range or declaration_cursor.range,
                 )
-            parameter_path = (*site_path, "input", name)
+            parameter_path = (*site_path, field_name, name)
             parameter_origin = catalog_builder.register(
                 (*parameter_path, "parameter"),
                 declaration_cursor,
@@ -412,6 +471,8 @@ def read_source_flow_inputs(
                             declaration_cursor,
                         ),
                         diagnostics=diagnostics,
+                        declaration_label=declaration_label,
+                        require_default=require_default,
                     )
                 )
             except LoadError as exc:

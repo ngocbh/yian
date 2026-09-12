@@ -17,10 +17,11 @@ Modules:
                   `SourceCursor`; compatibility metadata, never a YAML parser. Assertion
                   origin/range pairs come from one retained item cursor in the build
                   conductor, not a helper-side map.
-  - `types`       one recursive type-shape reader: `read_type` / `read_flow_inputs`
-                  are source-free, while `read_value_contract` /
-                  `read_source_flow_inputs` compile retained declaration cursors into
+  - `types`       one recursive type-shape reader: `read_type`, `read_flow_inputs`,
+                  and `read_variables` are source-free; `read_value_contract` and
+                  `read_source_parameters` compile retained input/variable cursors into
                   `Parameter` / `ValueContract` carriers containing only opaque origins.
+                  Local variables reuse the default reader with a mandatory-default policy.
   - `uses`        `UsesRef` / `parse_uses_ref`: the `uses:` child-flow reference parser.
 
 The sibling `compose.source` package exclusively owns YAML parsing and its private

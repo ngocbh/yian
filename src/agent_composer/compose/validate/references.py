@@ -8,7 +8,7 @@ Every located problem accumulates; one `LoadError` is raised carrying them all.
 
 Two subtleties mirror the representation-neutral collector:
 
-- **Prompt scope**: an AGENT prompt may interpolate ONLY this node's declared inputs as
+- **Prompt scope**: an AGENT prompt may interpolate this node's inputs and variables as
   bare `${name}`; a `${<id>.output}`/`${input.X}`/`${system.X}` in a prompt is a located error.
 - **Case node-local refs**: the desugared CASE `when:` strings use `${__rN}`/`${__on}`,
   which resolve against the bound input record — they are EXCLUDED here (only the
@@ -151,12 +151,13 @@ def validate_references(
         franges = result.field_ranges
         node_range = result.node_range
         # Prompt scope: a strict AGENT prompt may interpolate ONLY this node's
-        # declared inputs as bare `${name}` (or as a `${name}`-wrapped builtin-call arg);
+        # declared inputs and variables as `${name}` (or a builtin-call argument);
         # a pool ref in a prompt is loud, and an unknown builtin / malformed span is
         # rejected here (via `prompt_refs`, the renderer's compile-time companion).
         if isinstance(node, AgentNode) and node.prompt:
             prompt_rng = franges.get(("field", "prompt")) or node_range
             declared = {p.name for p in (node.params or [])}
+            declared.update(variable.name for variable in node.variables)
             try:
                 refs = prompt_refs(node.prompt)
             except ExpressionError as exc:
@@ -171,7 +172,7 @@ def validate_references(
                         else ""
                     )
                     errors.append((
-                        f"node {node_id!r} prompt: ${{{ref}}} is not a declared input{hint}",
+                        f"node {node_id!r} prompt: ${{{ref}}} is not a declared input or variable{hint}",
                         prompt_rng,
                     ))
         # Node-owned reserved wiring (`over`, `until`, ...) follows the same pool reference

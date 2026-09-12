@@ -2202,6 +2202,52 @@ def _single_node_flow(node) -> Flow:
     )
 
 
+def test_agent_variable_manifest_preserves_the_variable_free_fingerprint():
+    flow = _single_node_flow(AgentNode("node", prompt="hi"))
+    assert "variables" not in flow_manifest(flow)["nodes"]["node"]
+    assert flow_fingerprint(flow) == (
+        "5fccfadd2817175c4784246d6678837277247f94762b431086285471cf4e7e16"
+    )
+
+
+def test_agent_variable_identity_tracks_names_domains_defaults_and_order_only():
+    count = Parameter(
+        "count", ValueContract(Type(ValueKind.INTEGER, bounds=(1, 12))),
+        has_default=True, default=4,
+    )
+    tone = Parameter(
+        "tone", ValueContract(Type(ValueKind.STRING, tags=frozenset({"brief", "detailed"}))),
+        has_default=True, default="brief",
+    )
+    declarations = [
+        [count, tone],
+        [replace(count, name="sentences"), tone],
+        [replace(count, default=5), tone],
+        [replace(count, contract=ValueContract(Type(ValueKind.INTEGER, bounds=(1, 8)))), tone],
+        [tone, count],
+    ]
+    flows = [_single_node_flow(AgentNode("node", variables=variables)) for variables in declarations]
+    assert len({flow_fingerprint(flow) for flow in flows}) == len(flows)
+    assert len({expansion_digest(flow) for flow in flows}) == len(flows)
+    assert [variable["name"] for variable in flow_manifest(flows[0])["nodes"]["node"]["variables"]] == ["count", "tone"]
+
+    located = _single_node_flow(AgentNode("node", variables=[
+        replace(count, origin=OriginRef("declaration"), default_origin=OriginRef("default"),
+                contract=ValueContract(count.contract.type, ContractOrigins(OriginRef("type")))),
+        tone,
+    ]))
+    assert flow_fingerprint(located) == flow_fingerprint(flows[0])
+    assert expansion_digest(located) == expansion_digest(flows[0])
+
+
+@pytest.mark.parametrize("variables", [None, (), (Parameter("x"),)])
+def test_agent_variable_manifest_rejects_noncanonical_containers(variables):
+    node = AgentNode("node")
+    node.variables = variables
+    with pytest.raises(TypeError, match="expected list"):
+        flow_manifest(_single_node_flow(node))
+
+
 def _changed_fragment() -> Flow:
     """Return the canonical fragment with only its CODE body changed."""
     fragment = _fragment()

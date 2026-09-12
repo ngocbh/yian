@@ -100,6 +100,7 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
             "mode",
             "retries",
             "memory_policy",
+            "variables",
         }
     ),
     NodeKind.CODE: frozenset({"code"}),
@@ -1765,6 +1766,13 @@ def _node_manifest(
         )
         manifest["n"] = node._n if node._mode == "list" else None
     elif node.kind is NodeKind.AGENT:
+        if type(node.variables) is not list:
+            raise TypeError(f"{path}.variables: expected list")
+        if node.variables:
+            manifest["variables"] = [
+                _parameter_manifest(variable, ctx, f"{path}.variables[{index}]")
+                for index, variable in enumerate(node.variables)
+            ]
         memory_policy = (
             None
             if node.memory_policy is None

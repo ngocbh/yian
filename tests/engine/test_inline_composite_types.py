@@ -957,6 +957,26 @@ def test_canonicalization_normalizes_refined_record_required_none_to_empty():
     assert typ.required is None
 
 
+def test_inline_type_copy_preserves_bounded_nested_validation():
+    from agent_composer.typesys.types import type_for
+    from agent_composer.typesys.values import TypeCheckError, build_value_as
+
+    declared = Type(ValueKind.OBJECT, fields={
+        "scores": type_for("list[Optional[float[-0.5, 1]]]", {}),
+        "count": type_for("int[1, 12]", {}),
+    }, required=frozenset({"scores", "count"}))
+    inferred = _infer("${input.payload}", parent_input_types={"payload": declared})
+    copied = canonicalize_inline_type(inferred)
+    assert copied == declared and copied is not declared
+    assert copied.fields["scores"].element is not declared.fields["scores"].element
+    assert build_value_as(copied, {"scores": [None, 1], "count": 4}).to_object() == {
+        "scores": [None, 1], "count": 4,
+    }
+    with pytest.raises(TypeCheckError) as caught:
+        build_value_as(copied, {"scores": [1.1], "count": 4})
+    assert caught.value.path == ("scores", 0)
+
+
 @pytest.mark.parametrize(
     "kind",
     [

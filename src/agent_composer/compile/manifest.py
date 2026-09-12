@@ -186,7 +186,7 @@ _VALUE_CONTRACT_CANONICAL_FIELDS = frozenset({"type"})
 _VALUE_CONTRACT_IGNORED_FIELDS = frozenset({"origins"})
 _PARTIAL_RECORD_CONTRACT_FIELDS = frozenset({"fields"})
 _CONTRACT_ORIGINS_IGNORED_FIELDS = frozenset({"default", "entries"})
-_TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable"})
+_TYPE_FIELDS = frozenset({"kind", "fields", "required", "tags", "element", "nullable", "bounds"})
 _CASE_CANONICAL_FIELDS = frozenset({"handle", "when"})
 _CASE_IGNORED_FIELDS = frozenset({"origin"})
 _MEMORY_POLICY_CANONICAL_FIELDS = frozenset({"name", "_config"})
@@ -1394,7 +1394,7 @@ def _type_manifest(value: Type | None, ctx: _ManifestContext, path: str) -> Any:
                 }
                 for key, field_type in value.fields.items()
             ]
-        return {
+        manifest = {
             "element": _type_manifest(value.element, ctx, f"{path}.element"),
             "fields": fields,
             "kind": value.kind.value,
@@ -1402,6 +1402,10 @@ def _type_manifest(value: Type | None, ctx: _ManifestContext, path: str) -> Any:
             "required": sorted(value.required) if value.required is not None else None,
             "tags": sorted(value.tags) if value.tags is not None else None,
         }
+        if value.bounds is not None:
+            value.validate_shape()
+            manifest["bounds"] = list(value.bounds)
+        return manifest
     finally:
         ctx.types.remove(object_id)
 

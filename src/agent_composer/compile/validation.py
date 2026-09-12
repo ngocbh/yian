@@ -80,6 +80,7 @@ def types_compatible(source: Type, sink: Type) -> bool:
     sink REQUIRES is present + compatible); enums by tag-subset (source tags within the
     sink's accepted tags); list elements recurse, treating a bare specialized list as its
     non-null scalar element contract; a nullable source cannot fill a non-nullable sink.
+    A bounded numeric sink requires a source interval contained within its bounds.
 
     Args:
         source (`Type`): Type guaranteed by the producer.
@@ -112,6 +113,12 @@ def types_compatible(source: Type, sink: Type) -> bool:
     if source.kind != sink.kind:
         if not (sink.kind == ValueKind.NUMBER and source.kind == ValueKind.INTEGER):
             return False
+    if sink.bounds is not None and (
+        source.bounds is None
+        or source.bounds[0] < sink.bounds[0]
+        or source.bounds[1] > sink.bounds[1]
+    ):
+        return False
     if sink.fields is not None:
         if source.fields is None:
             return False

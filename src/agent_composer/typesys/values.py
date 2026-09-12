@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import date as _date
 from datetime import datetime as _datetime
 from enum import Enum
+from math import isfinite
 from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
@@ -312,6 +313,7 @@ class Type:
       - record:  kind=OBJECT,   fields={name: Type}, required={names}
       - variant: kind=STRING,   tags={labels}
       - list:    kind=LIST_*,   element=<element Type>
+      - number:  kind=INTEGER/NUMBER, bounds=(inclusive minimum, maximum)
     A refined specialized list uses the element's matching storage tag;
     `LIST_ANY` is the generic carrier and may refine any element type.
     A plain scalar / flat list uses only `kind` (see `Type.scalar`).
@@ -323,10 +325,11 @@ class Type:
     tags: Optional[frozenset[str]] = None
     element: Optional["Type"] = None
     nullable: bool = False  # an Optional[X] slot — accepts None (present-None or absent)
+    bounds: tuple[int | float, int | float] | None = None
 
     @classmethod
     def scalar(cls, seg: ValueKind) -> "Type":
-        """Build a plain `Type` carrying only a storage tag (no field/tag/element refinement)."""
+        """Build a plain `Type` carrying only a storage tag, without refinements."""
         return cls(kind=seg)
 
     def validate_shape(self) -> None:
@@ -364,6 +367,8 @@ def _validate_type_shape(
         raise TypeError("type kind must be a ValueKind")
     if type(typ.nullable) is not bool:
         raise TypeError("type nullable must be a bool")
+    if typ.bounds is not None:
+        _validate_numeric_bounds(typ.kind, typ.bounds)
 
     active.add(identity)
     try:
@@ -431,13 +436,36 @@ def _validate_type_shape(
                 )
 
         refinements = sum(
-            value is not None for value in (fields, tags, element)
+            value is not None for value in (fields, tags, element, typ.bounds)
         )
         if refinements > 1:
             raise ValueError("a type may declare only one structural refinement")
     finally:
         active.remove(identity)
     validated.add(identity)
+
+
+def _validate_numeric_bounds(kind: ValueKind, bounds: tuple[int | float, int | float]) -> None:
+    """Require inclusive bounds, with lossless finite endpoints for float storage."""
+    if kind is not ValueKind.INTEGER and kind is not ValueKind.NUMBER:
+        raise ValueError("only int and float types may declare bounds")
+    if type(bounds) is not tuple or len(bounds) != 2:
+        raise TypeError("type bounds must be a two-item tuple")
+    allowed = (int,) if kind is ValueKind.INTEGER else (int, float)
+    if any(type(endpoint) not in allowed for endpoint in bounds):
+        raise TypeError(f"{kind.value} bounds require exact numeric endpoints, excluding bool")
+    if kind is ValueKind.NUMBER:
+        for endpoint in bounds:
+            try:
+                represented = float(endpoint)
+            except OverflowError as exc:
+                raise ValueError("float bounds require finite endpoints") from exc
+            if not isfinite(represented):
+                raise ValueError("float bounds require finite endpoints")
+            if represented != endpoint:
+                raise ValueError("float bounds require lossless float endpoints")
+    if bounds[0] > bounds[1]:
+        raise ValueError("type bounds must be ordered from minimum to maximum")
 
 
 def _validate_type_metadata_string(value: str) -> None:
@@ -600,7 +628,7 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
     Args:
         declared (`ValueKind | Type`):
             The target type. A bare `ValueKind` is a scalar or flat list; a structural
-            `Type` additionally checks records, variants, and typed/element lists.
+            `Type` additionally checks records, variants, typed lists, and numeric bounds.
         value (`Any`):
             The raw Python value to validate and wrap, or an already-wrapped
             `TypedValue` (unwrapped to its plain value first).
@@ -612,7 +640,8 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
     Raises:
         `TypeCheckError`:
             The value does not satisfy `declared` — wrong scalar type, a non-member
-            variant tag, a record with missing/unknown fields, or a bad list element.
+            variant tag, an out-of-bounds number, a record with missing/unknown fields,
+            or a bad list element.
     """
     typ = Type.scalar(declared) if isinstance(declared, ValueKind) else declared
     if isinstance(value, TypedValue):
@@ -641,6 +670,14 @@ def _build_for_type(
         `TypeCheckError`: Value violates ``typ``; the error retains ``path`` or
             the failing descendant path.
     """
+    if typ.bounds is not None:
+        _validate_numeric_bounds(typ.kind, typ.bounds)
+        if _scalar_matches(typ.kind, value) and not typ.bounds[0] <= value <= typ.bounds[1]:
+            raise TypeCheckError(
+                f"{value!r} is outside inclusive {typ.kind.value} bounds {typ.bounds!r}",
+                path=path,
+            )
+
     # nullable (Optional[X]) — a None value is accepted as NoneValue
     if value is None and typ.nullable:
         return NoneValue()

@@ -20,10 +20,10 @@ Layer: nodes — imports `typesys` (Type/ValueKind) + `pydantic`; no engine/runt
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, List, Literal, Optional
+from typing import Annotated, Any, Callable, List, Literal, Optional
 
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, ValidationError, create_model
+from pydantic import BaseModel, Field, ValidationError, create_model
 
 from agent_composer.memory.contracts import (
     EvaluationTrace,
@@ -55,10 +55,14 @@ def _py_type(typ: Type) -> Any:
     if seg == ValueKind.STRING and typ.tags:
         return Literal[tuple(sorted(typ.tags))]  # type: ignore[valid-type]
     if seg in _SCALAR_PY:
+        if typ.bounds is not None:
+            typ.validate_shape()
+            annotation = Annotated[_SCALAR_PY[seg], Field(ge=typ.bounds[0], le=typ.bounds[1])]
+            return Optional[annotation] if typ.nullable else annotation
         return _SCALAR_PY[seg]
     if seg == ValueKind.OBJECT:
         return _record_model(typ) if typ.fields else dict
-    if seg == ValueKind.LIST_ANY:
+    if seg == ValueKind.LIST_ANY and typ.element is None:
         return list
     if seg.is_list():
         elem = typ.element

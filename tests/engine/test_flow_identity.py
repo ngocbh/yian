@@ -2499,6 +2499,38 @@ def test_output_contract_cutover_preserves_manifest_shape_and_fingerprint():
     assert expansion_digest(fragment) == flow_fingerprint(fragment)
 
 
+def test_numeric_bounds_are_part_of_type_identity_only_when_present():
+    plain = _fragment()
+    assert "bounds" not in flow_manifest(plain)["nodes"]["body"]["output_type"]
+    fingerprints = {flow_fingerprint(plain)}
+    digests = {expansion_digest(plain)}
+    for bounds in ((1, 12), (2, 12), (1, 13)):
+        bounded = copy.deepcopy(plain)
+        bounded.nodes["body"].output_contract = ValueContract(Type(ValueKind.INTEGER, bounds=bounds))
+        assert flow_manifest(bounded)["nodes"]["body"]["output_type"]["bounds"] == list(bounds)
+        fingerprints.add(flow_fingerprint(bounded))
+        digests.add(expansion_digest(bounded))
+    assert len(fingerprints) == len(digests) == 4
+
+
+def test_numeric_bounds_remain_in_nested_parameter_contract_identity():
+    from agent_composer.typesys.types import type_for
+
+    first = _fragment()
+    first.nodes["body"].params = [Parameter(
+        "scores", ValueContract(type_for("list[Optional[float[0, 1]]]", {})),
+        has_default=True, default=[0.5],
+    )]
+    first.wiring["body"] = {}
+    second = copy.deepcopy(first)
+    second.nodes["body"].params[0] = replace(
+        second.nodes["body"].params[0],
+        contract=ValueContract(type_for("list[Optional[float[0, 2]]]", {})),
+    )
+    nested = flow_manifest(first)["nodes"]["body"]["params"][0]["contract"]["type"]["element"]
+    assert nested["bounds"] == [0, 1] and nested["nullable"] is True
+    assert flow_fingerprint(first) != flow_fingerprint(second)
+
 def test_output_contract_manifest_rejects_unknown_raw_and_subclass_bypasses():
     """Only an exact ValueContract may occupy canonical node output storage."""
     unknown = _fragment()

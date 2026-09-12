@@ -32,6 +32,28 @@ def test_alias_composes_alias():
     assert type_for("Bundle", reg).kind == ValueKind.LIST_STRING
 
 
+def test_bounded_aliases_preserve_nullable_and_nested_value_paths():
+    from agent_composer.typesys.values import build_value_as
+
+    registry = read_typedefs({
+        "Score": "float[0, 1]", "MaybeScore": "Optional[Score]",
+        "Rating": {"scores": "list[MaybeScore]", "count": "int[1, 12]"},
+        "Ratings": "list[Rating]",
+    })
+    typ = type_for("Ratings", registry)
+    typ.validate_shape()
+    value = [{"scores": [None, 0.5, 1], "count": 4}]
+    assert build_value_as(typ, value).to_object() == value
+    assert build_value_as(type_for("MaybeScore", registry), None).to_object() is None
+    for value, path in (
+        ([{"scores": [None, 1.1], "count": 4}], (0, "scores", 1)),
+        ([{"scores": [0], "count": 0}], (0, "count")),
+    ):
+        with pytest.raises(TypeCheckError) as caught:
+            build_value_as(typ, value)
+        assert caught.value.path == path
+
+
 def test_record_resolves_with_enum_and_optional():
     reg = read_typedefs({
         "Category": "Literal[pro, con]",

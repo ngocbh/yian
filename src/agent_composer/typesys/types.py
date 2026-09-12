@@ -20,6 +20,7 @@ from agent_composer.typesys.values import (
     TypeCheckError,
     ValueKind,
     Type,
+    _validate_numeric_bounds,
 )
 
 
@@ -29,6 +30,7 @@ from agent_composer.typesys.values import (
 @dataclass(frozen=True)
 class ScalarExpr:
     name: str  # a scalar keyword (see _SCALAR_KEYWORDS)
+    bounds: tuple[int | float, int | float] | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +73,8 @@ def parse_type(s: str) -> TypeExpr:
     """Parse a type reference string into a `TypeExpr` AST via Python `ast` (eval mode).
 
     Accepts the one Python-surface vocabulary (`str`/`int`/`float`/`bool`/`Any`/`date`/
-    `datetime`/`object`/`file`/`None`, `list[X]`/`Optional[X]`/`dict[K,V]`/`Literal[...]`,
+    `datetime`/`object`/`file`/`None`, `int[min,max]`/`float[min,max]`,
+    `list[X]`/`Optional[X]`/`dict[K,V]`/`Literal[...]`,
     `topics`). A bare name that is neither a scalar nor a constructor is a registry
     reference. The legacy engine spelling (`string`/`integer`/`number`/`boolean`) no
     longer parses (it resolves as an unknown registry RefExpr).
@@ -118,6 +121,15 @@ def _type_from_ast(node: "ast.expr", src: str) -> TypeExpr:
             raise TypeCheckError(f"malformed type expression {src!r}")
         ctor = node.value.id
         sl = node.slice
+        if ctor in ("int", "float"):
+            if not isinstance(sl, ast.Tuple) or len(sl.elts) != 2:
+                raise TypeCheckError(f"numeric bounds require two endpoints in {src!r}")
+            bounds = tuple(_numeric_endpoint(endpoint, src) for endpoint in sl.elts)
+            try:
+                _validate_numeric_bounds(_SCALAR_SEG[ctor], bounds)
+            except (TypeError, ValueError) as exc:
+                raise TypeCheckError(f"invalid bounds in {src!r}: {exc}") from exc
+            return ScalarExpr(ctor, bounds=bounds)
         if ctor in ("list", "List"):
             return ListExpr(_type_from_ast(sl, src))
         if ctor == "Optional":
@@ -133,6 +145,17 @@ def _type_from_ast(node: "ast.expr", src: str) -> TypeExpr:
             )
         raise TypeCheckError(f"unknown type constructor {ctor!r} in {src!r}")
     raise TypeCheckError(f"malformed type expression {src!r}")
+
+
+def _numeric_endpoint(node: ast.expr, src: str) -> int | float:
+    """Read one numeric literal with an optional unary sign, without evaluation."""
+    sign = 1
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        sign = -1 if isinstance(node.op, ast.USub) else 1
+        node = node.operand
+    if not isinstance(node, ast.Constant) or type(node.value) not in (int, float):
+        raise TypeCheckError(f"numeric bounds require literal endpoints in {src!r}")
+    return sign * node.value
 
 
 def _literal_tags(sl: "ast.expr", src: str) -> tuple:
@@ -220,7 +243,10 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
             A `RefExpr` names an unknown type, or a record/alias reference is recursive.
     """
     if isinstance(t, ScalarExpr):
-        return Type.scalar(_SCALAR_SEG[t.name])
+        kind = _SCALAR_SEG[t.name]
+        if t.bounds is not None:
+            _validate_numeric_bounds(kind, t.bounds)
+        return Type(kind=kind, bounds=t.bounds)
 
     if isinstance(t, OptionalExpr):
         return replace(resolve_type(t.inner, registry, _seen), nullable=True)
@@ -313,6 +339,11 @@ def _canonical_nonnullable_label(typ: Type) -> str:
         if typ.element is None:
             return typ.kind.value
         return f"list[{canonical_type_label(typ.element)}]"
+
+    if typ.bounds is not None:
+        _validate_numeric_bounds(typ.kind, typ.bounds)
+        endpoints = ",".join(json.dumps(value, allow_nan=False) for value in typ.bounds)
+        return f"{typ.kind.value}[{endpoints}]"
 
     return typ.kind.value
 

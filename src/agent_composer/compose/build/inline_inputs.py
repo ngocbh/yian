@@ -252,6 +252,7 @@ def canonicalize_inline_type(typ: Type) -> Type:
         tags=tags,
         element=element,
         nullable=typ.nullable,
+        bounds=typ.bounds,
     )
 
 

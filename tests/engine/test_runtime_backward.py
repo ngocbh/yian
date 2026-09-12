@@ -9,6 +9,7 @@ from agent_composer.nodes.base import BackwardResult
 from agent_composer.nodes.contracts import Parameter
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
+from agent_composer.runtime.learning import validate_attributed_backward
 from tests.engine._fakes import FuncNode
 from tests.engine._graph_builder import _engine, _graph
 from tests.engine._backward_fakes import RecordingBackwardNode
@@ -68,6 +69,7 @@ def test_diamond_calls_shared_producer_once_with_two_ordered_messages():
     from agent_composer.runtime.backward import compute_backward
 
     root, results = compute_backward(engine.state.trace, {"left": "L", "right": "R"})
+    validate_attributed_backward(engine.state.trace, {"left": "L", "right": "R"}, root, results)
     assert len(producer.calls) == len(left.calls) == len(right.calls) == 1
     assert producer.calls[0][1] == ("L", "R")
     assert root.input_feedback == {"topic": ("L", "R")}
@@ -105,6 +107,7 @@ def test_empty_feedback_keeps_complete_history_without_invoking_callbacks(feedba
     engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]), learn=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, feedback)
+    validate_attributed_backward(engine.state.trace, feedback, root, results)
     assert root == BackwardResult()
     assert len(results) == len(engine.state.trace.occurrences)
     assert all(not result.invoked and result.feedback == () and result.result == BackwardResult() for result in results)
@@ -119,7 +122,8 @@ def test_root_default_feedback_survives_its_literal_route():
     start = StartNode(START_ID, params=[Parameter("topic", has_default=True, default="reefs"), Parameter("absent", required=False)])
     engine = _engine(_graph([start], [], outputs=[FlowOutput("result", "${input.topic}")]), learn=True)
     list(engine.run())
-    root, _ = compute_backward(engine.state.trace, "")
+    root, results = compute_backward(engine.state.trace, "")
+    validate_attributed_backward(engine.state.trace, "", root, results)
     assert root.input_feedback == {"topic": ("",)}
 
 
@@ -142,6 +146,7 @@ def test_accepted_failure_uses_recorded_inputs_and_diagnostics(early):
                      {"topic": "reefs"}, learn=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review failure")
+    validate_attributed_backward(engine.state.trace, "review failure", root, results)
     context, received = node.calls[0]
     assert received == ("review failure",)
     assert context.output is None and context.failure is not None
@@ -181,7 +186,8 @@ def test_terminal_trace_latches_causal_route_and_later_failure_wins(explicit):
     chosen = next(item for item in trace.occurrences if item.node_id == ("unrelated" if explicit else "router"))
     assert observed == [None]
     assert trace.terminal.source == chosen.source and not trace.terminal.succeeded
-    root, _ = compute_backward(trace, "explain failure")
+    root, attributed = compute_backward(trace, "explain failure")
+    validate_attributed_backward(trace, "explain failure", root, attributed)
     assert root == BackwardResult()
     assert len(calls) == (0 if explicit else 1)
     if calls:
@@ -199,6 +205,7 @@ def test_explicitly_synthetic_source_free_failure_keeps_direct_root_text():
     trace = RetainedTrace("synthetic", START_ID, END_ID)
     trace.terminal = TraceTerminal(False, None, None, Failure("graph.terminal_unreachable", "no executing producer", None))
     root, results = compute_backward(trace, "original text")
+    validate_attributed_backward(trace, "original text", root, results)
     assert root == BackwardResult(self_feedback=("original text",))
     assert results == ()
 
@@ -249,6 +256,7 @@ def test_map_whole_list_context_and_item_order_survive_reversed_completion(monke
     ends = [item.node_id for item in trace.occurrences if item.node_id in (f"map#0/{END_ID}", f"map#1/{END_ID}")]
     assert ends == [f"map#1/{END_ID}", f"map#0/{END_ID}"]
     root, results = compute_backward(trace, "review both items")
+    validate_attributed_backward(trace, "review both items", root, results)
     assert producer.calls[0][1] == (["review both items", None], [None, "review both items"])
     assert root.input_feedback == {"items": (["review both items", None], [None, "review both items"])}
     for index in (0, 1):
@@ -278,7 +286,8 @@ def test_structural_ancestry_requires_exact_metadata_prescribed_transfer(transfo
                             [(START_ID, "producer"), ("producer", "middle"), ("middle", "left"), ("middle", "right")],
                             outputs=[FlowOutput("left", "${left.output}"), FlowOutput("right", "${right.output}")]), learn=True)
     list(engine.run())
-    _, results = compute_backward(engine.state.trace, {"left": "same", "right": "same"})
+    root, results = compute_backward(engine.state.trace, {"left": "same", "right": "same"})
+    validate_attributed_backward(engine.state.trace, {"left": "same", "right": "same"}, root, results)
     occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == "producer")
     result = next(item for item in results if item.source == occurrence.source)
     assert result.feedback == (("same!", "same!") if transform else ("same", "same"))
@@ -314,6 +323,7 @@ def test_diamond_crossing_call_uses_one_walk_and_preserves_child_default_project
     engine = _engine(flow, {"topic": "reefs"}, learn=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, {"left": "L", "right": "R"})
+    validate_attributed_backward(engine.state.trace, {"left": "L", "right": "R"}, root, results)
     assert len(calls) == 1 and producer.calls[0][1] == ("L", "R")
     assert len(producer.calls) == 1
     assert root.input_feedback == {"topic": ("L", "R")}
@@ -351,6 +361,7 @@ def test_preseeded_root_output_does_not_invent_an_executed_producer(same_boundar
     )))
     list(FlowEngine(state, log, grow_builder=build_grow, num_workers=0).run())
     root, results = compute_backward(state.trace, "review")
+    validate_attributed_backward(state.trace, "review", root, results)
     assert root.input_feedback == ({"topic": ("review",)} if same_boundary else {})
     assert root.self_feedback == ()
     assert all(not result.invoked for result in results)
@@ -393,6 +404,7 @@ def test_opaque_expression_stops_are_recoverable_without_rerunning_functions(mon
                      {"topic": "reefs"}, learn=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review opaque")
+    validate_attributed_backward(engine.state.trace, "review opaque", root, results)
     occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == "work")
     result = next(item.result for item in results if item.source == occurrence.source)
     recovered = route_feedback(dict(zip(occurrence.input_route.names, occurrence.input_route.children))["x"],
@@ -423,6 +435,7 @@ def test_case_control_and_unselected_branch_do_not_receive_feedback():
     engine = _engine(flow, {"topic": "reefs"}, learn=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review selected")
+    validate_attributed_backward(engine.state.trace, "review selected", root, results)
     assert root.input_feedback == {"topic": ("review selected",)}
     assert control.calls == [] and unused.calls == []
     by_node = {item.node_id: item for item in engine.state.trace.occurrences}
@@ -518,7 +531,8 @@ def test_pooled_reverse_walk_uses_outcomes_instead_of_start_sequence(monkeypatch
     occurrences = {item.node_id: item for item in engine.state.trace.occurrences}
     assert occurrences["consumer"].source.execution_seq < occurrences["peer"].source.execution_seq
     assert occurrences["consumer"].outcome_seq > occurrences["peer"].outcome_seq
-    compute_backward(engine.state.trace, "review")
+    root, attributed = compute_backward(engine.state.trace, "review")
+    validate_attributed_backward(engine.state.trace, "review", root, attributed)
     assert len(consumer.calls) == len(peer.calls) == 1
     assert peer.calls[0][1] == ("review",)
 
@@ -603,6 +617,7 @@ def test_empty_map_retains_synthetics_without_inventing_item_contributors():
                             wiring={"map": {"over": [], "x": "${item}"}}), learn=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review empty list")
+    validate_attributed_backward(engine.state.trace, "review empty list", root, results)
     assert root == BackwardResult()
     assert engine.state.trace.boundaries == ()
     assert len(results) == len(engine.state.trace.occurrences) == 5
@@ -644,6 +659,7 @@ output: ${loop.output}
     engine = _engine(flow, {"n": 3}, learn=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review carried value")
+    validate_attributed_backward(engine.state.trace, "review carried value", root, results)
     assert root.input_feedback == {"n": ("review carried value",)}
     assert len(calls) == len(set(calls)) == 2
     drivers = [item for item in engine.state.trace.occurrences if item.record.forward_capture.scope.static_path == ("loop",)]

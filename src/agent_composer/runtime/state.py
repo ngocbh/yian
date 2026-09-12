@@ -60,6 +60,9 @@ from agent_composer.runtime.contracts import ForwardCapture
 from agent_composer.runtime.trace import RetainedTrace, TraceDelta, prepare_trace, select_seed_route
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
+    BackwardStartedRecord,
+    BackwardReadyRecord,
+    BackwardFinishedRecord,
     MemoryCommitFailedRecord,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
@@ -89,8 +92,10 @@ from agent_composer.runtime.learning import (
     PolicyCommitState,
     PolicyCommitStatus,
     RuntimeLearningState,
+    RuntimeBackwardState,
     memory_commit_id,
     project_outcome_episodes,
+    reduce_backward_record,
 )
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import (
@@ -234,6 +239,8 @@ class RunState:
             handlers, enabled by recorded learning independently of memory scopes.
         learning_state (`RuntimeLearningState`):
             Immutable episode, frame-learning, and policy-commit reducer projection.
+        backward_state (`RuntimeBackwardState`):
+            Immutable accepted backward attempts and irreversible commit facts.
         initial_static_ids (`frozenset[str]`):
             Immutable node IDs adopted before any runtime expansion.  Safe pruning
             may retire only later dynamic-overlay nodes.
@@ -268,6 +275,7 @@ class RunState:
         self.learn = False
         self.trace: RetainedTrace | None = None
         self.learning_state = RuntimeLearningState()
+        self.backward_state = RuntimeBackwardState()
         self._memory_authority = _MemoryAuthority(
             layout=None,
             snapshots=None,
@@ -355,6 +363,7 @@ class _RunStartedApply:
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None
     learn: bool
     learning_state: RuntimeLearningState
+    backward_state: RuntimeBackwardState
     memory_authority: _MemoryAuthority
     observers: tuple[Any, ...]
 
@@ -549,6 +558,25 @@ class _LearningPlan:
     end_node_identity: int | None
     originating_learning_state: RuntimeLearningState
     next_learning_state: RuntimeLearningState
+    originating_backward_state: RuntimeBackwardState
+    next_backward_state: RuntimeBackwardState
+    trace_delta: TraceDelta | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _BackwardPlan:
+    """Canonical record authority and a detached post-terminal attempt delta."""
+
+    originating_state: RunState
+    originating_flow: CompiledFlow
+    envelope_bytes: bytes
+    start_id: str
+    start_node_identity: int
+    end_id: str
+    end_node_identity: int | None
+    originating_learning_state: RuntimeLearningState
+    originating_backward_state: RuntimeBackwardState
+    next_backward_state: RuntimeBackwardState
     trace_delta: TraceDelta | None = None
 
 
@@ -647,6 +675,7 @@ class PreparedTransition:
         | _FailurePlan
         | _GrowthPlan
         | _LearningPlan
+        | _BackwardPlan
     )
     observers: tuple[Any, ...]
 
@@ -1136,16 +1165,15 @@ def prepare_record(
     """Validate one supported authoritative record against the current frontier.
 
     This is the shared reducer seam for live dispatch and later historical replay.
-    Graph records require an initialized nonterminal state. Memory learning and
-    commit records require an initialized primary terminal with learning enabled.
+    Graph records require an initialized nonterminal state. Backward and memory
+    records require an initialized primary terminal with learning enabled.
 
     Args:
         state (`RunState`):
             Initialized reducer state immediately before ``record``.
         record (`RunRecord`):
-            One supported graph/frontier record, or one of the six durable
-            ``MemoryFrameLearning*`` / ``MemoryFrameLearned`` /
-            ``MemoryCommit*`` post-terminal records, to validate and copy.
+            One supported graph/frontier, backward-attempt, or legacy memory
+            learning record to validate and copy.
         grow_builder (`GrowBuilder | None`, *optional*):
             Required only for ``NodeExpandedRecord`` replay; rebuilds and verifies
             the recorded fragment through the same injected path used live.
@@ -1162,6 +1190,12 @@ def prepare_record(
     """
     if type(state) is not RunState:
         raise TypeError("prepare_record expects a RunState")
+
+    if isinstance(record, (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord)) or (
+        isinstance(record, (MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord))
+        and record.attempt_id is not None
+    ):
+        return _prepare_backward_transition(state, record)
 
     if isinstance(
         record,
@@ -1619,6 +1653,24 @@ def _prepare_growth_transition(
     )
 
 
+def _prepare_backward_transition(state: RunState, record: RunRecord) -> PreparedTransition:
+    """Validate all backward data and prepare its detached state before append."""
+    _require_initialized_terminal_backward(state)
+    encoded = encode_record(RecordEnvelope(SCHEMA_VERSION, state.run_id, state.next_sequence, record))
+    envelope = decode_record(encoded)
+    if type(envelope.record) is not type(record) or envelope.record != record:
+        raise ValueError("backward record is not in canonical wire form")
+    next_backward = reduce_backward_record(state.trace, state.backward_state, envelope.record)
+    start_id, end_id = state.flow.start_id, state.flow.end_id
+    plan = _BackwardPlan(
+        state, state.flow, encoded, start_id, id(state.flow.nodes[start_id]),
+        end_id, id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None,
+        state.learning_state, state.backward_state, next_backward,
+        _prepare_record_trace(state, envelope),
+    )
+    return PreparedTransition(envelope.record, envelope.run_id, envelope.seq, plan, ())
+
+
 def _prepare_learning_transition(
     state: RunState,
     record: (
@@ -1663,6 +1715,10 @@ def _prepare_learning_transition(
         raise TypeError("learning envelope decoded to a different record kind")
 
     next_learning_state = _reduce_learning_record(state, canonical_record)
+    next_backward_state = (
+        replace(state.backward_state, legacy_requested=True)
+        if isinstance(canonical_record, MemoryCommitRequestedRecord) else state.backward_state
+    )
     start_id = state.flow.start_id
     end_id = state.flow.end_id
     plan = _LearningPlan(
@@ -1677,6 +1733,8 @@ def _prepare_learning_transition(
         ),
         originating_learning_state=state.learning_state,
         next_learning_state=next_learning_state,
+        originating_backward_state=state.backward_state,
+        next_backward_state=next_backward_state,
     )
     return PreparedTransition(
         record=canonical_record,
@@ -1904,10 +1962,12 @@ def commit_prepared(
         raise TypeError("commit_prepared expects a PreparedTransition")
     if not isinstance(prepared._plan, (
         _RunStartedPlan, _FrontierPlan, _SuccessPlan, _RoutePlan,
-        _FailurePlan, _GrowthPlan, _LearningPlan,
+        _FailurePlan, _GrowthPlan, _LearningPlan, _BackwardPlan,
     )):
         raise TypeError("unsupported prepared transition plan")
     trace_delta = prepared._plan.trace_delta
+    if isinstance(prepared._plan, (_LearningPlan, _BackwardPlan)):
+        _require_postterminal_trace_delta(state, trace_delta)
     if trace_delta is not None:
         trace_delta.validate_origin(state.trace)
     if isinstance(prepared._plan, _RunStartedPlan):
@@ -1924,6 +1984,8 @@ def commit_prepared(
         observers = _commit_growth(log, state, prepared)
     elif isinstance(prepared._plan, _LearningPlan):
         observers = _commit_learning(log, state, prepared)
+    elif isinstance(prepared._plan, _BackwardPlan):
+        observers = _commit_backward(log, state, prepared)
     else:
         raise TypeError("unsupported prepared transition plan")
     if trace_delta is not None:
@@ -2271,6 +2333,49 @@ def _commit_growth(
     return apply.observers
 
 
+def _require_postterminal_trace_delta(
+    state: RunState, delta: TraceDelta | None,
+) -> None:
+    """Require the exact sequence-only trace change before accepting a record."""
+    if (type(delta) is not TraceDelta or delta.originating_trace is not state.trace
+            or type(delta.sequence) is not int or delta.sequence != state.next_sequence
+            or delta.resumed is not False):
+        raise ValueError("postterminal trace delta must only advance the accepted sequence")
+    if any(value is not None for value in (
+        delta.initialized, delta.started, delta.occurrence, delta.handler, delta.writer,
+        delta.consumed_connection, delta.boundary_update, delta.root_start_source,
+        delta.root_writer, delta.causal_route_source, delta.terminal,
+    )) or any(type(values) is not tuple or len(values) != 0 for values in (
+        delta.prune_ids, delta.connections, delta.boundaries,
+    )):
+        raise ValueError("postterminal trace delta must only advance the accepted sequence")
+
+
+def _commit_backward(log: RunLog, state: RunState, prepared: PreparedTransition) -> tuple[Any, ...]:
+    """Verify the complete prepared authority, append, then replace attempt state."""
+    plan = prepared._plan
+    if type(plan) is not _BackwardPlan:
+        raise TypeError("backward commit requires its exact plan")
+    _require_prepared_origin(state, plan)
+    _require_learning_plan_origin(state, plan)
+    if state.backward_state is not plan.originating_backward_state:
+        raise ValueError("prepared backward transition has stale attempt authority")
+    _require_initialized_terminal_backward(state)
+    _require_authority_coordinates(log, state, prepared, initialized=True)
+    _require_unchanged_record(prepared, plan.envelope_bytes)
+    envelope = decode_record(plan.envelope_bytes)
+    expected = reduce_backward_record(state.trace, state.backward_state, envelope.record)
+    if type(plan.next_backward_state) is not RuntimeBackwardState:
+        raise TypeError("backward plan requires an exact next state")
+    RuntimeBackwardState.__post_init__(plan.next_backward_state)
+    if expected != plan.next_backward_state:
+        raise ValueError("backward plan state disagrees with its canonical record")
+    _append_and_verify(log, prepared)
+    state.backward_state = expected
+    state.next_sequence = prepared.expected_sequence + 1
+    return ()
+
+
 def _commit_learning(
     log: RunLog,
     state: RunState,
@@ -2294,9 +2399,20 @@ def _commit_learning(
         raise TypeError("learning plan requires a memory learning record")
     _require_prepared_origin(state, plan)
     _require_learning_plan_origin(state, plan)
+    if state.backward_state is not plan.originating_backward_state:
+        raise ValueError("prepared learning transition has stale backward authority")
     _require_initialized_terminal_learning(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
+    if isinstance(prepared.record, (MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)):
+        if prepared.record.attempt_id is not None:
+            raise ValueError("legacy learning plan cannot carry a backward attempt identity")
+    expected_backward = (
+        replace(state.backward_state, legacy_requested=True)
+        if isinstance(prepared.record, MemoryCommitRequestedRecord) else state.backward_state
+    )
+    if type(plan.next_backward_state) is not RuntimeBackwardState or plan.next_backward_state != expected_backward:
+        raise ValueError("legacy learning plan changed irreversible backward eligibility")
     if not (
         plan.next_learning_state.frame_order
         is state._memory_authority.frame_order
@@ -2307,6 +2423,7 @@ def _commit_learning(
 
     _append_and_verify(log, prepared)
     state.learning_state = plan.next_learning_state
+    state.backward_state = expected_backward
     state.next_sequence = prepared.expected_sequence + 1
     return ()
 
@@ -2321,6 +2438,7 @@ def _require_prepared_origin(
         | _FailurePlan
         | _GrowthPlan
         | _LearningPlan
+        | _BackwardPlan
     ),
 ) -> None:
     """Require the exact state, adopted flow, and boundary objects from preparation."""
@@ -2333,7 +2451,7 @@ def _require_prepared_origin(
 
 def _require_learning_plan_origin(
     state: RunState,
-    plan: _SuccessPlan | _RoutePlan | _FailurePlan | _GrowthPlan | _LearningPlan,
+    plan: _SuccessPlan | _RoutePlan | _FailurePlan | _GrowthPlan | _LearningPlan | _BackwardPlan,
 ) -> None:
     """Require the exact immutable learning projection used during preparation."""
     if state.learning_state is not plan.originating_learning_state:
@@ -2415,6 +2533,7 @@ def _require_initialized(state: RunState) -> None:
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
         and type(state.learning_state) is RuntimeLearningState
+        and type(state.backward_state) is RuntimeBackwardState
         and type(state._memory_authority) is _MemoryAuthority
         and type(state.initial_static_ids) is frozenset
     )
@@ -2469,6 +2588,17 @@ def _require_initialized_terminal_learning(state: RunState) -> None:
         raise ValueError("memory learning records require a primary terminal result")
     if state.learn is not True or state.memory_layout is None:
         raise ValueError("memory learning records require enabled learning")
+    if state.backward_state.attempts:
+        raise ValueError("legacy learning records cannot follow backward attempts")
+
+
+def _require_initialized_terminal_backward(state: RunState) -> None:
+    """Require the accepted retained terminal, independently from memory policies."""
+    _require_initialized(state)
+    if not isinstance(state.result, (RunSucceeded, RunFailed)):
+        raise ValueError("backward records require an accepted terminal result")
+    if state.learn is not True or state.trace is None or state.trace.terminal is None:
+        raise ValueError("backward records require recorded learning and terminal trace authority")
 
 
 def _validate_runtime_memory_configuration(state: RunState) -> None:
@@ -2483,6 +2613,10 @@ def _validate_runtime_memory_configuration(state: RunState) -> None:
         and state.learn is authority.learn
         and state.learning_state.frame_order is authority.frame_order
         and state.learning_state.policy_order is authority.policy_order
+        and state.backward_state.layout is authority.layout
+        and state.backward_state.frame_order is authority.frame_order
+        and state.backward_state.policy_order is authority.policy_order
+        and state.backward_state.policy_frame_indices is authority.policy_frame_indices
         and (
             state.learning_state.policy_frame_indices
             is authority.policy_frame_indices
@@ -4256,6 +4390,7 @@ def _require_pristine(state: RunState) -> None:
         and type(state.input) is dict
         and type(state.effective_llm_by_static_path) is dict
         and type(state.learning_state) is RuntimeLearningState
+        and type(state.backward_state) is RuntimeBackwardState
         and type(state._memory_authority) is _MemoryAuthority
         and type(state.initial_static_ids) is frozenset
     )
@@ -4289,6 +4424,7 @@ def _require_pristine(state: RunState) -> None:
         and state.learn is False
         and state.trace is None
         and state.learning_state == RuntimeLearningState()
+        and state.backward_state == RuntimeBackwardState()
         and state._memory_authority.layout is None
         and state._memory_authority.snapshots is None
         and state._memory_authority.learn is False
@@ -4313,6 +4449,7 @@ def _require_originating_flow(
         | _FailurePlan
         | _GrowthPlan
         | _LearningPlan
+        | _BackwardPlan
     ),
 ) -> None:
     """Reject replacement of the adopted flow object or either boundary identity.
@@ -4374,6 +4511,10 @@ def _materialize_run_started(
         raise TypeError("canonical START input is not a dict")
 
     learning_state = RuntimeLearningState.for_layout(record.memory_layout)
+    backward_state = RuntimeBackwardState(
+        record.memory_layout, learning_state.frame_order, learning_state.policy_order,
+        learning_state.policy_frame_indices,
+    )
     memory_authority = _MemoryAuthority(
         layout=record.memory_layout,
         snapshots=record.memory_snapshots,
@@ -4401,6 +4542,7 @@ def _materialize_run_started(
         memory_snapshots=record.memory_snapshots,
         learn=record.learn,
         learning_state=learning_state,
+        backward_state=backward_state,
         memory_authority=memory_authority,
         observers=(RunStarted(),),
     )
@@ -4426,6 +4568,7 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.memory_snapshots = apply.memory_snapshots
     state.learn = apply.learn
     state.learning_state = apply.learning_state
+    state.backward_state = apply.backward_state
     state._memory_authority = apply.memory_authority
     state.next_sequence = apply.next_sequence
 

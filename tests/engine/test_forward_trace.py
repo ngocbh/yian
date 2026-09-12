@@ -412,6 +412,10 @@ def test_pooled_lookup_keeps_value_and_producer_identity_together(monkeypatch):
 def test_discarded_pooled_outcomes_are_not_trace_occurrences():
     import threading
     from agent_composer.compile.model import START_ID, END_ID
+    from agent_composer.runtime.backward import compute_backward
+    from agent_composer.runtime.contracts import BackwardOutcome
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from agent_composer.runtime.state import prepare_record, commit_prepared
     from tests.engine._fakes import FuncNode
     from tests.engine._graph_builder import _engine, _graph
 
@@ -440,6 +444,14 @@ def test_discarded_pooled_outcomes_are_not_trace_occurrences():
     assert [entry.node_id for entry in trace.occurrences] == [START_ID, "bad"]
     assert "slow" not in trace.current_writers
     assert all(handler.__self__.id != "slow" for handler in trace.backward_handlers.values())
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardStartedRecord(1, [None]))
+    root, attributed = compute_backward(trace, None)
+    for record in (BackwardStartedRecord(1, None), BackwardReadyRecord(1, root, attributed, ()),
+                   BackwardFinishedRecord(1, BackwardOutcome("succeeded", root))):
+        assert commit_prepared(engine.log, engine.state, prepare_record(engine.state, record)) == ()
+    assert len(attributed) == 2 and all(not item.invoked for item in attributed)
+    assert engine.state.backward_state.outcome.feedback == root
 
 
 def test_learn_false_omits_backward_capture():

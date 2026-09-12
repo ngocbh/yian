@@ -498,3 +498,844 @@ def test_node_failure_wire_keeps_required_execution_attribution(record_kind, nod
     wire["payload"][field]["node_id"] = node_id
     with pytest.raises(ValueError):
         decode_record(json.dumps(wire).encode())
+
+
+def _retained_backward(*, layout=None, feedback="Review.", topic="reefs"):
+    from agent_composer.compile.model import START_ID, FlowOutput
+    from agent_composer.memory import MemorySnapshotEnvelope
+    from agent_composer.nodes.base import BackwardResult
+    from agent_composer.runtime.backward import compute_backward
+    from tests.engine._backward_fakes import RecordingBackwardNode
+    from tests.engine._graph_builder import _engine, _graph
+
+    work = RecordingBackwardNode(
+        "work", lambda inputs: inputs["x"], lambda _context, messages: BackwardResult({"x": messages}),
+        reads={"x": "${input.topic}"},
+    )
+    flow = _graph([work], [(START_ID, "work")], outputs=[FlowOutput("answer", "${work.output}")])
+    snapshots = None if layout is None else tuple(
+        MemorySnapshotEnvelope(name, {}) for name in sorted({spec.policy_name for spec in layout})
+    )
+    engine = _engine(flow, {"topic": topic}, learn=True, memory_layout=layout, memory_snapshots=snapshots)
+    list(engine.run())
+    return engine, compute_backward(engine.state.trace, feedback)
+
+
+def test_attributed_validation_reuses_recorded_transfers_without_callbacks_or_materialization(monkeypatch):
+    import agent_composer.runtime.backward as backward
+    from agent_composer.runtime.learning import validate_attributed_backward
+
+    engine, (root, attributed) = _retained_backward()
+    monkeypatch.setattr(backward, "_materialize_context", lambda *_: pytest.fail("materialized context"))
+    monkeypatch.setattr(backward, "_output_context", lambda *_: pytest.fail("formatted output context"))
+    monkeypatch.setattr(type(engine.state.trace), "backward_handlers",
+                        property(lambda _: pytest.fail("read backward callbacks")))
+    assert validate_attributed_backward(engine.state.trace, "Review.", root, attributed) is None
+    assert root.input_feedback == {"topic": ("Review.",)}
+
+
+def test_backward_attempt_records_prepare_append_then_reduce_without_forward_effects():
+    from agent_composer.runtime.contracts import BackwardOutcome
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord, encode_pool
+    from agent_composer.runtime.state import commit_prepared, prepare_record
+
+    engine, (root, attributed) = _retained_backward()
+    state, log = engine.state, engine.log
+    forward = (state.result, encode_pool(state.pool), dict(state.node_state), dict(state.edge_state),
+               tuple(state.ready), tuple(state.in_flight), state.trace.occurrences)
+    initial = state.backward_state
+    records = (BackwardStartedRecord(1, "Review."), BackwardReadyRecord(1, root, attributed, ()),
+               BackwardFinishedRecord(1, BackwardOutcome("succeeded", root)))
+    for record in records:
+        prior = state.backward_state
+        sequence = state.next_sequence
+        prepared = prepare_record(state, record)
+        assert state.backward_state is prior
+        assert log.next_sequence == sequence
+        assert commit_prepared(log, state, prepared) == ()
+        assert state.next_sequence == state.trace.next_sequence == log.next_sequence == sequence + 1
+    assert state.backward_state is not initial
+    assert state.backward_state.started == records[0]
+    assert state.backward_state.ready == records[1]
+    assert state.backward_state.finished == records[2]
+    assert state.backward_state.outcome == records[2].outcome
+    assert state.backward_state.can_start is False
+    assert forward == (state.result, encode_pool(state.pool), dict(state.node_state), dict(state.edge_state),
+                       tuple(state.ready), tuple(state.in_flight), state.trace.occurrences)
+
+
+def _accept_backward(engine, record):
+    from agent_composer.runtime.state import commit_prepared, prepare_record
+
+    return commit_prepared(engine.log, engine.state, prepare_record(engine.state, record))
+
+
+def _proposal_layout():
+    from agent_composer.memory import MemoryFrameSpec
+    from agent_composer.runtime.contracts import FrameProposal
+
+    layout = tuple(MemoryFrameSpec(_frame(name), policy, {}) for name, policy in (
+        ("a", "alpha"), ("b", "alpha"), ("c", "beta"),
+    ))
+    proposals = (
+        FrameProposal(layout[0].ref, (MemoryMutation("second", layout[0].ref, {"text": "A"}),)),
+        FrameProposal(layout[1].ref, (MemoryMutation("first", layout[1].ref, {"text": "B"}),)),
+        FrameProposal(layout[2].ref, ()),
+    )
+    return layout, proposals
+
+
+def test_backward_policy_batches_and_unfinished_prefixes_follow_accepted_layout_order():
+    from agent_composer.memory import LearningResult
+    from agent_composer.runtime.contracts import BackwardOutcome
+    from agent_composer.runtime.learning import memory_commit_id
+    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+        MemoryCommitRequestedRecord, MemoryCommitSucceededRecord)
+
+    layout, proposals = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    assert engine.state.backward_state.outcome.feedback is None
+    assert engine.state.backward_state.outcome.learning.status == "incomplete"
+    assert tuple(p.status for p in engine.state.backward_state.policy_outcomes) == ("unrequested", "unrequested")
+    _accept_backward(engine, BackwardReadyRecord(1, root, attributed, proposals))
+    assert engine.state.backward_state.outcome.feedback == root
+    for policy, batch in (("alpha", proposals[0].mutations + proposals[1].mutations), ("beta", ())):
+        commit_id = memory_commit_id(engine.state.run_id, policy, batch)
+        _accept_backward(engine, MemoryCommitRequestedRecord(policy, commit_id, batch, attempt_id=1))
+        assert engine.state.backward_state.ever_requested
+        assert next(p for p in engine.state.backward_state.policy_outcomes if p.policy_name == policy).status == "unknown"
+        assert engine.state.backward_state.can_start is False
+        _accept_backward(engine, MemoryCommitSucceededRecord(policy, commit_id, attempt_id=1))
+    interrupted = engine.state.backward_state.outcome
+    assert interrupted.status == "failed"
+    assert interrupted.failure.code == "backward.interrupted"
+    assert interrupted.learning.status == "incomplete"
+    policies = engine.state.backward_state.policy_outcomes
+    assert tuple(p.status for p in policies) == ("succeeded", "succeeded")
+    outcome = BackwardOutcome("succeeded", root, learning=LearningResult("succeeded", (), policies))
+    _accept_backward(engine, BackwardFinishedRecord(1, outcome))
+    assert engine.state.backward_state.outcome == outcome
+    assert engine.state.backward_state.current.requests[0].mutations == proposals[0].mutations + proposals[1].mutations
+    assert engine.state.backward_state.current.requests[1].mutations == ()
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_interrupted_attempt_requires_explicit_finish_before_a_fresh_start(ready):
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from agent_composer.runtime.state import prepare_record
+
+    engine, (root, attributed) = _retained_backward()
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    if ready:
+        _accept_backward(engine, BackwardReadyRecord(1, root, attributed, ()))
+    prior, sequence = engine.state.backward_state, engine.log.next_sequence
+    for invalid in (BackwardStartedRecord(2, {}), BackwardStartedRecord(2, "Review.")):
+        with pytest.raises(ValueError):
+            prepare_record(engine.state, invalid)
+        assert engine.state.backward_state is prior
+        assert engine.log.next_sequence == sequence
+    _accept_backward(engine, BackwardFinishedRecord(1, prior.outcome))
+    assert engine.state.backward_state.can_start is True
+    _accept_backward(engine, BackwardStartedRecord(2, "New feedback."))
+    assert len(engine.state.backward_state.attempts) == 2
+    assert engine.state.backward_state.ready is None
+    assert engine.state.backward_state.outcome.feedback is None
+
+
+@pytest.mark.parametrize("change", ["missing", "duplicate", "reordered", "foreign", "feedback", "input_coordinate",
+    "message_coordinate", "contribution_coordinate", "parent_coordinate", "unreached", "unknown_input",
+    "unknown_variable", "short_list", "root"])
+def test_ready_rejects_inventory_local_contract_transfer_and_root_disagreement_before_append(change):
+    from agent_composer.expr.lineage import SourceRef
+    from agent_composer.nodes.base import BackwardResult
+    from agent_composer.runtime.contracts import AttributedBackwardResult, BackwardAttribution
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord
+    from agent_composer.runtime.state import prepare_record
+
+    engine, (root, attributed) = _retained_backward(topic=[1, 2])
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    submitted = list(attributed)
+    work_index = next(i for i, occurrence in enumerate(engine.state.trace.occurrences) if occurrence.node_id == "work")
+    item = submitted[work_index]
+    source, feedback, attribution, result, invoked = item.source, item.feedback, item.attribution, item.result, item.invoked
+    if change == "missing":
+        submitted.pop()
+    elif change == "duplicate":
+        submitted[-1] = submitted[0]
+    elif change == "reordered":
+        submitted.reverse()
+    elif change == "root":
+        root = BackwardResult({"topic": ("different",)})
+    else:
+        if change == "foreign":
+            source = SourceRef("foreign-run", source.execution_seq)
+        elif change == "feedback":
+            feedback = ("different",)
+        elif change == "unreached":
+            feedback, attribution, result, invoked = (), (), BackwardResult(), False
+        elif change == "unknown_input":
+            result = BackwardResult({"foreign": ("Review.",)})
+        elif change == "unknown_variable":
+            result = BackwardResult(variable_feedback={"foreign": ("Review.",)})
+        elif change == "short_list":
+            result = BackwardResult({"x": ([None],)})
+        else:
+            original = attribution[0]
+            attribution = (BackwardAttribution(
+                original.sender, "foreign" if change == "input_coordinate" else original.input_name,
+                1 if change == "message_coordinate" else original.message_index,
+                1 if change == "contribution_coordinate" else original.contribution_index,
+                (0, 1) if change == "parent_coordinate" else original.parents,
+            ),)
+        submitted[work_index] = AttributedBackwardResult(source, feedback, attribution, result, invoked)
+    prior, sequence = engine.state.backward_state, engine.log.next_sequence
+    with pytest.raises((TypeError, ValueError)):
+        prepare_record(engine.state, BackwardReadyRecord(1, root, tuple(submitted), ()))
+    assert engine.state.backward_state is prior
+    assert engine.log.next_sequence == engine.state.trace.next_sequence == sequence
+
+
+@pytest.mark.parametrize("change", ["missing", "reordered", "duplicate", "foreign", "same_policy_id"])
+def test_ready_proposals_require_complete_owned_layout_and_policy_wide_ids(change):
+    from agent_composer.runtime.contracts import FrameProposal
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord
+    from agent_composer.runtime.state import prepare_record
+
+    layout, proposals = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    submitted = list(proposals)
+    if change == "missing":
+        submitted.pop()
+    elif change == "reordered":
+        submitted.reverse()
+    elif change == "duplicate":
+        submitted[-1] = submitted[0]
+    elif change == "foreign":
+        submitted[-1] = FrameProposal(_frame("foreign"), ())
+    else:
+        submitted[1] = FrameProposal(layout[1].ref, (MemoryMutation("second", layout[1].ref, {}),))
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardReadyRecord(1, root, attributed, tuple(submitted)))
+    assert engine.state.backward_state.ready is None
+
+
+def test_mutation_ids_may_repeat_across_different_recorded_policies():
+    from agent_composer.runtime.contracts import FrameProposal
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord
+
+    layout, proposals = _proposal_layout()
+    proposals = (*proposals[:2], FrameProposal(layout[2].ref, (MemoryMutation("second", layout[2].ref, {}),)))
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    _accept_backward(engine, BackwardReadyRecord(1, root, attributed, proposals))
+    assert engine.state.backward_state.ready.frame_proposals == proposals
+
+
+@pytest.mark.parametrize("retryable", [False, True])
+@pytest.mark.parametrize("code", ["learn.failed", "backward.interrupted"])
+def test_learner_failed_finished_keeps_completed_feedback_and_all_unrequested_policies(retryable, code):
+    from agent_composer.memory import LearningFailure, LearningResult, MemoryOperationFailure
+    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
+
+    layout, _ = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    cause = MemoryOperationFailure("provider-stage", code, "No proposal.", retryable)
+    failure = BackwardFailure("learn", cause.code, cause.message, policy_name="alpha", frame_ref=layout[0].ref, cause=cause)
+    learning = LearningResult("failed", (LearningFailure("alpha", "learn", cause, layout[0].ref),),
+                              engine.state.backward_state.policy_outcomes)
+    finished = BackwardFinishedRecord(1, BackwardOutcome("failed", root, failure, learning), attributed)
+    _accept_backward(engine, finished)
+    assert engine.state.backward_state.outcome == finished.outcome
+    assert engine.state.backward_state.finished.attributed_results == attributed
+    assert engine.state.backward_state.ready is None
+    assert engine.state.backward_state.can_start
+    _accept_backward(engine, BackwardStartedRecord(2, "Different."))
+    assert engine.state.backward_state.ready is None and engine.state.backward_state.outcome.feedback is None
+
+
+@pytest.mark.parametrize("retryable", [False, True])
+@pytest.mark.parametrize("code", ["commit.failed", "backward.interrupted"])
+def test_known_commit_failure_stops_later_requests_and_permanently_closes_new_attempts(retryable, code):
+    from agent_composer.memory import LearningFailure, LearningResult, MemoryOperationFailure
+    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
+    from agent_composer.runtime.learning import memory_commit_id
+    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+        MemoryCommitRequestedRecord, MemoryCommitFailedRecord)
+    from agent_composer.runtime.state import prepare_record
+
+    layout, proposals = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    _accept_backward(engine, BackwardReadyRecord(1, root, attributed, proposals))
+    batch = proposals[0].mutations + proposals[1].mutations
+    commit_id = memory_commit_id(engine.state.run_id, "alpha", batch)
+    _accept_backward(engine, MemoryCommitRequestedRecord("alpha", commit_id, batch, attempt_id=1))
+    cause = MemoryOperationFailure("backend-stage", code, "Rejected.", retryable)
+    _accept_backward(engine, MemoryCommitFailedRecord("alpha", commit_id, cause, attempt_id=1))
+    assert engine.state.backward_state.outcome.learning.status == "failed"
+    assert tuple(p.status for p in engine.state.backward_state.policy_outcomes) == ("failed", "unrequested")
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, MemoryCommitRequestedRecord("beta", memory_commit_id(engine.state.run_id, "beta", ()), (), attempt_id=1))
+    learning = LearningResult("failed", (LearningFailure("alpha", "commit", cause),), engine.state.backward_state.policy_outcomes)
+    failure = BackwardFailure("commit", cause.code, cause.message, policy_name="alpha", cause=cause)
+    _accept_backward(engine, BackwardFinishedRecord(1, BackwardOutcome("failed", root, failure, learning)))
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardStartedRecord(2, "Different."))
+    assert engine.state.backward_state.ever_requested and not engine.state.backward_state.can_start
+
+
+@pytest.mark.parametrize("gate", ["pristine", "nonterminal", "learn_false", "missing_terminal"])
+def test_backward_started_requires_initialized_learned_terminal_authority(gate):
+    from agent_composer.compile.model import START_ID, END_ID
+    from agent_composer.runtime.log import BackwardStartedRecord
+    from agent_composer.runtime.state import RunState, prepare_record
+    from tests.engine._graph_builder import _engine, _graph
+
+    engine = _engine(_graph([], [(START_ID, END_ID)]), learn=gate != "learn_false")
+    if gate in ("learn_false", "missing_terminal"):
+        list(engine.run())
+    if gate == "missing_terminal":
+        engine.state.trace.terminal = None
+    state = RunState(_graph([], [(START_ID, END_ID)])) if gate == "pristine" else engine.state
+    prior, sequence = state.backward_state, engine.log.next_sequence
+    with pytest.raises(ValueError):
+        prepare_record(state, BackwardStartedRecord(1, "Review."))
+    assert state.backward_state is prior and engine.log.next_sequence == sequence
+
+
+def test_started_feedback_shape_and_attempt_identity_validate_before_acceptance():
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from agent_composer.runtime.state import prepare_record
+
+    engine, (root, attributed) = _retained_backward(topic=[1, 2], feedback=[None, None])
+    for record in (BackwardStartedRecord(1, [None]), BackwardStartedRecord(2, [None, None])):
+        with pytest.raises(ValueError):
+            prepare_record(engine.state, record)
+    _accept_backward(engine, BackwardStartedRecord(1, [None, None]))
+    _accept_backward(engine, BackwardReadyRecord(1, root, attributed, ()))
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardReadyRecord(1, root, attributed, ()))
+    _accept_backward(engine, BackwardFinishedRecord(1, engine.state.backward_state.outcome))
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardStartedRecord(1, ""))
+    _accept_backward(engine, BackwardStartedRecord(2, ""))
+    assert engine.state.backward_state.started.feedback == ""
+
+
+@pytest.mark.parametrize("change", ["policy", "batch_order", "batch_content", "identity", "attempt"])
+def test_backward_commit_request_rejects_wrong_order_batch_identity_and_attempt(change):
+    from agent_composer.runtime.learning import memory_commit_id
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, MemoryCommitRequestedRecord
+    from agent_composer.runtime.state import prepare_record
+
+    layout, proposals = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    _accept_backward(engine, BackwardReadyRecord(1, root, attributed, proposals))
+    batch = proposals[0].mutations + proposals[1].mutations
+    policy, attempt = "alpha", 1
+    if change == "policy":
+        policy, batch = "beta", ()
+    elif change == "batch_order":
+        batch = tuple(reversed(batch))
+    elif change == "batch_content":
+        batch = (MemoryMutation("second", layout[0].ref, {"changed": True}), *batch[1:])
+    elif change == "attempt":
+        attempt = 2
+    commit_id = "commit-1" if change == "identity" else memory_commit_id(engine.state.run_id, policy, batch)
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, MemoryCommitRequestedRecord(policy, commit_id, batch, attempt_id=attempt))
+    assert not engine.state.backward_state.ever_requested
+
+
+@pytest.mark.parametrize("change", ["no_request", "policy", "identity", "attempt", "duplicate", "pending_request"])
+def test_backward_commit_observation_requires_the_current_pending_request(change):
+    from agent_composer.runtime.learning import memory_commit_id
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord
+    from agent_composer.runtime.state import prepare_record
+
+    layout, proposals = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    _accept_backward(engine, BackwardReadyRecord(1, root, attributed, proposals))
+    batch = proposals[0].mutations + proposals[1].mutations
+    commit_id = memory_commit_id(engine.state.run_id, "alpha", batch)
+    request = MemoryCommitRequestedRecord("alpha", commit_id, batch, attempt_id=1)
+    if change != "no_request":
+        _accept_backward(engine, request)
+    if change == "duplicate":
+        _accept_backward(engine, MemoryCommitSucceededRecord("alpha", commit_id, attempt_id=1))
+    record = request if change == "pending_request" else MemoryCommitSucceededRecord(
+        "beta" if change == "policy" else "alpha", "other" if change == "identity" else commit_id,
+        attempt_id=2 if change == "attempt" else 1,
+    )
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, record)
+
+
+@pytest.mark.parametrize("phase", ["started", "ready", "request", "finished"])
+def test_backward_append_failure_does_not_install_attempt_or_irreversible_request(phase, monkeypatch):
+    from agent_composer.runtime.contracts import BackwardOutcome
+    from agent_composer.runtime.learning import memory_commit_id
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord, MemoryCommitRequestedRecord
+    from agent_composer.runtime.state import prepare_record, commit_prepared
+
+    layout, proposals = _proposal_layout() if phase == "request" else (None, ())
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    if phase != "started":
+        _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    if phase in ("request", "finished"):
+        _accept_backward(engine, BackwardReadyRecord(1, root, attributed, proposals))
+    if phase == "started":
+        record = BackwardStartedRecord(1, "Review.")
+    elif phase == "ready":
+        record = BackwardReadyRecord(1, root, attributed, ())
+    elif phase == "request":
+        batch = proposals[0].mutations + proposals[1].mutations
+        record = MemoryCommitRequestedRecord("alpha", memory_commit_id(engine.state.run_id, "alpha", batch), batch, attempt_id=1)
+    else:
+        record = BackwardFinishedRecord(1, BackwardOutcome("succeeded", root))
+    prepared = prepare_record(engine.state, record)
+    prior, sequence, result = engine.state.backward_state, engine.state.next_sequence, engine.state.result
+    monkeypatch.setattr(engine.log, "append", lambda _: (_ for _ in ()).throw(OSError("append failed")))
+    with pytest.raises(OSError, match="append failed"):
+        commit_prepared(engine.log, engine.state, prepared)
+    assert engine.state.backward_state is prior and not prior.ever_requested
+    assert engine.state.result is result
+    assert engine.state.next_sequence == engine.state.trace.next_sequence == engine.log.next_sequence == sequence
+
+
+@pytest.mark.parametrize("change", ["stale", "next_state", "trace", "missing_trace", "payload", "origin"])
+def test_backward_prepared_plans_reject_stale_forged_or_mutated_authority_before_append(change):
+    from dataclasses import replace
+    from agent_composer.runtime.log import BackwardStartedRecord
+    from agent_composer.runtime.state import prepare_record, commit_prepared
+
+    engine, _ = _retained_backward()
+    prepared = prepare_record(engine.state, BackwardStartedRecord(1, "Review."))
+    if change == "stale":
+        _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    elif change == "next_state":
+        prepared = replace(prepared, _plan=replace(prepared._plan, next_backward_state=engine.state.backward_state))
+    elif change == "trace":
+        prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(prepared._plan.trace_delta, resumed=True)))
+    elif change == "missing_trace":
+        prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=None))
+    elif change == "payload":
+        object.__setattr__(prepared.record, "_feedback", "changed")
+    else:
+        other, _ = _retained_backward()
+        prepared = replace(prepared, _plan=replace(prepared._plan, originating_state=other.state))
+    prior, sequence = engine.state.backward_state, engine.log.next_sequence
+    with pytest.raises((TypeError, ValueError)):
+        commit_prepared(engine.log, engine.state, prepared)
+    assert engine.state.backward_state is prior
+    assert engine.log.next_sequence == sequence
+
+
+def _legacy_request_prepared():
+    from agent_composer.runtime.learning import memory_commit_id
+    from agent_composer.runtime.log import MemoryFrameLearningStartedRecord, MemoryFrameLearnedRecord, MemoryCommitRequestedRecord
+    from agent_composer.runtime.state import prepare_record, commit_prepared
+    from tests.engine.test_runtime_memory_learning import _successful_terminal
+
+    state, log, layout = _successful_terminal()
+    for spec in layout:
+        for record in (MemoryFrameLearningStartedRecord(spec.policy_name, spec.ref, state.learning_state.occurrence_inventory(spec.ref)),
+                       MemoryFrameLearnedRecord(spec.policy_name, spec.ref, ())):
+            commit_prepared(log, state, prepare_record(state, record))
+    policy = layout[0].policy_name
+    request = MemoryCommitRequestedRecord(policy, memory_commit_id(state.run_id, policy, ()), ())
+    return state, log, prepare_record(state, request)
+
+
+def test_legacy_request_irreversibly_closes_backward_eligibility_without_changing_legacy_retry():
+    from agent_composer.memory import MemoryOperationFailure
+    from agent_composer.runtime.log import BackwardStartedRecord, MemoryCommitFailedRecord
+    from agent_composer.runtime.state import prepare_record, commit_prepared
+
+    state, log, prepared = _legacy_request_prepared()
+    assert not state.backward_state.ever_requested
+    commit_prepared(log, state, prepared)
+    assert state.backward_state.ever_requested and state.backward_state.started is None
+    request = prepared.record
+    failed = MemoryCommitFailedRecord(request.policy_name, request.commit_id,
+                                      MemoryOperationFailure("backend", "temporary", "Try again.", True))
+    commit_prepared(log, state, prepare_record(state, failed))
+    with pytest.raises(ValueError):
+        prepare_record(state, BackwardStartedRecord(1, "Review."))
+    commit_prepared(log, state, prepare_record(state, request))
+    assert state.backward_state.ever_requested
+
+
+def test_forged_legacy_plan_cannot_drop_the_irreversible_request_fact():
+    from dataclasses import replace
+    from agent_composer.runtime.state import commit_prepared
+
+    state, log, prepared = _legacy_request_prepared()
+    prepared = replace(prepared, _plan=replace(prepared._plan, next_backward_state=state.backward_state))
+    prior, sequence = state.backward_state, log.next_sequence
+    with pytest.raises(ValueError):
+        commit_prepared(log, state, prepared)
+    assert state.backward_state is prior and log.next_sequence == sequence
+
+
+@pytest.mark.parametrize("record_kind", ["frame_started", "frame_learned", "frame_failed",
+    "commit_requested", "commit_succeeded", "commit_failed"])
+@pytest.mark.parametrize("change", ["missing", "changed"])
+def test_legacy_learning_plan_requires_its_exact_sequence_only_trace_delta(record_kind, change):
+    from dataclasses import replace
+    from agent_composer.memory import MemoryOperationFailure
+    from agent_composer.runtime.log import (MemoryFrameLearningStartedRecord, MemoryFrameLearnedRecord,
+        MemoryFrameLearningFailedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)
+    from agent_composer.runtime.state import prepare_record, commit_prepared
+    from tests.engine.test_runtime_memory_learning import _successful_terminal
+
+    failure = MemoryOperationFailure("backend", "failed", "Rejected.", False)
+    if record_kind.startswith("frame_"):
+        state, log, layout = _successful_terminal()
+        spec = layout[0]
+        started = MemoryFrameLearningStartedRecord(spec.policy_name, spec.ref,
+                                                   state.learning_state.occurrence_inventory(spec.ref))
+        if record_kind == "frame_started":
+            record = started
+        else:
+            commit_prepared(log, state, prepare_record(state, started))
+            record = (MemoryFrameLearnedRecord(spec.policy_name, spec.ref, ()) if record_kind == "frame_learned"
+                      else MemoryFrameLearningFailedRecord(spec.policy_name, spec.ref, failure))
+        prepared = prepare_record(state, record)
+    else:
+        state, log, prepared = _legacy_request_prepared()
+        if record_kind != "commit_requested":
+            request = prepared.record
+            commit_prepared(log, state, prepared)
+            record = (MemoryCommitSucceededRecord(request.policy_name, request.commit_id)
+                      if record_kind == "commit_succeeded" else
+                      MemoryCommitFailedRecord(request.policy_name, request.commit_id, failure))
+            prepared = prepare_record(state, record)
+    delta = None if change == "missing" else replace(prepared._plan.trace_delta, resumed=True)
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=delta))
+    learning, backward, result = state.learning_state, state.backward_state, state.result
+    sequence, started = state.next_sequence, dict(state.trace.started)
+    with pytest.raises(ValueError):
+        commit_prepared(log, state, prepared)
+    assert state.learning_state is learning and state.backward_state is backward and state.result is result
+    assert state.trace.started == started
+    assert state.next_sequence == state.trace.next_sequence == log.next_sequence == sequence
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("field", ["sequence", "resumed", "prune_ids", "connections", "boundaries",
+    "initialized", "started", "occurrence", "writer", "consumed_connection", "boundary_update", "root_start_source",
+    "root_writer", "causal_route_source", "terminal", "handler"])
+def test_postterminal_trace_delta_rejects_equal_but_noncanonical_fields_before_append(legacy, field):
+    from dataclasses import replace
+    from agent_composer.runtime.log import BackwardStartedRecord
+    from agent_composer.runtime.state import prepare_record, commit_prepared
+
+    if legacy:
+        state, log, prepared = _legacy_request_prepared()
+    else:
+        engine, _ = _retained_backward()
+        state, log = engine.state, engine.log
+        prepared = prepare_record(state, BackwardStartedRecord(1, "Review."))
+
+    class EmptyPrune(tuple):
+        def __iter__(self):
+            return iter((state.flow.start_id,))
+
+    class AbsentAlias:
+        def __eq__(self, other):
+            return other is None
+
+        def __iter__(self):
+            if field == "consumed_connection":
+                pytest.fail("iterated a noncanonical connection before validation")
+            return iter(())
+
+    if field == "sequence":
+        value = float(prepared._plan.trace_delta.sequence)
+    elif field == "resumed":
+        value = 0
+    elif field in ("prune_ids", "connections", "boundaries"):
+        value = EmptyPrune()
+    elif field == "handler":
+        value = lambda *_: pytest.fail("forged trace handler")
+    else:
+        value = AbsentAlias()
+    delta = replace(prepared._plan.trace_delta, **{field: value})
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=delta))
+    trace = state.trace
+    writers, sources = dict(trace.current_writers), dict(trace.sources)
+    learning, backward, sequence = state.learning_state, state.backward_state, state.next_sequence
+    with pytest.raises((TypeError, ValueError)):
+        commit_prepared(log, state, prepared)
+    assert state.learning_state is learning and state.backward_state is backward
+    assert state.trace is trace and type(trace.next_sequence) is int
+    assert dict(trace.current_writers) == writers and dict(trace.sources) == sources
+    assert state.next_sequence == trace.next_sequence == log.next_sequence == sequence
+
+
+def test_postterminal_trace_delta_validation_covers_the_closed_field_inventory():
+    from dataclasses import fields
+    from agent_composer.runtime.trace import TraceDelta
+
+    assert {field.name for field in fields(TraceDelta)} == {
+        "originating_trace", "sequence", "initialized", "started", "resumed", "occurrence", "handler",
+        "writer", "prune_ids", "connections", "consumed_connection", "boundaries", "boundary_update",
+        "root_start_source", "root_writer", "causal_route_source", "terminal",
+    }
+
+
+def test_legacy_learning_records_are_rejected_after_backward_lifecycle_starts():
+    from agent_composer.runtime.log import BackwardStartedRecord, MemoryFrameLearningStartedRecord
+    from agent_composer.runtime.state import prepare_record
+
+    layout, _ = _proposal_layout()
+    engine, _ = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    with pytest.raises(ValueError, match="legacy"):
+        prepare_record(engine.state, MemoryFrameLearningStartedRecord("alpha", layout[0].ref, ()))
+
+
+def test_failed_backward_computation_has_no_completed_feedback_and_keeps_unrequested_learning():
+    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
+
+    layout, _ = _proposal_layout()
+    engine, _ = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == "work")
+    context = engine.state.trace.backward_context(occurrence.source)
+    failure = BackwardFailure("backward", "backward.execute", "Callback failed.", context.scope,
+                              context.run_id, context.node_id, context.node_started_seq,
+                              cause_type="RuntimeError", traceback="debug trace")
+    outcome = BackwardOutcome("failed", failure=failure, learning=engine.state.backward_state.outcome.learning)
+    _accept_backward(engine, BackwardFinishedRecord(1, outcome))
+    assert engine.state.backward_state.outcome == outcome
+    assert engine.state.backward_state.finished.attributed_results == ()
+    assert outcome.feedback is None and outcome.learning.status == "incomplete"
+    assert tuple(p.status for p in outcome.learning.policies) == ("unrequested", "unrequested")
+    assert engine.state.backward_state.can_start
+
+
+@pytest.mark.parametrize("change", ["source", "node", "scope", "run", "feedback", "partial_inventory"])
+def test_failed_computation_finished_rejects_foreign_context_or_fabricated_results(change):
+    from agent_composer.nodes.contracts import ExecutionScope
+    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
+    from agent_composer.runtime.state import prepare_record
+
+    engine, (root, attributed) = _retained_backward()
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == "work")
+    context = engine.state.trace.backward_context(occurrence.source)
+    failure = BackwardFailure(
+        "backward", "backward.execute", "Callback failed.",
+        ExecutionScope(("foreign",)) if change == "scope" else context.scope,
+        "foreign" if change == "run" else context.run_id,
+        "foreign" if change == "node" else context.node_id,
+        9999 if change == "source" else context.node_started_seq,
+    )
+    record = BackwardFinishedRecord(1, BackwardOutcome("failed", root if change == "feedback" else None, failure),
+                                    attributed[:1] if change == "partial_inventory" else ())
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, record)
+
+
+@pytest.mark.parametrize("feedback,code", [(None, "backward.execute"),
+    ([None, None], "backward.result"), ("Review.", "backward.unknown")])
+def test_computation_failure_requires_effective_feedback_and_a_driver_failure_code(feedback, code):
+    from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardFinishedRecord
+    from agent_composer.runtime.state import prepare_record
+
+    engine, _ = _retained_backward(topic=[1, 2], feedback=feedback)
+    _accept_backward(engine, BackwardStartedRecord(1, feedback))
+    source = engine.state.trace.occurrences[-1].source
+    context = engine.state.trace.backward_context(source)
+    failure = BackwardFailure("backward", code, "Callback failed.", context.scope,
+                              context.run_id, context.node_id, context.node_started_seq)
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardFinishedRecord(1, BackwardOutcome("failed", failure=failure)))
+
+
+@pytest.mark.parametrize("phase", ["before_ready", "before_request", "pending", "one_confirmed"])
+def test_successful_finished_requires_ready_and_every_enabled_policy_confirmation(phase):
+    from agent_composer.memory import LearningResult
+    from agent_composer.runtime.contracts import BackwardOutcome
+    from agent_composer.runtime.learning import memory_commit_id
+    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+        MemoryCommitRequestedRecord, MemoryCommitSucceededRecord)
+    from agent_composer.runtime.state import prepare_record
+
+    layout, proposals = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    if phase != "before_ready":
+        _accept_backward(engine, BackwardReadyRecord(1, root, attributed, proposals))
+    if phase in ("pending", "one_confirmed"):
+        batch = proposals[0].mutations + proposals[1].mutations
+        identity = memory_commit_id(engine.state.run_id, "alpha", batch)
+        _accept_backward(engine, MemoryCommitRequestedRecord("alpha", identity, batch, attempt_id=1))
+        if phase == "one_confirmed":
+            _accept_backward(engine, MemoryCommitSucceededRecord("alpha", identity, attempt_id=1))
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardFinishedRecord(1, BackwardOutcome("succeeded", root,
+                                                                             learning=LearningResult("succeeded"))))
+
+
+@pytest.mark.parametrize("change", ["root", "attribution", "missing_policy", "policy_order", "commit_id", "attempt"])
+def test_finished_must_preserve_ready_results_and_exact_confirmed_policy_inventory(change):
+    from dataclasses import replace
+    from agent_composer.memory import LearningResult
+    from agent_composer.nodes.base import BackwardResult
+    from agent_composer.runtime.contracts import BackwardOutcome
+    from agent_composer.runtime.learning import memory_commit_id
+    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+        MemoryCommitRequestedRecord, MemoryCommitSucceededRecord)
+    from agent_composer.runtime.state import prepare_record
+
+    layout, proposals = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    _accept_backward(engine, BackwardReadyRecord(1, root, attributed, proposals))
+    for policy, batch in (("alpha", proposals[0].mutations + proposals[1].mutations), ("beta", ())):
+        identity = memory_commit_id(engine.state.run_id, policy, batch)
+        _accept_backward(engine, MemoryCommitRequestedRecord(policy, identity, batch, attempt_id=1))
+        _accept_backward(engine, MemoryCommitSucceededRecord(policy, identity, attempt_id=1))
+    policies = engine.state.backward_state.policy_outcomes
+    if change == "root":
+        root = BackwardResult({"topic": ("Different.",)})
+    elif change == "missing_policy":
+        policies = policies[:1]
+    elif change == "policy_order":
+        policies = tuple(reversed(policies))
+    elif change == "commit_id":
+        policies = (replace(policies[0], commit_id="other"), *policies[1:])
+    record = BackwardFinishedRecord(2 if change == "attempt" else 1,
+        BackwardOutcome("succeeded", root, learning=LearningResult("succeeded", (), policies)),
+        tuple(reversed(attributed)) if change == "attribution" else ())
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, record)
+
+
+def test_explicit_interruption_keeps_unknown_request_and_ready_attribution_without_resuming():
+    from agent_composer.runtime.learning import memory_commit_id
+    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+        MemoryCommitRequestedRecord)
+    from agent_composer.runtime.state import prepare_record
+
+    layout, proposals = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    _accept_backward(engine, BackwardReadyRecord(1, root, attributed, proposals))
+    batch = proposals[0].mutations + proposals[1].mutations
+    identity = memory_commit_id(engine.state.run_id, "alpha", batch)
+    _accept_backward(engine, MemoryCommitRequestedRecord("alpha", identity, batch, attempt_id=1))
+    projected = engine.state.backward_state.outcome
+    _accept_backward(engine, BackwardFinishedRecord(1, projected, attributed))
+    assert engine.state.backward_state.outcome == projected
+    assert projected.feedback == root and projected.learning.status == "incomplete"
+    assert tuple(item.status for item in projected.learning.policies) == ("unknown", "unrequested")
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardStartedRecord(2, "Review again."))
+
+
+@pytest.mark.parametrize("change", ["message", "feedback", "learning", "attribution"])
+def test_interrupted_finished_must_exactly_project_the_prefix(change):
+    from dataclasses import replace
+    from agent_composer.memory import LearningResult
+    from agent_composer.nodes.base import BackwardResult
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from agent_composer.runtime.state import prepare_record
+
+    layout, proposals = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    _accept_backward(engine, BackwardReadyRecord(1, root, attributed, proposals))
+    outcome = engine.state.backward_state.outcome
+    if change == "message":
+        outcome = replace(outcome, failure=replace(outcome.failure, message="different"))
+    elif change == "feedback":
+        outcome = replace(outcome, feedback=BackwardResult())
+    elif change == "learning":
+        outcome = replace(outcome, learning=LearningResult("incomplete"))
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardFinishedRecord(1, outcome, attributed[:1] if change == "attribution" else ()))
+
+
+def test_no_layout_ready_and_finished_reject_fabricated_memory_material():
+    from agent_composer.memory import LearningResult
+    from agent_composer.runtime.contracts import BackwardOutcome, FrameProposal
+    from agent_composer.runtime.log import BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord
+    from agent_composer.runtime.state import prepare_record
+
+    engine, (root, attributed) = _retained_backward()
+    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardReadyRecord(1, root, attributed, (FrameProposal(_frame("fake"), ()),)))
+    _accept_backward(engine, BackwardReadyRecord(1, root, attributed, ()))
+    with pytest.raises(ValueError):
+        prepare_record(engine.state, BackwardFinishedRecord(1, BackwardOutcome("succeeded", root,
+                                                                             learning=LearningResult("succeeded"))))
+
+
+@pytest.mark.parametrize("change", ["bool_index", "string_subclass"])
+def test_backward_state_revalidates_exact_nested_inventory_types(change):
+    from dataclasses import replace
+
+    class Name(str):
+        pass
+
+    layout, _ = _proposal_layout()
+    engine, _ = _retained_backward(layout=layout)
+    changes = ({"policy_frame_indices": ((False, 1), (2,))} if change == "bool_index" else
+               {"policy_order": (Name("alpha"), "beta")})
+    with pytest.raises(TypeError):
+        replace(engine.state.backward_state, **changes)
+
+
+def test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_context_formatting(monkeypatch):
+    from copy import deepcopy
+    import agent_composer.runtime.backward as backward_module
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.memory import LearningResult
+    from agent_composer.runtime.contracts import BackwardOutcome
+    from agent_composer.runtime.learning import memory_commit_id
+    from agent_composer.runtime.log import (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+        MemoryCommitRequestedRecord, MemoryCommitSucceededRecord)
+    from agent_composer.runtime.state import RunState, _replay_records
+
+    layout, proposals = _proposal_layout()
+    engine, (root, attributed) = _retained_backward(layout=layout)
+    original = deepcopy(engine.state.flow)
+    for node in original.nodes.values():
+        node.forward = lambda *_: pytest.fail("replayed forward")
+        node.backward = lambda *_: pytest.fail("replayed backward callback")
+        node.capture_backward_context = lambda *_: pytest.fail("recaptured backward context")
+    monkeypatch.setattr(backward_module, "_materialize_context", lambda *_: pytest.fail("materialized context"))
+    monkeypatch.setattr(backward_module, "_output_context", lambda *_: pytest.fail("formatted output context"))
+    prefixes = [(len(tuple(engine.log)), engine.state.backward_state)]
+    records = [BackwardStartedRecord(1, "Review."), BackwardReadyRecord(1, root, attributed, proposals)]
+    for policy, batch in (("alpha", proposals[0].mutations + proposals[1].mutations), ("beta", ())):
+        commit_id = memory_commit_id(engine.state.run_id, policy, batch)
+        records.extend((MemoryCommitRequestedRecord(policy, commit_id, batch, attempt_id=1),
+                        MemoryCommitSucceededRecord(policy, commit_id, attempt_id=1)))
+    for record in records:
+        _accept_backward(engine, record)
+        prefixes.append((len(tuple(engine.log)), engine.state.backward_state))
+    outcome = BackwardOutcome("succeeded", root, learning=LearningResult("succeeded", (), engine.state.backward_state.policy_outcomes))
+    _accept_backward(engine, BackwardFinishedRecord(1, outcome))
+    prefixes.append((len(tuple(engine.log)), engine.state.backward_state))
+    accepted = tuple(engine.log)
+    for length, expected in prefixes:
+        replay = _replay_records(RunState(deepcopy(original)), accepted[:length], grow_builder=build_grow)
+        assert replay.backward_state == expected
+        assert replay.backward_state.outcome == expected.outcome
+        assert replay.trace.next_sequence == replay.next_sequence == length
+        assert replay.result == engine.state.result

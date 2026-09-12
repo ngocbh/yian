@@ -8,23 +8,24 @@ materialized interpretation data and ordering keys exist only during this fold.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 import traceback
 
 from agent_composer.expr.lineage import (
-    FeedbackValue, RouteContext, SourceRef, has_feedback, route_feedback,
-    validate_feedback,
+    FeedbackValue, RouteContext, SourceRef,
 )
 from agent_composer.nodes.base import (
     BackwardContext, BackwardResult, _CapabilityFault, _HostStop,
     _copy_backward_value, validate_backward_result,
 )
 from agent_composer.runtime.contracts import (
-    AttributedBackwardResult, BackwardAttribution, BackwardFailure,
+    AttributedBackwardResult, BackwardFailure,
 )
 from agent_composer.runtime.log import _route_payload
-from agent_composer.runtime.trace import RetainedTrace, TraceTerminal
+from agent_composer.runtime.trace import RetainedTrace
+from agent_composer.runtime.learning import (
+    _BackwardMessage as _Message, _project_root_backward, _seed_backward, _transfer_backward,
+)
 
 
 class _BackwardComputeError(Exception):
@@ -33,14 +34,6 @@ class _BackwardComputeError(Exception):
     def __init__(self, failure: BackwardFailure) -> None:
         super().__init__(failure.message)
         self.failure = failure
-
-
-@dataclass(frozen=True)
-class _Message:
-    feedback: FeedbackValue
-    attribution: BackwardAttribution
-    order: tuple[int, ...]
-    context: tuple[RouteContext, ...] = ()
 
 
 def _source_data(source: SourceRef | None) -> dict[str, Any] | None:
@@ -80,41 +73,6 @@ def _failure(context: BackwardContext, code: str, exc: Exception) -> _BackwardCo
         run_id=context.run_id, node_id=context.node_id, node_started_seq=context.node_started_seq,
         cause_type=type(exc).__name__, traceback="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
     ))
-
-
-def _structural_parents(
-    context: BackwardContext, messages: list[_Message], result: BackwardResult,
-    has_output: bool,
-) -> dict[str, tuple[int, ...]] | None:
-    """Verify a metadata-prescribed transfer before assigning incoming ordinals."""
-    paths = context.node_data.get("input_output_paths")
-    inputs = context.inputs
-    if paths is None or inputs is None or (not has_output and context.failure is None):
-        return None
-    expected = {}
-    parents = {}
-    for name in context.input_names:
-        if name not in paths or name not in inputs:
-            continue
-        if has_output:
-            value = context.output
-            for part in paths[name]:
-                value = value[part]
-        selected = []
-        indices = []
-        for index, message in enumerate(messages):
-            feedback = message.feedback
-            for part in paths[name]:
-                if feedback is None or type(feedback) is str:
-                    break
-                feedback = feedback.get(part) if type(feedback) is dict else feedback[part]
-            if has_feedback(feedback):
-                selected.append(feedback)
-                indices.append(index)
-        if selected:
-            expected[name] = tuple(selected)
-            parents[name] = tuple(indices)
-    return parents if result.input_feedback == expected else None
 
 
 def _output_context(
@@ -157,21 +115,10 @@ def compute_backward(
         `_BackwardComputeError`: For an attributed callback or result-contract error.
             Host capability faults and cancellation propagate unchanged.
     """
-    if type(trace) is not RetainedTrace or type(trace.terminal) is not TraceTerminal:
-        raise ValueError("backward requires a retained terminal trace")
-    terminal = trace.terminal
-    TraceTerminal.__post_init__(terminal)
-    validate_feedback(root_feedback, terminal.output)
-    root_feedback = _copy_backward_value(root_feedback, "root_feedback")
+    pending, direct_root = _seed_backward(trace, root_feedback)
     occurrences = trace.occurrences
     results = {item.source: AttributedBackwardResult(item.source, (), (), BackwardResult(), False)
                for item in occurrences}
-    if not has_feedback(root_feedback):
-        return BackwardResult(), tuple(results[item.source] for item in occurrences)
-    if terminal.source is None:
-        root = BackwardResult(self_feedback=(root_feedback,)) if not terminal.succeeded else BackwardResult()
-        return root, tuple(results[item.source] for item in occurrences)
-    pending = {terminal.source: [_Message(root_feedback, BackwardAttribution(None, None, 0, None, ()), (0,))]}
     root_inputs: dict[str, tuple[FeedbackValue, ...]] = {}
     for occurrence in reversed(occurrences):
         messages = sorted(pending.pop(occurrence.source, ()), key=lambda item: item.order)
@@ -203,41 +150,15 @@ def compute_backward(
         if occurrence.source == trace.root_start_source:
             root_inputs = input_feedback
         has_output = occurrence.source in trace.sources
-        structural_parents = _structural_parents(
-            context, messages, result, has_output,
-        )
-        routes = dict(zip(occurrence.input_route.names, occurrence.input_route.children))
-        for input_index, name in enumerate(context.input_names):
-            for message_index, feedback_value in enumerate(input_feedback.get(name, ())):
-                parents = (structural_parents[name][message_index],) if structural_parents is not None else tuple(range(len(messages)))
-                inherited = tuple(detail for index in parents for detail in messages[index].context)
-                output_context = _output_context(occurrence.source, context, name, has_output)
-                routed = route_feedback(
-                    routes[name], feedback_value, trace.lookup_source,
-                    recorded_value=context.inputs[name],
-                )
-                for contribution_index, contribution in enumerate(routed.contributions):
-                    attribution = BackwardAttribution(
-                        occurrence.source, name, message_index, contribution_index, parents,
-                    )
-                    order = (*messages[parents[0]].order, input_index, message_index, contribution_index)
-                    pending.setdefault(contribution.source, []).append(_Message(
-                        contribution.feedback, attribution, order, (*inherited, *output_context, *contribution.context),
-                    ))
-    source_zero = SourceRef(trace.run_id, 0)
-    initial = trace.lookup_source(source_zero)
-    for message in sorted(pending.pop(source_zero, ()), key=lambda item: item.order):
-        if message.attribution.sender == trace.root_start_source and trace.root_start_source is not None:
-            continue
-        for name in trace.root_input_names:
-            if name not in initial:
-                continue
-            selected = message.feedback if type(message.feedback) is str else message.feedback.get(name)
-            if has_feedback(selected):
-                root_inputs[name] = (*root_inputs.get(name, ()), selected)
-    if pending:
-        raise ValueError("feedback targets an unavailable or later accepted occurrence")
-    root = BackwardResult(root_inputs)
+        for source, transfer in _transfer_backward(trace, occurrence, context, messages, result):
+            attribution = transfer.attribution
+            inherited = tuple(detail for index in attribution.parents for detail in messages[index].context)
+            output_context = _output_context(occurrence.source, context, attribution.input_name, has_output)
+            pending.setdefault(source, []).append(_Message(
+                transfer.feedback, attribution, transfer.order,
+                (*inherited, *output_context, *transfer.context),
+            ))
+    root = _project_root_backward(trace, pending, root_inputs, direct_root)
     return root, tuple(results[item.source] for item in occurrences)
 
 

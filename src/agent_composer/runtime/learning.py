@@ -1,24 +1,27 @@
-"""Source-neutral reducer projections for durable memory learning.
+"""Pure backward transfers and accepted backward/memory reducer projections.
 
-This module turns reducer-accepted graph outcomes into immutable learning
-episodes and owns the deterministic frame and policy state carried by
-``RunState``.  It performs no backend work: runtime orchestration may later use
-the projected state to call injected memory sessions, but the durable record
-history remains the sole authority.
+This module shares exact route-transfer validation with the backward callback
+driver and owns immutable attempt, frame, and policy state carried by RunState.
+It also projects legacy learning episodes from accepted forward outcomes.
+Contracts, records, and retained traces sit below it; state and callback drivers
+consume its pure projections. It invokes no callbacks or backend operations.
 """
 
 from __future__ import annotations
 
 from bisect import bisect_left
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from hashlib import sha256
 import json
 
 from agent_composer.diagnostics import Failure
+from agent_composer.expr.lineage import FeedbackValue, RouteContext, SourceRef, has_feedback, route_feedback, validate_feedback
 from agent_composer.memory import (
     EvaluationEvidence,
     LearnContext,
+    LearningFailure,
+    LearningResult,
     MemoryEpisode,
     MemoryEpisodeStatus,
     MemoryFrameRef,
@@ -27,17 +30,515 @@ from agent_composer.memory import (
     MemoryOccurrenceRef,
     MemoryOperationFailure,
     MemoryOwner,
+    PolicyCommitOutcome,
 )
+from agent_composer.nodes.base import BackwardContext, BackwardResult, _copy_backward_value, validate_backward_result
+from agent_composer.runtime.contracts import AttributedBackwardResult, BackwardAttribution, BackwardFailure, BackwardOutcome
 from agent_composer.runtime.log import (
+    BackwardStartedRecord,
+    BackwardReadyRecord,
+    BackwardFinishedRecord,
+    MemoryCommitRequestedRecord,
+    MemoryCommitSucceededRecord,
+    MemoryCommitFailedRecord,
     NodeExpandedRecord,
     NodeFailedRecord,
     NodeRoutedRecord,
     NodeSucceededRecord,
+    _copy_attributed_results,
+    _copy_backward_result,
+    _revalidate_run_record,
     canonical_seed,
 )
+from agent_composer.runtime.trace import RetainedTrace, TraceOccurrence, TraceTerminal
 
 
 _PRESERVE = object()
+
+
+@dataclass(frozen=True, slots=True)
+class _BackwardMessage:
+    """Transient ordered transfer; only the driver materializes its route context."""
+
+    feedback: FeedbackValue
+    attribution: BackwardAttribution
+    order: tuple[int, ...]
+    context: tuple[RouteContext, ...] = ()
+
+
+def _seed_backward(
+    trace: RetainedTrace, feedback: FeedbackValue,
+) -> tuple[dict[SourceRef, list[_BackwardMessage]], BackwardResult]:
+    """Validate the whole terminal message before deciding whether to seed work."""
+    if type(trace) is not RetainedTrace or type(trace.terminal) is not TraceTerminal:
+        raise ValueError("backward requires a retained terminal trace")
+    terminal = trace.terminal
+    TraceTerminal.__post_init__(terminal)
+    validate_feedback(feedback, terminal.output)
+    feedback = _copy_backward_value(feedback, "root_feedback")
+    if not has_feedback(feedback):
+        return {}, BackwardResult()
+    if terminal.source is None:
+        root = BackwardResult(self_feedback=(feedback,)) if not terminal.succeeded else BackwardResult()
+        return {}, root
+    return {terminal.source: [_BackwardMessage(
+        feedback, BackwardAttribution(None, None, 0, None, ()), (0,),
+    )]}, BackwardResult()
+
+
+def _structural_parents(
+    context: BackwardContext, messages: list[_BackwardMessage], result: BackwardResult,
+    has_output: bool,
+) -> dict[str, tuple[int, ...]] | None:
+    """Verify metadata-prescribed exact transfer before assigning incoming ordinals."""
+    paths = context.node_data.get("input_output_paths")
+    inputs = context.inputs
+    if paths is None or inputs is None or (not has_output and context.failure is None):
+        return None
+    expected = {}
+    parents = {}
+    for name in context.input_names:
+        if name not in paths or name not in inputs:
+            continue
+        if has_output:
+            value = context.output
+            for part in paths[name]:
+                value = value[part]
+        selected = []
+        indices = []
+        for index, message in enumerate(messages):
+            feedback = message.feedback
+            for part in paths[name]:
+                if feedback is None or type(feedback) is str:
+                    break
+                feedback = feedback.get(part) if type(feedback) is dict else feedback[part]
+            if has_feedback(feedback):
+                selected.append(feedback)
+                indices.append(index)
+        if selected:
+            expected[name] = tuple(selected)
+            parents[name] = tuple(indices)
+    return parents if result.input_feedback == expected else None
+
+
+def _transfer_backward(
+    trace: RetainedTrace, occurrence: TraceOccurrence, context: BackwardContext,
+    messages: list[_BackwardMessage], result: BackwardResult,
+) -> tuple[tuple[SourceRef, _BackwardMessage], ...]:
+    """Derive exact transfers from accepted routes without invoking or formatting."""
+    structural = _structural_parents(context, messages, result, occurrence.source in trace.sources)
+    routes = dict(zip(occurrence.input_route.names, occurrence.input_route.children))
+    transfers = []
+    for input_index, name in enumerate(context.input_names):
+        for message_index, feedback in enumerate(result.input_feedback.get(name, ())):
+            parents = ((structural[name][message_index],) if structural is not None
+                       else tuple(range(len(messages))))
+            routed = route_feedback(routes[name], feedback, trace.lookup_source,
+                                    recorded_value=context.inputs[name])
+            for contribution_index, contribution in enumerate(routed.contributions):
+                attribution = BackwardAttribution(occurrence.source, name, message_index,
+                                                  contribution_index, parents)
+                order = (*messages[parents[0]].order, input_index, message_index, contribution_index)
+                transfers.append((contribution.source, _BackwardMessage(
+                    contribution.feedback, attribution, order, contribution.context,
+                )))
+    return tuple(transfers)
+
+
+def _project_root_backward(
+    trace: RetainedTrace, pending: dict[SourceRef, list[_BackwardMessage]],
+    root_inputs: dict[str, tuple[FeedbackValue, ...]], direct_root: BackwardResult,
+) -> BackwardResult:
+    """Project validated START and actual source-zero fields without duplication."""
+    source_zero = SourceRef(trace.run_id, 0)
+    messages = sorted(pending.pop(source_zero, ()), key=lambda item: item.order)
+    if messages:
+        initial = trace.lookup_source(source_zero)
+        for message in messages:
+            if message.attribution.sender == trace.root_start_source and trace.root_start_source is not None:
+                continue
+            for name in trace.root_input_names:
+                if name not in initial:
+                    continue
+                selected = message.feedback if type(message.feedback) is str else message.feedback.get(name)
+                if has_feedback(selected):
+                    root_inputs[name] = (*root_inputs.get(name, ()), selected)
+    if pending:
+        raise ValueError("feedback targets an unavailable or later accepted occurrence")
+    return BackwardResult(root_inputs, direct_root.self_feedback)
+
+
+def validate_attributed_backward(
+    trace: RetainedTrace, submitted_feedback: FeedbackValue,
+    root_result: BackwardResult, attributed_results: tuple[AttributedBackwardResult, ...],
+) -> None:
+    """Validate a complete reverse result against exact accepted transfer streams.
+
+    Args:
+        trace (`RetainedTrace`): Accepted terminal forward authority.
+        submitted_feedback (`FeedbackValue`): Original complete root message.
+        root_result (`BackwardResult`): Submitted root projection.
+        attributed_results (`tuple[AttributedBackwardResult, ...]`): Every accepted
+            occurrence in outcome order, including unreached empty results.
+
+    Raises:
+        `TypeError`: For malformed carriers, channels, or message containers.
+        `ValueError`: For inventory, transfer, local contract, or root disagreement.
+    """
+    pending, direct_root = _seed_backward(trace, submitted_feedback)
+    root_result = _copy_backward_result(root_result)
+    attributed_results = _copy_attributed_results(attributed_results)
+    occurrences = trace.occurrences
+    if tuple(item.source for item in attributed_results) != tuple(item.source for item in occurrences):
+        raise ValueError("backward results must match the complete accepted occurrence order")
+    root_inputs = {}
+    for occurrence, item in reversed(tuple(zip(occurrences, attributed_results))):
+        messages = sorted(pending.pop(occurrence.source, ()), key=lambda message: message.order)
+        if (item.feedback != tuple(message.feedback for message in messages)
+                or item.attribution != tuple(message.attribution for message in messages)
+                or item.invoked is not bool(messages)):
+            raise ValueError("backward received feedback and attribution must match exact transfers")
+        context = trace.backward_context(occurrence.source)
+        validate_backward_result(item.result, context)
+        if not messages:
+            continue
+        if occurrence.source == trace.root_start_source:
+            root_inputs = item.result.input_feedback
+        for source, transfer in _transfer_backward(trace, occurrence, context, messages, item.result):
+            pending.setdefault(source, []).append(transfer)
+    if root_result != _project_root_backward(trace, pending, root_inputs, direct_root):
+        raise ValueError("backward root result must match the accepted START and source-zero projection")
+
+
+@dataclass(frozen=True, slots=True)
+class _BackwardAttempt:
+    """Accepted computation and commit facts for one explicit attempt."""
+
+    started: BackwardStartedRecord
+    ready: BackwardReadyRecord | None = None
+    finished: BackwardFinishedRecord | None = None
+    requests: tuple[MemoryCommitRequestedRecord, ...] = ()
+    observations: tuple[MemoryCommitSucceededRecord | MemoryCommitFailedRecord, ...] = ()
+
+    def __post_init__(self) -> None:
+        for record, carrier in ((self.started, BackwardStartedRecord),
+                                (self.ready, BackwardReadyRecord), (self.finished, BackwardFinishedRecord)):
+            if record is None and carrier is not BackwardStartedRecord:
+                continue
+            if type(record) is not carrier:
+                raise TypeError("backward attempt requires exact accepted records")
+            _revalidate_run_record(record)
+            if record.attempt_id != self.started.attempt_id:
+                raise ValueError("backward attempt record identities disagree")
+        for records, carriers in ((self.requests, (MemoryCommitRequestedRecord,)),
+                                  (self.observations, (MemoryCommitSucceededRecord, MemoryCommitFailedRecord))):
+            if type(records) is not tuple:
+                raise TypeError("backward commit records must be immutable tuples")
+            for record in records:
+                if type(record) not in carriers:
+                    raise TypeError("backward commit requires an exact accepted record")
+                _revalidate_run_record(record)
+                if record.attempt_id != self.started.attempt_id:
+                    raise ValueError("backward commit attempt identities disagree")
+
+
+def _interrupted_failure() -> BackwardFailure:
+    return BackwardFailure("backward", "backward.interrupted", "backward attempt interrupted before completion")
+
+
+def _policy_outcomes(policy_order: tuple[str, ...], attempt: _BackwardAttempt) -> tuple[PolicyCommitOutcome, ...]:
+    requests = {record.policy_name: record for record in attempt.requests}
+    observations = {record.policy_name: record for record in attempt.observations}
+    outcomes = []
+    for name in policy_order:
+        request, observation = requests.get(name), observations.get(name)
+        if request is None:
+            outcomes.append(PolicyCommitOutcome(name, "unrequested"))
+        elif observation is None:
+            outcomes.append(PolicyCommitOutcome(name, "unknown", request.commit_id))
+        elif type(observation) is MemoryCommitSucceededRecord:
+            outcomes.append(PolicyCommitOutcome(name, "succeeded", request.commit_id))
+        else:
+            outcomes.append(PolicyCommitOutcome(name, "failed", request.commit_id, observation.failure))
+    return tuple(outcomes)
+
+
+def _prefix_learning(
+    backward: RuntimeBackwardState, *, succeeded: bool = False, learner_failure: LearningFailure | None = None,
+) -> LearningResult | None:
+    if not backward.policy_order:
+        return None
+    policies = backward.policy_outcomes
+    failures = tuple(LearningFailure(item.policy_name, "commit", item.failure)
+                     for item in policies if item.status == "failed")
+    if learner_failure is not None:
+        failures = (learner_failure, *failures)
+    status = "failed" if failures else "succeeded" if succeeded else "incomplete"
+    return LearningResult(status, failures, policies)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeBackwardState:
+    """Immutable accepted attempt history, separate from legacy frame learning.
+
+    Layout inventories share the RunStarted authority roots. Completed proposals
+    remain inspectable; only new records can advance an attempt. No prefix view
+    resumes work or invokes a callback.
+
+    Attributes:
+        layout (`tuple[MemoryFrameSpec, ...] | None`): Recorded enabled frames.
+        frame_order (`tuple[MemoryFrameRef, ...]`): Exact recorded owning refs.
+        policy_order (`tuple[str, ...]`): Canonical configured policy order.
+        policy_frame_indices (`tuple[tuple[int, ...], ...]`): Frame positions for
+            each policy, preserving layout order during batch aggregation.
+        attempts (`tuple[_BackwardAttempt, ...]`): Accepted immutable attempt
+            history; a later start never inherits earlier proposals.
+        legacy_requested (`bool`): Irreversible request fact from legacy records.
+    """
+
+    layout: tuple[MemoryFrameSpec, ...] | None = None
+    frame_order: tuple[MemoryFrameRef, ...] = ()
+    policy_order: tuple[str, ...] = ()
+    policy_frame_indices: tuple[tuple[int, ...], ...] = ()
+    attempts: tuple[_BackwardAttempt, ...] = ()
+    legacy_requested: bool = False
+
+    def __post_init__(self) -> None:
+        """Reject malformed inventories and impossible accepted-history shapes."""
+        if self.layout is not None:
+            _validate_layout(self.layout)
+        if type(self.frame_order) is not tuple or any(type(ref) is not MemoryFrameRef for ref in self.frame_order):
+            raise TypeError("backward frame order must be a tuple of exact MemoryFrameRef values")
+        for ref in self.frame_order:
+            MemoryFrameRef(ref.root_flow_id, ref.static_path, ref.owner)
+        if type(self.policy_order) is not tuple or any(type(name) is not str for name in self.policy_order):
+            raise TypeError("backward policy order must be a tuple of strings")
+        if type(self.policy_frame_indices) is not tuple or any(
+            type(indices) is not tuple or any(type(index) is not int for index in indices)
+            for indices in self.policy_frame_indices
+        ):
+            raise TypeError("backward policy frame indices must be tuples of exact integers")
+        expected_frames = tuple(spec.ref for spec in (self.layout or ()))
+        expected_policies = tuple(sorted({spec.policy_name for spec in (self.layout or ())}))
+        expected_indices = tuple(tuple(i for i, spec in enumerate(self.layout or ()) if spec.policy_name == name)
+                                 for name in expected_policies)
+        if (self.frame_order != expected_frames or self.policy_order != expected_policies
+                or self.policy_frame_indices != expected_indices):
+            raise ValueError("backward inventories must match the recorded layout")
+        if type(self.attempts) is not tuple or type(self.legacy_requested) is not bool:
+            raise TypeError("backward history must be immutable with an exact request flag")
+        for index, attempt in enumerate(self.attempts):
+            if type(attempt) is not _BackwardAttempt:
+                raise TypeError("backward history requires exact attempt states")
+            _BackwardAttempt.__post_init__(attempt)
+            if attempt.started.attempt_id != index + 1:
+                raise ValueError("backward attempt IDs must follow accepted start order")
+            if index < len(self.attempts) - 1 and (attempt.finished is None or attempt.requests
+                    or attempt.finished.outcome.status == "succeeded"):
+                raise ValueError("a closed or unfinished attempt cannot precede another start")
+            if tuple(record.policy_name for record in attempt.requests) != self.policy_order[:len(attempt.requests)]:
+                raise ValueError("backward requests must follow recorded policy order")
+            if len(attempt.observations) > len(attempt.requests) or len(attempt.requests) > len(attempt.observations) + 1:
+                raise ValueError("backward requests and observations must alternate")
+            for result_index, observation in enumerate(attempt.observations):
+                request = attempt.requests[result_index]
+                if observation.policy_name != request.policy_name or observation.commit_id != request.commit_id:
+                    raise ValueError("backward observation must match its accepted request")
+                if type(observation) is MemoryCommitFailedRecord and result_index < len(attempt.requests) - 1:
+                    raise ValueError("a failed commit cannot be followed by another request")
+            if attempt.requests and attempt.ready is None:
+                raise ValueError("backward requests require accepted Ready proposals")
+        if self.legacy_requested and self.attempts:
+            raise ValueError("legacy requests cannot coexist with backward attempts")
+
+    @property
+    def current(self) -> _BackwardAttempt | None:
+        """Return the most recently accepted attempt, including a closed one."""
+        return self.attempts[-1] if self.attempts else None
+
+    @property
+    def started(self) -> BackwardStartedRecord | None:
+        """Return the current attempt's exact accepted submission."""
+        return self.current.started if self.current is not None else None
+
+    @property
+    def ready(self) -> BackwardReadyRecord | None:
+        """Return completed results/proposals without treating them as resumable."""
+        return self.current.ready if self.current is not None else None
+
+    @property
+    def finished(self) -> BackwardFinishedRecord | None:
+        """Return the accepted closing record, if this attempt was closed."""
+        return self.current.finished if self.current is not None else None
+
+    @property
+    def ever_requested(self) -> bool:
+        """Report any accepted commit request, independent of later observations."""
+        return self.legacy_requested or any(attempt.requests for attempt in self.attempts)
+
+    @property
+    def policy_outcomes(self) -> tuple[PolicyCommitOutcome, ...]:
+        """Project each configured policy from accepted requests and observations."""
+        if self.current is None:
+            return tuple(PolicyCommitOutcome(name, "unrequested") for name in self.policy_order)
+        return _policy_outcomes(self.policy_order, self.current)
+
+    @property
+    def can_start(self) -> bool:
+        """Report history eligibility; terminal/learn gates remain state-owned."""
+        return (not self.ever_requested and (self.current is None or self.finished is not None)
+                and not any(attempt.finished is not None and attempt.finished.outcome.status == "succeeded"
+                            for attempt in self.attempts))
+
+    @property
+    def outcome(self) -> BackwardOutcome | None:
+        """Inspect the accepted Finished or derive interruption without appending."""
+        if self.current is None:
+            return None
+        if self.finished is not None:
+            return self.finished.outcome
+        return BackwardOutcome("failed", self.ready.root_result if self.ready else None,
+                               _interrupted_failure(), _prefix_learning(self))
+
+
+def _proposal_batches(backward: RuntimeBackwardState, ready: BackwardReadyRecord) -> tuple[tuple[MemoryMutation, ...], ...]:
+    """Aggregate every recorded frame in layout order, including empty proposals."""
+    if tuple(proposal.frame_ref for proposal in ready.frame_proposals) != backward.frame_order:
+        raise ValueError("frame proposals must cover the complete recorded layout in order")
+    batches = tuple(tuple(mutation for index in indices for mutation in ready.frame_proposals[index].mutations)
+                    for indices in backward.policy_frame_indices)
+    for batch in batches:
+        identities = tuple(mutation.mutation_id for mutation in batch)
+        if len(set(identities)) != len(identities):
+            raise ValueError("backward mutation IDs must be unique within each policy")
+    return batches
+
+
+def _validate_backward_finished(
+    trace: RetainedTrace, backward: RuntimeBackwardState, record: BackwardFinishedRecord,
+) -> None:
+    """Require completed feedback and failure dispositions from accepted authority."""
+    current, outcome = backward.current, record.outcome
+    ready = current.ready
+    if ready is not None:
+        if outcome.feedback != ready.root_result:
+            raise ValueError("Finished feedback must match accepted Ready")
+        if record.attributed_results and record.attributed_results != ready.attributed_results:
+            raise ValueError("Finished attribution must match accepted Ready")
+    if outcome.status == "succeeded":
+        if ready is None or any(policy.status != "succeeded" for policy in backward.policy_outcomes):
+            raise ValueError("successful Finished requires Ready and every policy confirmation")
+        if outcome.learning != _prefix_learning(backward, succeeded=True):
+            raise ValueError("successful Finished learning must match accepted policy confirmations")
+        return
+    failure = outcome.failure
+    if failure == _interrupted_failure():
+        if outcome != backward.outcome or (ready is None and record.attributed_results):
+            raise ValueError("interrupted Finished must exactly project the accepted prefix")
+        return
+    if ready is not None:
+        failed = tuple(policy for policy in backward.policy_outcomes if policy.status == "failed")
+        if len(failed) != 1:
+            raise ValueError("failed Finished after Ready requires a recorded commit failure")
+        policy = failed[0]
+        expected = BackwardFailure("commit", policy.failure.code, policy.failure.message,
+                                   policy_name=policy.policy_name, cause=policy.failure)
+        if failure != expected or outcome.learning != _prefix_learning(backward):
+            raise ValueError("commit Finished must match the exact accepted failure and policy states")
+        return
+    if failure.stage == "learn":
+        if type(failure.cause) is not MemoryOperationFailure or failure.frame_ref not in backward.frame_order:
+            raise ValueError("learner failure requires one exact enabled frame and memory-operation cause")
+        spec = backward.layout[backward.frame_order.index(failure.frame_ref)]
+        expected = BackwardFailure("learn", failure.cause.code, failure.cause.message,
+                                   policy_name=spec.policy_name, frame_ref=spec.ref, cause=failure.cause)
+        if failure != expected or outcome.feedback is None:
+            raise ValueError("learner Finished must retain the exact attributed failure and completed feedback")
+        validate_attributed_backward(trace, current.started.feedback, outcome.feedback, record.attributed_results)
+        known = LearningFailure(spec.policy_name, "learn", failure.cause, spec.ref)
+        if outcome.learning != _prefix_learning(backward, learner_failure=known):
+            raise ValueError("learner Finished learning must contain its exact known failure")
+        return
+    if failure.stage != "backward" or outcome.feedback is not None or record.attributed_results:
+        raise ValueError("incomplete backward computation cannot carry completed or partial results")
+    _seed_backward(trace, current.started.feedback)
+    if not has_feedback(current.started.feedback) or failure.code not in ("backward.execute", "backward.result"):
+        raise ValueError("backward computation failure requires effective feedback and a driver failure code")
+    if (failure.run_id != trace.run_id or failure.node_started_seq is None
+            or failure.policy_name is not None or failure.frame_ref is not None):
+        raise ValueError("backward computation failure requires accepted occurrence attribution")
+    source = SourceRef(trace.run_id, failure.node_started_seq)
+    try:
+        trace.occurrence(source)
+    except KeyError:
+        raise ValueError("backward computation failure requires an accepted occurrence") from None
+    context = trace.backward_context(source)
+    if failure.node_id != context.node_id or failure.scope != context.scope:
+        raise ValueError("backward computation failure must match its recorded invocation")
+    if outcome.learning != _prefix_learning(backward):
+        raise ValueError("failed computation learning must retain incomplete unrequested policies")
+
+
+def reduce_backward_record(
+    trace: RetainedTrace, backward: RuntimeBackwardState,
+    record: BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord
+            | MemoryCommitRequestedRecord | MemoryCommitSucceededRecord | MemoryCommitFailedRecord,
+) -> RuntimeBackwardState:
+    """Validate and project one accepted backward record without effects.
+
+    Args:
+        trace (`RetainedTrace`): Recorded terminal forward authority.
+        backward (`RuntimeBackwardState`): Immutable accepted attempt prefix.
+        record (`RunRecord`): A backward lifecycle or attributed commit record.
+
+    Returns:
+        `RuntimeBackwardState`: The validated next immutable attempt projection.
+
+    Raises:
+        `TypeError`: For malformed exact carriers or result channels.
+        `ValueError`: For attempt, transfer, proposal, or disposition disagreement.
+    """
+    if type(backward) is not RuntimeBackwardState:
+        raise TypeError("backward reduction requires RuntimeBackwardState")
+    if type(record) is BackwardStartedRecord:
+        _seed_backward(trace, record.feedback)
+        if not backward.can_start:
+            raise ValueError("backward attempt cannot start from the accepted prefix")
+        if record.attempt_id != len(backward.attempts) + 1:
+            raise ValueError("backward attempt_id must be the next accepted start")
+        return replace(backward, attempts=(*backward.attempts, _BackwardAttempt(record)))
+    current = backward.current
+    if current is None or current.finished is not None or record.attempt_id != current.started.attempt_id:
+        raise ValueError("backward record requires its matching unfinished attempt")
+    if type(record) is BackwardReadyRecord:
+        if current.ready is not None:
+            raise ValueError("backward attempt already has a Ready")
+        validate_attributed_backward(trace, current.started.feedback, record.root_result, record.attributed_results)
+        _proposal_batches(backward, record)
+        next_attempt = replace(current, ready=record)
+    elif type(record) is BackwardFinishedRecord:
+        _validate_backward_finished(trace, backward, record)
+        next_attempt = replace(current, finished=record)
+    elif type(record) is MemoryCommitRequestedRecord:
+        if current.ready is None or any(policy.status in ("unknown", "failed") for policy in backward.policy_outcomes):
+            raise ValueError("backward commit request requires Ready and no pending or failed policy")
+        index = len(current.requests)
+        if index >= len(backward.policy_order) or record.policy_name != backward.policy_order[index]:
+            raise ValueError("backward request must name the next enabled policy")
+        batch = _proposal_batches(backward, current.ready)[index]
+        if record.mutations != batch or record.commit_id != memory_commit_id(trace.run_id, record.policy_name, batch):
+            raise ValueError("backward commit batch and identity must match the ordered Ready proposals")
+        next_attempt = replace(current, requests=(*current.requests, record))
+    elif type(record) in (MemoryCommitSucceededRecord, MemoryCommitFailedRecord):
+        if len(current.requests) != len(current.observations) + 1:
+            raise ValueError("backward commit result requires a matching pending request")
+        request = current.requests[-1]
+        if record.policy_name != request.policy_name or record.commit_id != request.commit_id:
+            raise ValueError("backward commit result must match its pending policy and identity")
+        next_attempt = replace(current, observations=(*current.observations, record))
+    else:
+        raise ValueError("backward commit requires a completed policy proposal")
+    return replace(backward, attempts=(*backward.attempts[:-1], next_attempt))
 
 
 class FrameLearningStatus(str, Enum):
@@ -915,6 +1416,7 @@ __all__ = [
     "FrameLearningStatus",
     "PolicyCommitState",
     "PolicyCommitStatus",
+    "RuntimeBackwardState",
     "RuntimeLearningState",
     "aggregate_policy_mutations",
     "failure_json",
@@ -922,4 +1424,6 @@ __all__ = [
     "memory_commit_id",
     "occurrence_key",
     "project_outcome_episodes",
+    "reduce_backward_record",
+    "validate_attributed_backward",
 ]

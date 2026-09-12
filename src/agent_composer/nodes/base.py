@@ -540,6 +540,10 @@ class Node(ABC):
             Compile-derived static memory context. Authors cannot supply it;
             memory layout resolution stamps it before execution when memory is
             enabled, and ordinary nodes otherwise retain ``None``.
+        execution_scope (`ExecutionScope | None`):
+            Compile-derived authored location, independent of memory policies.
+            Static layout resolution stamps root-relative paths on private node
+            templates; direct construction starts with ``None``.
         env (`dict[str, Any]`):
             Author-supplied static per-node config (`{str -> literal}`), baked at build
             time from the flow-level `env:` default merged with the node's own `env:`
@@ -643,6 +647,7 @@ class Node(ABC):
         # Derived beside generated ancestry because neither value is authored node
         # configuration. The compile layer owns all non-None assignments.
         self.memory_scope: MemoryScope | None = None
+        self.execution_scope: ExecutionScope | None = None
         # Author-supplied static per-node config, opaque to the engine core (kind-blind): a
         # plain `{str -> literal}` map baked at build time from the flow-level `env:` default
         # merged with this node's own `env:` (node override wins; see the compose builder). The

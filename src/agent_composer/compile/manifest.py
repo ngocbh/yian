@@ -79,6 +79,7 @@ _IGNORED_NODE_FIELDS = frozenset(
         "origin",
         "origin_context",
         "memory_scope",
+        "execution_scope",
         "wiring_labels",
     }
 )

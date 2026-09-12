@@ -540,6 +540,34 @@ or partial semantics but deliberately omit `ContractOrigins`, keeping provenance
 identity-neutral. Live output validation resolves a `TypeCheckError.path` through the
 whole or field-local contract. The structural path is consumed before `Failure` and
 never enters the durable record schema.
+
+Numeric `Type.bounds` refines INTEGER/NUMBER with one inclusive endpoint pair.
+The shared shape validator rejects malformed or reversed bounds and competing
+refinements. Integer endpoints retain arbitrary precision; NUMBER endpoints must
+have a finite, lossless float representation. Runtime checks retain nested
+`TypeCheckError.path`; compatibility checks interval containment, including
+integer-to-number widening. Inline canonicalization preserves the pair, and
+generated numeric schemas carry `minimum`/`maximum` recursively through lists
+and records. Canonical labels and manifests include present bounds; absent bounds
+remain omitted from manifests to preserve unbounded identities.
+
+AGENT's local `variables` field uses an ordered `list[Parameter]`, with an exact
+`ValueContract` and mandatory typed default for every entry. Compose reuses its
+semantic/default readers and injects source-aware declaration compilation at
+build time. Declaration keys, contracts, and defaults retain their normal opaque
+origins through AGENT's local traversal and graph rebasing. Inputs and variables
+have disjoint names. Nonempty declarations affect authored identity; origins and
+empty variable sections do not.
+
+`AgentNode.forward` resolves a detached copy of defaults once, then renders the
+merged input/variable record. Default strings are literal data, and ordinary
+rendering does not require an execution scope. `Node.declared_variables()` returns
+an empty tuple by default; AGENT exposes its canonical declarations so common
+backward validation can check local targets. The owner key is the authored
+`execution_scope.static_path` plus variable name, independent of runtime IDs and
+diagnostic keys. MAP/LOOP occurrences share that owner; distinct authored callsites
+do not. These declarations add no pool writes or graph edges and do not activate
+backward or change `llm_config`.
 Compose and runtime growth reference validation both call the source-neutral closed-field
 walk in `nodes/contracts.py`; exact nested records and partial root name sets therefore
 reject the same provably absent paths without importing Compose into runtime.

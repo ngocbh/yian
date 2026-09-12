@@ -117,13 +117,14 @@ sink, including recursively inside lists, matching runtime coercion. This lets a
 compute a carried boolean directly, for example
 `exited: ${ask.output == "/exit"}`.
 
-A **prompt** is the strict context: it reads only the node's own declared inputs (bare
-`${name}`), renders in `STRICT_RAISE` mode, and may call a builtin.
+A **prompt** is the strict context: it reads local inputs as bare `${name}`;
+AGENT prompts also read their own declared variables. It renders in
+`STRICT_RAISE` mode and may call a builtin.
 
 ## builtins — the prompt formatters
 
 A prompt span may be a plain reference or a call to a pure builtin over the node's
-already-bound inputs. A deliberate, bounded bend of "all computation is a node": builtins
+local values. A deliberate, bounded bend of "all computation is a node": builtins
 are read-only formatting, mint no graph node, and are unavailable in bindings/`when:`.
 
 | Builtin | Does |

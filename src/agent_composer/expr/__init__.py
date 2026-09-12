@@ -12,6 +12,13 @@ The engine is three layers, all pool-agnostic (they take a `resolve` callable):
   spans, then drives the engine per span (`eval_binding`, `eval_template`,
   `expr_refs_of`, `prompt_refs`, `render_template_record`, `scan_template`).
 
+`lineage` owns ordinary feedback values, immutable expression routes, and
+source-relative feedback transfer. Optional tracing in the same evaluator walk
+retains selected value arms, container mappings, and opaque function boundaries.
+Routes reference accepted source identities; the caller supplies recorded values
+when transferring feedback. This leaf uses only the standard library and stays
+independent of nodes, memory, and runtime.
+
 Flow invocation is NO LONGER a `${...}` construct — it is the compile-time
 whole-value `call(...)` directive (in `compose.calls`), not part of this engine.
 
@@ -33,6 +40,7 @@ from agent_composer.expr.expressions import (
     rewrite_expr_refs,
 )
 from agent_composer.expr.grammar import parse_expr
+from agent_composer.expr.lineage import FeedbackValue, has_feedback, validate_feedback
 from agent_composer.expr.template import (
     binding_co_skips,
     eval_binding,
@@ -46,6 +54,7 @@ from agent_composer.expr.template import (
 
 __all__ = [
     "ExpressionError",
+    "FeedbackValue",
     "RequiredError",
     "binding_co_skips",
     "condition_refs",
@@ -56,6 +65,7 @@ __all__ = [
     "expr_refs",
     "expr_refs_of",
     "first_failing_assert",
+    "has_feedback",
     "infer_expr_type",
     "parse_expr",
     "prompt_refs",
@@ -65,4 +75,5 @@ __all__ = [
     "rewrite_expr_refs",
     "rewrite_template_refs",
     "scan_template",
+    "validate_feedback",
 ]

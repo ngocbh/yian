@@ -11,12 +11,16 @@ from threading import TIMEOUT_MAX
 from typing import Any
 
 from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
-from agent_composer.nodes.binding import BindingError, _resolve_source, _source_origin
+from agent_composer.nodes.binding import (
+    BindingError, ReservedBinder, _resolve_source, _source_origin,
+)
 from agent_composer.nodes.contracts import binding_source
 from agent_composer.typesys.pool import VariablePool
 
 
-def resolve_until(until_src: Any, pool: VariablePool) -> str:
+def resolve_until(
+    until_src: Any, pool: VariablePool, *, bind: ReservedBinder | None = None,
+) -> str:
     """Resolve a raw or carrier-wrapped WAIT source to an ISO date/datetime.
 
     Exactly one semantic ``Binding`` layer is removed before a ``${...}``
@@ -24,10 +28,17 @@ def resolve_until(until_src: Any, pool: VariablePool) -> str:
     ``date``/``datetime`` values resolve to ISO strings; a raw object exposing
     ``isoformat()`` is formatted defensively. This binding operation validates the
     absolute ISO deadline; the WAIT body reparses it only to compute the duration.
+    An optional ``bind`` callable retains the normalized value at the read boundary.
     """
+    if bind is not None:
+        return bind("until", until_src, lambda value: _normalize_until(until_src, value))
+    return _normalize_until(until_src, _resolve_source(until_src, pool))
+
+
+def _normalize_until(until_src: Any, value: Any) -> str:
+    """Validate one resolved WAIT value and return the ISO string delivered to it."""
     origin = _source_origin(until_src)
     display_source = binding_source(until_src)
-    value = _resolve_source(until_src, pool)
     if isinstance(value, str):
         resolved = value
     elif hasattr(value, "isoformat"):
@@ -83,9 +94,11 @@ class WaitNode(Node):
     def __init__(self, node_id: str, *, title: str | None = None) -> None:
         super().__init__(node_id, title=title)
 
-    def bind_reserved(self, node_wiring: dict, pool: VariablePool) -> dict[str, str]:
+    def bind_reserved(
+        self, node_wiring: dict, pool: VariablePool, *, bind: ReservedBinder | None = None,
+    ) -> dict[str, str]:
         """Resolve the required ``until`` wiring into the node's input record."""
-        return {"until": resolve_until(node_wiring["until"], pool)}
+        return {"until": resolve_until(node_wiring["until"], pool, bind=bind)}
 
     def reserved_wiring_keys(self) -> set[str]:
         """Declare the required author-owned ``until`` wiring key."""

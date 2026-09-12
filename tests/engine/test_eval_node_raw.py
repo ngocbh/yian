@@ -96,6 +96,7 @@ def test_public_evaluation_always_returns_frozen_slotted_wrapper() -> None:
     assert [field.name for field in fields(EvaluatedOutcome)] == [
         "outcome",
         "evidence",
+        "bindings",
     ]
     assert not hasattr(evaluated, "__dict__")
     with pytest.raises(FrozenInstanceError):

@@ -45,7 +45,7 @@ def test_map_returns_grow():
     from tests.engine.test_expand import _child_flow
 
     node = MapNode("m", flow_id="child", child=_child_flow(), child_inputs=[])
-    out = node.run({"over": ["ACME", "BETA"]}, bind_item=lambda el: {"x": el})
+    out = node.run({"over": ["ACME", "BETA"]}, bind_item=lambda el, index: {"x": el})
     assert isinstance(out, Grow)
     assert out.seed == [{"x": "ACME"}, {"x": "BETA"}]
     assert out.prune == frozenset()
@@ -56,7 +56,7 @@ def test_map_empty_returns_grow_with_lone_list_end():
     from tests.engine.test_expand import _child_flow
 
     node = MapNode("m", flow_id="child", child=_child_flow(), child_inputs=[])
-    out = node.run({"over": []}, bind_item=lambda el: {"x": el})
+    out = node.run({"over": []}, bind_item=lambda el, index: {"x": el})
     assert isinstance(out, Grow)
     assert out.seed == []
     assert out.prune == frozenset()
@@ -72,4 +72,4 @@ def test_call_unbaked_child_raises():
 def test_map_unbaked_child_raises():
     node = MapNode("m", flow_id="child", child=None)
     with pytest.raises(RuntimeError, match="not baked"):
-        node.run({"over": ["ACME"]}, bind_item=lambda el: {"topic": el})
+        node.run({"over": ["ACME"]}, bind_item=lambda el, index: {"topic": el})

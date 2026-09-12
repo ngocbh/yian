@@ -6,6 +6,10 @@ growth reducer splices or prunes dynamic topology, so one authored flow can back
 independent runs. `NodeState` is the shared per-node state vocabulary tracked against
 that topology; it is re-exported here for compatibility.
 
+Growth fragments also carry source-neutral seed connections and actual child
+boundary pairs. Their graph validation lives here so manifests and accepted-state
+preparation share one check without depending on the kind-aware growth builders.
+
 `START_ID` / `END_ID` are the reserved boundary-node ids. Every flow begins with a synthesized
 START node (which binds the run inputs) and ends with a synthesized END node (whose value is the
 flow's result). They are owned canonically by the node classes (`StartNode.ID` / `EndNode.ID`)
@@ -18,7 +22,14 @@ from typing import Any, Optional
 from agent_composer._state import NodeState
 from agent_composer.memory.contracts import MemoryPolicySpec
 from agent_composer.nodes.base import Node
-from agent_composer.nodes.contracts import Binding, as_binding
+from agent_composer.nodes.contracts import (
+    Binding,
+    ChildFlowBoundary,
+    ExecutionScope,
+    Parameter,
+    SeedConnection,
+    as_binding,
+)
 from agent_composer.nodes.end import EndNode
 from agent_composer.nodes.start import StartNode
 
@@ -168,17 +179,83 @@ class Flow:
         end_id (`str`):
             The flow's result node id — the node whose value is the flow's output. Defaults to
             `END_ID` (the top-level synthesized END); spliced flows namespace it.
+        input_connections (`tuple[SeedConnection, ...]`):
+            Derived child START bindings selected from a parent's materialized seed routes.
+        child_boundaries (`tuple[ChildFlowBoundary, ...]`):
+            Actual authored child flow boundaries, excluding generated fan nodes.
     """
 
     def __init__(self, nodes: dict[str, Node], edges: list[Edge],
                  wiring: Optional[dict[str, dict[str, Any]]] = None,
-                 start_id: str = START_ID, end_id: str = END_ID) -> None:
+                 start_id: str = START_ID, end_id: str = END_ID, *,
+                 input_connections: tuple[SeedConnection, ...] = (),
+                 child_boundaries: tuple[ChildFlowBoundary, ...] = ()) -> None:
         self.nodes = nodes                              # node id -> Node
         self.edges = edges                              # all directed edges
         # Normalize once so every consumer below this construction boundary reads one shape.
         self.wiring: dict[str, dict[str, Binding]] = _normalize_wiring(wiring)
         self.start_id = start_id                        # single entry node id
         self.end_id = end_id                            # result node id
+        self.input_connections = input_connections      # source-neutral materialized seed recipes
+        self.child_boundaries = child_boundaries        # actual authored child boundaries
+
+
+def validate_growth_metadata(flow: Flow) -> None:
+    """Validate immutable growth recipes against their declared fragment targets.
+
+    Both fragment acceptance and topology identity use this source-neutral graph
+    check. Execution scopes may be absent on direct graphs; present scopes must
+    identify the corresponding actual boundary and containing flow occurrence.
+    """
+    for name, carrier in (("input_connections", SeedConnection),
+                          ("child_boundaries", ChildFlowBoundary)):
+        values = getattr(flow, name)
+        if type(values) is not tuple or any(type(value) is not carrier for value in values):
+            raise TypeError(f"{name} must be a tuple of exact {carrier.__name__} values")
+    starts: set[str] = set()
+    endpoints: set[str] = set()
+    for boundary in flow.child_boundaries:
+        ChildFlowBoundary(boundary.start_id, boundary.end_id)
+        scopes = []
+        for node_id, role in ((boundary.start_id, "start"), (boundary.end_id, "end")):
+            if node_id not in flow.nodes or node_id in endpoints:
+                raise ValueError("child boundaries must name distinct fragment nodes")
+            endpoints.add(node_id)
+            node = flow.nodes[node_id]
+            if not isinstance(node, Node):
+                raise TypeError("child boundaries must name Node values")
+            scope = node.execution_scope
+            if scope is not None:
+                if type(scope) is not ExecutionScope:
+                    raise TypeError("child boundary scope must be an ExecutionScope")
+                ExecutionScope(scope.static_path, scope.flow_path, scope.occurrence_path, scope.boundary)
+                if scope.boundary != role:
+                    raise ValueError("child boundary role disagrees with its execution scope")
+                if not scope.static_path or scope.static_path[:-1] != scope.flow_path:
+                    raise ValueError("child boundary location must belong to its containing flow")
+            scopes.append(scope)
+        if all(scope is not None for scope in scopes) and (
+            scopes[0].flow_path != scopes[1].flow_path
+            or scopes[0].occurrence_path != scopes[1].occurrence_path
+        ):
+            raise ValueError("child boundaries must belong to the same flow occurrence")
+        starts.add(boundary.start_id)
+    targets: set[tuple[str, str]] = set()
+    for connection in flow.input_connections:
+        SeedConnection(connection.child_start_id, connection.input_name, connection.seed_path)
+        target = (connection.child_start_id, connection.input_name)
+        if connection.child_start_id not in starts or target in targets:
+            raise ValueError("seed connections must name unique declared child START inputs")
+        targets.add(target)
+        params = flow.nodes[connection.child_start_id].params
+        if params is None:
+            params = []
+        if type(params) is not list or any(type(param) is not Parameter for param in params):
+            raise TypeError("seed connection target parameters must be Parameter values")
+        if connection.input_name not in {param.name for param in params}:
+            raise ValueError("seed connection target input must be declared")
+        if connection.input_name not in flow.wiring.get(connection.child_start_id, {}):
+            raise ValueError("seed connection target input must be wired")
 
 
 class CompiledFlow(Flow):

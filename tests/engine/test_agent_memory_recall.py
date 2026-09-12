@@ -240,7 +240,7 @@ def test_uncanonical_recall_inputs_remain_typed_when_evidence_is_enabled(
     )
 
     class _UncanonicalInputAgent(AgentNode):
-        def bind_reserved(self, _wiring, _pool):
+        def bind_reserved(self, _wiring, _pool, *, bind=None):
             return {"bad": {1, 2}}
 
     node = _UncanonicalInputAgent("agent", prompt="Answer")

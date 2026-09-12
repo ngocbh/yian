@@ -302,9 +302,11 @@ def _capture_semantic_failures(
     captured: list[Failure] = []
     project = FlowEngine._prepare_failure
 
-    def capture(self, node_id, failure, *, evidence=None):
+    def capture(self, node_id, failure, *, evidence=None, forward_capture=None):
         captured.append(failure)
-        return project(self, node_id, failure, evidence=evidence)
+        return project(
+            self, node_id, failure, evidence=evidence, forward_capture=forward_capture,
+        )
 
     monkeypatch.setattr(FlowEngine, "_prepare_failure", capture)
     return captured
@@ -452,6 +454,7 @@ def test_success_preparation_runtime_error_remains_exact_host_failure(monkeypatc
         *,
         commit_as=None,
         evidence=None,
+        forward_capture=None,
     ):
         if node_id == "work":
             raise expected
@@ -461,6 +464,7 @@ def test_success_preparation_runtime_error_remains_exact_host_failure(monkeypatc
             output,
             commit_as=commit_as,
             evidence=evidence,
+            forward_capture=forward_capture,
         )
 
     monkeypatch.setattr(engine_module, "prepare_node_succeeded", broken_prepare)

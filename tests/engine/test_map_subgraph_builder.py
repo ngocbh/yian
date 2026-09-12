@@ -22,7 +22,7 @@ from agent_composer.memory import (
     MemoryOwner,
     MemoryScope,
 )
-from agent_composer.nodes.contracts import Binding
+from agent_composer.nodes.contracts import Binding, ChildFlowBoundary, SeedConnection
 
 from tests.engine.test_expand import _child_flow
 
@@ -69,6 +69,17 @@ def test_map_subgraph_matches_grow_map_type():
 
     # N>0 so the synthetic start does NOT wire straight to the list-END (it fans in over the clones).
     assert not any(e.from_ == map_start_id and e.to == map_end_id for e in sg.edges)
+    assert sg.input_connections == tuple(
+        SeedConnection(ns(map_callsite("m0", i), child.start_id), "x", (i, "x"))
+        for i in range(2)
+    )
+    assert sg.child_boundaries == tuple(
+        ChildFlowBoundary(
+            ns(map_callsite("m0", i), child.start_id),
+            ns(map_callsite("m0", i), child.end_id),
+        )
+        for i in range(2)
+    )
 
 
 def test_map_subgraph_n_ge_2_start_fans_out_to_all_element_starts():
@@ -128,6 +139,8 @@ def test_map_subgraph_n0_wires_start_to_collector():
     assert sg.nodes[map_end_id].commit_as == "m0"
     assert sg.nodes[map_start_id].origin_context == context
     assert sg.nodes[map_end_id].origin_context == context
+    assert sg.input_connections == ()
+    assert sg.child_boundaries == ()
 
 
 def test_map_subgraph_appends_item_occurrence_and_scopes_generated_fan_nodes() -> None:

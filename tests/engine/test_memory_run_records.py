@@ -1,4 +1,4 @@
-"""Schema-4 run-record contracts for source-neutral memory evidence and learning."""
+"""Schema-5 run-record contracts for source-neutral memory evidence and learning."""
 
 from __future__ import annotations
 
@@ -363,13 +363,9 @@ def test_memory_scope_requires_one_lexical_unique_frame_chain() -> None:
             (flow_ref, agent_ref),
             boundary=MemoryBoundary(MemoryBoundaryKind.START, flow_ref),
         )
-    with pytest.raises(ValueError, match="non-empty"):
-        EvaluationEvidence(
-            MemoryScope("root", ("root", "neutral")),
-            {},
-            "base",
-            "prompt",
-        )
+    assert EvaluationEvidence(
+        MemoryScope("root", ("root", "neutral")), {}, "base", "prompt",
+    ).memory_sections == ()
     with pytest.raises(ValueError, match="lexical nesting"):
         MemoryScope(
             "root",
@@ -424,8 +420,7 @@ def test_run_started_distinguishes_disabled_and_enabled_empty_memory() -> None:
 
     with pytest.raises(ValueError, match="both"):
         _started(layout=(), snapshots=None)
-    with pytest.raises(ValueError, match="requires enabled"):
-        _started(learn=True)
+    assert _round_trip(_started(learn=True)).learn is True
     with pytest.raises(TypeError, match="boolean"):
         _started(layout=(), snapshots=(), learn=1)  # type: ignore[arg-type]
 

@@ -198,7 +198,7 @@ def test_map_run_returns_grow():
     from tests.engine.test_expand import _child_flow
 
     n = MapNode("m", flow_id="c", child=_child_flow(), child_inputs=[])
-    out = n.run({"over": ["A", "B"]}, bind_item=lambda el: {"x": el})  # no system cap
+    out = n.run({"over": ["A", "B"]}, bind_item=lambda el, index: {"x": el})  # no system cap
     assert isinstance(out, Grow)
     assert out.seed == [{"x": "A"}, {"x": "B"}]
     subgraph = build_grow(n, out.seed)
@@ -217,7 +217,7 @@ def test_map_empty_over_returns_grow_with_lone_list_end():
     from tests.engine.test_expand import _child_flow
 
     n = MapNode("m", flow_id="c", child=_child_flow(), child_inputs=[])
-    out = n.run({"over": []}, bind_item=lambda el: {})
+    out = n.run({"over": []}, bind_item=lambda el, index: {})
     assert isinstance(out, Grow) and out.seed == []
     subgraph = build_grow(n, out.seed)
     assert set(subgraph.nodes) == {ns("m", START_ID), ns("m", END_ID)}

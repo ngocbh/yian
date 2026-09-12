@@ -91,3 +91,38 @@ def test_expr_refs_of_embedded_and_default_and_arith():
 def test_expr_refs_of_item_is_collected():
     # item-headed refs ARE collected (caller skips them for edge minting).
     assert expr_refs_of("${item.x}") == ["item.x"]
+
+
+def test_capture_marks_actual_template_evaluation_in_materialized_seed(monkeypatch):
+    import agent_composer.expr.template as template
+    from agent_composer.expr.lineage import ResolvedValue
+    from agent_composer.nodes.binding import BindingCollector, bind_params
+    from agent_composer.nodes.contracts import Parameter
+    from agent_composer.typesys.pool import VariablePool
+
+    scanned = []
+    parsed = template.grammar.parse_expr
+
+    def parse_once(text):
+        scanned.append(text)
+        return parsed(text)
+
+    monkeypatch.setattr(template.grammar, "parse_expr", parse_once)
+    collector = BindingCollector()
+    result = bind_params(
+        [Parameter("evaluated"), Parameter("escaped"), Parameter("literal")],
+        {
+            "evaluated": "${missing | absent}",
+            "escaped": "$${missing | absent}",
+            "literal": None,
+        },
+        VariablePool(), collector=collector,
+        source_resolver=lambda path: ResolvedValue(None, False),
+    )
+    captured = collector.freeze()
+    assert result == {
+        "evaluated": None, "escaped": "${missing | absent}", "literal": None,
+    }
+    assert captured.evaluated_keys == frozenset({"evaluated"})
+    assert all(route.kind == "literal" for route in captured.route.children)
+    assert scanned == ["missing | absent"]

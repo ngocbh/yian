@@ -32,6 +32,7 @@ Never imports: `nodes`, `compile`, `runtime`, `typesys` (pool-agnostic via `reso
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
@@ -46,6 +47,7 @@ from agent_composer.expr.expressions import (
     expr_refs,
     rewrite_expr_refs,
 )
+from agent_composer.expr.lineage import TracedValue, ValueRoute
 
 if TYPE_CHECKING:  # `Tree`/`Token` appear ONLY in the `Span.tree` annotation
     from lark import Token, Tree
@@ -222,7 +224,9 @@ def _split_calls_aware(s: str, sep: str) -> list:
 # --------------------------------------------------------------------------- #
 
 
-def eval_binding(source: str, resolve: Callable[[str], Any], item: Any = None) -> Any:
+def eval_binding(
+    source: str, resolve: Callable[[str], Any], item: Any = None, *, trace: bool = False,
+) -> Any:
     """
     Evaluate a binding-value TEMPLATE string to a value (through the unified engine).
 
@@ -249,10 +253,15 @@ def eval_binding(source: str, resolve: Callable[[str], Any], item: Any = None) -
         item (`Any`, *optional*, defaults to `None`):
             The MAP-body-local scope for `${item}` / `${item.path}`. `None` means no item
             scope (a `None` element and "no scope" coincide).
+        trace (`bool`, *optional*, defaults to `False`):
+            Internal retention switch. The resolver returns `ResolvedValue` and
+            `item` may supply the same carrier; return a `TracedValue` containing
+            the ordinary result and the route collected by this evaluation.
 
     Returns:
         `Any`:
-            The typed value for a whole single span; otherwise the rendered string.
+            The typed value for a whole single span; otherwise the rendered
+            string. With tracing enabled, the same value inside `TracedValue`.
 
     Raises:
         `RequiredError`:
@@ -260,8 +269,13 @@ def eval_binding(source: str, resolve: Callable[[str], Any], item: Any = None) -
         `ExpressionError`:
             On a malformed span (unbalanced `${...}`, unparseable interior) or any error
             the span's evaluation raises.
+        `TypeError`:
+            When a traced resolver does not return `ResolvedValue`.
     """
-    return eval_template(scan_template(source), resolve, item=item, mode=ResolveMode.BINDING_NONE)
+    return eval_template(
+        scan_template(source), resolve, item=item, mode=ResolveMode.BINDING_NONE,
+        trace=trace,
+    )
 
 
 def expr_refs_of(source: str) -> list[str]:
@@ -757,6 +771,8 @@ def eval_template(
     resolve: Callable[[str], Any],
     item: Any = None,
     mode: ResolveMode = ResolveMode.BINDING_NONE,
+    *,
+    trace: bool = False,
 ) -> Any:
     """
     Evaluate scanned template `segments` to a value.
@@ -779,11 +795,16 @@ def eval_template(
             The MAP-body-local scope for `${item}` / `${item.path}`.
         mode (`ResolveMode`, *optional*, defaults to `BINDING_NONE`):
             How a missing reference is treated inside a span (see `eval_expr`).
+        trace (`bool`, *optional*, defaults to `False`):
+            Internal retention switch. The resolver returns `ResolvedValue` and
+            `item` may supply the same carrier. Record each embedded expression's
+            route and half-open character span in the rendered output.
 
     Returns:
         `Any`:
             The typed value for a whole-single-span template; otherwise the rendered
-            string (pure-literal -> the literal string).
+            string (pure-literal -> the literal string). With tracing enabled,
+            return the same value inside `TracedValue`.
 
     Raises:
         `ExpressionError`:
@@ -791,23 +812,45 @@ def eval_template(
             value is `None` in `STRICT_RAISE` mode.
         `RequiredError`:
             When a span's `head :? message` required atom misses / is None.
+        `TypeError`:
+            When a traced resolver does not return `ResolvedValue`.
     """
     def eval_span(span: Span) -> Any:
-        value = eval_expr(span.tree, resolve, item=item, mode=mode)
+        result = eval_expr(span.tree, resolve, item=item, mode=mode, trace=trace)
+        value = result.value if trace else result
         if value is None and mode is ResolveMode.STRICT_RAISE:
             raise ExpressionError("null value in strict template")
-        return value
+        return result
 
     if len(segments) == 1 and isinstance(segments[0], Span):
         return eval_span(segments[0])
     parts: list = []
+    routes: list[ValueRoute] = []
+    spans: list[tuple[int, int]] = []
+    expressions: list[str] = []
+    offset = 0
     for seg in segments:
         if isinstance(seg, Literal):
             parts.append(seg.text)
+            if trace:
+                expressions.append(seg.text)
         else:  # a Span embedded in surrounding text -> stringified
-            v = eval_span(seg)
+            evaluated = eval_span(seg)
+            v = evaluated.value if trace else evaluated
             parts.append("" if v is None else str(v))
-    return "".join(parts)
+            if trace:
+                routes.append(evaluated.route)
+                spans.append((offset, offset + len(parts[-1])))
+                expressions.append("${" + evaluated.route.expression + "}")
+        offset += len(parts[-1])
+    value = "".join(parts)
+    if not trace:
+        return value
+    route = ValueRoute(
+        "interpolation", value_json=json.dumps(value, ensure_ascii=False),
+        children=tuple(routes), expression="".join(expressions), spans=tuple(spans),
+    ) if routes else ValueRoute.literal(value)
+    return TracedValue(value, route)
 
 
 def template_refs(segments: list) -> list[str]:

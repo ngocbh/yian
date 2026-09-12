@@ -18,7 +18,7 @@ from typing import Any, NoReturn
 
 from agent_composer._state import NodeState
 from agent_composer.compile.manifest import expansion_digest
-from agent_composer.compile.model import CompiledFlow, Edge, Flow, GrowthRejected
+from agent_composer.compile.model import CompiledFlow, Edge, Flow, GrowthRejected, validate_growth_metadata
 from agent_composer.compile.validation import _classify_path
 from agent_composer.diagnostics import Failure, OriginRef
 from agent_composer.events import (
@@ -45,15 +45,19 @@ from agent_composer.memory import (
 )
 from agent_composer.nodes.base import Grow, Node
 from agent_composer.nodes.contracts import (
+    ChildFlowBoundary,
     OutputContract,
     Parameter,
     PartialRecordContract,
+    SeedConnection,
     binding_source,
     missing_output_contract_field,
     output_contract_origin,
     output_contract_type,
     validate_output_contract,
 )
+from agent_composer.runtime.contracts import ForwardCapture
+from agent_composer.runtime.trace import RetainedTrace, TraceDelta, prepare_trace, select_seed_route
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
     MemoryCommitFailedRecord,
@@ -225,6 +229,9 @@ class RunState:
             Canonical recorded policy snapshots, paired with ``memory_layout``.
         learn (`bool`):
             Whether accepted eligible outcomes must project durable learning evidence.
+        trace (`RetainedTrace | None`):
+            Accepted executions, immutable producer entries and private backward
+            handlers, enabled by recorded learning independently of memory scopes.
         learning_state (`RuntimeLearningState`):
             Immutable episode, frame-learning, and policy-commit reducer projection.
         initial_static_ids (`frozenset[str]`):
@@ -259,6 +266,7 @@ class RunState:
         self.memory_layout: tuple[MemoryFrameSpec, ...] | None = None
         self.memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
         self.learn = False
+        self.trace: RetainedTrace | None = None
         self.learning_state = RuntimeLearningState()
         self._memory_authority = _MemoryAuthority(
             layout=None,
@@ -322,6 +330,7 @@ class _RunStartedPlan:
     start_node_identity: int
     end_id: str
     end_node_identity: int | None
+    trace_delta: TraceDelta | None = None
 
 
 @dataclass(slots=True)
@@ -367,6 +376,7 @@ class _FrontierPlan:
     end_id: str
     end_node_identity: int | None
     delta: _NodeStartedDelta | _RunResumedDelta
+    trace_delta: TraceDelta | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,6 +409,7 @@ class _SuccessPlan:
     terminal: _TerminalDelta | None
     originating_learning_state: RuntimeLearningState
     next_learning_state: RuntimeLearningState
+    trace_delta: TraceDelta | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -437,6 +448,7 @@ class _RoutePlan:
     terminal: _TerminalDelta | None
     originating_learning_state: RuntimeLearningState
     next_learning_state: RuntimeLearningState
+    trace_delta: TraceDelta | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -495,6 +507,7 @@ class _FailurePlan:
     failure: Failure
     originating_learning_state: RuntimeLearningState
     next_learning_state: RuntimeLearningState
+    trace_delta: TraceDelta | None = None
 
 
 @dataclass(slots=True)
@@ -520,6 +533,7 @@ class _GrowthPlan:
     topology: _GrowthTopology
     originating_learning_state: RuntimeLearningState
     next_learning_state: RuntimeLearningState
+    trace_delta: TraceDelta | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -535,6 +549,7 @@ class _LearningPlan:
     end_node_identity: int | None
     originating_learning_state: RuntimeLearningState
     next_learning_state: RuntimeLearningState
+    trace_delta: TraceDelta | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -777,7 +792,7 @@ def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransiti
         record=record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=plan,
+        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
         observers=(RunStarted(),),
     )
 
@@ -816,6 +831,7 @@ def prepare_node_succeeded(
     *,
     commit_as: str | None = None,
     evidence: EvaluationEvidence | None = None,
+    forward_capture: ForwardCapture | None = None,
 ) -> PreparedTransition:
     """Prepare one canonical output commit and its newly-ready successors.
 
@@ -831,6 +847,8 @@ def prepare_node_succeeded(
             target and then to ``node_id`` itself.
         evidence (`EvaluationEvidence | None`, *optional*):
             Frozen visible evidence captured during this exact evaluation.
+        forward_capture (`ForwardCapture | None`, *optional*):
+            Canonical binding capture, required exactly when learning is enabled.
 
     Returns:
         `PreparedTransition`:
@@ -886,6 +904,7 @@ def prepare_node_succeeded(
             commit_target=target,
             value=value_wire,
             evidence=evidence,
+            forward_capture=forward_capture,
         ),
         typed,
     )
@@ -897,6 +916,7 @@ def prepare_node_routed(
     handle: str,
     *,
     evidence: EvaluationEvidence | None = None,
+    forward_capture: ForwardCapture | None = None,
 ) -> PreparedTransition:
     """Prepare one selected route and its derived recursive skip closure.
 
@@ -909,6 +929,8 @@ def prepare_node_routed(
             Exact non-empty handle selected by the router.
         evidence (`EvaluationEvidence | None`, *optional*):
             Frozen visible evidence captured during this exact evaluation.
+        forward_capture (`ForwardCapture | None`, *optional*):
+            Canonical binding capture, required exactly when learning is enabled.
 
     Returns:
         `PreparedTransition`:
@@ -934,7 +956,10 @@ def prepare_node_routed(
     _require_routing_node(state, node_id)
     return _prepare_route_transition(
         state,
-        NodeRoutedRecord(node_id=node_id, handle=handle, evidence=evidence),
+        NodeRoutedRecord(
+            node_id=node_id, handle=handle, evidence=evidence,
+            forward_capture=forward_capture,
+        ),
         derive_terminal_failure=True,
     )
 
@@ -946,6 +971,7 @@ def prepare_expanded(
     grow_builder: GrowBuilder,
     *,
     evidence: EvaluationEvidence | None = None,
+    forward_capture: ForwardCapture | None = None,
 ) -> PreparedTransition:
     """Prepare one canonical flat graph expansion without mutating live state.
 
@@ -961,6 +987,8 @@ def prepare_expanded(
             to one self-contained `Flow` fragment.
         evidence (`EvaluationEvidence | None`, *optional*):
             Frozen visible evidence captured during this exact evaluation.
+        forward_capture (`ForwardCapture | None`, *optional*):
+            Canonical binding capture, required exactly when learning is enabled.
 
     Returns:
         `PreparedTransition`:
@@ -1017,6 +1045,7 @@ def prepare_expanded(
             prune_ids=tuple(sorted(grow.prune)),
             topology_digest=digest,
             evidence=evidence,
+            forward_capture=forward_capture,
         ),
         fragment,
         actual_digest=digest,
@@ -1029,6 +1058,7 @@ def prepare_node_failed(
     failure: Failure,
     *,
     evidence: EvaluationEvidence | None = None,
+    forward_capture: ForwardCapture | None = None,
 ) -> PreparedTransition:
     """Prepare one terminal node failure with its canonical durable authority.
 
@@ -1040,6 +1070,8 @@ def prepare_node_failed(
             the executing node.
         evidence (`EvaluationEvidence | None`, *optional*):
             Frozen visible evidence captured before the evaluation failed.
+        forward_capture (`ForwardCapture | None`, *optional*):
+            Canonical binding capture, including unavailable inputs on early failure.
     Returns:
         `PreparedTransition`:
             Canonical ``NodeFailedRecord`` and detached append-before-apply plan.
@@ -1054,7 +1086,7 @@ def prepare_node_failed(
         raise TypeError("prepare_node_failed expects a RunState")
     if type(failure) is not Failure:
         raise TypeError("prepare_node_failed expects a Failure")
-    record = NodeFailedRecord(failure=failure, evidence=evidence)
+    record = NodeFailedRecord(failure=failure, evidence=evidence, forward_capture=forward_capture)
     _require_initialized_nonterminal(state)
     return _prepare_failure_transition(state, record)
 
@@ -1223,7 +1255,7 @@ def prepare_record(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=plan,
+        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
         observers=observers,
     )
 
@@ -1299,7 +1331,7 @@ def _prepare_success_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=plan,
+        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
         observers=observers,
     )
 
@@ -1397,7 +1429,7 @@ def _prepare_route_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=plan,
+        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
         observers=observers,
     )
 
@@ -1454,7 +1486,7 @@ def _prepare_failure_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=plan,
+        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
         observers=_failure_observers(failure),
     )
 
@@ -1536,6 +1568,12 @@ def _prepare_growth_transition(
         raise TypeError("node-expansion envelope decoded to a different record kind")
     if canonical_record != record:
         raise ValueError("NodeExpandedRecord is not in canonical wire form")
+    if state.learn and type(canonical_record.forward_capture) is ForwardCapture:
+        for connection in fragment.input_connections:
+            if select_seed_route(canonical_record.forward_capture, connection) is None:
+                _raise_growth_rejected(ValueError(
+                    f"seed connection {connection.seed_path!r} was not captured"
+                ))
     next_learning_state = state.learning_state.append_episodes(
         project_outcome_episodes(run_id, canonical_record)
     )
@@ -1561,7 +1599,10 @@ def _prepare_growth_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=plan,
+        _plan=replace(plan, trace_delta=_prepare_record_trace(
+            state, canonical_envelope, input_connections=fragment.input_connections,
+            child_boundaries=fragment.child_boundaries,
+        )),
         observers=(_growth_observer(canonical_record),),
     )
 
@@ -1629,7 +1670,7 @@ def _prepare_learning_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=plan,
+        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
         observers=(),
     )
 
@@ -1849,21 +1890,52 @@ def commit_prepared(
         raise TypeError("commit_prepared expects a RunState")
     if not isinstance(prepared, PreparedTransition):
         raise TypeError("commit_prepared expects a PreparedTransition")
+    if not isinstance(prepared._plan, (
+        _RunStartedPlan, _FrontierPlan, _SuccessPlan, _RoutePlan,
+        _FailurePlan, _GrowthPlan, _LearningPlan,
+    )):
+        raise TypeError("unsupported prepared transition plan")
+    trace_delta = prepared._plan.trace_delta
+    if trace_delta is not None:
+        trace_delta.validate_origin(state.trace)
     if isinstance(prepared._plan, _RunStartedPlan):
-        return _commit_run_started(log, state, prepared)
-    if isinstance(prepared._plan, _FrontierPlan):
-        return _commit_frontier(log, state, prepared)
-    if isinstance(prepared._plan, _SuccessPlan):
-        return _commit_success(log, state, prepared)
-    if isinstance(prepared._plan, _RoutePlan):
-        return _commit_route(log, state, prepared)
-    if isinstance(prepared._plan, _FailurePlan):
-        return _commit_failure(log, state, prepared)
-    if isinstance(prepared._plan, _GrowthPlan):
-        return _commit_growth(log, state, prepared)
-    if isinstance(prepared._plan, _LearningPlan):
-        return _commit_learning(log, state, prepared)
-    raise TypeError("unsupported prepared transition plan")
+        observers = _commit_run_started(log, state, prepared)
+    elif isinstance(prepared._plan, _FrontierPlan):
+        observers = _commit_frontier(log, state, prepared)
+    elif isinstance(prepared._plan, _SuccessPlan):
+        observers = _commit_success(log, state, prepared)
+    elif isinstance(prepared._plan, _RoutePlan):
+        observers = _commit_route(log, state, prepared)
+    elif isinstance(prepared._plan, _FailurePlan):
+        observers = _commit_failure(log, state, prepared)
+    elif isinstance(prepared._plan, _GrowthPlan):
+        observers = _commit_growth(log, state, prepared)
+    elif isinstance(prepared._plan, _LearningPlan):
+        observers = _commit_learning(log, state, prepared)
+    else:
+        raise TypeError("unsupported prepared transition plan")
+    if trace_delta is not None:
+        state.trace = trace_delta.apply()
+    return observers
+
+
+def _prepare_record_trace(
+    state: RunState, envelope: RecordEnvelope, *,
+    input_connections: tuple[SeedConnection, ...] = (),
+    child_boundaries: tuple[ChildFlowBoundary, ...] = (),
+) -> TraceDelta | None:
+    """Prepare accepted trace data while the actual executing node still exists."""
+    record = envelope.record
+    if isinstance(record, NodeFailedRecord):
+        node_id = record.failure.node_id
+    elif isinstance(record, NodeExpandedRecord):
+        node_id = record.spawner_id
+    elif isinstance(record, (NodeSucceededRecord, NodeRoutedRecord)):
+        node_id = record.node_id
+    else:
+        node_id = None
+    return prepare_trace(state.trace, envelope, state.flow.nodes.get(node_id),
+                         input_connections=input_connections, child_boundaries=child_boundaries)
 
 
 def _replay_records(
@@ -2351,6 +2423,12 @@ def _require_initialized(state: RunState) -> None:
         raise ValueError("initialized pool START must match the adopted flow")
     if state.flow.start_id not in state.initial_static_ids:
         raise ValueError("initialized run state START is not an initial static node")
+    if state.learn:
+        if (type(state.trace) is not RetainedTrace or state.trace.run_id != state.run_id
+                or state.trace.next_sequence != state.next_sequence):
+            raise ValueError("run-state trace disagrees with recorded authority")
+    elif state.trace is not None:
+        raise ValueError("trace requires recorded learning")
     _validate_runtime_memory_configuration(state)
 
 
@@ -2756,6 +2834,10 @@ def _validate_growth_fragment_data(
                 "growth fragment wiring keys must exactly equal fragment nodes"
             )
         )
+    try:
+        validate_growth_metadata(fragment)
+    except (TypeError, ValueError) as exc:
+        _raise_growth_rejected(exc)
     combined_nodes = dict(state.flow.nodes)
     combined_nodes.update(fragment.nodes)
     combined_node_ids = set(combined_nodes)
@@ -3285,55 +3367,31 @@ def _validate_node_evidence(
     node = state.flow.nodes[node_id]
     scope = node.memory_scope
 
-    if state.memory_layout is None or state.learn is not True:
+    if state.learn is not True or node.needs_evaluation_trace is not True:
         if evidence is not None:
-            raise ValueError("node evidence requires enabled memory learning")
+            raise ValueError(f"node {node_id!r} is ineligible for evaluation evidence")
         return
-    if not state.memory_layout:
-        if evidence is not None:
-            raise ValueError(
-                f"node {node_id!r} is ineligible for evaluation evidence"
-            )
-        return
-    if node.needs_evaluation_trace is not True:
-        if evidence is not None:
-            raise ValueError(
-                f"node {node_id!r} is ineligible for evaluation evidence"
-            )
-        return
-    if type(scope) is not MemoryScope:
+    if scope is not None:
+        if type(scope) is not MemoryScope:
+            raise ValueError(f"node {node_id!r} has no exact compiled memory scope")
+        MemoryScope(scope.root_flow_id, scope.static_path, scope.frame_stack,
+                    scope.occurrence_path, scope.boundary)
+        expected_stack = state.learning_state.applicable_frames(
+            scope.root_flow_id, scope.static_path,
+        )
+        if scope.frame_stack != expected_stack:
+            raise ValueError(f"node {node_id!r} memory scope must carry its exact recorded frame stack")
+    elif state.memory_layout:
         raise ValueError(f"node {node_id!r} has no exact compiled memory scope")
-    MemoryScope(
-        scope.root_flow_id,
-        scope.static_path,
-        scope.frame_stack,
-        scope.occurrence_path,
-        scope.boundary,
-    )
-    expected_stack = state.learning_state.applicable_frames(
-        scope.root_flow_id,
-        scope.static_path,
-    )
-    if scope.frame_stack != expected_stack:
-        raise ValueError(
-            f"node {node_id!r} memory scope must carry its exact recorded frame stack"
-        )
-    if not expected_stack:
-        if evidence is not None:
-            raise ValueError(
-                f"node {node_id!r} is ineligible for evaluation evidence"
-            )
-        return
     if evidence is None:
-        raise ValueError(
-            f"eligible node {node_id!r} requires evaluation evidence while learning"
-        )
+        raise ValueError(f"eligible node {node_id!r} requires evaluation evidence while learning")
     if type(evidence) is not EvaluationEvidence:
         raise TypeError("node evidence must be an EvaluationEvidence or None")
     if evidence.scope != scope:
         raise ValueError(f"node {node_id!r} evidence scope does not match its layout")
-    for frame_ref in scope.frame_stack:
-        MemoryOccurrenceRef(frame_ref, scope.occurrence_path)
+    if scope is not None:
+        for frame_ref in scope.frame_stack:
+            MemoryOccurrenceRef(frame_ref, scope.occurrence_path)
 
 
 def _validate_failure_record(state: RunState, record: NodeFailedRecord) -> None:
@@ -4206,6 +4264,7 @@ def _require_pristine(state: RunState) -> None:
         and state.memory_layout is None
         and state.memory_snapshots is None
         and state.learn is False
+        and state.trace is None
         and state.learning_state == RuntimeLearningState()
         and state._memory_authority.layout is None
         and state._memory_authority.snapshots is None

@@ -21,12 +21,13 @@ def test_source_span_is_absent_from_runtime_events() -> None:
 
 
 def test_failure_carriers_have_no_parallel_location_fields() -> None:
-    """Failure carriers retain one authority and only approved memory evidence."""
+    """Failure records add capture data while observers retain one failure authority."""
     for carrier in (EvaluationFailure, NodeFailed, RunFailed):
         assert [field.name for field in fields(carrier)] == ["failure"]
     assert [field.name for field in fields(NodeFailedRecord)] == [
         "failure",
         "evidence",
+        "forward_capture",
     ]
 
     assert [field.name for field in fields(RunResult)] == [

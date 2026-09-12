@@ -22,7 +22,9 @@ from typing import Any, Callable, ClassVar, Iterator, Optional
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.base import Grow, Node, NodeKind
-from agent_composer.nodes.binding import BindingError, _resolve_source, _source_origin
+from agent_composer.nodes.binding import (
+    BindingError, ReservedBinder, _resolve_source, _source_origin,
+)
 from agent_composer.nodes.contracts import (
     Parameter,
     _iter_origin_carrier,
@@ -61,6 +63,7 @@ class MapNode(Node):
     kind = NodeKind.MAP
     is_spawner: ClassVar[bool] = True  # grows the graph: run() returns a seed-first Grow
     binds_per_item: ClassVar[bool] = True  # binds call-args PER ELEMENT via `bind_item`, not up front
+    item_source_key: ClassVar[str] = "over"
     grow_depth_delta: ClassVar[int] = 1  # each child is one call level deeper (bounded by MAX_REF_DEPTH)
 
     def __init__(self, node_id: str, *, flow_id: str, parallel: bool = False,
@@ -107,30 +110,39 @@ class MapNode(Node):
         if self.child is None:
             raise RuntimeError(f"MAP node {self.id!r}: child flow {self.flow_id!r} not baked")
 
-    def bind_reserved(self, node_wiring: dict, pool) -> dict:
+    def bind_reserved(
+        self, node_wiring: dict, pool, *, bind: ReservedBinder | None = None,
+    ) -> dict:
         """Pre-resolve the MAP `over` source into the list `run` maps over.
 
         Returns `{"over": <list>}`: the `over` source rides `node_wiring["over"]`, evaluated
         against `pool`. A source that resolves to `None`/non-list raises a binder-owned
         ``BindingError`` classified as ``contract.input`` by the read seam."""
         over_src = node_wiring["over"]
-        items = _resolve_source(over_src, pool)
-        if items is None or not isinstance(items, list):
-            display_src = binding_source(over_src)
-            raise BindingError(
-                f"MAP node {self.id!r}: `over` ({display_src}) did not resolve to a list",
-                failure_code="contract.input",
-                origin=_source_origin(over_src),
-            )
+
+        def validate(items):
+            if items is None or not isinstance(items, list):
+                display_src = binding_source(over_src)
+                raise BindingError(
+                    f"MAP node {self.id!r}: `over` ({display_src}) did not resolve to a list",
+                    failure_code="contract.input",
+                    origin=_source_origin(over_src),
+                )
+            return items
+
+        items = (
+            validate(_resolve_source(over_src, pool)) if bind is None
+            else bind("over", over_src, validate)
+        )
         return {"over": items}
 
     def reserved_wiring_keys(self) -> set[str]:
         """A MAP reserves `over` (its iteration-source author-wiring key)."""
         return {"over"}
 
-    def forward(self, inputs: dict, *, bind_item: Optional[Callable[[Any], dict]] = None):
+    def forward(self, inputs: dict, *, bind_item: Optional[Callable[[Any, int], dict]] = None):
         # Per-element call-args RAW (no driver pre-default): the spliced child START_ID fills omitted
         # inputs from its params' declared defaults. The node describes growth with only the
         # per-element records; the compile-owned injected builder constructs the MAP fan-in.
-        records = [dict(bind_item(el)) for el in inputs["over"]]
+        records = [dict(bind_item(el, index)) for index, el in enumerate(inputs["over"])]
         return Grow(seed=records)

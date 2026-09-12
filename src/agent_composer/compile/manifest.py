@@ -21,7 +21,7 @@ from urllib.parse import unquote_plus
 
 from lark import Token, Tree
 
-from agent_composer.compile.model import CompiledFlow, Edge, Flow, FlowOutput
+from agent_composer.compile.model import CompiledFlow, Edge, Flow, FlowOutput, validate_growth_metadata
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import ExpressionError, expr_refs, scan_template
 from agent_composer.expr.template import Literal, Span
@@ -41,6 +41,7 @@ from agent_composer.nodes.contracts import (
     Assertion,
     Binding,
     ContractOrigins,
+    ExecutionScope,
     Parameter,
     PartialRecordContract,
     ValueContract,
@@ -79,6 +80,7 @@ _IGNORED_NODE_FIELDS = frozenset(
         "origin",
         "origin_context",
         "memory_scope",
+        "execution_scope",
         "wiring_labels",
     }
 )
@@ -1862,6 +1864,20 @@ def _node_manifest(
             node.memory_scope,
             f"{path}.memory_scope",
         )
+    if topology_only and node.execution_scope is not None:
+        scope = node.execution_scope
+        if type(scope) is not ExecutionScope:
+            raise TypeError(f"{path}.execution_scope must be an ExecutionScope")
+        ExecutionScope(scope.static_path, scope.flow_path, scope.occurrence_path, scope.boundary)
+        manifest["execution_scope"] = {
+            "static_path": list(scope.static_path),
+            "flow_path": list(scope.flow_path),
+            "occurrence_path": [
+                {"kind": position.kind, "static_path": list(position.static_path), "index": position.index}
+                for position in scope.occurrence_path
+            ],
+            "boundary": scope.boundary,
+        }
 
     return {key: manifest[key] for key in sorted(manifest)}
 
@@ -1917,6 +1933,8 @@ def _flow_manifest(
                     "wiring",
                     "start_id",
                     "end_id",
+                    "input_connections",
+                    "child_boundaries",
                     "outputs",
                     "flow_llm_config",
                     "flow_id",
@@ -1926,10 +1944,12 @@ def _flow_manifest(
                 }
             )
         elif type(flow) is Flow:
-            expected = frozenset({"nodes", "edges", "wiring", "start_id", "end_id"})
+            expected = frozenset({"nodes", "edges", "wiring", "start_id", "end_id",
+                                  "input_connections", "child_boundaries"})
         else:
             raise TypeError(f"{path}: unsupported Flow subclass {type(flow).__name__}")
         _check_fields(flow, expected, path)
+        validate_growth_metadata(flow)
 
         nodes: dict[str, Any] = {}
         bad_node_id = next(
@@ -1983,6 +2003,18 @@ def _flow_manifest(
             "start_id": flow.start_id,
             "wiring": wiring,
         }
+        if topology_only and flow.input_connections:
+            manifest["input_connections"] = [
+                {"child_start_id": connection.child_start_id, "input_name": connection.input_name,
+                 "seed_path": list(connection.seed_path)}
+                for connection in sorted(flow.input_connections,
+                                         key=lambda item: (item.child_start_id, item.input_name))
+            ]
+        if topology_only and flow.child_boundaries:
+            manifest["child_boundaries"] = [
+                {"start_id": boundary.start_id, "end_id": boundary.end_id}
+                for boundary in sorted(flow.child_boundaries, key=lambda item: (item.start_id, item.end_id))
+            ]
         if type(flow) is CompiledFlow and not topology_only:
             if flow.flow_id is not None:
                 if type(flow.flow_id) is not str or not flow.flow_id:

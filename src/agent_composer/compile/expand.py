@@ -17,6 +17,8 @@ child `END_ID` is the alias filler. A child node reading `${input.X}` is re-poin
 child START_ID's output object (`${<callsite>/<start>.output.X}`). Transition preparation
 validates the fragment and records its canonical seed/digest; the reducer then splices it,
 initializes its dispositions, and queues its START node.
+Builders preserve seed-route selectors and actual child boundary pairs independently
+of the materialized values, and instantiate execution scopes from authored locations.
 
 Layer: compile — imports `expr`/`nodes` plus the shared growth-schema leaf;
 never `runtime` or the package-root run boundary.
@@ -34,11 +36,13 @@ from agent_composer.compile.model import (
     Edge,
     Flow,
     GrowthRejected,
+    validate_growth_metadata,
 )
 from agent_composer.compile.memory_layout import (
     _revalidate_memory_occurrence_path,
     _revalidate_memory_scope,
 )
+from agent_composer.compile.execution_layout import _revalidate_scope as _revalidate_execution_scope
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr import rewrite_template_refs
 from agent_composer.expr.expressions import rewrite_condition_refs
@@ -49,7 +53,15 @@ from agent_composer.memory.contracts import (
     MemorySetupError,
 )
 from agent_composer.nodes.base import Node, NodeKind
-from agent_composer.nodes.contracts import Assertion, Binding, Parameter
+from agent_composer.nodes.contracts import (
+    Assertion,
+    Binding,
+    ChildFlowBoundary,
+    ExecutionPosition,
+    ExecutionScope,
+    Parameter,
+    SeedConnection,
+)
 from agent_composer.nodes.end.node import EndNode
 from agent_composer.nodes.ids import map_callsite, ns
 from agent_composer.nodes.start.node import StartNode
@@ -212,6 +224,8 @@ def _lower_spawner_post_asserts(
 def clone_child(child, callsite: str, record: dict, *,
                 origin_context: "tuple[OriginRef, ...]" = (),
                 occurrence_path: "tuple[MemoryOccurrenceSegment, ...]" = (),
+                execution_path: tuple[ExecutionPosition, ...] = (),
+                seed_prefix: tuple[int, ...] = (),
                 post_asserts: "list[Assertion] | None" = None,
                 input_names: "set[str] | None" = None) -> Flow:
     """Splice a child `CompiledFlow`'s `START_ID..END_ID` at `callsite`. Every child node
@@ -226,6 +240,9 @@ def clone_child(child, callsite: str, record: dict, *,
     clone's existing generated ancestry without deduplication. ``occurrence_path`` is the
     complete dynamic memory occurrence inherited by every clone. Static templates must carry
     an empty occurrence; cloning replaces it rather than accumulating stale dynamic state.
+    ``execution_path`` prefixes each direct template node's initial execution position;
+    nested child templates retain their own static scopes until they are instantiated.
+    ``seed_prefix`` supplies an optional MAP item index for materialized seed selectors.
     `post_asserts`/
     `input_names` (default empty) carry a SPAWNER's node-level POST `asserts:`
     — a `call` node may declare `asserts:` reading `${output}` (its committed output) and its
@@ -236,12 +253,27 @@ def clone_child(child, callsite: str, record: dict, *,
         occurrence_path,
         name="occurrence_path",
     )
+    validate_growth_metadata(child)
+    ExecutionScope((), occurrence_path=execution_path)
+    if type(seed_prefix) is not tuple or len(seed_prefix) > 1 or any(
+        type(index) is not int or index < 0 for index in seed_prefix
+    ):
+        raise ValueError("seed_prefix must be empty or one non-negative item index")
 
     nodes: dict[str, Node] = {}
     for nid, node in child.nodes.items():
         clone = copy.deepcopy(node)
         clone.id = ns(callsite, nid)
         clone.origin_context = origin_context + clone.origin_context
+        if clone.execution_scope is not None:
+            scope = clone.execution_scope
+            if type(scope) is not ExecutionScope:
+                raise TypeError("child execution scope must be an ExecutionScope")
+            ExecutionScope(scope.static_path, scope.flow_path, scope.occurrence_path, scope.boundary)
+            local = (ExecutionPosition("loop_driver", scope.static_path, 0),) if clone.is_loop else ()
+            if scope.occurrence_path != local:
+                raise ValueError("child execution template contains a dynamic occurrence")
+            clone.execution_scope = replace(scope, occurrence_path=(*execution_path, *local))
         if clone.memory_scope is not None:
             try:
                 _revalidate_memory_scope(
@@ -329,7 +361,24 @@ def clone_child(child, callsite: str, record: dict, *,
         post_asserts=post_asserts or [],
         input_names=set(input_names or ()),
     )
-    return Flow(nodes=nodes, edges=edges, wiring=wiring, start_id=start_ns, end_id=out_id)
+    declared = {param.name for param in (child.nodes[child.start_id].params or [])}
+    connections = tuple(
+        SeedConnection(start_ns, name, (*seed_prefix, name))
+        for name in record if name in declared
+    )
+    connections += tuple(
+        SeedConnection(
+            ns(callsite, item.child_start_id), item.input_name, (*seed_prefix, *item.seed_path),
+        )
+        for item in child.input_connections if item.child_start_id != child.start_id
+    )
+    boundaries = (ChildFlowBoundary(start_ns, out_id),) + tuple(
+        ChildFlowBoundary(ns(callsite, item.start_id), ns(callsite, item.end_id))
+        for item in child.child_boundaries
+        if (item.start_id, item.end_id) != (child.start_id, child.end_id)
+    )
+    return Flow(nodes=nodes, edges=edges, wiring=wiring, start_id=start_ns, end_id=out_id,
+                input_connections=connections, child_boundaries=boundaries)
 
 
 def _producer_of(src: str) -> Optional[str]:
@@ -347,6 +396,7 @@ def _producer_of(src: str) -> Optional[str]:
 def call_subgraph(child, callsite: str, record: dict, *,
                   origin_context: "tuple[OriginRef, ...]" = (),
                   memory_scope: "MemoryScope | None" = None,
+                  execution_scope: ExecutionScope | None = None,
                   post_asserts: "list[Assertion] | None" = None,
                   input_names: "set[str] | None" = None) -> Flow:
     """The pure CALL builder: the self-describing fragment a CALL spawner grows into.
@@ -367,19 +417,27 @@ def call_subgraph(child, callsite: str, record: dict, *,
     including both child boundaries. The CALL node passes its ordered assertion carriers and
     declared-input names; durable `build_grow` uses the same inputs so a resumed run's rebuilt
     child END is identical. ``memory_scope`` contributes its existing absolute occurrence path
-    unchanged to each cloned child node."""
+    unchanged to each cloned child node. ``execution_scope`` appends the authored CALL
+    position. The returned recipes select parent seed parameter names directly."""
     if memory_scope is not None:
         _revalidate_memory_scope(memory_scope)
+    if execution_scope is not None:
+        _revalidate_execution_scope(execution_scope)
     cloned = clone_child(child, callsite=callsite, record=record,
                          origin_context=origin_context,
                          occurrence_path=(
                              () if memory_scope is None else memory_scope.occurrence_path
                          ),
+                         execution_path=(() if execution_scope is None else (
+                             *execution_scope.occurrence_path,
+                             ExecutionPosition("call", execution_scope.static_path),
+                         )),
                          post_asserts=post_asserts,
                          input_names=input_names)
     cloned.nodes[cloned.end_id].commit_as = callsite
     return Flow(nodes=cloned.nodes, edges=cloned.edges, wiring=cloned.wiring,
-                start_id=cloned.start_id, end_id=cloned.end_id)
+                start_id=cloned.start_id, end_id=cloned.end_id,
+                input_connections=cloned.input_connections, child_boundaries=cloned.child_boundaries)
 
 
 def map_subgraph(
@@ -389,6 +447,7 @@ def map_subgraph(
     *,
     origin_context: "tuple[OriginRef, ...]" = (),
     memory_scope: "MemoryScope | None" = None,
+    execution_scope: ExecutionScope | None = None,
 ) -> Flow:
     """The pure MAP builder: the self-describing fragment a MAP spawner grows into.
 
@@ -413,6 +472,8 @@ def map_subgraph(
 
     When ``memory_scope`` is present, element ``i`` appends a structured MAP-item occurrence to
     its cloned child nodes. The generated fan nodes retain the spawner scope with no flow boundary.
+    Execution scopes also append the explicit item index; seed recipes select that same
+    index and parameter name. Only actual item START/END pairs become child boundaries.
 
     N=0 (empty map): the only body node is the list-END; `map#/__start__ → map#/__end__` is wired
     with the same ordering edge so the collector still schedules and emits `[]`."""
@@ -424,9 +485,13 @@ def map_subgraph(
     end_wiring: dict[str, str] = {}
     end_edges: list[Edge] = []
     start_edges: list[Edge] = []                         # map_start -> each element start (ordering)
+    connections: list[SeedConnection] = []
+    boundaries: list[ChildFlowBoundary] = []
 
     if memory_scope is not None:
         _revalidate_memory_scope(memory_scope)
+    if execution_scope is not None:
+        _revalidate_execution_scope(execution_scope)
 
     for i, record in enumerate(records):
         occurrence_path = ()
@@ -445,10 +510,17 @@ def map_subgraph(
             record=record,
             origin_context=origin_context,
             occurrence_path=occurrence_path,
+            execution_path=(() if execution_scope is None else (
+                *execution_scope.occurrence_path,
+                ExecutionPosition("map_item", execution_scope.static_path, i),
+            )),
+            seed_prefix=(i,),
         )
         nodes.update(cloned.nodes)
         edges.extend(cloned.edges)
         wiring.update(cloned.wiring)
+        connections.extend(cloned.input_connections)
+        boundaries.extend(cloned.child_boundaries)
         # Ordering fan-out: map_start -> this element's START (the element's sole incoming gate).
         start_edges.append(Edge(
             id=f"{map_start_id}->{cloned.start_id}#0",
@@ -464,6 +536,8 @@ def map_subgraph(
     map_start.origin_context = origin_context
     if memory_scope is not None:
         map_start.memory_scope = replace(memory_scope, boundary=None)
+    if execution_scope is not None:
+        map_start.execution_scope = replace(execution_scope, boundary=None)
     nodes[map_start_id] = map_start
     wiring[map_start_id] = {}
 
@@ -474,6 +548,8 @@ def map_subgraph(
     map_end.origin_context = origin_context
     if memory_scope is not None:
         map_end.memory_scope = replace(memory_scope, boundary=None)
+    if execution_scope is not None:
+        map_end.execution_scope = replace(execution_scope, boundary=None)
     nodes[map_end_id] = map_end
     edges.extend(start_edges)
     edges.extend(end_edges)
@@ -486,7 +562,8 @@ def map_subgraph(
             from_=map_start_id, to=map_end_id, ordering=True))
 
     return Flow(nodes=nodes, edges=edges, wiring=wiring,
-                start_id=map_start_id, end_id=map_end_id)
+                start_id=map_start_id, end_id=map_end_id,
+                input_connections=tuple(connections), child_boundaries=tuple(boundaries))
 
 
 def loop_continue_subgraph(
@@ -498,6 +575,7 @@ def loop_continue_subgraph(
     *,
     origin_context: "tuple[OriginRef, ...]" = (),
     memory_scope: "MemoryScope | None" = None,
+    execution_scope: ExecutionScope | None = None,
 ) -> Flow:
     """The pure LOOP CONTINUE builder: body_k + the fresh next-iteration driver.
 
@@ -522,13 +600,25 @@ def loop_continue_subgraph(
     clones. The supplied next driver already owns its copied outer context; its authored LOOP
     origin remains local and is appended by `Node.failure_trace`. When ``memory_scope`` is
     present, the body appends this LOOP-iteration occurrence while the next driver retains the
-    supplied base occurrence unchanged."""
+    supplied base occurrence unchanged. Execution positions replace the current driver
+    with body ``k``; the respawned driver already owns driver ``k + 1``. Seed recipes
+    select only carried fields declared by the body START."""
     if memory_scope is not None:
         _revalidate_memory_scope(memory_scope)
     if driver.memory_scope is not None:
         _revalidate_memory_scope(
             driver.memory_scope,
             name="loop driver memory_scope",
+        )
+    execution_path = ()
+    if execution_scope is not None:
+        _revalidate_execution_scope(execution_scope)
+        current = ExecutionPosition("loop_driver", execution_scope.static_path, k)
+        if not execution_scope.occurrence_path or execution_scope.occurrence_path[-1] != current:
+            raise ValueError("loop scope must end in its current driver position")
+        execution_path = (
+            *execution_scope.occurrence_path[:-1],
+            ExecutionPosition("loop_body", execution_scope.static_path, k),
         )
 
     # The loop's carried record may be wider than the body domain: the authoring
@@ -557,6 +647,7 @@ def loop_continue_subgraph(
         record=body_seed,
         origin_context=origin_context,
         occurrence_path=occurrence_path,
+        execution_path=execution_path,
     )
     body_end = cloned.end_id                               # ns(map_callsite(origin, k), END_ID)
     nodes = dict(cloned.nodes)
@@ -579,7 +670,8 @@ def loop_continue_subgraph(
     wiring[driver.id] = driver_wiring
     edges.extend(driver_edges)
     return Flow(nodes=nodes, edges=edges, wiring=wiring,
-                start_id=cloned.start_id, end_id=body_end)
+                start_id=cloned.start_id, end_id=body_end,
+                input_connections=cloned.input_connections, child_boundaries=cloned.child_boundaries)
 
 
 def _growth_record(seed: Any, *, label: str) -> dict[str, Any]:
@@ -653,6 +745,7 @@ def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
                 record=dict(record),
                 origin_context=spawner.failure_trace(),
                 memory_scope=spawner.memory_scope,
+                execution_scope=spawner.execution_scope,
                 post_asserts=spawner.post_asserts,
                 input_names={param.name for param in (spawner.params or [])},
             )
@@ -664,6 +757,7 @@ def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
                 records=[dict(record) for record in records],
                 origin_context=spawner.failure_trace(),
                 memory_scope=spawner.memory_scope,
+                execution_scope=spawner.execution_scope,
             )
         case NodeKind.LOOP:
             carried, iteration = _loop_growth_seed(canonical_seed)
@@ -675,6 +769,7 @@ def build_grow(spawner: Node, canonical_seed: Any) -> Flow:
                 spawner.respawn(iteration + 1),
                 origin_context=spawner.failure_trace(),
                 memory_scope=spawner.memory_scope,
+                execution_scope=spawner.execution_scope,
             )
         case _:
             raise ValueError(

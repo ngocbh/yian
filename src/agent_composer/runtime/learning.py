@@ -791,6 +791,8 @@ def project_outcome_episodes(
         return ()
     if type(evidence) is not EvaluationEvidence:
         raise TypeError("episode projection evidence must be EvaluationEvidence")
+    if evidence.scope is None:
+        return ()
 
     if type(record) is NodeSucceededRecord:
         if type(record.value) is not dict or "value" not in record.value:

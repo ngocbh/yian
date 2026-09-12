@@ -62,7 +62,7 @@ from agent_composer.runtime.state import (
 )
 from agent_composer.typesys import VariablePool
 from tests.engine._fakes import FuncNode
-from tests.engine._graph_builder import _graph
+from tests.engine._graph_builder import _forward_capture, _graph
 
 
 _RUN_ID = "learning-run"
@@ -183,12 +183,15 @@ def _start_trace_node(
     """Drive START and leave ``node`` as the sole in-flight outcome."""
     state, log = _new_state(node, layout=layout, learn=learn)
     commit_prepared(log, state, prepare_node_started(state, START_ID))
-    commit_prepared(log, state, prepare_node_succeeded(state, START_ID, {}))
+    commit_prepared(log, state, prepare_node_succeeded(
+        state, START_ID, {},
+        forward_capture=_forward_capture(state.flow.nodes[START_ID], {}) if learn else None,
+    ))
     commit_prepared(log, state, prepare_node_started(state, node.id))
     return state, log
 
 
-def _evidence(scope: MemoryScope) -> EvaluationEvidence:
+def _evidence(scope: MemoryScope | None) -> EvaluationEvidence:
     """Return deterministic visible evidence for one accepted outcome."""
     return EvaluationEvidence(
         scope,
@@ -217,10 +220,13 @@ def _successful_terminal(
             node.id,
             {"answer": 7},
             evidence=_evidence(scope),
+            forward_capture=_forward_capture(node, {"question": "q"}),
         ),
     )
     commit_prepared(log, state, prepare_node_started(state, END_ID))
-    commit_prepared(log, state, prepare_node_succeeded(state, END_ID, None))
+    commit_prepared(log, state, prepare_node_succeeded(
+        state, END_ID, None, forward_capture=_forward_capture(state.flow.nodes[END_ID], {}),
+    ))
     assert isinstance(state.result, RunSucceeded)
     return state, log, layout
 
@@ -395,7 +401,10 @@ def test_failure_episode_uses_full_canonical_durable_failure_json() -> None:
         cause_type="ValueError",
         traceback="debug trace",
     )
-    prepared = prepare_node_failed(state, failure, evidence=_evidence(scope))
+    prepared = prepare_node_failed(
+        state, failure, evidence=_evidence(scope),
+        forward_capture=_forward_capture(node, {"question": "q"}),
+    )
     commit_prepared(_log, state, prepared)
 
     assert isinstance(state.result, RunFailed)
@@ -421,7 +430,7 @@ def test_evidence_is_rejected_when_learning_is_not_enabled(
     layout = _layout(node.memory_scope.frame_stack) if enabled else None
     state, _log = _start_trace_node(node, layout=layout, learn=learn)
 
-    with pytest.raises(ValueError, match="requires enabled memory learning"):
+    with pytest.raises(ValueError, match="ineligible for evaluation evidence"):
         prepare_node_succeeded(
             state,
             node.id,
@@ -438,7 +447,9 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
     layout = _layout(node.memory_scope.frame_stack)
     state, _log = _start_trace_node(node, layout=layout, learn=True)
     with pytest.raises(ValueError, match="requires evaluation evidence"):
-        prepare_node_succeeded(state, node.id, "done")
+        prepare_node_succeeded(
+            state, node.id, "done", forward_capture=_forward_capture(node, {}),
+        )
 
     ordinary = FuncNode("ordinary", lambda _inputs: "done")
     ordinary.memory_scope = _scope(ordinary.id)
@@ -454,9 +465,13 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
             ordinary.id,
             "done",
             evidence=_evidence(ordinary.memory_scope),
+            forward_capture=_forward_capture(ordinary, {"question": "q"}),
         )
     assert (
-        prepare_node_succeeded(ordinary_state, ordinary.id, "done").record.evidence
+        prepare_node_succeeded(
+            ordinary_state, ordinary.id, "done",
+            forward_capture=_forward_capture(ordinary, {}),
+        ).record.evidence
         is None
     )
 
@@ -479,21 +494,27 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
             mismatched.id,
             "done",
             evidence=_evidence(mismatched.memory_scope),
+            forward_capture=_forward_capture(mismatched, {"question": "q"}),
         )
 
 
-def test_empty_enabled_layout_has_no_evidence_eligible_frames() -> None:
+def test_empty_enabled_layout_retains_scope_free_evidence_without_episodes() -> None:
     node = _TraceNode("agent")
     state, _log = _start_trace_node(node, layout=(), learn=True)
 
-    prepared = prepare_node_succeeded(state, node.id, "done")
-    assert prepared.record.evidence is None
-    with pytest.raises(ValueError, match="ineligible"):
+    prepared = prepare_node_succeeded(
+        state, node.id, "done", evidence=_evidence(None),
+        forward_capture=_forward_capture(node, {"question": "q"}),
+    )
+    assert prepared.record.evidence.scope is None
+    assert project_outcome_episodes(_RUN_ID, prepared.record) == ()
+    with pytest.raises(ValueError, match="evidence scope does not match"):
         prepare_node_succeeded(
             state,
             node.id,
             "done",
             evidence=_evidence(_scope(node.id)),
+            forward_capture=_forward_capture(node, {"question": "q"}),
         )
 
 
@@ -517,7 +538,9 @@ def test_learning_rejects_trace_scope_that_omits_an_applicable_frame(
     )
 
     with pytest.raises(ValueError, match="exact recorded frame stack"):
-        prepare_node_succeeded(state, node.id, "done")
+        prepare_node_succeeded(
+            state, node.id, "done", forward_capture=_forward_capture(node, {}),
+        )
 
 
 def test_learning_records_require_primary_terminal_and_enabled_learn_flag() -> None:
@@ -535,6 +558,7 @@ def test_learning_records_require_primary_terminal_and_enabled_learn_flag() -> N
             node.id,
             "done",
             evidence=_evidence(scope),
+            forward_capture=_forward_capture(node, {"question": "q"}),
         ),
     )
     occurrences = state.learning_state.occurrence_inventory(agent)
@@ -653,7 +677,10 @@ def test_expanded_map_occurrence_projects_and_replays_from_live_node_scope() -> 
     commit_prepared(
         log,
         state,
-        prepare_expanded(state, spawner.id, Grow(seed=[{}]), build_grow),
+        prepare_expanded(
+            state, spawner.id, Grow(seed=[{}]), build_grow,
+            forward_capture=_forward_capture(spawner, {"over": [{}]}),
+        ),
     )
 
     def succeed(node_id: str, value, *, evidence=None) -> None:
@@ -662,7 +689,12 @@ def test_expanded_map_occurrence_projects_and_replays_from_live_node_scope() -> 
         commit_prepared(
             log,
             state,
-            prepare_node_succeeded(state, node_id, value, evidence=evidence),
+            prepare_node_succeeded(
+                state, node_id, value, evidence=evidence,
+                forward_capture=_forward_capture(
+                    state.flow.nodes[node_id], {} if evidence is None else evidence.bound_inputs,
+                ),
+            ),
         )
 
     succeed("map/__start__", {})
@@ -1057,6 +1089,7 @@ def test_graph_outcome_uses_constant_memory_roots_and_indexed_scope(
         node.id,
         "done",
         evidence=_evidence(node.memory_scope),
+        forward_capture=_forward_capture(node, {"question": "q"}),
     )
     commit_prepared(log, state, prepared)
 

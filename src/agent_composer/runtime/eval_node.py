@@ -6,7 +6,7 @@ the read (bind the inputs from the pool) and the write (the dispatcher stores `O
 pre-resolves reserved keys, builds trait-gated capabilities, runs the node through its
 assert-owning ``run`` wrapper, forwards transient chunks through ``emit_stream``, and
 returns an ``EvaluatedOutcome`` containing exactly
-``Output | Route | Grow | EvaluationFailure`` plus optional visible evidence. It emits no
+``Output | Route | Grow | EvaluationFailure`` plus optional evidence and input capture. It emits no
 observer notifications; durable observer ordering belongs to the dispatcher.
 
 Expected rejection is classified where its operation occurs: binding evaluation,
@@ -34,6 +34,7 @@ from typing import Any, TypeAlias
 
 from agent_composer.diagnostics import Failure, FailureCode, OriginRef
 from agent_composer.events import StreamChunk
+from agent_composer.expr.lineage import ResolvedValue, ValueRoute
 from agent_composer.memory import (
     EvaluationEvidence,
     EvaluationTrace,
@@ -55,7 +56,14 @@ from agent_composer.nodes.base import (
     _HostStop,
     _NodeBodyError,
 )
-from agent_composer.nodes.binding import BindingError, bind_params
+from agent_composer.nodes.binding import (
+    BindingCapture,
+    BindingCollector,
+    BindingError,
+    SourceResolver,
+    _resolve_source,
+    bind_params,
+)
 from agent_composer.runtime.log import canonical_seed
 from agent_composer.typesys.pool import VariablePool
 
@@ -124,6 +132,7 @@ class EvaluatedOutcome:
 
     outcome: WorkerOutcome
     evidence: EvaluationEvidence | None
+    bindings: BindingCapture | None = None
 
     def __post_init__(self) -> None:
         """Require one closed raw outcome and exact optional evidence."""
@@ -131,12 +140,14 @@ class EvaluatedOutcome:
             raise TypeError("outcome must be a WorkerOutcome")
         if self.evidence is not None and type(self.evidence) is not EvaluationEvidence:
             raise TypeError("evidence must be an EvaluationEvidence or None")
+        if self.bindings is not None and type(self.bindings) is not BindingCapture:
+            raise TypeError("bindings must be a BindingCapture or None")
 
 
 class _EvaluationTraceCollector(EvaluationTrace):
     """Private mutable trace frozen once at the evaluator return boundary."""
 
-    def __init__(self, scope: MemoryScope) -> None:
+    def __init__(self, scope: MemoryScope | None) -> None:
         self._scope = scope
         self._bound_inputs: dict[str, Any] | None = None
         self._base_system_prompt: str | None = None
@@ -227,12 +238,8 @@ def _new_evaluation_trace(
     if not capture_evidence or node.needs_evaluation_trace is not True:
         return None
     scope = node.memory_scope
-    if (
-        type(scope) is not MemoryScope
-        or type(scope.frame_stack) is not tuple
-        or not scope.frame_stack
-    ):
-        return None
+    if scope is not None and type(scope) is not MemoryScope:
+        raise TypeError("node memory_scope must be an exact MemoryScope or None")
     return _EvaluationTraceCollector(scope)
 
 
@@ -344,6 +351,8 @@ def _evaluate_node_stream(
     stop_event=None,
     evaluation_trace: _EvaluationTraceCollector | None = None,
     memory_recall: MemoryRecall | None = None,
+    binding_collector: BindingCollector | None = None,
+    source_resolver: SourceResolver | None = None,
 ) -> Generator[StreamChunk, None, WorkerOutcome]:
     """Bind and run one node, yielding chunks and returning one normalized result.
 
@@ -381,14 +390,40 @@ def _evaluate_node_stream(
         node_wiring = {} if flow is None else flow.wiring.get(node.id, {})
 
     per_item = node.binds_per_item
+    uses_base_template = type(node).run is Node.run
+    reserved_binder = None
+    reserved_sources: set[str] = set()
+    if binding_collector is not None:
+        def reserved_binder(name, source, normalize):
+            """Capture one node-owned reserved value after its normalization."""
+            value = _resolve_source(
+                source, pool, collector=binding_collector, name=name,
+                source_resolver=source_resolver,
+            )
+            value = normalize(value)
+            reserved_sources.add(name)
+            return value
+
     try:
         if per_item:
             record = {}
         else:
             params = node.params if node.params is not None else []
-            record = bind_params(params, node_wiring, pool)
-        record.update(node.bind_reserved(node_wiring, pool))
+            record = bind_params(
+                params, node_wiring, pool, collector=binding_collector,
+                source_resolver=source_resolver, _finish_capture=False,
+            )
+        reserved = node.bind_reserved(node_wiring, pool, bind=reserved_binder)
+        record.update(reserved)
+        if binding_collector is not None:
+            for name, value in reserved.items():
+                if name not in reserved_sources:
+                    binding_collector._record_source(name, ValueRoute.literal(value), False)
+            if not uses_base_template:
+                binding_collector.finish(record)
     except BindingError as exc:
+        if binding_collector is not None:
+            binding_collector.invalidate()
         return _evaluation_failure(
             node,
             exc.failure_code,
@@ -420,11 +455,25 @@ def _evaluate_node_stream(
     if per_item:
         params = node.params if node.params is not None else []
 
-        def bind_item(element):
+        def bind_item(element, index):
             """Preserve only this evaluator-owned deferred binding operation."""
             try:
-                return bind_params(params, node_wiring, pool, item=element)
+                item_collector = None
+                if binding_collector is not None:
+                    item_collector = binding_collector.for_item(index)
+                    key = node.item_source_key
+                    route = (
+                        binding_collector.route_for(key).project((index,))
+                        if key is not None else None
+                    )
+                    element = ResolvedValue(element, True, route)
+                return bind_params(
+                    params, node_wiring, pool, item=element,
+                    collector=item_collector, source_resolver=source_resolver,
+                )
             except BindingError as exc:
+                if binding_collector is not None:
+                    binding_collector.invalidate()
                 raise _BindingStageError(exc) from exc
             except Exception as exc:
                 raise _DeferredBindingFault(exc) from exc
@@ -439,10 +488,15 @@ def _evaluate_node_stream(
     if recall_memory is not None:
         caps["recall_memory"] = recall_memory
 
-    uses_base_template = type(node).run is Node.run
     try:
         outcome = (
-            node._run_for_evaluator(record, **caps)
+            node._run_for_evaluator(
+                record,
+                _capture_inputs=(
+                    binding_collector.finish if binding_collector is not None else None
+                ),
+                **caps,
+            )
             if uses_base_template
             else node.run(record, **caps)
         )
@@ -470,6 +524,8 @@ def _evaluate_node_stream(
                 origin=node.exception_origin(original),
                 traceback_text=_format_exception(original),
             )
+        if binding_collector is not None:
+            binding_collector.invalidate()
         return _evaluation_failure(
             node,
             original.failure_code,
@@ -544,6 +600,8 @@ def eval_node(
     emit_stream: Callable[[StreamChunk], None] | None = None,
     capture_evidence: bool = False,
     memory_recall: MemoryRecall | None = None,
+    capture_bindings: bool = False,
+    source_resolver: SourceResolver | None = None,
 ) -> EvaluatedOutcome:
     """Evaluate one node into a wrapped worker result and transient stream callback.
 
@@ -553,15 +611,23 @@ def eval_node(
     are discarded. ``capture_evidence`` must be an exact bool; its default leaves tracing
     dormant. ``memory_recall`` reaches only a scoped, opted-in node through a narrower
     capability. ``_HostStop`` likewise propagates unchanged.
+    ``capture_bindings`` independently retains input values and expression routes,
+    with ``source_resolver`` supplying paired reads when available. Its default
+    leaves binding capture dormant and does not require a memory frame.
     """
     if type(capture_evidence) is not bool:
         raise TypeError("capture_evidence must be a bool")
+    if type(capture_bindings) is not bool:
+        raise TypeError("capture_bindings must be a bool")
+    if source_resolver is not None and not callable(source_resolver):
+        raise TypeError("source_resolver must be callable or None")
     if memory_recall is not None and not callable(memory_recall):
         raise TypeError("memory_recall must be callable or None")
     evaluation_trace = _new_evaluation_trace(
         node,
         capture_evidence=capture_evidence,
     )
+    binding_collector = BindingCollector() if capture_bindings else None
     stream = _evaluate_node_stream(
         node,
         flow,
@@ -570,6 +636,8 @@ def eval_node(
         stop_event=stop_event,
         evaluation_trace=evaluation_trace,
         memory_recall=memory_recall,
+        binding_collector=binding_collector,
+        source_resolver=source_resolver,
     )
     try:
         while True:
@@ -596,4 +664,5 @@ def eval_node(
         stream.close()
 
     evidence = evaluation_trace._freeze() if evaluation_trace is not None else None
-    return EvaluatedOutcome(result, evidence)
+    bindings = binding_collector.freeze() if binding_collector is not None else None
+    return EvaluatedOutcome(result, evidence, bindings)

@@ -91,6 +91,26 @@ runtime.
 When you add a package, name what it sits *above* and what it sits *below*, and
 record that in its charter's "Knows / Never imports".
 
+Feedback contracts follow the same ladder. `expr/lineage.py` owns ordinary
+feedback validation, immutable source/composition routes, and route transfer;
+it imports only the standard library. `nodes/binding.py` owns transient binding
+capture and never imports `nodes/base.py` back. `nodes/base.py` owns
+`BackwardContext`, `BackwardResult`, and node-facing validation, while
+`nodes/contracts.py` owns source-neutral execution scopes, positions, input
+connections, and child boundaries within its existing restricted import set.
+`compile/execution_layout.py` derives and
+atomically applies authored node/flow paths and boundaries without reading memory
+policies or creating another child-cloning mechanism. `runtime/contracts.py` owns
+forward captures and backward outcome/failure carriers shared by records and
+consumers; it never imports runtime log, state, trace, driver, or the package-root
+run boundary. `runtime/trace.py` derives accepted execution and producer indexes
+from records, preparing sparse deltas for the state reducer and exposing paired
+source reads to the evaluator. It may consume runtime contracts and log codecs,
+but never imports the backward driver or `compile.expand`.
+`compile.expand` constructs growth recipes alongside topology; `runtime.state`
+validates them through the shared growth boundary before `runtime.trace` joins
+them to accepted binding routes. Runtime never dispatches on spawner kind.
+
 Compiled-origin traversal follows the same direction. Semantic carriers and
 nodes own their local origin slots and static-child hooks; `diagnostics` owns the
 exact resolver table; and `compile/origins.py` owns flow wiring, outputs,

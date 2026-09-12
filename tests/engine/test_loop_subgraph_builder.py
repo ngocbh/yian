@@ -20,7 +20,7 @@ from agent_composer.memory import (
     MemoryScope,
 )
 from agent_composer.nodes.end import EndNode
-from agent_composer.nodes.contracts import Binding, Parameter
+from agent_composer.nodes.contracts import Binding, ChildFlowBoundary, Parameter, SeedConnection
 from agent_composer.nodes.loop import LoopNode
 from agent_composer.nodes.start import StartNode
 
@@ -119,6 +119,8 @@ def test_continue_seeds_only_fields_declared_by_the_body_start():
         "x": Binding(f"${{{body_end}.output.x}}"),
         "exited": Binding(f"${{{body_end}.output.exited}}"),
     }
+    assert sg.input_connections == (SeedConnection(sg.start_id, "x", ("x",)),)
+    assert sg.child_boundaries == (ChildFlowBoundary(sg.start_id, body_end),)
 
 
 def test_continue_orders_zero_field_body_before_next_driver():
@@ -146,6 +148,8 @@ def test_continue_orders_zero_field_body_before_next_driver():
         ordering=True,
     ) in sg.edges
     assert sg.wiring["lp~1"] == {}
+    assert sg.input_connections == ()
+    assert sg.child_boundaries == (ChildFlowBoundary(sg.start_id, body_end),)
 
 
 def test_continue_keys_body_on_origin_when_driver_id_differs():

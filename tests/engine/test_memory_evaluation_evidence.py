@@ -50,7 +50,7 @@ from agent_composer.runtime.state import (
 )
 from agent_composer.typesys import Type, ValueKind, VariablePool
 from tests.engine._fakes import FuncNode
-from tests.engine._graph_builder import _engine, _graph
+from tests.engine._graph_builder import _forward_capture, _engine, _graph
 
 
 class _StringSubclass(str):
@@ -287,7 +287,7 @@ class _MutatingTraceNode(Node):
     kind = NodeKind.CODE
     needs_evaluation_trace = True
 
-    def bind_reserved(self, _wiring, _pool):
+    def bind_reserved(self, _wiring, _pool, *, bind=None):
         return {"payload": {"items": [1]}}
 
     def forward(self, inputs, *, evaluation_trace: EvaluationTrace):
@@ -305,7 +305,7 @@ class _UncanonicalTraceNode(Node):
         super().__init__(node_id)
         self.ran = False
 
-    def bind_reserved(self, _wiring, _pool):
+    def bind_reserved(self, _wiring, _pool, *, bind=None):
         return {"unordered": {1, 2}}
 
     def forward(self, _inputs, *, evaluation_trace: EvaluationTrace):
@@ -372,7 +372,26 @@ def test_evaluation_trace_protocol_is_runtime_checkable_and_write_only() -> None
     assert not hasattr(EvaluationTrace, "evidence")
 
 
-def test_capture_gate_requires_exact_flag_trait_and_nonempty_scope(
+def test_scope_free_model_evidence_is_accepted_with_forward_capture(monkeypatch):
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: _PlainChat("done"))
+    node = AgentNode("work")
+    engine = _engine(
+        _graph([node], [(START_ID, node.id), (node.id, END_ID)]), learn=True,
+    )
+    list(engine.run())
+    record = next(
+        item.record for item in engine.state.trace.occurrences if item.node_id == node.id
+    )
+    assert record.evidence.scope is None
+    assert record.evidence.interactions == (ModelTextInteraction("done"),)
+    assert record.forward_capture.bound_inputs == {}
+    assert record.forward_capture.scope.static_path == (node.id,)
+    from agent_composer.runtime.learning import project_outcome_episodes
+
+    assert project_outcome_episodes(engine.state.run_id, record) == ()
+
+
+def test_capture_gate_requires_exact_flag_and_trait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -391,13 +410,15 @@ def test_capture_gate_requires_exact_flag_trait_and_nonempty_scope(
     assert disabled.evidence is None
 
     unscoped = AgentNode("unscoped")
-    assert eval_node(
+    unscoped_evidence = eval_node(
         unscoped,
         None,
         VariablePool(),
         capture_evidence=True,
         memory_recall=_empty_recall,
-    ).evidence is None
+    ).evidence
+    assert unscoped_evidence.scope is None
+    assert unscoped_evidence.interactions == (ModelTextInteraction("done"),)
 
     ordinary = FuncNode("ordinary", lambda _inputs: "done")
     ordinary.memory_scope = _scope(ordinary.id)
@@ -1115,7 +1136,8 @@ def _inflight_state(node: Node):
     commit_prepared(
         engine.log,
         engine.state,
-        prepare_node_succeeded(engine.state, START_ID, {}),
+        prepare_node_succeeded(engine.state, START_ID, {},
+                               forward_capture=_forward_capture(engine.state.flow.nodes[START_ID], {})),
     )
     commit_prepared(
         engine.log,
@@ -1136,6 +1158,7 @@ def test_state_validates_evidence_scope_and_trait_for_live_and_replay() -> None:
         node.id,
         "done",
         evidence=evidence,
+        forward_capture=_forward_capture(node, {}),
     )
     assert type(prepared.record) is NodeSucceededRecord
     assert prepared.record.evidence == evidence

@@ -51,7 +51,7 @@ from agent_composer.runtime.state import (
 )
 from agent_composer.typesys import VariablePool
 from tests.engine._fakes import FuncNode
-from tests.engine._graph_builder import _graph
+from tests.engine._graph_builder import _forward_capture, _graph
 
 
 @dataclass
@@ -262,7 +262,8 @@ def _terminal_learning_state(
         commit_prepared(
             log,
             state,
-            prepare_node_succeeded(state, node_id, value),
+            prepare_node_succeeded(state, node_id, value,
+                                   forward_capture=_forward_capture(state.flow.nodes[node_id], {})),
         )
     assert isinstance(state.result, RunSucceeded)
     return state, log

@@ -97,6 +97,7 @@ def test_public_evaluation_always_returns_frozen_slotted_wrapper() -> None:
         "outcome",
         "evidence",
         "bindings",
+        "backward_capture",
     ]
     assert not hasattr(evaluated, "__dict__")
     with pytest.raises(FrozenInstanceError):

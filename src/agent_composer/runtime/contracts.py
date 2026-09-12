@@ -19,7 +19,9 @@ from agent_composer.memory.contracts import (
     JsonObject,
     JsonValue,
 )
-from agent_composer.nodes.base import BackwardResult, _copy_backward_value
+from agent_composer.nodes.base import (
+    BackwardResult, _copy_backward_value, _validate_declared_names, _validate_input_output_paths,
+)
 from agent_composer.nodes.contracts import ExecutionScope
 
 
@@ -147,6 +149,65 @@ def _validate_route(route: ValueRoute) -> None:
 
 
 @dataclass(frozen=True, slots=True, init=False)
+class BackwardCapture:
+    """Transient detached inventories, scope, and static material from one invocation.
+
+    This worker-owned snapshot becomes durable only through an accepted
+    ForwardCapture. It contains neither bound values nor outcomes.
+    """
+
+    input_names: tuple[str, ...]
+    variable_names: tuple[str, ...]
+    scope: ExecutionScope | None
+    _node_data: JsonObject = field(repr=False)
+
+    def __init__(
+        self,
+        input_names: tuple[str, ...] = (),
+        variable_names: tuple[str, ...] = (),
+        scope: ExecutionScope | None = None,
+        node_data: JsonObject | None = None,
+    ) -> None:
+        """Validate common declarations and copy optional node-owned static data.
+
+        Args:
+            input_names (`tuple[str, ...]`, *optional*, defaults to `()`): Distinct
+                eligible input names, snapshotted before binding can fail.
+            variable_names (`tuple[str, ...]`, *optional*, defaults to `()`):
+                Distinct local variable names in their declaration order.
+            scope (`ExecutionScope | None`, *optional*, defaults to `None`):
+                This invocation's authored path and dynamic positions, if known.
+            node_data (`JsonObject | None`, *optional*, defaults to `None`):
+                Finite JSON static material captured after defaults and before
+                the body. `None` uses `{}`, including on early binding failure.
+
+        Raises:
+            `TypeError`: If inventories, scope, or JSON containers are malformed.
+            `ValueError`: If names repeat, scope or output paths are invalid,
+                or node data contains non-finite numbers.
+        """
+        _validate_declared_names(input_names, "input_names")
+        _validate_declared_names(variable_names, "variable_names")
+        if scope is not None:
+            if type(scope) is not ExecutionScope:
+                raise TypeError("scope must be an ExecutionScope or None")
+            ExecutionScope(scope.static_path, scope.flow_path, scope.occurrence_path, scope.boundary)
+        data = {} if node_data is None else node_data
+        if type(data) is not dict:
+            raise TypeError("node_data must be a dictionary")
+        _validate_input_output_paths(data, input_names)
+        object.__setattr__(self, "input_names", input_names)
+        object.__setattr__(self, "variable_names", variable_names)
+        object.__setattr__(self, "scope", scope)
+        object.__setattr__(self, "_node_data", _copy_backward_value(data, "node_data"))
+
+    @property
+    def node_data(self) -> JsonObject:
+        """Return detached static data without exposing the worker's snapshot."""
+        return _copy_backward_value(self._node_data, "node_data")
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class ForwardCapture:
     """Detached canonical inputs and routes from one actual binding operation.
 
@@ -161,7 +222,9 @@ class ForwardCapture:
     evaluated_keys: frozenset[str]
     items: tuple[tuple[int, ForwardCapture], ...]
     scope: ExecutionScope | None
-    _node_data: JsonValue = field(repr=False)
+    _node_data: JsonObject | None = field(repr=False)
+    input_names: tuple[str, ...]
+    variable_names: tuple[str, ...]
 
     def __init__(
         self,
@@ -170,9 +233,36 @@ class ForwardCapture:
         evaluated_keys: frozenset[str] = frozenset(),
         items: tuple[tuple[int, ForwardCapture], ...] = (),
         scope: ExecutionScope | None = None,
-        node_data: JsonValue = None,
+        node_data: JsonObject | None = None,
+        *,
+        input_names: tuple[str, ...] = (),
+        variable_names: tuple[str, ...] = (),
     ) -> None:
-        """Validate immutable routes and detach already-canonical input data."""
+        """Validate immutable routes and detach canonical invocation data.
+
+        Args:
+            bound_inputs (`JsonObject | None`): Actual completed input record;
+                `None` marks unfinished binding and forbids usable item inputs.
+            route (`ValueRoute`): Record-shaped routes for the captured fields.
+            evaluated_keys (`frozenset[str]`, *optional*, defaults to empty):
+                Captured keys whose template expressions were evaluated here.
+            items (`tuple[tuple[int, ForwardCapture], ...]`, *optional*, defaults
+                to `()`): Per-item bindings in increasing explicit index order.
+            scope (`ExecutionScope | None`, *optional*, defaults to `None`):
+                Captured authored location and occurrence, when available.
+            node_data (`JsonObject | None`, *optional*, defaults to `None`):
+                Detached node-owned static backward material, if captured.
+            input_names (`tuple[str, ...]`, *optional*, defaults to `()`):
+                Distinct eligible input names retained for this invocation.
+            variable_names (`tuple[str, ...]`, *optional*, defaults to `()`):
+                Distinct local variable names retained for this invocation.
+
+        Raises:
+            `TypeError`: If a carrier, immutable container, or JSON value has an
+                invalid type.
+            `ValueError`: If routes, inventory names, scope, output paths, or
+                input/item presence violate the capture contract.
+        """
         _validate_route(route)
         if route.kind != "record":
             raise ValueError("input route must be a record")
@@ -196,7 +286,8 @@ class ForwardCapture:
             if type(capture) is not ForwardCapture:
                 raise TypeError("item capture must be a ForwardCapture")
             ForwardCapture(capture.bound_inputs, capture.route, capture.evaluated_keys,
-                           capture.items, capture.scope, capture.node_data)
+                           capture.items, capture.scope, capture.node_data,
+                           input_names=capture.input_names, variable_names=capture.variable_names)
             if bound_inputs is None and capture.bound_inputs is not None:
                 raise ValueError("unfinished binding cannot retain usable item inputs")
             previous_index = index
@@ -204,12 +295,20 @@ class ForwardCapture:
             if type(scope) is not ExecutionScope:
                 raise TypeError("scope must be an ExecutionScope or None")
             ExecutionScope(scope.static_path, scope.flow_path, scope.occurrence_path, scope.boundary)
+        _validate_declared_names(input_names, "input_names")
+        _validate_declared_names(variable_names, "variable_names")
+        if node_data is not None:
+            if type(node_data) is not dict:
+                raise TypeError("node_data must be a dictionary or None")
+            _validate_input_output_paths(node_data, input_names)
         object.__setattr__(self, "_bound_inputs", _copy_backward_value(bound_inputs, "bound_inputs"))
         object.__setattr__(self, "route", route)
         object.__setattr__(self, "evaluated_keys", evaluated_keys)
         object.__setattr__(self, "items", items)
         object.__setattr__(self, "scope", scope)
         object.__setattr__(self, "_node_data", _copy_backward_value(node_data, "node_data"))
+        object.__setattr__(self, "input_names", input_names)
+        object.__setattr__(self, "variable_names", variable_names)
 
     @property
     def bound_inputs(self) -> JsonObject | None:
@@ -217,8 +316,8 @@ class ForwardCapture:
         return _copy_backward_value(self._bound_inputs, "bound_inputs")
 
     @property
-    def node_data(self) -> JsonValue:
-        """Return detached optional data reserved for the node's backward hook."""
+    def node_data(self) -> JsonObject | None:
+        """Return detached optional static data for the node's backward hook."""
         return _copy_backward_value(self._node_data, "node_data")
 
 
@@ -356,4 +455,4 @@ class BackwardOutcome:
                 raise ValueError("succeeded backward requires succeeded learning")
 
 
-__all__ = ["BackwardFailure", "BackwardOutcome", "ForwardCapture"]
+__all__ = ["BackwardCapture", "BackwardFailure", "BackwardOutcome", "ForwardCapture"]

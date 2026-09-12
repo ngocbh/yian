@@ -23,7 +23,7 @@ from agent_composer.expr.lineage import ResolvedValue, SourceRef, ValueRoute
 from agent_composer.nodes.base import Node
 from agent_composer.nodes.binding import BindingCapture
 from agent_composer.nodes.contracts import ChildFlowBoundary, ExecutionScope, SeedConnection
-from agent_composer.runtime.contracts import ForwardCapture
+from agent_composer.runtime.contracts import BackwardCapture, ForwardCapture
 from agent_composer.runtime.log import (
     NodeExpandedRecord, NodeFailedRecord, NodeRoutedRecord, NodeStartedRecord,
     NodeSucceededRecord, RecordEnvelope, RunResumedRecord, RunStartedRecord,
@@ -34,16 +34,33 @@ from agent_composer.typesys.values import ANY_VALUE_ADAPTER
 
 def capture_bindings(
     bindings: BindingCapture,
-    scope: ExecutionScope | None,
+    backward: BackwardCapture,
 ) -> ForwardCapture:
-    """Canonicalize actual detached binder values through the existing seed codec."""
+    """Join detached binding and backward material through the existing seed codec.
+
+    Args:
+        bindings (`BindingCapture`): Actual delivered values, routes, and indexed
+            item bindings frozen by the evaluator.
+        backward (`BackwardCapture`): The same invocation's declared names, scope,
+            and static node data. Item seeds have no separate node inventory.
+
+    Returns:
+        `ForwardCapture`: Canonical material ready for accepted-record validation.
+
+    Raises:
+        `TypeError`: If either transient carrier has the wrong type.
+        `ValueError`: If captured data cannot satisfy the canonical wire contract.
+    """
     if type(bindings) is not BindingCapture:
         raise TypeError("retained evaluation requires a BindingCapture")
+    if type(backward) is not BackwardCapture:
+        raise TypeError("retained evaluation requires a BackwardCapture")
     return ForwardCapture(
         canonical_seed(bindings.bound_inputs)[1], bindings.route,
         bindings.evaluated_keys,
-        tuple((index, capture_bindings(item, None)) for index, item in bindings.items),
-        scope,
+        tuple((index, capture_bindings(item, BackwardCapture())) for index, item in bindings.items),
+        backward.scope, backward.node_data,
+        input_names=backward.input_names, variable_names=backward.variable_names,
     )
 
 

@@ -14,6 +14,146 @@ from agent_composer.runtime.log import (
 )
 
 
+def test_forward_capture_round_trips_invocation_names_and_structural_layout():
+    from agent_composer.runtime.contracts import ForwardCapture
+
+    data = {"input_output_paths": {"result": []}}
+    capture = ForwardCapture(
+        {"result": {"items": [1]}},
+        ValueRoute.record((("result", ValueRoute.literal({"items": [1]})),)),
+        node_data=data, input_names=("result",), variable_names=("instruction",),
+    )
+    data["input_output_paths"]["result"].append("changed")
+    record = NodeSucceededRecord("end", "end", canonical_typed({"items": [1]}, None)[0], forward_capture=capture)
+    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 3, record)
+    decoded = decode_record(encode_record(envelope))
+    assert decoded == envelope
+    assert decoded.record.forward_capture.input_names == ("result",)
+    assert decoded.record.forward_capture.variable_names == ("instruction",)
+    assert decoded.record.forward_capture.node_data == {"input_output_paths": {"result": []}}
+    assert SCHEMA_VERSION == 6
+    old = json.loads(encode_record(envelope))
+    old["schema"] = 5
+    with pytest.raises(ValueError, match="schema"):
+        decode_record(json.dumps(old))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("input_names", None), ("input_names", ["result", "result"]), ("input_names", [1]),
+    ("variable_names", ["instruction", "instruction"]), ("variable_names", [False]),
+    ("node_data", {"input_output_paths": []}),
+    ("node_data", {"input_output_paths": {"unknown": []}}),
+    ("node_data", {"input_output_paths": {"result": [True]}}),
+    ("node_data", {"input_output_paths": {"result": [-1]}}),
+    ("node_data", {"input_output_paths": {"result": "result"}}),
+])
+def test_forward_capture_rejects_malformed_invocation_inventory_and_paths(field, value):
+    from agent_composer.runtime.contracts import ForwardCapture
+
+    capture = ForwardCapture({"result": 1}, ValueRoute.record((("result", ValueRoute.literal(1)),)),
+                             input_names=("result",), variable_names=("instruction",))
+    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 3, NodeSucceededRecord(
+        "end", "end", canonical_typed(1, None)[0], forward_capture=capture,
+    ))
+    wire = json.loads(encode_record(envelope))
+    wire["payload"]["forward_capture"][field] = value
+    with pytest.raises((TypeError, ValueError)):
+        decode_record(json.dumps(wire))
+
+
+@pytest.mark.parametrize("field", ["input_names", "variable_names"])
+def test_schema_six_requires_explicit_invocation_inventories(field):
+    from agent_composer.runtime.contracts import ForwardCapture
+
+    capture = ForwardCapture({}, ValueRoute.record(()))
+    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 3, NodeSucceededRecord(
+        "work", "work", canonical_typed(None, None)[0], forward_capture=capture,
+    ))
+    wire = json.loads(encode_record(envelope))
+    wire["payload"]["forward_capture"].pop(field)
+    with pytest.raises(ValueError):
+        decode_record(json.dumps(wire))
+
+
+def test_accepted_backward_inventories_and_layout_replay_without_recapturing(monkeypatch):
+    import copy
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.compile.model import END_ID, START_ID
+    from agent_composer.compose import load_flow
+    from agent_composer.nodes.base import BackwardContext, Node
+    from agent_composer.nodes.code import CodeNode
+    from agent_composer.nodes.end import EndNode
+    from agent_composer.nodes.start import StartNode
+    from agent_composer.runtime.state import RunState, _replay_records
+    from tests.engine._graph_builder import _engine
+
+    flow = load_flow("""id: captured_layout
+name: captured_layout
+input: {topic: 'str = reefs'}
+nodes:
+  work:
+    kind: code
+    input: {topic: '${input.topic}'}
+    code: return inputs['topic']
+    output: str
+output: ${work.output}
+asserts: ["${work.output} != null"]
+""").compiled
+    engine = _engine(flow, learn=True)
+    original = copy.deepcopy(engine.state.flow)
+    list(engine.run())
+    occurrences = {item.node_id: item for item in engine.state.trace.occurrences}
+    start = occurrences[START_ID].record.forward_capture
+    terminal = occurrences[END_ID].record.forward_capture
+    assert start.input_names == ("topic",) and start.bound_inputs == {"topic": "reefs"}
+    assert terminal.input_names == ("result",)
+    assert len(terminal.bound_inputs) > 1
+    assert terminal.node_data == {"input_output_paths": {"result": []}}
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("replay executed or recaptured a node")
+
+    monkeypatch.setattr(CodeNode, "forward", forbidden)
+    monkeypatch.setattr(Node, "backward_input_names", forbidden)
+    monkeypatch.setattr(Node, "declared_variables", forbidden)
+    for kind in (Node, StartNode, EndNode):
+        monkeypatch.setattr(kind, "capture_backward_context", forbidden)
+    replay = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
+    assert replay.trace.occurrences == engine.state.trace.occurrences
+    occurrence = next(item for item in replay.trace.occurrences if item.node_id == END_ID)
+    handler = replay.trace.backward_handlers[occurrence.source]
+    handler.__self__._names[:] = ["changed", "afterward"]
+    handler.__self__.params.clear()
+    capture = occurrence.record.forward_capture
+    context = BackwardContext(
+        capture.bound_inputs, input_names=capture.input_names, variable_names=capture.variable_names,
+        output=replay.trace.sources[occurrence.source].value, node_data=capture.node_data,
+    )
+    assert handler(context, ("Review the answer.",)).input_feedback == {"result": ("Review the answer.",)}
+
+
+def test_static_capture_host_fault_does_not_append_a_node_outcome():
+    from agent_composer.compile.model import END_ID, START_ID
+    from agent_composer.runtime.log import NodeStartedRecord
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _engine, _graph
+
+    expected = ValueError("capture failed")
+    node = FuncNode("work", lambda _inputs: "body must not run")
+
+    def fail():
+        raise expected
+
+    node.capture_backward_context = fail
+    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learn=True)
+    with pytest.raises(ValueError) as caught:
+        list(engine.run())
+    assert caught.value is expected
+    assert tuple(engine.log)[-1].record == NodeStartedRecord("work")
+    assert all(item.node_id != "work" for item in engine.state.trace.occurrences)
+    assert engine.state.pool.get("work") is None
+
+
 def test_forward_capture_round_trips_without_memory_scope():
     from agent_composer.runtime.contracts import ForwardCapture
 
@@ -44,7 +184,7 @@ def test_forward_capture_round_trips_without_memory_scope():
     assert capture.node_data == {"saved": [2]}
     with pytest.raises(FrozenInstanceError):
         capture.scope = None
-    assert SCHEMA_VERSION == 5
+    assert SCHEMA_VERSION == 6
     old = json.loads(encode_record(envelope))
     old["schema"] = 4
     with pytest.raises(ValueError, match="schema"):
@@ -591,7 +731,7 @@ def test_seed_connections_wait_for_append_and_survive_unfinished_start_retry(mon
     evaluated = engine._evaluate("spawn", emit_stream=None)
     prepared = prepare_expanded(
         engine.state, "spawn", evaluated.outcome, engine.grow_builder,
-        forward_capture=capture_bindings(evaluated.bindings, engine.state.flow.nodes["spawn"].execution_scope),
+        forward_capture=capture_bindings(evaluated.bindings, evaluated.backward_capture),
     )
     before = (_trace_snapshot(engine.state.trace), tuple(engine.state.flow.nodes), engine.state.next_sequence)
     original_append = engine.log.append

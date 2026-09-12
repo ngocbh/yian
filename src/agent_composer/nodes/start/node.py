@@ -13,7 +13,10 @@ job: system/clock/run_id. Hidden from authors: a reserved __-prefixed id, never 
 
 from typing import Optional
 
-from agent_composer.nodes.base import Node, NodeKind, Output
+from agent_composer.expr.lineage import FeedbackValue
+from agent_composer.nodes.base import (
+    BackwardContext, BackwardResult, Node, NodeKind, Output, _project_structural_feedback,
+)
 from agent_composer.nodes.contracts import Parameter
 
 
@@ -67,3 +70,36 @@ class StartNode(Node):
     def forward(self, inputs: dict) -> Output:
         """Return the record already bound by the generic node input seam."""
         return Output(value=inputs)
+
+    def capture_backward_context(self) -> dict:
+        """Capture the named record projection independently of delivered presence.
+
+        Returns:
+            `dict`: Each declared input maps to its same-named output field in
+                `input_output_paths`; an omitted optional input keeps its path.
+        """
+        return {"input_output_paths": {name: [name] for name in self.backward_input_names()}}
+
+    def backward(
+        self, context: BackwardContext, feedback: tuple[FeedbackValue, ...],
+    ) -> BackwardResult:
+        """Project feedback to declared inputs present in the captured START record.
+
+        Args:
+            context (`BackwardContext`): Recorded bound inputs, output or failure,
+                declaration inventory, and the captured named output paths.
+            feedback (`tuple[FeedbackValue, ...]`): Independent whole-record text
+                or structured selections. Failed START accepts text or `None`.
+
+        Returns:
+            `BackwardResult`: Messages for delivered inputs, including defaults;
+                omitted inputs and unavailable bindings receive no messages.
+
+        Raises:
+            `TypeError`: If a message batch or captured path has an invalid type.
+            `ValueError`: If feedback or a captured path does not match the
+                recorded output, or the required structural layout is absent.
+        """
+        if context.failure is None and type(context.output) is not dict:
+            return BackwardResult()
+        return _project_structural_feedback(context, feedback)

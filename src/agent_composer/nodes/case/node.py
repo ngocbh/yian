@@ -14,6 +14,7 @@ engine's `_branch` does the skip-flood.
 """
 
 from dataclasses import dataclass
+import re
 from typing import Callable, Iterator, Optional
 
 from agent_composer.diagnostics import OriginRef
@@ -158,3 +159,15 @@ class CaseNode(Node):
             if evaluate_when_record(case.when, inputs):
                 return Route(case.handle)
         return Route(DEFAULT_HANDLE)
+
+    def backward_input_names(self) -> tuple[str, ...]:
+        """Exclude lowered CASE controls from ordinary declared input targets.
+
+        Returns:
+            `tuple[str, ...]`: Declared names except generated `__on` and `__rN`
+                controls, preserving directly declared ordinary inputs in order.
+        """
+        return tuple(
+            name for name in super().backward_input_names()
+            if name != "__on" and re.fullmatch(r"__r[0-9]+", name) is None
+        )

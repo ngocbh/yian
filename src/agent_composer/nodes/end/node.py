@@ -17,7 +17,10 @@ no special co-skip logic. Hidden from authors: a reserved __-prefixed id, never 
 
 from typing import Optional
 
-from agent_composer.nodes.base import Node, NodeKind, Output
+from agent_composer.expr.lineage import FeedbackValue
+from agent_composer.nodes.base import (
+    BackwardContext, BackwardResult, Node, NodeKind, Output, _project_structural_feedback,
+)
 from agent_composer.nodes.contracts import Parameter
 
 
@@ -90,3 +93,52 @@ class EndNode(Node):
             return Output(value={name: inputs[name] for name in self._names})
         # list mode (the MAP fan-in): join in over order (index); n=0 -> [].
         return Output(value=[inputs[f"e{i}"] for i in range(self._n)])
+
+    def backward_input_names(self) -> tuple[str, ...]:
+        """Return actual output contributors, excluding augmented assertion params.
+
+        Returns:
+            `tuple[str, ...]`: Stored record output names, or ordered `e0` through
+                `eN` list slots. Empty output layouts have an empty inventory.
+        """
+        if self._mode == "record":
+            return tuple(self._names)
+        return tuple(f"e{index}" for index in range(self._n))
+
+    def capture_backward_context(self) -> dict:
+        """Capture record arity or ordered list positions before the body executes.
+
+        Returns:
+            `dict`: The `input_output_paths` mapping: no paths for zero outputs,
+                `[]` for one bare value, named paths for multiple record outputs,
+                or indexed paths for a list. Assertion inputs are excluded.
+        """
+        names = self.backward_input_names()
+        if self._mode == "list":
+            paths = {name: [index] for index, name in enumerate(names)}
+        else:
+            paths = {name: ([] if len(names) == 1 else [name]) for name in names}
+        return {"input_output_paths": paths}
+
+    def backward(
+        self, context: BackwardContext, feedback: tuple[FeedbackValue, ...],
+    ) -> BackwardResult:
+        """Project through the recorded layout without consulting mutable node fields.
+
+        Args:
+            context (`BackwardContext`): Recorded inputs, output or failure,
+                actual output-name inventory, and captured output paths.
+            feedback (`tuple[FeedbackValue, ...]`): Ordered text or structural
+                selections over the accepted output. Text stays unchanged when
+                sent to multiple contributors; a failed END accepts text or `None`.
+
+        Returns:
+            `BackwardResult`: Independent input message batches. Zero-output and
+                empty-list layouts have no contributors; missing bindings stop.
+
+        Raises:
+            `TypeError`: If a message batch or captured path has an invalid type.
+            `ValueError`: If feedback or a captured path does not match the
+                recorded output, or the required structural layout is absent.
+        """
+        return _project_structural_feedback(context, feedback)

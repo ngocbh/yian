@@ -66,7 +66,7 @@ from agent_composer.typesys.values import (
 )
 
 
-SCHEMA_VERSION: Final = 5
+SCHEMA_VERSION: Final = 6
 """The one run-record wire schema understood by this release."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -927,7 +927,9 @@ class _ForwardCapturePayload(_StrictModel):
     evaluated_keys: list[str]
     items: list[_ItemCapturePayload]
     scope: _ExecutionScopePayload | None
-    node_data: Any
+    node_data: dict[str, Any] | None
+    input_names: list[str]
+    variable_names: list[str]
 
     @field_validator("evaluated_keys")
     @classmethod
@@ -1700,7 +1702,8 @@ def _validate_optional_capture(capture: ForwardCapture | None) -> None:
     if type(capture) is not ForwardCapture:
         raise TypeError("forward_capture must be a ForwardCapture or None")
     ForwardCapture(capture.bound_inputs, capture.route, capture.evaluated_keys,
-                   capture.items, capture.scope, capture.node_data)
+                   capture.items, capture.scope, capture.node_data,
+                   input_names=capture.input_names, variable_names=capture.variable_names)
 
 
 def _route_payload(route: ValueRoute) -> dict[str, Any]:
@@ -1766,6 +1769,8 @@ def _capture_payload(capture: ForwardCapture | None) -> dict[str, Any] | None:
             "boundary": scope.boundary,
         },
         "node_data": capture.node_data,
+        "input_names": list(capture.input_names),
+        "variable_names": list(capture.variable_names),
     }
 
 
@@ -1784,6 +1789,8 @@ def _capture_from_payload(payload: dict[str, Any] | None) -> ForwardCapture | No
                   for position in scope["occurrence_path"]), scope["boundary"],
         ),
         payload["node_data"],
+        input_names=tuple(payload["input_names"]),
+        variable_names=tuple(payload["variable_names"]),
     )
 
 

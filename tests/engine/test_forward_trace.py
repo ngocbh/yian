@@ -114,11 +114,20 @@ asserts: ["${work.output} != null"]
         raise AssertionError("replay executed or recaptured a node")
 
     monkeypatch.setattr(CodeNode, "forward", forbidden)
-    monkeypatch.setattr(Node, "backward_input_names", forbidden)
+    input_names = Node.backward_input_names
+    initialized_roots = []
+
+    def root_inventory_only(node):
+        assert node.id == START_ID
+        initialized_roots.append(node.id)
+        return input_names(node)
+
+    monkeypatch.setattr(Node, "backward_input_names", root_inventory_only)
     monkeypatch.setattr(Node, "declared_variables", forbidden)
     for kind in (Node, StartNode, EndNode):
         monkeypatch.setattr(kind, "capture_backward_context", forbidden)
     replay = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
+    assert initialized_roots == [START_ID]
     assert replay.trace.occurrences == engine.state.trace.occurrences
     occurrence = next(item for item in replay.trace.occurrences if item.node_id == END_ID)
     handler = replay.trace.backward_handlers[occurrence.source]
@@ -485,6 +494,8 @@ def test_reducer_requires_capture_exactly_when_learning():
 
 def _trace_snapshot(trace):
     return (
+        trace.end_id, trace.root_input_names, trace.root_start_source, trace.terminal,
+        trace._root_writer, trace._causal_route_source,
         trace.occurrences, dict(trace.sources), dict(trace.current_writers),
         dict(trace.started), trace.next_sequence, trace.boundaries, dict(trace.pending_connections),
         {source: (handler.__self__.id, handler.__self__.execution_scope,

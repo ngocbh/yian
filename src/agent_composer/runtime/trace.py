@@ -18,12 +18,13 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
+from agent_composer.diagnostics import Failure
 from agent_composer.expr.expressions import ExpressionError
 from agent_composer.expr.lineage import ResolvedValue, SourceRef, ValueRoute
-from agent_composer.nodes.base import Node
+from agent_composer.nodes.base import BackwardContext, Node, _validate_declared_names
 from agent_composer.nodes.binding import BindingCapture
 from agent_composer.nodes.contracts import ChildFlowBoundary, ExecutionScope, SeedConnection
-from agent_composer.runtime.contracts import BackwardCapture, ForwardCapture
+from agent_composer.runtime.contracts import BackwardCapture, ForwardCapture, _validate_source
 from agent_composer.runtime.log import (
     NodeExpandedRecord, NodeFailedRecord, NodeRoutedRecord, NodeStartedRecord,
     NodeSucceededRecord, RecordEnvelope, RunResumedRecord, RunStartedRecord,
@@ -79,6 +80,41 @@ class SourceEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class TraceTerminal:
+    """The reducer's terminal result and its actual accepted causal identity."""
+
+    succeeded: bool
+    source: SourceRef | None
+    output_bytes: bytes | None
+    failure: Failure | None
+
+    def __post_init__(self) -> None:
+        """Require distinct success/null and failure shapes with canonical values."""
+        if type(self.succeeded) is not bool:
+            raise TypeError("terminal succeeded must be a bool")
+        if self.source is not None:
+            _validate_source(self.source)
+            if self.source.path:
+                raise ValueError("terminal source must identify a root value")
+        if self.succeeded:
+            if type(self.output_bytes) is not bytes or self.failure is not None:
+                raise ValueError("successful terminal requires output bytes and no failure")
+            ANY_VALUE_ADAPTER.validate_json(self.output_bytes, strict=True)
+        else:
+            if self.output_bytes is not None or type(self.failure) is not Failure:
+                raise ValueError("failed terminal requires a failure and no output")
+            Failure.__post_init__(self.failure)
+
+    @property
+    def output(self) -> Any:
+        """Return detached canonical output, or None when the terminal failed."""
+        if not self.succeeded:
+            return None
+        value = ANY_VALUE_ADAPTER.validate_json(self.output_bytes, strict=True).to_object()
+        return canonical_seed(value)[1]
+
+
+@dataclass(frozen=True, slots=True)
 class TraceOccurrence:
     """One accepted outcome and its derived route, identified by its accepted start."""
 
@@ -131,11 +167,22 @@ class RetainedTrace:
     available independently of the live scheduling graph.
     """
 
-    def __init__(self, run_id: str, start_id: str) -> None:
+    def __init__(
+        self, run_id: str, start_id: str, end_id: str | None = None,
+        root_input_names: tuple[str, ...] = (),
+    ) -> None:
         self.run_id = run_id
         self.start_id = start_id
+        self.end_id = end_id
+        _validate_declared_names(root_input_names, "root_input_names")
+        self.root_input_names = root_input_names
+        self.root_start_source: SourceRef | None = None
+        self.terminal: TraceTerminal | None = None
+        self._root_writer: SourceEntry | None = None
+        self._causal_route_source: SourceRef | None = None
         self.next_sequence = 0
         self._occurrences: list[TraceOccurrence] = []
+        self._occurrence_by_source: dict[SourceRef, TraceOccurrence] = {}
         self._sources: dict[SourceRef, SourceEntry] = {}
         self._current_writers: dict[str, SourceEntry] = {}
         self._started: dict[str, int] = {}
@@ -188,6 +235,55 @@ class RetainedTrace:
             value = value[part]
         return value
 
+    def occurrence(self, source: SourceRef) -> TraceOccurrence:
+        """Look up an accepted occurrence by its physical start identity.
+
+        Args:
+            source (`SourceRef`): Physical start identity with an empty path.
+
+        Returns:
+            `TraceOccurrence`: The accepted outcome and derived input route.
+
+        Raises:
+            `KeyError`: If no accepted outcome has this identity, including source zero.
+        """
+        return self._occurrence_by_source[source]
+
+    def backward_context(
+        self, source: SourceRef, *, downstream_context: tuple[dict[str, Any], ...] = (),
+    ) -> BackwardContext:
+        """Build detached context from accepted invocation facts without calling hooks.
+
+        Args:
+            source (`SourceRef`): Physical accepted start identity of an executed
+                occurrence.
+            downstream_context (`tuple[dict[str, Any], ...]`, *optional*, defaults
+                to `()`): Transient attribution materialized by a caller. It is
+                copied with the other context values.
+
+        Returns:
+            `BackwardContext`: Recorded names, usable inputs, static node data, and
+                the actual output or canonical forward failure.
+
+        Raises:
+            `KeyError`: If the occurrence or its accepted output source is absent.
+            `TypeError`: If supplied context material violates the context contract.
+            `ValueError`: If retained or supplied data violates canonical constraints.
+        """
+        occurrence = self.occurrence(source)
+        record = occurrence.record
+        capture = record.forward_capture
+        failure = record.failure if type(record) is NodeFailedRecord else (
+            record.terminal_failure if type(record) is NodeRoutedRecord else None
+        )
+        return BackwardContext(
+            capture.bound_inputs, input_names=capture.input_names, variable_names=capture.variable_names,
+            output=self.lookup_source(source) if type(record) is NodeSucceededRecord else None,
+            failure=failure, scope=capture.scope, run_id=source.run_id,
+            node_id=occurrence.node_id, node_started_seq=source.execution_seq,
+            node_data=capture.node_data, downstream_context=downstream_context,
+        )
+
     def resolve(self, path: str) -> ResolvedValue:
         """Pair each actual lookup's value, presence and producer in one read."""
         parts = path.strip().split(".")
@@ -238,6 +334,10 @@ class TraceDelta:
     consumed_connection: tuple[str, _SeedRoutes] | None = None
     boundaries: tuple[TraceBoundary, ...] = ()
     boundary_update: tuple[int, TraceBoundary] | None = None
+    root_start_source: SourceRef | None = None
+    root_writer: SourceEntry | None = None
+    causal_route_source: SourceRef | None = None
+    terminal: TraceTerminal | None = None
 
     def validate_origin(self, trace: RetainedTrace | None) -> None:
         """Reject stale or replaced trace authority before durable append."""
@@ -260,6 +360,7 @@ class TraceDelta:
             trace._started.clear()
         if self.occurrence is not None:
             trace._occurrences.append(self.occurrence)
+            trace._occurrence_by_source[self.occurrence.source] = self.occurrence
             trace._backward_handlers[self.occurrence.source] = self.handler
             del trace._started[self.occurrence.node_id]
             trace._current_boundaries.pop(self.occurrence.node_id, None)
@@ -283,6 +384,14 @@ class TraceDelta:
             target, entry = self.writer
             trace._current_writers[target] = entry
             trace._sources[entry.source] = entry
+        if self.root_start_source is not None:
+            trace.root_start_source = self.root_start_source
+        if self.root_writer is not None:
+            trace._root_writer = self.root_writer
+        if self.causal_route_source is not None:
+            trace._causal_route_source = self.causal_route_source
+        if self.terminal is not None:
+            trace.terminal = self.terminal
         trace.next_sequence = self.sequence + 1
         return trace
 
@@ -294,6 +403,11 @@ def prepare_trace(
     *,
     input_connections: tuple[SeedConnection, ...] = (),
     child_boundaries: tuple[ChildFlowBoundary, ...] = (),
+    root_end_id: str | None = None,
+    root_input_names: tuple[str, ...] | None = None,
+    terminal_succeeded: bool | None = None,
+    terminal_output_bytes: bytes | None = None,
+    terminal_failure: Failure | None = None,
 ) -> TraceDelta | None:
     """Validate capture authority and prepare a detached accepted-record delta."""
     record = envelope.record
@@ -301,13 +415,16 @@ def prepare_trace(
         if not record.learn:
             return None
         pool = decode_pool(record.initial_pool)
-        initial = RetainedTrace(envelope.run_id, pool.start_id)
+        if type(root_end_id) is not str or root_input_names is None:
+            raise ValueError("retained RunStarted requires verified root metadata")
+        initial = RetainedTrace(envelope.run_id, pool.start_id, root_end_id, root_input_names)
         for target, typed in pool.store.items():
             source = SourceRef(envelope.run_id, 0) if target == pool.start_id else None
             entry = SourceEntry(source, 0, ANY_VALUE_ADAPTER.dump_json(typed, warnings="error"))
             initial._current_writers[target] = entry
             if source is not None:
                 initial._sources[source] = entry
+        initial._root_writer = initial._current_writers.get(root_end_id)
         initial._system = {key: ANY_VALUE_ADAPTER.dump_json(value, warnings="error")
                            for key, value in pool.system.items()}
         return TraceDelta(None, envelope.seq, initialized=initial)
@@ -318,6 +435,8 @@ def prepare_trace(
         return None
     if trace.run_id != envelope.run_id or trace.next_sequence != envelope.seq:
         raise ValueError("trace disagrees with accepted record coordinates")
+    if terminal_succeeded is None and (terminal_output_bytes is not None or terminal_failure is not None):
+        raise ValueError("terminal payload requires a terminal disposition")
     if type(record) is NodeStartedRecord:
         return TraceDelta(trace, envelope.seq, started=(record.node_id, envelope.seq))
     if type(record) is RunResumedRecord:
@@ -378,6 +497,30 @@ def prepare_trace(
         writer = (record.commit_target, SourceEntry(
             source, envelope.seq, ANY_VALUE_ADAPTER.dump_json(typed, warnings="error"),
         ))
+    root_writer = writer[1] if writer is not None and writer[0] == trace.end_id else None
+    causal_route_source = (
+        source if type(record) is NodeRoutedRecord and record.terminal_failure is not None
+        and trace._causal_route_source is None else None
+    )
+    terminal = None
+    if terminal_succeeded is not None:
+        if terminal_succeeded:
+            accepted_writer = root_writer or trace._root_writer
+            if accepted_writer is None or ANY_VALUE_ADAPTER.validate_json(
+                accepted_writer._value_bytes, strict=True,
+            ) != ANY_VALUE_ADAPTER.validate_json(terminal_output_bytes, strict=True):
+                raise ValueError("terminal output disagrees with the accepted root writer")
+            terminal_source = accepted_writer.source
+        else:
+            terminal_source = (
+                source if type(record) is NodeFailedRecord
+                else causal_route_source or trace._causal_route_source
+            )
+            if terminal_source is None:
+                raise ValueError("accepted failure requires an accepted causal occurrence")
+        terminal = TraceTerminal(
+            terminal_succeeded, terminal_source, terminal_output_bytes, terminal_failure,
+        )
     return TraceDelta(
         trace, envelope.seq, occurrence=occurrence, handler=handler, writer=writer,
         prune_ids=record.prune_ids if type(record) is NodeExpandedRecord else (),
@@ -385,6 +528,8 @@ def prepare_trace(
                           for node_id, fields in connections.items()),
         consumed_connection=None if candidates is None else (node.id, candidates),
         boundaries=boundaries, boundary_update=boundary_update,
+        root_start_source=source if node.id == trace.start_id and trace.root_start_source is None else None,
+        root_writer=root_writer, causal_route_source=causal_route_source, terminal=terminal,
     )
 
 
@@ -404,4 +549,4 @@ def _validate_sources(trace: RetainedTrace, route: ValueRoute, outcome_seq: int)
         _validate_sources(trace, child, outcome_seq)
 
 
-__all__ = ["RetainedTrace", "SourceEntry", "TraceBoundary", "TraceOccurrence"]
+__all__ = ["RetainedTrace", "SourceEntry", "TraceBoundary", "TraceOccurrence", "TraceTerminal"]

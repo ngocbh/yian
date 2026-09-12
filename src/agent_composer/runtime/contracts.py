@@ -11,7 +11,9 @@ import json
 from typing import Literal
 
 from agent_composer.diagnostics import Failure, OriginRef
-from agent_composer.expr.lineage import SourceRef, ValueRoute
+from agent_composer.expr.lineage import (
+    FeedbackValue, SourceRef, ValueRoute, validate_feedback,
+)
 from agent_composer.memory.contracts import (
     LearningResult,
     MemoryFrameRef,
@@ -322,6 +324,110 @@ class ForwardCapture:
 
 
 @dataclass(frozen=True, slots=True)
+class BackwardAttribution:
+    """Reference one input message transfer and its sender's incoming positions.
+
+    Sender/input/message identify a returned input batch slot; contribution is
+    its ordinal in the existing pure route transfer. Parents index the sender's
+    ordered received messages. A root seed has no sender or parents. These
+    coordinates retain expression stops and contexts without copying source data.
+    """
+
+    sender: SourceRef | None
+    input_name: str | None
+    message_index: int
+    contribution_index: int | None
+    parents: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        """Reject malformed root/transfer coordinates and mutable inventories."""
+        if type(self.message_index) is not int or self.message_index < 0:
+            raise ValueError("message_index must be a non-negative integer")
+        if type(self.parents) is not tuple or any(type(i) is not int or i < 0 for i in self.parents):
+            raise TypeError("parents must be a tuple of non-negative integer positions")
+        if tuple(sorted(set(self.parents))) != self.parents:
+            raise ValueError("parents must be distinct ordered positions")
+        if self.sender is None:
+            if (self.input_name is not None or self.message_index != 0
+                    or self.contribution_index is not None or self.parents):
+                raise ValueError("root attribution cannot carry sender coordinates")
+        else:
+            _validate_source(self.sender)
+            if self.sender.execution_seq == 0 or self.sender.path:
+                raise ValueError("attribution sender must identify an accepted occurrence")
+            if type(self.input_name) is not str or not self.input_name:
+                raise ValueError("transfer attribution requires an input name")
+            if type(self.contribution_index) is not int or self.contribution_index < 0:
+                raise ValueError("transfer attribution requires a non-negative contribution index")
+            if not self.parents:
+                raise ValueError("transfer attribution requires incoming parent positions")
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class AttributedBackwardResult:
+    """Detached feedback and a result for every accepted forward occurrence."""
+
+    source: SourceRef
+    _feedback: tuple[FeedbackValue, ...] = field(repr=False)
+    attribution: tuple[BackwardAttribution, ...]
+    result: BackwardResult
+    invoked: bool
+
+    def __init__(
+        self, source: SourceRef, feedback: tuple[FeedbackValue, ...],
+        attribution: tuple[BackwardAttribution, ...], result: BackwardResult, invoked: bool,
+    ) -> None:
+        """Validate aligned attribution and copy mutable message containers.
+
+        Args:
+            source (`SourceRef`): Accepted forward occurrence identity, never
+                source zero.
+            feedback (`tuple[FeedbackValue, ...]`): Ordered ordinary messages
+                delivered to its callback.
+            attribution (`tuple[BackwardAttribution, ...]`): One source-neutral
+                transfer reference per message.
+            result (`BackwardResult`): Its validated three-channel result, empty
+                when unreached.
+            invoked (`bool`): Whether the fold invoked this occurrence's callback.
+
+        Raises:
+            `TypeError`: For noncanonical carriers or mutable batch containers.
+            `ValueError`: For invalid coordinates, misalignment, or nonempty
+                material on an unreached occurrence.
+        """
+        _validate_source(source)
+        if source.execution_seq == 0 or source.path:
+            raise ValueError("backward result source must identify an accepted occurrence")
+        if type(feedback) is not tuple or type(attribution) is not tuple:
+            raise TypeError("feedback and attribution must be tuples")
+        if len(feedback) != len(attribution):
+            raise ValueError("feedback and attribution must align")
+        for message in feedback:
+            validate_feedback(message, message)
+        for item in attribution:
+            if type(item) is not BackwardAttribution:
+                raise TypeError("attribution requires exact BackwardAttribution values")
+            BackwardAttribution.__post_init__(item)
+        if type(result) is not BackwardResult or type(invoked) is not bool:
+            raise TypeError("result and invoked must be a BackwardResult and bool")
+        checked = BackwardResult(result.input_feedback, result.self_feedback, result.variable_feedback)
+        if not invoked and (feedback or checked != BackwardResult()):
+            raise ValueError("unreached occurrences cannot carry backward material")
+        if invoked and not feedback:
+            raise ValueError("invoked occurrences require received feedback")
+        object.__setattr__(self, "source", source)
+        object.__setattr__(self, "_feedback", tuple(_copy_backward_value(m, "feedback") for m in feedback))
+        object.__setattr__(self, "attribution", attribution)
+        object.__setattr__(self, "result", checked)
+        object.__setattr__(self, "invoked", invoked)
+
+    @property
+    def feedback(self) -> tuple[FeedbackValue, ...]:
+        """Return an isolated copy of the ordered ordinary message batch."""
+        return tuple(_copy_backward_value(message, "feedback") for message in self._feedback)
+
+
+@dataclass(frozen=True, slots=True)
 class BackwardFailure:
     """An attributed failure from one backward or memory operation.
 
@@ -455,4 +561,7 @@ class BackwardOutcome:
                 raise ValueError("succeeded backward requires succeeded learning")
 
 
-__all__ = ["BackwardCapture", "BackwardFailure", "BackwardOutcome", "ForwardCapture"]
+__all__ = [
+    "AttributedBackwardResult", "BackwardAttribution", "BackwardCapture",
+    "BackwardFailure", "BackwardOutcome", "ForwardCapture",
+]

@@ -959,3 +959,222 @@ def test_json_compatible_nested_results_keep_complete_feedback_shape(
     assert stopped[0].context[-1].result == value
     assert stopped[0].context[-1].result_type is None
     assert calls == ["call"]
+
+
+@pytest.mark.parametrize("form", [
+    "literal", "nested_literal", "opaque", "selected", "list", "record",
+    "concat", "repeat", "project_record", "project_list",
+])
+def test_accepted_result_shape_validates_unavailable_temporary_routes(form, monkeypatch):
+    temporary = object()
+    calls = []
+    raw = {"file": temporary, "other": 1} if form == "project_record" else (
+        [temporary, 1] if form == "project_list" else temporary
+    )
+    monkeypatch.setitem(TEMPLATE_FNS, "accepted_temporary", lambda: calls.append(None) or raw)
+    expression = "${accepted_temporary() | null}" if form == "selected" else "${accepted_temporary()}"
+    traced = eval_binding(expression, lambda _: None, trace=True)
+    route = traced.route
+    value = {"uri": "file:///tmp/example.txt"}
+    feedback = {"uri": "Check the URI."}
+    expected_stop = feedback
+    if form == "literal":
+        route = ValueRoute.literal(temporary)
+    elif form == "nested_literal":
+        route = ValueRoute.literal({"files": [temporary]})
+        value, feedback = {"files": [value]}, {"files": [feedback]}
+    elif form == "list":
+        route = ValueRoute("list", children=(route,))
+        value, feedback = [value], [feedback]
+    elif form == "record":
+        route = ValueRoute.record((("file", route),))
+        value, feedback = {"file": value}, {"file": feedback}
+    elif form == "concat":
+        route = ValueRoute("concat", children=(ValueRoute("list", children=(route,)), ValueRoute.literal([])), sizes=(1, 0))
+        value, feedback = [value], [feedback]
+    elif form == "repeat":
+        route = ValueRoute("repeat", children=(ValueRoute("list", children=(route,)), ValueRoute.literal(2)), sizes=(1,), count=2)
+        value, feedback = [value, value], [feedback, None]
+    elif form == "project_record":
+        route = route.project(("file",))
+        expected_stop = {"file": feedback}
+    elif form == "project_list":
+        route = route.project((0,))
+        expected_stop = [feedback, None]
+    routed = route_feedback(route, feedback, lambda _: None, recorded_value=value)
+    assert routed.contributions == ()
+    assert [item.feedback for item in routed.stopped] == (
+        [] if form in ("literal", "nested_literal") else [expected_stop]
+    )
+    if routed.stopped:
+        opaque_context = routed.stopped[0].context[-1]
+        original = traced.route.children[0] if form == "selected" else traced.route
+        assert opaque_context.result is None
+        assert opaque_context.result_type == original.result_type
+        assert opaque_context.snapshot == original.snapshot
+    assert calls == [None]
+    with pytest.raises(ValueError):
+        route_feedback(route, feedback, lambda _: None)
+
+
+@pytest.mark.parametrize("container", ["record", "list"])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("boundary", ["opaque", "literal"])
+def test_accepted_projected_value_stops_at_a_bounded_ancestor(container, wrapped, boundary, monkeypatch):
+    value = object()
+    step = "nested" if container == "record" else 0
+    path = (step,) * 40
+    for _ in path:
+        value = {"nested": value} if container == "record" else [value, "sibling"]
+    calls = []
+    monkeypatch.setitem(TEMPLATE_FNS, "bounded_temporary", lambda: calls.append(None) or value)
+    traced = eval_binding("${bounded_temporary()}", lambda _: None, trace=True)
+    boundary_route = traced.route if boundary == "opaque" else ValueRoute.literal(value)
+    parent = ValueRoute.record((("outer", boundary_route),)) if wrapped else boundary_route
+    selected_path = ("outer", *path) if wrapped else path
+    projected = parent.project(selected_path)
+    feedback = {"uri": "Review."}
+    routed = route_feedback(projected, feedback, lambda _: None, recorded_value={"uri": "file:///tmp/x"})
+    assert routed.contributions == ()
+    if boundary == "opaque":
+        assert len(routed.stopped) == 1
+        stop = routed.stopped[0]
+        assert stop.feedback == feedback
+        assert any(detail.role == "projection" and detail.operand == selected_path for detail in stop.context)
+        assert stop.context[-1].snapshot == traced.route.snapshot
+    else:
+        assert routed.stopped == ()
+    assert calls == [None]
+
+
+@pytest.mark.parametrize("operation", ["concat", "repeat"])
+def test_projected_partial_container_uses_recorded_operation_positions(operation, monkeypatch):
+    calls = []
+    raw = [object(), object()]
+    monkeypatch.setitem(TEMPLATE_FNS, "operation_temporary", lambda: calls.append(None) or raw)
+    expression = "${operation_temporary() + []}" if operation == "concat" else "${operation_temporary() * 2}"
+    traced = eval_binding(expression, lambda _: None, trace=True)
+    index = 1 if operation == "concat" else 3
+    feedback = {"uri": "Check."}
+    routed = route_feedback(traced.route.project((index,)), feedback, lambda _: None,
+                            recorded_value={"uri": "file:///tmp/x"})
+    assert routed.contributions == ()
+    assert [stop.feedback for stop in routed.stopped] == [[None, feedback]]
+    context = routed.stopped[0].context
+    assert any(detail.role == "projection" and detail.operand == (index,) for detail in context)
+    assert any((index,) in detail.positions for detail in context)
+    assert calls == [None]
+    with pytest.raises(IndexError):
+        route_feedback(traced.route.project((len(traced.value),)), feedback, lambda _: None,
+                       recorded_value={"uri": "file:///tmp/x"})
+
+
+def test_accepted_shape_keeps_full_validation_and_exact_source_failures():
+    source = SourceRef("run", 1)
+    route = ValueRoute("list", children=(ValueRoute("source", source=source), ValueRoute.literal(object())))
+    valid = [1, {"uri": "file:///tmp/x"}]
+    reads = []
+
+    def lookup(identity):
+        reads.append(identity)
+        return 1
+
+    for invalid in ([None], [None, {"unknown": None}], [None, []]):
+        with pytest.raises(ValueError):
+            route_feedback(route, invalid, lookup, recorded_value=valid)
+    assert reads == []
+    routed = route_feedback(route, ["Source.", {"uri": "Literal."}], lookup, recorded_value=valid)
+    assert messages(routed) == [(source, "Source.")]
+    failure = RuntimeError("accepted source lookup broke")
+
+    def broken_lookup(_):
+        raise failure
+
+    with pytest.raises(RuntimeError) as caught:
+        route_feedback(route, ["Source.", None], broken_lookup, recorded_value=valid)
+    assert caught.value is failure
+    with pytest.raises(KeyError):
+        route_feedback(ValueRoute("source", source=SourceRef("run", 1, ("absent",))), "Review.", lambda _: {}, recorded_value="present")
+    with pytest.raises(ValueError, match="unknown route kind"):
+        route_feedback(ValueRoute("malformed"), "Review.", lookup, recorded_value="present")
+
+
+@pytest.mark.parametrize("operation", ["direct", "concat", "repeat"])
+@pytest.mark.parametrize("structured", [False, True])
+def test_bounded_projected_lists_compose_before_opaque_stopping(operation, structured, monkeypatch):
+    raw = {"files": [object()]}
+    path = ("nested",) * 40 + ("files",)
+    for _ in range(40):
+        raw = {"nested": raw}
+    calls = []
+    monkeypatch.setitem(TEMPLATE_FNS, "bounded_files", lambda: calls.append(None) or raw)
+    opaque = eval_binding("${bounded_files()}", lambda _: None, trace=True).route
+    selected = opaque.project(path)
+    route = selected
+    value = [{"uri": "file:///tmp/x"}]
+    feedback = [{"uri": "Review."}] if structured else "Review."
+    if operation == "concat":
+        route = ValueRoute("concat", children=(selected, ValueRoute.literal([])), sizes=(1, 0))
+    elif operation == "repeat":
+        route = ValueRoute("repeat", children=(selected, ValueRoute.literal(2)), sizes=(1,), count=2)
+        value *= 2
+        if structured:
+            feedback.append(None)
+    routed = route_feedback(route, feedback, lambda _: None, recorded_value=value)
+    assert routed.contributions == ()
+    assert [stop.feedback for stop in routed.stopped] == ([feedback[:1]] if structured else [feedback])
+    assert any(detail.role == "projection" and detail.operand == path
+               for detail in routed.stopped[0].context)
+    assert routed.stopped[0].context[-1].snapshot == opaque.snapshot
+    assert calls == [None]
+    with pytest.raises(ValueError):
+        route_feedback(route, [None] * (len(value) + 1), lambda _: None, recorded_value=value)
+    with pytest.raises(ValueError):
+        route_feedback(route, [{"unknown": None}] * len(value), lambda _: None, recorded_value=value)
+
+
+@pytest.mark.parametrize("fault_type", [RuntimeError, TypeError, ValueError])
+def test_unavailable_concat_child_does_not_hide_real_source_faults(fault_type):
+    unavailable = ValueRoute.literal(object()).project(("files",))
+    source = ValueRoute("source", source=SourceRef("run", 1))
+    route = ValueRoute("concat", children=(unavailable, source), sizes=(1, 1))
+    failure = fault_type("source lookup failed")
+
+    def broken_lookup(_):
+        raise failure
+
+    with pytest.raises(fault_type) as caught:
+        route_feedback(route, "Review.", broken_lookup, recorded_value=[1, 2])
+    assert caught.value is failure
+    with pytest.raises(TypeError):
+        route_feedback(route, "Review.", lambda _: 1, recorded_value=[1, 2])
+
+
+@pytest.mark.parametrize("operation", ["concat", "repeat"])
+def test_projection_over_unavailable_composition_uses_recorded_bounds(operation):
+    from dataclasses import replace
+
+    opaque = replace(ValueRoute.literal(object()), kind="opaque", expression="opaque()")
+    selected = opaque.project(("files",))
+    route = (
+        ValueRoute("concat", children=(selected, ValueRoute.literal([])), sizes=(1, 0))
+        if operation == "concat" else
+        ValueRoute("repeat", children=(selected, ValueRoute.literal(2)), sizes=(1,), count=2)
+    )
+    value = {"uri": "file:///tmp/x"}
+    feedback = {"uri": "Review."}
+    routed = route_feedback(route.project((0,)), feedback, lambda _: None, recorded_value=value)
+    assert routed.contributions == ()
+    assert [stop.feedback for stop in routed.stopped] == [feedback]
+    length = 1 if operation == "concat" else 2
+    with pytest.raises(IndexError):
+        route_feedback(route.project((length,)), feedback, lambda _: None, recorded_value=value)
+
+
+@pytest.mark.parametrize("count", [0, -1])
+def test_empty_repetition_does_not_infer_its_original_content_from_the_result(count):
+    sources = Sources(original="value")
+    traced = sources.evaluate(f"[original] * {count}")
+    assert traced.value == []
+    routed = route_feedback(traced.route, "Review.", sources.lookup, recorded_value=[])
+    assert messages(routed) == [(sources.identities["original"], "Review.")]

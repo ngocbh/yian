@@ -12,6 +12,10 @@ Accepted forward captures and paired producer reads follow the same reducer
 for live execution and replay; private backward handlers stay outside records.
 Shared forward/backward contracts live below the log and driver;
 they keep reverse-operation status separate from forward execution status.
+The internal reverse fold walks accepted outcomes once without writing state,
+logs, or memory. Trace-owned terminal authority and context reconstruction are
+shared below that fold; durable attribution references values instead of copying
+materialized downstream histories.
 
 Knows about:   events, memory contracts, typesys, nodes, and compile
                topology/identity/validation contracts.

@@ -1331,7 +1331,12 @@ def _prepare_success_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
+        _plan=replace(plan, trace_delta=_prepare_record_trace(
+            state, canonical_envelope,
+            terminal_succeeded=terminal.succeeded if terminal is not None else None,
+            terminal_output_bytes=terminal.output_bytes if terminal is not None else None,
+            terminal_failure=terminal.failure if terminal is not None else None,
+        )),
         observers=observers,
     )
 
@@ -1429,7 +1434,12 @@ def _prepare_route_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
+        _plan=replace(plan, trace_delta=_prepare_record_trace(
+            state, canonical_envelope,
+            terminal_succeeded=terminal.succeeded if terminal is not None else None,
+            terminal_output_bytes=terminal.output_bytes if terminal is not None else None,
+            terminal_failure=terminal.failure if terminal is not None else None,
+        )),
         observers=observers,
     )
 
@@ -1486,7 +1496,9 @@ def _prepare_failure_transition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
         expected_sequence=canonical_envelope.seq,
-        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
+        _plan=replace(plan, trace_delta=_prepare_record_trace(
+            state, canonical_envelope, terminal_succeeded=False, terminal_failure=failure,
+        )),
         observers=_failure_observers(failure),
     )
 
@@ -1923,6 +1935,9 @@ def _prepare_record_trace(
     state: RunState, envelope: RecordEnvelope, *,
     input_connections: tuple[SeedConnection, ...] = (),
     child_boundaries: tuple[ChildFlowBoundary, ...] = (),
+    terminal_succeeded: bool | None = None,
+    terminal_output_bytes: bytes | None = None,
+    terminal_failure: Failure | None = None,
 ) -> TraceDelta | None:
     """Prepare accepted trace data while the actual executing node still exists."""
     record = envelope.record
@@ -1935,7 +1950,15 @@ def _prepare_record_trace(
     else:
         node_id = None
     return prepare_trace(state.trace, envelope, state.flow.nodes.get(node_id),
-                         input_connections=input_connections, child_boundaries=child_boundaries)
+                         input_connections=input_connections, child_boundaries=child_boundaries,
+                         root_end_id=state.flow.end_id if isinstance(record, RunStartedRecord) else None,
+                         root_input_names=(
+                             state.flow.nodes[state.flow.start_id].backward_input_names()
+                             if isinstance(record, RunStartedRecord) and record.learn else None
+                         ),
+                         terminal_succeeded=terminal_succeeded,
+                         terminal_output_bytes=terminal_output_bytes,
+                         terminal_failure=terminal_failure)
 
 
 def _replay_records(

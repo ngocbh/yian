@@ -8,6 +8,7 @@ continuation state is stored in the graph or variable pool.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Callable, Iterator, Optional
 
 from agent_composer.diagnostics import OriginRef
@@ -24,6 +25,7 @@ from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunCont
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
 from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
+from agent_composer.nodes.binding import apply_defaults
 from agent_composer.nodes.contracts import (
     Parameter,
     ValueContract,
@@ -42,7 +44,8 @@ class AgentNode(Node):
     The package attribute is resolved at call time so tests and hosts may
     monkeypatch the model factory without an engine-owned capability. An optional
     ``memory_policy`` is authored identity only until compile derives runtime scope.
-    ``variables`` retains typed local declarations with mandatory literal defaults.
+    ``variables`` retains typed local declarations with mandatory literal defaults,
+    resolved into a fresh prompt record for each invocation.
     """
 
     kind = NodeKind.AGENT
@@ -199,8 +202,13 @@ class AgentNode(Node):
         evaluation_trace: EvaluationTrace | None = None,
         recall_memory: Callable[[str, str], tuple[MemorySection, ...]] | None = None,
     ) -> Output:
-        """Render declared inputs and run the selected local mode to completion."""
-        prompt = render_template_record(self.prompt, inputs)
+        """Render inputs with fresh variable defaults and run the selected mode."""
+        input_names = set(inputs) | {parameter.name for parameter in (self.params or [])}
+        for variable in self.variables:
+            if variable.name in input_names:
+                raise ValueError(f"variable {variable.name!r} collides with an input name")
+        variables = self._resolve_variables()
+        prompt = render_template_record(self.prompt, {**inputs, **variables})
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         memory_sections = (
@@ -218,3 +226,11 @@ class AgentNode(Node):
                 memory_sections=memory_sections,
             )
         )
+
+    def _resolve_variables(self) -> dict[str, Any]:
+        """Resolve validated literal defaults into one detached invocation record."""
+        return deepcopy(apply_defaults(self.variables, {}))
+
+    def declared_variables(self) -> tuple[Parameter, ...]:
+        """Return the canonical local declarations in their authored order."""
+        return tuple(self.variables)

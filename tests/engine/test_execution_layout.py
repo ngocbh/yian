@@ -115,6 +115,133 @@ def test_callsites_to_one_definition_have_distinct_paths():
     assert right.node.execution_scope == right.scope
 
 
+def test_agent_variable_owners_are_authored_callsites_and_survive_call_cloning():
+    from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+    from agent_composer.compile.expand import call_subgraph
+    from agent_composer.compile.llm_cascade import apply_effective_llm_map
+    from agent_composer.compose import load_flow
+    from agent_composer.nodes.agent import AgentNode
+
+    source = _REPEATED_DEFINITION.replace(
+        "kind: code\n        code: |\n          return 1\n        output: int",
+        "kind: agent\n        variables: {instruction: 'str = Summarize clearly'}\n"
+        "        prompt: ${instruction}\n        output: str",
+    )
+    flow = load_flow(source).compiled
+    apply_effective_llm_map(flow, {
+        path: {"provider": "test", "model": "test"}
+        for path in ("left/answer", "right/answer")
+    })
+    layout = resolve_execution_layout(flow)
+    owners = {
+        (target.scope.static_path, variable.name)
+        for target in layout.targets
+        for variable in target.node.declared_variables()
+    }
+    assert owners == {
+        (("left", "answer"), "instruction"),
+        (("right", "answer"), "instruction"),
+    }
+    assert all(target.node.execution_scope is None for target in layout.targets)
+
+    apply_execution_layout(flow, layout)
+    for callsite in ("left", "right"):
+        spawner = flow.nodes[callsite]
+        fragment = call_subgraph(
+            spawner.child, callsite, {}, execution_scope=spawner.execution_scope,
+        )
+        template = spawner.child.nodes["answer"]
+        clone = next(node for node in fragment.nodes.values() if isinstance(node, AgentNode))
+        variable, = clone.declared_variables()
+        assert (clone.execution_scope.static_path, variable.name) in owners
+        assert clone.execution_scope.flow_path == (callsite,)
+        assert clone.execution_scope.occurrence_path == (ExecutionPosition("call", (callsite,)),)
+        assert variable is not template.declared_variables()[0]
+        assert variable.default == "Summarize clearly"
+        assert clone.memory_scope is None
+
+
+def test_map_items_and_loop_iterations_share_the_authored_agent_variable_owner():
+    from agent_composer.compile.execution_layout import apply_execution_layout, resolve_execution_layout
+    from agent_composer.compile.expand import loop_continue_subgraph, map_subgraph
+    from agent_composer.compile.llm_cascade import apply_effective_llm_map
+    from agent_composer.compose import load_flow
+    from agent_composer.nodes.agent import AgentNode
+    from agent_composer.nodes.loop import LoopNode
+
+    flow = load_flow("""id: variable_owners
+name: variable_owners
+defs:
+  body:
+    input: {n: int}
+    nodes:
+      writer:
+        kind: agent
+        input: {n: '${input.n}'}
+        variables: {instruction: 'str = Summarize clearly'}
+        prompt: '${instruction}: ${n}'
+        output: {n: int}
+    output: ${writer.output}
+  repeated:
+    input: {n: int}
+    nodes:
+      repeat:
+        kind: loop
+        call: body
+        times: 2
+        input: {n: '${input.n}'}
+    output: ${repeat.output}
+nodes:
+  outer:
+    kind: map
+    call: repeated
+    over: [3, 3]
+    input: {n: '${item}'}
+output: ${outer.output}
+""").compiled
+    apply_effective_llm_map(flow, {
+        "outer/repeat/writer": {"provider": "test", "model": "test"},
+    })
+    layout = resolve_execution_layout(flow)
+    authored = next(target for target in layout.targets if isinstance(target.node, AgentNode))
+    owner = (authored.scope.static_path, authored.node.declared_variables()[0].name)
+    assert owner == (("outer", "repeat", "writer"), "instruction")
+    apply_execution_layout(flow, layout)
+    spawner = flow.nodes["outer"]
+    fragment = map_subgraph(
+        spawner.child, spawner.id, [{"n": 3}, {"n": 3}], execution_scope=spawner.execution_scope,
+    )
+    drivers = sorted(
+        (node for node in fragment.nodes.values() if isinstance(node, LoopNode)),
+        key=lambda node: node.execution_scope.occurrence_path[0].index,
+    )
+    assert len(drivers) == 2
+    occurrences = set()
+    variables = []
+    for item, current in enumerate(drivers):
+        for iteration in range(2):
+            next_driver = current.respawn(iteration + 1)
+            body = loop_continue_subgraph(
+                current.child, current.origin_id, {"n": 3}, iteration, next_driver,
+                execution_scope=current.execution_scope,
+            )
+            clone = next(node for node in body.nodes.values() if isinstance(node, AgentNode))
+            variable, = clone.declared_variables()
+            assert (clone.execution_scope.static_path, variable.name) == owner
+            assert clone.execution_scope.occurrence_path == (
+                ExecutionPosition("map_item", ("outer",), item),
+                ExecutionPosition("loop_body", ("outer", "repeat"), iteration),
+            )
+            assert variable.default == "Summarize clearly"
+            assert clone.memory_scope is None
+            occurrences.add(clone.execution_scope.occurrence_path)
+            variables.append(variable)
+            current = next_driver
+    assert len(occurrences) == 4
+    assert len({id(variable) for variable in variables}) == 4
+    assert authored.node.execution_scope.occurrence_path == ()
+
+
 def test_aliased_child_targets_are_rejected_before_any_scope_is_stamped():
     from agent_composer.compile.execution_layout import (
         apply_execution_layout, resolve_execution_layout,

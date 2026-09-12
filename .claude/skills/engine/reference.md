@@ -63,8 +63,9 @@ A streaming kind is a generator that yields `StreamChunk` and *returns* a
 evaluation boundary returns `EvaluationFailure(Failure)` for expected rejection;
 host control, stream callbacks, unexpected binder faults, and malformed setup
 escape. Result preparation constructs the same canonical value for expected
-output, route, and growth rejection. One strict schema-4 record boundary handles
-both paths, may retain optional source-neutral evaluation evidence, and carries
+output, route, and growth rejection. One strict schema-5 record boundary handles
+both paths, carries forward capture when retention is enabled, may retain
+optional model/tool evaluation evidence, and carries
 the nested value through the reducer to `NodeFailed`/`RunFailed` observers and
 `RunResult.failure`.
 `Node.on_failure` is a dormant future seam, not currently driven by `eval_node`.
@@ -850,12 +851,14 @@ never runtime ids, graph topology, or a text heuristic.
   structural error path through the effective target contract's exact,
   nearest-ancestor, or default origin, then falls back to the executing node;
   other canonicalization errors use the contract default. Route and growth use
-  the executing node origin. Schema-4 output rejection retains its cause type
-  inside `Failure` and may retain source-neutral evaluation evidence beside it;
-  there is no adjacent runtime coordinate.
+  the executing node origin. Schema-5 output rejection retains its cause type
+  inside `Failure`, forward capture when retention is enabled, and optional
+  model/tool evaluation evidence beside it. Execution scope in the capture is
+  separate from diagnostic provenance.
 - **Runtime boundary:** evaluator and dispatcher rejection construct one
-  canonical `Failure`; schema-4 `NodeFailedRecord` stores that value plus optional
-  source-neutral evaluation evidence. Reducer state, `NodeFailed`, `RunFailed`,
+  canonical `Failure`; schema-5 `NodeFailedRecord` stores that value, forward
+  capture when retention is enabled, and optional model/tool evaluation evidence.
+  Reducer state, `NodeFailed`, `RunFailed`,
   and `RunResult.failure` carry no semantic aliases. The first route whose skip
   closure reaches END latches `graph.terminal_unreachable` with that router and
   its `failure_trace()` on the causal `NodeRoutedRecord`; recovery structurally

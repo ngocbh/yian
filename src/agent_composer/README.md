@@ -143,7 +143,7 @@ supplies a local origin. Unsupported growth kinds and arbitrary builder, compile
 spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
 faults escape rather than becoming flow failures.
 
-At the schema-4 boundary, every trace item becomes an exact base
+At the schema-5 boundary, every diagnostic trace item becomes an exact base
 `OriginRef(key)`: front-end-specific subclasses are valid in memory, but class
 identity is intentionally absent from the single-key wire. The reducer carries
 that canonical immutable `Failure` through `NodeFailed`, terminal `RunFailed`,
@@ -545,15 +545,78 @@ targets, and floods the target's outgoing edges.
 Failure is a `raise`, not another result variant. `eval_node` structurally turns
 expected binding, assertion, body, and result rejection into
 `EvaluationFailure(Failure)`. Result preparation constructs the same canonical
-value for expected output, route, and growth rejection. Schema 4 carries that
+value for expected output, route, and growth rejection. Schema 5 carries that
 value unchanged through the durable record, reducer, observer events, and public
 result; the durable outcome may also retain optional source-neutral evaluation
 evidence. Host control, stream callbacks, unexpected binder faults, malformed
 setup, and arbitrary host/compiler faults escape. A streaming kind may yield
 transient `StreamChunk` values and then return one of the same three results.
 
+`eval_node(..., capture_bindings=True)` can also return a detached
+`BindingCapture` independently of model/tool evidence. It retains the actual
+input record after coercion, validation, and wrapper defaults, before assertions
+or body mutation. An incomplete binding has `bound_inputs=None`; partial routes
+remain available for inspection. The node-owned `bind_reserved(..., bind=None)`
+hook can use the injected `bind(name, source, normalize)` callable to retain a
+reserved input's route and normalized value. Materialized hook results without
+that call have literal routes. MAP passes `bind_item(element, index)` its actual
+enumeration index and projects each item's routes from the captured `over`
+collection, including concatenated or repeated collections.
+
+Expression capture uses the existing evaluator walk. A paired resolver returns
+the value, presence, and optional source together; neither capture nor feedback
+transfer invokes the source expression again. `expr.lineage.ValueRoute` retains
+selected arms, projections, collection construction, concatenation, repetition,
+and the evaluated contributors to scalar operations and interpolation. Ordinary
+registered function calls are opaque: feedback stops there with local context.
+`BindingCapture.evaluated_keys` separately records which inputs evaluated a
+template expression, since even an evaluated expression can return a literal
+route. Literal and escaped strings do not set that marker.
+
+Feedback values are ordinary strings, dictionaries, exact-length positional
+lists, or `None`. A string addresses a whole value and stays unchanged during
+transfer; structural context accompanies it separately. Dictionaries select
+known fields, and a positional list must match its recorded list's full length
+at every nested level. `None` and empty selections carry no effective feedback;
+an empty string is still a supplied message. `BackwardResult` keeps independent
+messages in ordered tuples across its input, self, and variable channels.
+Input messages may be structured; self and variable feedback contain text
+messages only.
+`validate_backward_result` checks the complete result against the detached
+`BackwardContext`, including actual input shapes and declared target names,
+before any input message is routed. These contracts do not activate the reserved
+`Node.backward` hook in forward execution or memory learning.
+
+`compile.execution_layout` derives execution locations independently of memory
+declarations. Each `ExecutionScope` separates a root-relative authored node path,
+its containing flow path, a flow boundary role, and instantiated child positions.
+The root flow path is empty, so a memory-free direct graph needs no flow ID or
+artificial boundary nodes solely for layout. When memory is present, a node's
+`MemoryScope.static_path` adds the root flow ID to its execution `static_path`.
+
+Resolve and apply execution layout after the existing run-configuration pass
+makes private child copies at each callsite. Resolution is pure. Application
+validates the full layout, current graph, exact target objects, aliases, and all
+existing scopes before stamping any node; reapplication is idempotent. It rejects
+shared or replaced targets instead of overwriting scopes at conflicting paths.
+The derived `Node.execution_scope` field has an explicit manifest exclusion and
+does not change authored flow fingerprints.
+
+LOOP templates start with an explicit driver position at iteration zero. Child
+instantiation adds CALL, MAP-item, or LOOP-body positions to the enclosing path;
+a nested LOOP keeps its own initial driver position. Each continuing driver
+replaces its previous driver position. Authored node and flow paths stay stable,
+and the existing memory occurrence and ownership rules remain separate.
+
+Growth fragments carry source-neutral input-connection recipes and actual child
+START/END boundary pairs. CALL and LOOP recipes select a named materialized input
+route; MAP recipes select an explicit item index and then a name. Synthetic MAP
+fan-out and collector nodes inherit the spawner's execution scope when present,
+with `boundary=None`. Expansion validation and its digest include these derived
+connections and execution topology; authored fingerprints exclude them.
+
 The runtime core is **kind-blind**. It dispatches on this result sum and consults
-node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`,
+node-owned execution-semantic traits/hooks (`is_spawner`, `binds_per_item`, `item_source_key`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
 `needs_stop_event`, `needs_memory_recall`, `needs_evaluation_trace`,
 `memory_scope`, and `skipped_output_target`) plus the diagnostic-only projections
@@ -582,8 +645,13 @@ MemoryFrameLearningFailedRecord | MemoryCommitRequestedRecord |
 MemoryCommitSucceededRecord | MemoryCommitFailedRecord
 ```
 
-The exact wire version is schema 4. Accepted node outcomes may retain optional
-source-neutral evaluation evidence; `NodeFailedRecord` still owns one canonical
+The exact wire version is schema 5. The recorded `learn` flag controls retention:
+`learn=True` requires every accepted node outcome to carry a `ForwardCapture`;
+`learn=False` omits it. The capture contains canonical bound inputs or an
+incomplete-binding marker, input routes, indexed item captures, execution scope,
+and optional node-owned data. Model/tool evaluation evidence is separate and may
+have no memory scope; recalled sections still require
+a matching scope and follow its frame order. `NodeFailedRecord` owns one canonical
 nested `Failure`. Earlier schemas are rejected rather than migrated. Terminal
 success remains derived from the END value. The first
 route whose skip closure reaches END persists its causal `Failure` on that
@@ -601,6 +669,32 @@ not applied and its outcome observer is not published. `FlowEngine` is the sole
 ready-frontier consumer and state writer; pooled workers only evaluate durably
 started nodes and return raw results to the dispatcher. Stream chunks remain
 callback-only and never enter the authoritative log.
+
+`runtime.trace.RetainedTrace` derives execution history from those accepted
+records. An occurrence is identified by the run ID and its accepted
+`NodeStartedRecord` sequence; outcome sequence separately defines accepted order.
+Sequence zero denotes the root input source. The current writer index maps each
+logical output target to its actual producing execution, including redirected
+outputs. A binding lookup reads the value, presence, and producer from one
+immutable entry at the existing read point. A pooled consumer may therefore start
+before the producer it eventually reads has started.
+
+Trace changes follow the same prepare/append/apply order as scheduler state.
+Rejected proposals retain their accepted canonical failure; discarded worker
+results do not become occurrences. Replay rebuilds the indexes through the same
+reducer and retains reconstructed node backward callables separately from the
+serialized records. Pruning removes live names while preserving accepted history
+and its callable references. It does not rerun expressions or model calls to
+recover provenance.
+
+Accepted growth installs candidate child-input connections through the same trace
+delta. A child's accepted capture remains unchanged; its effective input route
+joins those candidates only for fields already captured. A field in
+`evaluated_keys` keeps its actual second binding route, even when the result is
+literal or null. Failed binding remains incomplete. Consuming or pruning a child
+removes its pending connections, while accepted boundary associations and input
+routes remain in history. Replay derives the same connections after validating
+the rebuilt expansion and digest; it never infers sources from matching values.
 
 The package-root `run_flow` boundary commits the complete initialization record
 before lending its state/log pair to `FlowEngine`. A direct runtime caller has the
@@ -629,8 +723,8 @@ encoding prevents memory text from breaking or spoofing the envelope, but the
 text remains model-visible system material and is not isolated from prompt
 injection. Accepted invocation evidence is recorded beside the ordinary node
 outcome, including visible model retries within that invocation. Reducer-rejected
-node outcomes, discarded late siblings, and transient stream chunks do not become
-learning evidence.
+node proposals are represented by their accepted canonical failure. Discarded
+late siblings and transient stream chunks do not become learning evidence.
 
 `learn=True` starts a separate post-terminal phase after either primary success
 or primary failure. For each static frame, runtime derives its exact occurrence

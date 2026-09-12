@@ -99,8 +99,9 @@ this model whenever you design anything:
   effective commit target's contract. Missing contract provenance falls back to
   the parameter or executing node, while invalid defaults retain their default
   origin. Non-type output canonicalization uses the contract default. Route and
-  growth use the executing node origin. All paths feed one schema-4
-  `NodeFailedRecord(failure, optional evidence)` boundary;
+  growth use the executing node origin. All paths feed one schema-5
+  `NodeFailedRecord` boundary carrying the failure, optional evaluation evidence,
+  and forward capture when retention is enabled;
   reducer state, `NodeFailed`, `RunFailed`, and `RunResult.failure` retain that
   same semantic authority without flattened aliases. That durable boundary
   collapses any valid `OriginRef` subclass to exact `OriginRef(key)`, because
@@ -338,7 +339,7 @@ Most are just the functional model (above) made enforceable:
   sanctioned kind match lives in `compile.expand.build_grow`. The core dispatches only on the
   closed worker-result and run-record sums and consults node-owned
   execution-semantic traits/hooks
-  (`is_spawner`, `binds_per_item`,
+  (`is_spawner`, `binds_per_item`, `item_source_key`,
   `bind_reserved`, `reserved_wiring_keys`, `validate_execution_setup`,
   `grow_depth_delta`, `is_loop`, `needs_stop_event`, `skipped_output_target`)
   plus the diagnostic-only projections `exception_origin` and `failure_trace`.
@@ -360,6 +361,55 @@ Most are just the functional model (above) made enforceable:
   vocabulary for a future durable reverse-DAG pass. Do not call it from ordinary
   execution or memory learning until producer lineage and feedback records define
   its contract.
+- **Binding capture follows the actual read boundary** — optional input capture
+  uses the existing expression walk and a paired value/presence/source resolver.
+  Never reevaluate a callable or reconstruct provenance from value equality.
+  Capture the final input record after wrapper defaults and before assertions or
+  body mutation; incomplete binding has no usable record. Reserved hooks use
+  `bind(name, source, normalize)` for routed values, while directly returned
+  materialized values have literal routes. MAP supplies explicit item indices
+  and projects the captured `over` route. Preserve `evaluated_keys` from the same
+  template scan; an evaluated expression may still produce a literal route.
+- **Feedback shape and message order stay explicit** — use ordinary string,
+  dictionary, exact-length list, and `None` values. Keep whole-value text
+  unchanged with structural context alongside it, and keep independent messages
+  in tuples. Input messages may be structured; self and variable feedback contain
+  text messages only. Validate all `BackwardResult` channels against recorded
+  input shapes and declared targets before routing. Opaque registered expression functions
+  stop transfer and retain local context; do not add a function-backward registry.
+- **Execution location is independent of memory ownership** — derive
+  root-relative authored node/flow paths and explicit boundary roles through
+  `compile.execution_layout`; do not parse runtime IDs or require a memory policy
+  or new flow ID. Apply the layout after existing run setup makes private child
+  copies per callsite. Validate the complete layout, target identities, aliases,
+  and existing scopes before writing any scope. Derived `Node.execution_scope`
+  is explicitly excluded from authored fingerprints; memory frame ownership
+  remains separate.
+- **Growth connects recorded inputs explicitly** — source-neutral fragment
+  recipes select CALL/LOOP parameter routes or MAP item-index/parameter routes.
+  Retain real child START/END pairs; synthetic MAP fan nodes are not child-flow
+  boundaries. Include connections and execution topology in expansion validation
+  and its digest. Join candidates only into fields present in the accepted child
+  capture, keeping the original capture unchanged. `evaluated_keys` wins over a
+  parent candidate, including an actual expression that returned null. Consume or
+  prune pending connections so reused runtime IDs cannot inherit stale sources.
+  LOOP templates begin at driver zero; cloning adds outer positions while keeping
+  a nested LOOP's initial driver suffix. Continuations replace their own driver
+  position. Do not parse runtime IDs or change memory ownership to derive these
+  execution positions.
+- **Retained history follows accepted records** — the recorded `learn` flag
+  controls retention. Schema 5 requires `ForwardCapture` on every accepted node
+  outcome when `learn=True` and omits it when `learn=False`. Model/tool evidence
+  remains separate from general capture and may have no memory scope; recalled
+  sections still require matching ordered
+  frame membership. Identify executions by run ID and accepted start sequence,
+  with outcome order recorded separately. Sequence zero is the root input source.
+  Read value, presence, and producer from one immutable current writer entry at
+  the actual binding lookup. Redirected output names retain the physical producer.
+  Prepare trace deltas before append and install them only through accepted
+  reducer transitions. Replay uses that same reducer; pruning preserves historical
+  entries and reconstructed backward callables. Never serialize callables or
+  retain discarded worker outcomes as executions.
 - **Memory is host-injected and record-authoritative** — authored
   `long_term_memory:` declarations select policies that resolve to static frames
   owned by flows or AGENT nodes; MAP items and LOOP iterations reuse those frames.

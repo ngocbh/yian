@@ -226,15 +226,17 @@ library callers use the same method when they need presentation-ready frames.
 
 ## Authoritative run logs
 
-Every execution is reduced from one ordered schema-4 `RunLog`, including
+Every execution is reduced from one ordered schema-5 `RunLog`, including
 process-local runs. The closed durable record vocabulary is `RunStartedRecord`,
 `RunResumedRecord`, `NodeStartedRecord`, `NodeSucceededRecord`,
 `NodeRoutedRecord`, `NodeExpandedRecord`, `NodeFailedRecord`,
 `MemoryFrameLearningStartedRecord`, `MemoryFrameLearnedRecord`,
 `MemoryFrameLearningFailedRecord`, `MemoryCommitRequestedRecord`,
 `MemoryCommitSucceededRecord`, and `MemoryCommitFailedRecord`. The four node
-outcome records may retain optional source-neutral evaluation evidence. Terminal
-success or failure is derived from node transitions. `NodeFailedRecord` stores
+outcome records carry canonical forward inputs and routes when the recorded
+run has `learn=True`; `learn=False` omits that capture. Optional model/tool
+evaluation evidence is separate. Terminal success
+or failure is derived from node transitions. `NodeFailedRecord` stores
 the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
 stores the optional derived terminal-unreachable `Failure` that replay
 revalidates before restoring; no separate terminal record exists. Earlier

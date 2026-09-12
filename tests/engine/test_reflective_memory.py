@@ -70,6 +70,14 @@ def _context(
     )
 
 
+def test_reflective_episode_material_retains_the_physical_execution_sequence() -> None:
+    episode = MemoryEpisode("run-1", MemoryOccurrenceRef(_ref()), _ref().static_path,
+                            MemoryEpisodeStatus.SUCCEEDED, {"text": "hello"}, "HELLO", execution_seq=17)
+    material = json.loads(reflective._bounded_episode_material(LearnContext("run-1", _ref(), (episode,))))
+    assert material["episodes"][0]["execution_seq"] == 17
+    assert material["episodes"][0]["owner_static_path"] == list(_ref().static_path)
+
+
 def _mutation(
     ref: MemoryFrameRef,
     mutation_id: str,

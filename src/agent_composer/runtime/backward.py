@@ -3,17 +3,15 @@
 The fold consumes recorded routes and node-owned backward hooks. It does not
 interpret kinds, evaluate expressions, drive child flows, or write logs/memory.
 Small durable attribution references live in runtime.contracts below this module;
-materialized interpretation data and ordering keys exist only during this fold.
+materialized interpretation data and ordering keys remain transient. The shared
+learning projection owns formatting without performing this callback fold.
 """
 
 from __future__ import annotations
 
-from typing import Any
 import traceback
 
-from agent_composer.expr.lineage import (
-    FeedbackValue, RouteContext, SourceRef,
-)
+from agent_composer.expr.lineage import FeedbackValue
 from agent_composer.nodes.base import (
     BackwardContext, BackwardResult, _CapabilityFault, _HostStop,
     _copy_backward_value, validate_backward_result,
@@ -21,10 +19,9 @@ from agent_composer.nodes.base import (
 from agent_composer.runtime.contracts import (
     AttributedBackwardResult, BackwardFailure,
 )
-from agent_composer.runtime.log import _route_payload
 from agent_composer.runtime.trace import RetainedTrace
 from agent_composer.runtime.learning import (
-    _BackwardMessage as _Message, _project_root_backward, _seed_backward, _transfer_backward,
+    _contextual_transfers, _materialize_context, _project_root_backward, _seed_backward,
 )
 
 
@@ -36,59 +33,12 @@ class _BackwardComputeError(Exception):
         self.failure = failure
 
 
-def _source_data(source: SourceRef | None) -> dict[str, Any] | None:
-    if source is None:
-        return None
-    return {"run_id": source.run_id, "execution_seq": source.execution_seq, "path": list(source.path)}
-
-
-def _materialize_context(trace: RetainedTrace, message: _Message, index: int) -> dict[str, Any]:
-    """Resolve only the accepted values needed by one transient callback view."""
-    details = []
-    for context in message.context:
-        sources = [{"source": _source_data(source), "value": trace.lookup_source(source)}
-                   for source in context.sources]
-        result = context.result
-        if context.result_json is None and context.result_type is None and len(sources) == 1:
-            result = sources[0]["value"]
-        details.append({
-            "expression": context.expression, "result": result, "sources": sources,
-            "role": context.role,
-            "operand": list(context.operand) if type(context.operand) is tuple else context.operand,
-            "positions": [list(position) for position in context.positions],
-            "span": list(context.span) if context.span is not None else None,
-            "result_type": context.result_type,
-            "snapshot": _route_payload(context.snapshot) if context.snapshot is not None else None,
-        })
-    attribution = message.attribution
-    return {"message_index": index, "sender": _source_data(attribution.sender),
-            "input_name": attribution.input_name, "sender_message_index": attribution.message_index,
-            "contribution_index": attribution.contribution_index, "parents": list(attribution.parents),
-            "contexts": details}
-
-
 def _failure(context: BackwardContext, code: str, exc: Exception) -> _BackwardComputeError:
     return _BackwardComputeError(BackwardFailure(
         stage="backward", code=code, message=str(exc), scope=context.scope,
         run_id=context.run_id, node_id=context.node_id, node_started_seq=context.node_started_seq,
         cause_type=type(exc).__name__, traceback="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
     ))
-
-
-def _output_context(
-    source: SourceRef, context: BackwardContext, name: str, has_output: bool,
-) -> tuple[RouteContext, ...]:
-    """Reference an accepted structural output without rebuilding or copying it."""
-    if not has_output:
-        return ()
-    path = context.node_data.get("input_output_paths", {}).get(name)
-    if path is None:
-        return ()
-    value = context.output
-    for part in path:
-        value = value[part]
-    positions = ((path[0],),) if path and type(path[0]) is int else ()
-    return (RouteContext("", None, (source,), "output", tuple(path), positions),)
 
 
 def compute_backward(
@@ -149,15 +99,8 @@ def compute_backward(
         input_feedback = result.input_feedback
         if occurrence.source == trace.root_start_source:
             root_inputs = input_feedback
-        has_output = occurrence.source in trace.sources
-        for source, transfer in _transfer_backward(trace, occurrence, context, messages, result):
-            attribution = transfer.attribution
-            inherited = tuple(detail for index in attribution.parents for detail in messages[index].context)
-            output_context = _output_context(occurrence.source, context, attribution.input_name, has_output)
-            pending.setdefault(source, []).append(_Message(
-                transfer.feedback, attribution, transfer.order,
-                (*inherited, *output_context, *transfer.context),
-            ))
+        for source, transfer in _contextual_transfers(trace, occurrence, context, messages, result):
+            pending.setdefault(source, []).append(transfer)
     root = _project_root_backward(trace, pending, root_inputs, direct_root)
     return root, tuple(results[item.source] for item in occurrences)
 

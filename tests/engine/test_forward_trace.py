@@ -454,6 +454,175 @@ def test_discarded_pooled_outcomes_are_not_trace_occurrences():
     assert engine.state.backward_state.outcome.feedback == root
 
 
+def test_trace_memory_scope_is_detached_and_replayed_without_evidence():
+    from copy import deepcopy
+    from agent_composer.compile.expand import build_grow
+    from agent_composer.compile.model import START_ID, FlowOutput
+    from agent_composer.memory import MemoryFrameRef, MemoryFrameSpec, MemoryOwner, MemoryScope, MemorySnapshotEnvelope
+    from agent_composer.runtime.state import RunState, _replay_records
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _engine, _graph
+
+    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
+    scope = MemoryScope("root", ("root", "code"), (frame,))
+    node = FuncNode("code", lambda _: {"items": [1]})
+    node.memory_scope = scope
+    engine = _engine(_graph([node], [(START_ID, "code")], outputs=[FlowOutput("value", "${code.output}")]),
+                     learn=True, memory_layout=(MemoryFrameSpec(frame, "memory", {}),),
+                     memory_snapshots=(MemorySnapshotEnvelope("memory", {}),))
+    original = deepcopy(engine.state.flow)
+    list(engine.run())
+    occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == "code")
+    expected = deepcopy(scope)
+    assert occurrence.record.evidence is None
+    assert occurrence.memory_scope == expected and occurrence.memory_scope is not scope
+    assert "memory_scope" not in json.loads(occurrence._record_bytes)["payload"]
+    engine.state.flow.nodes["code"].memory_scope = None
+    object.__setattr__(scope, "frame_stack", [])
+    detached = occurrence.memory_scope
+    object.__setattr__(detached, "static_path", ("foreign",))
+    assert occurrence.memory_scope == expected
+    replay = _replay_records(RunState(original), tuple(engine.log), grow_builder=build_grow)
+    assert replay.trace.occurrence(occurrence.source).memory_scope == expected
+
+
+@pytest.mark.parametrize("bad", ["carrier", "nested"])
+def test_trace_rejects_forged_memory_scope_before_append_and_when_copied(bad):
+    from copy import deepcopy
+    from dataclasses import replace
+    from agent_composer.memory import MemoryFrameRef, MemoryFrameSpec, MemoryOwner, MemoryScope
+    from agent_composer.runtime.state import prepare_node_succeeded, commit_prepared
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _forward_capture
+    from tests.engine.test_runtime_memory_learning import _start_trace_node
+
+    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
+    node = FuncNode("code", lambda _: "done")
+    node.memory_scope = MemoryScope("root", ("root", "code"), (frame,))
+    state, log = _start_trace_node(node, layout=(MemoryFrameSpec(frame, "memory", {}),), learn=True)
+    prepared = prepare_node_succeeded(state, node.id, "done", forward_capture=_forward_capture(node, {}))
+    occurrence = prepared._plan.trace_delta.occurrence
+    malformed = object() if bad == "carrier" else deepcopy(node.memory_scope)
+    if bad == "nested":
+        object.__setattr__(malformed, "frame_stack", [])
+    with pytest.raises(TypeError):
+        replace(occurrence, _memory_scope=malformed)
+    object.__setattr__(occurrence, "_memory_scope", malformed)
+    sequence = state.next_sequence
+    with pytest.raises(TypeError):
+        commit_prepared(log, state, prepared)
+    assert state.next_sequence == state.trace.next_sequence == log.next_sequence == sequence
+
+
+def _prepared_scoped_outcome(kind, *, scoped=True):
+    """Prepare one physical outcome using the existing direct reducer fixture."""
+    from copy import deepcopy
+    from agent_composer.compile.model import END_ID
+    from agent_composer.diagnostics import Failure
+    from agent_composer.memory import MemoryFrameRef, MemoryFrameSpec, MemoryOwner, MemoryScope
+    from agent_composer.nodes.base import Grow
+    from agent_composer.runtime.state import prepare_expanded, prepare_node_failed, prepare_node_routed, prepare_node_succeeded
+    from tests.engine._fakes import FuncNode
+    from tests.engine._graph_builder import _forward_capture
+    from tests.engine.test_runtime_memory_learning import _start_trace_node
+    from tests.engine.test_run_state_growth import _fragment
+
+    class Spawner(FuncNode):
+        is_spawner = True
+
+    node = (Spawner if kind == "growth" else FuncNode)("physical", lambda _: "done")
+    frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
+    node.memory_scope = MemoryScope("root", ("root", node.id), (frame,)) if scoped else None
+    state, log = _start_trace_node(node, layout=(MemoryFrameSpec(frame, "memory", {}),), learn=True,
+                                   route_handle="go" if kind == "route" else None)
+    original = deepcopy(state.flow)
+    kwargs = {"forward_capture": _forward_capture(node, {})}
+    builder = lambda spawner, _seed: _fragment(spawner.id)
+    if kind == "success":
+        prepared = prepare_node_succeeded(state, node.id, "done", commit_as=END_ID, **kwargs)
+    elif kind == "route":
+        prepared = prepare_node_routed(state, node.id, "go", **kwargs)
+    elif kind == "failure":
+        prepared = prepare_node_failed(state, Failure("node.execute", "failed", node.id), **kwargs)
+    else:
+        prepared = prepare_expanded(state, node.id, Grow(seed={}), builder, **kwargs)
+    return node, state, log, prepared, original, builder
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
+@pytest.mark.parametrize("method", ["replace", "mutate"])
+@pytest.mark.parametrize("change", ["none", "foreign_path", "foreign_frame"])
+def test_outcome_rejects_valid_scope_substitution_before_append(kind, method, change):
+    from dataclasses import replace
+    from agent_composer.memory import MemoryFrameRef, MemoryOwner, MemoryScope
+    from agent_composer.runtime.log import encode_pool
+    from agent_composer.runtime.state import commit_prepared
+
+    node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
+    scope = node.memory_scope
+    if change == "none":
+        forged = None
+    elif change == "foreign_path":
+        forged = MemoryScope("root", ("root", "other"), scope.frame_stack)
+    else:
+        foreign_frame = MemoryFrameRef("root", scope.static_path, MemoryOwner.AGENT)
+        forged = MemoryScope("root", scope.static_path, (foreign_frame,))
+    delta = prepared._plan.trace_delta
+    if method == "replace":
+        prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(
+            delta, occurrence=replace(delta.occurrence, _memory_scope=forged),
+        )))
+    else:
+        object.__setattr__(delta.occurrence, "_memory_scope", forged)
+    accepted, pool, nodes = tuple(log), encode_pool(state.pool), state.flow.nodes
+    sequence = state.next_sequence
+    with pytest.raises(ValueError, match="physical.*memory scope|memory scope.*physical"):
+        commit_prepared(log, state, prepared)
+    assert tuple(log) == accepted and encode_pool(state.pool) == pool and state.flow.nodes is nodes
+    assert state.next_sequence == state.trace.next_sequence == log.next_sequence == sequence
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
+@pytest.mark.parametrize("change", ["display_node", "delta", "occurrence"])
+def test_outcome_scope_authority_cannot_be_selected_or_omitted_by_trace_delta(kind, change):
+    from dataclasses import replace
+    from agent_composer.compile.model import START_ID
+    from agent_composer.runtime.state import commit_prepared
+
+    _node, state, log, prepared, _original, _builder = _prepared_scoped_outcome(kind)
+    delta = prepared._plan.trace_delta
+    if change == "display_node":
+        delta = replace(delta, occurrence=replace(delta.occurrence, node_id=START_ID, _memory_scope=None))
+    elif change == "delta":
+        delta = None
+    else:
+        delta = replace(delta, occurrence=None)
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=delta))
+    sequence = state.next_sequence
+    with pytest.raises(ValueError):
+        commit_prepared(log, state, prepared)
+    assert state.next_sequence == state.trace.next_sequence == log.next_sequence == sequence
+
+
+@pytest.mark.parametrize("kind", ["success", "route", "failure", "growth"])
+@pytest.mark.parametrize("scoped", [False, True])
+def test_outcome_accepts_detached_physical_scope_and_replays_it(kind, scoped):
+    from copy import deepcopy
+    from dataclasses import replace
+    from agent_composer.runtime.state import RunState, _replay_records, commit_prepared
+
+    node, state, log, prepared, original, builder = _prepared_scoped_outcome(kind, scoped=scoped)
+    delta = prepared._plan.trace_delta
+    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=replace(
+        delta, occurrence=replace(delta.occurrence, _memory_scope=deepcopy(node.memory_scope)),
+    )))
+    commit_prepared(log, state, prepared)
+    occurrence = state.trace.occurrences[-1]
+    assert occurrence.memory_scope == node.memory_scope
+    replay = _replay_records(RunState(original), tuple(log), grow_builder=builder)
+    assert replay.trace.occurrence(occurrence.source).memory_scope == occurrence.memory_scope
+
+
 def test_learn_false_omits_backward_capture():
     from agent_composer.compile.model import START_ID, END_ID
     from agent_composer.runtime.log import NodeSucceededRecord

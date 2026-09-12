@@ -14,6 +14,7 @@ survive consumption and live graph pruning.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
@@ -21,6 +22,7 @@ from typing import Any, Callable, Mapping
 from agent_composer.diagnostics import Failure
 from agent_composer.expr.expressions import ExpressionError
 from agent_composer.expr.lineage import ResolvedValue, SourceRef, ValueRoute
+from agent_composer.memory import MemoryScope
 from agent_composer.nodes.base import BackwardContext, Node, _validate_declared_names
 from agent_composer.nodes.binding import BindingCapture
 from agent_composer.nodes.contracts import ChildFlowBoundary, ExecutionScope, SeedConnection
@@ -114,15 +116,40 @@ class TraceTerminal:
         return canonical_seed(value)[1]
 
 
+def _copy_memory_scope(scope: MemoryScope | None) -> MemoryScope | None:
+    """Detach validated frame ownership without deriving execution coordinates."""
+    if scope is None:
+        return None
+    if type(scope) is not MemoryScope:
+        raise TypeError("historical memory scope must be a MemoryScope or None")
+    return deepcopy(MemoryScope(scope.root_flow_id, scope.static_path, scope.frame_stack,
+                                scope.occurrence_path, scope.boundary))
+
+
 @dataclass(frozen=True, slots=True)
 class TraceOccurrence:
-    """One accepted outcome and its derived route, identified by its accepted start."""
+    """One accepted outcome and its derived route, identified by its accepted start.
+
+    Private memory ownership is detached from the physical node before pruning.
+    Replay reconstructs it from that node; it never replaces execution scope or
+    adds memory ownership to the accepted outcome payload.
+    """
 
     source: SourceRef
     node_id: str
     outcome_seq: int
     _record_bytes: bytes = field(repr=False)
     input_route: ValueRoute
+    _memory_scope: MemoryScope | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        """Keep detached exact frame ownership alongside the historical record."""
+        object.__setattr__(self, "_memory_scope", _copy_memory_scope(self._memory_scope))
+
+    @property
+    def memory_scope(self) -> MemoryScope | None:
+        """Return detached receiver-frame metadata without relabeling execution."""
+        return _copy_memory_scope(self._memory_scope)
 
     @property
     def record(self):
@@ -345,6 +372,10 @@ class TraceDelta:
             raise ValueError("trace transition requires its originating trace")
         if trace is not None and trace.next_sequence != self.sequence:
             raise ValueError("trace transition has a stale sequence")
+        if self.occurrence is not None:
+            if type(self.occurrence) is not TraceOccurrence:
+                raise TypeError("trace delta requires an exact occurrence")
+            _copy_memory_scope(self.occurrence._memory_scope)
         if self.consumed_connection is not None:
             node_id, routes = self.consumed_connection
             if trace is None or trace._pending_connections.get(node_id) is not routes:
@@ -466,7 +497,7 @@ def prepare_trace(
             for name, route in zip(capture.route.names, capture.route.children)
         )
     _validate_sources(trace, input_route, envelope.seq)
-    occurrence = TraceOccurrence(source, node.id, envelope.seq, encode_record(envelope), input_route)
+    occurrence = TraceOccurrence(source, node.id, envelope.seq, encode_record(envelope), input_route, node.memory_scope)
     boundary_update = None
     boundary_target = trace._current_boundaries.get(node.id)
     if boundary_target is not None:

@@ -487,6 +487,41 @@ def test_episode_status_enforces_output_or_failure_shape() -> None:
         )
 
 
+@pytest.mark.parametrize("sequence", [0, 17])
+def test_episode_execution_sequence_is_optional_and_survives_context_copy(sequence) -> None:
+    """Physical identity extends the existing positional host constructor."""
+    occurrence = MemoryOccurrenceRef(_agent_ref())
+    legacy = MemoryEpisode("run", occurrence, _agent_ref().static_path,
+                           MemoryEpisodeStatus.SUCCEEDED, {}, "answer", None, (), None, None, ())
+    assert legacy.execution_seq is None
+    inputs = {"items": [1]}
+    episode = MemoryEpisode("run", occurrence, _agent_ref().static_path,
+                            MemoryEpisodeStatus.SUCCEEDED, inputs, "answer", execution_seq=sequence)
+    context = LearnContext("run", _agent_ref(), (episode,))
+    inputs["items"].append(2)
+    assert context.episodes[0].execution_seq == sequence
+    assert context.episodes[0].inputs == {"items": [1]}
+    object.__setattr__(episode, "execution_seq", True)
+    with pytest.raises(TypeError, match="execution_seq"):
+        LearnContext("run", _agent_ref(), (episode,))
+
+
+@pytest.mark.parametrize("sequence", [False, True, -1, 1.0, "1"])
+def test_episode_rejects_nonphysical_execution_sequences(sequence) -> None:
+    with pytest.raises((TypeError, ValueError), match="execution_seq"):
+        MemoryEpisode("run", MemoryOccurrenceRef(_agent_ref()), _agent_ref().static_path,
+                      MemoryEpisodeStatus.SUCCEEDED, {}, execution_seq=sequence)
+
+
+def test_episode_rejects_integer_subclass_execution_sequence() -> None:
+    class Sequence(int):
+        pass
+
+    with pytest.raises(TypeError, match="execution_seq"):
+        MemoryEpisode("run", MemoryOccurrenceRef(_agent_ref()), _agent_ref().static_path,
+                      MemoryEpisodeStatus.SUCCEEDED, {}, execution_seq=Sequence(1))
+
+
 def test_learn_context_requires_frame_local_episode_identity() -> None:
     """A learning batch contains only episodes assigned to its run and frame."""
     outer_flow_episode = MemoryEpisode(

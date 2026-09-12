@@ -2,7 +2,8 @@
 
 This module shares exact route-transfer validation with the backward callback
 driver and owns immutable attempt, frame, and policy state carried by RunState.
-It also projects legacy learning episodes from accepted forward outcomes.
+It projects owner-local contexts for every enabled frame from complete accepted
+history and backward results, including legacy forward episode projections.
 Contracts, records, and retained traces sit below it; state and callback drivers
 consume its pure projections. It invokes no callbacks or backend operations.
 """
@@ -14,6 +15,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from hashlib import sha256
 import json
+from typing import Any
 
 from agent_composer.diagnostics import Failure
 from agent_composer.expr.lineage import FeedbackValue, RouteContext, SourceRef, has_feedback, route_feedback, validate_feedback
@@ -47,7 +49,9 @@ from agent_composer.runtime.log import (
     NodeSucceededRecord,
     _copy_attributed_results,
     _copy_backward_result,
+    _execution_scope_payload,
     _revalidate_run_record,
+    _route_payload,
     canonical_seed,
 )
 from agent_composer.runtime.trace import RetainedTrace, TraceOccurrence, TraceTerminal
@@ -58,12 +62,88 @@ _PRESERVE = object()
 
 @dataclass(frozen=True, slots=True)
 class _BackwardMessage:
-    """Transient ordered transfer; only the driver materializes its route context."""
+    """Transient ordered transfer, with contexts materialized only by consumers."""
 
     feedback: FeedbackValue
     attribution: BackwardAttribution
     order: tuple[int, ...]
     context: tuple[RouteContext, ...] = ()
+
+
+def _source_data(source: SourceRef | None) -> dict[str, Any] | None:
+    """Project a reference without materializing its accepted value."""
+    if source is None:
+        return None
+    return {"run_id": source.run_id, "execution_seq": source.execution_seq, "path": list(source.path)}
+
+
+def _route_context_data(trace: RetainedTrace, contexts: tuple[RouteContext, ...]) -> list[dict[str, Any]]:
+    """Resolve accepted values while preserving unavailable temporary snapshots."""
+    details = []
+    for context in contexts:
+        sources = [{"source": _source_data(source), "value": trace.lookup_source(source)}
+                   for source in context.sources]
+        result = context.result
+        if context.result_json is None and context.result_type is None and len(sources) == 1:
+            result = sources[0]["value"]
+        details.append({
+            "expression": context.expression, "result": result, "sources": sources,
+            "role": context.role,
+            "operand": list(context.operand) if type(context.operand) is tuple else context.operand,
+            "positions": [list(position) for position in context.positions],
+            "span": list(context.span) if context.span is not None else None,
+            "result_type": context.result_type,
+            "snapshot": _route_payload(context.snapshot) if context.snapshot is not None else None,
+        })
+    return details
+
+
+def _materialize_context(trace: RetainedTrace, message: _BackwardMessage, index: int) -> dict[str, Any]:
+    """Resolve only the accepted values needed by one transient callback view."""
+    attribution = message.attribution
+    return {"message_index": index, "sender": _source_data(attribution.sender),
+            "input_name": attribution.input_name, "sender_message_index": attribution.message_index,
+            "contribution_index": attribution.contribution_index, "parents": list(attribution.parents),
+            "contexts": _route_context_data(trace, message.context)}
+
+
+def _output_context(
+    source: SourceRef, context: BackwardContext, name: str, has_output: bool,
+) -> tuple[RouteContext, ...]:
+    """Reference an accepted structural output without rebuilding or copying it."""
+    if not has_output:
+        return ()
+    path = context.node_data.get("input_output_paths", {}).get(name)
+    if path is None:
+        return ()
+    value = context.output
+    for part in path:
+        value = value[part]
+    positions = ((path[0],),) if path and type(path[0]) is int else ()
+    return (RouteContext("", None, (source,), "output", tuple(path), positions),)
+
+
+def _inherited_context(
+    occurrence: TraceOccurrence, context: BackwardContext, messages: list[_BackwardMessage],
+    parents: tuple[int, ...], name: str, has_output: bool,
+) -> tuple[RouteContext, ...]:
+    """Preserve ordered parent contexts before adding actual structural output."""
+    inherited = tuple(detail for index in parents for detail in messages[index].context)
+    return (*inherited, *_output_context(occurrence.source, context, name, has_output))
+
+
+def _contextual_transfers(
+    trace: RetainedTrace, occurrence: TraceOccurrence, context: BackwardContext,
+    messages: list[_BackwardMessage], result: BackwardResult,
+) -> tuple[tuple[SourceRef, _BackwardMessage], ...]:
+    """Attach transient inherited/output context after the pure transfer step."""
+    transfers = []
+    for source, transfer in _transfer_backward(trace, occurrence, context, messages, result):
+        attribution = transfer.attribution
+        inherited = _inherited_context(occurrence, context, messages, attribution.parents,
+                                       attribution.input_name, occurrence.source in trace.sources)
+        transfers.append((source, replace(transfer, context=(*inherited, *transfer.context))))
+    return tuple(transfers)
 
 
 def _seed_backward(
@@ -1250,6 +1330,7 @@ def _revalidate_episode(episode: MemoryEpisode) -> None:
         base_system_prompt=episode.base_system_prompt,
         prompt=episode.prompt,
         memory_sections=episode.memory_sections,
+        execution_seq=episode.execution_seq,
     )
 
 
@@ -1275,26 +1356,10 @@ def failure_json(failure: Failure) -> dict[str, object]:
     }
 
 
-def project_outcome_episodes(
-    run_id: str,
-    record: (
-        NodeSucceededRecord
-        | NodeRoutedRecord
-        | NodeExpandedRecord
-        | NodeFailedRecord
-    ),
-) -> tuple[tuple[MemoryFrameRef, MemoryEpisode], ...]:
-    """Project one canonical accepted graph outcome into every scoped frame."""
-    if type(run_id) is not str or not run_id:
-        raise ValueError("episode projection requires a non-empty run_id")
-    evidence = record.evidence
-    if evidence is None:
-        return ()
-    if type(evidence) is not EvaluationEvidence:
-        raise TypeError("episode projection evidence must be EvaluationEvidence")
-    if evidence.scope is None:
-        return ()
-
+def _episode_outcome(
+    record: NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord,
+) -> tuple[MemoryEpisodeStatus, Any, dict[str, object] | None]:
+    """Project the actual accepted outcome without assuming model evidence."""
     if type(record) is NodeSucceededRecord:
         if type(record.value) is not dict or "value" not in record.value:
             raise ValueError("successful record has no canonical typed value")
@@ -1302,9 +1367,14 @@ def project_outcome_episodes(
         status = MemoryEpisodeStatus.SUCCEEDED
         failure = None
     elif type(record) is NodeRoutedRecord:
-        output = {"kind": "route", "handle": record.handle}
-        status = MemoryEpisodeStatus.SUCCEEDED
-        failure = None
+        if record.terminal_failure is None:
+            output = {"kind": "route", "handle": record.handle}
+            status = MemoryEpisodeStatus.SUCCEEDED
+            failure = None
+        else:
+            output = None
+            status = MemoryEpisodeStatus.FAILED
+            failure = failure_json(record.terminal_failure)
     elif type(record) is NodeExpandedRecord:
         output = {
             "kind": "grow",
@@ -1319,6 +1389,33 @@ def project_outcome_episodes(
         failure = failure_json(record.failure)
     else:
         raise TypeError("unsupported graph outcome for episode projection")
+
+    return status, output, failure
+
+
+def project_outcome_episodes(
+    run_id: str,
+    record: (
+        NodeSucceededRecord
+        | NodeRoutedRecord
+        | NodeExpandedRecord
+        | NodeFailedRecord
+    ),
+    *,
+    execution_seq: int | None = None,
+) -> tuple[tuple[MemoryFrameRef, MemoryEpisode], ...]:
+    """Project one canonical accepted graph outcome into every scoped frame."""
+    if type(run_id) is not str or not run_id:
+        raise ValueError("episode projection requires a non-empty run_id")
+    evidence = record.evidence
+    if evidence is None:
+        return ()
+    if type(evidence) is not EvaluationEvidence:
+        raise TypeError("episode projection evidence must be EvaluationEvidence")
+    if evidence.scope is None:
+        return ()
+
+    status, output, failure = _episode_outcome(record)
 
     additions: list[tuple[MemoryFrameRef, MemoryEpisode]] = []
     for frame_ref in evidence.scope.frame_stack:
@@ -1341,10 +1438,183 @@ def project_outcome_episodes(
                     base_system_prompt=evidence.base_system_prompt,
                     prompt=evidence.prompt,
                     memory_sections=evidence.memory_sections,
+                    execution_seq=execution_seq,
                 ),
             )
         )
     return tuple(additions)
+
+
+class OwnerContextError(Exception):
+    """A validated owner's material cannot fit the existing memory JSON boundary."""
+
+    def __init__(self, frame_ref: MemoryFrameRef, original: Exception) -> None:
+        """Retain the exact receiving frame and original context-construction error."""
+        if type(frame_ref) is not MemoryFrameRef:
+            raise TypeError("owner context failure requires an exact MemoryFrameRef")
+        self.frame_ref = MemoryFrameRef(frame_ref.root_flow_id, frame_ref.static_path, frame_ref.owner)
+        self.original = original
+        super().__init__(str(original))
+
+
+def _owner_feedback(
+    trace: RetainedTrace, occurrence: TraceOccurrence, context: BackwardContext,
+    messages: list[_BackwardMessage], result: BackwardResult,
+) -> list[dict[str, Any]]:
+    """Project every local channel, including input messages stopped at literals."""
+    entries = []
+    for index, message in enumerate(messages):
+        entries.append({"channel": "output", "target_name": None, "value": message.feedback,
+                        "contribution_context": _materialize_context(trace, message, index)})
+    has_output = occurrence.source in trace.sources
+    structural = _structural_parents(context, messages, result, has_output)
+    routes = dict(zip(occurrence.input_route.names, occurrence.input_route.children))
+    for name in context.input_names:
+        for index, feedback in enumerate(result.input_feedback.get(name, ())):
+            parents = (structural[name][index],) if structural is not None else tuple(range(len(messages)))
+            inherited = _inherited_context(occurrence, context, messages, parents, name, has_output)
+            routed = route_feedback(routes[name], feedback, trace.lookup_source, recorded_value=context.inputs[name])
+            entries.append({
+                "channel": "input", "target_name": name, "value": feedback,
+                "contribution_context": {
+                    "message_index": index, "parents": list(parents),
+                    "contexts": _route_context_data(trace, inherited),
+                    "contributions": [
+                        {"source": _source_data(contribution.source), "value": contribution.feedback,
+                         "contribution_index": contribution_index,
+                         "contexts": _route_context_data(trace, contribution.context)}
+                        for contribution_index, contribution in enumerate(routed.contributions)
+                    ],
+                },
+            })
+            for stop_index, stopped in enumerate(routed.stopped):
+                entries.append({
+                    "channel": "stopped", "target_name": name, "value": stopped.feedback,
+                    "contribution_context": {
+                        "message_index": index, "stop_index": stop_index, "parents": list(parents),
+                        "contexts": _route_context_data(trace, (*inherited, *stopped.context)),
+                    },
+                })
+    entries.extend({"channel": "self", "target_name": None, "value": feedback,
+                    "message_index": index, "contribution_context": {}}
+                   for index, feedback in enumerate(result.self_feedback))
+    variables = result.variable_feedback
+    for name in context.variable_names:
+        if name not in variables:
+            continue
+        entries.extend({"channel": "variable", "target_name": name, "value": feedback,
+                        "message_index": index, "contribution_context": {}}
+                       for index, feedback in enumerate(variables[name]))
+    return entries
+
+
+def _root_owner_feedback(result: BackwardResult) -> list[dict[str, Any]]:
+    """Keep source-free/root-input fallback channels without duplicating START."""
+    entries = [
+        {"channel": "input", "target_name": name, "value": feedback,
+         "contribution_context": {"message_index": index}}
+        for name, batch in result.input_feedback.items() for index, feedback in enumerate(batch)
+    ]
+    entries.extend({"channel": "self", "target_name": None, "value": feedback,
+                    "message_index": index, "contribution_context": {}}
+                   for index, feedback in enumerate(result.self_feedback))
+    entries.extend({"channel": "variable", "target_name": name, "value": feedback,
+                    "message_index": index, "contribution_context": {}}
+                   for name, batch in result.variable_feedback.items() for index, feedback in enumerate(batch))
+    return [{"execution_seq": None, "owner_static_path": None, "occurrence_path": None,
+             "execution_scope": None, "root": True, **entry} for entry in entries]
+
+
+def project_owner_contexts(
+    trace: RetainedTrace, layout: tuple[MemoryFrameSpec, ...], submitted_feedback: FeedbackValue,
+    root_result: BackwardResult, attributed_results: tuple[AttributedBackwardResult, ...],
+) -> tuple[LearnContext, ...]:
+    """Build every enabled owner's context from a validated complete backward result.
+
+    Args:
+        trace (`RetainedTrace`): Accepted terminal executions and historical scopes.
+        layout (`tuple[MemoryFrameSpec, ...]`): Complete recorded enabled layout,
+            including frames without executed nodes.
+        submitted_feedback (`FeedbackValue`): Original ordinary root message.
+        root_result (`BackwardResult`): Completed root projection.
+        attributed_results (`tuple[AttributedBackwardResult, ...]`): Complete
+            accepted occurrence inventory and validated local results.
+
+    Returns:
+        `tuple[LearnContext, ...]`: Detached episode/feedback batches in layout order.
+            Feedback preserves accepted execution coordinates. Memory scope selects
+            receivers and episode ownership without relabeling that feedback.
+
+    Raises:
+        `TypeError` or `ValueError`: For invalid layout, trace, or backward authority.
+        `KeyError`: For missing accepted source authority during materialization.
+        `OwnerContextError`: When validated material cannot satisfy a receiving
+            frame's existing memory JSON contract. No callback or backend is invoked.
+    """
+    if type(layout) is not tuple:
+        raise TypeError("owner contexts require the complete recorded layout tuple")
+    inventory = RuntimeLearningState.for_layout(layout)
+    validate_attributed_backward(trace, submitted_feedback, root_result, attributed_results)
+    occurrences = trace.occurrences
+    scopes = {}
+    for occurrence in occurrences:
+        scope = occurrence.memory_scope
+        if scope is not None:
+            if scope.frame_stack != inventory.applicable_frames(scope.root_flow_id, scope.static_path):
+                raise ValueError("historical memory scope disagrees with the complete recorded layout")
+            if scope.frame_stack:
+                scopes[occurrence.source] = scope
+
+    pending, direct_root = _seed_backward(trace, submitted_feedback)
+    feedback_by_source = {}
+    for occurrence, item in reversed(tuple(zip(occurrences, attributed_results))):
+        messages = sorted(pending.pop(occurrence.source, ()), key=lambda message: message.order)
+        context = trace.backward_context(occurrence.source)
+        if occurrence.source in scopes:
+            feedback_by_source[occurrence.source] = _owner_feedback(trace, occurrence, context, messages, item.result)
+        for source, transfer in _contextual_transfers(trace, occurrence, context, messages, item.result):
+            pending.setdefault(source, []).append(transfer)
+    fallback = _root_owner_feedback(_project_root_backward(trace, pending, {}, direct_root))
+
+    contexts = []
+    for spec in layout:
+        episodes, feedback = [], []
+        for occurrence in occurrences:
+            scope = scopes.get(occurrence.source)
+            if scope is None or spec.ref not in scope.frame_stack:
+                continue
+            record = occurrence.record
+            capture, evidence = record.forward_capture, record.evidence
+            status, output, failure = _episode_outcome(record)
+            execution_scope = _execution_scope_payload(capture.scope)
+            coordinates = {
+                "execution_seq": occurrence.source.execution_seq,
+                "owner_static_path": None if execution_scope is None else execution_scope["static_path"],
+                "occurrence_path": None if execution_scope is None else execution_scope["occurrence_path"],
+                "execution_scope": execution_scope,
+            }
+            feedback.extend({**coordinates, **entry} for entry in feedback_by_source[occurrence.source])
+            try:
+                episodes.append(MemoryEpisode(
+                    run_id=trace.run_id,
+                    occurrence=MemoryOccurrenceRef(spec.ref, scope.occurrence_path),
+                    owner_static_path=scope.static_path,
+                    status=status, inputs=capture.bound_inputs, output=output, failure=failure,
+                    interactions=() if evidence is None else evidence.interactions,
+                    base_system_prompt=None if evidence is None else evidence.base_system_prompt,
+                    prompt=None if evidence is None else evidence.prompt,
+                    memory_sections=() if evidence is None else evidence.memory_sections,
+                    execution_seq=occurrence.source.execution_seq,
+                ))
+            except (TypeError, ValueError) as exc:
+                raise OwnerContextError(spec.ref, exc) from exc
+        if spec.ref.owner is MemoryOwner.FLOW and spec.ref.static_path == (spec.ref.root_flow_id,):
+            feedback.extend(fallback)
+        try:
+            contexts.append(LearnContext(trace.run_id, spec.ref, tuple(episodes), tuple(feedback)))
+        except (TypeError, ValueError) as exc:
+            raise OwnerContextError(spec.ref, exc) from exc
+    return tuple(contexts)
 
 
 def aggregate_policy_mutations(
@@ -1418,12 +1688,14 @@ __all__ = [
     "PolicyCommitStatus",
     "RuntimeBackwardState",
     "RuntimeLearningState",
+    "OwnerContextError",
     "aggregate_policy_mutations",
     "failure_json",
     "frame_key",
     "memory_commit_id",
     "occurrence_key",
     "project_outcome_episodes",
+    "project_owner_contexts",
     "reduce_backward_record",
     "validate_attributed_backward",
 ]

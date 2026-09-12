@@ -1088,7 +1088,12 @@ class RecallContext:
 
 @dataclass(frozen=True, slots=True, init=False)
 class MemoryEpisode:
-    """One reducer-accepted source-neutral execution episode."""
+    """One reducer-accepted source-neutral execution episode.
+
+    ``execution_seq`` optionally identifies the physical accepted node-start
+    record; it is independent of episode order and outcome-record position.
+    Host-created episodes may omit it, and source coordinate zero is valid.
+    """
 
     run_id: str
     occurrence: MemoryOccurrenceRef
@@ -1101,6 +1106,7 @@ class MemoryEpisode:
     prompt: str | None
     memory_sections: tuple[MemorySection, ...]
     interactions: tuple[VisibleInteraction, ...]
+    execution_seq: int | None
 
     def __init__(
         self,
@@ -1115,9 +1121,22 @@ class MemoryEpisode:
         base_system_prompt: str | None = None,
         prompt: str | None = None,
         memory_sections: tuple[MemorySection, ...] = (),
+        *,
+        execution_seq: int | None = None,
     ) -> None:
-        """Validate one accepted success or failure episode and snapshot its JSON."""
+        """Validate one accepted success or failure episode and snapshot its JSON.
+
+        ``execution_seq`` is an optional exact nonnegative integer. Malformed
+        fields raise ``TypeError``; inconsistent values or excessive JSON nesting
+        raise ``ValueError``. Existing positional host construction is preserved.
+        """
         object.__setattr__(self, "run_id", _require_string(run_id, "run_id"))
+        if execution_seq is not None:
+            if type(execution_seq) is not int:
+                raise TypeError("execution_seq must be an integer or None")
+            if execution_seq < 0:
+                raise ValueError("execution_seq must be non-negative")
+        object.__setattr__(self, "execution_seq", execution_seq)
         if type(occurrence) is not MemoryOccurrenceRef:
             raise TypeError("occurrence must be a MemoryOccurrenceRef")
         MemoryOccurrenceRef(occurrence.frame_ref, occurrence.occurrence_path)
@@ -1228,6 +1247,7 @@ class LearnContext:
                 base_system_prompt=episode.base_system_prompt,
                 prompt=episode.prompt,
                 memory_sections=episode.memory_sections,
+                execution_seq=episode.execution_seq,
             )
             if episode.run_id != self.run_id:
                 raise ValueError("episode run_id must match the learning context")

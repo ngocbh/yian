@@ -522,12 +522,12 @@ def _retained_backward(*, layout=None, feedback="Review.", topic="reefs"):
 
 
 def test_attributed_validation_reuses_recorded_transfers_without_callbacks_or_materialization(monkeypatch):
-    import agent_composer.runtime.backward as backward
+    import agent_composer.runtime.learning as learning
     from agent_composer.runtime.learning import validate_attributed_backward
 
     engine, (root, attributed) = _retained_backward()
-    monkeypatch.setattr(backward, "_materialize_context", lambda *_: pytest.fail("materialized context"))
-    monkeypatch.setattr(backward, "_output_context", lambda *_: pytest.fail("formatted output context"))
+    monkeypatch.setattr(learning, "_materialize_context", lambda *_: pytest.fail("materialized context"))
+    monkeypatch.setattr(learning, "_output_context", lambda *_: pytest.fail("formatted output context"))
     monkeypatch.setattr(type(engine.state.trace), "backward_handlers",
                         property(lambda _: pytest.fail("read backward callbacks")))
     assert validate_attributed_backward(engine.state.trace, "Review.", root, attributed) is None
@@ -1302,7 +1302,6 @@ def test_backward_state_revalidates_exact_nested_inventory_types(change):
 
 def test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_context_formatting(monkeypatch):
     from copy import deepcopy
-    import agent_composer.runtime.backward as backward_module
     from agent_composer.compile.expand import build_grow
     from agent_composer.memory import LearningResult
     from agent_composer.runtime.contracts import BackwardOutcome
@@ -1318,8 +1317,10 @@ def test_backward_replay_matches_every_accepted_prefix_without_callbacks_or_cont
         node.forward = lambda *_: pytest.fail("replayed forward")
         node.backward = lambda *_: pytest.fail("replayed backward callback")
         node.capture_backward_context = lambda *_: pytest.fail("recaptured backward context")
-    monkeypatch.setattr(backward_module, "_materialize_context", lambda *_: pytest.fail("materialized context"))
-    monkeypatch.setattr(backward_module, "_output_context", lambda *_: pytest.fail("formatted output context"))
+    import agent_composer.runtime.learning as learning
+
+    monkeypatch.setattr(learning, "_materialize_context", lambda *_: pytest.fail("materialized context"))
+    monkeypatch.setattr(learning, "_output_context", lambda *_: pytest.fail("formatted output context"))
     prefixes = [(len(tuple(engine.log)), engine.state.backward_state)]
     records = [BackwardStartedRecord(1, "Review."), BackwardReadyRecord(1, root, attributed, proposals)]
     for policy, batch in (("alpha", proposals[0].mutations + proposals[1].mutations), ("beta", ())):

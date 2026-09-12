@@ -57,7 +57,9 @@ from agent_composer.nodes.contracts import (
     validate_output_contract,
 )
 from agent_composer.runtime.contracts import ForwardCapture
-from agent_composer.runtime.trace import RetainedTrace, TraceDelta, prepare_trace, select_seed_route
+from agent_composer.runtime.trace import (
+    RetainedTrace, TraceDelta, TraceOccurrence, _copy_memory_scope, prepare_trace, select_seed_route,
+)
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
     BackwardStartedRecord,
@@ -1329,7 +1331,10 @@ def _prepare_success_transition(
     if canonical_record != record:
         raise ValueError("NodeSucceededRecord is not in canonical wire form")
     next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(run_id, canonical_record)
+        project_outcome_episodes(
+            run_id, canonical_record,
+            execution_seq=state.trace.started[canonical_record.node_id] if state.trace is not None else None,
+        )
     )
 
     start_id = state.flow.start_id
@@ -1429,7 +1434,10 @@ def _prepare_route_transition(
             terminal_unreachable_failure=canonical_record.terminal_failure,
         )
     next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(run_id, canonical_record)
+        project_outcome_episodes(
+            run_id, canonical_record,
+            execution_seq=state.trace.started[canonical_record.node_id] if state.trace is not None else None,
+        )
     )
 
     terminal = _prepare_terminal_delta(
@@ -1508,7 +1516,10 @@ def _prepare_failure_transition(
 
     failure = canonical_record.failure
     next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(run_id, canonical_record)
+        project_outcome_episodes(
+            run_id, canonical_record,
+            execution_seq=state.trace.started[canonical_record.failure.node_id] if state.trace is not None else None,
+        )
     )
     start_id = state.flow.start_id
     end_id = state.flow.end_id
@@ -1621,7 +1632,10 @@ def _prepare_growth_transition(
                     f"seed connection {connection.seed_path!r} was not captured"
                 ))
     next_learning_state = state.learning_state.append_episodes(
-        project_outcome_episodes(run_id, canonical_record)
+        project_outcome_episodes(
+            run_id, canonical_record,
+            execution_seq=state.trace.started[canonical_record.spawner_id] if state.trace is not None else None,
+        )
     )
 
     start_id = state.flow.start_id
@@ -2003,14 +2017,7 @@ def _prepare_record_trace(
 ) -> TraceDelta | None:
     """Prepare accepted trace data while the actual executing node still exists."""
     record = envelope.record
-    if isinstance(record, NodeFailedRecord):
-        node_id = record.failure.node_id
-    elif isinstance(record, NodeExpandedRecord):
-        node_id = record.spawner_id
-    elif isinstance(record, (NodeSucceededRecord, NodeRoutedRecord)):
-        node_id = record.node_id
-    else:
-        node_id = None
+    node_id = _outcome_node_id(record)
     return prepare_trace(state.trace, envelope, state.flow.nodes.get(node_id),
                          input_connections=input_connections, child_boundaries=child_boundaries,
                          root_end_id=state.flow.end_id if isinstance(record, RunStartedRecord) else None,
@@ -2021,6 +2028,39 @@ def _prepare_record_trace(
                          terminal_succeeded=terminal_succeeded,
                          terminal_output_bytes=terminal_output_bytes,
                          terminal_failure=terminal_failure)
+
+
+def _outcome_node_id(record: RunRecord) -> str | None:
+    """Select the physical executing node from canonical outcome authority."""
+    if isinstance(record, NodeFailedRecord):
+        return record.failure.node_id
+    if isinstance(record, NodeExpandedRecord):
+        return record.spawner_id
+    if isinstance(record, (NodeSucceededRecord, NodeRoutedRecord)):
+        return record.node_id
+    return None
+
+
+def _require_outcome_trace_scope(state: RunState, prepared: PreparedTransition) -> None:
+    """Match detached scope to the canonical physical node before append/prune.
+
+    Callers have checked the record against its immutable prepared envelope. The
+    adopted graph remains authority until apply; neither a commit target nor a
+    substituted occurrence can select the historical owner.
+    """
+    delta = prepared._plan.trace_delta
+    if state.trace is None:
+        if delta is not None:
+            raise ValueError("an unretained outcome cannot carry a trace delta")
+        return
+    if type(delta) is not TraceDelta or type(delta.occurrence) is not TraceOccurrence:
+        raise ValueError("a retained outcome requires its physical trace occurrence")
+    node_id = _outcome_node_id(prepared.record)
+    node = state.flow.nodes.get(node_id)
+    if not isinstance(node, Node):
+        raise ValueError("outcome memory scope requires its physical executing node")
+    if delta.occurrence.memory_scope != _copy_memory_scope(node.memory_scope):
+        raise ValueError("outcome memory scope disagrees with the physical executing node")
 
 
 def _replay_records(
@@ -2191,6 +2231,7 @@ def _commit_success(
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
+    _require_outcome_trace_scope(state, prepared)
     delta = plan.delta
     if not (
         prepared.record.node_id == delta.node_id
@@ -2229,6 +2270,7 @@ def _commit_route(
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
+    _require_outcome_trace_scope(state, prepared)
     delta = plan.delta
     if not (
         prepared.record.node_id == delta.node_id
@@ -2274,6 +2316,7 @@ def _commit_failure(
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
+    _require_outcome_trace_scope(state, prepared)
     if prepared.record.failure is not plan.failure:
         raise ValueError("failure record and prevalidated authority disagree")
     node_id = plan.failure.node_id
@@ -2306,6 +2349,7 @@ def _commit_growth(
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
+    _require_outcome_trace_scope(state, prepared)
     delta = plan.delta
     if not (
         prepared.record.spawner_id == delta.spawner_id

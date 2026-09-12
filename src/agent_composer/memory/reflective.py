@@ -462,6 +462,7 @@ def _episode_json(episode: MemoryEpisode) -> JsonObject:
         )
     return {
         "base_system_prompt": episode.base_system_prompt,
+        "execution_seq": episode.execution_seq,
         "failure": episode.failure,
         "inputs": episode.inputs,
         "interactions": [

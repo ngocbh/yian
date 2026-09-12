@@ -30,7 +30,7 @@ from agent_composer.runtime.contracts import BackwardCapture, ForwardCapture, _v
 from agent_composer.runtime.log import (
     NodeExpandedRecord, NodeFailedRecord, NodeRoutedRecord, NodeStartedRecord,
     NodeSucceededRecord, RecordEnvelope, RunResumedRecord, RunStartedRecord,
-    _decode_typed, canonical_seed, decode_pool, decode_record, encode_record,
+    _decode_typed, _evidence_payload, canonical_seed, decode_pool, decode_record, encode_record,
 )
 from agent_composer.typesys.values import ANY_VALUE_ADAPTER
 
@@ -289,8 +289,9 @@ class RetainedTrace:
                 copied with the other context values.
 
         Returns:
-            `BackwardContext`: Recorded names, usable inputs, static node data, and
-                the actual output or canonical forward failure.
+            `BackwardContext`: Recorded names, usable inputs, node data, and the
+                actual output or canonical forward failure. The private reserved
+                `_evaluation_evidence` entry contains only accepted record evidence.
 
         Raises:
             `KeyError`: If the occurrence or its accepted output source is absent.
@@ -300,6 +301,12 @@ class RetainedTrace:
         occurrence = self.occurrence(source)
         record = occurrence.record
         capture = record.forward_capture
+        data = capture.node_data
+        if data is None:
+            data = {}
+        if "_evaluation_evidence" in data:
+            raise ValueError("captured node data uses reserved _evaluation_evidence")
+        data["_evaluation_evidence"] = _evidence_payload(record.evidence)
         failure = record.failure if type(record) is NodeFailedRecord else (
             record.terminal_failure if type(record) is NodeRoutedRecord else None
         )
@@ -308,7 +315,7 @@ class RetainedTrace:
             output=self.lookup_source(source) if type(record) is NodeSucceededRecord else None,
             failure=failure, scope=capture.scope, run_id=source.run_id,
             node_id=occurrence.node_id, node_started_seq=source.execution_seq,
-            node_data=capture.node_data, downstream_context=downstream_context,
+            node_data=data, downstream_context=downstream_context,
         )
 
     def resolve(self, path: str) -> ResolvedValue:

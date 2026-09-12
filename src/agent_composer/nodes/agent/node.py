@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterator, Optional
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.expr.template import render_template_record
+from agent_composer.expr.lineage import FeedbackValue
 from agent_composer.memory.contracts import (
     EvaluationTrace,
     MemoryPolicySpec,
@@ -22,9 +23,10 @@ from agent_composer.memory.contracts import (
     _rewrite_memory_policy_origin,
 )
 from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunContext
+from agent_composer.nodes.agent.backward import backward_agent
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
-from agent_composer.nodes.base import Node, NodeKind, Output, _CapabilityFault, _HostStop
+from agent_composer.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, _CapabilityFault, _HostStop
 from agent_composer.nodes.binding import apply_defaults
 from agent_composer.nodes.contracts import (
     Parameter,
@@ -289,6 +291,30 @@ class AgentNode(Node):
     def _resolve_variables(self) -> dict[str, Any]:
         """Resolve validated literal defaults into one detached invocation record."""
         return deepcopy(apply_defaults(self.variables, {}))
+
+    def backward(self, context: BackwardContext, feedback: tuple[FeedbackValue, ...]) -> BackwardResult:
+        """Use only recorded invocation material for one tool-free backward call.
+
+        Args:
+            context (`BackwardContext`): Accepted context, including recorded model
+                configuration and render/evidence components; live node fields are unused.
+            feedback (`tuple[FeedbackValue, ...]`): Ordered ordinary output messages.
+                Empty effective feedback skips model construction.
+
+        Returns:
+            `BackwardResult`: Independent input, self, and variable channels for
+                common result validation by the caller before upstream routing.
+
+        Raises:
+            `TypeError`: Context, feedback, captured fields, or response channels are malformed.
+            `ValueError`: Feedback shape, required capture, or response JSON is invalid.
+                Model and host exceptions propagate to the existing driver boundary.
+
+        Examples:
+            `node.backward(recorded_context, ())` returns empty channels without
+            constructing a model. Effective messages use only that recorded context.
+        """
+        return backward_agent(context, feedback)
 
     def declared_variables(self) -> tuple[Parameter, ...]:
         """Return the canonical local declarations in their authored order."""

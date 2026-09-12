@@ -4,6 +4,8 @@
 host-installed blocking ``ask_user``, is an ordinary authored tool executed
 through the public invocation path inside the live loop. The package owns no
 durable run state.
+``backward`` builds one tool-free model request from accepted invocation material;
+it neither rerenders the forward prompt nor updates local variables.
 
 Knows about: nodes.base, expr, typesys, tools, llm_clients, peer AGENT modules,
              LangChain, and Pydantic.

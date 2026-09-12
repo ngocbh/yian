@@ -18,7 +18,7 @@ from typing import Callable
 from agent_composer.expr.lineage import FeedbackValue
 from agent_composer.memory import LearningFailure, MemoryOperationFailure
 from agent_composer.nodes.base import (
-    BackwardContext, BackwardResult, _CapabilityFault, _HostStop,
+    BackwardContext, BackwardResult,
     _copy_backward_value, validate_backward_result,
 )
 from agent_composer.runtime.contracts import (
@@ -95,11 +95,8 @@ def compute_backward(
         handler = trace.backward_handlers[occurrence.source]
         try:
             result = handler(context, feedback)
-        except (_HostStop, MemoryError, RecursionError):
-            raise
-        except _CapabilityFault as fault:
-            raise fault.original.with_traceback(fault.original.__traceback__) from None
         except Exception as exc:
+            _raise_host_error(exc)
             raise _failure(context, "backward.execute", exc) from exc
         try:
             validate_backward_result(result, context)

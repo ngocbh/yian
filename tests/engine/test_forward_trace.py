@@ -269,7 +269,10 @@ output: {left: '${left.output}', right: '${right.output}'}
         handler = replay.trace.backward_handlers[occurrence.source].__self__
         handler.prompt = "later prompt"
         handler.llm_config["model"] = "later model"
-        assert replay.trace.backward_context(occurrence.source).node_data == occurrence.record.forward_capture.node_data
+        data = replay.trace.backward_context(occurrence.source).node_data
+        evidence = data.pop("_evaluation_evidence")
+        assert evidence["interactions"] == []
+        assert data == occurrence.record.forward_capture.node_data
 
 
 @pytest.mark.parametrize("failure_at", ["capture", "append"])

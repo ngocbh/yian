@@ -207,6 +207,7 @@ tool loop and uses the accumulated message history.
 | YAML or host value | Role in execution |
 | --- | --- |
 | Node `input:` | Binds the local values available to prompt rendering and memory recall. It is not independently dumped into a message. |
+| AGENT `variables:` | Supplies typed local defaults to prompt rendering. Each invocation receives a fresh copy; see [agent-owned variables](syntax.md#agent-owned-variables). |
 | `prompt:` | Renders local `${name}` values into the initial `HumanMessage`. |
 | `long_term_memory:` plus host `memory={...}` | Recalls frame text and appends it to the system message as labelled canonical sections. |
 | `tools: [name, ...]` | Resolves registered tool schemas and binds them beside the messages in `tool_calling` mode. |

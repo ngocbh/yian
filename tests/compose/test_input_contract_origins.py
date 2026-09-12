@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from textwrap import indent
+
 import pytest
 
+from agent_composer.compile.manifest import flow_fingerprint
 from agent_composer.compile.model import START_ID
 from agent_composer.compose import LoadError, load_flow
 from agent_composer.compose.source import SourceCursor, SourceDocument
 from agent_composer.diagnostics import OriginRef, OriginResolver
+from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.contracts import ContractOrigins, Parameter, ValueContract
 from agent_composer.run import run_flow
 
@@ -78,6 +82,122 @@ def _assert_site(
     expected = cursor.key_range if anchor == "key" else cursor.range
     assert frame.range == expected
     return origin
+
+
+def test_agent_variables_keep_declaration_contract_and_default_source_sites():
+    text = """\
+id: variable-origins
+name: variable-origins
+typedefs:
+  Settings:
+    limit: int[1,12]
+    tags: list[str]
+nodes:
+  writer:
+    kind: agent
+    variables:
+      settings: 'Settings = {limit: 4, tags: [a, b]}'
+      note: Optional[str] = null
+    prompt: ${note}
+    output: str
+output: ${writer.output}
+"""
+    document = SourceDocument.parse(text)
+    loaded = load_flow(text)
+    variables = loaded.compiled.nodes["writer"].variables
+    for name in ("settings", "note"):
+        variable = _parameter(variables, name)
+        cursor = document.root.child("nodes").child("writer").child("variables").child(name)
+        declaration = _assert_site(loaded.origin_resolver, variable.origin, cursor, anchor="key")
+        contract = _assert_site(loaded.origin_resolver, _contract(variable).origins.default, cursor)
+        default = _assert_site(loaded.origin_resolver, variable.default_origin, cursor)
+        assert len({declaration, contract, default}) == 3
+    settings = _parameter(variables, "settings")
+    assert _contract(settings).origins.at(("limit",)) == _contract(settings).origins.default
+
+
+@pytest.mark.parametrize("placement", ["compact", "definition", "flat-definition", "inline"])
+def test_agent_variable_locations_follow_existing_node_projections(placement):
+    body = "kind: agent\nvariables:\n  count: int[1,12] = 4\nprompt: ${count}\noutput: str\n"
+    header = "id: projected_variables\nname: projected_variables\n"
+    if placement == "compact":
+        text = header + body
+        cursor_path = ()
+    elif placement == "flat-definition":
+        text = (header + "defs:\n  child:\n" + indent(body, "    ")
+                + "nodes:\n  invoke:\n    kind: call\n    call: child\noutput: ${invoke.output}\n")
+        cursor_path = ("defs", "child")
+    elif placement == "definition":
+        text = (header + "defs:\n  child:\n    nodes:\n      writer:\n" + indent(body, "        ")
+                + "    output: ${writer.output}\nnodes:\n  invoke:\n    kind: call\n"
+                + "    call: child\noutput: ${invoke.output}\n")
+        cursor_path = ("defs", "child", "nodes", "writer")
+    else:
+        text = (header + "nodes:\n  invoke:\n    kind: call\n    nodes:\n      writer:\n"
+                + indent(body, "        ") + "    output: ${writer.output}\noutput: ${invoke.output}\n")
+        cursor_path = ("nodes", "invoke", "nodes", "writer")
+
+    document = SourceDocument.parse(text)
+    cursor = document.root
+    for segment in cursor_path:
+        cursor = cursor.child(segment)
+    cursor = cursor.child("variables").child("count")
+    loaded = load_flow(text)
+    compiled = loaded.compiled if placement == "compact" else loaded.compiled.nodes["invoke"].child
+    agents = [node for node in compiled.nodes.values() if isinstance(node, AgentNode)]
+    assert len(agents) == 1
+    variable = agents[0].variables[0]
+    _assert_site(loaded.origin_resolver, variable.origin, cursor, anchor="key")
+    _assert_site(loaded.origin_resolver, variable.contract.origins.default, cursor)
+    _assert_site(loaded.origin_resolver, variable.default_origin, cursor)
+
+    invalid = text.replace("int[1,12] = 4", "int[1,12] = 13")
+    with pytest.raises(LoadError, match="default.*does not satisfy") as caught:
+        load_flow(invalid)
+    invalid_cursor = SourceDocument.parse(invalid).root
+    for segment in cursor_path:
+        invalid_cursor = invalid_cursor.child(segment)
+    assert caught.value.diagnostic.frames[-1].range == invalid_cursor.child("variables").child("count").range
+
+
+def test_external_aliases_rebase_agent_variables_without_changing_identity():
+    child_text = """\
+id: variable_child
+name: variable_child
+kind: agent
+variables:
+  count: int[1,12] = 4
+prompt: ${count}
+output: str
+"""
+    child = load_flow(child_text, source_label="variable-child.yaml")
+    parent = load_flow("""\
+id: variable-parent
+name: variable-parent
+uses:
+  left: child
+  right: child
+nodes:
+  first:
+    kind: call
+    call: left
+  second:
+    kind: call
+    call: right
+output:
+  first: ${first.output}
+  second: ${second.output}
+""", child_resolver=lambda _path, _version=None: child)
+    fragments = [parent.compiled.nodes[name].child for name in ("first", "second")]
+    variables = [next(node for node in fragment.nodes.values() if isinstance(node, AgentNode)).variables[0]
+                 for fragment in [child.compiled, *fragments]]
+    origins = [tuple(variable.iter_origins()) for variable in variables]
+    assert all(len(sites) == 3 for sites in origins)
+    for index in range(3):
+        assert len({sites[index] for sites in origins}) == 3
+        assert parent.origin_resolver.resolve(origins[1][index]) == child.origin_resolver.resolve(origins[0][index])
+        assert parent.origin_resolver.resolve(origins[2][index]) == child.origin_resolver.resolve(origins[0][index])
+    assert flow_fingerprint(fragments[0]) == flow_fingerprint(fragments[1])
 
 
 def test_root_inputs_compile_parameter_contract_default_and_nested_origins():

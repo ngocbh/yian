@@ -89,6 +89,52 @@ def test_acyclic_seed_passes_cycle_check():
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.parametrize("source,sink,compatible", [
+    ("int[2, 4]", "int[1, 12]", True),
+    ("int[1, 12]", "int[2, 4]", False),
+    ("int[1, 12]", "int[1, 12]", True),
+    ("int[-2, 4]", "int[0, 12]", False),
+    ("int[2, 13]", "int[1, 12]", False),
+    ("int[4, 4]", "int[1, 12]", True),
+    ("int", "int[1, 12]", False),
+    ("int[1, 12]", "int", True),
+    ("float[0.25, 0.75]", "float[0, 1]", True),
+    ("float[0, 1]", "float[0.25, 0.75]", False),
+    ("float", "float[0, 1]", False),
+    ("float[0, 1]", "float", True),
+    ("int[1, 2]", "float[0.5, 2.5]", True),
+    ("int[0, 2]", "float[0.5, 2.5]", False),
+    ("int", "float[0, 1]", False),
+    ("int[0, 1]", "float", True),
+    ("float[1, 1]", "int[1, 1]", False),
+    ("Optional[int[1, 2]]", "int[0, 3]", False),
+    ("int[1, 2]", "Optional[int[0, 3]]", True),
+    ("Optional[int[1, 2]]", "Optional[float[0, 3]]", True),
+    ("Optional[int]", "Optional[int[0, 3]]", False),
+    ("None", "Optional[int[0, 3]]", True),
+    ("None", "int[0, 3]", False),
+])
+def test_numeric_domain_compatibility_requires_interval_containment(source, sink, compatible):
+    from agent_composer.typesys.types import type_for
+
+    assert types_compatible(type_for(source, {}), type_for(sink, {})) is compatible
+
+
+@pytest.mark.parametrize("source,sink,compatible", [
+    ("list[int[2, 4]]", "list[float[1, 12]]", True),
+    ("list[int]", "list[int[1, 12]]", False),
+    ("list[int[0, 4]]", "list[float[1, 12]]", False),
+])
+def test_numeric_domain_compatibility_recurses_through_records_and_lists(source, sink, compatible):
+    from agent_composer.typesys.types import type_for
+
+    left = Type(ValueKind.OBJECT, fields={"values": type_for(source, {})},
+                required=frozenset({"values"}))
+    right = Type(ValueKind.OBJECT, fields={"values": type_for(sink, {})},
+                 required=frozenset({"values"}))
+    assert types_compatible(left, right) is compatible
+
+
 def test_list_element_compatibility_preserves_nullable_direction() -> None:
     """A source list may narrow but cannot widen the sink's element contract."""
     strict_element = Type.scalar(ValueKind.INTEGER)

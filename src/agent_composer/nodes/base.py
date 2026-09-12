@@ -973,6 +973,10 @@ class Node(ABC):
             f"node {self.id!r} ({type(self).__name__}) defines no forward"
         )
 
+    def declared_variables(self) -> tuple[Parameter, ...]:
+        """Return this node's canonical local declarations as an immutable inventory."""
+        return ()
+
     def backward(self, *args: Any, **caps: Any) -> None:
         """Reserve the node-owned reverse hook without defining feedback semantics.
 

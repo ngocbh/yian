@@ -122,6 +122,37 @@ def _loop_driver(child: CompiledFlow, signature: Parameter) -> LoopNode:
 _CompositeFactory = Callable[[CompiledFlow, Parameter], Node]
 
 
+def test_agent_variable_origins_rewrite_shared_carriers_once_without_walking_defaults():
+    payload_origin = _origin("payload-only")
+    contract = ValueContract(
+        Type.scalar(ValueKind.OBJECT),
+        ContractOrigins(_origin("type"), ((('leaf',), _origin("nested-type")),)),
+    )
+    variable = _parameter("settings", "variable", contract=contract,
+                          default={"opaque": payload_origin})
+    first = AgentNode("first", variables=[variable])
+    second = AgentNode("second", variables=[variable])
+    first.output_contract = contract
+    flow = Flow(nodes={"first": first, "second": second}, edges=[],
+                wiring={"first": {}, "second": {}})
+    assert {origin.key for origin in iter_flow_origins(flow)} == {
+        "type", "nested-type", "variable", "variable/default",
+    }
+    seen = []
+
+    def rewrite(origin):
+        seen.append(origin.key)
+        return _origin(f"mapped:{origin.key}")
+
+    rewritten = rewrite_flow_origins(flow, rewrite)
+    copied = rewritten.nodes["first"].variables[0]
+    assert copied is rewritten.nodes["second"].variables[0]
+    assert copied.contract is rewritten.nodes["first"].output_contract
+    assert sorted(seen) == ["nested-type", "type", "variable", "variable/default"]
+    assert copied.default["opaque"] == payload_origin
+    assert variable.origin == _origin("variable")
+
+
 def _rich_flow() -> tuple[CompiledFlow, set[str], OriginRef]:
     """Build all current origin slots with deliberate carrier and child aliases."""
     opaque_payload_origin = _origin("payload/not-provenance")

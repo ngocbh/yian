@@ -2202,6 +2202,52 @@ def _single_node_flow(node) -> Flow:
     )
 
 
+def test_agent_variable_manifest_preserves_the_variable_free_fingerprint():
+    flow = _single_node_flow(AgentNode("node", prompt="hi"))
+    assert "variables" not in flow_manifest(flow)["nodes"]["node"]
+    assert flow_fingerprint(flow) == (
+        "5fccfadd2817175c4784246d6678837277247f94762b431086285471cf4e7e16"
+    )
+
+
+def test_agent_variable_identity_tracks_names_domains_defaults_and_order_only():
+    count = Parameter(
+        "count", ValueContract(Type(ValueKind.INTEGER, bounds=(1, 12))),
+        has_default=True, default=4,
+    )
+    tone = Parameter(
+        "tone", ValueContract(Type(ValueKind.STRING, tags=frozenset({"brief", "detailed"}))),
+        has_default=True, default="brief",
+    )
+    declarations = [
+        [count, tone],
+        [replace(count, name="sentences"), tone],
+        [replace(count, default=5), tone],
+        [replace(count, contract=ValueContract(Type(ValueKind.INTEGER, bounds=(1, 8)))), tone],
+        [tone, count],
+    ]
+    flows = [_single_node_flow(AgentNode("node", variables=variables)) for variables in declarations]
+    assert len({flow_fingerprint(flow) for flow in flows}) == len(flows)
+    assert len({expansion_digest(flow) for flow in flows}) == len(flows)
+    assert [variable["name"] for variable in flow_manifest(flows[0])["nodes"]["node"]["variables"]] == ["count", "tone"]
+
+    located = _single_node_flow(AgentNode("node", variables=[
+        replace(count, origin=OriginRef("declaration"), default_origin=OriginRef("default"),
+                contract=ValueContract(count.contract.type, ContractOrigins(OriginRef("type")))),
+        tone,
+    ]))
+    assert flow_fingerprint(located) == flow_fingerprint(flows[0])
+    assert expansion_digest(located) == expansion_digest(flows[0])
+
+
+@pytest.mark.parametrize("variables", [None, (), (Parameter("x"),)])
+def test_agent_variable_manifest_rejects_noncanonical_containers(variables):
+    node = AgentNode("node")
+    node.variables = variables
+    with pytest.raises(TypeError, match="expected list"):
+        flow_manifest(_single_node_flow(node))
+
+
 def _changed_fragment() -> Flow:
     """Return the canonical fragment with only its CODE body changed."""
     fragment = _fragment()
@@ -2498,6 +2544,38 @@ def test_output_contract_cutover_preserves_manifest_shape_and_fingerprint():
     )
     assert expansion_digest(fragment) == flow_fingerprint(fragment)
 
+
+def test_numeric_bounds_are_part_of_type_identity_only_when_present():
+    plain = _fragment()
+    assert "bounds" not in flow_manifest(plain)["nodes"]["body"]["output_type"]
+    fingerprints = {flow_fingerprint(plain)}
+    digests = {expansion_digest(plain)}
+    for bounds in ((1, 12), (2, 12), (1, 13)):
+        bounded = copy.deepcopy(plain)
+        bounded.nodes["body"].output_contract = ValueContract(Type(ValueKind.INTEGER, bounds=bounds))
+        assert flow_manifest(bounded)["nodes"]["body"]["output_type"]["bounds"] == list(bounds)
+        fingerprints.add(flow_fingerprint(bounded))
+        digests.add(expansion_digest(bounded))
+    assert len(fingerprints) == len(digests) == 4
+
+
+def test_numeric_bounds_remain_in_nested_parameter_contract_identity():
+    from agent_composer.typesys.types import type_for
+
+    first = _fragment()
+    first.nodes["body"].params = [Parameter(
+        "scores", ValueContract(type_for("list[Optional[float[0, 1]]]", {})),
+        has_default=True, default=[0.5],
+    )]
+    first.wiring["body"] = {}
+    second = copy.deepcopy(first)
+    second.nodes["body"].params[0] = replace(
+        second.nodes["body"].params[0],
+        contract=ValueContract(type_for("list[Optional[float[0, 2]]]", {})),
+    )
+    nested = flow_manifest(first)["nodes"]["body"]["params"][0]["contract"]["type"]["element"]
+    assert nested["bounds"] == [0, 1] and nested["nullable"] is True
+    assert flow_fingerprint(first) != flow_fingerprint(second)
 
 def test_output_contract_manifest_rejects_unknown_raw_and_subclass_bypasses():
     """Only an exact ValueContract may occupy canonical node output storage."""

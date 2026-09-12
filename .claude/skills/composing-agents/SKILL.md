@@ -105,7 +105,7 @@ Allowed only for the **leaf kinds** (`agent`, `code`, `model`, `tool`,
 | `${input.X}` | field `X` of the flow input |
 | `${node.output}` | node `node`'s whole (typed) value |
 | `${node.output.field}` | dot into an object value |
-| `${name}` (bare) | **only inside a `prompt:` or a `case` `when:`** — that node's own declared input |
+| `${name}` (bare) | a local input inside `prompt:` or `case` `when:`; AGENT prompts also see their own `variables:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is **stringified**.
@@ -148,6 +148,13 @@ Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`,
 `datetime`, `object`, `None`. Forms: `list[X]`, `Optional[X]`, `Literal[...]` (an
 enum of tags), and named **records**. `Optional[X]` (nullable) and `= default`
 (omission-fill) are orthogonal.
+
+Use `int[1, 12]` or `float[0.0, 1.0]` for inclusive numeric bounds. Supply two
+ordered literal endpoints. Integer bounds may be arbitrary precision; float
+bounds must be finite, and integer endpoints in a float domain must convert
+without rounding. Booleans are invalid.
+Bounds compose with lists, records, aliases, and nullable types. Defaults and
+supplied values are checked; cross-flow sources must fit the destination domain.
 
 An explicit `Optional[int] = null` is a present default, distinct from no `=`;
 null is invalid for a non-nullable type, and an empty `=` is invalid. The default
@@ -194,6 +201,30 @@ layers but still receives those provider/model defaults.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +
 per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
 AGENT node's tool-calling loop (default `-1` = no cap).
+
+### Agent-owned variables — `variables:`
+
+Use typed defaults for local prompt settings, alongside the AGENT node's inputs:
+
+```yaml
+writer:
+  kind: agent
+  variables:
+    num_sentences: int[1, 12] = 4
+    tone: Literal[concise, detailed, technical] = concise
+  input:
+    topic: ${input.topic}
+  prompt: Write ${num_sentences} ${tone} sentences about ${topic}.
+  output: str
+```
+
+Every variable needs an explicit, valid default, including nullable variables.
+Names cannot overlap inputs. Defaults are literal values; `${...}` inside a
+default string stays text. Each invocation receives a fresh copy and repeated
+prompt references read the same local value. Ownership follows the authored
+AGENT path plus name across MAP items and LOOP iterations. These declarations
+create no data edges. Model settings still belong in `llm_config:` even when a
+variable has the same name, such as `temperature`.
 
 ### Agent memory — `long_term_memory:`
 
@@ -458,9 +489,9 @@ Do not confuse this with an inline child body: `call(f, ...)` invokes an already
 named child flow and synthesizes a CALL node; `kind: call` + `nodes:` defines a
 one-off child's body on that node.
 
-## Prompts see only LOCAL inputs
-Inside a `prompt:` you may reference only names the node declares in its own
-`input:` block, written bare (`${name}`). Pool references (`${input.x}`,
+## Prompt names are local
+Inside a `prompt:` use names from the node's own `input:` block, written bare
+(`${name}`). An AGENT prompt also sees its own `variables:`. Pool references (`${input.x}`,
 `${other.output}`) go in the `input:` block — bind there, then use the local name
 in the prompt.
 
@@ -506,7 +537,8 @@ WAIT return ordinary node outputs from their live calls. There is no authored
 - [ ] Every data dependency uses `${...}` in `input:`; ordering-only dependencies use `depends_on:` or `runs_after:`.
 - [ ] Every `agent` `output:` is typed — bare `str` for free text, or a
   `Literal[...]`/other supported shape for structured generation.
-- [ ] Every prompt references only the node's own local input names.
+- [ ] Every prompt references local inputs or, for an AGENT, its own declared variables.
+- [ ] Every variable has a typed default and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a flow or `agent`, selects a host-registered memory policy by name, and contains only public behavior config.
 - [ ] Each `case` has an `else:` (or its `Literal` cases are exhaustive); branches are joined with `|`.
 - [ ] `tool` ids are registered; a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.

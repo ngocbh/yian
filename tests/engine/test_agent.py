@@ -18,7 +18,7 @@ import agent_composer.llm_clients as llm_clients_mod
 import agent_composer.tools as tools_mod
 from agent_composer.diagnostics import OriginRef
 from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.contracts import ContractOrigins, ValueContract
+from agent_composer.nodes.contracts import ContractOrigins, Parameter, ValueContract
 from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
 from agent_composer.typesys.pool import VariablePool
 from agent_composer.typesys.values import Type, ValueKind
@@ -104,6 +104,53 @@ def _node(tools=None, prompt="hi", mode="tool_calling"):
 def _run_node(node, pool=None):
     """Evaluate one agent into its raw output or failure carrier."""
     return eval_node(node, None, pool or VariablePool()).outcome
+
+
+@pytest.mark.parametrize("variables", [
+    (), {}, [object()], [Parameter("choice")],
+    [Parameter("choice", has_default=True, default=1)],
+    [Parameter("", ValueContract(Type.scalar(ValueKind.INTEGER)), has_default=True, default=1)],
+    [Parameter(1, ValueContract(Type.scalar(ValueKind.INTEGER)), has_default=True, default=1)],
+    [Parameter("choice", ValueContract(Type.scalar(ValueKind.INTEGER)), has_default=True, default="1")],
+    [Parameter("choice", ValueContract(Type(ValueKind.INTEGER, bounds=(1, 2))), has_default=True, default=3)],
+    [Parameter("choice", ValueContract(Type(ValueKind.INTEGER, bounds=(2, 1))), has_default=True, default=1)],
+])
+def test_direct_agent_rejects_invalid_variable_declarations(variables):
+    with pytest.raises((TypeError, ValueError)):
+        AgentNode("writer", variables=variables)
+
+
+def test_direct_agent_rejects_duplicate_variables_and_preserves_valid_default_payloads():
+    variable = Parameter(
+        "count", ValueContract(Type(ValueKind.NUMBER, bounds=(0, 4))),
+        has_default=True, default=4,
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        AgentNode("writer", variables=[variable, variable])
+    node = AgentNode("writer", variables=[variable])
+    assert node.variables == [variable]
+    assert node.variables[0].default is variable.default
+    assert type(node.variables[0].default) is int
+    assert node.params is None
+
+
+@pytest.mark.parametrize("field,value", [("has_default", 1), ("required", 0), ("required", True)])
+def test_direct_agent_rejects_forged_variable_default_presence(field, value):
+    variable = Parameter("count", ValueContract(Type.scalar(ValueKind.INTEGER)),
+                         has_default=True, default=4)
+    object.__setattr__(variable, field, value)
+    with pytest.raises(ValueError, match="requires a default and required=False"):
+        AgentNode("writer", variables=[variable])
+
+
+def test_direct_agent_requires_an_exact_variable_contract():
+    class CustomContract(ValueContract):
+        pass
+
+    variable = Parameter("count", CustomContract(Type.scalar(ValueKind.INTEGER)),
+                         has_default=True, default=4)
+    with pytest.raises(TypeError, match="exact ValueContract"):
+        AgentNode("writer", variables=[variable])
 
 
 def test_plain_mode_single_call_ignores_tools(monkeypatch):

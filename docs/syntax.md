@@ -89,7 +89,7 @@ Everywhere you wire data you use a `${...}` reference:
 | `${input.X}` | field `X` of the flow's input |
 | `${node.output}` | node `node`'s whole value |
 | `${node.output.field}` | dot into an object value |
-| `${name}` / bare `name` | that node's own declared input — as `${name}` inside an AGENT node's or HUMAN_INPUT node's `prompt:`, or bare `name` in a `case` `when:` |
+| `${name}` / bare `name` | a local input in a node's `prompt:` or a `case` `when:`; AGENT prompts also see their own declared `variables:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
 text it is stringified.
@@ -99,9 +99,9 @@ null raises, even when the span is embedded in text. Binding templates retain th
 non-strict behavior—a whole null remains a typed null, while an embedded null
 contributes empty text.
 
-!!! important "Prompts see only local inputs"
-    Inside a `prompt:` you may reference only names the node declares in its own
-    `input:` block — written bare, like `${name}`. Pool references
+!!! important "Prompt names are local"
+    Inside a `prompt:` use names from the node's own `input:` block, written
+    bare, like `${name}`. An AGENT prompt also sees its own `variables:`. Pool references
     (`${input.x}`, `${other.output}`) belong in the `input:` block, not the
     prompt. Bind it there, then refer to the local name in the prompt.
 
@@ -145,6 +145,16 @@ number, a list a list); embedded in surrounding text it is stringified.
 The type vocabulary is Python typing. Scalars: `str`, `int`, `float`, `bool`,
 `date`, `datetime`, `object`, `None`. Containers/forms: `list[X]`, `Optional[X]`,
 `Literal[...]` (an enum of tags), and named **records** (dataclass-style).
+
+Numeric domains may add inclusive bounds: `int[1, 12]` or `float[0.0, 1.0]`.
+Both endpoints are required and the lower endpoint must not exceed the upper.
+Integer bounds can be any size. Float bounds must be finite; integer endpoints
+used in a float domain must convert without rounding. Booleans and computed
+endpoint expressions are invalid. Bounds work inside aliases, records, lists,
+and `Optional[...]`.
+Defaults and supplied values must satisfy them. Cross-flow wiring requires the
+source domain to fit inside the destination domain; an unbounded source cannot
+establish that guarantee for a bounded destination.
 
 Name reusable types in `typedefs:`:
 
@@ -357,6 +367,44 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
       model: gpt-5.5
       inherit: false            # own config + process defaults; no flow/CLI layers
 ```
+
+#### Agent-owned variables
+
+Declare local prompt settings in `variables:`. Every entry needs a type and an
+explicit default:
+
+```yaml
+id: summarize
+name: summarize
+input:
+  topic: str
+nodes:
+  writer:
+    kind: agent
+    variables:
+      num_sentences: int[1, 12] = 4
+      temperature: float[0.0, 1.0] = 0.4
+      tone: Literal[concise, detailed, technical] = concise
+      instruction: str = "Summarize clearly"
+    input:
+      topic: ${input.topic}
+    prompt: ${instruction}. Write ${num_sentences} ${tone} sentences about ${topic}.
+    output: str
+output: ${writer.output}
+```
+
+Variable names must be unique and cannot overlap the node's input names. Defaults
+are validated while loading, including bounds and enum choices. Nullable variables
+still require an explicit default, such as `Optional[str] = null`; a quoted empty
+string is a valid `str` default. Default strings are literal text, so `${...}`
+inside a default is not evaluated as a binding.
+
+Each invocation starts with a fresh copy of these defaults. Repeated `${name}`
+references read the same local value. A variable belongs to its authored AGENT
+path and name: MAP items and LOOP iterations of that node share its declaration,
+while distinct authored callsites have distinct owners. Variables introduce no
+data dependencies or flow outputs. A variable named `temperature` is prompt data;
+configure model temperature through `llm_config:`.
 
 ### `code` / `model` / `tool` — the other leaves
 

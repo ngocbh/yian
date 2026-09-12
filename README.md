@@ -33,6 +33,8 @@ ac run hello.yaml --input name=Ada --provider ollama --model llama3.2:3b
 
 See [Agent](docs/agent.md) for the conceptual model and
 [Flow syntax](docs/syntax.md) for the complete YAML surface.
+AGENT nodes can declare [typed local variables](docs/syntax.md#agent-owned-variables)
+with validated defaults and reference them in prompts as `${name}`.
 
 ## Why fixed flows?
 

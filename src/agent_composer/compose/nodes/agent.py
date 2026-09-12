@@ -14,18 +14,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Optional
 
-from agent_composer.compose.helpers.errors import LoadDiagnostics
+from agent_composer.compose.helpers.errors import LoadDiagnostics, LoadError
 from agent_composer.compose.helpers.memory import (
     attach_memory_policy_origin,
     parse_memory_policy,
 )
+from agent_composer.compose.helpers.types import read_variables
 from agent_composer.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from agent_composer.compose.source import SourceCursor
 from agent_composer.diagnostics import SourceRange
 from agent_composer.llm_clients import LLMConfig
 from agent_composer.memory.contracts import MemoryPolicySpec
 from agent_composer.nodes.agent import AgentNode
-from agent_composer.nodes.contracts import ValueContract
+from agent_composer.nodes.contracts import Parameter, ValueContract
 
 if TYPE_CHECKING:
     from agent_composer.compose.source.catalog import _SourceCatalogBuilder
@@ -91,7 +92,7 @@ class AgentDescriptor(NodeDescriptor):
     fields are declared here, while `inputs`/`outputs` come from the base.
 
     Class attrs: `kind="agent"`; `allowed` adds normalized `inputs`/`outputs` plus `prompt`/`tools`/
-    `mode`/`llm_config`/`long_term_memory`/`retries`/`asserts` to the commons;
+    `variables`/`mode`/`llm_config`/`long_term_memory`/`retries`/`asserts` to the commons;
     `required` is empty (no mandatory flat field); `binding_fields=("inputs",)` — a
     `prompt:`'s `${...}` refs are handled by
     template scanning, not the inline-call desugar, so only `inputs` is walked.
@@ -102,6 +103,7 @@ class AgentDescriptor(NodeDescriptor):
         "inputs",
         "outputs",
         "prompt",
+        "variables",
         "tools",
         "mode",
         "llm_config",
@@ -114,6 +116,7 @@ class AgentDescriptor(NodeDescriptor):
     keyword_remap = {"long_term_memory": "memory_policy"}
 
     prompt: Optional[str] = None
+    variables: dict[str, Any] = field(default_factory=dict)
     tools: list[str] = field(default_factory=list)
     mode: str = "tool_calling"
     llm_config: dict[str, Any] = field(default_factory=dict)
@@ -192,7 +195,7 @@ class AgentDescriptor(NodeDescriptor):
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `AgentNode` (+ wiring) for this `AgentDescriptor`.
 
-        Builds the agent leaf (LLM-config validation, node-side
+        Builds the agent leaf (LLM-config and local-variable validation, node-side
         `params` + flow-owned `inputs` wiring, `output_contract` from authored `output:`/override).
         `_finish` stamps the descriptor origin on the node and keeps its ranges on the
         Compose-owned `BuildResult`. `ctx.resolver` is unused (leaf kind), and the inline-CODE
@@ -211,6 +214,7 @@ class AgentDescriptor(NodeDescriptor):
                 f"node {self.id!r}: mode must be a string",
                 range=mode_range,
             )
+        variables = self._read_variables(ctx)
         try:
             node = AgentNode(
                 self.id,
@@ -222,6 +226,7 @@ class AgentDescriptor(NodeDescriptor):
                 retries=self.retries,
                 title=self.node_name,
                 memory_policy=self.memory_policy,
+                variables=variables,
             )
         except ValueError as exc:
             # AgentNode validates the mode registry; surface a rejection as
@@ -238,5 +243,42 @@ class AgentDescriptor(NodeDescriptor):
             else self.output_contract(ctx)
         )
         node.params = self.sink_params()
+        input_names = {parameter.name for parameter in node.params}
+        for variable in variables:
+            if variable.name in input_names:
+                frame = (
+                    ctx.resolve_origin(variable.origin)
+                    if ctx.resolve_origin is not None and variable.origin is not None
+                    else None
+                )
+                message = f"node {self.id!r}: variable {variable.name!r} collides with an input name"
+                if frame is not None:
+                    raise ctx.diagnostics.error(message, frames=(frame,))
+                raise ctx.diagnostics.error(
+                    message,
+                    range=self.field_ranges.get(("field", "variables")) or self.range,
+                )
         wiring = self.sink_wiring()
         return self._finish(node, wiring)
+
+    def _read_variables(self, ctx: BuildContext) -> list[Parameter]:
+        """Compile this node's declarations at their authored or source-free site."""
+        try:
+            if ctx.variable_declaration_reader is not None:
+                variables = ctx.variable_declaration_reader(self.id, self.variables)
+                if variables is not None:
+                    if type(variables) is not list or any(
+                        type(variable) is not Parameter for variable in variables
+                    ):
+                        raise TypeError(
+                            "variable declaration reader must return a list of exact Parameters or None"
+                        )
+                    return variables
+            return read_variables(self.variables, ctx.registry, diagnostics=ctx.diagnostics)
+        except LoadError as exc:
+            if exc.diagnostic.frames:
+                raise
+            raise ctx.diagnostics.prepend(
+                exc,
+                range=self.field_ranges.get(("field", "variables")) or self.range,
+            ) from exc

@@ -29,6 +29,96 @@ def test_scalar_int_gets_schema():
     assert inst.value == 7
 
 
+@pytest.mark.parametrize("expression,lower,upper,inside,outside", [
+    ("int[1, 12]", 1, 12, 4, 13),
+    ("float[-0.5, 1]", -0.5, 1, 0.4, 1.1),
+    ("int[4, 4]", 4, 4, 4, 3),
+])
+def test_bounded_scalar_schema_exposes_and_enforces_inclusive_limits(
+    expression, lower, upper, inside, outside,
+):
+    from agent_composer.typesys.types import type_for
+
+    model = type_to_schema(type_for(expression, {}))
+    value_schema = model.model_json_schema()["properties"]["value"]
+    assert (value_schema["minimum"], value_schema["maximum"]) == (lower, upper)
+    for value in (lower, inside, upper):
+        assert model.model_validate({"value": value}).value == value
+    with pytest.raises(ValidationError):
+        model.model_validate({"value": outside})
+
+
+def test_bounded_numeric_schemas_preserve_nested_lists_records_and_nullable_fields():
+    from agent_composer.typesys.types import read_typedefs, type_for
+
+    registry = read_typedefs({"Rating": {
+        "count": "int[1, 12]", "scores": "list[list[float[0, 1]]]",
+        "confidence": "Optional[float[0, 1]]",
+    }})
+    model = type_to_schema(type_for("list[Rating]", registry))
+    schema = model.model_json_schema()
+    record_name = schema["properties"]["items"]["items"]["$ref"].rsplit("/", 1)[-1]
+    fields = schema["$defs"][record_name]["properties"]
+    assert fields["count"]["minimum"] == 1 and fields["count"]["maximum"] == 12
+    scalar = fields["scores"]["items"]["items"]
+    assert scalar["minimum"] == 0 and scalar["maximum"] == 1
+    numeric = next(arm for arm in fields["confidence"]["anyOf"] if arm["type"] == "number")
+    assert numeric["minimum"] == 0 and numeric["maximum"] == 1
+    model.model_validate({"items": [{"count": 4, "scores": [[0, 1]], "confidence": None}]})
+    with pytest.raises(ValidationError) as caught:
+        model.model_validate({"items": [{"count": 4, "scores": [[0, 1.1]]}]})
+    assert caught.value.errors()[0]["loc"] == ("items", 0, "scores", 0, 1)
+
+
+def test_nullable_bounded_scalars_keep_explicit_null_in_schema():
+    from agent_composer.typesys.types import type_for
+
+    model = type_to_schema(type_for("list[Optional[int[1, 12]]]", {}))
+    items_schema = model.model_json_schema()["properties"]["items"]["items"]
+    numeric = next(arm for arm in items_schema["anyOf"] if arm["type"] == "integer")
+    assert numeric["minimum"] == 1 and numeric["maximum"] == 12
+    assert model.model_validate({"items": [None, 4]}).items == [None, 4]
+
+
+@pytest.mark.parametrize("kind,lower,upper,outside", [
+    ("int", 10**400, 10**400 + 2, 10**400 + 3),
+    ("float", 2**53, 2**53 + 2, 2**53 + 4),
+    ("float", -(2**53 + 2), -(2**53), -(2**53 + 4)),
+])
+def test_large_numeric_schema_bounds_match_resolved_type(kind, lower, upper, outside):
+    from agent_composer.typesys.types import type_for
+    from agent_composer.typesys.values import TypeCheckError, build_value_as
+
+    typ = type_for(f"{kind}[{lower}, {upper}]", {})
+    typ.validate_shape()
+    model = type_to_schema(typ)
+    value_schema = model.model_json_schema()["properties"]["value"]
+    assert (value_schema["minimum"], value_schema["maximum"]) == (lower, upper)
+    for value in (lower, upper):
+        assert build_value_as(typ, value).to_object() == value
+        assert model.model_validate({"value": value}).value == value
+    with pytest.raises(TypeCheckError):
+        build_value_as(typ, outside)
+    with pytest.raises(ValidationError):
+        model.model_validate({"value": outside})
+
+
+def test_generic_list_schema_honors_existing_unbounded_element_refinements():
+    from agent_composer.typesys.types import type_for
+
+    model = type_to_schema(type_for("list[list[int]]", {}))
+    scalar_schema = model.model_json_schema()["properties"]["items"]["items"]["items"]
+    assert scalar_schema == {"type": "integer"}
+    assert model.model_validate({"items": [[1], [2]]}).items == [[1], [2]]
+    with pytest.raises(ValidationError) as caught:
+        model.model_validate({"items": [[1], ["not-an-int"]]})
+    assert caught.value.errors()[0]["loc"] == ("items", 1, 0)
+
+    bare = type_to_schema(Type(ValueKind.LIST_ANY))
+    assert bare.model_json_schema()["properties"]["items"]["items"] == {}
+    assert bare.model_validate({"items": [1, "free", {}]}).items == [1, "free", {}]
+
+
 def test_record_type():
     typ = Type(
         kind=ValueKind.OBJECT,

@@ -8,6 +8,7 @@ continuation state is stored in the graph or variable pool.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, Callable, Iterator, Optional
 
 from agent_composer.diagnostics import OriginRef
@@ -24,7 +25,14 @@ from agent_composer.nodes.agent.modes import DEFAULT_SYSTEM, MODES, AgentRunCont
 from agent_composer.nodes.agent.modes.tool_calling import MAX_TOOL_ITERATIONS
 from agent_composer.nodes.agent.structured import _structured_validation_path
 from agent_composer.nodes.base import Node, NodeKind, Output, _HostStop
-from agent_composer.nodes.contracts import ValueContract
+from agent_composer.nodes.binding import apply_defaults
+from agent_composer.nodes.contracts import (
+    Parameter,
+    ValueContract,
+    _iter_origin_carrier,
+    _rewrite_origin_carrier,
+)
+from agent_composer.typesys.values import build_value_as
 
 DEFAULT_MODE = "plain"
 
@@ -36,6 +44,8 @@ class AgentNode(Node):
     The package attribute is resolved at call time so tests and hosts may
     monkeypatch the model factory without an engine-owned capability. An optional
     ``memory_policy`` is authored identity only until compile derives runtime scope.
+    ``variables`` retains typed local declarations with mandatory literal defaults,
+    resolved into a fresh prompt record for each invocation.
     """
 
     kind = NodeKind.AGENT
@@ -55,6 +65,7 @@ class AgentNode(Node):
         retries: int = 2,
         title: Optional[str] = None,
         memory_policy: MemoryPolicySpec | None = None,
+        variables: list[Parameter] | None = None,
     ) -> None:
         super().__init__(node_id, title=title)
         self.prompt = prompt or ""
@@ -71,19 +82,43 @@ class AgentNode(Node):
                 "memory_policy must be an exact MemoryPolicySpec or None"
             )
         self.memory_policy = memory_policy
+        self.variables = [] if variables is None else variables
         if self.mode not in MODES:
             raise ValueError(
                 f"AGENT node {node_id!r}: unknown mode {self.mode!r}; known: {sorted(MODES)}"
             )
+        self._validate_variables()
+
+    def _validate_variables(self) -> None:
+        """Require canonical, uniquely named declarations with valid typed defaults."""
+        if type(self.variables) is not list:
+            raise TypeError("agent variables must be a list of Parameter values")
+        names: set[str] = set()
+        for variable in self.variables:
+            if type(variable) is not Parameter:
+                raise TypeError("agent variables must contain exact Parameter values")
+            if type(variable.name) is not str or not variable.name:
+                raise TypeError("variable names must be non-empty strings")
+            if variable.name in names:
+                raise ValueError(f"duplicate variable name {variable.name!r}")
+            names.add(variable.name)
+            if type(variable.contract) is not ValueContract:
+                raise TypeError(f"variable {variable.name!r} requires an exact ValueContract")
+            if variable.has_default is not True or variable.required is not False:
+                raise ValueError(f"variable {variable.name!r} requires a default and required=False")
+            variable.contract.type.validate_shape()
+            build_value_as(variable.contract.type, variable.default)
 
     def iter_local_origins(
         self,
         *,
         _seen_carriers: Optional[set[int]] = None,
     ) -> Iterator[OriginRef]:
-        """Yield common AGENT origins followed by its optional policy site."""
+        """Yield common origins, variable declarations, and the optional policy site."""
         seen = _seen_carriers if _seen_carriers is not None else set()
         yield from super().iter_local_origins(_seen_carriers=seen)
+        for variable in self.variables:
+            yield from _iter_origin_carrier(variable, seen)
         if self.memory_policy is not None:
             yield from _iter_memory_policy_origin(self.memory_policy, seen)
 
@@ -93,9 +128,11 @@ class AgentNode(Node):
         *,
         _seen_carriers: Optional[set[int]] = None,
     ) -> None:
-        """Rewrite common AGENT origins and its policy while retaining aliases."""
+        """Rewrite common, variable, and policy origins while retaining aliases."""
         seen = _seen_carriers if _seen_carriers is not None else set()
         super().rewrite_local_origins(mapper, _seen_carriers=seen)
+        for variable in self.variables:
+            _rewrite_origin_carrier(variable, mapper, seen)
         if self.memory_policy is not None:
             _rewrite_memory_policy_origin(self.memory_policy, mapper, seen)
 
@@ -165,8 +202,13 @@ class AgentNode(Node):
         evaluation_trace: EvaluationTrace | None = None,
         recall_memory: Callable[[str, str], tuple[MemorySection, ...]] | None = None,
     ) -> Output:
-        """Render declared inputs and run the selected local mode to completion."""
-        prompt = render_template_record(self.prompt, inputs)
+        """Render inputs with fresh variable defaults and run the selected mode."""
+        input_names = set(inputs) | {parameter.name for parameter in (self.params or [])}
+        for variable in self.variables:
+            if variable.name in input_names:
+                raise ValueError(f"variable {variable.name!r} collides with an input name")
+        variables = self._resolve_variables()
+        prompt = render_template_record(self.prompt, {**inputs, **variables})
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         memory_sections = (
@@ -184,3 +226,11 @@ class AgentNode(Node):
                 memory_sections=memory_sections,
             )
         )
+
+    def _resolve_variables(self) -> dict[str, Any]:
+        """Resolve validated literal defaults into one detached invocation record."""
+        return deepcopy(apply_defaults(self.variables, {}))
+
+    def declared_variables(self) -> tuple[Parameter, ...]:
+        """Return the canonical local declarations in their authored order."""
+        return tuple(self.variables)

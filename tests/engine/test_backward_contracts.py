@@ -24,6 +24,27 @@ from agent_composer.nodes.contracts import ExecutionPosition, ExecutionScope
 from agent_composer.runtime.contracts import BackwardFailure, BackwardOutcome
 
 
+@pytest.mark.parametrize("inputs", [{"topic": "reefs"}, None])
+def test_declared_variables_supply_local_backward_targets_without_activating_hooks(inputs):
+    from agent_composer.compose.helpers.types import read_variables
+    from agent_composer.nodes.agent import AgentNode
+
+    node = AgentNode("writer", variables=read_variables({"tone": "str = concise"}, {}))
+    context = BackwardContext(
+        inputs=inputs,
+        input_names=("topic",),
+        variable_names=tuple(parameter.name for parameter in node.declared_variables()),
+    )
+    validate_backward_result(
+        BackwardResult(variable_feedback={"tone": ("Use a technical tone.",)}), context,
+    )
+    for name in ("topic", "other_instruction", "other.tone"):
+        with pytest.raises(ValueError, match=name):
+            validate_backward_result(
+                BackwardResult(variable_feedback={name: ("Be clearer.",)}), context,
+            )
+
+
 def test_feedback_uses_exact_nested_list_lengths() -> None:
     """A whole-list message or a full positional list addresses one recorded value."""
     value = {"summary": "text", "tags": ["a", "b"]}

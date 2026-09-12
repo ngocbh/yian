@@ -83,6 +83,7 @@ from agent_composer.compose.source.catalog import _SourceCatalogBuilder
 from agent_composer.compose.helpers.types import (
     read_flow_inputs,
     read_source_flow_inputs,
+    read_source_parameters,
     read_value_contract,
 )
 from agent_composer.compose.validate.handles import check_case_handles
@@ -900,6 +901,33 @@ def _assemble(
         except SourceAccessError as exc:
             raise diagnostics.error(str(exc), range=exc.range) from exc
 
+    def read_authored_node_variables(
+        node_id: str,
+        declarations: Any,
+    ) -> list[Parameter] | None:
+        """Compile one physical node's variables through its normalized cursor."""
+        try:
+            if not nodes_cursor.has(node_id):
+                return None
+            node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
+            if not node_cursor.has("variables"):
+                return None
+            variables_cursor = node_cursor.child("variables")
+            if variables_cursor.range is None:
+                return None
+            return read_source_parameters(
+                variables_cursor.with_value(declarations),
+                registry,
+                site_path=(*owner, "node", node_id),
+                catalog_builder=catalog_builder,
+                diagnostics=diagnostics,
+                field_name="variables",
+                declaration_label="variable",
+                require_default=True,
+            )
+        except SourceAccessError as exc:
+            raise diagnostics.error(str(exc), range=exc.range) from exc
+
     # Inline CODE receives the owning document label only as an opaque Python
     # traceback filename; authored locations come from semantic origins. Inert for
     # reference-mode CODE.
@@ -1167,6 +1195,7 @@ def _assemble(
         resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
         output_contract_reader=read_authored_node_output,
+        variable_declaration_reader=read_authored_node_variables,
     )
     descriptor_cache = _DescriptorBuildCache(descriptors, ctx_base)
     build_results = descriptor_cache.build_in_source_order()

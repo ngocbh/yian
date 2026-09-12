@@ -178,6 +178,8 @@ Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`,
 | nullable | `Optional[str]` | may be `null` |
 | default-fill | `lookback: int = 30` | filled when the input is omitted |
 | enum | `Literal[go, no_go, wait]` | one of these tags |
+| bounded integer | `int[1, 12]` | inclusive integer endpoints |
+| bounded float | `float[0.0, 1.0]` | inclusive finite float endpoints |
 | alias | `Basket: list[str]` | aliases compose |
 | record | (see below) | fields recurse |
 
@@ -199,7 +201,22 @@ not `int = "30"`, and quote date strings (`date = "2026-01-01"`). Only supplied
 boundary strings may be coerced. A compatible default keeps its authored payload,
 so `float = 30` remains an integer.
 
+Bounds require two ordered numeric literals and exclude booleans. Integer bounds
+retain arbitrary precision. Float bounds must be finite; integer endpoints used
+in a float domain must convert without rounding. Bounds compose with other
+type forms and constrain defaults, supplied values, and generated schemas.
+Cross-flow wiring requires the source domain to fit inside the destination;
+an unbounded source does not prove a bounded destination safe.
+
 ## Recipes
+
+**Give an AGENT a local prompt setting.** Add `variables:` beside `input:`, with
+an entry such as `num_sentences: int[1, 12] = 4`, then use `${num_sentences}` in
+the prompt. Each variable requires a validated typed default; nullable variables
+also need an explicit default. Variable and input names cannot overlap. Default
+strings stay literal, and each invocation gets a fresh copy of all defaults.
+Ownership follows the authored AGENT path plus name across repeated executions.
+A variable named `temperature` does not configure the model; use `llm_config:`.
 
 **Get a structured or numeric value out of an AGENT node.** Declare the typed shape directly
 as the node's `output:` — a `Literal[...]`, record, non-string scalar, or list switches
@@ -279,8 +296,8 @@ prove `bool`. This is the shape `ac chat` runs; see `chat.yaml` (and
 - **An AGENT node's `output:` may be any shape** — only a bare, untagged `str` keeps it a text
   producer; a `Literal[...]`/record/non-string scalar/list switches it to structured
   generation (schema-checked at the write boundary, `retries:`-capped self-correction).
-- **Prompts see only LOCAL inputs.** Inside `prompt:` you may reference only names
-  the node declares in its own `input:` block, written bare (`${name}`). Pool refs
+- **Prompt names are local.** Inside `prompt:` use names from the node's own
+  `input:` block, written bare (`${name}`); AGENT prompts also see local `variables:`. Pool refs
   (`${input.x}`, `${other.output}`) go in the `input:` block first.
 - **No `edges:` block, no per-node `id:`, no body wrappers.** `${...}` references
   infer data edges; `depends_on:` / `runs_after:` add ordering-only edges. A node

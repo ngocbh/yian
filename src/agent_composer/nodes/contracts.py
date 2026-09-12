@@ -561,15 +561,18 @@ def validate_output_contract(
 
 @dataclass(frozen=True)
 class Parameter:
-    """One formal input with one optional value contract and default policy.
+    """One named declared value with an optional contract and default policy.
+
+    Formal inputs and node-local variables share this carrier; their owning
+    construct decides whether a contract or default is required.
 
     ``has_default`` distinguishes an explicit ``None`` default from no default.
     ``coerce_strings`` is boundary policy derived from ``contract.type`` by a
     later consumer; there is deliberately no parallel textual type field.
 
     Attributes:
-        name (`str`): Bound record key.
-        contract (`ValueContract | None`): Optional semantic input contract.
+        name (`str`): Declared name in the owner's local record.
+        contract (`ValueContract | None`): Optional semantic value contract.
         required (`bool`): Whether omission is invalid.
         has_default (`bool`): Whether ``default`` is semantically present.
         default (`Any`): Retained default payload; meaningful only when present.

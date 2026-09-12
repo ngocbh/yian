@@ -272,6 +272,33 @@ defaults without replacing their authored payload, and coerces supplied strings
 only when the parameter opts in. A bound null shadows a default but still passes
 through contract validation, so it is accepted only when the parameter is untyped
 or its contract accepts null (a nullable or `None`-kind type).
+
+Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or
+NUMBER. Shape validation rejects malformed, reversed, or incompatible
+refinements; integer endpoints remain arbitrary precision, and NUMBER endpoints
+require finite, lossless float representation. Value checks preserve the failing
+structural path. Cross-flow compatibility requires interval containment, including
+integer-to-number widening. Inline type copying, nested generated schemas, and
+canonical labels preserve bounds. Manifests include bounds only when present,
+preserving the identity of unbounded declarations.
+
+`AgentNode.variables` is an ordered list of the same `Parameter` carriers, each
+with an exact `ValueContract` and an explicit typed default. Variable names are
+local and cannot overlap inputs. Compose compiles their declaration-key, type,
+and default origins through its shared reader; AGENT's origin hooks retain them
+through graph rebasing. Variable declarations affect authored identity, while
+their diagnostic origins do not. Empty variable inventories leave existing
+fingerprints unchanged.
+
+AGENT resolves a detached copy of its defaults once per invocation and renders
+one prompt from inputs plus those local values. Default strings remain literal
+data. Rendering requires no execution scope and does not change model config or
+graph bindings. `Node.declared_variables()` exposes an empty tuple by default;
+AGENT returns its canonical declarations for common feedback target validation.
+The stable owner is `(execution_scope.static_path, variable.name)`, so repeated
+MAP/LOOP occurrences retain one authored owner and distinct callsites retain
+distinct owners. This declaration inventory does not itself activate backward.
+
 `TypeCheckError.path` contains only contract-relative record names and actual list
 indices. A supplied-value rejection resolves that path through `ContractOrigins`
 (exact, nearest ancestor, then default) before falling back to the parameter

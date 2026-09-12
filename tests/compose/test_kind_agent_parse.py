@@ -52,3 +52,26 @@ nodes:
 """
     with pytest.raises(LoadError, match="controls.*not allowed"):
         AgentDescriptor.parse("writer", _reader_for(text, "writer"))
+
+
+def test_agent_variable_declarations_remain_separate_from_binding_fields():
+    text = """\
+nodes:
+  writer:
+    kind: agent
+    variables:
+      num_sentences: int[1,12] = 4
+      temperature: float[0,1] = 0.4
+      tone: Literal[concise,detailed,technical] = concise
+      instruction: str = "Summarize clearly"
+    prompt: "${instruction} in ${num_sentences} sentences."
+"""
+    descriptor = AgentDescriptor.parse("writer", _reader_for(text, "writer"))
+    assert descriptor.variables == {
+        "num_sentences": "int[1,12] = 4",
+        "temperature": "float[0,1] = 0.4",
+        "tone": "Literal[concise,detailed,technical] = concise",
+        "instruction": 'str = "Summarize clearly"',
+    }
+    assert descriptor.inputs == {}
+    assert descriptor.binding_fields == ("inputs",)

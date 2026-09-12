@@ -44,6 +44,21 @@ this model whenever you design anything:
   optional opaque origins;
   `iter_origins()` and `map_origins()` touch only declared provenance slots, and
   `typesys.Type` remains provenance-free while arbitrary payloads stay opaque.
+- Numeric `Type.bounds` is one optional inclusive pair on INTEGER/NUMBER.
+  Validate shape and values through the existing type system. Integer endpoints
+  remain arbitrary precision; NUMBER endpoints need finite, lossless float
+  representation. Compatibility requires interval containment, and inline type
+  copies, nested schemas, and labels retain the refinement. Omit absent bounds
+  from manifests so unbounded declarations keep their identity.
+- `AgentNode.variables` reuses ordered `Parameter` declarations, each with an
+  exact contract and explicit typed default. Reject duplicate names and input
+  collisions. Resolve a detached default record once per invocation, then render
+  inputs plus variables without evaluating default strings as bindings.
+  `Node.declared_variables()` exposes the local declaration inventory, empty by
+  default. Ownership is authored execution `static_path` plus variable name;
+  rendering requires no scope. Include nonempty declarations in manifests and
+  their origins in AGENT's existing traversal hooks. This inventory does not
+  activate backward or modify model configuration.
 - Nodes own local origin enumeration/rewrite and expose static children through
   `origin_children()`. `compile.origins` combines those hooks with flow wiring
   and outputs, rewriting an isolated copy by identity and returning a finalized

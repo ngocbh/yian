@@ -31,7 +31,7 @@ from agent_composer.expr import ExpressionError
 from agent_composer.expr.expressions import evaluate_when_record
 from agent_composer.expr.lineage import FeedbackValue, validate_feedback
 from agent_composer.memory.contracts import MemoryScope
-from agent_composer.nodes.binding import BindingError, apply_defaults
+from agent_composer.nodes.binding import BindingError, ReservedBinder, apply_defaults
 from agent_composer.nodes.contracts import (
     Assertion,
     ExecutionScope,
@@ -558,6 +558,9 @@ class Node(ABC):
     # `caps['bind_item']`; when False (the common case) it binds `params` once from the pool.
     # Overridden True by MapNode; every other kind binds up front.
     binds_per_item: ClassVar[bool] = False
+    # A per-item binder may project its local scope from this reserved input key.
+    # None means the node has no recorded source collection for the local scope.
+    item_source_key: ClassVar[str | None] = None
     # Nested-call depth policy for the engine's growth core. The depth stamped on a grow's subgraph
     # spawners + its terminal is `parent_depth + grow_depth_delta`; a positive delta is also
     # bounded by MAX_REF_DEPTH. Possible values:
@@ -811,15 +814,29 @@ class Node(ABC):
         """
         return self._run_template(inputs, classify_body_errors=False, **caps)
 
-    def _run_for_evaluator(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
-        """Run the base template with private structural failure markers enabled."""
-        return self._run_template(inputs, classify_body_errors=True, **caps)
+    def _run_for_evaluator(
+        self,
+        inputs: dict[str, Any],
+        *,
+        _capture_inputs: Callable[[dict[str, Any]], None] | None = None,
+        **caps: Any,
+    ) -> "NodeResult":
+        """Run the base template with private failure markers and input capture.
+
+        The optional callback receives the completed input record after defaults
+        and before assertions or the body; it is consumed here, never forwarded
+        as a node capability.
+        """
+        return self._run_template(
+            inputs, classify_body_errors=True, _capture_inputs=_capture_inputs, **caps,
+        )
 
     def _run_template(
         self,
         inputs: dict[str, Any],
         *,
         classify_body_errors: bool,
+        _capture_inputs: Callable[[dict[str, Any]], None] | None = None,
         **caps: Any,
     ) -> "NodeResult":
         """Template method: fill declared defaults for omitted inputs, fire pre-asserts
@@ -863,6 +880,8 @@ class Node(ABC):
             if not classify_body_errors:
                 raise
             raise _BindingStageError(exc) from exc
+        if _capture_inputs is not None:
+            _capture_inputs(inputs)
         self.validate_execution_setup()
         # Fire pre-asserts IN ORDER, first-failure-wins. The assertion carrier supplies the
         # canonical operation origin used by the evaluator's failure trace.
@@ -961,14 +980,19 @@ class Node(ABC):
         """Reserved error-strategy seam, not currently driven by ``eval_node``. Default: re-raise."""
         raise exc
 
-    def bind_reserved(self, node_wiring: dict, pool) -> dict[str, Any]:
+    def bind_reserved(
+        self, node_wiring: dict, pool, *, bind: ReservedBinder | None = None,
+    ) -> dict[str, Any]:
         """Reserved input keys the read seam (`eval_node`) must pre-resolve from
         `node_wiring` + `pool` before `run`, merged into the bound record.
 
         Possible keys (per kind): WAIT returns `{"until": <ISO deadline>}`; a MAP returns
         `{"over": <list>}`. Default: `{}` (an ordinary node reserves no keys). `node_wiring`
         is the flow-owned wiring for this node (`flow.wiring[id]`); `pool` is the live
-        `VariablePool` the seam reads sources from."""
+        `VariablePool` the seam reads sources from. The optional ``bind`` callable
+        resolves a named source and applies the node-owned validation/normalization
+        before retaining its delivered value; its arguments are name, source, and
+        normalization callable. Omitting it preserves direct read-hook calls."""
         return {}
 
     def reserved_wiring_keys(self) -> set[str]:

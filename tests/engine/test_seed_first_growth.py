@@ -32,7 +32,7 @@ def _growth_producers():
 
     map_node = MapNode("map", flow_id="child", child=child)
     map_grow = map_node.run(
-        {"over": [1, 2]}, bind_item=lambda item: {"x": item}
+        {"over": [1, 2]}, bind_item=lambda item, index: {"x": item}
     )
 
     loop = LoopNode(

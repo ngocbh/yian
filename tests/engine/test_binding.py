@@ -99,6 +99,233 @@ def _pool(**system):
     return p
 
 
+def test_binding_capture_matches_the_value_actually_delivered(monkeypatch):
+    from agent_composer.expr.builtins import TEMPLATE_FNS
+    from agent_composer.expr.lineage import ResolvedValue, SourceRef, route_feedback
+    from agent_composer.nodes.binding import BindingCollector
+
+    original = {"items": ["before"]}
+    reads = []
+    calls = []
+
+    def resolve(path):
+        reads.append(path)
+        value = " 12 " if path == "count" else original
+        return ResolvedValue(value, True, SourceRef("run", 1, (path,)))
+
+    def observe(value):
+        calls.append(value)
+        return value
+
+    monkeypatch.setitem(TEMPLATE_FNS, "observe", observe)
+    collector = BindingCollector()
+    delivered = bind_params(
+        [
+            Parameter("count", contract=INTEGER, coerce_strings=True),
+            Parameter("payload"),
+        ],
+        {"count": "${count}", "payload": "${observe(payload)}"},
+        _pool(),
+        collector=collector,
+        source_resolver=resolve,
+    )
+    captured = collector.freeze()
+    assert captured.bound_inputs == delivered == {
+        "count": 12, "payload": {"items": ["before"]}
+    }
+    assert reads == ["count", "payload"]
+    assert calls == [original]
+    delivered["payload"]["items"].append("node mutation")
+    original["items"].append("pool mutation")
+    assert captured.bound_inputs["payload"] == {"items": ["before"]}
+    routed = route_feedback(
+        captured.route, {"count": "Too large."},
+        lambda source: {"count": " 12 ", "payload": original},
+    )
+    assert [(c.source, c.feedback) for c in routed.contributions] == [
+        (SourceRef("run", 1), {"count": "Too large."})
+    ]
+
+
+def test_omitted_default_has_no_upstream_source():
+    from agent_composer.expr.lineage import ResolvedValue, SourceRef, route_feedback
+    from agent_composer.nodes.binding import BindingCollector
+
+    collector = BindingCollector()
+    delivered = bind_params(
+        [
+            Parameter("defaulted", contract=NUMBER, has_default=True, default=30),
+            Parameter("null", has_default=True, default="unused"),
+            Parameter("omitted"),
+        ],
+        {"null": "${present}"},
+        _pool(),
+        collector=collector,
+        source_resolver=lambda path: ResolvedValue(None, True, SourceRef("run", 3)),
+    )
+    captured = collector.freeze()
+    assert captured.bound_inputs == delivered == {"defaulted": 30, "null": None}
+    assert type(captured.bound_inputs["defaulted"]) is int
+    assert captured.route.names == ("defaulted", "null")
+    assert captured.evaluated_keys == frozenset({"null"})
+    routed = route_feedback(
+        captured.route, {"defaulted": "Local.", "null": "Supply a value."},
+        lambda source: None,
+    )
+    assert [(c.source, c.feedback) for c in routed.contributions] == [
+        (SourceRef("run", 3), "Supply a value.")
+    ]
+
+
+@pytest.mark.parametrize("stage", ["ordinary", "reserved", "deferred", "wrapper_default"])
+def test_binding_failure_keeps_partial_context_without_usable_inputs(stage):
+    from agent_composer.compile.model import Flow
+    from agent_composer.nodes.base import Node
+    from agent_composer.nodes.map import MapNode
+    from agent_composer.nodes.wait import WaitNode
+    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
+
+    origin = OriginRef("bad-input")
+    if stage == "ordinary":
+        node = Node("node")
+        node.params = [Parameter("ok"), Parameter("bad", contract=INTEGER, origin=origin)]
+        wiring = {"ok": {"safe": [1]}, "bad": "wrong"}
+        expected_names = ("ok", "bad")
+    elif stage == "reserved":
+        node = WaitNode("node")
+        node.params = [Parameter("ok")]
+        wiring = {"ok": {"safe": [1]}, "until": Binding("wrong", origin=origin)}
+        expected_names = ("ok", "until")
+    elif stage == "deferred":
+        node = MapNode("node", flow_id="child", child=Flow(nodes=[], edges=[]))
+        node.params = [Parameter("ok"), Parameter("bad", contract=INTEGER, origin=origin)]
+        wiring = {"over": [1, "wrong"], "ok": {"safe": [1]}, "bad": "${item}"}
+        expected_names = ("over",)
+    else:
+        node = MapNode("node", flow_id="child", child=Flow(nodes=[], edges=[]))
+        node.params = [Parameter(
+            "bad", contract=INTEGER, has_default=True, default="wrong",
+            default_origin=origin,
+        )]
+        wiring = {"over": []}
+        expected_names = ("over",)
+    evaluated = eval_node(
+        node, None, _pool(), wiring_override=wiring, capture_bindings=True,
+    )
+    assert isinstance(evaluated.outcome, EvaluationFailure)
+    assert evaluated.outcome.failure.code == (
+        "binding.evaluate" if stage == "wrapper_default" else "contract.input"
+    )
+    assert evaluated.outcome.failure.trace == (origin,)
+    assert evaluated.bindings.bound_inputs is None
+    assert evaluated.bindings.route.names == expected_names
+    if stage == "deferred":
+        assert [index for index, _ in evaluated.bindings.items] == [0, 1]
+        for _, item in evaluated.bindings.items:
+            assert item.bound_inputs is None
+            assert item.route.names == ("ok", "bad")
+
+
+def test_evaluator_capture_preserves_typed_values_before_node_mutation():
+    from agent_composer.nodes.base import Node, NodeKind, Output
+    from agent_composer.runtime.eval_node import eval_node
+    from agent_composer.typesys import FileRef
+
+    class MutatingNode(Node):
+        kind = NodeKind.CODE
+
+        def forward(self, inputs):
+            inputs["payload"][0]["items"].append("after")
+            return Output(inputs)
+
+    file = FileRef(uri="file:///input.txt", name="input.txt")
+    node = MutatingNode("mutate")
+    node.params = [Parameter("payload")]
+    wiring = {"payload": ({"items": [file]},)}
+    evaluated = eval_node(
+        node, None, _pool(), wiring_override=wiring, capture_bindings=True,
+    )
+    assert evaluated.evidence is None
+    assert evaluated.bindings.bound_inputs == {"payload": ({"items": [file]},)}
+    assert type(evaluated.bindings.bound_inputs["payload"]) is tuple
+    assert type(evaluated.bindings.bound_inputs["payload"][0]["items"][0]) is FileRef
+    assert evaluated.outcome.value["payload"][0]["items"] == [file, "after"]
+    assert eval_node(node, None, _pool(), wiring_override=wiring).bindings is None
+
+
+def test_capture_includes_materialized_reserved_values_from_node_hooks():
+    from agent_composer.nodes.base import Node, NodeKind, Output
+    from agent_composer.runtime.eval_node import eval_node
+
+    class ReservedNode(Node):
+        kind = NodeKind.CODE
+
+        def bind_reserved(self, node_wiring, pool, *, bind=None):
+            return {"payload": {"items": [1]}}
+
+        def forward(self, inputs):
+            inputs["payload"]["items"].append(2)
+            return Output(inputs)
+
+    evaluated = eval_node(ReservedNode("node"), None, _pool(), capture_bindings=True)
+    assert evaluated.bindings.bound_inputs == {"payload": {"items": [1]}}
+    assert evaluated.bindings.route.names == ("payload",)
+    assert evaluated.bindings.route.children[0].kind == "literal"
+
+
+@pytest.mark.parametrize("mode", ["return", "mutate", "preassert"])
+def test_per_item_wrapper_capture_includes_defaults_before_body_and_asserts(mode):
+    from agent_composer.nodes.base import Node, NodeKind, Output
+    from agent_composer.nodes.contracts import Assertion
+    from agent_composer.runtime.eval_node import EvaluationFailure, eval_node
+
+    class PerItemNode(Node):
+        kind = NodeKind.CODE
+        binds_per_item = True
+
+        def forward(self, inputs, *, bind_item):
+            if mode == "mutate":
+                inputs["fallback"]["items"].append(2)
+            return Output(inputs)
+
+    node = PerItemNode("node")
+    node.params = [Parameter("fallback", has_default=True, default={"items": [1]})]
+    if mode == "preassert":
+        node.pre_asserts = [Assertion("false", "must hold")]
+    evaluated = eval_node(node, None, _pool(), capture_bindings=True)
+    assert evaluated.bindings.bound_inputs == {"fallback": {"items": [1]}}
+    assert evaluated.bindings.route.names == ("fallback",)
+    assert evaluated.bindings.route.children[0].kind == "literal"
+    assert evaluated.bindings.evaluated_keys == frozenset()
+    if mode == "preassert":
+        assert isinstance(evaluated.outcome, EvaluationFailure)
+        assert evaluated.outcome.failure.code == "assertion.failed"
+    else:
+        expected = [1, 2] if mode == "mutate" else [1]
+        assert evaluated.outcome.value == {"fallback": {"items": expected}}
+
+
+def test_map_wrapper_capture_includes_valid_defaults_and_item_routes():
+    from agent_composer.nodes.map import MapNode
+    from agent_composer.runtime.eval_node import eval_node
+
+    node = MapNode("map", flow_id="child", child=object())
+    node.params = [Parameter("fallback", contract=NUMBER, has_default=True, default=30)]
+    evaluated = eval_node(
+        node, None, _pool(), wiring_override={"over": [1]}, capture_bindings=True,
+    )
+    assert evaluated.bindings.bound_inputs == {"over": [1], "fallback": 30}
+    assert type(evaluated.bindings.bound_inputs["fallback"]) is int
+    assert evaluated.bindings.route.names == ("over", "fallback")
+    assert evaluated.bindings.route.children[-1].kind == "literal"
+    assert evaluated.outcome.seed == [{"fallback": 30}]
+    index, item = evaluated.bindings.items[0]
+    assert index == 0
+    assert item.bound_inputs == {"fallback": 30}
+    assert item.route.names == ("fallback",)
+    assert item.route.children[0].kind == "literal"
+
+
 def test_bind_ref_and_literal():
     pool = _pool(topics="ACME")
     pool.set("up", {"pe": 21.0})

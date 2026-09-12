@@ -287,7 +287,7 @@ class _MutatingTraceNode(Node):
     kind = NodeKind.CODE
     needs_evaluation_trace = True
 
-    def bind_reserved(self, _wiring, _pool):
+    def bind_reserved(self, _wiring, _pool, *, bind=None):
         return {"payload": {"items": [1]}}
 
     def forward(self, inputs, *, evaluation_trace: EvaluationTrace):
@@ -305,7 +305,7 @@ class _UncanonicalTraceNode(Node):
         super().__init__(node_id)
         self.ran = False
 
-    def bind_reserved(self, _wiring, _pool):
+    def bind_reserved(self, _wiring, _pool, *, bind=None):
         return {"unordered": {1, 2}}
 
     def forward(self, _inputs, *, evaluation_trace: EvaluationTrace):

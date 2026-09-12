@@ -61,6 +61,88 @@ def messages(routed):
     return [(c.source, c.feedback) for c in routed.contributions]
 
 
+def test_reserved_map_over_uses_the_same_capture_path():
+    from agent_composer.compile.model import Flow
+    from agent_composer.nodes.map import MapNode
+    from agent_composer.runtime.eval_node import eval_node
+    from agent_composer.typesys.pool import VariablePool
+
+    sources = Sources(items=[])
+    node = MapNode("map", flow_id="child", child=Flow(nodes=[], edges=[]))
+    evaluated = eval_node(
+        node, None, VariablePool(), wiring_override={"over": "${items}"},
+        capture_bindings=True, source_resolver=sources.resolve,
+    )
+    assert evaluated.evidence is None
+    assert evaluated.bindings.bound_inputs == {"over": []}
+    assert evaluated.bindings.evaluated_keys == frozenset({"over"})
+    assert sources.reads == ["items"]
+    assert messages(route_feedback(
+        evaluated.bindings.route, {"over": "Add an item."}, sources.lookup,
+    )) == [(sources.identities["items"], "Add an item.")]
+
+
+def test_equal_map_items_get_distinct_recorded_indices():
+    from agent_composer.compile.model import Flow
+    from agent_composer.nodes.contracts import Parameter
+    from agent_composer.nodes.map import MapNode
+    from agent_composer.runtime.eval_node import eval_node
+    from agent_composer.typesys.pool import VariablePool
+
+    sources = Sources(left=["same", None], right=["same", None])
+    node = MapNode("map", flow_id="child", child=Flow(nodes=[], edges=[]))
+    node.params = [Parameter("x")]
+    evaluated = eval_node(
+        node, None, VariablePool(),
+        wiring_override={"over": "${left + right * 2}", "x": "${item}"},
+        capture_bindings=True, source_resolver=sources.resolve,
+    )
+    assert evaluated.outcome.seed == [{"x": "same"}, {"x": None}] * 3
+    assert [index for index, _ in evaluated.bindings.items] == list(range(6))
+    assert sources.reads == ["left", "right"]
+    for index, item in evaluated.bindings.items:
+        assert item.bound_inputs == evaluated.outcome.seed[index]
+        assert item.evaluated_keys == frozenset({"x"})
+        expected_source = sources.identities["left" if index < 2 else "right"]
+        expected_feedback = [None, "Fix."] if index % 2 else ["Fix.", None]
+        routed = route_feedback(
+            item.route, {"x": "Fix."}, sources.lookup,
+        )
+        assert messages(routed) == [(expected_source, expected_feedback)]
+        assert any(
+            context.operand == (index,)
+            for context in routed.contributions[0].context
+        )
+
+
+def test_wait_capture_retains_the_delivered_iso_value_after_normalization():
+    from agent_composer.nodes.wait import WaitNode
+    from agent_composer.runtime.eval_node import eval_node
+    from agent_composer.typesys.pool import VariablePool
+
+    class Deadline:
+        calls = 0
+
+        def isoformat(self):
+            self.calls += 1
+            return "2000-01-01T00:00:00+00:00"
+
+    deadline = Deadline()
+    sources = Sources(deadline=deadline)
+    evaluated = eval_node(
+        WaitNode("wait"), None, VariablePool(),
+        wiring_override={"until": "${deadline}"},
+        capture_bindings=True, source_resolver=sources.resolve,
+    )
+    assert evaluated.outcome.value is None
+    assert evaluated.bindings.bound_inputs == {"until": "2000-01-01T00:00:00+00:00"}
+    assert deadline.calls == 1
+    assert sources.reads == ["deadline"]
+    assert messages(route_feedback(
+        evaluated.bindings.route, {"until": "Too early."}, sources.lookup,
+    )) == [(sources.identities["deadline"], "Too early.")]
+
+
 def test_direct_projection_lifts_feedback_into_source_shape():
     original = {"tags": ["one", "two"], "summary": "text"}
     root = SourceRef("run", 7)

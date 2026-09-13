@@ -450,7 +450,7 @@ def prepare_trace(
     """Validate capture authority and prepare a detached accepted-record delta."""
     record = envelope.record
     if type(record) is RunStartedRecord:
-        if not record.learn:
+        if not record.learnable:
             return None
         pool = decode_pool(record.initial_pool)
         if type(root_end_id) is not str or root_input_names is None:

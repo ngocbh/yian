@@ -35,7 +35,7 @@ def _records(path):
 
 @pytest.mark.parametrize("durable", [False, True])
 def test_backward_without_memory_is_explicit_and_single_success(tmp_path, durable):
-    result = run_flow(load_flow(_IDENTITY), {"text": "hello"}, learn=True,
+    result = run_flow(load_flow(_IDENTITY), {"text": "hello"}, learnable=True,
                       log=tmp_path / "run.jsonl" if durable else None)
     assert result.backward_outcome is None
     assert result.learning is None
@@ -53,7 +53,7 @@ def test_backward_without_memory_is_explicit_and_single_success(tmp_path, durabl
 def test_forward_returns_before_any_learning_or_commit(tmp_path):
     path = tmp_path / "run.jsonl"
     memory = _Memory()
-    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True,
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learnable=True,
                       log=path, memory={"test": memory})
     assert memory.learn_contexts == memory.commit_calls == []
     assert memory.close_count == 1
@@ -82,7 +82,7 @@ def test_same_handle_rejects_nested_backward_before_a_second_commit():
         return []
 
     backend = _Memory(learn_outcomes=[learn])
-    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True,
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learnable=True,
                       memory={"test": backend})
 
     assert result.backward("Outer review.").status == "succeeded"
@@ -105,7 +105,7 @@ def test_same_handle_rejects_concurrent_backward_without_waiting(tmp_path, durab
         return []
 
     backend = _Memory(learn_outcomes=[learn])
-    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True,
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learnable=True,
                       log=tmp_path / "run.jsonl" if durable else None, memory={"test": backend})
     with ThreadPoolExecutor(max_workers=1) as workers:
         pending = workers.submit(result.backward, "First review.")
@@ -140,14 +140,14 @@ def test_delayed_backward_anchors_the_log_at_acquisition(tmp_path, monkeypatch, 
                 raise interrupted
 
         with pytest.raises(RuntimeError) as caught:
-            run_flow(flow, {"text": "hello"}, learn=True, log="run.jsonl", on_event=stop_after_start)
+            run_flow(flow, {"text": "hello"}, learnable=True, log="run.jsonl", on_event=stop_after_start)
         assert caught.value is interrupted
         result = resume_flow(flow, log="run.jsonl", on_event=move_after_forward)
     elif acquisition == "resume_after":
-        run_flow(flow, {"text": "hello"}, learn=True, log="run.jsonl")
+        run_flow(flow, {"text": "hello"}, learnable=True, log="run.jsonl")
         result = resume_flow(flow, log="run.jsonl")
     else:
-        result = run_flow(flow, {"text": "hello"}, learn=True, log="run.jsonl",
+        result = run_flow(flow, {"text": "hello"}, learnable=True, log="run.jsonl",
                           on_event=move_after_forward if acquisition == "fresh_event" else None)
     monkeypatch.chdir(elsewhere)
 
@@ -166,8 +166,8 @@ def test_acquisition_uses_the_captured_locator_if_opener_changes_cwd(tmp_path, m
     flow = load_flow(_IDENTITY)
     other_prefix = None
     if opening == "resume":
-        run_flow(flow, {"text": "hello"}, learn=True, log="run.jsonl")
-        run_flow(flow, {"text": "other run"}, learn=True, log=elsewhere / "run.jsonl")
+        run_flow(flow, {"text": "hello"}, learnable=True, log="run.jsonl")
+        run_flow(flow, {"text": "other run"}, learnable=True, log=elsewhere / "run.jsonl")
         other_prefix = (elsewhere / "run.jsonl").read_bytes()
     original_open = getattr(JsonlRunLog, opening)
 
@@ -176,7 +176,7 @@ def test_acquisition_uses_the_captured_locator_if_opener_changes_cwd(tmp_path, m
         return original_open(path, *args)
 
     monkeypatch.setattr(JsonlRunLog, opening, classmethod(change_before_open))
-    result = (run_flow(flow, {"text": "hello"}, learn=True, log="run.jsonl")
+    result = (run_flow(flow, {"text": "hello"}, learnable=True, log="run.jsonl")
               if opening == "create" else resume_flow(flow, log="run.jsonl"))
 
     assert result.output == "hello" and result.log == Path("run.jsonl")
@@ -198,7 +198,7 @@ def test_prefix_export_failure_preserves_primary_and_prevents_stale_retry(tmp_pa
                       commit_outcomes=[primary] if phase == "commit" else [])
     flow = load_flow(_WITH_MEMORY)
     path = tmp_path / "export.jsonl" if durable else None
-    result = run_flow(flow, {"text": "hello"}, learn=True, log=path, memory={"test": backend})
+    result = run_flow(flow, {"text": "hello"}, learnable=True, log=path, memory={"test": backend})
     log_type = JsonlRunLog if durable else MemoryRunLog
     original_iter, original_close = log_type.__iter__, log_type.close
     closed = []
@@ -248,7 +248,7 @@ def test_accepted_append_error_refreshes_the_actual_prefix(tmp_path, monkeypatch
     backend = _Memory()
     path = tmp_path / "accepted.jsonl" if durable else None
     flow = load_flow(_WITH_MEMORY)
-    result = run_flow(flow, {"text": "hello"}, learn=True, log=path, memory={"test": backend})
+    result = run_flow(flow, {"text": "hello"}, learnable=True, log=path, memory={"test": backend})
     log_type = JsonlRunLog if durable else MemoryRunLog
     original_append = log_type.append
     failure = OSError("append accepted before returning")
@@ -292,7 +292,7 @@ def test_each_explicit_attempt_restores_fresh_sessions_from_recorded_snapshots()
     backend = _Memory(learn_outcomes=[MemoryOperationError("learner", "declined", "Try again.", True), []])
     replacement = _Memory()
     mapping = {"test": backend}
-    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True, memory=mapping)
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learnable=True, memory=mapping)
     assert len(backend.sessions) == 1 and backend.sessions[0].closed
     backend.sessions[0]._snapshot["namespace"] = "changed after forward"
     mapping["test"] = replacement
@@ -311,7 +311,7 @@ def test_terminal_resume_retains_mapping_references_without_opening_them(tmp_pat
     path = tmp_path / "terminal.jsonl"
     flow = load_flow(_WITH_MEMORY)
     original = _Memory()
-    run_flow(flow, {"text": "hello"}, learn=True, log=path, memory={"test": original})
+    run_flow(flow, {"text": "hello"}, learnable=True, log=path, memory={"test": original})
     missing = resume_flow(flow, log=path)
     prefix = path.read_bytes()
     with pytest.raises(MemorySetupError):
@@ -333,7 +333,7 @@ def test_terminal_resume_retains_mapping_references_without_opening_them(tmp_pat
 def test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation(tmp_path, monkeypatch):
     path = tmp_path / "restore.jsonl"
     backend = _Memory(learn_outcomes=[MemoryError("interrupted learner"), []])
-    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True,
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learnable=True,
                       log=path, memory={"test": backend})
     with pytest.raises(MemoryError):
         result.backward("First review.")
@@ -361,7 +361,7 @@ def test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation(tm
 def test_delayed_backward_uses_private_program_and_canonical_values(tmp_path, durable):
     flow = load_flow(_IDENTITY.replace("text: str", "text: object"))
     supplied = {"text": {"items": [1, 2]}}
-    result = run_flow(flow, supplied, learn=True, log=tmp_path / "private.jsonl" if durable else None)
+    result = run_flow(flow, supplied, learnable=True, log=tmp_path / "private.jsonl" if durable else None)
     supplied["text"]["items"].append(3)
     assert result.input == {"text": {"items": [1, 2]}}
     result.input["text"]["items"].append(4)
@@ -393,7 +393,7 @@ def test_distinct_durable_handles_keep_file_lock_exclusion(tmp_path):
 
     flow = load_flow(_WITH_MEMORY)
     backend = _Memory(learn_outcomes=[learn])
-    first = run_flow(flow, {"text": "hello"}, learn=True, log=path, memory={"test": backend})
+    first = run_flow(flow, {"text": "hello"}, learnable=True, log=path, memory={"test": backend})
     second = resume_flow(flow, log=path, memory={"test": backend})
 
     assert first.backward("Review.").status == "succeeded"
@@ -406,7 +406,7 @@ def test_distinct_durable_handles_keep_file_lock_exclusion(tmp_path):
 @pytest.mark.parametrize("phase", ["export", "close"])
 def test_handle_guard_covers_prefix_export_and_log_cleanup(monkeypatch, phase):
     backend = _Memory()
-    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True, memory={"test": backend})
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learnable=True, memory={"test": backend})
     method = "__iter__" if phase == "export" else "close"
     original = getattr(MemoryRunLog, method)
     rejected = []
@@ -430,7 +430,7 @@ def test_handle_guard_covers_prefix_export_and_log_cleanup(monkeypatch, phase):
 def test_cleanup_error_preserves_finished_authority_and_releases_guard(monkeypatch, resource, learner_fails):
     backend = _Memory(learn_outcomes=[MemoryOperationError("learner", "declined", "Try again.", True), []]
                       if learner_fails else [])
-    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True, memory={"test": backend})
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learnable=True, memory={"test": backend})
     owner = _Session if resource == "session" else MemoryRunLog
     original_close = owner.close
     failure = OSError("cleanup failed")
@@ -460,7 +460,7 @@ def test_cleanup_error_preserves_finished_authority_and_releases_guard(monkeypat
 @pytest.mark.parametrize("failure", [AsyncCancelledError("cancelled"), FutureCancelledError("cancelled")])
 def test_cancelled_backward_retains_started_and_releases_resources(failure):
     backend = _Memory(learn_outcomes=[failure, []])
-    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True, memory={"test": backend})
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learnable=True, memory={"test": backend})
 
     with pytest.raises(type(failure)) as caught:
         result.backward("Interrupted review.")
@@ -477,7 +477,7 @@ def test_cancelled_backward_retains_started_and_releases_resources(failure):
 def test_invalid_feedback_does_not_change_latest_outcome(tmp_path):
     path = tmp_path / "retry.jsonl"
     memory = _Memory(learn_outcomes=[MemoryOperationError("learner", "declined", "Try again.", True), []])
-    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True,
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learnable=True,
                       log=path, memory={"test": memory})
     previous = result.backward("Review.")
     assert previous.status == "failed" and previous.feedback.input_feedback == {"text": ("Review.",)}
@@ -497,7 +497,7 @@ def test_invalid_feedback_on_stale_handle_preserves_its_observation(tmp_path, pr
     flow = load_flow(_WITH_MEMORY if previous_failure else _IDENTITY)
     backend = _Memory(learn_outcomes=[MemoryOperationError("learner", "declined", "Try again.", True), []])
     memory = {"test": backend} if previous_failure else None
-    first = run_flow(flow, {"text": "hello"}, learn=True, log=path, memory=memory)
+    first = run_flow(flow, {"text": "hello"}, learnable=True, log=path, memory=memory)
     if previous_failure:
         assert first.backward("First review.").status == "failed"
     previous, previous_learning = first.backward_outcome, first.learning
@@ -523,7 +523,7 @@ def test_stale_handle_publishes_its_new_accepted_prefix_on_host_failure(tmp_path
         MemoryOperationError("learner", "declined", "Try again.", True), failure,
     ])
     memory = {"test": backend}
-    first = run_flow(flow, {"text": "hello"}, learn=True, log=path, memory=memory)
+    first = run_flow(flow, {"text": "hello"}, learnable=True, log=path, memory=memory)
     second = resume_flow(flow, log=path, memory=memory)
     assert second.backward("First review.").status == "failed"
     assert first.backward_outcome is first.learning is None
@@ -547,7 +547,7 @@ def test_resumed_interrupted_observation_keeps_identity_on_invalid_feedback(tmp_
     flow = load_flow(_WITH_MEMORY)
     backend = _Memory(learn_outcomes=[MemoryError("interrupted learner"), []])
     memory = {"test": backend}
-    original = run_flow(flow, {"text": "hello"}, learn=True, log=path, memory=memory)
+    original = run_flow(flow, {"text": "hello"}, learnable=True, log=path, memory=memory)
     with pytest.raises(MemoryError):
         original.backward("First review.")
     resumed = resume_flow(flow, log=path, memory=memory)
@@ -571,7 +571,7 @@ def test_resumed_interrupted_observation_keeps_identity_on_invalid_feedback(tmp_
 
 def test_nonretained_result_rejects_backward():
     result = run_flow(load_flow(_IDENTITY), {"text": "hello"})
-    with pytest.raises(ValueError, match="learn=True"):
+    with pytest.raises(ValueError, match="learnable=True"):
         result.backward("Review.")
     assert result.learning is result.backward_outcome is None
 
@@ -588,7 +588,7 @@ nodes:
       return 0
 output: ${work.output}
 """)
-    result = run_flow(flow, {}, learn=True)
+    result = run_flow(flow, {}, learnable=True)
     assert result.status == "failed"
     failure, events = result.failure, list(result.events)
     assert result.backward("Review failure.").status == "succeeded"
@@ -600,7 +600,7 @@ def test_terminal_resume_only_reconstructs_backward_outcome(tmp_path):
     path = tmp_path / "run.jsonl"
     flow = load_flow(_WITH_MEMORY)
     memory = _Memory()
-    result = run_flow(flow, {"text": "hello"}, learn=True, log=path, memory={"test": memory})
+    result = run_flow(flow, {"text": "hello"}, learnable=True, log=path, memory={"test": memory})
     before = _records(path)
     inspected = resume_flow(flow, log=path)
     assert inspected.backward_outcome is inspected.learning is None
@@ -624,7 +624,7 @@ def test_terminal_resume_inspects_every_unfinished_backward_prefix(tmp_path, pre
     path = tmp_path / "prefix.jsonl"
     flow = load_flow(_WITH_MEMORY)
     memory = _Memory()
-    run_flow(flow, {"text": "hello"}, learn=True, log=path, memory={"test": memory})
+    run_flow(flow, {"text": "hello"}, learnable=True, log=path, memory={"test": memory})
     with JsonlRunLog.resume(path) as log:
         state = _replay_run_log(flow, log)
         root, attributed = compute_backward(state.trace, "Review.")

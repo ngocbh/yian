@@ -268,7 +268,7 @@ output: ${run_research.output}
 For `investigate`, recall is ordered root-flow → child-flow → AGENT-local.
 Each YAML declaration selects the `reflective` host policy by name; a Python host
 enables it by passing `memory={"reflective": implementation}` to `run_flow`. No
-`${memory}` reference is required. `learn=True` independently retains accepted
+`${memory}` reference is required. `learnable=True` independently retains accepted
 execution; forward returns before learning or commits. The host calls
 `result.backward(feedback)` explicitly afterward. Every enabled frame then
 receives its own history and descendant evidence, including empty histories,

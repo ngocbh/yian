@@ -239,7 +239,7 @@ per-item/per-iteration frames.
 Other node kinds and anonymous inline child flows cannot carry this declaration.
 It remains dormant under ordinary `ac run`; library hosts enable recall by
 registering the selected policy with
-`run_flow(..., memory={NAME: implementation})`. Independently, `learn=True` retains
+`run_flow(..., memory={NAME: implementation})`. Independently, `learnable=True` retains
 execution for a later explicit `result.backward(feedback)` call; forward returns
 before learning or commits. `result.backward()` with no external feedback still
 runs every enabled frame learner, while unreached AGENT backward model calls are

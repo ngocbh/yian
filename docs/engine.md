@@ -162,7 +162,7 @@ spawner kind means setting traits on its node; the core never gains a branch. De
 
 Node evaluation may raise (a failed assert, a bad LLM response); the engine catches the
 exception at the evaluation boundary. The dispatcher then prepares and commits a
-schema-6 `NodeFailedRecord` carrying one nested, immutable `Failure`, optional
+schema-7 `NodeFailedRecord` carrying one nested, immutable `Failure`, optional
 model/tool evaluation evidence, and forward capture when retention is enabled.
 Only after the record is appended does the
 reducer expose that same `Failure` through `NodeFailed`, terminal `RunFailed`, and
@@ -201,8 +201,8 @@ MemoryCommitSucceededRecord | MemoryCommitFailedRecord |
 BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord
 ```
 
-Schema-6 node outcome records require forward capture when the recorded run
-has `learn=True` and omit it when `learn=False`. Optional model/tool evaluation
+Schema-7 node outcome records require forward capture when the recorded run
+has `learnable=True` and omit it when `learnable=False`. Optional model/tool evaluation
 evidence is separate. There is no separate forward terminal record: success is derived
 from the terminal value once the graph is quiescent. Failure is derived either from
 `NodeFailedRecord` or from a reduced route that skip-floods the declared terminal
@@ -228,7 +228,7 @@ change forward scheduling or the forward result.
 
 ## Explicit backward attempts
 
-`FlowEngine` drives forward scheduling only. `learn=True` retains accepted
+`FlowEngine` drives forward scheduling only. `learnable=True` retains accepted
 execution independently of memory recall, then the public run boundary returns
 the forward result. `RunResult.backward(feedback)` later calls the explicit
 `runtime.backward` driver against the same record/reducer authority. Ordinary
@@ -293,8 +293,8 @@ before the run boundary releases the log.
 | `node.forward(inputs, **caps) → NodeResult` | the one kind-specific body step |
 | `node.is_spawner` | may it return `Grow`? |
 | read-boundary traits | `binds_per_item`, `bind_reserved`, `reserved_wiring_keys`, `needs_stop_event` |
-| memory/evidence traits | `needs_memory_recall` controls recall eligibility; `needs_evaluation_trace` opts into model/tool evidence when `learn=True`; `memory_scope` supplies optional memory context and validates recalled frames |
-| forward capture | recorded `learn=True` retains general binding data independently of memory scope |
+| memory/evidence traits | `needs_memory_recall` controls recall eligibility; `needs_evaluation_trace` opts into model/tool evidence when `learnable=True`; `memory_scope` supplies optional memory context and validates recalled frames |
+| forward capture | recorded `learnable=True` retains general binding data independently of memory scope |
 | output metadata | `output_contract` validates committed values; `commit_as` selects a logical success target |
 | growth traits | `grow_depth_delta`, `is_loop` |
 | diagnostic-only projections | `exception_origin(exc)` selects the local origin; `failure_trace(operation_origin=None)` combines it with ordered ancestry without affecting program identity |

@@ -56,7 +56,7 @@ def _chain(tmp_path, monkeypatch, *, workers=0, backend=None):
     chat = _BackwardChat([AIMessage(content="draft"), AIMessage(content="answer")])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
     path = tmp_path / "chain.jsonl"
-    result = run_flow(flow, {"topic": "reefs"}, log=path, learn=True,
+    result = run_flow(flow, {"topic": "reefs"}, log=path, learnable=True,
                       num_workers=workers, memory={"test": backend})
     assert result.status == "succeeded" and result.output == "answer"
     assert chat.calls == 2 and backend.learn_contexts == backend.commit_calls == []
@@ -89,7 +89,7 @@ output: ${{work.output}}
 """)
     backend = _Memory()
     path = tmp_path / "invalid.jsonl"
-    result = run_flow(flow, {}, log=path, learn=True, memory={"test": backend})
+    result = run_flow(flow, {}, log=path, learnable=True, memory={"test": backend})
     assert result.status == ("failed" if failed else "succeeded")
     forward = deepcopy((result.input, result.status, result.output, result.failure, result.events))
     previous = (result.backward_outcome, result.learning)
@@ -291,7 +291,7 @@ output: ${input.payload}
         value = {"next": value}
     backend = _Memory()
     path = tmp_path / "deep.jsonl"
-    result = run_flow(flow, {"payload": value}, log=path, learn=True, memory={"test": backend})
+    result = run_flow(flow, {"payload": value}, log=path, learnable=True, memory={"test": backend})
     assert result.status == "succeeded" and result.output == value
     forward = deepcopy((result.input, result.status, result.output, result.failure, result.events))
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: pytest.fail("structural context failure invoked model"))
@@ -511,7 +511,7 @@ def test_three_policy_failure_preserves_ordered_dispositions_and_closes_public_r
     forward_chat = _BackwardChat([AIMessage(content="draft"), AIMessage(content="answer")])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: forward_chat)
     path = tmp_path / "policies.jsonl"
-    result = run_flow(flow, {"topic": "reefs"}, log=path, learn=True, memory=backends)
+    result = run_flow(flow, {"topic": "reefs"}, log=path, learnable=True, memory=backends)
     assert result.status == "succeeded" and result.output == "answer"
     forward = deepcopy((result.input, result.status, result.output, result.failure, result.events))
     forward_bytes = path.read_bytes()

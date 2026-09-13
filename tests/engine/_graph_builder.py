@@ -62,13 +62,13 @@ def _engine(
     stop_event=None,
     memory_layout: tuple[MemoryFrameSpec, ...] | None = None,
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None,
-    learn: bool = False,
+    learnable: bool = False,
     memory_recall=None,
 ) -> FlowEngine:
     """Prepare one in-memory authority and return the final direct engine surface."""
     inputs = dict(run_inputs or {})
     effective_llm = {}
-    if learn:
+    if learnable:
         effective_llm = resolve_llm_cascade(flow, {}, defaults={"provider": "test", "model": "test"})
         apply_execution_layout(flow, resolve_execution_layout(flow))
     state = RunState(flow)
@@ -89,7 +89,7 @@ def _engine(
             num_workers=num_workers,
             memory_layout=memory_layout,
             memory_snapshots=memory_snapshots,
-            learn=learn,
+            learnable=learnable,
         ),
     )
     commit_prepared(log, state, prepared)

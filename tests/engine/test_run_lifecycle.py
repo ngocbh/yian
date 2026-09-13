@@ -444,7 +444,7 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
         "on_stream",
         "llm_config",
         "memory",
-        "learn",
+        "learnable",
     ]
     _assert_keyword_only(
         fresh,
@@ -456,14 +456,14 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
             "on_stream",
             "llm_config",
             "memory",
-            "learn",
+            "learnable",
         ),
     )
     assert fresh.parameters["log"].default is None
     assert fresh.parameters["run_id"].default is None
     assert fresh.parameters["num_workers"].default == 0
     assert fresh.parameters["memory"].default is None
-    assert fresh.parameters["learn"].default is False
+    assert fresh.parameters["learnable"].default is False
     assert "stop_event" not in fresh.parameters
 
     assert list(recovered.parameters) == [

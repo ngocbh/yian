@@ -91,12 +91,12 @@ def test_authored_policy_is_dormant_when_memory_is_none(tmp_path: Path) -> None:
     assert isinstance(start, RunStartedRecord)
     assert start.memory_layout is None
     assert start.memory_snapshots is None
-    assert start.learn is False
+    assert start.learnable is False
 
 
-def test_learn_true_retains_without_enabling_an_authored_policy(tmp_path: Path) -> None:
+def test_learnable_true_retains_without_enabling_an_authored_policy(tmp_path: Path) -> None:
     path = tmp_path / "retained.jsonl"
-    result = run_flow(load_flow(_FLOW), {}, log=path, learn=True)
+    result = run_flow(load_flow(_FLOW), {}, log=path, learnable=True)
     assert result.learning is None and result.backward_outcome is None
     assert _records(path)[0].memory_layout is None
     assert result.backward().learning is None
@@ -127,7 +127,7 @@ def test_recall_only_records_snapshot_without_evidence_or_learning(
     assert start.memory_layout is not None
     assert len(start.memory_layout) == 1
     assert start.memory_snapshots is not None
-    assert start.learn is False
+    assert start.learnable is False
     assert not any(
         isinstance(record, BackwardStartedRecord)
         for record in records
@@ -143,7 +143,7 @@ def test_learning_success_is_separate_from_the_primary_result(tmp_path: Path) ->
         {},
         log=path,
         memory={"test": memory},
-        learn=True,
+        learnable=True,
     )
 
     assert result.status == "succeeded"
@@ -174,7 +174,7 @@ def test_learning_failure_does_not_replace_primary_success(tmp_path: Path) -> No
         {},
         log=path,
         memory={"test": memory},
-        learn=True,
+        learnable=True,
     )
 
     assert result.status == "succeeded"
@@ -202,7 +202,7 @@ def test_primary_failure_still_learns_without_changing_its_failure(tmp_path: Pat
         {},
         log=path,
         memory={"test": memory},
-        learn=True,
+        learnable=True,
     )
 
     assert result.status == "failed"
@@ -233,7 +233,7 @@ def test_precommit_failure_requires_an_explicit_whole_pass_retry(
         {},
         log=path,
         memory={"test": memory},
-        learn=True,
+        learnable=True,
     )
     first.backward()
     primary_prefix = len(_records(path))
@@ -279,7 +279,7 @@ def test_explicit_retry_uses_static_layout_after_map_growth(
         {"values": [1, 4]},
         log=path,
         memory={"test": memory},
-        learn=True,
+        learnable=True,
     )
     first.backward()
     resumed = resume_flow(flow, log=path, memory={"test": memory})

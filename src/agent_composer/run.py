@@ -144,11 +144,11 @@ class RunResult:
 
         Examples:
             `result.backward("Keep the explanation shorter.")` returns a separate
-            outcome for a run created with `learn=True`.
+            outcome for a run created with `learnable=True`.
         """
         handle = self._backward_handle
         if handle is None:
-            raise ValueError("backward requires a run retained with learn=True")
+            raise ValueError("backward requires a run retained with learnable=True")
         if not handle._guard.acquire(blocking=False):
             raise RuntimeError("a backward call on this result is already in progress")
         try:
@@ -251,7 +251,7 @@ def run_flow(
     on_stream: StreamHook | None = None,
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
-    learn: bool = False,
+    learnable: bool = False,
 ) -> RunResult:
     """Start and drive one flow through an in-memory or durable run log.
 
@@ -287,7 +287,7 @@ def run_flow(
             Host-injected policy implementations keyed by authored policy name.
             ``None`` leaves every authored policy dormant. A mapping enables
             recall and records exact per-policy recovery snapshots.
-        learn (`bool`, *optional*, defaults to `False`):
+        learnable (`bool`, *optional*, defaults to `False`):
             Retain accepted execution for a later explicit `RunResult.backward`
             call. Forward execution performs no learning or commits. Memory is
             optional; an enabled mapping supplies owned learners for that call.
@@ -321,7 +321,7 @@ def run_flow(
         on_stream=on_stream,
         llm_config=llm_config,
         memory=memory,
-        learn=learn,
+        learnable=learnable,
         stop_event=threading.Event(),
     )
 
@@ -337,20 +337,20 @@ def _run_flow_controlled(
     on_stream: StreamHook | None = None,
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
-    learn: bool = False,
+    learnable: bool = False,
     stop_event: threading.Event,
 ) -> RunResult:
     """Drive a fresh run with one host-owned cooperative stop event."""
     if not isinstance(flow, ComposedFlow):
         raise TypeError("run_flow expects a ComposedFlow")
-    if type(learn) is not bool:
-        raise TypeError("learn must be a bool")
+    if type(learnable) is not bool:
+        raise TypeError("learnable must be a bool")
 
     # Identity belongs to the authored program, before cascade resolution or any
     # per-run copy can change object topology.
     authored_fingerprint = flow_fingerprint(flow.compiled)
     private_flow = copy.deepcopy(flow.compiled)
-    retained_program = copy.deepcopy(private_flow) if learn else None
+    retained_program = copy.deepcopy(private_flow) if learnable else None
 
     # Ambient defaults are read exactly once each and become part of RunStarted.
     defaults = {
@@ -363,7 +363,7 @@ def _run_flow_controlled(
         defaults=defaults,
     )
 
-    if learn:
+    if learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
 
     canonical_run_id = run_id if run_id is not None else default_run_id()
@@ -407,7 +407,7 @@ def _run_flow_controlled(
                 memory_snapshots=(
                     None if memory_runtime is None else memory_runtime.snapshots
                 ),
-                learn=learn,
+                learnable=learnable,
             ),
         )
 
@@ -535,7 +535,7 @@ def _resume_flow_controlled(
     primary_error: BaseException | None = None
     try:
         state = _replay_run_log(flow, authority)
-        retained_program = copy.deepcopy(flow.compiled) if state.learn else None
+        retained_program = copy.deepcopy(flow.compiled) if state.learnable else None
         if state.result is not None:
             return _result_from_state(state, log_path, [],
                                       handle=_retained_handle(retained_program, state, authority, memory,
@@ -669,7 +669,7 @@ def _replay_compiled_run_log(flow: CompiledFlow, log: RunLog) -> RunState:
         private_flow,
         first.record.effective_llm_by_static_path,
     )
-    if first.record.learn:
+    if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
     if first.record.memory_layout is not None:
         replay_layout, _ = _resolve_runtime_memory_layout(private_flow)

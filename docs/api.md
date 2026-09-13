@@ -105,7 +105,7 @@ run_flow(
     on_stream: Callable[[StreamChunk], None] | None = None,
     llm_config: dict[str, Any] | None = None,
     memory: dict[str, Memory] | None = None,
-    learn: bool = False,
+    learnable: bool = False,
 ) -> RunResult
 ```
 
@@ -129,7 +129,7 @@ terminal. Stored defaults are not coerced.
   dormant. A mapping opens one snapshot-isolated session per referenced policy,
   enables recall for AGENT nodes, and records the exact public snapshots needed
   by recovery.
-- `learn` — retain accepted inputs, outputs, routes, and invocation context for
+- `learnable` — retain accepted inputs, outputs, routes, and invocation context for
   a later explicit `result.backward(feedback)` call. It defaults to `False` and
   needs no memory policy. Forward execution never calls backward hooks, frame
   learners, or policy commits.
@@ -147,7 +147,7 @@ engine has drained active workers and released the boundary-owned log.
 ## Explicit backward feedback
 
 `RunResult.backward(feedback=None) -> BackwardOutcome` operates on a terminal run
-created with `learn=True`. It leaves the forward `input`, `status`, `output`,
+created with `learnable=True`. It leaves the forward `input`, `status`, `output`,
 `failure`, and `events` unchanged. A fresh forward result starts with `backward_outcome=None`
 and `learning=None`; an accepted attempt updates the separately observed
 `backward_outcome` and its `learning` projection.
@@ -175,7 +175,7 @@ output:
   items: ${input.items}
   label: batch
 ''')
-result = run_flow(flow, {"items": [1, 2]}, learn=True)
+result = run_flow(flow, {"items": [1, 2]}, learnable=True)
 assert result.backward_outcome is None and result.learning is None
 
 outcome = result.backward({"items": [None, "Check this value."]})
@@ -247,7 +247,7 @@ result = run_flow(
     {"question": "What did we learn?"},
     llm_config=model,
     memory={"reflective": reflective},
-    learn=True,
+    learnable=True,
 )
 print(result.status, result.output)  # Forward has finished; nothing has learned yet.
 outcome = result.backward("Explain the main point more directly.")
@@ -264,7 +264,7 @@ Application-specific implementations use the source-neutral `Memory`,
 `agent_composer.memory`. The host implements session snapshots, frame recall and
 learning, and idempotent policy commits behind those interfaces.
 
-Recall works whether or not `learn=True`. During an explicit backward attempt,
+Recall works whether or not `learnable=True`. During an explicit backward attempt,
 each enabled static frame receives its owned history and descendant evidence in
 recorded layout order. An inherited frame is read-only to the descendant's own
 learner: only the receiver frame's callback can propose mutations for that frame.
@@ -334,7 +334,7 @@ library callers use the same method when they need presentation-ready frames.
 
 ## Authoritative run logs
 
-Every execution is reduced from one ordered schema-6 `RunLog`, including
+Every execution is reduced from one ordered schema-7 `RunLog`, including
 process-local runs. The closed durable record vocabulary is `RunStartedRecord`,
 `RunResumedRecord`, `NodeStartedRecord`, `NodeSucceededRecord`,
 `NodeRoutedRecord`, `NodeExpandedRecord`, `NodeFailedRecord`,
@@ -342,7 +342,7 @@ process-local runs. The closed durable record vocabulary is `RunStartedRecord`,
 `MemoryCommitSucceededRecord`, `MemoryCommitFailedRecord`,
 `BackwardStartedRecord`, `BackwardReadyRecord`, and `BackwardFinishedRecord`. The four node
 outcome records carry canonical forward inputs and routes when the recorded
-run has `learn=True`; `learn=False` omits that capture. Optional model/tool
+run has `learnable=True`; `learnable=False` omits that capture. Optional model/tool
 evaluation evidence is separate. Terminal success
 or failure is derived from node transitions. `NodeFailedRecord` stores
 the nested `Failure` directly beside any evidence. A causal `NodeRoutedRecord`
@@ -401,7 +401,7 @@ result = run_flow(
     loaded,
     {"text": "A long explanation."},
     log=run_log,
-    learn=True,
+    learnable=True,
 )
 
 # Safe in a later process, whether the prefix is terminal or unfinished.

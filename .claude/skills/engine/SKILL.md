@@ -114,7 +114,7 @@ this model whenever you design anything:
   effective commit target's contract. Missing contract provenance falls back to
   the parameter or executing node, while invalid defaults retain their default
   origin. Non-type output canonicalization uses the contract default. Route and
-  growth use the executing node origin. All paths feed one schema-6
+  growth use the executing node origin. All paths feed one schema-7
   `NodeFailedRecord` boundary carrying the failure, optional evaluation evidence,
   and forward capture when retention is enabled;
   reducer state, `NodeFailed`, `RunFailed`, and `RunResult.failure` retain that
@@ -433,9 +433,9 @@ Most are just the functional model (above) made enforceable:
   a nested LOOP's initial driver suffix. Continuations replace their own driver
   position. Do not parse runtime IDs or change memory ownership to derive these
   execution positions.
-- **Retained history follows accepted records** — the recorded `learn` flag
-  controls retention. Schema 6 requires `ForwardCapture` on every accepted node
-  outcome when `learn=True` and omits it when `learn=False`. Model/tool evidence
+- **Retained history follows accepted records** — the recorded `learnable` flag
+  controls retention. Schema 7 requires `ForwardCapture` on every accepted node
+  outcome when `learnable=True` and omits it when `learnable=False`. Model/tool evidence
   remains separate from general capture and may have no memory scope; recalled
   sections still require matching ordered
   frame membership. Identify executions by run ID and accepted start sequence,
@@ -458,8 +458,8 @@ Most are just the functional model (above) made enforceable:
   `long_term_memory:` declarations select policies that resolve to static frames
   owned by flows or AGENT nodes; MAP items and LOOP iterations reuse those frames.
   `memory=None` is dormant, while an injected registry opens snapshot-isolated
-  sessions and supplies a kind-blind recall callback, independently of `learn`.
-  `learn=True` retains execution only; forward returns before learning/commits.
+  sessions and supplies a kind-blind recall callback, independently of `learnable`.
+  `learnable=True` retains execution only; forward returns before learning/commits.
   Explicit `RunResult.backward(feedback)` performs the reverse fold, then every
   enabled frame learner in layout order, including empty/unexecuted histories.
   A receiver writes only its own frame; descendant evidence preserves original

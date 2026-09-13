@@ -26,7 +26,7 @@ flowchart TD
     terminal -->|expected failure| failure["Failure"]
     output --> result["RunResult<br/>forward returns"]
     failure --> result
-    result -. "explicit backward(feedback)<br/>requires learn=True" .-> backward["reverse computation<br/>then owned frame proposals/commits"]
+    result -. "explicit backward(feedback)<br/>requires learnable=True" .-> backward["reverse computation<br/>then owned frame proposals/commits"]
     backward --> outcome["BackwardOutcome<br/>feedback + learning"]
 
     initialize -. "setup, host, or log fault" .-> raised["exception propagates"]
@@ -147,7 +147,7 @@ For a Compose-authored flow, `ComposedFlow.diagnose(result.failure)` resolves th
 failure's opaque origin trace into a presentation-only `Diagnostic` without
 putting YAML coordinates into runtime semantics.
 
-`learn=True` retains accepted execution for a later explicit
+`learnable=True` retains accepted execution for a later explicit
 `RunResult.backward(feedback)` call, independently of memory recall. Forward
 returns before any learner or commit. Backward uses the same record authority and
 returns a separate `BackwardOutcome`, observed through `backward_outcome` and its

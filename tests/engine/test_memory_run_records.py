@@ -158,7 +158,7 @@ def _started(
     *,
     layout: tuple[MemoryFrameSpec, ...] | None = None,
     snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None,
-    learn: bool = False,
+    learnable: bool = False,
 ) -> RunStartedRecord:
     return RunStartedRecord(
         flow_fingerprint=_FINGERPRINT,
@@ -168,7 +168,7 @@ def _started(
         num_workers=0,
         memory_layout=layout,
         memory_snapshots=snapshots,
-        learn=learn,
+        learnable=learnable,
     )
 
 
@@ -410,19 +410,31 @@ def test_episode_accepts_binding_failure_and_typed_visible_material() -> None:
 def test_run_started_distinguishes_disabled_and_enabled_empty_memory() -> None:
     disabled = _round_trip(_started())
     enabled = _round_trip(_started(layout=(), snapshots=()))
-    learning = _round_trip(_started(layout=(), snapshots=(), learn=True))
+    learning = _round_trip(_started(layout=(), snapshots=(), learnable=True))
 
     assert disabled.memory_layout is None
     assert disabled.memory_snapshots is None
     assert enabled.memory_layout == ()
     assert enabled.memory_snapshots == ()
-    assert learning.learn is True
+    assert learning.learnable is True
 
     with pytest.raises(ValueError, match="both"):
         _started(layout=(), snapshots=None)
-    assert _round_trip(_started(learn=True)).learn is True
+    assert _round_trip(_started(learnable=True)).learnable is True
     with pytest.raises(TypeError, match="boolean"):
-        _started(layout=(), snapshots=(), learn=1)  # type: ignore[arg-type]
+        _started(layout=(), snapshots=(), learnable=1)  # type: ignore[arg-type]
+
+
+def test_run_started_uses_learnable_as_its_only_wire_retention_field() -> None:
+    started = _started(learnable=True)
+    wire = json.loads(encode_record(RecordEnvelope(SCHEMA_VERSION, "run", 0, started)))
+
+    assert wire["payload"]["learnable"] is True
+    assert "learn" not in wire["payload"]
+
+    wire["payload"]["learn"] = wire["payload"].pop("learnable")
+    with pytest.raises(ValueError):
+        decode_record(json.dumps(wire).encode())
 
 
 def test_run_started_requires_canonical_layout_and_matching_snapshots() -> None:

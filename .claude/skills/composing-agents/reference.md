@@ -381,7 +381,7 @@ Other node kinds and anonymous inline children cannot carry the declaration. The
 YAML contains no credentials, tenant/backend paths, persistence locations, or
 Python imports. A library host injects implementations under the selected policy
 name with `run_flow(..., memory={NAME: implementation})` to enable recall.
-`learn=True` independently retains execution; forward never learns or commits.
+`learnable=True` independently retains execution; forward never learns or commits.
 Call `result.backward(feedback)` explicitly after forward returns, and inspect
 its separate outcome. With `None` feedback, enabled memory frames still learn
 from accepted history without AGENT backward model work. Terminal resume is silent

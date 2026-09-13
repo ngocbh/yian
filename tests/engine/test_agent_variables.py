@@ -19,7 +19,7 @@ def _retained_agent(node, inputs=None, **engine_options):
     flow = _graph([node], [(START_ID, node.id)],
                   wiring={node.id: {name: f"${{input.{name}}}" for name in supplied}},
                   outputs=[FlowOutput("answer", f"${{{node.id}.output}}")])
-    engine = _engine(flow, supplied, learn=True, **engine_options)
+    engine = _engine(flow, supplied, learnable=True, **engine_options)
     list(engine.run())
     occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == node.id)
     return engine, occurrence.record
@@ -170,7 +170,7 @@ def test_retained_agent_rejects_nonfinite_variable_model_extras_before_acceptanc
     calls = []
     monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
     assert node.forward({}) == Output("ready")
-    engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learn=True)
+    engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learnable=True)
     with pytest.raises(ValueError, match="non-finite"):
         list(engine.run())
     assert calls == ["ready"]
@@ -388,7 +388,7 @@ output: ${writer.output}
     monkeypatch.setattr(llm_clients, "model_from_config", model)
     monkeypatch.setattr(chat, "invoke", record_messages)
     monkeypatch.setattr(AgentNode, "_resolve_variables", resolve_without_scope)
-    result = run_flow(loaded, {"topic": "reefs"}, learn=False)
+    result = run_flow(loaded, {"topic": "reefs"}, learnable=False)
 
     assert result.status == "succeeded" and result.output == "answer"
     assert result.learning is None
@@ -428,7 +428,7 @@ output: ${writer.output}
     assert set(flow.wiring["writer"]) == {"topic"}
     assert [parameter.name for parameter in flow.nodes["writer"].params] == ["topic"]
     assert all(edge.from_ != "absent" for edge in flow.edges)
-    engine = _engine(flow, {"topic": "reefs"}, learn=False)
+    engine = _engine(flow, {"topic": "reefs"}, learnable=False)
     list(engine.run())
 
     expected = "reefs: concise, ${absent.output}"

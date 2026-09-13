@@ -34,6 +34,7 @@ from agent_composer.events import (
     RunSucceeded,
 )
 from agent_composer.expr import ExpressionError, expr_refs_of
+from agent_composer.expr.lineage import SourceRef
 from agent_composer.memory import (
     EvaluationEvidence,
     MemoryFrameRef,
@@ -55,9 +56,10 @@ from agent_composer.nodes.contracts import (
     output_contract_type,
     validate_output_contract,
 )
-from agent_composer.runtime.contracts import ForwardCapture
+from agent_composer.runtime.contracts import ForwardCapture, _validate_source
 from agent_composer.runtime.trace import (
-    RetainedTrace, TraceDelta, TraceOccurrence, _copy_memory_scope, prepare_trace, select_seed_route,
+    RetainedTrace, SourceEntry, TraceDelta, TraceOccurrence, TraceTerminal,
+    _copy_memory_scope, prepare_trace, select_seed_route,
 )
 from agent_composer.runtime.log import (
     SCHEMA_VERSION,
@@ -1687,6 +1689,8 @@ def commit_prepared(
     trace_delta = prepared._plan.trace_delta
     if isinstance(prepared._plan, _BackwardPlan):
         _require_postterminal_trace_delta(state, trace_delta)
+    elif isinstance(prepared._plan, _FrontierPlan):
+        _require_frontier_trace_delta(state, prepared)
     if trace_delta is not None:
         trace_delta.validate_origin(state.trace)
     if isinstance(prepared._plan, _RunStartedPlan):
@@ -1764,6 +1768,94 @@ def _require_outcome_trace_scope(state: RunState, prepared: PreparedTransition) 
         raise ValueError("outcome memory scope requires its physical executing node")
     if delta.occurrence.memory_scope != _copy_memory_scope(node.memory_scope):
         raise ValueError("outcome memory scope disagrees with the physical executing node")
+
+
+def _require_outcome_trace_terminal(state: RunState, prepared: PreparedTransition) -> None:
+    """Match physical occurrence, terminal facts, and source latches to authority.
+
+    The terminal disposition was already derived during preparation. Validate
+    its trace projection without repeating quiescence or invoking node hooks.
+    Writer and route-latch updates also constrain later terminal projections.
+    """
+    trace = state.trace
+    if trace is None:
+        return
+    plan, record = prepared._plan, prepared.record
+    delta = plan.trace_delta
+    if (type(delta.sequence) is not int or delta.sequence != prepared.expected_sequence
+            or delta.initialized is not None or delta.started is not None or delta.resumed is not False):
+        raise ValueError("outcome trace cannot change initialization or dispatch authority")
+    node_id = _outcome_node_id(record)
+    source = SourceRef(state.run_id, trace.started[node_id])
+    occurrence = delta.occurrence
+    _validate_source(occurrence.source)
+    if (occurrence.source != source or type(occurrence.node_id) is not str or occurrence.node_id != node_id
+            or type(occurrence.outcome_seq) is not int or occurrence.outcome_seq != prepared.expected_sequence
+            or type(occurrence._record_bytes) is not bytes or occurrence._record_bytes != plan.envelope_bytes):
+        raise ValueError("physical trace occurrence disagrees with the accepted outcome")
+    root_start_source = source if node_id == trace.start_id and trace.root_start_source is None else None
+    if delta.root_start_source is not None:
+        _validate_source(delta.root_start_source)
+    if delta.root_start_source != root_start_source:
+        raise ValueError("terminal trace root START source disagrees with the accepted outcome")
+    writer = None
+    if isinstance(plan, _SuccessPlan):
+        if (type(delta.writer) is not tuple or len(delta.writer) != 2
+                or type(delta.writer[0]) is not str or delta.writer[0] != record.commit_target):
+            raise ValueError("physical trace writer disagrees with the accepted output target")
+        writer = SourceEntry(source, prepared.expected_sequence, plan.delta.value_bytes)
+    elif delta.writer is not None:
+        raise ValueError("only an accepted output can install a physical trace writer")
+    root_writer = writer if writer is not None and record.commit_target == state.flow.end_id else None
+    for actual, expected_writer, label in (
+        (delta.writer[1] if delta.writer is not None else None, writer, "physical trace writer"),
+        (delta.root_writer, root_writer, "terminal trace root writer"),
+    ):
+        if actual is not None:
+            if (type(actual) is not SourceEntry or type(actual.outcome_seq) is not int
+                    or type(actual._value_bytes) is not bytes):
+                raise ValueError(f"{label} must be an exact accepted entry")
+            if actual.source is not None:
+                _validate_source(actual.source)
+        if actual != expected_writer:
+            raise ValueError(f"{label} disagrees with the accepted outcome")
+
+    causal_source = (
+        source if isinstance(record, NodeRoutedRecord) and record.terminal_failure is not None
+        and trace._causal_route_source is None else None
+    )
+    if delta.causal_route_source is not None:
+        _validate_source(delta.causal_route_source)
+    if delta.causal_route_source != causal_source:
+        raise ValueError("terminal trace causal source disagrees with the accepted outcome")
+
+    expected = (
+        _TerminalDelta(False, None, plan.failure) if isinstance(plan, _FailurePlan)
+        else plan.terminal if isinstance(plan, (_SuccessPlan, _RoutePlan)) else None
+    )
+    terminal = delta.terminal
+    if expected is None:
+        if terminal is not None:
+            raise ValueError("nonterminal outcome cannot install a terminal trace")
+        return
+    if type(terminal) is not TraceTerminal:
+        raise ValueError("terminal outcome requires an exact terminal trace")
+    TraceTerminal.__post_init__(terminal)
+    if expected.succeeded:
+        accepted_writer = root_writer or trace._root_writer
+        if accepted_writer is None:
+            raise ValueError("terminal trace requires its accepted root writer")
+        terminal_source = accepted_writer.source
+    else:
+        terminal_source = (
+            source if isinstance(plan, _FailurePlan)
+            else causal_source or trace._causal_route_source
+        )
+        if terminal_source is None:
+            raise ValueError("terminal trace failure requires its accepted causal occurrence")
+    if (terminal.succeeded is not expected.succeeded or terminal.source != terminal_source
+            or terminal.output_bytes != expected.output_bytes or terminal.failure != expected.failure):
+        raise ValueError("terminal trace disagrees with the prepared terminal outcome")
 
 
 def _replay_records(
@@ -1935,6 +2027,7 @@ def _commit_success(
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
     _require_outcome_trace_scope(state, prepared)
+    _require_outcome_trace_terminal(state, prepared)
     delta = plan.delta
     if not (
         prepared.record.node_id == delta.node_id
@@ -1974,6 +2067,7 @@ def _commit_route(
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
     _require_outcome_trace_scope(state, prepared)
+    _require_outcome_trace_terminal(state, prepared)
     delta = plan.delta
     if not (
         prepared.record.node_id == delta.node_id
@@ -2020,6 +2114,7 @@ def _commit_failure(
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
     _require_outcome_trace_scope(state, prepared)
+    _require_outcome_trace_terminal(state, prepared)
     if prepared.record.failure is not plan.failure:
         raise ValueError("failure record and prevalidated authority disagree")
     node_id = plan.failure.node_id
@@ -2053,6 +2148,7 @@ def _commit_growth(
     _require_authority_coordinates(log, state, prepared, initialized=True)
     _require_unchanged_record(prepared, plan.envelope_bytes)
     _require_outcome_trace_scope(state, prepared)
+    _require_outcome_trace_terminal(state, prepared)
     delta = plan.delta
     if not (
         prepared.record.spawner_id == delta.spawner_id
@@ -2096,6 +2192,37 @@ def _require_postterminal_trace_delta(
         delta.prune_ids, delta.connections, delta.boundaries,
     )):
         raise ValueError("postterminal trace delta must only advance the accepted sequence")
+
+
+def _require_frontier_trace_delta(state: RunState, prepared: PreparedTransition) -> None:
+    """Permit only the canonical dispatch or resume operation before append."""
+    delta, record = prepared._plan.trace_delta, prepared.record
+    if state.trace is None:
+        if delta is not None:
+            raise ValueError("an unretained frontier cannot carry a frontier trace delta")
+        return
+    if (type(delta) is not TraceDelta or delta.originating_trace is not state.trace
+            or type(delta.sequence) is not int or delta.sequence != state.next_sequence):
+        raise ValueError("frontier trace delta requires its exact accepted sequence")
+    if isinstance(record, NodeStartedRecord):
+        if (type(delta.started) is not tuple or len(delta.started) != 2
+                or type(delta.started[0]) is not str or delta.started[0] != record.node_id
+                or type(delta.started[1]) is not int or delta.started[1] != prepared.expected_sequence
+                or delta.resumed is not False):
+            raise ValueError("frontier trace start disagrees with its canonical record")
+    elif isinstance(record, RunResumedRecord):
+        if delta.started is not None or delta.resumed is not True:
+            raise ValueError("frontier trace resume disagrees with its canonical record")
+    else:
+        raise ValueError("frontier trace requires a dispatch or resume record")
+    if any(value is not None for value in (
+        delta.initialized, delta.occurrence, delta.handler, delta.writer,
+        delta.consumed_connection, delta.boundary_update, delta.root_start_source,
+        delta.root_writer, delta.causal_route_source, delta.terminal,
+    )) or any(type(values) is not tuple or len(values) != 0 for values in (
+        delta.prune_ids, delta.connections, delta.boundaries,
+    )):
+        raise ValueError("frontier trace cannot change outcome or terminal history")
 
 
 def _commit_backward(log: RunLog, state: RunState, prepared: PreparedTransition) -> tuple[Any, ...]:

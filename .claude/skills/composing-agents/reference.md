@@ -380,9 +380,14 @@ static authored frames.
 Other node kinds and anonymous inline children cannot carry the declaration. The
 YAML contains no credentials, tenant/backend paths, persistence locations, or
 Python imports. A library host injects implementations under the selected policy
-name with `run_flow(..., memory={NAME: implementation})`; `learn=True` enables the
-separate post-terminal learning phase. The CLI currently leaves declarations
-dormant.
+name with `run_flow(..., memory={NAME: implementation})` to enable recall.
+`learn=True` independently retains execution; forward never learns or commits.
+Call `result.backward(feedback)` explicitly after forward returns, and inspect
+its separate outcome. With `None` feedback, enabled memory frames still learn
+from accepted history without AGENT backward model work. Terminal resume is silent
+inspection; manual whole-attempt retry is allowed only before an accepted commit
+request or successful backward completion. The CLI leaves memory declarations
+dormant and has no backward command.
 
 ## Validate
 

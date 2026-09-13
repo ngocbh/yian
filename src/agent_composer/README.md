@@ -24,8 +24,9 @@ know the shape of it:
   implements `forward`; the base `Node.run` template applies defaults and fires
   record-only asserts around that body. A flow's own asserts are lowered onto its
   synthesized START/END boundary nodes, so top-level and nested-flow asserts use
-  the same ordinary node path. `Node.backward` is a dormant no-op reserved for a
-  future lineage-aware reverse pass; current execution never calls it.
+  the same ordinary node path. `Node.backward` accepts recorded context and an
+  ordered feedback tuple, returning input, self, and variable channels. Its base
+  implementation returns empty channels; structural nodes own their routing rules.
 - The **program structure is fixed by the author**, as a function's call graph is
   fixed by its source. The LLM fills leaf boxes; it does not rewrite the graph at
   runtime. The authoritative record prefix makes engine state recoverable; it
@@ -48,9 +49,9 @@ compose/      Compose-YAML front end: text -> CompiledFlow; source/ owns YAML
               construction/navigation and opaque-origin resolution; later phases
               lower file-private children
               (source/helpers/nodes/parse/desugar/edges/validate/build/loader)
-runtime/      run records/logs, reducer-owned RunState, kind-blind dispatcher,
-              and worker pool
-run.py        public run boundary: ComposedFlow + inputs/log -> RunResult
+runtime/      run records/logs, reducer-owned state, forward dispatcher/worker pool,
+              explicit backward driver and pure learning/context projections
+run.py        public run/recovery boundary and retained RunResult.backward handle
 llm_clients/  provider clients (lazy-imported) + LLMConfig + model_from_config
 tools/        tool registry + process-owned ask_user interaction seam
 cli/          `ac` commands + main-thread terminal broker
@@ -68,7 +69,8 @@ The package facade lazy-loads its declared root exports, so importing a leaf
 submodule does not bootstrap those higher layers.
 Package-root `run.py` sits above `compose`, `compile.expand`, and `runtime`: it
 consumes a `ComposedFlow`, injects the kind-aware growth builder, and owns run-log
-creation and recovery. None of those packages imports it back.
+creation, recovery, and delayed backward resource ownership. None of those
+packages imports it back.
 
 `diagnostics.Failure` is the canonical source-neutral semantic failure value. It
 is a frozen product of `code`, `message`, optional execution `node_id`, an
@@ -143,7 +145,7 @@ supplies a local origin. Unsupported growth kinds and arbitrary builder, compile
 spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
 faults escape rather than becoming flow failures.
 
-At the schema-5 boundary, every diagnostic trace item becomes an exact base
+At the schema-6 boundary, every diagnostic trace item becomes an exact base
 `OriginRef(key)`: front-end-specific subclasses are valid in memory, but class
 identity is intentionally absent from the single-key wire. The reducer carries
 that canonical immutable `Failure` through `NodeFailed`, terminal `RunFailed`,
@@ -572,7 +574,7 @@ targets, and floods the target's outgoing edges.
 Failure is a `raise`, not another result variant. `eval_node` structurally turns
 expected binding, assertion, body, and result rejection into
 `EvaluationFailure(Failure)`. Result preparation constructs the same canonical
-value for expected output, route, and growth rejection. Schema 5 carries that
+value for expected output, route, and growth rejection. Schema 6 carries that
 value unchanged through the durable record, reducer, observer events, and public
 result; the durable outcome may also retain optional source-neutral evaluation
 evidence. Host control, stream callbacks, unexpected binder faults, malformed
@@ -611,8 +613,19 @@ Input messages may be structured; self and variable feedback contain text
 messages only.
 `validate_backward_result` checks the complete result against the detached
 `BackwardContext`, including actual input shapes and declared target names,
-before any input message is routed. These contracts do not activate the reserved
-`Node.backward` hook in forward execution or memory learning.
+before any input message is routed. Forward execution does not invoke backward.
+Routing receives the accepted canonical input value for shape validation when a
+supported forward object had an unavailable temporary expression snapshot. It
+preserves the recorded route and stopping boundary. An opaque projection with
+unavailable parent shape retains its selected feedback and path without inventing
+parent fields or list lengths; literals still stop without opaque-stop evidence.
+Structural backward uses the recorded invocation layout: START maps named inputs,
+END preserves its zero/one/many output arity or ordered list slots, and a stopping
+LOOP routes its carried record. `backward_input_names()` supplies each node's
+eligible input inventory: END uses its stored output names or list slots, and
+CASE excludes its generated control parameters. Assertion-only parameters do not
+become feedback targets. Behavioral nodes inherit the empty stopping
+implementation until they define their own transformation.
 
 `compile.execution_layout` derives execution locations independently of memory
 declarations. Each `ExecutionScope` separates a root-relative authored node path,
@@ -659,7 +672,8 @@ census test keeps runtime's `NodeKind`/expansion dispatch count at zero.
 
 ## One append-only authority
 
-Every run has exactly one `RunLog` and one matching reducer-owned `RunState`.
+Every drive uses one `RunLog` and matching reducer-owned `RunState` over the
+run's accepted record authority.
 `MemoryRunLog` is the process-local implementation; `JsonlRunLog` is the durable
 implementation, with a nonblocking exclusive advisory lock, canonical JSONL, and
 an fsync per append. Both accept the same closed record vocabulary:
@@ -667,16 +681,41 @@ an fsync per append. Both accept the same closed record vocabulary:
 ```
 RunStartedRecord | RunResumedRecord | NodeStartedRecord |
 NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord |
-MemoryFrameLearningStartedRecord | MemoryFrameLearnedRecord |
-MemoryFrameLearningFailedRecord | MemoryCommitRequestedRecord |
-MemoryCommitSucceededRecord | MemoryCommitFailedRecord
+MemoryCommitRequestedRecord |
+MemoryCommitSucceededRecord | MemoryCommitFailedRecord |
+BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord
 ```
 
-The exact wire version is schema 5. The recorded `learn` flag controls retention:
+The exact wire version is schema 6. The recorded `learn` flag controls retention:
 `learn=True` requires every accepted node outcome to carry a `ForwardCapture`;
 `learn=False` omits it. The capture contains canonical bound inputs or an
 incomplete-binding marker, input routes, indexed item captures, execution scope,
-and optional node-owned data. Model/tool evaluation evidence is separate and may
+detached declared input/variable inventories, and optional node-owned data. The
+pure `capture_backward_context` hook supplies static node layout at the existing
+input capture boundary: after defaults and before assertions for the base run
+template, or before invoking a custom run wrapper. Its empty default is
+independent of the common declaration inventories. Expected early binding
+failures retain the known inventories with no usable input record. Capture
+faults remain host errors.
+The transient `BackwardCapture` carries names, scope, and node data through
+`EvaluatedOutcome`; only the accepted `ForwardCapture` is durable. A reserved
+`input_output_paths` map links eligible names to output field/index paths, keeping
+structural routing in node code and its context separate from feedback values.
+
+An opt-in invocation capture capability also accepts one completed dynamic
+snapshot. AGENT publishes from its actual variable-resolution/render operation,
+retaining `prompt_template`, `variables`, `variable_domains`, `rendered_prompt`,
+and `effective_llm_config`. Locals established before a later failure remain
+available; unresolved variables or an unrendered prompt are explicitly `None`,
+distinct from an empty record/string. The evaluator immediately detaches the
+snapshot, rejects repeated or post-close writes, and keeps capture faults as host
+faults. Supported values use canonical seed conversion with strict nonfinite
+rejection; static capture validation is unchanged. Model configuration comes
+only from the accepted RunStarted map entry selected by the authored execution
+path, never a dynamic ID or mutable ambient/node config. No default or prompt is
+evaluated a second time to capture it.
+
+Model/tool evaluation evidence is separate and may
 have no memory scope; recalled sections still require
 a matching scope and follow its frame order. `NodeFailedRecord` owns one canonical
 nested `Failure`. Earlier schemas are rejected rather than migrated. Terminal
@@ -693,7 +732,8 @@ prepare and validate -> append -> apply reducer -> publish transient observers
 
 Preparation cannot mutate live state. If append fails, its state transition is
 not applied and its outcome observer is not published. `FlowEngine` is the sole
-ready-frontier consumer and state writer; pooled workers only evaluate durably
+forward ready-frontier consumer; the explicit backward driver later uses the
+same prepare/append/reduce authority. Pooled workers only evaluate durably
 started nodes and return raw results to the dispatcher. Stream chunks remain
 callback-only and never enter the authoritative log.
 
@@ -713,6 +753,35 @@ reducer and retains reconstructed node backward callables separately from the
 serialized records. Pruning removes live names while preserving accepted history
 and its callable references. It does not rerun expressions or model calls to
 recover provenance.
+
+The trace also retains the actual root output writer or causal failure source,
+independently of the last completed node and live graph pruning. Its
+`backward_context` method reconstructs detached invocation context without
+calling node hooks. `runtime.backward.compute_backward` walks accepted outcomes
+in reverse order, gathering every incoming message before invoking an occurrence
+once. It validates the entire returned result before transferring any input
+feedback. Every accepted occurrence remains in its result inventory, including
+unreached nodes with empty feedback. Root and child input projections use the
+accepted START result, preserving feedback for literal and defaulted inputs.
+
+AGENT backward validates retained node data and uses the exact recorded model
+configuration for at most one tool-free call. It supplies authored/rendered
+prompt, resolved locals/domains, delivered inputs, output/failure, ordinary
+feedback and downstream context. The private `_evaluation_evidence` context key
+comes only from accepted evidence and cannot be supplied by node capture. Base
+system prompt, ordered recalled sections, and visible interactions remain
+separate recorded components; tool calls/results are inert JSON in the prompt.
+There is no tool grant/loop, recall, formatter replay, or config fallback.
+Unreached AGENTs do no backward model work. Validated variable feedback is advice,
+not an optimizer or a variable/model update.
+
+`BackwardAttribution` references the sending occurrence, returned input message,
+route contribution, and incoming parent positions. `AttributedBackwardResult`
+keeps those references alongside the received messages and validated result.
+Materialized downstream context and ordering keys remain transient. Captured
+structural paths establish message ancestry only when the complete returned input
+channel matches their prescribed transfer; transformed custom feedback carries
+its own message identity.
 
 Accepted growth installs candidate child-input connections through the same trace
 delta. A child's accepted capture remains unchanged; its effective input route
@@ -753,21 +822,63 @@ outcome, including visible model retries within that invocation. Reducer-rejecte
 node proposals are represented by their accepted canonical failure. Discarded
 late siblings and transient stream chunks do not become learning evidence.
 
-`learn=True` starts a separate post-terminal phase after either primary success
-or primary failure. For each static frame, runtime derives its exact occurrence
-inventory and episode set, records `MemoryFrameLearningStartedRecord`, calls that
-frame's `learn`, and records either its proposed mutations or a typed failure.
-Policy-raised `MemoryOperationError` messages are durable, so implementations
-must keep them safe; unexpected exceptions and invalid returns use stable
-sanitized failures. Once every frame for a policy is learned or finally failed, one
-deterministic idempotent commit batches that policy's mutations. Intent is durable
-before each external `learn`/`commit` effect. Retryable failures remain incomplete
-for a later `resume_flow`; final learning failures never replace the graph's
-primary result. `RunResult.learning` reports this independent disposition.
+`learn=True` enables retention only, with or without an enabled memory policy.
+Forward returns before any backward hook, learner, or commit. An explicit
+`RunResult.backward(feedback=None)` starts the separate attempt driver after
+terminal success or failure. It leaves forward values, failure, and events
+unchanged and exposes a separate `BackwardOutcome`; `RunResult.learning` is the
+learning projection of that observed outcome. With no effective feedback, the
+node callback fold does no work, but every enabled static frame still learns.
 
-Learning is behavior-only. It does not invoke the reserved `Node.backward`,
-traverse producer lineage, or mutate the authored graph. Each frame owned by a
-flow or AGENT node writes only its own policy state. Concrete implementations
+`runtime.learning` owns pure root seeding/projection, ordered message transfer,
+complete attributed-result validation, and owner-context construction. The
+callback driver imports those helpers; state/replay never imports the driver or
+invokes callbacks. `RuntimeLearningState` retains only forward inventory/episodes;
+`RuntimeBackwardState` is the sole attempt authority.
+
+`project_owner_contexts` consumes the complete recorded layout and every accepted
+occurrence, including CODE, MAP, growth, causal route failures, and early binding
+failures. Empty/unexecuted frames get a context too. `MemoryEpisode.execution_seq`
+is the physical accepted start sequence, not completion order. Retained exact
+`MemoryScope` values select receiving frames and memory episode occurrences;
+feedback `owner_static_path` and `occurrence_path` retain the original
+root-relative `ExecutionScope` coordinates, explicitly absent if unavailable.
+Each ordinary feedback entry preserves its channel, target name, original value,
+message ordinal, and contribution context. Self/variable messages remain
+separate ordered entries with empty contribution context. Received/generated
+input and opaque-stop entries reconstruct context through the existing route
+interpreter; literal/default feedback remains local without a fabricated source.
+Defined JSON/materialization failure becomes a frame-attributed context failure
+before Ready; invalid record authority remains an error.
+
+The explicit driver accepts `BackwardStartedRecord`, completes the single reverse
+fold and every owned frame proposal, then accepts one `BackwardReadyRecord`.
+No per-node progress or per-frame learning records exist. A known computation
+failure finishes without partial root feedback; a known learner/context/proposal
+failure retains the completed root result and full attribution, discards temporary
+proposals, and commits nothing. Unexpected errors and host/cancellation controls
+escape without a fabricated Finished.
+
+After Ready, each enabled policy receives exactly one batch in recorded policy
+order, including empty batches. Its positive `attempt_id` and deterministic
+`memory_commit_id` are validated on `MemoryCommitRequestedRecord` before the
+backend call. Backend mutations are detached from accepted authority. A success
+or known failure is recorded afterward; a known failure stops later policies.
+`BackwardFinishedRecord` settles the attempt. Policy dispositions are
+`unrequested`, `unknown`, `succeeded`, and `failed`; a returned success without an
+accepted observation remains unknown. Known learner/commit failure makes learning
+failed regardless of backend retry hints. All successful confirmations without
+Finished still project an interrupted backward outcome and incomplete learning.
+An accepted failed confirmation instead projects failed learning.
+
+A successful Finished or any accepted request permanently closes retry
+eligibility. A permitted precommit retry is explicit and recomputes the whole
+attempt from original snapshots with fresh sessions; Ready proposals are never
+resumed. No rollback, rebase, or automatic recovery of backward work occurs.
+
+Memory learning belongs to each frame's policy. Each frame owned by a flow or
+AGENT node writes only its own policy state. Node feedback propagation remains a
+runtime operation; a memory callback does not mutate the authored graph. Concrete implementations
 live behind the source-neutral `Memory`/`MemorySession`/`MemoryFrame` protocols; the provided
 `ReflectiveMemory` is a process-local backend whose model call and query rewrite
 are policy-owned.
@@ -776,8 +887,8 @@ are policy-owned.
 
 `run_flow(..., log=path)` exclusively creates a new JSONL authority. Its first
 record captures the run ID, authored-flow fingerprint, complete initial typed
-pool, START wiring, worker count, fully resolved LLM configuration, and optional
-memory layout/snapshots/learning flag. Expansion
+pool, START wiring, worker count, fully resolved LLM configuration, the required
+`learn` retention flag, and optional memory layout/snapshots. Expansion
 records retain canonical growth seeds plus topology digests, so replay rebuilds
 the same nested CALL/MAP/LOOP graph without re-running the spawner.
 
@@ -787,14 +898,25 @@ the supplied flow fingerprint. It folds historical records silently through the
 same reducer and injected growth builder used live. A nonterminal primary prefix
 gets exactly one `RunResumedRecord`, which puts durably started nodes with no
 durable outcome back ahead of the ready frontier before dispatch continues. A
-terminal primary with incomplete retryable learning appends only learning records;
-it does not append `RunResumedRecord` or execute graph nodes. Recovery uses the
+terminal primary returns its observed backward prefix without appending records
+or invoking graph nodes, backward callbacks, learners, or commits. Recovery uses the
 recorded input, run ID, and complete LLM map rather than current ambient defaults.
 
 When an unfinished recorded run enabled memory, recovery requires the named host
 implementations and verifies that opening each session reproduces the exact
-recorded snapshot. A terminal run whose primary execution and learning are both
-settled returns without opening memory or appending a record.
+recorded snapshot. Terminal inspection opens no memory; supplied mapping references
+remain available to the returned handle for a later eligible explicit attempt.
+
+A delayed handle owns private program/data snapshots and policy references, not
+open forward resources. The run boundary anchors durable paths at acquisition,
+reopens and replays authoritative records per call, and restores fresh sessions
+from recorded public snapshots. Process-local reopening validates and detaches
+every schema/run/sequence carrier without reopening the original closed log.
+A nonblocking per-handle guard covers replay, work, prefix refresh, and cleanup;
+durable log locks exclude competing handles. Invalid submissions preserve that
+result's last observed objects. Append/cleanup errors preserve the primary fault
+and accepted prefix; a handle that cannot refresh its authority becomes unusable
+instead of reusing stale proposals or requests.
 
 This provides deterministic engine-state recovery, not exactly-once external
 effects: an interrupted node with a durable start and no outcome is retried.

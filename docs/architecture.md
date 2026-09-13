@@ -9,6 +9,7 @@
 Agent Composer has two main phases: **Compose** builds a reusable program, then
 the **engine** runs a private instance of that program. One append-only run log
 is the authority for every runtime state change.
+After forward returns, the caller may explicitly start backward on a retained run.
 
 ```mermaid
 flowchart TD
@@ -23,9 +24,10 @@ flowchart TD
     loop --> terminal{"primary terminal"}
     terminal -->|success| output["flow output"]
     terminal -->|expected failure| failure["Failure"]
-    output --> learning["optional post-terminal learning"]
-    failure --> learning
-    learning --> result["RunResult"]
+    output --> result["RunResult<br/>forward returns"]
+    failure --> result
+    result -. "explicit backward(feedback)<br/>requires learn=True" .-> backward["reverse computation<br/>then owned frame proposals/commits"]
+    backward --> outcome["BackwardOutcome<br/>feedback + learning"]
 
     initialize -. "setup, host, or log fault" .-> raised["exception propagates"]
     loop -. "host, control, callback,<br/>log, or invariant fault" .-> raised
@@ -145,13 +147,16 @@ For a Compose-authored flow, `ComposedFlow.diagnose(result.failure)` resolves th
 failure's opaque origin trace into a presentation-only `Diagnostic` without
 putting YAML coordinates into runtime semantics.
 
-With `learn=True`, learning starts only after either primary state is terminal.
-It writes its own records through the same run log and produces the independent
-`RunResult.learning` disposition. A learning failure never replaces the primary
-output or `Failure`; a retryable learning operation can remain incomplete for
-recovery.
+`learn=True` retains accepted execution for a later explicit
+`RunResult.backward(feedback)` call, independently of memory recall. Forward
+returns before any learner or commit. Backward uses the same record authority and
+returns a separate `BackwardOutcome`, observed through `backward_outcome` and its
+`learning` projection. It never changes the primary output, `Failure`, or events.
+All backward results and owned frame proposals precede Ready and any policy
+commit. A manual whole-attempt retry is possible only before an accepted request
+or successful backward completion; terminal recovery never performs that retry.
 
-Host setup errors, callback failures, log I/O errors, control interruption, and
+Host setup errors, observer/stream callback failures, log I/O errors, control interruption, and
 internal invariant violations propagate as exceptions after owned resources are
 drained and closed. They do not become `RunResult(status="failed")`. A durable
 log may still contain the valid prefix committed before such a fault. See the
@@ -166,13 +171,13 @@ canonically and fsynced. `resume_flow(flow, log=path)` then:
 2. validates its contiguous records and the supplied flow fingerprint;
 3. rebuilds a private graph and folds the prefix through the same reducer used
    during live execution;
-4. after any incomplete-tail repair, returns a fully settled run without
-   appending records, or continues the unfinished part.
+4. after any incomplete-tail repair, returns a terminal forward result without
+   appending records, or continues unfinished forward execution.
 
 If primary execution is unfinished, recovery appends one `RunResumedRecord`,
 retries nodes that have a durable start but no durable outcome, and continues
-the recorded frontier. If the primary result is terminal but learning has a
-retryable operation, recovery continues only learning. Inputs, run identity,
+the recorded frontier. If the primary result is terminal, recovery only inspects
+its accepted backward prefix and opens no memory sessions. Inputs, run identity,
 resolved model configuration, dynamic growth, and memory snapshots come from
 the log rather than current defaults.
 
@@ -190,8 +195,9 @@ object:
 | Source presentation | `compose/` | `SourceDocument`, source cursors, load diagnostics, and an optional origin resolver |
 | Semantic program | `compile/` | `CompiledFlow` plus opaque origins; no YAML ranges or mutable run state |
 | Node execution | `nodes/` | Plain bound inputs and one `Output`, `Route`, or `Grow`; no shared-state access |
-| Run setup | `run.py` | Private graph, injected host capabilities, initialized state/log pair, and final `RunResult` |
+| Run setup and delayed backward | `run.py` | Private graph/data, injected policy references, guarded log/resource lifetime, and `RunResult` |
 | Runtime authority | `runtime/` | `RunRecord` sequence reduced into `RunState`; no YAML parsing or node-kind dispatch |
+| Backward computation | `nodes/` + `runtime/` | Recorded node context and three result channels; shared pure transfer/context validation below drivers |
 | Typed graph state | `typesys/` | Losslessly serializable values and the variable pool |
 | Agent memory | `memory/` + host | Source-neutral policy protocols and host-owned implementations; separate from the variable pool |
 

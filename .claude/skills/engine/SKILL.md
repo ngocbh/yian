@@ -114,7 +114,7 @@ this model whenever you design anything:
   effective commit target's contract. Missing contract provenance falls back to
   the parameter or executing node, while invalid defaults retain their default
   origin. Non-type output canonicalization uses the contract default. Route and
-  growth use the executing node origin. All paths feed one schema-5
+  growth use the executing node origin. All paths feed one schema-6
   `NodeFailedRecord` boundary carrying the failure, optional evaluation evidence,
   and forward capture when retention is enabled;
   reducer state, `NodeFailed`, `RunFailed`, and `RunResult.failure` retain that
@@ -372,10 +372,28 @@ Most are just the functional model (above) made enforceable:
   Compile-side origin traversal follows the separate node-owned
   `iter_local_origins`, `rewrite_local_origins`, and `origin_children` hooks; these
   are not runtime capabilities.
-- **`Node.backward` is reserved, not active** — the base no-op only reserves the
-  vocabulary for a future durable reverse-DAG pass. Do not call it from ordinary
-  execution or memory learning until producer lineage and feedback records define
-  its contract.
+- **Backward behavior belongs to the node** — `Node.backward(context, feedback)`
+  takes recorded context and an ordered message tuple, then returns the three
+  validated feedback channels. The base implementation stops with empty channels.
+  START, END, and stopping LOOP own mechanical routing using captured layouts;
+  forward execution never invokes this hook. A reached AGENT uses at most one
+  tool-free model call from accepted context and the exact retained effective
+  model config; visible tool interactions are inert evidence, never executable
+  grants. No ambient/node config fallback, recall, render, or default replay.
+- **Reverse traversal follows accepted outcome order** — gather all incoming
+  feedback before invoking an occurrence once, and validate every returned
+  channel before routing any message. Use trace-owned terminal identity and
+  detached contexts. Keep unreached accepted occurrences in the result inventory;
+  learning coverage must not depend on feedback reachability. Project flow inputs
+  from accepted START results so literals and defaults retain feedback. Durable
+  attribution uses occurrence and message references; materialized downstream
+  context and sort keys remain transient.
+- **Pure transfer rules are shared below drivers** — `runtime.learning` owns
+  root seeding/projection, message ordering, route transfer and complete
+  attribution validation. `runtime.backward` owns callback invocation and the
+  explicit attempt driver. Ready/replay validation must not call a node or
+  materialize transcript contexts. `RuntimeBackwardState` is the sole attempt
+  authority; `RuntimeLearningState` keeps pure inventory/episode projection only.
 - **Binding capture follows the actual read boundary** — optional input capture
   uses the existing expression walk and a paired value/presence/source resolver.
   Never reevaluate a callable or reconstruct provenance from value equality.
@@ -392,6 +410,9 @@ Most are just the functional model (above) made enforceable:
   text messages only. Validate all `BackwardResult` channels against recorded
   input shapes and declared targets before routing. Opaque registered expression functions
   stop transfer and retain local context; do not add a function-backward registry.
+  Supply accepted canonical inputs to the existing routing helper when temporary
+  snapshots lack their shape. This grants no producer mapping: unavailable opaque
+  parents retain selected feedback/path, and literal routes remain silent stops.
 - **Execution location is independent of memory ownership** — derive
   root-relative authored node/flow paths and explicit boundary roles through
   `compile.execution_layout`; do not parse runtime IDs or require a memory policy
@@ -413,7 +434,7 @@ Most are just the functional model (above) made enforceable:
   position. Do not parse runtime IDs or change memory ownership to derive these
   execution positions.
 - **Retained history follows accepted records** — the recorded `learn` flag
-  controls retention. Schema 5 requires `ForwardCapture` on every accepted node
+  controls retention. Schema 6 requires `ForwardCapture` on every accepted node
   outcome when `learn=True` and omits it when `learn=False`. Model/tool evidence
   remains separate from general capture and may have no memory scope; recalled
   sections still require matching ordered
@@ -425,23 +446,49 @@ Most are just the functional model (above) made enforceable:
   reducer transitions. Replay uses that same reducer; pruning preserves historical
   entries and reconstructed backward callables. Never serialize callables or
   retain discarded worker outcomes as executions.
+- **AGENT capture comes from the actual invocation** — one opt-in dynamic
+  snapshot retains authored/rendered prompt, resolved variables and canonical
+  domains, plus the selected RunStarted effective config. Keep partial established
+  locals on failure and distinguish unavailable `None` from empty values.
+  Detach immediately, reject duplicate/late writes, and preserve host fault
+  identity. Static capture remains separate. Accepted evidence retains base system
+  prompt, ordered recall sections, and visible interactions; the private
+  `_evaluation_evidence` backward-context bridge comes only from that record.
 - **Memory is host-injected and record-authoritative** — authored
   `long_term_memory:` declarations select policies that resolve to static frames
   owned by flows or AGENT nodes; MAP items and LOOP iterations reuse those frames.
   `memory=None` is dormant, while an injected registry opens snapshot-isolated
-  sessions and supplies a kind-blind recall callback. With `learn=True`, learning
-  runs only after primary success/failure, appends each intent before calling the
-  policy effect, commits per policy with an idempotent digest, and reports a
-  separate `RunResult.learning`. It never calls `Node.backward`, rewrites the
-  graph, or replaces the primary result. Recovery must reproduce recorded public
-  snapshots before unfinished execution/learning continues.
+  sessions and supplies a kind-blind recall callback, independently of `learn`.
+  `learn=True` retains execution only; forward returns before learning/commits.
+  Explicit `RunResult.backward(feedback)` performs the reverse fold, then every
+  enabled frame learner in layout order, including empty/unexecuted histories.
+  A receiver writes only its own frame; descendant evidence preserves original
+  execution coordinates. No learner mutates an inherited parent frame.
+- **One attempt barrier precedes commits** — accept Started, complete backward
+  results and all frame proposals, then accept Ready. Commit each enabled policy
+  once in recorded order, even with an empty batch, accepting its positive-attempt
+  request before the backend effect and observation afterward. A known failure
+  stops later policies; Finished records the separate outcome. No per-frame
+  learning records, nullable legacy attempt IDs, or per-frame retry frontier.
+  Keep `unrequested`/`unknown`/`succeeded`/`failed` policy observations distinct.
+  An accepted request or successful Finished permanently forbids another attempt;
+  a permitted manual precommit retry recomputes everything using fresh sessions
+  and original snapshots. Never resume Ready proposals or infer retry policy from
+  backend hints.
+- **Delayed backward owns no idle resources** — `run.py` keeps private program
+  and accepted data plus policy references. Each call reopens/replays authority,
+  uses a nonblocking handle guard and durable locks, restores recorded snapshots,
+  and closes resources. Preserve primary host/cleanup errors and the accepted
+  prefix; poison an unrefreshable handle. Invalid submissions leave prior observed
+  outcome objects unchanged. Terminal resume is inspection only, opening no
+  policies and invoking no backward/learning work. Forward fields never change.
 - **`Node.env` is engine-opaque** — a per-node `dict[str,Any]` of static config the compiler
   bakes at build (`{**flow_env, **node_env}`, node wins, flow-local). The engine NEVER reads it;
   only a node's own `forward()` interprets known keys (e.g. an AGENT node's `max_tool_iterations`). It is the
   kind-blind knob for "tune this node" — add a key by having the node read it, never by an engine
   branch. An AGENT node stays one live loop, so its node-local `env` remains on that invocation.
-- **Single-writer invariant** — workers are pure executors; the dispatcher is the
-  only ready-frontier consumer and state mutator. It durably records each start before
+- **Single-writer invariant** — workers are pure executors; the dispatcher alone
+  consumes the forward ready frontier and commits its reducer transitions. It records each start before
   submission and each accepted outcome before applying it. A pooled drive owns workers
   until its full join; abnormal dispatch exit must signal cooperative stop before joining.
 - **Single-process CLI target** — dispatch and workers remain in-process. Durability

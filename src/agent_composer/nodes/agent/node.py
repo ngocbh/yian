@@ -219,8 +219,8 @@ class AgentNode(Node):
             inputs (`dict`): Delivered inputs, kept separate from local variables.
             stop_event (*optional*, defaults to `None`): Cooperative host stop
                 signal checked before recall and mode execution.
-            evaluation_trace (`EvaluationTrace | None`, *optional*, defaults to
-                `None`): Write-only visible prompt and interaction collector.
+            evaluation_trace (`EvaluationTrace | None`, *optional*, defaults to `None`):
+                Write-only visible prompt and interaction collector.
             recall_memory (`Callable | None`, *optional*, defaults to `None`):
                 Recall ordered sections from the base and actual rendered prompt.
             capture_render (`Callable | None`, *optional*, defaults to `None`):

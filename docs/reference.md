@@ -35,6 +35,16 @@ The run-loop primitives live in `agent_composer.run`.
 
 ::: agent_composer.run.resume_flow
 
+::: agent_composer.runtime.BackwardOutcome
+
+::: agent_composer.runtime.BackwardFailure
+
+::: agent_composer.memory.LearningResult
+
+::: agent_composer.memory.LearningFailure
+
+::: agent_composer.memory.PolicyCommitOutcome
+
 ## Compose source provenance
 
 Compose owns immutable source views separately from the source-neutral engine.
@@ -71,8 +81,8 @@ The lower-level runtime surface is deliberately scoped to
 ### Durable run records
 
 The log stores only this closed transition vocabulary. Run success and failure
-observers are derived by reducing these records; there are no separate terminal
-records.
+observers are derived by reducing these records; there is no separate forward
+terminal record. Backward attempts have their own Started/Ready/Finished records.
 
 ::: agent_composer.runtime.log.RecordEnvelope
 
@@ -90,17 +100,23 @@ records.
 
 ::: agent_composer.runtime.log.NodeFailedRecord
 
-::: agent_composer.runtime.log.MemoryFrameLearningStartedRecord
+::: agent_composer.runtime.log.BackwardStartedRecord
 
-::: agent_composer.runtime.log.MemoryFrameLearnedRecord
+::: agent_composer.runtime.log.BackwardReadyRecord
 
-::: agent_composer.runtime.log.MemoryFrameLearningFailedRecord
+::: agent_composer.runtime.log.BackwardFinishedRecord
 
 ::: agent_composer.runtime.log.MemoryCommitRequestedRecord
 
 ::: agent_composer.runtime.log.MemoryCommitSucceededRecord
 
 ::: agent_composer.runtime.log.MemoryCommitFailedRecord
+
+::: agent_composer.runtime.contracts.ForwardCapture
+
+::: agent_composer.runtime.contracts.FrameProposal
+
+::: agent_composer.runtime.contracts.AttributedBackwardResult
 
 ## Nodes
 
@@ -114,6 +130,12 @@ exception, not a node-result variant.
 ::: agent_composer.nodes.base.NodeKind
 
 ::: agent_composer.nodes.base.Node
+
+::: agent_composer.nodes.base.BackwardContext
+
+::: agent_composer.nodes.base.BackwardResult
+
+::: agent_composer.nodes.base.validate_backward_result
 
 ::: agent_composer.nodes.base.Output
 

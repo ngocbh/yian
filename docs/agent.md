@@ -268,11 +268,31 @@ output: ${run_research.output}
 For `investigate`, recall is ordered root-flow → child-flow → AGENT-local.
 Each YAML declaration selects the `reflective` host policy by name; a Python host
 enables it by passing `memory={"reflective": implementation}` to `run_flow`. No
-`${memory}` reference is required. `learn=True` runs learning after the primary
-flow terminates, so it does not change a later node in the same run. New lessons
-can affect later fresh runs when the host reuses the same memory implementation
-or supplies one that persists its state. See
+`${memory}` reference is required. `learn=True` independently retains accepted
+execution; forward returns before learning or commits. The host calls
+`result.backward(feedback)` explicitly afterward. Every enabled frame then
+receives its own history and descendant evidence, including empty histories,
+and can propose writes only for itself. New committed lessons can affect later
+fresh runs when the host reuses the memory implementation. See
 [Injecting agent memory](api.md#injecting-agent-memory) for the host API.
+
+### AGENT backward uses the recorded invocation
+
+A reached AGENT makes at most one tool-free model call using its accepted
+authored/rendered prompt, delivered inputs, resolved variables and type domains,
+output or failure, effective model configuration, and supplied feedback/context.
+The base system prompt, ordered recalled sections, and visible interactions are
+retained separately. Tool interactions are inert evidence in this call; tools are
+not granted or executed. Defaults, prompt rendering, recall, and model selection
+are not repeated. Partial established locals survive later forward failures,
+with unavailable values distinguished from empty ones.
+
+The model returns validated input, self, and local-variable feedback. This is
+advice, not an automatic variable update, graph rewrite, or rerun. With no
+effective feedback, the AGENT backward call is skipped, while enabled memory
+frames still learn from accepted history. Memory-policy learners are separate
+callbacks from this AGENT model call. Terminal resume invokes neither; see
+[explicit backward feedback](api.md#explicit-backward-feedback).
 
 ## Representing agents in YAML
 

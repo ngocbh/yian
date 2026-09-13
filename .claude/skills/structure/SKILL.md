@@ -83,8 +83,10 @@ import `compile`; runtime may consume compile's topology, identity, and validati
 contracts but never imports `compile.expand`. `run.py` injects
 `compile.expand.build_grow` into runtime instead. Runtime owns run-record/log
 codecs, append-before-apply reducer state, and dispatch; `run.py` owns fresh-log
-creation, locked prefix recovery, and
-log closure. Spawner seed schemas are owned by their node packages; the internal
+creation, locked prefix recovery, delayed backward handles, and log closure.
+A retained handle holds private program/data and policy references, not open
+sessions or a lock; its guarded call reopens authority and fresh recorded-snapshot
+resources. Spawner seed schemas are owned by their node packages; the internal
 `_state.py` leaf carries the scheduling-state vocabulary shared by compile and
 runtime.
 `tests/engine/test_layer_direction.py` ratchets these boundaries.
@@ -101,12 +103,23 @@ connections, and child boundaries within its existing restricted import set.
 `compile/execution_layout.py` derives and
 atomically applies authored node/flow paths and boundaries without reading memory
 policies or creating another child-cloning mechanism. `runtime/contracts.py` owns
-forward captures and backward outcome/failure carriers shared by records and
+forward captures and backward outcome, failure, and attribution carriers shared by records and
 consumers; it never imports runtime log, state, trace, driver, or the package-root
 run boundary. `runtime/trace.py` derives accepted execution and producer indexes
 from records, preparing sparse deltas for the state reducer and exposing paired
-source reads to the evaluator. It may consume runtime contracts and log codecs,
-but never imports the backward driver or `compile.expand`.
+source reads to the evaluator. It also owns accepted terminal identity and
+reconstructs detached backward contexts from recorded invocations. It may consume
+runtime contracts and log codecs, but never imports the backward driver or
+`compile.expand`. `runtime.learning` sits above contracts/log/trace and below
+state/drivers. It owns pure root/transfer ordering, full attribution validation,
+attempt projections, and owner-context construction. Reducer replay uses those
+rules without callbacks or context materialization. `runtime/backward.py` consumes
+history in one reverse accepted-outcome walk and owns callback invocation plus
+the explicit attempt driver. `runtime.memory_runtime` opens injected sessions,
+stages frame proposals, and delivers detached policy batches. Neither reconstructs
+graph topology or interprets node kinds. `FlowEngine` schedules forward only;
+both drivers use the same state prepare/append/reduce authority. No legacy
+auto-learning driver or per-frame attempt state remains.
 `compile.expand` constructs growth recipes alongside topology; `runtime.state`
 validates them through the shared growth boundary before `runtime.trace` joins
 them to accepted binding routes. Runtime never dispatches on spawner kind.

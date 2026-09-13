@@ -350,8 +350,8 @@ class MemoryCommitRequestedRecord:
 class MemoryCommitSucceededRecord:
     """Confirm one policy commit completed successfully.
 
-    The keyword-only `attempt_id` defaults to `None` for the legacy learning
-    path; a positive identity associates the confirmation with a backward attempt.
+    The required positive keyword-only `attempt_id` identifies the accepted
+    backward attempt whose policy request this confirmation settles.
     """
 
     policy_name: str
@@ -367,10 +367,10 @@ class MemoryCommitSucceededRecord:
 
 @dataclass(frozen=True, slots=True)
 class MemoryCommitFailedRecord:
-    """Retain one sanitized policy commit failure.
+    """Retain one observed policy commit failure.
 
-    The keyword-only `attempt_id` defaults to `None` for the legacy learning
-    path; a positive identity associates the failure with a backward attempt.
+    The required positive keyword-only `attempt_id` identifies the accepted
+    backward attempt whose policy request this failure settles.
     """
 
     policy_name: str

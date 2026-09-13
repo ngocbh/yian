@@ -1,9 +1,9 @@
 """Pure backward transfers and accepted backward/memory reducer projections.
 
 This module shares exact route-transfer validation with the backward callback
-driver and owns immutable attempt, frame, and policy state carried by RunState.
+driver and owns immutable attempt state and pure episode/layout inventories.
 It projects owner-local contexts for every enabled frame from complete accepted
-history and backward results, including legacy forward episode projections.
+history and backward results alongside forward episode projections.
 Contracts, records, and retained traces sit below it; state and callback drivers
 consume its pure projections. It invokes no callbacks or backend operations.
 """
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from dataclasses import dataclass, replace
-from enum import Enum
 from hashlib import sha256
 import json
 from typing import Any
@@ -55,9 +54,6 @@ from agent_composer.runtime.log import (
     canonical_seed,
 )
 from agent_composer.runtime.trace import RetainedTrace, TraceOccurrence, TraceTerminal
-
-
-_PRESERVE = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -359,7 +355,7 @@ def _prefix_learning(
 
 @dataclass(frozen=True, slots=True)
 class RuntimeBackwardState:
-    """Immutable accepted attempt history, separate from legacy frame learning.
+    """Immutable accepted backward attempt history and policy dispositions.
 
     Layout inventories share the RunStarted authority roots. Completed proposals
     remain inspectable; only new records can advance an attempt. No prefix view
@@ -373,7 +369,6 @@ class RuntimeBackwardState:
             each policy, preserving layout order during batch aggregation.
         attempts (`tuple[_BackwardAttempt, ...]`): Accepted immutable attempt
             history; a later start never inherits earlier proposals.
-        legacy_requested (`bool`): Irreversible request fact from legacy records.
     """
 
     layout: tuple[MemoryFrameSpec, ...] | None = None
@@ -381,7 +376,6 @@ class RuntimeBackwardState:
     policy_order: tuple[str, ...] = ()
     policy_frame_indices: tuple[tuple[int, ...], ...] = ()
     attempts: tuple[_BackwardAttempt, ...] = ()
-    legacy_requested: bool = False
 
     def __post_init__(self) -> None:
         """Reject malformed inventories and impossible accepted-history shapes."""
@@ -405,8 +399,8 @@ class RuntimeBackwardState:
         if (self.frame_order != expected_frames or self.policy_order != expected_policies
                 or self.policy_frame_indices != expected_indices):
             raise ValueError("backward inventories must match the recorded layout")
-        if type(self.attempts) is not tuple or type(self.legacy_requested) is not bool:
-            raise TypeError("backward history must be immutable with an exact request flag")
+        if type(self.attempts) is not tuple:
+            raise TypeError("backward history must be an immutable tuple")
         for index, attempt in enumerate(self.attempts):
             if type(attempt) is not _BackwardAttempt:
                 raise TypeError("backward history requires exact attempt states")
@@ -428,8 +422,6 @@ class RuntimeBackwardState:
                     raise ValueError("a failed commit cannot be followed by another request")
             if attempt.requests and attempt.ready is None:
                 raise ValueError("backward requests require accepted Ready proposals")
-        if self.legacy_requested and self.attempts:
-            raise ValueError("legacy requests cannot coexist with backward attempts")
 
     @property
     def current(self) -> _BackwardAttempt | None:
@@ -454,7 +446,7 @@ class RuntimeBackwardState:
     @property
     def ever_requested(self) -> bool:
         """Report any accepted commit request, independent of later observations."""
-        return self.legacy_requested or any(attempt.requests for attempt in self.attempts)
+        return any(attempt.requests for attempt in self.attempts)
 
     @property
     def policy_outcomes(self) -> tuple[PolicyCommitOutcome, ...]:
@@ -621,146 +613,6 @@ def reduce_backward_record(
     return replace(backward, attempts=(*backward.attempts[:-1], next_attempt))
 
 
-class FrameLearningStatus(str, Enum):
-    """Closed reducer states for one frame-local learn operation."""
-
-    PENDING = "pending"
-    STARTED = "started"
-    LEARNED = "learned"
-    FAILED_RETRYABLE = "failed_retryable"
-    FAILED_FINAL = "failed_final"
-
-
-class PolicyCommitStatus(str, Enum):
-    """Closed reducer states for one policy-local commit operation."""
-
-    UNREQUESTED = "unrequested"
-    REQUESTED = "requested"
-    SUCCEEDED = "succeeded"
-    FAILED_RETRYABLE = "failed_retryable"
-    FAILED_FINAL = "failed_final"
-
-
-@dataclass(frozen=True, slots=True)
-class FrameLearningState:
-    """Authoritative state of one frame's latest durable learn attempt."""
-
-    status: FrameLearningStatus = FrameLearningStatus.PENDING
-    occurrences: tuple[MemoryOccurrenceRef, ...] = ()
-    mutations: tuple[MemoryMutation, ...] = ()
-    failure: MemoryOperationFailure | None = None
-
-    def __post_init__(self) -> None:
-        """Revalidate exact carriers and the closed state shape."""
-        if type(self.status) is not FrameLearningStatus:
-            raise TypeError("frame learning status must be a FrameLearningStatus")
-        if type(self.occurrences) is not tuple:
-            raise TypeError("frame learning occurrences must be a tuple")
-        for occurrence in self.occurrences:
-            if type(occurrence) is not MemoryOccurrenceRef:
-                raise TypeError(
-                    "frame learning occurrences must contain MemoryOccurrenceRef values"
-                )
-            MemoryOccurrenceRef(occurrence.frame_ref, occurrence.occurrence_path)
-        if type(self.mutations) is not tuple:
-            raise TypeError("frame learning mutations must be a tuple")
-        for mutation in self.mutations:
-            if type(mutation) is not MemoryMutation:
-                raise TypeError(
-                    "frame learning mutations must contain MemoryMutation values"
-                )
-            MemoryMutation(
-                mutation.mutation_id,
-                mutation.frame_ref,
-                mutation.payload,
-            )
-        if self.failure is not None:
-            if type(self.failure) is not MemoryOperationFailure:
-                raise TypeError(
-                    "frame learning failure must be a MemoryOperationFailure or None"
-                )
-            MemoryOperationFailure(
-                self.failure.stage,
-                self.failure.code,
-                self.failure.message,
-                self.failure.retryable,
-            )
-
-        if self.status is FrameLearningStatus.PENDING:
-            if self.occurrences or self.mutations or self.failure is not None:
-                raise ValueError("pending frame learning state must be empty")
-        elif self.status is FrameLearningStatus.STARTED:
-            if self.mutations or self.failure is not None:
-                raise ValueError("started frame learning state cannot be resolved")
-        elif self.status is FrameLearningStatus.LEARNED:
-            if self.failure is not None:
-                raise ValueError("learned frame state cannot carry a failure")
-        else:
-            if self.mutations or self.failure is None:
-                raise ValueError("failed frame learning state requires one failure")
-            expected_retryable = self.status is FrameLearningStatus.FAILED_RETRYABLE
-            if self.failure.retryable is not expected_retryable:
-                raise ValueError("frame learning status disagrees with retryability")
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyCommitState:
-    """Authoritative state of one policy's latest durable commit attempt."""
-
-    status: PolicyCommitStatus = PolicyCommitStatus.UNREQUESTED
-    commit_id: str | None = None
-    mutations: tuple[MemoryMutation, ...] = ()
-    failure: MemoryOperationFailure | None = None
-
-    def __post_init__(self) -> None:
-        """Revalidate exact carriers and the closed state shape."""
-        if type(self.status) is not PolicyCommitStatus:
-            raise TypeError("policy commit status must be a PolicyCommitStatus")
-        if self.commit_id is not None and (
-            type(self.commit_id) is not str or not self.commit_id
-        ):
-            raise ValueError("policy commit_id must be a non-empty string or None")
-        if type(self.mutations) is not tuple:
-            raise TypeError("policy commit mutations must be a tuple")
-        for mutation in self.mutations:
-            if type(mutation) is not MemoryMutation:
-                raise TypeError(
-                    "policy commit mutations must contain MemoryMutation values"
-                )
-            MemoryMutation(
-                mutation.mutation_id,
-                mutation.frame_ref,
-                mutation.payload,
-            )
-        if self.failure is not None:
-            if type(self.failure) is not MemoryOperationFailure:
-                raise TypeError(
-                    "policy commit failure must be a MemoryOperationFailure or None"
-                )
-            MemoryOperationFailure(
-                self.failure.stage,
-                self.failure.code,
-                self.failure.message,
-                self.failure.retryable,
-            )
-
-        if self.status is PolicyCommitStatus.UNREQUESTED:
-            if self.commit_id is not None or self.mutations or self.failure is not None:
-                raise ValueError("unrequested policy commit state must be empty")
-        elif self.status in (
-            PolicyCommitStatus.REQUESTED,
-            PolicyCommitStatus.SUCCEEDED,
-        ):
-            if self.commit_id is None or self.failure is not None:
-                raise ValueError("requested or succeeded commit state is malformed")
-        else:
-            if self.commit_id is None or self.failure is None:
-                raise ValueError("failed commit state requires identity and failure")
-            expected_retryable = self.status is PolicyCommitStatus.FAILED_RETRYABLE
-            if self.failure.retryable is not expected_retryable:
-                raise ValueError("policy commit status disagrees with retryability")
-
-
 @dataclass(frozen=True, slots=True)
 class _EpisodeLog:
     """Persistent append log with canonical power-of-two chronological chunks.
@@ -853,16 +705,13 @@ def occurrence_key(
 
 @dataclass(frozen=True, slots=True)
 class RuntimeLearningState:
-    """Immutable reducer projection aligned to recorded frame/policy order."""
+    """Pure immutable episode and layout inventory without attempt progress."""
 
     frame_order: tuple[MemoryFrameRef, ...] = ()
     policy_order: tuple[str, ...] = ()
     policy_frame_indices: tuple[tuple[int, ...], ...] = ()
     episodes: tuple[_EpisodeLog, ...] = ()
-    frames: tuple[FrameLearningState, ...] = ()
-    commits: tuple[PolicyCommitState, ...] = ()
     episode_run_id: str | None = None
-    active_frame_ref: MemoryFrameRef | None = None
 
     def __post_init__(self) -> None:
         """Require canonical inventories and revalidate all nested values."""
@@ -887,16 +736,10 @@ class RuntimeLearningState:
             raise TypeError("policy frame indices must be a tuple")
         if type(self.episodes) is not tuple:
             raise TypeError("learning episodes must be a tuple")
-        if type(self.frames) is not tuple or type(self.commits) is not tuple:
-            raise TypeError("learning frame and commit states must be tuples")
         if len(self.policy_frame_indices) != len(self.policy_order):
             raise ValueError("policy frame indices must align with policy_order")
         if len(self.episodes) != len(self.frame_order):
             raise ValueError("learning episodes must align with frame_order")
-        if len(self.frames) != len(self.frame_order):
-            raise ValueError("learning frame states must align with frame_order")
-        if len(self.commits) != len(self.policy_order):
-            raise ValueError("learning commit states must align with policy_order")
         flattened_indices: list[int] = []
         for indices in self.policy_frame_indices:
             if type(indices) is not tuple or any(
@@ -912,12 +755,6 @@ class RuntimeLearningState:
             type(self.episode_run_id) is not str or not self.episode_run_id
         ):
             raise ValueError("episode_run_id must be a non-empty string or None")
-        if self.active_frame_ref is not None and (
-            type(self.active_frame_ref) is not MemoryFrameRef
-        ):
-            raise TypeError("active_frame_ref must be a MemoryFrameRef or None")
-
-        active_ref: MemoryFrameRef | None = None
         episode_run_ids: set[str] = set()
         for index, episode_log in enumerate(self.episodes):
             if type(episode_log) is not _EpisodeLog:
@@ -933,47 +770,6 @@ class RuntimeLearningState:
         expected_episode_run_id = next(iter(episode_run_ids), None)
         if self.episode_run_id != expected_episode_run_id:
             raise ValueError("episode_run_id must match retained episodes")
-        for index, state in enumerate(self.frames):
-            if type(state) is not FrameLearningState:
-                raise TypeError("frames must contain FrameLearningState values")
-            FrameLearningState(
-                state.status,
-                state.occurrences,
-                state.mutations,
-                state.failure,
-            )
-            ref = self.frame_order[index]
-            if any(
-                occurrence.frame_ref != ref
-                for occurrence in state.occurrences
-            ):
-                raise ValueError("frame state occurrences must align with frame_order")
-            if any(mutation.frame_ref != ref for mutation in state.mutations):
-                raise ValueError("frame state mutations must align with frame_order")
-            if (
-                state.status is not FrameLearningStatus.PENDING
-                and state.occurrences != self._occurrence_inventory_at(index)
-            ):
-                raise ValueError(
-                    "frame state occurrences must equal accepted inventory"
-                )
-            if state.status is FrameLearningStatus.STARTED:
-                if active_ref is not None:
-                    raise ValueError(
-                        "at most one frame learning operation may be active"
-                    )
-                active_ref = ref
-        if self.active_frame_ref != active_ref:
-            raise ValueError("active_frame_ref must match the started frame")
-        for state in self.commits:
-            if type(state) is not PolicyCommitState:
-                raise TypeError("commits must contain PolicyCommitState values")
-            PolicyCommitState(
-                state.status,
-                state.commit_id,
-                state.mutations,
-                state.failure,
-            )
 
     @classmethod
     def for_layout(
@@ -997,8 +793,6 @@ class RuntimeLearningState:
             policy_order=policy_order,
             policy_frame_indices=policy_frame_indices,
             episodes=tuple(_EpisodeLog() for _ in frame_order),
-            frames=tuple(FrameLearningState() for _ in frame_order),
-            commits=tuple(PolicyCommitState() for _ in policy_order),
         )
 
     def validate_layout(self, layout: tuple[MemoryFrameSpec, ...] | None) -> None:
@@ -1034,19 +828,6 @@ class RuntimeLearningState:
     def episodes_for(self, ref: MemoryFrameRef) -> tuple[MemoryEpisode, ...]:
         """Return accepted episodes for one exact recorded frame."""
         return self.episodes[self._frame_index(ref)].to_tuple()
-
-    def frame_state(self, ref: MemoryFrameRef) -> FrameLearningState:
-        """Return durable learn state for one exact recorded frame."""
-        return self.frames[self._frame_index(ref)]
-
-    def commit_state(self, policy_name: str) -> PolicyCommitState:
-        """Return durable commit state for one exact recorded policy."""
-        return self.commits[self._policy_index(policy_name)]
-
-    @property
-    def active_frame(self) -> MemoryFrameRef | None:
-        """Return the sole started frame, if one exists."""
-        return self.active_frame_ref
 
     def occurrence_inventory(
         self,
@@ -1133,83 +914,6 @@ class RuntimeLearningState:
             episode_run_id=addition_run_id,
         )
 
-    def with_frame_state(
-        self,
-        ref: MemoryFrameRef,
-        state: FrameLearningState,
-    ) -> RuntimeLearningState:
-        """Replace one frame state while retaining canonical layout order."""
-        if type(state) is not FrameLearningState:
-            raise TypeError("frame replacement must be a FrameLearningState")
-        FrameLearningState(
-            state.status,
-            state.occurrences,
-            state.mutations,
-            state.failure,
-        )
-        index = self._frame_index(ref)
-        if any(occurrence.frame_ref != ref for occurrence in state.occurrences):
-            raise ValueError("frame state occurrences must align with its frame")
-        if any(mutation.frame_ref != ref for mutation in state.mutations):
-            raise ValueError("frame state mutations must align with its frame")
-        if (
-            state.status is not FrameLearningStatus.PENDING
-            and state.occurrences != self._occurrence_inventory_at(index)
-        ):
-            raise ValueError("frame state occurrences must equal accepted inventory")
-        if state.status is FrameLearningStatus.STARTED:
-            active = self.active_frame
-            if active is not None and active != ref:
-                raise ValueError("at most one frame learning operation may be active")
-        next_active = self.active_frame_ref
-        if state.status is FrameLearningStatus.STARTED:
-            next_active = ref
-        elif next_active == ref:
-            next_active = None
-        updated = list(self.frames)
-        updated[index] = state
-        return self._from_validated(
-            frames=tuple(updated),
-            active_frame_ref=next_active,
-        )
-
-    def with_commit_state(
-        self,
-        policy_name: str,
-        state: PolicyCommitState,
-    ) -> RuntimeLearningState:
-        """Replace one policy state while retaining canonical policy order."""
-        if type(state) is not PolicyCommitState:
-            raise TypeError("commit replacement must be a PolicyCommitState")
-        PolicyCommitState(
-            state.status,
-            state.commit_id,
-            state.mutations,
-            state.failure,
-        )
-        updated = list(self.commits)
-        updated[self._policy_index(policy_name)] = state
-        return self._from_validated(commits=tuple(updated))
-
-    def policy_mutations(
-        self,
-        policy_name: str,
-    ) -> tuple[MemoryMutation, ...]:
-        """Aggregate one policy in cached frame order without scanning layout."""
-        policy_index = self._policy_index(policy_name)
-        mutations: list[MemoryMutation] = []
-        for frame_index in self.policy_frame_indices[policy_index]:
-            state = self.frames[frame_index]
-            if state.status is FrameLearningStatus.LEARNED:
-                mutations.extend(state.mutations)
-            elif state.status is FrameLearningStatus.FAILED_FINAL:
-                continue
-            else:
-                raise ValueError(
-                    "policy commit requires every frame to be learned or failed_final"
-                )
-        return tuple(mutations)
-
     def _occurrence_inventory_at(
         self,
         index: int,
@@ -1224,10 +928,7 @@ class RuntimeLearningState:
         self,
         *,
         episodes: tuple[_EpisodeLog, ...] | None = None,
-        frames: tuple[FrameLearningState, ...] | None = None,
-        commits: tuple[PolicyCommitState, ...] | None = None,
         episode_run_id: str | None = None,
-        active_frame_ref: MemoryFrameRef | None | object = _PRESERVE,
     ) -> RuntimeLearningState:
         """Replace validated aligned roots without rescanning frozen history."""
         value = object.__new__(type(self))
@@ -1243,25 +944,10 @@ class RuntimeLearningState:
             "episodes",
             self.episodes if episodes is None else episodes,
         )
-        object.__setattr__(value, "frames", self.frames if frames is None else frames)
-        object.__setattr__(
-            value,
-            "commits",
-            self.commits if commits is None else commits,
-        )
         object.__setattr__(
             value,
             "episode_run_id",
             self.episode_run_id if episode_run_id is None else episode_run_id,
-        )
-        object.__setattr__(
-            value,
-            "active_frame_ref",
-            (
-                self.active_frame_ref
-                if active_frame_ref is _PRESERVE
-                else active_frame_ref
-            ),
         )
         return value
 
@@ -1273,18 +959,6 @@ class RuntimeLearningState:
         index = bisect_left(self.frame_order, key, key=frame_key)
         if index >= len(self.frame_order) or self.frame_order[index] != ref:
             raise ValueError("memory frame is absent from recorded layout")
-        return index
-
-    def _policy_index(self, policy_name: str) -> int:
-        """Resolve one exact policy or reject an unrecorded identity."""
-        if type(policy_name) is not str:
-            raise TypeError("policy name must be a string")
-        index = bisect_left(self.policy_order, policy_name)
-        if (
-            index >= len(self.policy_order)
-            or self.policy_order[index] != policy_name
-        ):
-            raise ValueError("memory policy is absent from recorded layout")
         return index
 
     def _frame_for_key(
@@ -1617,23 +1291,6 @@ def project_owner_contexts(
     return tuple(contexts)
 
 
-def aggregate_policy_mutations(
-    layout: tuple[MemoryFrameSpec, ...],
-    learning: RuntimeLearningState,
-    policy_name: str,
-) -> tuple[MemoryMutation, ...]:
-    """Aggregate learned mutations in recorded frame and proposal order."""
-    _validate_layout(layout)
-    if type(learning) is not RuntimeLearningState:
-        raise TypeError("mutation aggregation requires RuntimeLearningState")
-    learning.validate_layout(layout)
-    if type(policy_name) is not str or not policy_name:
-        raise ValueError("policy_name must be a non-empty string")
-    if policy_name not in learning.policy_order:
-        raise ValueError("memory policy is absent from recorded layout")
-    return learning.policy_mutations(policy_name)
-
-
 def memory_commit_id(
     run_id: str,
     policy_name: str,
@@ -1682,14 +1339,9 @@ def memory_commit_id(
 
 
 __all__ = [
-    "FrameLearningState",
-    "FrameLearningStatus",
-    "PolicyCommitState",
-    "PolicyCommitStatus",
     "RuntimeBackwardState",
     "RuntimeLearningState",
     "OwnerContextError",
-    "aggregate_policy_mutations",
     "failure_json",
     "frame_key",
     "memory_commit_id",

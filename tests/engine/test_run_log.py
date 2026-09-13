@@ -152,6 +152,39 @@ def test_memory_log_orders_records_and_retains_a_canonical_copy():
         log.append(NodeStartedRecord(node_id="late"))
 
 
+def test_memory_log_reopens_a_detached_prefix_at_the_next_sequence():
+    original = MemoryRunLog("retained")
+    original.append(NodeExpandedRecord("each", {"items": [1]}, (), _DIGEST))
+    original.close()
+    prefix = original.records()
+    reopened = MemoryRunLog._from_records(prefix)
+    try:
+        prefix[0].record.seed["items"].append(2)
+        assert tuple(reopened)[0].record.seed == {"items": [1]}
+        accepted = reopened.append(NodeStartedRecord("next"))
+        assert accepted.seq == 1 and reopened.next_sequence == 2
+        assert len(original.records()) == 1
+        with pytest.raises(RuntimeError, match="closed"):
+            original.append(NodeStartedRecord("late"))
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("change", ["empty", "list", "gap", "foreign"])
+def test_memory_log_reopening_rejects_invalid_prefix_coordinates(change):
+    records = (RecordEnvelope(SCHEMA_VERSION, "run", 0, NodeStartedRecord("first")),)
+    if change == "empty":
+        records = ()
+    elif change == "list":
+        records = list(records)
+    elif change == "gap":
+        records = (RecordEnvelope(SCHEMA_VERSION, "run", 1, NodeStartedRecord("first")),)
+    else:
+        records += (RecordEnvelope(SCHEMA_VERSION, "other", 1, NodeStartedRecord("second")),)
+    with pytest.raises(ValueError):
+        MemoryRunLog._from_records(records)
+
+
 def test_memory_log_never_exposes_its_retained_mutable_payload():
     log = MemoryRunLog("memory-run")
     appended = log.append(

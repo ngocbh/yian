@@ -38,7 +38,6 @@ from agent_composer.memory import (
     EvaluationEvidence,
     MemoryFrameRef,
     MemoryFrameSpec,
-    MemoryMutation,
     MemoryOccurrenceRef,
     MemoryScope,
     MemorySnapshotEnvelope,
@@ -68,9 +67,6 @@ from agent_composer.runtime.log import (
     MemoryCommitFailedRecord,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
-    MemoryFrameLearnedRecord,
-    MemoryFrameLearningFailedRecord,
-    MemoryFrameLearningStartedRecord,
     NodeExpandedRecord,
     NodeFailedRecord,
     NodeRoutedRecord,
@@ -89,13 +85,8 @@ from agent_composer.runtime.log import (
     encode_record,
 )
 from agent_composer.runtime.learning import (
-    FrameLearningState,
-    FrameLearningStatus,
-    PolicyCommitState,
-    PolicyCommitStatus,
     RuntimeLearningState,
     RuntimeBackwardState,
-    memory_commit_id,
     project_outcome_episodes,
     reduce_backward_record,
 )
@@ -240,7 +231,7 @@ class RunState:
             Accepted executions, immutable producer entries and private backward
             handlers, enabled by recorded learning independently of memory scopes.
         learning_state (`RuntimeLearningState`):
-            Immutable episode, frame-learning, and policy-commit reducer projection.
+            Pure immutable episode and recorded frame/policy inventory.
         backward_state (`RuntimeBackwardState`):
             Immutable accepted backward attempts and irreversible commit facts.
         initial_static_ids (`frozenset[str]`):
@@ -548,24 +539,6 @@ class _GrowthPlan:
 
 
 @dataclass(frozen=True, slots=True)
-class _LearningPlan:
-    """Opaque authority anchors and one immutable post-terminal learning state."""
-
-    originating_state: RunState
-    originating_flow: CompiledFlow
-    envelope_bytes: bytes
-    start_id: str
-    start_node_identity: int
-    end_id: str
-    end_node_identity: int | None
-    originating_learning_state: RuntimeLearningState
-    next_learning_state: RuntimeLearningState
-    originating_backward_state: RuntimeBackwardState
-    next_backward_state: RuntimeBackwardState
-    trace_delta: TraceDelta | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class _BackwardPlan:
     """Canonical record authority and a detached post-terminal attempt delta."""
 
@@ -676,7 +649,6 @@ class PreparedTransition:
         | _RoutePlan
         | _FailurePlan
         | _GrowthPlan
-        | _LearningPlan
         | _BackwardPlan
     )
     observers: tuple[Any, ...]
@@ -1174,8 +1146,7 @@ def prepare_record(
         state (`RunState`):
             Initialized reducer state immediately before ``record``.
         record (`RunRecord`):
-            One supported graph/frontier, backward-attempt, or legacy memory
-            learning record to validate and copy.
+            One supported graph/frontier or backward-attempt record to validate and copy.
         grow_builder (`GrowBuilder | None`, *optional*):
             Required only for ``NodeExpandedRecord`` replay; rebuilds and verifies
             the recorded fragment through the same injected path used live.
@@ -1193,24 +1164,9 @@ def prepare_record(
     if type(state) is not RunState:
         raise TypeError("prepare_record expects a RunState")
 
-    if isinstance(record, (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord)) or (
-        isinstance(record, (MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord))
-        and record.attempt_id is not None
-    ):
+    if isinstance(record, (BackwardStartedRecord, BackwardReadyRecord, BackwardFinishedRecord,
+                           MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)):
         return _prepare_backward_transition(state, record)
-
-    if isinstance(
-        record,
-        (
-            MemoryFrameLearningStartedRecord,
-            MemoryFrameLearnedRecord,
-            MemoryFrameLearningFailedRecord,
-            MemoryCommitRequestedRecord,
-            MemoryCommitSucceededRecord,
-            MemoryCommitFailedRecord,
-        ),
-    ):
-        return _prepare_learning_transition(state, record)
 
     _require_initialized_nonterminal(state)
 
@@ -1685,257 +1641,6 @@ def _prepare_backward_transition(state: RunState, record: RunRecord) -> Prepared
     return PreparedTransition(envelope.record, envelope.run_id, envelope.seq, plan, ())
 
 
-def _prepare_learning_transition(
-    state: RunState,
-    record: (
-        MemoryFrameLearningStartedRecord
-        | MemoryFrameLearnedRecord
-        | MemoryFrameLearningFailedRecord
-        | MemoryCommitRequestedRecord
-        | MemoryCommitSucceededRecord
-        | MemoryCommitFailedRecord
-    ),
-) -> PreparedTransition:
-    """Freeze one validated post-terminal learning or commit transition."""
-    _require_initialized_terminal_learning(state)
-    run_id = state.run_id
-    if not isinstance(run_id, str):  # established by initialized-state validation
-        raise ValueError("run state is not initialized")
-    canonical_bytes = encode_record(
-        RecordEnvelope(
-            schema=SCHEMA_VERSION,
-            run_id=run_id,
-            seq=state.next_sequence,
-            record=record,
-        )
-    )
-    canonical_envelope = decode_record(canonical_bytes)
-    canonical_record = canonical_envelope.record
-    if type(canonical_record) is not type(record) or canonical_record != record:
-        raise ValueError(
-            f"{type(record).__name__} is not in canonical wire form"
-        )
-    if not isinstance(
-        canonical_record,
-        (
-            MemoryFrameLearningStartedRecord,
-            MemoryFrameLearnedRecord,
-            MemoryFrameLearningFailedRecord,
-            MemoryCommitRequestedRecord,
-            MemoryCommitSucceededRecord,
-            MemoryCommitFailedRecord,
-        ),
-    ):
-        raise TypeError("learning envelope decoded to a different record kind")
-
-    next_learning_state = _reduce_learning_record(state, canonical_record)
-    next_backward_state = (
-        replace(state.backward_state, legacy_requested=True)
-        if isinstance(canonical_record, MemoryCommitRequestedRecord) else state.backward_state
-    )
-    start_id = state.flow.start_id
-    end_id = state.flow.end_id
-    plan = _LearningPlan(
-        originating_state=state,
-        originating_flow=state.flow,
-        envelope_bytes=canonical_bytes,
-        start_id=start_id,
-        start_node_identity=id(state.flow.nodes[start_id]),
-        end_id=end_id,
-        end_node_identity=(
-            id(state.flow.nodes[end_id]) if end_id in state.flow.nodes else None
-        ),
-        originating_learning_state=state.learning_state,
-        next_learning_state=next_learning_state,
-        originating_backward_state=state.backward_state,
-        next_backward_state=next_backward_state,
-    )
-    return PreparedTransition(
-        record=canonical_record,
-        expected_run_id=canonical_envelope.run_id,
-        expected_sequence=canonical_envelope.seq,
-        _plan=replace(plan, trace_delta=_prepare_record_trace(state, canonical_envelope)),
-        observers=(),
-    )
-
-
-def _reduce_learning_record(
-    state: RunState,
-    record: (
-        MemoryFrameLearningStartedRecord
-        | MemoryFrameLearnedRecord
-        | MemoryFrameLearningFailedRecord
-        | MemoryCommitRequestedRecord
-        | MemoryCommitSucceededRecord
-        | MemoryCommitFailedRecord
-    ),
-) -> RuntimeLearningState:
-    """Return the immutable next learning projection for one canonical record."""
-    learning = state.learning_state
-    layout = state.memory_layout
-    if type(layout) is not tuple:
-        raise ValueError("learning requires an enabled recorded memory layout")
-
-    if isinstance(
-        record,
-        (
-            MemoryFrameLearningStartedRecord,
-            MemoryFrameLearnedRecord,
-            MemoryFrameLearningFailedRecord,
-        ),
-    ):
-        spec = _memory_frame_spec(state, record.frame_ref)
-        if record.policy_name != spec.policy_name:
-            raise ValueError(
-                "learning record policy_name does not match recorded frame policy"
-            )
-        current = learning.frame_state(record.frame_ref)
-
-        if isinstance(record, MemoryFrameLearningStartedRecord):
-            if learning.active_frame is not None:
-                raise ValueError("another memory frame learning operation is active")
-            if current.status not in (
-                FrameLearningStatus.PENDING,
-                FrameLearningStatus.FAILED_RETRYABLE,
-            ):
-                raise ValueError(
-                    f"frame learning cannot start from {current.status.value}"
-                )
-            expected = learning.occurrence_inventory(record.frame_ref)
-            if record.occurrences != expected:
-                raise ValueError(
-                    "learning start occurrences must exactly equal accepted inventory"
-                )
-            return learning.with_frame_state(
-                record.frame_ref,
-                FrameLearningState(
-                    status=FrameLearningStatus.STARTED,
-                    occurrences=record.occurrences,
-                ),
-            )
-
-        if learning.active_frame != record.frame_ref or (
-            current.status is not FrameLearningStatus.STARTED
-        ):
-            raise ValueError("learning result must match the active memory frame")
-        if isinstance(record, MemoryFrameLearnedRecord):
-            _validate_policy_mutation_ids(
-                layout,
-                learning,
-                spec,
-                record.mutations,
-            )
-            return learning.with_frame_state(
-                record.frame_ref,
-                FrameLearningState(
-                    status=FrameLearningStatus.LEARNED,
-                    occurrences=current.occurrences,
-                    mutations=record.mutations,
-                ),
-            )
-        status = (
-            FrameLearningStatus.FAILED_RETRYABLE
-            if record.failure.retryable
-            else FrameLearningStatus.FAILED_FINAL
-        )
-        return learning.with_frame_state(
-            record.frame_ref,
-            FrameLearningState(
-                status=status,
-                occurrences=current.occurrences,
-                failure=record.failure,
-            ),
-        )
-
-    policy_name = record.policy_name
-    current_commit = learning.commit_state(policy_name)
-    if isinstance(record, MemoryCommitRequestedRecord):
-        if current_commit.status not in (
-            PolicyCommitStatus.UNREQUESTED,
-            PolicyCommitStatus.FAILED_RETRYABLE,
-        ):
-            raise ValueError(
-                f"memory commit cannot be requested from {current_commit.status.value}"
-            )
-        expected_mutations = learning.policy_mutations(policy_name)
-        if record.mutations != expected_mutations:
-            raise ValueError(
-                "memory commit batch must exactly aggregate learned frame mutations"
-            )
-        expected_commit_id = memory_commit_id(
-            state.run_id,
-            policy_name,
-            expected_mutations,
-        )
-        if record.commit_id != expected_commit_id:
-            raise ValueError("memory commit_id does not match its canonical batch")
-        return learning.with_commit_state(
-            policy_name,
-            PolicyCommitState(
-                status=PolicyCommitStatus.REQUESTED,
-                commit_id=record.commit_id,
-                mutations=record.mutations,
-            ),
-        )
-
-    if current_commit.status is not PolicyCommitStatus.REQUESTED:
-        raise ValueError("memory commit result requires one active request")
-    if record.commit_id != current_commit.commit_id:
-        raise ValueError("memory commit result does not match the active commit_id")
-    if isinstance(record, MemoryCommitSucceededRecord):
-        return learning.with_commit_state(
-            policy_name,
-            PolicyCommitState(
-                status=PolicyCommitStatus.SUCCEEDED,
-                commit_id=current_commit.commit_id,
-                mutations=current_commit.mutations,
-            ),
-        )
-    status = (
-        PolicyCommitStatus.FAILED_RETRYABLE
-        if record.failure.retryable
-        else PolicyCommitStatus.FAILED_FINAL
-    )
-    return learning.with_commit_state(
-        policy_name,
-        PolicyCommitState(
-            status=status,
-            commit_id=current_commit.commit_id,
-            mutations=current_commit.mutations,
-            failure=record.failure,
-        ),
-    )
-
-
-def _validate_policy_mutation_ids(
-    layout: tuple[MemoryFrameSpec, ...],
-    learning: RuntimeLearningState,
-    spec: MemoryFrameSpec,
-    mutations: tuple[MemoryMutation, ...],
-) -> None:
-    """Reject policy-wide mutation identity collisions at reducer authority."""
-    prior_ids = {
-        mutation.mutation_id
-        for other in layout
-        if other.policy_name == spec.policy_name and other.ref != spec.ref
-        for mutation in learning.frame_state(other.ref).mutations
-    }
-    if any(mutation.mutation_id in prior_ids for mutation in mutations):
-        raise ValueError("memory mutation ids must be unique within one policy commit")
-
-
-def _memory_frame_spec(state: RunState, ref: MemoryFrameRef) -> MemoryFrameSpec:
-    """Return the exact recorded frame specification for one identity."""
-    layout = state.memory_layout
-    if type(layout) is not tuple:
-        raise ValueError("memory layout is disabled")
-    index = state.learning_state._frame_index(ref)
-    spec = layout[index]
-    if spec.ref != ref:
-        raise ValueError("memory frame is absent from recorded layout")
-    return spec
-
-
 def commit_prepared(
     log: RunLog,
     state: RunState,
@@ -1976,11 +1681,11 @@ def commit_prepared(
         raise TypeError("commit_prepared expects a PreparedTransition")
     if not isinstance(prepared._plan, (
         _RunStartedPlan, _FrontierPlan, _SuccessPlan, _RoutePlan,
-        _FailurePlan, _GrowthPlan, _LearningPlan, _BackwardPlan,
+        _FailurePlan, _GrowthPlan, _BackwardPlan,
     )):
         raise TypeError("unsupported prepared transition plan")
     trace_delta = prepared._plan.trace_delta
-    if isinstance(prepared._plan, (_LearningPlan, _BackwardPlan)):
+    if isinstance(prepared._plan, _BackwardPlan):
         _require_postterminal_trace_delta(state, trace_delta)
     if trace_delta is not None:
         trace_delta.validate_origin(state.trace)
@@ -1996,8 +1701,6 @@ def commit_prepared(
         observers = _commit_failure(log, state, prepared)
     elif isinstance(prepared._plan, _GrowthPlan):
         observers = _commit_growth(log, state, prepared)
-    elif isinstance(prepared._plan, _LearningPlan):
-        observers = _commit_learning(log, state, prepared)
     elif isinstance(prepared._plan, _BackwardPlan):
         observers = _commit_backward(log, state, prepared)
     else:
@@ -2420,58 +2123,6 @@ def _commit_backward(log: RunLog, state: RunState, prepared: PreparedTransition)
     return ()
 
 
-def _commit_learning(
-    log: RunLog,
-    state: RunState,
-    prepared: PreparedTransition,
-) -> tuple[Any, ...]:
-    """Validate, append, and install one post-terminal learning transition."""
-    plan = prepared._plan
-    if not isinstance(plan, _LearningPlan):
-        raise TypeError("learning commit requires a learning plan")
-    if not isinstance(
-        prepared.record,
-        (
-            MemoryFrameLearningStartedRecord,
-            MemoryFrameLearnedRecord,
-            MemoryFrameLearningFailedRecord,
-            MemoryCommitRequestedRecord,
-            MemoryCommitSucceededRecord,
-            MemoryCommitFailedRecord,
-        ),
-    ):
-        raise TypeError("learning plan requires a memory learning record")
-    _require_prepared_origin(state, plan)
-    _require_learning_plan_origin(state, plan)
-    if state.backward_state is not plan.originating_backward_state:
-        raise ValueError("prepared learning transition has stale backward authority")
-    _require_initialized_terminal_learning(state)
-    _require_authority_coordinates(log, state, prepared, initialized=True)
-    _require_unchanged_record(prepared, plan.envelope_bytes)
-    if isinstance(prepared.record, (MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)):
-        if prepared.record.attempt_id is not None:
-            raise ValueError("legacy learning plan cannot carry a backward attempt identity")
-    expected_backward = (
-        replace(state.backward_state, legacy_requested=True)
-        if isinstance(prepared.record, MemoryCommitRequestedRecord) else state.backward_state
-    )
-    if type(plan.next_backward_state) is not RuntimeBackwardState or plan.next_backward_state != expected_backward:
-        raise ValueError("legacy learning plan changed irreversible backward eligibility")
-    if not (
-        plan.next_learning_state.frame_order
-        is state._memory_authority.frame_order
-        and plan.next_learning_state.policy_order
-        is state._memory_authority.policy_order
-    ):
-        raise ValueError("learning plan changed RunStarted memory inventories")
-
-    _append_and_verify(log, prepared)
-    state.learning_state = plan.next_learning_state
-    state.backward_state = expected_backward
-    state.next_sequence = prepared.expected_sequence + 1
-    return ()
-
-
 def _require_prepared_origin(
     state: RunState,
     plan: (
@@ -2481,7 +2132,6 @@ def _require_prepared_origin(
         | _RoutePlan
         | _FailurePlan
         | _GrowthPlan
-        | _LearningPlan
         | _BackwardPlan
     ),
 ) -> None:
@@ -2495,7 +2145,7 @@ def _require_prepared_origin(
 
 def _require_learning_plan_origin(
     state: RunState,
-    plan: _SuccessPlan | _RoutePlan | _FailurePlan | _GrowthPlan | _LearningPlan | _BackwardPlan,
+    plan: _SuccessPlan | _RoutePlan | _FailurePlan | _GrowthPlan | _BackwardPlan,
 ) -> None:
     """Require the exact immutable learning projection used during preparation."""
     if state.learning_state is not plan.originating_learning_state:
@@ -2623,17 +2273,6 @@ def _require_initialized_nonterminal(state: RunState) -> None:
     _require_initialized(state)
     if state.result is not None:
         raise ValueError("terminal run state cannot prepare another graph transition")
-
-
-def _require_initialized_terminal_learning(state: RunState) -> None:
-    """Require an initialized primary terminal with durable learning enabled."""
-    _require_initialized(state)
-    if not isinstance(state.result, (RunSucceeded, RunFailed)):
-        raise ValueError("memory learning records require a primary terminal result")
-    if state.learn is not True or state.memory_layout is None:
-        raise ValueError("memory learning records require enabled learning")
-    if state.backward_state.attempts:
-        raise ValueError("legacy learning records cannot follow backward attempts")
 
 
 def _require_initialized_terminal_backward(state: RunState) -> None:
@@ -4492,7 +4131,6 @@ def _require_originating_flow(
         | _RoutePlan
         | _FailurePlan
         | _GrowthPlan
-        | _LearningPlan
         | _BackwardPlan
     ),
 ) -> None:

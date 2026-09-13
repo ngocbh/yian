@@ -9,7 +9,6 @@ import pytest
 from agent_composer.compose import load_flow
 from agent_composer.events import NodeExpanded, RunStarted
 from agent_composer.memory import (
-    MemoryMutation,
     MemoryOperationError,
     MemorySetupError,
 )
@@ -18,8 +17,8 @@ from agent_composer.runtime.log import (
     JsonlRunLog,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
-    MemoryFrameLearningFailedRecord,
-    MemoryFrameLearningStartedRecord,
+    BackwardFinishedRecord,
+    BackwardStartedRecord,
     RunResumedRecord,
     RunStartedRecord,
 )
@@ -95,13 +94,12 @@ def test_authored_policy_is_dormant_when_memory_is_none(tmp_path: Path) -> None:
     assert start.learn is False
 
 
-def test_learn_true_requires_memory_before_creating_a_log(tmp_path: Path) -> None:
-    path = tmp_path / "invalid.jsonl"
-
-    with pytest.raises(MemorySetupError, match="requires"):
-        run_flow(load_flow(_FLOW), {}, log=path, learn=True)
-
-    assert not path.exists()
+def test_learn_true_retains_without_enabling_an_authored_policy(tmp_path: Path) -> None:
+    path = tmp_path / "retained.jsonl"
+    result = run_flow(load_flow(_FLOW), {}, log=path, learn=True)
+    assert result.learning is None and result.backward_outcome is None
+    assert _records(path)[0].memory_layout is None
+    assert result.backward().learning is None
 
 
 def test_recall_only_records_snapshot_without_evidence_or_learning(
@@ -131,7 +129,7 @@ def test_recall_only_records_snapshot_without_evidence_or_learning(
     assert start.memory_snapshots is not None
     assert start.learn is False
     assert not any(
-        isinstance(record, MemoryFrameLearningStartedRecord)
+        isinstance(record, BackwardStartedRecord)
         for record in records
     )
 
@@ -150,22 +148,25 @@ def test_learning_success_is_separate_from_the_primary_result(tmp_path: Path) ->
 
     assert result.status == "succeeded"
     assert result.output == 7
+    assert result.learning is None
+    result.backward()
     assert result.learning is not None
     assert result.learning.status == "succeeded"
     assert len(memory.learn_contexts) == 1
-    assert memory.learn_contexts[0].episodes == ()
+    assert len(memory.learn_contexts[0].episodes) == 3
     assert memory.learn_contexts[0].feedback == ()
     assert len(memory.commit_calls) == 1
     assert memory.commit_calls[0][1] == ()
     records = _records(path)
-    assert isinstance(records[-2], MemoryCommitRequestedRecord)
-    assert isinstance(records[-1], MemoryCommitSucceededRecord)
+    assert isinstance(records[-3], MemoryCommitRequestedRecord)
+    assert isinstance(records[-2], MemoryCommitSucceededRecord)
+    assert isinstance(records[-1], BackwardFinishedRecord)
 
 
 def test_learning_failure_does_not_replace_primary_success(tmp_path: Path) -> None:
     path = tmp_path / "learn-failed.jsonl"
     memory = _Memory(
-        learn_outcomes=[RuntimeError("credential=must-not-leak")],
+        learn_outcomes=[MemoryOperationError("learner", "declined", "Cannot learn.", True)],
     )
 
     result = run_flow(
@@ -179,13 +180,15 @@ def test_learning_failure_does_not_replace_primary_success(tmp_path: Path) -> No
     assert result.status == "succeeded"
     assert result.output == 7
     assert result.failure is None
+    outcome = result.backward()
+    assert outcome.status == "failed" and outcome.failure.stage == "learn"
     assert result.learning is not None
     assert result.learning.status == "failed"
     assert len(result.learning.failures) == 1
     assert result.learning.failures[0].operation == "learn"
-    assert "must-not-leak" not in result.learning.failures[0].failure.message
+    assert result.learning.failures[0].failure.message == "Cannot learn."
     assert any(
-        isinstance(record, MemoryFrameLearningFailedRecord)
+        isinstance(record, BackwardFinishedRecord)
         for record in _records(path)
     )
 
@@ -205,13 +208,14 @@ def test_primary_failure_still_learns_without_changing_its_failure(tmp_path: Pat
     assert result.status == "failed"
     assert result.failure is not None
     assert result.failure.code == "node.execute"
+    result.backward("Review the failure.")
     assert result.learning is not None
     assert result.learning.status == "succeeded"
     assert len(memory.learn_contexts) == 1
     assert len(memory.commit_calls) == 1
 
 
-def test_retryable_learning_resumes_without_rerunning_settled_primary(
+def test_precommit_failure_requires_an_explicit_whole_pass_retry(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "retry.jsonl"
@@ -231,12 +235,16 @@ def test_retryable_learning_resumes_without_rerunning_settled_primary(
         memory={"test": memory},
         learn=True,
     )
+    first.backward()
     primary_prefix = len(_records(path))
 
     assert first.status == "succeeded"
     assert first.learning is not None
-    assert first.learning.status == "incomplete"
+    assert first.learning.status == "failed"
     resumed = resume_flow(flow, log=path, memory={"test": memory})
+    assert resumed.learning == first.learning
+    assert len(_records(path)) == primary_prefix and len(memory.learn_contexts) == 1
+    resumed.backward()
 
     assert resumed.status == "succeeded"
     assert resumed.output == 7
@@ -258,7 +266,7 @@ def test_retryable_learning_resumes_without_rerunning_settled_primary(
     assert len(_records(path)) == settled_count
 
 
-def test_learning_only_resume_uses_static_layout_after_map_growth(
+def test_explicit_retry_uses_static_layout_after_map_growth(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "map-learning.jsonl"
@@ -273,16 +281,19 @@ def test_learning_only_resume_uses_static_layout_after_map_growth(
         memory={"test": memory},
         learn=True,
     )
+    first.backward()
     resumed = resume_flow(flow, log=path, memory={"test": memory})
 
     assert first.status == "succeeded"
     assert first.output == [2, 5]
     assert first.learning is not None
-    assert first.learning.status == "incomplete"
+    assert first.learning.status == "failed"
     assert resumed.status == "succeeded"
     assert resumed.output == [2, 5]
     assert resumed.events == []
     assert resumed.learning is not None
+    assert resumed.learning == first.learning
+    resumed.backward()
     assert resumed.learning.status == "succeeded"
 
 

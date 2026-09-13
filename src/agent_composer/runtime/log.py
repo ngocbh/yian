@@ -200,93 +200,8 @@ class NodeFailedRecord:
         _validate_optional_capture(self.forward_capture)
 
 
-@dataclass(frozen=True, slots=True)
-class MemoryFrameLearningStartedRecord:
-    """Start learning for one frame from its canonical occurrence set."""
-
-    policy_name: str
-    frame_ref: MemoryFrameRef
-    occurrences: tuple[MemoryOccurrenceRef, ...]
-
-    def __post_init__(self) -> None:
-        """Validate policy, ownership, uniqueness, and canonical occurrence order."""
-        _require_nonempty_string(self.policy_name, "policy_name")
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
-        if type(self.occurrences) is not tuple:
-            raise TypeError("occurrences must be a tuple")
-        for occurrence in self.occurrences:
-            if type(occurrence) is not MemoryOccurrenceRef:
-                raise TypeError("occurrences items must be MemoryOccurrenceRef values")
-            MemoryOccurrenceRef(
-                occurrence.frame_ref,
-                occurrence.occurrence_path,
-            )
-            if occurrence.frame_ref != self.frame_ref:
-                raise ValueError("occurrence frame_ref must match the learning frame")
-        keys = tuple(_occurrence_key(item) for item in self.occurrences)
-        if keys != tuple(sorted(set(keys))):
-            raise ValueError("occurrences must be sorted and unique")
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryFrameLearnedRecord:
-    """Retain one frame's canonical proposed mutation batch."""
-
-    policy_name: str
-    frame_ref: MemoryFrameRef
-    mutations: tuple[MemoryMutation, ...]
-
-    def __post_init__(self) -> None:
-        """Validate frame ownership and canonical unique mutation identities."""
-        _require_nonempty_string(self.policy_name, "policy_name")
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
-        _validate_mutations(self.mutations, frame_ref=self.frame_ref)
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryFrameLearningFailedRecord:
-    """Retain one sanitized frame-local learning failure."""
-
-    policy_name: str
-    frame_ref: MemoryFrameRef
-    failure: MemoryOperationFailure
-
-    def __post_init__(self) -> None:
-        """Validate exact policy, frame, and failure carriers."""
-        _require_nonempty_string(self.policy_name, "policy_name")
-        if type(self.frame_ref) is not MemoryFrameRef:
-            raise TypeError("frame_ref must be a MemoryFrameRef")
-        MemoryFrameRef(
-            self.frame_ref.root_flow_id,
-            self.frame_ref.static_path,
-            self.frame_ref.owner,
-        )
-        if type(self.failure) is not MemoryOperationFailure:
-            raise TypeError("failure must be a MemoryOperationFailure")
-        MemoryOperationFailure(
-            self.failure.stage,
-            self.failure.code,
-            self.failure.message,
-            self.failure.retryable,
-        )
-
-
-def _validate_attempt_id(attempt_id: int | None, *, optional: bool = False) -> None:
-    """Require an exact positive attempt identity or the explicit legacy marker."""
-    if optional and attempt_id is None:
-        return
+def _validate_attempt_id(attempt_id: int) -> None:
+    """Require an exact positive accepted-attempt identity."""
     if type(attempt_id) is not int:
         raise TypeError("attempt_id must be an integer")
     if attempt_id <= 0:
@@ -415,18 +330,17 @@ class BackwardFinishedRecord:
 class MemoryCommitRequestedRecord:
     """Request one policy's atomic idempotent mutation commit.
 
-    The keyword-only `attempt_id` defaults to `None` for the legacy learning
-    path; a positive identity associates the commit with a backward attempt.
+    The required keyword-only `attempt_id` identifies the accepted backward attempt.
     """
 
     policy_name: str
     commit_id: str
     mutations: tuple[MemoryMutation, ...]
-    attempt_id: int | None = field(default=None, kw_only=True)
+    attempt_id: int = field(kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate exact identity and canonical unique mutations."""
-        _validate_attempt_id(self.attempt_id, optional=True)
+        _validate_attempt_id(self.attempt_id)
         _require_nonempty_string(self.policy_name, "policy_name")
         _require_nonempty_string(self.commit_id, "commit_id")
         _validate_mutations(self.mutations)
@@ -442,11 +356,11 @@ class MemoryCommitSucceededRecord:
 
     policy_name: str
     commit_id: str
-    attempt_id: int | None = field(default=None, kw_only=True)
+    attempt_id: int = field(kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate the exact policy and commit identities."""
-        _validate_attempt_id(self.attempt_id, optional=True)
+        _validate_attempt_id(self.attempt_id)
         _require_nonempty_string(self.policy_name, "policy_name")
         _require_nonempty_string(self.commit_id, "commit_id")
 
@@ -462,11 +376,11 @@ class MemoryCommitFailedRecord:
     policy_name: str
     commit_id: str
     failure: MemoryOperationFailure
-    attempt_id: int | None = field(default=None, kw_only=True)
+    attempt_id: int = field(kw_only=True)
 
     def __post_init__(self) -> None:
         """Validate exact identities and failure carrier."""
-        _validate_attempt_id(self.attempt_id, optional=True)
+        _validate_attempt_id(self.attempt_id)
         _require_nonempty_string(self.policy_name, "policy_name")
         _require_nonempty_string(self.commit_id, "commit_id")
         if type(self.failure) is not MemoryOperationFailure:
@@ -487,9 +401,6 @@ RunRecord: TypeAlias = (
     | NodeRoutedRecord
     | NodeExpandedRecord
     | NodeFailedRecord
-    | MemoryFrameLearningStartedRecord
-    | MemoryFrameLearnedRecord
-    | MemoryFrameLearningFailedRecord
     | MemoryCommitRequestedRecord
     | MemoryCommitSucceededRecord
     | MemoryCommitFailedRecord
@@ -507,9 +418,6 @@ _RUN_RECORD_TYPES = (
     NodeRoutedRecord,
     NodeExpandedRecord,
     NodeFailedRecord,
-    MemoryFrameLearningStartedRecord,
-    MemoryFrameLearnedRecord,
-    MemoryFrameLearningFailedRecord,
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
     MemoryCommitFailedRecord,
@@ -531,22 +439,6 @@ def _require_nonempty_string(value: object, name: str) -> str:
 def _frame_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
     """Return the canonical sortable identity of one memory frame."""
     return (ref.root_flow_id, ref.static_path, ref.owner.value)
-
-
-def _occurrence_key(
-    occurrence: MemoryOccurrenceRef,
-) -> tuple[
-    tuple[str, tuple[str, ...], str],
-    tuple[tuple[str, tuple[str, ...], int], ...],
-]:
-    """Return the canonical sortable identity of one dynamic occurrence."""
-    return (
-        _frame_key(occurrence.frame_ref),
-        tuple(
-            (segment.kind.value, segment.static_path, segment.index)
-            for segment in occurrence.occurrence_path
-        ),
-    )
 
 
 def _validate_optional_evidence(evidence: EvaluationEvidence | None) -> None:
@@ -710,6 +602,21 @@ class MemoryRunLog:
         self._records: list[RecordEnvelope] = []
         self._next_sequence = 0
         self._closed = False
+
+    @classmethod
+    def _from_records(cls, records: tuple[RecordEnvelope, ...]) -> MemoryRunLog:
+        """Reopen a detached canonical prefix without renumbering accepted records."""
+        if type(records) is not tuple or not records:
+            raise ValueError("reopening requires a nonempty record tuple")
+        canonical = tuple(_copy_envelope(envelope) for envelope in records)
+        run_id = canonical[0].run_id
+        for sequence, envelope in enumerate(canonical):
+            if envelope.run_id != run_id or envelope.seq != sequence:
+                raise ValueError("reopened prefix must have one run and contiguous sequences")
+        log = cls(run_id)
+        log._records = list(canonical)
+        log._next_sequence = len(canonical)
+        return log
 
     @property
     def run_id(self) -> str:
@@ -1306,36 +1213,12 @@ class _NodeFailedPayload(_StrictModel):
     forward_capture: _ForwardCapturePayload | None
 
 
-class _MemoryFrameLearningStartedPayload(_StrictModel):
-    """Strict wire payload for frame-learning start."""
-
-    policy_name: str = Field(min_length=1)
-    frame_ref: _MemoryFrameRefPayload
-    occurrences: list[_MemoryOccurrenceRefPayload]
-
-
-class _MemoryFrameLearnedPayload(_StrictModel):
-    """Strict wire payload for frame-local proposed mutations."""
-
-    policy_name: str = Field(min_length=1)
-    frame_ref: _MemoryFrameRefPayload
-    mutations: list[_MemoryMutationPayload]
-
-
-class _MemoryFrameLearningFailedPayload(_StrictModel):
-    """Strict wire payload for one frame-learning failure."""
-
-    policy_name: str = Field(min_length=1)
-    frame_ref: _MemoryFrameRefPayload
-    failure: _MemoryOperationFailurePayload
-
-
 class _MemoryCommitRequestedPayload(_StrictModel):
     """Strict wire payload for one atomic policy commit request."""
 
     policy_name: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
-    attempt_id: int | None
+    attempt_id: int = Field(gt=0)
     mutations: list[_MemoryMutationPayload]
 
 
@@ -1344,7 +1227,7 @@ class _MemoryCommitSucceededPayload(_StrictModel):
 
     policy_name: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
-    attempt_id: int | None
+    attempt_id: int = Field(gt=0)
 
 
 class _MemoryCommitFailedPayload(_StrictModel):
@@ -1352,7 +1235,7 @@ class _MemoryCommitFailedPayload(_StrictModel):
 
     policy_name: str = Field(min_length=1)
     commit_id: str = Field(min_length=1)
-    attempt_id: int | None
+    attempt_id: int = Field(gt=0)
     failure: _MemoryOperationFailurePayload
 
 
@@ -1481,9 +1364,6 @@ _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
     "node_routed": _NodeRoutedPayload,
     "node_expanded": _NodeExpandedPayload,
     "node_failed": _NodeFailedPayload,
-    "memory_frame_learning_started": _MemoryFrameLearningStartedPayload,
-    "memory_frame_learned": _MemoryFrameLearnedPayload,
-    "memory_frame_learning_failed": _MemoryFrameLearningFailedPayload,
     "memory_commit_requested": _MemoryCommitRequestedPayload,
     "memory_commit_succeeded": _MemoryCommitSucceededPayload,
     "memory_commit_failed": _MemoryCommitFailedPayload,
@@ -1500,9 +1380,6 @@ _TYPE_TO_KIND: dict[type[Any], str] = {
     NodeRoutedRecord: "node_routed",
     NodeExpandedRecord: "node_expanded",
     NodeFailedRecord: "node_failed",
-    MemoryFrameLearningStartedRecord: "memory_frame_learning_started",
-    MemoryFrameLearnedRecord: "memory_frame_learned",
-    MemoryFrameLearningFailedRecord: "memory_frame_learning_failed",
     MemoryCommitRequestedRecord: "memory_commit_requested",
     MemoryCommitSucceededRecord: "memory_commit_succeeded",
     MemoryCommitFailedRecord: "memory_commit_failed",
@@ -2448,27 +2325,6 @@ def _revalidate_run_record(record: RunRecord) -> None:
         NodeFailedRecord(record.failure, record.evidence, record.forward_capture)
         _failure_payload(record.failure, carrier="NodeFailedRecord")
         return
-    if type(record) is MemoryFrameLearningStartedRecord:
-        MemoryFrameLearningStartedRecord(
-            record.policy_name,
-            record.frame_ref,
-            record.occurrences,
-        )
-        return
-    if type(record) is MemoryFrameLearnedRecord:
-        MemoryFrameLearnedRecord(
-            record.policy_name,
-            record.frame_ref,
-            record.mutations,
-        )
-        return
-    if type(record) is MemoryFrameLearningFailedRecord:
-        MemoryFrameLearningFailedRecord(
-            record.policy_name,
-            record.frame_ref,
-            record.failure,
-        )
-        return
     if type(record) is MemoryCommitRequestedRecord:
         MemoryCommitRequestedRecord(
             record.policy_name,
@@ -2586,29 +2442,6 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             ),
             "evidence": _evidence_payload(record.evidence),
             "forward_capture": _capture_payload(record.forward_capture),
-        }
-    elif isinstance(record, MemoryFrameLearningStartedRecord):
-        raw = {
-            "policy_name": record.policy_name,
-            "frame_ref": _frame_ref_payload(record.frame_ref),
-            "occurrences": [
-                _occurrence_ref_payload(occurrence)
-                for occurrence in record.occurrences
-            ],
-        }
-    elif isinstance(record, MemoryFrameLearnedRecord):
-        raw = {
-            "policy_name": record.policy_name,
-            "frame_ref": _frame_ref_payload(record.frame_ref),
-            "mutations": [
-                _mutation_payload(mutation) for mutation in record.mutations
-            ],
-        }
-    elif isinstance(record, MemoryFrameLearningFailedRecord):
-        raw = {
-            "policy_name": record.policy_name,
-            "frame_ref": _frame_ref_payload(record.frame_ref),
-            "failure": _memory_failure_payload(record.failure),
         }
     elif isinstance(record, MemoryCommitRequestedRecord):
         raw = {
@@ -2734,30 +2567,6 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
             failure=_failure_from_payload(failure_payload),
             evidence=_evidence_from_payload(values["evidence"]),
             forward_capture=_capture_from_payload(values["forward_capture"]),
-        )
-    if kind == "memory_frame_learning_started":
-        return MemoryFrameLearningStartedRecord(
-            policy_name=values["policy_name"],
-            frame_ref=_frame_ref_from_payload(values["frame_ref"]),
-            occurrences=tuple(
-                _occurrence_ref_from_payload(occurrence)
-                for occurrence in values["occurrences"]
-            ),
-        )
-    if kind == "memory_frame_learned":
-        return MemoryFrameLearnedRecord(
-            policy_name=values["policy_name"],
-            frame_ref=_frame_ref_from_payload(values["frame_ref"]),
-            mutations=tuple(
-                _mutation_from_payload(mutation)
-                for mutation in values["mutations"]
-            ),
-        )
-    if kind == "memory_frame_learning_failed":
-        return MemoryFrameLearningFailedRecord(
-            policy_name=values["policy_name"],
-            frame_ref=_frame_ref_from_payload(values["frame_ref"]),
-            failure=_memory_failure_from_payload(values["failure"]),
         )
     if kind == "memory_commit_requested":
         return MemoryCommitRequestedRecord(
@@ -3061,9 +2870,6 @@ __all__ = [
     "MemoryCommitFailedRecord",
     "MemoryCommitRequestedRecord",
     "MemoryCommitSucceededRecord",
-    "MemoryFrameLearnedRecord",
-    "MemoryFrameLearningFailedRecord",
-    "MemoryFrameLearningStartedRecord",
     "NodeExpandedRecord",
     "NodeFailedRecord",
     "NodeRoutedRecord",

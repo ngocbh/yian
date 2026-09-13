@@ -42,7 +42,6 @@ def _records():
     from agent_composer.memory import MemoryFrameRef, MemoryMutation, MemoryOperationFailure, MemoryOwner
     from agent_composer.runtime.log import (
         MemoryCommitFailedRecord, MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
-        MemoryFrameLearnedRecord, MemoryFrameLearningFailedRecord, MemoryFrameLearningStartedRecord,
     )
     from tests.engine.test_backward_records import _backward_records
 
@@ -85,9 +84,6 @@ def _records():
                 traceback="Traceback (most recent call last): ...",
             ),
         ),
-        MemoryFrameLearningStartedRecord("history", frame, ()),
-        MemoryFrameLearnedRecord("history", frame, mutations),
-        MemoryFrameLearningFailedRecord("history", frame, failure),
         MemoryCommitRequestedRecord("history", "commit-1", mutations, attempt_id=1),
         MemoryCommitSucceededRecord("history", "commit-1", attempt_id=1),
         MemoryCommitFailedRecord("history", "commit-1", failure, attempt_id=1),
@@ -115,6 +111,36 @@ def test_every_record_round_trips_through_a_validated_envelope(record):
 
 def test_record_wire_examples_cover_the_closed_record_inventory():
     assert {type(record) for record in _records()} == set(get_args(RunRecord))
+
+
+@pytest.mark.parametrize("kind,extra", [
+    ("memory_frame_learning_started", {"occurrences": []}),
+    ("memory_frame_learned", {"mutations": []}),
+    ("memory_frame_learning_failed", {"failure": {
+        "stage": "learn", "code": "declined", "message": "Declined.", "retryable": True,
+    }}),
+])
+def test_removed_frame_learning_wire_kinds_are_rejected(kind, extra):
+    wire = {"schema": SCHEMA_VERSION, "run_id": "run", "seq": 0, "kind": kind,
+            "payload": {"policy_name": "history", "frame_ref": {
+                "root_flow_id": "root", "static_path": ["root"], "owner": "flow",
+            }, **extra}}
+    with pytest.raises(ValueError, match="kind"):
+        decode_record(json.dumps(wire).encode())
+
+
+@pytest.mark.parametrize("kind,payload", [
+    ("memory_commit_requested", {"mutations": []}),
+    ("memory_commit_succeeded", {}),
+    ("memory_commit_failed", {"failure": {
+        "stage": "commit", "code": "declined", "message": "Declined.", "retryable": True,
+    }}),
+])
+def test_memory_commit_wire_requires_a_positive_attempt(kind, payload):
+    wire = {"schema": SCHEMA_VERSION, "run_id": "run", "seq": 0, "kind": kind,
+            "payload": {"policy_name": "history", "commit_id": "commit-1", "attempt_id": None, **payload}}
+    with pytest.raises(ValueError):
+        decode_record(json.dumps(wire).encode())
 
 
 def test_record_encoding_is_canonical_newline_free_and_byte_stable():

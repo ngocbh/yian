@@ -82,7 +82,7 @@ def test_backward_record_constructors_detach_values_without_reducer_inference():
         BackwardReadyRecord(1, _result(), (), [proposal])
 
 
-def test_commit_attempt_ids_are_optional_keyword_only_positive_integers():
+def test_commit_attempt_ids_are_required_keyword_only_positive_integers():
     from agent_composer.memory import MemoryOperationFailure
     from agent_composer.runtime.log import MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord
 
@@ -92,11 +92,12 @@ def test_commit_attempt_ids_are_optional_keyword_only_positive_integers():
         (MemoryCommitSucceededRecord, ("history", "commit-1")),
         (MemoryCommitFailedRecord, ("history", "commit-1", failure)),
     ):
-        assert carrier(*args).attempt_id is None
+        with pytest.raises(TypeError):
+            carrier(*args)
         assert carrier(*args, attempt_id=2).attempt_id == 2
         with pytest.raises(TypeError):
             carrier(*args, 2)
-        for invalid in (0, -1, True, "2", 2.0):
+        for invalid in (None, 0, -1, True, "2", 2.0):
             with pytest.raises((TypeError, ValueError)):
                 carrier(*args, attempt_id=invalid)
 
@@ -132,12 +133,12 @@ def test_backward_record_wire_round_trip_preserves_all_channels(index):
     assert _round_trip(record) == record
 
 
-def test_commit_wire_preserves_nullable_and_supplied_attempt_ids():
+def test_commit_wire_preserves_supplied_attempt_ids():
     from agent_composer.memory import MemoryOperationFailure
     from agent_composer.runtime.log import MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord
 
     failure = MemoryOperationFailure("backend", "failed", "Failed.", False)
-    for attempt_id in (None, 3):
+    for attempt_id in (1, 3):
         for record in (
             MemoryCommitRequestedRecord("history", "commit-1", (), attempt_id=attempt_id),
             MemoryCommitSucceededRecord("history", "commit-1", attempt_id=attempt_id),
@@ -937,112 +938,17 @@ def test_backward_prepared_plans_reject_stale_forged_or_mutated_authority_before
     assert engine.log.next_sequence == sequence
 
 
-def _legacy_request_prepared():
-    from agent_composer.runtime.learning import memory_commit_id
-    from agent_composer.runtime.log import MemoryFrameLearningStartedRecord, MemoryFrameLearnedRecord, MemoryCommitRequestedRecord
-    from agent_composer.runtime.state import prepare_record, commit_prepared
-    from tests.engine.test_runtime_memory_learning import _successful_terminal
-
-    state, log, layout = _successful_terminal()
-    for spec in layout:
-        for record in (MemoryFrameLearningStartedRecord(spec.policy_name, spec.ref, state.learning_state.occurrence_inventory(spec.ref)),
-                       MemoryFrameLearnedRecord(spec.policy_name, spec.ref, ())):
-            commit_prepared(log, state, prepare_record(state, record))
-    policy = layout[0].policy_name
-    request = MemoryCommitRequestedRecord(policy, memory_commit_id(state.run_id, policy, ()), ())
-    return state, log, prepare_record(state, request)
-
-
-def test_legacy_request_irreversibly_closes_backward_eligibility_without_changing_legacy_retry():
-    from agent_composer.memory import MemoryOperationFailure
-    from agent_composer.runtime.log import BackwardStartedRecord, MemoryCommitFailedRecord
-    from agent_composer.runtime.state import prepare_record, commit_prepared
-
-    state, log, prepared = _legacy_request_prepared()
-    assert not state.backward_state.ever_requested
-    commit_prepared(log, state, prepared)
-    assert state.backward_state.ever_requested and state.backward_state.started is None
-    request = prepared.record
-    failed = MemoryCommitFailedRecord(request.policy_name, request.commit_id,
-                                      MemoryOperationFailure("backend", "temporary", "Try again.", True))
-    commit_prepared(log, state, prepare_record(state, failed))
-    with pytest.raises(ValueError):
-        prepare_record(state, BackwardStartedRecord(1, "Review."))
-    commit_prepared(log, state, prepare_record(state, request))
-    assert state.backward_state.ever_requested
-
-
-def test_forged_legacy_plan_cannot_drop_the_irreversible_request_fact():
-    from dataclasses import replace
-    from agent_composer.runtime.state import commit_prepared
-
-    state, log, prepared = _legacy_request_prepared()
-    prepared = replace(prepared, _plan=replace(prepared._plan, next_backward_state=state.backward_state))
-    prior, sequence = state.backward_state, log.next_sequence
-    with pytest.raises(ValueError):
-        commit_prepared(log, state, prepared)
-    assert state.backward_state is prior and log.next_sequence == sequence
-
-
-@pytest.mark.parametrize("record_kind", ["frame_started", "frame_learned", "frame_failed",
-    "commit_requested", "commit_succeeded", "commit_failed"])
-@pytest.mark.parametrize("change", ["missing", "changed"])
-def test_legacy_learning_plan_requires_its_exact_sequence_only_trace_delta(record_kind, change):
-    from dataclasses import replace
-    from agent_composer.memory import MemoryOperationFailure
-    from agent_composer.runtime.log import (MemoryFrameLearningStartedRecord, MemoryFrameLearnedRecord,
-        MemoryFrameLearningFailedRecord, MemoryCommitSucceededRecord, MemoryCommitFailedRecord)
-    from agent_composer.runtime.state import prepare_record, commit_prepared
-    from tests.engine.test_runtime_memory_learning import _successful_terminal
-
-    failure = MemoryOperationFailure("backend", "failed", "Rejected.", False)
-    if record_kind.startswith("frame_"):
-        state, log, layout = _successful_terminal()
-        spec = layout[0]
-        started = MemoryFrameLearningStartedRecord(spec.policy_name, spec.ref,
-                                                   state.learning_state.occurrence_inventory(spec.ref))
-        if record_kind == "frame_started":
-            record = started
-        else:
-            commit_prepared(log, state, prepare_record(state, started))
-            record = (MemoryFrameLearnedRecord(spec.policy_name, spec.ref, ()) if record_kind == "frame_learned"
-                      else MemoryFrameLearningFailedRecord(spec.policy_name, spec.ref, failure))
-        prepared = prepare_record(state, record)
-    else:
-        state, log, prepared = _legacy_request_prepared()
-        if record_kind != "commit_requested":
-            request = prepared.record
-            commit_prepared(log, state, prepared)
-            record = (MemoryCommitSucceededRecord(request.policy_name, request.commit_id)
-                      if record_kind == "commit_succeeded" else
-                      MemoryCommitFailedRecord(request.policy_name, request.commit_id, failure))
-            prepared = prepare_record(state, record)
-    delta = None if change == "missing" else replace(prepared._plan.trace_delta, resumed=True)
-    prepared = replace(prepared, _plan=replace(prepared._plan, trace_delta=delta))
-    learning, backward, result = state.learning_state, state.backward_state, state.result
-    sequence, started = state.next_sequence, dict(state.trace.started)
-    with pytest.raises(ValueError):
-        commit_prepared(log, state, prepared)
-    assert state.learning_state is learning and state.backward_state is backward and state.result is result
-    assert state.trace.started == started
-    assert state.next_sequence == state.trace.next_sequence == log.next_sequence == sequence
-
-
-@pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("field", ["sequence", "resumed", "prune_ids", "connections", "boundaries",
     "initialized", "started", "occurrence", "writer", "consumed_connection", "boundary_update", "root_start_source",
     "root_writer", "causal_route_source", "terminal", "handler"])
-def test_postterminal_trace_delta_rejects_equal_but_noncanonical_fields_before_append(legacy, field):
+def test_postterminal_trace_delta_rejects_equal_but_noncanonical_fields_before_append(field):
     from dataclasses import replace
     from agent_composer.runtime.log import BackwardStartedRecord
     from agent_composer.runtime.state import prepare_record, commit_prepared
 
-    if legacy:
-        state, log, prepared = _legacy_request_prepared()
-    else:
-        engine, _ = _retained_backward()
-        state, log = engine.state, engine.log
-        prepared = prepare_record(state, BackwardStartedRecord(1, "Review."))
+    engine, _ = _retained_backward()
+    state, log = engine.state, engine.log
+    prepared = prepare_record(state, BackwardStartedRecord(1, "Review."))
 
     class EmptyPrune(tuple):
         def __iter__(self):
@@ -1089,17 +995,6 @@ def test_postterminal_trace_delta_validation_covers_the_closed_field_inventory()
         "writer", "prune_ids", "connections", "consumed_connection", "boundaries", "boundary_update",
         "root_start_source", "root_writer", "causal_route_source", "terminal",
     }
-
-
-def test_legacy_learning_records_are_rejected_after_backward_lifecycle_starts():
-    from agent_composer.runtime.log import BackwardStartedRecord, MemoryFrameLearningStartedRecord
-    from agent_composer.runtime.state import prepare_record
-
-    layout, _ = _proposal_layout()
-    engine, _ = _retained_backward(layout=layout)
-    _accept_backward(engine, BackwardStartedRecord(1, "Review."))
-    with pytest.raises(ValueError, match="legacy"):
-        prepare_record(engine.state, MemoryFrameLearningStartedRecord("alpha", layout[0].ref, ()))
 
 
 def test_failed_backward_computation_has_no_completed_feedback_and_keeps_unrequested_learning():

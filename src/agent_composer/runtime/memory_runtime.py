@@ -19,14 +19,11 @@ from typing import Any
 
 from agent_composer.diagnostics import OriginRef
 from agent_composer.memory import (
-    LearningFailure,
-    LearningResult,
     LearnContext,
     Memory,
     MemoryFrame,
     MemoryFrameRef,
     MemoryFrameSpec,
-    MemoryMutation,
     MemoryOperationError,
     MemoryOperationFailure,
     MemoryRecallError,
@@ -40,26 +37,7 @@ from agent_composer.memory import (
 from agent_composer.memory.contracts import _validate_mutations
 from agent_composer.nodes.base import _CapabilityFault, _HostStop
 from agent_composer.runtime.contracts import FrameProposal
-from agent_composer.runtime.learning import (
-    FrameLearningStatus,
-    PolicyCommitStatus,
-    aggregate_policy_mutations,
-    memory_commit_id,
-)
-from agent_composer.runtime.log import (
-    MemoryCommitFailedRecord,
-    MemoryCommitRequestedRecord,
-    MemoryCommitSucceededRecord,
-    MemoryFrameLearnedRecord,
-    MemoryFrameLearningFailedRecord,
-    MemoryFrameLearningStartedRecord,
-    RunLog,
-)
-from agent_composer.runtime.state import (
-    RunState,
-    commit_prepared,
-    prepare_record,
-)
+from agent_composer.runtime.log import MemoryCommitRequestedRecord
 
 
 def _frame_key(ref: MemoryFrameRef) -> tuple[str, tuple[str, ...], str]:
@@ -535,7 +513,7 @@ class MemoryRuntime:
         request = MemoryCommitRequestedRecord(
             request.policy_name, request.commit_id, request.mutations, attempt_id=request.attempt_id,
         )
-        if request.attempt_id is None or request.policy_name not in self._sessions:
+        if request.policy_name not in self._sessions:
             raise ValueError("backward commit requires an enabled policy and attempt")
         mutations = _validate_mutations(request.mutations)
         try:
@@ -544,176 +522,6 @@ class MemoryRuntime:
             _raise_host_error(exc)
             return _operation_failure("commit", exc)
         return None if result is None else _invalid_result_failure("commit")
-
-    def drive_learning(self, state: RunState, log: RunLog) -> None:
-        """Run each unfinished frame and policy operation at most once.
-
-        Every intent is appended and reduced before the corresponding external
-        effect.  A typed policy error becomes a durable sanitized failure and
-        independent frames/policies continue.  Retryable failures remain pending
-        for a later ``resume_flow`` invocation; this method never retries an
-        operation that failed during the current call.
-        """
-        if self._closed:
-            raise RuntimeError("memory runtime is closed")
-        if type(state) is not RunState:
-            raise TypeError("memory learning requires a RunState")
-        if not isinstance(log, RunLog):
-            raise TypeError("memory learning requires a RunLog")
-        if state.result is None:
-            raise ValueError("memory learning requires a terminal primary run")
-        if state.learn is not True:
-            raise ValueError("memory learning is disabled for this run")
-        if state.memory_layout != self._layout:
-            raise ValueError("opened memory layout does not match the run state")
-        if state.memory_snapshots != self._snapshots:
-            raise ValueError("opened memory snapshots do not match the run state")
-
-        for spec in self._layout:
-            current = state.learning_state.frame_state(spec.ref)
-            if current.status in (
-                FrameLearningStatus.LEARNED,
-                FrameLearningStatus.FAILED_FINAL,
-            ):
-                continue
-            if current.status not in (
-                FrameLearningStatus.PENDING,
-                FrameLearningStatus.STARTED,
-                FrameLearningStatus.FAILED_RETRYABLE,
-            ):
-                raise RuntimeError("unsupported frame learning state")
-
-            if current.status is not FrameLearningStatus.STARTED:
-                occurrences = state.learning_state.occurrence_inventory(spec.ref)
-                self._commit_learning_record(
-                    state,
-                    log,
-                    MemoryFrameLearningStartedRecord(
-                        spec.policy_name,
-                        spec.ref,
-                        occurrences,
-                    ),
-                )
-
-            context = state.learning_state.learn_context(state.run_id, spec.ref)
-            opened = self._frames[spec.ref]
-            try:
-                raw_mutations = opened.frame.learn(context)
-            except MemoryOperationError as exc:
-                failure = _operation_failure("learn", exc)
-            except Exception:
-                failure = _unexpected_operation_failure("learn")
-            else:
-                try:
-                    learned = _learned_record(spec, raw_mutations)
-                    _validate_policy_mutation_ids(
-                        self._layout,
-                        state,
-                        spec,
-                        learned.mutations,
-                    )
-                except (TypeError, ValueError, RecursionError):
-                    failure = _invalid_result_failure("learn")
-                else:
-                    self._commit_learning_record(state, log, learned)
-                    continue
-
-            self._commit_learning_record(
-                state,
-                log,
-                MemoryFrameLearningFailedRecord(
-                    spec.policy_name,
-                    spec.ref,
-                    failure,
-                ),
-            )
-
-        for policy_name in state.learning_state.policy_order:
-            current = state.learning_state.commit_state(policy_name)
-            if current.status in (
-                PolicyCommitStatus.SUCCEEDED,
-                PolicyCommitStatus.FAILED_FINAL,
-            ):
-                continue
-            if not _policy_frames_settled(
-                self._layout,
-                state,
-                policy_name,
-            ):
-                continue
-            if current.status not in (
-                PolicyCommitStatus.UNREQUESTED,
-                PolicyCommitStatus.REQUESTED,
-                PolicyCommitStatus.FAILED_RETRYABLE,
-            ):
-                raise RuntimeError("unsupported policy commit state")
-
-            mutations = aggregate_policy_mutations(
-                self._layout,
-                state.learning_state,
-                policy_name,
-            )
-            commit_id = memory_commit_id(state.run_id, policy_name, mutations)
-            if current.status is PolicyCommitStatus.REQUESTED:
-                if (
-                    current.commit_id != commit_id
-                    or current.mutations != mutations
-                ):
-                    raise RuntimeError(
-                        "recorded memory commit request changed before recovery"
-                    )
-            else:
-                self._commit_learning_record(
-                    state,
-                    log,
-                    MemoryCommitRequestedRecord(
-                        policy_name,
-                        commit_id,
-                        mutations,
-                    ),
-                )
-
-            try:
-                result = self._sessions[policy_name].commit(
-                    commit_id,
-                    mutations,
-                )
-            except MemoryOperationError as exc:
-                failure = _operation_failure("commit", exc)
-            except Exception:
-                failure = _unexpected_operation_failure("commit")
-            else:
-                if result is not None:
-                    failure = _invalid_result_failure("commit")
-                else:
-                    self._commit_learning_record(
-                        state,
-                        log,
-                        MemoryCommitSucceededRecord(policy_name, commit_id),
-                    )
-                    continue
-
-            self._commit_learning_record(
-                state,
-                log,
-                MemoryCommitFailedRecord(
-                    policy_name,
-                    commit_id,
-                    failure,
-                ),
-            )
-
-    @staticmethod
-    def _commit_learning_record(
-        state: RunState,
-        log: RunLog,
-        record: object,
-    ) -> None:
-        """Append and apply one observer-free post-terminal transition."""
-        prepared = prepare_record(state, record)  # type: ignore[arg-type]
-        observers = commit_prepared(log, state, prepared)
-        if observers:
-            raise RuntimeError("memory learning records cannot emit observers")
 
     def close(self) -> None:
         """Close every opened session in reverse policy order exactly once."""
@@ -752,46 +560,6 @@ def _close_sessions(
         raise first_error
 
 
-def _learned_record(
-    spec: MemoryFrameSpec,
-    value: object,
-) -> MemoryFrameLearnedRecord:
-    """Validate one exact policy proposal list into its durable carrier."""
-    if type(value) is not list:
-        raise TypeError("memory learn() must return an exact list")
-    mutations = tuple(value)
-    for mutation in mutations:
-        if type(mutation) is not MemoryMutation:
-            raise TypeError("memory learn() returned a non-mutation value")
-        MemoryMutation(
-            mutation.mutation_id,
-            mutation.frame_ref,
-            mutation.payload,
-        )
-    return MemoryFrameLearnedRecord(
-        spec.policy_name,
-        spec.ref,
-        mutations,
-    )
-
-
-def _validate_policy_mutation_ids(
-    layout: tuple[MemoryFrameSpec, ...],
-    state: RunState,
-    spec: MemoryFrameSpec,
-    mutations: tuple[MemoryMutation, ...],
-) -> None:
-    """Reject a frame proposal that collides inside its policy-wide batch."""
-    prior_ids = {
-        mutation.mutation_id
-        for other in layout
-        if other.policy_name == spec.policy_name and other.ref != spec.ref
-        for mutation in state.learning_state.frame_state(other.ref).mutations
-    }
-    if any(mutation.mutation_id in prior_ids for mutation in mutations):
-        raise ValueError("memory mutation ids must be unique within one policy commit")
-
-
 def _operation_failure(
     operation: str,
     error: MemoryOperationError,
@@ -828,97 +596,6 @@ def _invalid_result_failure(operation: str) -> MemoryOperationFailure:
     )
 
 
-def _policy_frames_settled(
-    layout: tuple[MemoryFrameSpec, ...],
-    state: RunState,
-    policy_name: str,
-) -> bool:
-    """Return whether one policy may form its canonical atomic commit batch."""
-    statuses = (
-        state.learning_state.frame_state(spec.ref).status
-        for spec in layout
-        if spec.policy_name == policy_name
-    )
-    return all(
-        status in (
-            FrameLearningStatus.LEARNED,
-            FrameLearningStatus.FAILED_FINAL,
-        )
-        for status in statuses
-    )
-
-
-def learning_is_settled(state: RunState) -> bool:
-    """Return whether terminal learning has no pending or retryable operation."""
-    if type(state) is not RunState:
-        raise TypeError("learning settlement requires a RunState")
-    if state.learn is not True:
-        return True
-    if state.memory_layout is None:
-        raise ValueError("enabled learning requires a recorded memory layout")
-    frame_settled = all(
-        frame.status in (
-            FrameLearningStatus.LEARNED,
-            FrameLearningStatus.FAILED_FINAL,
-        )
-        for frame in state.learning_state.frames
-    )
-    commit_settled = all(
-        commit.status in (
-            PolicyCommitStatus.SUCCEEDED,
-            PolicyCommitStatus.FAILED_FINAL,
-        )
-        for commit in state.learning_state.commits
-    )
-    return frame_settled and commit_settled
-
-
-def learning_result(state: RunState) -> LearningResult | None:
-    """Project the separate public learning disposition from reducer authority."""
-    if type(state) is not RunState:
-        raise TypeError("learning result requires a RunState")
-    if state.learn is not True:
-        return None
-    layout = state.memory_layout
-    if type(layout) is not tuple:
-        raise ValueError("enabled learning requires a recorded memory layout")
-
-    failures: list[LearningFailure] = []
-    for spec in layout:
-        frame = state.learning_state.frame_state(spec.ref)
-        if frame.failure is not None:
-            failures.append(
-                LearningFailure(
-                    spec.policy_name,
-                    "learn",
-                    frame.failure,
-                    spec.ref,
-                )
-            )
-    for policy_name in state.learning_state.policy_order:
-        commit = state.learning_state.commit_state(policy_name)
-        if commit.failure is not None:
-            failures.append(
-                LearningFailure(
-                    policy_name,
-                    "commit",
-                    commit.failure,
-                )
-            )
-
-    if not learning_is_settled(state):
-        if not any(item.failure.retryable for item in failures):
-            raise RuntimeError(
-                "learning result requested before an active operation settled"
-            )
-        return LearningResult("incomplete", tuple(failures))
-    if failures:
-        return LearningResult("failed", tuple(failures))
-    return LearningResult("succeeded")
-
-
 __all__ = [
     "MemoryRuntime",
-    "learning_is_settled",
-    "learning_result",
 ]

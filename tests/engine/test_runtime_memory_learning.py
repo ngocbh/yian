@@ -19,7 +19,6 @@ from agent_composer.memory import (
     MemoryOccurrenceKind,
     MemoryOccurrenceRef,
     MemoryOccurrenceSegment,
-    MemoryOperationFailure,
     MemoryOwner,
     MemoryScope,
     MemorySnapshotEnvelope,
@@ -29,21 +28,11 @@ from agent_composer.nodes.agent import AgentNode
 from agent_composer.nodes.base import Grow, Node, NodeKind
 from agent_composer.nodes.map import MapNode
 from agent_composer.runtime.learning import (
-    FrameLearningState,
-    FrameLearningStatus,
-    PolicyCommitStatus,
     RuntimeLearningState,
-    aggregate_policy_mutations,
     memory_commit_id,
     project_outcome_episodes,
 )
 from agent_composer.runtime.log import (
-    MemoryCommitFailedRecord,
-    MemoryCommitRequestedRecord,
-    MemoryCommitSucceededRecord,
-    MemoryFrameLearnedRecord,
-    MemoryFrameLearningFailedRecord,
-    MemoryFrameLearningStartedRecord,
     MemoryRunLog,
     NodeExpandedRecord,
     NodeRoutedRecord,
@@ -751,121 +740,6 @@ def test_causal_route_episode_retains_the_accepted_failure():
         assert episode.failure["code"] == failure.code
 
 
-def test_frame_learning_and_commit_follow_record_authority_and_layout_order() -> None:
-    state, log, layout = _successful_terminal()
-    outer, agent = _refs()
-
-    # The reducer allows independent frames in any execution order; aggregation
-    # still follows the canonical recorded layout and each frame's proposal order.
-    for ref, mutations in (
-        (
-            agent,
-            (
-                MemoryMutation("agent-2", agent, {"order": 2}),
-                MemoryMutation("agent-3", agent, {"order": 3}),
-            ),
-        ),
-        (outer, (MemoryMutation("flow-1", outer, {"order": 1}),)),
-    ):
-        occurrences = state.learning_state.occurrence_inventory(ref)
-        _commit_record(
-            state,
-            log,
-            MemoryFrameLearningStartedRecord(_POLICY, ref, occurrences),
-        )
-        assert state.learning_state.active_frame == ref
-        _commit_record(
-            state,
-            log,
-            MemoryFrameLearnedRecord(_POLICY, ref, mutations),
-        )
-        assert (
-            state.learning_state.frame_state(ref).status
-            is FrameLearningStatus.LEARNED
-        )
-
-    batch = aggregate_policy_mutations(layout, state.learning_state, _POLICY)
-    assert [mutation.mutation_id for mutation in batch] == [
-        "flow-1",
-        "agent-2",
-        "agent-3",
-    ]
-    commit_id = memory_commit_id(_RUN_ID, _POLICY, batch)
-    _commit_record(
-        state,
-        log,
-        MemoryCommitRequestedRecord(_POLICY, commit_id, batch),
-    )
-    requested = state.learning_state.commit_state(_POLICY)
-    assert requested.status is PolicyCommitStatus.REQUESTED
-    assert requested.commit_id == commit_id
-    assert requested.mutations == batch
-
-    _commit_record(
-        state,
-        log,
-        MemoryCommitSucceededRecord(_POLICY, commit_id),
-    )
-    assert (
-        state.learning_state.commit_state(_POLICY).status
-        is PolicyCommitStatus.SUCCEEDED
-    )
-
-
-def test_learning_failure_retry_final_and_primary_result_are_independent() -> None:
-    agent = _refs()[1]
-    state, log, _layout_value = _successful_terminal(frames=(agent,))
-    primary = state.result
-    occurrences = state.learning_state.occurrence_inventory(agent)
-
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearningStartedRecord(_POLICY, agent, occurrences),
-    )
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearningFailedRecord(
-            _POLICY,
-            agent,
-            MemoryOperationFailure("learn", "temporary", "retry", True),
-        ),
-    )
-    assert (
-        state.learning_state.frame_state(agent).status
-        is FrameLearningStatus.FAILED_RETRYABLE
-    )
-    assert state.result is primary
-
-    # Segment timing is orchestration-owned; the reducer validates the durable
-    # failed_retryable -> started edge because no post-terminal resume marker exists.
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearningStartedRecord(_POLICY, agent, occurrences),
-    )
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearningFailedRecord(
-            _POLICY,
-            agent,
-            MemoryOperationFailure("learn", "permanent", "stop", False),
-        ),
-    )
-    assert (
-        state.learning_state.frame_state(agent).status
-        is FrameLearningStatus.FAILED_FINAL
-    )
-    with pytest.raises(ValueError, match="cannot start from failed_final"):
-        prepare_record(
-            state,
-            MemoryFrameLearningStartedRecord(_POLICY, agent, occurrences),
-        )
-    assert state.result is primary
-
-
 def test_failure_episode_uses_full_canonical_durable_failure_json() -> None:
     agent = _refs()[1]
     node = _TraceNode("agent")
@@ -1023,106 +897,6 @@ def test_learning_rejects_trace_scope_that_omits_an_applicable_frame(
         )
 
 
-def test_learning_records_require_primary_terminal_and_enabled_learn_flag() -> None:
-    agent = _refs()[1]
-    node = _TraceNode("agent")
-    scope = _scope(node.id, frames=(agent,))
-    node.memory_scope = scope
-    layout = _layout((agent,))
-    state, log = _start_trace_node(node, layout=layout, learn=True)
-    commit_prepared(
-        log,
-        state,
-        prepare_node_succeeded(
-            state,
-            node.id,
-            "done",
-            evidence=_evidence(scope),
-            forward_capture=_forward_capture(node, {"question": "q"}),
-        ),
-    )
-    occurrences = state.learning_state.occurrence_inventory(agent)
-    start = MemoryFrameLearningStartedRecord(_POLICY, agent, occurrences)
-    with pytest.raises(ValueError, match="primary terminal"):
-        prepare_record(state, start)
-
-    disabled_node = _TraceNode("agent")
-    disabled_node.memory_scope = scope
-    disabled, disabled_log = _start_trace_node(
-        disabled_node,
-        layout=layout,
-        learn=False,
-    )
-    commit_prepared(
-        disabled_log,
-        disabled,
-        prepare_node_succeeded(disabled, disabled_node.id, "done"),
-    )
-    commit_prepared(
-        disabled_log,
-        disabled,
-        prepare_node_started(disabled, END_ID),
-    )
-    commit_prepared(
-        disabled_log,
-        disabled,
-        prepare_node_succeeded(disabled, END_ID, None),
-    )
-    with pytest.raises(ValueError, match="enabled learning"):
-        prepare_record(disabled, start)
-
-
-def test_started_and_requested_crash_states_replay_without_duplicate_records() -> None:
-    agent = _refs()[1]
-    state, log, layout = _successful_terminal(frames=(agent,))
-    occurrences = state.learning_state.occurrence_inventory(agent)
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearningStartedRecord(_POLICY, agent, occurrences),
-    )
-
-    replay_started = _replay_records(
-        RunState(copy.deepcopy(state.flow)),
-        tuple(log),
-        grow_builder=lambda _node, _seed: pytest.fail("no growth expected"),
-    )
-    assert replay_started.learning_state == state.learning_state
-    assert (
-        replay_started.learning_state.frame_state(agent).status
-        is FrameLearningStatus.STARTED
-    )
-    with pytest.raises(ValueError, match="active"):
-        prepare_record(
-            replay_started,
-            MemoryFrameLearningStartedRecord(_POLICY, agent, occurrences),
-        )
-
-    mutation = MemoryMutation("m", agent, {"lesson": "kept"})
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearnedRecord(_POLICY, agent, (mutation,)),
-    )
-    batch = aggregate_policy_mutations(layout, state.learning_state, _POLICY)
-    commit_id = memory_commit_id(_RUN_ID, _POLICY, batch)
-    request = MemoryCommitRequestedRecord(_POLICY, commit_id, batch)
-    _commit_record(state, log, request)
-
-    replay_requested = _replay_records(
-        RunState(copy.deepcopy(state.flow)),
-        tuple(log),
-        grow_builder=lambda _node, _seed: pytest.fail("no growth expected"),
-    )
-    assert replay_requested.learning_state == state.learning_state
-    assert (
-        replay_requested.learning_state.commit_state(_POLICY).status
-        is PolicyCommitStatus.REQUESTED
-    )
-    with pytest.raises(ValueError, match="cannot be requested from requested"):
-        prepare_record(replay_requested, request)
-
-
 def test_expanded_map_occurrence_projects_and_replays_from_live_node_scope() -> None:
     outer = _refs()[0]
     child_agent = AgentNode("agent", prompt="visible")
@@ -1209,189 +983,6 @@ def test_expanded_map_occurrence_projects_and_replays_from_live_node_scope() -> 
     )
     assert replayed.learning_state == state.learning_state
     assert replayed.learning_state.episodes_for(outer) == (episode,)
-
-
-def test_retryable_and_final_commit_failures_control_re_request() -> None:
-    agent = _refs()[1]
-    state, log, layout = _successful_terminal(frames=(agent,))
-    occurrences = state.learning_state.occurrence_inventory(agent)
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearningStartedRecord(_POLICY, agent, occurrences),
-    )
-    mutation = MemoryMutation("m", agent, {"lesson": 1})
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearnedRecord(_POLICY, agent, (mutation,)),
-    )
-    batch = aggregate_policy_mutations(layout, state.learning_state, _POLICY)
-    commit_id = memory_commit_id(_RUN_ID, _POLICY, batch)
-    request = MemoryCommitRequestedRecord(_POLICY, commit_id, batch)
-    _commit_record(state, log, request)
-    _commit_record(
-        state,
-        log,
-        MemoryCommitFailedRecord(
-            _POLICY,
-            commit_id,
-            MemoryOperationFailure("commit", "temporary", "retry", True),
-        ),
-    )
-    assert (
-        state.learning_state.commit_state(_POLICY).status
-        is PolicyCommitStatus.FAILED_RETRYABLE
-    )
-
-    _commit_record(state, log, request)
-    _commit_record(
-        state,
-        log,
-        MemoryCommitFailedRecord(
-            _POLICY,
-            commit_id,
-            MemoryOperationFailure("commit", "permanent", "stop", False),
-        ),
-    )
-    assert (
-        state.learning_state.commit_state(_POLICY).status
-        is PolicyCommitStatus.FAILED_FINAL
-    )
-    with pytest.raises(ValueError, match="cannot be requested from failed_final"):
-        prepare_record(state, request)
-
-
-def test_learning_records_validate_active_frame_inventory_policy_batch_and_id() -> None:
-    state, log, layout = _successful_terminal()
-    outer, agent = _refs()
-    outer_occurrences = state.learning_state.occurrence_inventory(outer)
-    agent_occurrences = state.learning_state.occurrence_inventory(agent)
-
-    with pytest.raises(ValueError, match="accepted inventory"):
-        prepare_record(
-            state,
-            MemoryFrameLearningStartedRecord(_POLICY, outer, ()),
-        )
-    with pytest.raises(ValueError, match="does not match recorded frame policy"):
-        prepare_record(
-            state,
-            MemoryFrameLearningStartedRecord("wrong", outer, outer_occurrences),
-        )
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearningStartedRecord(_POLICY, outer, outer_occurrences),
-    )
-    with pytest.raises(ValueError, match="another memory frame"):
-        prepare_record(
-            state,
-            MemoryFrameLearningStartedRecord(_POLICY, agent, agent_occurrences),
-        )
-    with pytest.raises(ValueError, match="active memory frame"):
-        prepare_record(
-            state,
-            MemoryFrameLearnedRecord(
-                _POLICY,
-                agent,
-                (MemoryMutation("wrong", agent, {}),),
-            ),
-        )
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearnedRecord(
-            _POLICY,
-            outer,
-            (MemoryMutation("outer", outer, {}),),
-        ),
-    )
-    with pytest.raises(ValueError, match="every frame"):
-        prepare_record(
-            state,
-            MemoryCommitRequestedRecord(
-                _POLICY,
-                memory_commit_id(_RUN_ID, _POLICY, ()),
-                (),
-            ),
-        )
-
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearningStartedRecord(_POLICY, agent, agent_occurrences),
-    )
-    collision = MemoryFrameLearnedRecord(
-        _POLICY,
-        agent,
-        (MemoryMutation("outer", agent, {}),),
-    )
-    with pytest.raises(ValueError, match="unique within one policy"):
-        prepare_record(state, collision)
-
-    forged = MemoryRunLog(_RUN_ID)
-    for envelope in log:
-        forged.append(envelope.record)
-    forged.append(collision)
-    with pytest.raises(ValueError, match="unique within one policy"):
-        _replay_records(
-            RunState(copy.deepcopy(state.flow)),
-            tuple(forged),
-            grow_builder=build_grow,
-        )
-
-    _commit_record(
-        state,
-        log,
-        MemoryFrameLearnedRecord(
-            _POLICY,
-            agent,
-            (MemoryMutation("agent", agent, {}),),
-        ),
-    )
-    batch = aggregate_policy_mutations(layout, state.learning_state, _POLICY)
-    with pytest.raises(ValueError, match="exactly aggregate"):
-        prepare_record(
-            state,
-            MemoryCommitRequestedRecord(
-                _POLICY,
-                memory_commit_id(_RUN_ID, _POLICY, tuple(reversed(batch))),
-                tuple(reversed(batch)),
-            ),
-        )
-    with pytest.raises(ValueError, match="canonical batch"):
-        prepare_record(
-            state,
-            MemoryCommitRequestedRecord(_POLICY, "wrong-id", batch),
-        )
-
-
-def test_learning_append_failure_leaves_projection_sequence_and_result_unchanged(
-) -> None:
-    agent = _refs()[1]
-    state, log, _layout_value = _successful_terminal(frames=(agent,))
-    record = MemoryFrameLearningStartedRecord(
-        _POLICY,
-        agent,
-        state.learning_state.occurrence_inventory(agent),
-    )
-    prepared = prepare_record(state, record)
-    original_learning = state.learning_state
-    original_sequence = state.next_sequence
-    original_result = state.result
-
-    class _FailingLog:
-        run_id = log.run_id
-        next_sequence = log.next_sequence
-
-        def append(self, _record):
-            raise OSError("append failed")
-
-    with pytest.raises(OSError, match="append failed"):
-        commit_prepared(_FailingLog(), state, prepared)
-    assert state.learning_state is original_learning
-    assert state.next_sequence == original_sequence
-    assert state.result is original_result
 
 
 def test_route_and_growth_projection_use_closed_source_neutral_envelopes() -> None:
@@ -1508,7 +1099,7 @@ def test_large_frame_inventory_uses_indexed_lookup(monkeypatch) -> None:
 
     monkeypatch.setattr(MemoryFrameRef, "__eq__", count_equality)
     for ref in refs:
-        assert learning.frame_state(ref).status is FrameLearningStatus.PENDING
+        assert learning.episodes_for(ref) == ()
 
     assert comparisons <= len(refs) * 2
 
@@ -1575,47 +1166,6 @@ def test_graph_outcome_uses_constant_memory_roots_and_indexed_scope(
 
     assert applicable_calls == 1
     assert key_calls < 100
-
-
-def test_policy_aggregation_uses_cached_frame_partition(monkeypatch) -> None:
-    refs = tuple(
-        MemoryFrameRef(
-            "root",
-            ("root", "agents", f"agent-{index:04d}"),
-            MemoryOwner.AGENT,
-        )
-        for index in range(512)
-    )
-    layout = tuple(
-        MemoryFrameSpec(ref, f"policy-{index:04d}", {})
-        for index, ref in enumerate(refs)
-    )
-    learning = RuntimeLearningState.for_layout(layout)
-    for ref in refs:
-        learning = learning.with_frame_state(
-            ref,
-            FrameLearningState(FrameLearningStatus.STARTED),
-        )
-        learning = learning.with_frame_state(
-            ref,
-            FrameLearningState(FrameLearningStatus.LEARNED),
-        )
-
-    def reject_layout_scan(*_args, **_kwargs) -> None:
-        pytest.fail("trusted policy aggregation rescanned the complete layout")
-
-    monkeypatch.setattr(learning_module, "_validate_layout", reject_layout_scan)
-    monkeypatch.setattr(
-        RuntimeLearningState,
-        "validate_layout",
-        reject_layout_scan,
-    )
-    for index in range(len(refs)):
-        assert learning.policy_mutations(f"policy-{index:04d}") == ()
-
-    assert learning.policy_frame_indices == tuple(
-        (index,) for index in range(len(refs))
-    )
 
 
 def test_commit_id_has_one_documented_canonical_encoding() -> None:

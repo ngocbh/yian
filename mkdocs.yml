@@ -88,6 +88,7 @@ nav:
   - Examples: examples.md
   - Internals:
     - Agent: agent.md
+    - Learning: learning.md
     - Architecture: architecture.md
     - Compose (YAML → IR): compose.md
     - The engine: engine.md

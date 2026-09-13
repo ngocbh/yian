@@ -8,8 +8,8 @@ whether to enable retention and when to submit feedback.
 ```mermaid
 flowchart LR
     forward["run_flow(..., learn=True)"] --> result["terminal RunResult"]
-    result --> call["result.backward(feedback)"]
-    call --> fold["reverse fold over accepted data lineage"]
+    result --> attempt["result.backward(feedback)"]
+    attempt --> fold["reverse fold over accepted data lineage"]
     fold --> nodes["node backward hooks"]
     fold --> frames["owner-scoped frame learners"]
     nodes --> ready["validated feedback and proposals"]

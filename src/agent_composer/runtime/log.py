@@ -608,6 +608,8 @@ class MemoryRunLog:
         """Reopen a detached canonical prefix without renumbering accepted records."""
         if type(records) is not tuple or not records:
             raise ValueError("reopening requires a nonempty record tuple")
+        if any(type(envelope) is not RecordEnvelope for envelope in records):
+            raise TypeError("reopening requires exact RecordEnvelope values")
         canonical = tuple(_copy_envelope(envelope) for envelope in records)
         run_id = canonical[0].run_id
         for sequence, envelope in enumerate(canonical):

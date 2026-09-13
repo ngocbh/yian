@@ -139,18 +139,26 @@ class RunResult:
             `MemorySetupError`: Enabled policies cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.
+            `RuntimeError`: Another backward call on this result is in progress,
+                or its accepted prefix could not be retained after an earlier call.
 
         Examples:
             `result.backward("Keep the explanation shorter.")` returns a separate
             outcome for a run created with `learn=True`.
         """
-        if self._backward_handle is None:
+        handle = self._backward_handle
+        if handle is None:
             raise ValueError("backward requires a run retained with learn=True")
+        if not handle._guard.acquire(blocking=False):
+            raise RuntimeError("a backward call on this result is already in progress")
         try:
-            return self._backward_handle.backward(feedback)
+            try:
+                return handle.backward(feedback)
+            finally:
+                self.backward_outcome = handle.outcome
+                self.learning = None if self.backward_outcome is None else self.backward_outcome.learning
         finally:
-            self.backward_outcome = self._backward_handle.outcome
-            self.learning = None if self.backward_outcome is None else self.backward_outcome.learning
+            handle._guard.release()
 
 
 @dataclass
@@ -163,9 +171,13 @@ class _BackwardHandle:
     records: tuple[RecordEnvelope, ...]
     memory: dict[str, Memory] | None
     outcome: BackwardOutcome | None
+    _guard: Any = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
+    _unusable: bool = field(default=False, init=False, repr=False, compare=False)
 
     def backward(self, feedback: FeedbackValue) -> BackwardOutcome:
         """Reconstruct accepted facts and delegate the complete attempt driver."""
+        if self._unusable:
+            raise RuntimeError("backward handle is unavailable after an accepted-prefix refresh failure")
         authority = MemoryRunLog._from_records(self.records) if self.path is None else JsonlRunLog.resume(self.path)
         state = None
         replay_sequence = None
@@ -193,14 +205,39 @@ class _BackwardHandle:
             raise
         finally:
             try:
-                # Replaying another handle's work does not observe a new attempt
-                # for this result when the submitted feedback is rejected.
-                if replay_sequence is not None and state.next_sequence > replay_sequence:
-                    self.outcome = state.backward_state.outcome
-                if self.path is None:
-                    self.records = tuple(authority)
+                if replay_sequence is not None:
+                    try:
+                        self._refresh(authority, state, replay_sequence)
+                    except BaseException as refresh_error:
+                        self._unusable = True
+                        if primary_error is None:
+                            primary_error = refresh_error
+                            raise
+                        _note_cleanup_error(primary_error, "backward prefix refresh", refresh_error)
             finally:
                 _close_owned_log(authority, primary_error)
+
+    def _refresh(self, authority: RunLog, state: RunState, replay_sequence: int) -> None:
+        """Retain accepted facts, replaying an append that outpaced local reduction."""
+        sequence = authority.next_sequence
+        if type(sequence) is not int or sequence < state.next_sequence:
+            raise ValueError("backward log sequence regressed during the call")
+        # Merely reading another handle's work must preserve this result's
+        # existing observation when its own submission accepted no new record.
+        if sequence == replay_sequence:
+            return
+        if state.next_sequence > replay_sequence:
+            self.outcome = state.backward_state.outcome
+        records = tuple(authority)
+        if authority.next_sequence != sequence or len(records) != sequence:
+            raise ValueError("backward log changed during prefix refresh")
+        if self.path is None:
+            self.records = records
+        if sequence > state.next_sequence:
+            accepted = _replay_compiled_run_log(self.program, authority)
+            if accepted.run_id != self.run_id:
+                raise ValueError("backward log identity differs from the retained run")
+            self.outcome = accepted.backward_state.outcome
 
 
 def run_flow(
@@ -376,10 +413,12 @@ def _run_flow_controlled(
 
         # Preparation precedes durable-file creation, so invalid initialization
         # cannot leave an empty path behind.
+        log_path = None if log is None else Path(log)
+        retained_locator = None if log_path is None else log_path.absolute()
         authority = (
             MemoryRunLog(canonical_run_id)
-            if log is None
-            else JsonlRunLog.create(log, canonical_run_id)
+            if log_path is None
+            else JsonlRunLog.create(retained_locator, canonical_run_id)
         )
         events: list[Any] = []
         start_observers = commit_prepared(authority, state, prepared_start)
@@ -403,8 +442,9 @@ def _run_flow_controlled(
             ),
         )
         events.extend(engine.run())
-        return _result_from_state(state, authority.path, events,
-                                  handle=_retained_handle(retained_program, state, authority, memory))
+        return _result_from_state(state, log_path, events,
+                                  handle=_retained_handle(retained_program, state, authority, memory,
+                                                          locator=retained_locator))
     except BaseException as exc:
         primary_error = exc
         raise
@@ -488,15 +528,18 @@ def _resume_flow_controlled(
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event."""
-    authority = JsonlRunLog.resume(log)
+    log_path = Path(log)
+    retained_locator = log_path.absolute()
+    authority = JsonlRunLog.resume(retained_locator)
     memory_runtime: MemoryRuntime | None = None
     primary_error: BaseException | None = None
     try:
         state = _replay_run_log(flow, authority)
         retained_program = copy.deepcopy(flow.compiled) if state.learn else None
         if state.result is not None:
-            return _result_from_state(state, authority.path, [],
-                                      handle=_retained_handle(retained_program, state, authority, memory))
+            return _result_from_state(state, log_path, [],
+                                      handle=_retained_handle(retained_program, state, authority, memory,
+                                                              locator=retained_locator))
 
         if state.memory_layout is not None:
             if memory is None:
@@ -548,8 +591,9 @@ def _resume_flow_controlled(
             )
             events.extend(engine.run())
 
-        return _result_from_state(state, authority.path, events,
-                                  handle=_retained_handle(retained_program, state, authority, memory))
+        return _result_from_state(state, log_path, events,
+                                  handle=_retained_handle(retained_program, state, authority, memory,
+                                                          locator=retained_locator))
     except BaseException as exc:
         primary_error = exc
         raise
@@ -738,11 +782,12 @@ def _result_from_state(
 
 def _retained_handle(
     program: CompiledFlow | None, state: RunState, log: RunLog, memory: dict[str, Memory] | None,
+    *, locator: Path | None,
 ) -> _BackwardHandle | None:
     """Detach delayed authority without keeping an opened session or public wrapper."""
     if program is None:
         return None
-    return _BackwardHandle(program, state.run_id, log.path, tuple(log) if log.path is None else (),
+    return _BackwardHandle(program, state.run_id, locator, tuple(log) if log.path is None else (),
                            memory.copy() if type(memory) is dict else memory, state.backward_state.outcome)
 
 

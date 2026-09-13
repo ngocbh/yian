@@ -154,13 +154,17 @@ def test_memory_log_orders_records_and_retains_a_canonical_copy():
 
 def test_memory_log_reopens_a_detached_prefix_at_the_next_sequence():
     original = MemoryRunLog("retained")
-    original.append(NodeExpandedRecord("each", {"items": [1]}, (), _DIGEST))
+    original.append(NodeExpandedRecord("each", {"items": [{"value": 1}]}, (), _DIGEST))
     original.close()
     prefix = original.records()
     reopened = MemoryRunLog._from_records(prefix)
     try:
-        prefix[0].record.seed["items"].append(2)
-        assert tuple(reopened)[0].record.seed == {"items": [1]}
+        prefix[0].record.seed["items"][0]["value"] = 2
+        exported = reopened.records()
+        exported[0].record.seed["items"].append({"value": 3})
+        assert tuple(reopened)[0].record.seed == {"items": [{"value": 1}]}
+        assert original.records()[0].record.seed == {"items": [{"value": 1}]}
+        assert exported[0] is not prefix[0]
         accepted = reopened.append(NodeStartedRecord("next"))
         assert accepted.seq == 1 and reopened.next_sequence == 2
         assert len(original.records()) == 1
@@ -170,19 +174,46 @@ def test_memory_log_reopens_a_detached_prefix_at_the_next_sequence():
         reopened.close()
 
 
-@pytest.mark.parametrize("change", ["empty", "list", "gap", "foreign"])
+@pytest.mark.parametrize("change", ["empty", "list", "tuple_subclass", "gap", "duplicate", "foreign"])
 def test_memory_log_reopening_rejects_invalid_prefix_coordinates(change):
     records = (RecordEnvelope(SCHEMA_VERSION, "run", 0, NodeStartedRecord("first")),)
     if change == "empty":
         records = ()
     elif change == "list":
         records = list(records)
+    elif change == "tuple_subclass":
+        class OtherTuple(tuple):
+            pass
+
+        records = OtherTuple(records)
     elif change == "gap":
         records = (RecordEnvelope(SCHEMA_VERSION, "run", 1, NodeStartedRecord("first")),)
+    elif change == "duplicate":
+        records += records
     else:
         records += (RecordEnvelope(SCHEMA_VERSION, "other", 1, NodeStartedRecord("second")),)
     with pytest.raises(ValueError):
         MemoryRunLog._from_records(records)
+
+
+@pytest.mark.parametrize("field, value", [
+    ("schema", SCHEMA_VERSION - 1), ("schema", float(SCHEMA_VERSION)), ("schema", True),
+    ("run_id", ""), ("run_id", 1), ("run_id", "\ud800"),
+    ("seq", -1), ("seq", 0.0), ("seq", False),
+    ("record", NodeStartedRecord(1)), ("envelope", None),
+])
+def test_memory_log_reopening_revalidates_exact_envelope_authority(field, value):
+    envelope = RecordEnvelope(SCHEMA_VERSION, "run", 0, NodeStartedRecord("first"))
+    if field == "envelope":
+        class OtherEnvelope(RecordEnvelope):
+            pass
+
+        envelope = OtherEnvelope(SCHEMA_VERSION, "run", 0, NodeStartedRecord("first"))
+    else:
+        object.__setattr__(envelope, field, value)
+
+    with pytest.raises((TypeError, ValueError)):
+        MemoryRunLog._from_records((envelope,))
 
 
 def test_memory_log_never_exposes_its_retained_mutable_payload():

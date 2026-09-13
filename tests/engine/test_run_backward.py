@@ -1,15 +1,21 @@
 """Explicit public backward attempts over retained forward run authority."""
 
+from asyncio import CancelledError as AsyncCancelledError
+from concurrent.futures import CancelledError as FutureCancelledError, ThreadPoolExecutor
+from pathlib import Path
+import threading
+
 import pytest
 
 from agent_composer.compose import load_flow
-from agent_composer.memory import MemoryOperationError
+from agent_composer.events import RunStarted, RunSucceeded
+from agent_composer.memory import MemoryOperationError, MemorySetupError
 from agent_composer.run import resume_flow, run_flow
 from agent_composer.runtime.log import (
     BackwardFinishedRecord, BackwardReadyRecord, BackwardStartedRecord, JsonlRunLog,
-    MemoryCommitRequestedRecord, MemoryCommitSucceededRecord,
+    MemoryCommitRequestedRecord, MemoryCommitSucceededRecord, MemoryRunLog,
 )
-from tests.engine._memory_fakes import _Memory
+from tests.engine._memory_fakes import _Memory, _Session
 
 
 _IDENTITY = """id: identity
@@ -63,6 +69,409 @@ def test_forward_returns_before_any_learning_or_commit(tmp_path):
         BackwardStartedRecord, BackwardReadyRecord, MemoryCommitRequestedRecord,
         MemoryCommitSucceededRecord, BackwardFinishedRecord,
     )
+
+
+def test_same_handle_rejects_nested_backward_before_a_second_commit():
+    rejected = []
+
+    def learn(context):
+        try:
+            result.backward("Nested review.")
+        except RuntimeError as exc:
+            rejected.append(exc)
+        return []
+
+    backend = _Memory(learn_outcomes=[learn])
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True,
+                      memory={"test": backend})
+
+    assert result.backward("Outer review.").status == "succeeded"
+
+    assert len(backend.commit_calls) == 1
+    assert len(backend.learn_contexts) == 1
+    assert len(rejected) == 1 and "in progress" in str(rejected[0])
+    assert backend.close_count == 2
+    with pytest.raises(ValueError, match="accepted prefix"):
+        result.backward("Later review.")
+
+
+@pytest.mark.parametrize("durable", [False, True])
+def test_same_handle_rejects_concurrent_backward_without_waiting(tmp_path, durable):
+    entered, release = threading.Event(), threading.Event()
+
+    def learn(context):
+        entered.set()
+        assert release.wait(timeout=5)
+        return []
+
+    backend = _Memory(learn_outcomes=[learn])
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True,
+                      log=tmp_path / "run.jsonl" if durable else None, memory={"test": backend})
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        pending = workers.submit(result.backward, "First review.")
+        try:
+            assert entered.wait(timeout=5)
+            with pytest.raises(RuntimeError, match="in progress"):
+                result.backward("Concurrent review.")
+            assert len(backend.learn_contexts) == 1 and not backend.commit_calls
+        finally:
+            release.set()
+        assert pending.result(timeout=5).status == "succeeded"
+    assert len(backend.commit_calls) == 1 and backend.close_count == 2
+
+
+@pytest.mark.parametrize("acquisition", ["fresh_event", "fresh_after", "resume_event", "resume_after"])
+def test_delayed_backward_anchors_the_log_at_acquisition(tmp_path, monkeypatch, acquisition):
+    acquired, elsewhere = tmp_path / "acquired", tmp_path / "elsewhere"
+    acquired.mkdir()
+    elsewhere.mkdir()
+    monkeypatch.chdir(acquired)
+    flow = load_flow(_IDENTITY)
+
+    def move_after_forward(event):
+        if isinstance(event, RunSucceeded):
+            monkeypatch.chdir(elsewhere)
+
+    if acquisition == "resume_event":
+        interrupted = RuntimeError("interrupt before forward evaluation")
+
+        def stop_after_start(event):
+            if isinstance(event, RunStarted):
+                raise interrupted
+
+        with pytest.raises(RuntimeError) as caught:
+            run_flow(flow, {"text": "hello"}, learn=True, log="run.jsonl", on_event=stop_after_start)
+        assert caught.value is interrupted
+        result = resume_flow(flow, log="run.jsonl", on_event=move_after_forward)
+    elif acquisition == "resume_after":
+        run_flow(flow, {"text": "hello"}, learn=True, log="run.jsonl")
+        result = resume_flow(flow, log="run.jsonl")
+    else:
+        result = run_flow(flow, {"text": "hello"}, learn=True, log="run.jsonl",
+                          on_event=move_after_forward if acquisition == "fresh_event" else None)
+    monkeypatch.chdir(elsewhere)
+
+    assert result.log == Path("run.jsonl")
+    assert result.backward("Review.").feedback.input_feedback == {"text": ("Review.",)}
+    assert type(_records(acquired / "run.jsonl")[-1]) is BackwardFinishedRecord
+    assert not (elsewhere / "run.jsonl").exists()
+
+
+@pytest.mark.parametrize("opening", ["create", "resume"])
+def test_acquisition_uses_the_captured_locator_if_opener_changes_cwd(tmp_path, monkeypatch, opening):
+    acquired, elsewhere = tmp_path / "acquired", tmp_path / "elsewhere"
+    acquired.mkdir()
+    elsewhere.mkdir()
+    monkeypatch.chdir(acquired)
+    flow = load_flow(_IDENTITY)
+    other_prefix = None
+    if opening == "resume":
+        run_flow(flow, {"text": "hello"}, learn=True, log="run.jsonl")
+        run_flow(flow, {"text": "other run"}, learn=True, log=elsewhere / "run.jsonl")
+        other_prefix = (elsewhere / "run.jsonl").read_bytes()
+    original_open = getattr(JsonlRunLog, opening)
+
+    def change_before_open(cls, path, *args):
+        monkeypatch.chdir(elsewhere)
+        return original_open(path, *args)
+
+    monkeypatch.setattr(JsonlRunLog, opening, classmethod(change_before_open))
+    result = (run_flow(flow, {"text": "hello"}, learn=True, log="run.jsonl")
+              if opening == "create" else resume_flow(flow, log="run.jsonl"))
+
+    assert result.output == "hello" and result.log == Path("run.jsonl")
+    assert result.backward("Review.").feedback.input_feedback == {"text": ("Review.",)}
+    assert type(_records(acquired / "run.jsonl")[-1]) is BackwardFinishedRecord
+    if other_prefix is None:
+        assert not (elsewhere / "run.jsonl").exists()
+    else:
+        assert (elsewhere / "run.jsonl").read_bytes() == other_prefix
+
+
+@pytest.mark.parametrize("phase", ["learner", "commit", "finished"])
+@pytest.mark.parametrize("durable", [False, True])
+def test_prefix_export_failure_preserves_primary_and_prevents_stale_retry(tmp_path, monkeypatch, phase, durable):
+    primary = MemoryError("learner failed") if phase == "learner" else RuntimeError("backend failed")
+    export_error = OSError("prefix export failed")
+    close_error = OSError("log close failed")
+    backend = _Memory(learn_outcomes=[primary] if phase == "learner" else [],
+                      commit_outcomes=[primary] if phase == "commit" else [])
+    flow = load_flow(_WITH_MEMORY)
+    path = tmp_path / "export.jsonl" if durable else None
+    result = run_flow(flow, {"text": "hello"}, learn=True, log=path, memory={"test": backend})
+    log_type = JsonlRunLog if durable else MemoryRunLog
+    original_iter, original_close = log_type.__iter__, log_type.close
+    closed = []
+
+    def export(log):
+        if any(type(envelope.record) is BackwardStartedRecord for envelope in log._records):
+            raise export_error
+        return original_iter(log)
+
+    def close(log):
+        original_close(log)
+        closed.append(log)
+        raise close_error
+
+    monkeypatch.setattr(log_type, "__iter__", export)
+    monkeypatch.setattr(log_type, "close", close)
+    with pytest.raises(BaseException) as caught:
+        result.backward("Review.")
+
+    assert caught.value is (export_error if phase == "finished" else primary)
+    assert len(closed) == 1 and closed[0]._closed
+    assert backend.close_count == 2
+    assert result.backward_outcome is not None
+    assert result.backward_outcome.status == ("succeeded" if phase == "finished" else "failed")
+    if phase == "commit":
+        assert result.learning.policies[0].status == "unknown"
+    learned, committed = len(backend.learn_contexts), len(backend.commit_calls)
+    monkeypatch.setattr(log_type, "__iter__", original_iter)
+    monkeypatch.setattr(log_type, "close", original_close)
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        result.backward("Do not retry stale history.")
+
+    assert (len(backend.learn_contexts), len(backend.commit_calls)) == (learned, committed)
+    if durable:
+        assert resume_flow(flow, log=path).backward_outcome == result.backward_outcome
+
+
+@pytest.mark.parametrize("record_type, disposition", [
+    (BackwardStartedRecord, "unrequested"),
+    (MemoryCommitRequestedRecord, "unknown"),
+    (MemoryCommitSucceededRecord, "succeeded"),
+    (BackwardFinishedRecord, "finished"),
+])
+@pytest.mark.parametrize("durable", [False, True])
+def test_accepted_append_error_refreshes_the_actual_prefix(tmp_path, monkeypatch, record_type, disposition, durable):
+    backend = _Memory()
+    path = tmp_path / "accepted.jsonl" if durable else None
+    flow = load_flow(_WITH_MEMORY)
+    result = run_flow(flow, {"text": "hello"}, learn=True, log=path, memory={"test": backend})
+    log_type = JsonlRunLog if durable else MemoryRunLog
+    original_append = log_type.append
+    failure = OSError("append accepted before returning")
+    fail_once = True
+
+    def append(log, record):
+        nonlocal fail_once
+        envelope = original_append(log, record)
+        if fail_once and type(record) is record_type:
+            fail_once = False
+            raise failure
+        return envelope
+
+    monkeypatch.setattr(log_type, "append", append)
+    with pytest.raises(OSError) as caught:
+        result.backward("Review.")
+
+    assert caught.value is failure
+    assert result.backward_outcome is not None
+    if disposition == "finished":
+        assert result.backward_outcome.status == result.learning.status == "succeeded"
+    else:
+        assert result.backward_outcome.failure.code == "backward.interrupted"
+        assert result.learning.status == "incomplete"
+        assert result.learning.policies[0].status == disposition
+    if durable:
+        inspected = resume_flow(flow, log=path)
+        assert result.backward_outcome == inspected.backward_outcome
+    if disposition == "unrequested":
+        assert backend.learn_contexts == backend.commit_calls == []
+        assert result.backward("Fresh whole pass.").status == "succeeded"
+        assert len(backend.learn_contexts) == len(backend.commit_calls) == 1
+    else:
+        learned, committed = len(backend.learn_contexts), len(backend.commit_calls)
+        with pytest.raises(ValueError, match="accepted prefix"):
+            result.backward("Forbidden retry.")
+        assert (len(backend.learn_contexts), len(backend.commit_calls)) == (learned, committed)
+
+
+def test_each_explicit_attempt_restores_fresh_sessions_from_recorded_snapshots():
+    backend = _Memory(learn_outcomes=[MemoryOperationError("learner", "declined", "Try again.", True), []])
+    replacement = _Memory()
+    mapping = {"test": backend}
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True, memory=mapping)
+    assert len(backend.sessions) == 1 and backend.sessions[0].closed
+    backend.sessions[0]._snapshot["namespace"] = "changed after forward"
+    mapping["test"] = replacement
+
+    assert result.backward("First review.").status == "failed"
+    assert result.backward("Fresh review.").status == "succeeded"
+
+    assert backend.open_snapshots == [None, {"namespace": "test"}, {"namespace": "test"}]
+    assert len({id(session) for session in backend.sessions}) == 3
+    assert all(session.closed for session in backend.sessions)
+    assert len(backend.learn_contexts) == 2 and len(backend.commit_calls) == 1
+    assert replacement.sessions == []
+
+
+def test_terminal_resume_retains_mapping_references_without_opening_them(tmp_path):
+    path = tmp_path / "terminal.jsonl"
+    flow = load_flow(_WITH_MEMORY)
+    original = _Memory()
+    run_flow(flow, {"text": "hello"}, learn=True, log=path, memory={"test": original})
+    missing = resume_flow(flow, log=path)
+    prefix = path.read_bytes()
+    with pytest.raises(MemorySetupError):
+        missing.backward("Review.")
+    assert path.read_bytes() == prefix and missing.backward_outcome is None
+    backend, replacement = _Memory(), _Memory()
+    mapping = {"test": backend}
+    inspected = resume_flow(flow, log=path, memory=mapping)
+    assert backend.sessions == [] and path.read_bytes() == prefix
+    mapping["test"] = replacement
+
+    assert inspected.backward("Review.").status == "succeeded"
+
+    assert backend.open_snapshots == [{"namespace": "test"}]
+    assert len(backend.sessions) == 1 and backend.sessions[0].closed
+    assert replacement.sessions == [] and original.learn_contexts == []
+
+
+def test_failed_snapshot_restoration_keeps_interrupted_prefix_and_observation(tmp_path, monkeypatch):
+    path = tmp_path / "restore.jsonl"
+    backend = _Memory(learn_outcomes=[MemoryError("interrupted learner"), []])
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True,
+                      log=path, memory={"test": backend})
+    with pytest.raises(MemoryError):
+        result.backward("First review.")
+    previous, learning, prefix = result.backward_outcome, result.learning, path.read_bytes()
+    original_open = backend.open_run
+
+    def mismatched_open(*, snapshot=None):
+        session = original_open(snapshot=snapshot)
+        session._snapshot["namespace"] = "wrong snapshot"
+        return session
+
+    monkeypatch.setattr(backend, "open_run", mismatched_open)
+    with pytest.raises(MemorySetupError):
+        result.backward("Review after restoration.")
+
+    assert result.backward_outcome is previous and result.learning is learning
+    assert path.read_bytes() == prefix and backend.sessions[-1].closed
+    assert len(backend.learn_contexts) == 1 and backend.commit_calls == []
+    monkeypatch.setattr(backend, "open_run", original_open)
+    assert result.backward("Fresh review.").status == "succeeded"
+    assert [record.attempt_id for record in _records(path) if type(record) is BackwardStartedRecord] == [1, 2]
+
+
+@pytest.mark.parametrize("durable", [False, True])
+def test_delayed_backward_uses_private_program_and_canonical_values(tmp_path, durable):
+    flow = load_flow(_IDENTITY.replace("text: str", "text: object"))
+    supplied = {"text": {"items": [1, 2]}}
+    result = run_flow(flow, supplied, learn=True, log=tmp_path / "private.jsonl" if durable else None)
+    supplied["text"]["items"].append(3)
+    assert result.input == {"text": {"items": [1, 2]}}
+    result.input["text"]["items"].append(4)
+    result.output["items"].append(5)
+    result.run_id = "changed public identity"
+    result.log = tmp_path / "changed-public-path.jsonl"
+    flow.compiled.wiring[flow.compiled.end_id].clear()
+    flow.compiled.nodes.clear()
+
+    outcome = result.backward({"items": ["Review first.", None]})
+
+    assert outcome.status == "succeeded"
+    assert outcome.feedback.input_feedback == {"text": ({"items": ["Review first.", None]},)}
+    assert result.output == {"items": [1, 2, 5]}
+    assert result.input == {"text": {"items": [1, 2, 4]}}
+    assert not result.log.exists()
+
+
+def test_distinct_durable_handles_keep_file_lock_exclusion(tmp_path):
+    path = tmp_path / "locked.jsonl"
+    rejected = []
+
+    def learn(context):
+        try:
+            second.backward("Nested on another handle.")
+        except BlockingIOError as exc:
+            rejected.append(exc)
+        return []
+
+    flow = load_flow(_WITH_MEMORY)
+    backend = _Memory(learn_outcomes=[learn])
+    first = run_flow(flow, {"text": "hello"}, learn=True, log=path, memory={"test": backend})
+    second = resume_flow(flow, log=path, memory={"test": backend})
+
+    assert first.backward("Review.").status == "succeeded"
+
+    assert len(rejected) == len(backend.learn_contexts) == len(backend.commit_calls) == 1
+    assert second.backward_outcome is None
+    assert resume_flow(flow, log=path).backward_outcome == first.backward_outcome
+
+
+@pytest.mark.parametrize("phase", ["export", "close"])
+def test_handle_guard_covers_prefix_export_and_log_cleanup(monkeypatch, phase):
+    backend = _Memory()
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True, memory={"test": backend})
+    method = "__iter__" if phase == "export" else "close"
+    original = getattr(MemoryRunLog, method)
+    rejected = []
+
+    def guarded(log):
+        if any(type(envelope.record) is BackwardStartedRecord for envelope in log._records):
+            try:
+                result.backward("Nested during cleanup.")
+            except RuntimeError as exc:
+                rejected.append(exc)
+        return original(log)
+
+    monkeypatch.setattr(MemoryRunLog, method, guarded)
+    assert result.backward("Review.").status == "succeeded"
+    assert len(rejected) == 1 and "in progress" in str(rejected[0])
+    assert len(backend.learn_contexts) == len(backend.commit_calls) == 1
+
+
+@pytest.mark.parametrize("resource", ["session", "log"])
+@pytest.mark.parametrize("learner_fails", [False, True])
+def test_cleanup_error_preserves_finished_authority_and_releases_guard(monkeypatch, resource, learner_fails):
+    backend = _Memory(learn_outcomes=[MemoryOperationError("learner", "declined", "Try again.", True), []]
+                      if learner_fails else [])
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True, memory={"test": backend})
+    owner = _Session if resource == "session" else MemoryRunLog
+    original_close = owner.close
+    failure = OSError("cleanup failed")
+
+    def close(resource):
+        original_close(resource)
+        raise failure
+
+    monkeypatch.setattr(owner, "close", close)
+    with pytest.raises(OSError) as caught:
+        result.backward("Review.")
+    assert caught.value is failure
+    assert result.backward_outcome.status == ("failed" if learner_fails else "succeeded")
+    assert all(session.closed for session in backend.sessions)
+    monkeypatch.setattr(owner, "close", original_close)
+
+    if learner_fails:
+        assert result.backward("Fresh review.").status == "succeeded"
+        assert len(backend.learn_contexts) == 2
+    else:
+        with pytest.raises(ValueError, match="accepted prefix"):
+            result.backward("Forbidden retry.")
+        assert len(backend.learn_contexts) == 1
+    assert len(backend.commit_calls) == 1
+
+
+@pytest.mark.parametrize("failure", [AsyncCancelledError("cancelled"), FutureCancelledError("cancelled")])
+def test_cancelled_backward_retains_started_and_releases_resources(failure):
+    backend = _Memory(learn_outcomes=[failure, []])
+    result = run_flow(load_flow(_WITH_MEMORY), {"text": "hello"}, learn=True, memory={"test": backend})
+
+    with pytest.raises(type(failure)) as caught:
+        result.backward("Interrupted review.")
+
+    assert caught.value is failure
+    assert result.backward_outcome.failure.code == "backward.interrupted"
+    assert result.backward_outcome.feedback is None
+    assert all(session.closed for session in backend.sessions)
+    assert backend.commit_calls == []
+    assert result.backward("Fresh whole pass.").status == "succeeded"
+    assert len(backend.learn_contexts) == 2 and len(backend.commit_calls) == 1
 
 
 def test_invalid_feedback_does_not_change_latest_outcome(tmp_path):

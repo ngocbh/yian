@@ -89,6 +89,7 @@ class _Memory:
         self.learn_outcomes = list(learn_outcomes or [])
         self.commit_outcomes = list(commit_outcomes or [])
         self.open_snapshots: list[dict[str, Any] | None] = []
+        self.sessions: list[_Session] = []
         self.opened_specs: list[MemoryFrameSpec] = []
         self.recall_contexts: list[RecallContext | None] = []
         self.learn_contexts: list[LearnContext] = []
@@ -100,7 +101,9 @@ class _Memory:
         restored = None if snapshot is None else copy.deepcopy(snapshot)
         self.open_snapshots.append(restored)
         effective = {"namespace": "test"} if restored is None else restored
-        return _Session(self, effective)
+        session = _Session(self, effective)
+        self.sessions.append(session)
+        return session
 
     def reset(self) -> None:
         self.reset_count += 1

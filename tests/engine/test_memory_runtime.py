@@ -237,7 +237,7 @@ def _terminal_learning_state(
                 num_workers=0,
                 memory_layout=runtime.layout,
                 memory_snapshots=runtime.snapshots,
-                learn=True,
+                learnable=True,
             ),
         ),
     )

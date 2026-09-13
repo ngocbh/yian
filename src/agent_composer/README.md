@@ -145,7 +145,7 @@ supplies a local origin. Unsupported growth kinds and arbitrary builder, compile
 spawner/fragment-copy, digest, topology-materialization, reducer, append, or log
 faults escape rather than becoming flow failures.
 
-At the schema-6 boundary, every diagnostic trace item becomes an exact base
+At the schema-7 boundary, every diagnostic trace item becomes an exact base
 `OriginRef(key)`: front-end-specific subclasses are valid in memory, but class
 identity is intentionally absent from the single-key wire. The reducer carries
 that canonical immutable `Failure` through `NodeFailed`, terminal `RunFailed`,
@@ -574,7 +574,7 @@ targets, and floods the target's outgoing edges.
 Failure is a `raise`, not another result variant. `eval_node` structurally turns
 expected binding, assertion, body, and result rejection into
 `EvaluationFailure(Failure)`. Result preparation constructs the same canonical
-value for expected output, route, and growth rejection. Schema 6 carries that
+value for expected output, route, and growth rejection. Schema 7 carries that
 value unchanged through the durable record, reducer, observer events, and public
 result; the durable outcome may also retain optional source-neutral evaluation
 evidence. Host control, stream callbacks, unexpected binder faults, malformed
@@ -686,9 +686,9 @@ MemoryCommitSucceededRecord | MemoryCommitFailedRecord |
 BackwardStartedRecord | BackwardReadyRecord | BackwardFinishedRecord
 ```
 
-The exact wire version is schema 6. The recorded `learn` flag controls retention:
-`learn=True` requires every accepted node outcome to carry a `ForwardCapture`;
-`learn=False` omits it. The capture contains canonical bound inputs or an
+The exact wire version is schema 7. The recorded `learnable` flag controls retention:
+`learnable=True` requires every accepted node outcome to carry a `ForwardCapture`;
+`learnable=False` omits it. The capture contains canonical bound inputs or an
 incomplete-binding marker, input routes, indexed item captures, execution scope,
 detached declared input/variable inventories, and optional node-owned data. The
 pure `capture_backward_context` hook supplies static node layout at the existing
@@ -822,7 +822,7 @@ outcome, including visible model retries within that invocation. Reducer-rejecte
 node proposals are represented by their accepted canonical failure. Discarded
 late siblings and transient stream chunks do not become learning evidence.
 
-`learn=True` enables retention only, with or without an enabled memory policy.
+`learnable=True` enables retention only, with or without an enabled memory policy.
 Forward returns before any backward hook, learner, or commit. An explicit
 `RunResult.backward(feedback=None)` starts the separate attempt driver after
 terminal success or failure. It leaves forward values, failure, and events
@@ -888,7 +888,7 @@ are policy-owned.
 `run_flow(..., log=path)` exclusively creates a new JSONL authority. Its first
 record captures the run ID, authored-flow fingerprint, complete initial typed
 pool, START wiring, worker count, fully resolved LLM configuration, the required
-`learn` retention flag, and optional memory layout/snapshots. Expansion
+`learnable` retention flag, and optional memory layout/snapshots. Expansion
 records retain canonical growth seeds plus topology digests, so replay rebuilds
 the same nested CALL/MAP/LOOP graph without re-running the spawner.
 

@@ -78,7 +78,7 @@ output: ${outer.output}
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: pytest.fail("structural flow called a model"))
     path = tmp_path / "selected.jsonl"
     payload = {"title": "unchanged", "rows": [["a"], ["b", "c"]]}
-    result = run_flow(flow, {"selected": True, "payload": payload}, log=path, learn=True)
+    result = run_flow(flow, {"selected": True, "payload": payload}, log=path, learnable=True)
     assert result.status == "succeeded"
     assert result.output == {"payload": payload, "local": "child default"}
     before = path.read_bytes()
@@ -161,7 +161,7 @@ output: ${each.output}
 
     monkeypatch.setattr(llm_clients, "model_from_config", forward_model)
     path = tmp_path / "map.jsonl"
-    result = run_flow(flow, {"values": ["same", "same"]}, log=path, learn=True,
+    result = run_flow(flow, {"values": ["same", "same"]}, log=path, learnable=True,
                       num_workers=4, on_event=observe)
     assert result.status == "succeeded" and result.output == ["same", "same"]
     assert len(forward_chats) == 2 and all(chat.calls == 1 for chat in forward_chats)
@@ -293,7 +293,7 @@ output:
 
     monkeypatch.setattr(llm_clients, "model_from_config", forward_model)
     path = tmp_path / "nested.jsonl"
-    result = run_flow(flow, {"n": 3, "values": [10, 20]}, log=path, learn=True)
+    result = run_flow(flow, {"n": 3, "values": [10, 20]}, log=path, learnable=True)
     assert result.status == "succeeded"
     assert result.output == {"single": {"n": 1}, "mapped": [{"n": 1}, {"n": 1}]}
     assert len(forward_calls) == 6 and all(chat.calls == 1 for _, chat in forward_calls)
@@ -419,7 +419,7 @@ output: ${outer.output}
 """)
     backend = _Memory()
     path = tmp_path / "expressions.jsonl"
-    result = run_flow(flow, {"values": ["same"]}, log=path, learn=True, memory={"test": backend})
+    result = run_flow(flow, {"values": ["same"]}, log=path, learnable=True, memory={"test": backend})
     assert result.status == "succeeded"
     assert result.output == ["same", "same", "same", "literal", "same"]
     assert calls == [["same"]]
@@ -490,7 +490,7 @@ output: ${invoke.output | unused.output}
     forward_chat = _BackwardChat([AIMessage(content="answer")])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: forward_chat)
     path = tmp_path / "owned.jsonl"
-    result = run_flow(flow, {"topic": "reefs"}, learn=True, log=path, memory={"test": backend})
+    result = run_flow(flow, {"topic": "reefs"}, learnable=True, log=path, memory={"test": backend})
     assert result.status == "succeeded" and result.output == "answer"
     assert forward_chat.calls == 1 and backend.learn_contexts == backend.commit_calls == []
     with JsonlRunLog.resume(path) as log:
@@ -588,9 +588,9 @@ output: ${input.text}
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: pytest.fail("identity flow called an AGENT model"))
     first_path, second_path = tmp_path / "a.jsonl", tmp_path / "b.jsonl"
     first = run_flow(flow, {"text": "A"}, run_id="snapshot-a", log=first_path,
-                     learn=True, memory={"reflective": backend})
+                     learnable=True, memory={"reflective": backend})
     second = run_flow(flow, {"text": "B"}, run_id="snapshot-b", log=second_path,
-                      learn=True, memory={"reflective": backend})
+                      learnable=True, memory={"reflective": backend})
     with JsonlRunLog.resume(first_path) as log:
         first_start = next(iter(log)).record
     with JsonlRunLog.resume(second_path) as log:

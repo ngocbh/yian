@@ -73,7 +73,7 @@ class FlowEngine:
     ``run`` yields only observers returned after a record has been appended and its
     reducer plan applied.  The optional event callback sees the same observers first;
     stream chunks are callback-only and never durable or yielded. Optional memory recall is
-    one source-neutral callback; evidence capture follows only recorded ``RunState.learn``.
+    one source-neutral callback; evidence capture follows only recorded ``RunState.learnable``.
     """
 
     def __init__(
@@ -276,7 +276,7 @@ class FlowEngine:
         evidence = evaluated.evidence
         forward_capture = (
             capture_bindings(evaluated.bindings, evaluated.backward_capture)
-            if self.state.learn else None
+            if self.state.learnable else None
         )
         if isinstance(outcome, EvaluationFailure):
             failure = outcome.failure
@@ -415,8 +415,8 @@ class FlowEngine:
             wiring_override=self.state.wiring_overrides.get(node_id),
             stop_event=self.stop_event,
             emit_stream=emit_stream,
-            capture_evidence=self.state.learn,
-            capture_bindings=self.state.learn,
+            capture_evidence=self.state.learnable,
+            capture_bindings=self.state.learnable,
             effective_llm_by_static_path=self.state.effective_llm_by_static_path,
             source_resolver=None if self.state.trace is None else self.state.trace.resolve,
             memory_recall=self.memory_recall,

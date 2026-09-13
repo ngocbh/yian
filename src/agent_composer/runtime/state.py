@@ -133,7 +133,7 @@ class _MemoryAuthority:
 
     layout: tuple[MemoryFrameSpec, ...] | None
     snapshots: tuple[MemorySnapshotEnvelope, ...] | None
-    learn: bool
+    learnable: bool
     frame_order: tuple[MemoryFrameRef, ...]
     policy_order: tuple[str, ...]
     policy_frame_indices: tuple[tuple[int, ...], ...]
@@ -227,7 +227,7 @@ class RunState:
             Canonical recorded frame inventory, or ``None`` when memory is disabled.
         memory_snapshots (`tuple[MemorySnapshotEnvelope, ...] | None`):
             Canonical recorded policy snapshots, paired with ``memory_layout``.
-        learn (`bool`):
+        learnable (`bool`):
             Whether accepted eligible outcomes must project durable learning evidence.
         trace (`RetainedTrace | None`):
             Accepted executions, immutable producer entries and private backward
@@ -267,14 +267,14 @@ class RunState:
         self.effective_llm_by_static_path: dict[str, dict[str, Any]] = {}
         self.memory_layout: tuple[MemoryFrameSpec, ...] | None = None
         self.memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
-        self.learn = False
+        self.learnable = False
         self.trace: RetainedTrace | None = None
         self.learning_state = RuntimeLearningState()
         self.backward_state = RuntimeBackwardState()
         self._memory_authority = _MemoryAuthority(
             layout=None,
             snapshots=None,
-            learn=False,
+            learnable=False,
             frame_order=self.learning_state.frame_order,
             policy_order=self.learning_state.policy_order,
             policy_frame_indices=self.learning_state.policy_frame_indices,
@@ -303,7 +303,7 @@ class RunStartData:
             Canonical static frame inventory, or ``None`` to disable memory.
         memory_snapshots (`tuple[MemorySnapshotEnvelope, ...] | None`, *optional*):
             Canonical policy snapshots paired with an enabled frame inventory.
-        learn (`bool`, *optional*, defaults to `False`):
+        learnable (`bool`, *optional*, defaults to `False`):
             Whether eligible accepted outcomes must carry learning evidence.
     """
 
@@ -315,7 +315,7 @@ class RunStartData:
     num_workers: int
     memory_layout: tuple[MemoryFrameSpec, ...] | None = None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
-    learn: bool = False
+    learnable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,7 +356,7 @@ class _RunStartedApply:
     effective_llm_by_static_path: dict[str, dict[str, Any]]
     memory_layout: tuple[MemoryFrameSpec, ...] | None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None
-    learn: bool
+    learnable: bool
     learning_state: RuntimeLearningState
     backward_state: RuntimeBackwardState
     memory_authority: _MemoryAuthority
@@ -763,7 +763,7 @@ def prepare_run_started(state: RunState, data: RunStartData) -> PreparedTransiti
         num_workers=data.num_workers,
         memory_layout=data.memory_layout,
         memory_snapshots=data.memory_snapshots,
-        learn=data.learn,
+        learnable=data.learnable,
     )
     # The public envelope codec is the sole payload authority.  Decode its canonical
     # bytes immediately so the prepared record is exactly what either log will retain.
@@ -1583,7 +1583,7 @@ def _prepare_growth_transition(
         raise TypeError("node-expansion envelope decoded to a different record kind")
     if canonical_record != record:
         raise ValueError("NodeExpandedRecord is not in canonical wire form")
-    if state.learn and type(canonical_record.forward_capture) is ForwardCapture:
+    if state.learnable and type(canonical_record.forward_capture) is ForwardCapture:
         for connection in fragment.input_connections:
             if select_seed_route(canonical_record.forward_capture, connection) is None:
                 _raise_growth_rejected(ValueError(
@@ -1730,7 +1730,7 @@ def _prepare_record_trace(
                          root_end_id=state.flow.end_id if isinstance(record, RunStartedRecord) else None,
                          root_input_names=(
                              state.flow.nodes[state.flow.start_id].backward_input_names()
-                             if isinstance(record, RunStartedRecord) and record.learn else None
+                             if isinstance(record, RunStartedRecord) and record.learnable else None
                          ),
                          terminal_succeeded=terminal_succeeded,
                          terminal_output_bytes=terminal_output_bytes,
@@ -1931,7 +1931,7 @@ def _replay_records(
             num_workers=start.num_workers,
             memory_layout=start.memory_layout,
             memory_snapshots=start.memory_snapshots,
-            learn=start.learn,
+            learnable=start.learnable,
         ),
     )
     commit_prepared(cursor, state, prepared)
@@ -2386,7 +2386,7 @@ def _require_initialized(state: RunState) -> None:
         raise ValueError("initialized pool START must match the adopted flow")
     if state.flow.start_id not in state.initial_static_ids:
         raise ValueError("initialized run state START is not an initial static node")
-    if state.learn:
+    if state.learnable:
         if (type(state.trace) is not RetainedTrace or state.trace.run_id != state.run_id
                 or state.trace.next_sequence != state.next_sequence):
             raise ValueError("run-state trace disagrees with recorded authority")
@@ -2407,7 +2407,7 @@ def _require_initialized_terminal_backward(state: RunState) -> None:
     _require_initialized(state)
     if not isinstance(state.result, (RunSucceeded, RunFailed)):
         raise ValueError("backward records require an accepted terminal result")
-    if state.learn is not True or state.trace is None or state.trace.terminal is None:
+    if state.learnable is not True or state.trace is None or state.trace.terminal is None:
         raise ValueError("backward records require recorded learning and terminal trace authority")
 
 
@@ -2419,8 +2419,8 @@ def _validate_runtime_memory_configuration(state: RunState) -> None:
     if not (
         state.memory_layout is authority.layout
         and state.memory_snapshots is authority.snapshots
-        and type(state.learn) is bool
-        and state.learn is authority.learn
+        and type(state.learnable) is bool
+        and state.learnable is authority.learnable
         and state.learning_state.frame_order is authority.frame_order
         and state.learning_state.policy_order is authority.policy_order
         and state.backward_state.layout is authority.layout
@@ -3334,7 +3334,7 @@ def _validate_node_evidence(
     node = state.flow.nodes[node_id]
     scope = node.memory_scope
 
-    if state.learn is not True or node.needs_evaluation_trace is not True:
+    if state.learnable is not True or node.needs_evaluation_trace is not True:
         if evidence is not None:
             raise ValueError(f"node {node_id!r} is ineligible for evaluation evidence")
         return
@@ -4231,13 +4231,13 @@ def _require_pristine(state: RunState) -> None:
         and not state.effective_llm_by_static_path
         and state.memory_layout is None
         and state.memory_snapshots is None
-        and state.learn is False
+        and state.learnable is False
         and state.trace is None
         and state.learning_state == RuntimeLearningState()
         and state.backward_state == RuntimeBackwardState()
         and state._memory_authority.layout is None
         and state._memory_authority.snapshots is None
-        and state._memory_authority.learn is False
+        and state._memory_authority.learnable is False
         and state._memory_authority.frame_order is state.learning_state.frame_order
         and state._memory_authority.policy_order is state.learning_state.policy_order
         and (
@@ -4327,7 +4327,7 @@ def _materialize_run_started(
     memory_authority = _MemoryAuthority(
         layout=record.memory_layout,
         snapshots=record.memory_snapshots,
-        learn=record.learn,
+        learnable=record.learnable,
         frame_order=learning_state.frame_order,
         policy_order=learning_state.policy_order,
         policy_frame_indices=learning_state.policy_frame_indices,
@@ -4349,7 +4349,7 @@ def _materialize_run_started(
         effective_llm_by_static_path=canonical_effective,
         memory_layout=record.memory_layout,
         memory_snapshots=record.memory_snapshots,
-        learn=record.learn,
+        learnable=record.learnable,
         learning_state=learning_state,
         backward_state=backward_state,
         memory_authority=memory_authority,
@@ -4375,7 +4375,7 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.effective_llm_by_static_path = apply.effective_llm_by_static_path
     state.memory_layout = apply.memory_layout
     state.memory_snapshots = apply.memory_snapshots
-    state.learn = apply.learn
+    state.learnable = apply.learnable
     state.learning_state = apply.learning_state
     state.backward_state = apply.backward_state
     state._memory_authority = apply.memory_authority

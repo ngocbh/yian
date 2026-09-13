@@ -138,7 +138,7 @@ New builtins register with `@register_template_fn()`.
 
 ## Retained expression routes
 
-With `learn=True`, binding evaluation records the route in the same walk that
+With `learnable=True`, binding evaluation records the route in the same walk that
 produces the delivered value. References retain the actual accepted producer;
 record/list construction, selection, coalescing, concatenation, and repetition
 preserve their structural routes. Equal values never establish source identity.

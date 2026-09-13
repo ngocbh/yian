@@ -68,7 +68,7 @@ def _retained_engine(monkeypatch):
                   wiring={"writer": {"topic": "${input.topic}", "tags": "${input.tags}"}},
                   outputs=[FlowOutput("result", "${writer.output}")])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: _BackwardChat([AIMessage(content="forward answer")]))
-    engine = _engine(flow, {"topic": "reefs", "tags": ["a", "b"]}, learn=True)
+    engine = _engine(flow, {"topic": "reefs", "tags": ["a", "b"]}, learnable=True)
     original = deepcopy(engine.state.flow)
     list(engine.run())
     return engine, node, original
@@ -110,7 +110,7 @@ def test_backward_context_rejects_captured_reserved_evidence_collision():
 
     node = FuncNode("custom", lambda _inputs: "done")
     node.capture_backward_context = lambda: {"_evaluation_evidence": None}
-    engine = _engine(_graph([node], [(START_ID, "custom")], outputs=[FlowOutput("result", "${custom.output}")]), learn=True)
+    engine = _engine(_graph([node], [(START_ID, "custom")], outputs=[FlowOutput("result", "${custom.output}")]), learnable=True)
     list(engine.run())
     occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == "custom")
     with pytest.raises(ValueError, match="reserved.*_evaluation_evidence"):
@@ -122,7 +122,7 @@ def test_backward_context_allows_absent_node_data_without_changing_the_record():
     from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
     from tests.engine._graph_builder import _engine, _forward_capture, _graph
 
-    engine = _engine(_graph([], []), learn=True)
+    engine = _engine(_graph([], []), learnable=True)
     state = engine.state
     commit_prepared(engine.log, state, prepare_node_started(state, START_ID))
     commit_prepared(engine.log, state, prepare_node_succeeded(

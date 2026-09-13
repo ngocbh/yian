@@ -267,7 +267,7 @@ frame.
 
 Authored long-term-memory declarations are dormant unless a Python host passes a
 `memory={...}` registry to `run_flow`, keyed by the selected policy names.
-Supplying the registry enables recall. Independently, `learn=True` retains
+Supplying the registry enables recall. Independently, `learnable=True` retains
 accepted execution for an explicit `result.backward(feedback)` call after forward
 returns. Forward never learns or commits. A call with no external feedback still
 presents history to every enabled memory frame; backward outcomes stay separate

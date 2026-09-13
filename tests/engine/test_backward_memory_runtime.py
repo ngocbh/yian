@@ -90,7 +90,7 @@ def test_proposal_contexts_validate_completely_before_any_learner(invalid):
     assert not memory.learn_contexts and not memory.commit_calls
 
 
-def _terminal(policies=("A",), *, value="reefs", callback=None, learn=True):
+def _terminal(policies=("A",), *, value="reefs", callback=None, learnable=True):
     """Build one real retained CODE occurrence plus complete enabled frame inventory."""
     node = RecordingBackwardNode(
         "work", lambda inputs: inputs["topic"],
@@ -105,7 +105,7 @@ def _terminal(policies=("A",), *, value="reefs", callback=None, learn=True):
     if layout:
         for current in flow.nodes.values():
             current.memory_scope = MemoryScope("root", ("root", current.id), (layout[0].ref,))
-    engine = _engine(flow, {"topic": value}, learn=learn, memory_layout=layout or None,
+    engine = _engine(flow, {"topic": value}, learnable=learnable, memory_layout=layout or None,
                      memory_snapshots=tuple(MemorySnapshotEnvelope(name, {}) for name in sorted(set(policies)))
                      if layout else None)
     list(engine.run())
@@ -561,7 +561,7 @@ def test_opened_memory_runtime_subclass_is_closed_by_the_driver():
 
 @pytest.mark.parametrize("problem", ["learn_disabled", "missing_opener", "invalid_feedback"])
 def test_submission_gates_reject_before_opening_or_appending(problem):
-    engine, node = _terminal(learn=problem != "learn_disabled")
+    engine, node = _terminal(learnable=problem != "learn_disabled")
     memory = _Memory()
     records = _records(engine)
     with pytest.raises(ValueError):

@@ -517,7 +517,7 @@ def _retained_backward(*, layout=None, feedback="Review.", topic="reefs"):
     snapshots = None if layout is None else tuple(
         MemorySnapshotEnvelope(name, {}) for name in sorted({spec.policy_name for spec in layout})
     )
-    engine = _engine(flow, {"topic": topic}, learn=True, memory_layout=layout, memory_snapshots=snapshots)
+    engine = _engine(flow, {"topic": topic}, learnable=True, memory_layout=layout, memory_snapshots=snapshots)
     list(engine.run())
     return engine, compute_backward(engine.state.trace, feedback)
 
@@ -796,7 +796,7 @@ def test_backward_started_requires_initialized_learned_terminal_authority(gate):
     from agent_composer.runtime.state import RunState, prepare_record
     from tests.engine._graph_builder import _engine, _graph
 
-    engine = _engine(_graph([], [(START_ID, END_ID)]), learn=gate != "learn_false")
+    engine = _engine(_graph([], [(START_ID, END_ID)]), learnable=gate != "learn_false")
     if gate in ("learn_false", "missing_terminal"):
         list(engine.run())
     if gate == "missing_terminal":

@@ -80,7 +80,7 @@ A streaming kind is a generator that yields `StreamChunk` and *returns* a
 evaluation boundary returns `EvaluationFailure(Failure)` for expected rejection;
 host control, stream callbacks, unexpected binder faults, and malformed setup
 escape. Result preparation constructs the same canonical value for expected
-output, route, and growth rejection. One strict schema-6 record boundary handles
+output, route, and growth rejection. One strict schema-7 record boundary handles
 both paths, carries forward capture when retention is enabled, may retain
 optional model/tool evaluation evidence, and carries
 the nested value through the reducer to `NodeFailed`/`RunFailed` observers and
@@ -298,7 +298,7 @@ per-frame records and nullable legacy commit attempt IDs are not accepted.
 `run_flow(..., log=None)` uses process-local authority; a path selects a durable
 JSONL log. `memory={name: implementation}` opens one snapshot-isolated session
 per policy selected by an authored `long_term_memory:` declaration for independent
-recall. `learn=True` retains accepted execution for explicit
+recall. `learnable=True` retains accepted execution for explicit
 `RunResult.backward(feedback=None)` and does not require a memory policy. Forward
 never calls learners or commits. The explicit attempt completes the reverse fold
 and all enabled frame proposals before Ready, then requests/observes one batch
@@ -917,12 +917,12 @@ never runtime ids, graph topology, or a text heuristic.
   structural error path through the effective target contract's exact,
   nearest-ancestor, or default origin, then falls back to the executing node;
   other canonicalization errors use the contract default. Route and growth use
-  the executing node origin. Schema-6 output rejection retains its cause type
+  the executing node origin. Schema-7 output rejection retains its cause type
   inside `Failure`, forward capture when retention is enabled, and optional
   model/tool evaluation evidence beside it. Execution scope in the capture is
   separate from diagnostic provenance.
 - **Runtime boundary:** evaluator and dispatcher rejection construct one
-  canonical `Failure`; schema-6 `NodeFailedRecord` stores that value, forward
+  canonical `Failure`; schema-7 `NodeFailedRecord` stores that value, forward
   capture when retention is enabled, and optional model/tool evaluation evidence.
   Reducer state, `NodeFailed`, `RunFailed`,
   and `RunResult.failure` carry no semantic aliases. The first route whose skip

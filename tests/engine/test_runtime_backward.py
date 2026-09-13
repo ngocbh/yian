@@ -27,7 +27,7 @@ def test_terminal_trace_keeps_actual_root_writer_until_quiescence(value):
     flow = _graph([end, FuncNode("late", late)],
                   [(START_ID, END_ID), (START_ID, "late")],
                   wiring={END_ID: {"answer": value}, "late": {}})
-    engine = _engine(flow, learn=True)
+    engine = _engine(flow, learnable=True)
     list(engine.run())
     trace = engine.state.trace
     end_occurrence = next(item for item in trace.occurrences if item.node_id == END_ID)
@@ -43,7 +43,7 @@ def test_terminal_trace_keeps_actual_root_writer_until_quiescence(value):
 def test_root_inventory_is_retained_without_running_capture_or_defaults():
     start = StartNode(START_ID, params=[Parameter("topic", has_default=True, default=[1])])
     start.capture_backward_context = lambda: pytest.fail("initialization captured an invocation")
-    engine = _engine(_graph([start], [(START_ID, END_ID)]), learn=True)
+    engine = _engine(_graph([start], [(START_ID, END_ID)]), learnable=True)
     assert engine.state.trace.root_input_names == ("topic",)
     assert engine.state.trace.root_start_source is None
     assert engine.state.trace.lookup_source(next(iter(engine.state.trace.sources))) == {}
@@ -64,7 +64,7 @@ def test_diamond_calls_shared_producer_once_with_two_ordered_messages():
     flow = _graph([producer, left, right],
                   [(START_ID, "producer"), ("producer", "left"), ("producer", "right")],
                   outputs=[FlowOutput("left", "${left.output}"), FlowOutput("right", "${right.output}")])
-    engine = _engine(flow, {"topic": "reefs"}, learn=True)
+    engine = _engine(flow, {"topic": "reefs"}, learnable=True)
     list(engine.run())
     from agent_composer.runtime.backward import compute_backward
 
@@ -90,7 +90,7 @@ def test_entire_callback_result_is_validated_before_routing_any_input(bad):
     consumer = RecordingBackwardNode("consumer", lambda inputs: inputs["x"], lambda *_: bad(),
                                      reads={"x": "${producer.output}"})
     engine = _engine(_graph([producer, consumer], [(START_ID, "producer"), ("producer", "consumer")],
-                            outputs=[FlowOutput("result", "${consumer.output}")]), learn=True)
+                            outputs=[FlowOutput("result", "${consumer.output}")]), learnable=True)
     list(engine.run())
     with pytest.raises(_BackwardComputeError) as caught:
         compute_backward(engine.state.trace, "review")
@@ -104,7 +104,7 @@ def test_empty_feedback_keeps_complete_history_without_invoking_callbacks(feedba
     from agent_composer.runtime.backward import compute_backward
 
     node = RecordingBackwardNode("work", lambda _: [1, 2], lambda *_: pytest.fail("empty callback"))
-    engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]), learn=True)
+    engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]), learnable=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, feedback)
     validate_attributed_backward(engine.state.trace, feedback, root, results)
@@ -120,7 +120,7 @@ def test_root_default_feedback_survives_its_literal_route():
     from agent_composer.runtime.backward import compute_backward
 
     start = StartNode(START_ID, params=[Parameter("topic", has_default=True, default="reefs"), Parameter("absent", required=False)])
-    engine = _engine(_graph([start], [], outputs=[FlowOutput("result", "${input.topic}")]), learn=True)
+    engine = _engine(_graph([start], [], outputs=[FlowOutput("result", "${input.topic}")]), learnable=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "")
     validate_attributed_backward(engine.state.trace, "", root, results)
@@ -143,7 +143,7 @@ def test_accepted_failure_uses_recorded_inputs_and_diagnostics(early):
     if early:
         node.params.append(Parameter("missing", required=True))
     engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]),
-                     {"topic": "reefs"}, learn=True)
+                     {"topic": "reefs"}, learnable=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review failure")
     validate_attributed_backward(engine.state.trace, "review failure", root, results)
@@ -179,7 +179,7 @@ def test_terminal_trace_latches_causal_route_and_later_failure_wins(explicit):
         return Output("done")
 
     flow.nodes["unrelated"].forward = later
-    engine = _engine(flow, learn=True)
+    engine = _engine(flow, learnable=True)
     original = deepcopy(engine.state.flow)
     list(engine.run())
     trace = engine.state.trace
@@ -398,7 +398,7 @@ def test_preseeded_root_output_does_not_invent_an_executed_producer(same_boundar
     pool.add_system("run_id", "preseed")
     state, log = RunState(flow), MemoryRunLog("preseed")
     commit_prepared(log, state, prepare_run_started(state, RunStartData(
-        "preseed", "f" * 64, pool, {}, {}, 0, learn=True,
+        "preseed", "f" * 64, pool, {}, {}, 0, learnable=True,
     )))
     list(FlowEngine(state, log, grow_builder=build_grow, num_workers=0).run())
     root, results = compute_backward(state.trace, "review")
@@ -414,7 +414,7 @@ def test_terminal_trace_append_rejection_leaves_all_indexes_unchanged(monkeypatc
     from tests.engine._graph_builder import _forward_capture
     from tests.engine.test_forward_trace import _trace_snapshot
 
-    engine = _engine(_graph([], [(START_ID, END_ID)]), learn=True)
+    engine = _engine(_graph([], [(START_ID, END_ID)]), learnable=True)
     state, log = engine.state, engine.log
     for node_id, value in ((START_ID, {}), (END_ID, None)):
         commit_prepared(log, state, prepare_node_started(state, node_id))
@@ -442,7 +442,7 @@ def test_opaque_expression_stops_are_recoverable_without_rerunning_functions(mon
     node = RecordingBackwardNode("work", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),
                                  reads={"x": "${backward_opaque(input.topic)}"})
     engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]),
-                     {"topic": "reefs"}, learn=True)
+                     {"topic": "reefs"}, learnable=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review opaque")
     validate_attributed_backward(engine.state.trace, "review opaque", root, results)
@@ -473,7 +473,7 @@ def test_case_control_and_unselected_branch_do_not_receive_feedback():
                   outputs=[FlowOutput("result", "${selected.output | unused.output}")],
                   wiring={"value": {"x": "${input.topic}"}, "case": {"__r0": "${control.output}"},
                           "selected": {"x": "${value.output}"}})
-    engine = _engine(flow, {"topic": "reefs"}, learn=True)
+    engine = _engine(flow, {"topic": "reefs"}, learnable=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review selected")
     validate_attributed_backward(engine.state.trace, "review selected", root, results)
@@ -502,7 +502,7 @@ def test_agent_inventory_is_recorded_and_empty_feedback_does_no_backward_work(mo
     node = AgentNode("agent", prompt="${topic}", variables=read_variables({"instruction": "str = concise"}, {}))
     node.params = [Parameter("topic")]
     engine = _engine(_graph([node], [(START_ID, "agent")], outputs=[FlowOutput("result", "${agent.output}")],
-                            wiring={"agent": {"topic": "${input.topic}"}}), {"topic": "reefs"}, learn=True)
+                            wiring={"agent": {"topic": "${input.topic}"}}), {"topic": "reefs"}, learnable=True)
     list(engine.run())
     node.params.clear()
     node.variables.clear()
@@ -526,7 +526,7 @@ def test_callback_failures_are_attributed_without_swallowing_host_faults(kind, m
         raise _CapabilityFault(original) if kind == "host" else original
 
     node = RecordingBackwardNode("work", lambda _: "value", backward)
-    engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]), learn=True)
+    engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]), learnable=True)
     list(engine.run())
     if kind == "infrastructure":
         def broken_lookup(_source):
@@ -567,7 +567,7 @@ def test_pooled_reverse_walk_uses_outcomes_instead_of_start_sequence(monkeypatch
 
     engine = _engine(_graph([consumer, peer], [(START_ID, "consumer"), (START_ID, "peer")],
                             outputs=[FlowOutput("result", "${consumer.output}")]),
-                     learn=True, num_workers=2, on_event=observe)
+                     learnable=True, num_workers=2, on_event=observe)
     list(engine.run())
     occurrences = {item.node_id: item for item in engine.state.trace.occurrences}
     assert occurrences["consumer"].source.execution_seq < occurrences["peer"].source.execution_seq
@@ -584,7 +584,7 @@ def test_causal_route_trace_latch_is_installed_only_after_append(monkeypatch):
     from tests.engine.test_forward_trace import _trace_snapshot
     from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
 
-    engine = _engine(_terminal_skip_route_flow(sibling=True), learn=True)
+    engine = _engine(_terminal_skip_route_flow(sibling=True), learnable=True)
     state, log = engine.state, engine.log
     commit_prepared(log, state, prepare_node_started(state, START_ID))
     commit_prepared(log, state, prepare_node_succeeded(state, START_ID, {}, forward_capture=_forward_capture(state.flow.nodes[START_ID], {})))
@@ -610,7 +610,7 @@ def test_failed_end_routes_text_without_fabricating_output_context():
     from agent_composer.runtime.backward import compute_backward
 
     producer = RecordingBackwardNode("producer", lambda _: [1, 2], lambda *_: BackwardResult())
-    engine = _engine(_graph([producer], [(START_ID, "producer")], outputs=[FlowOutput("result", "${producer.output}")]), learn=True)
+    engine = _engine(_graph([producer], [(START_ID, "producer")], outputs=[FlowOutput("result", "${producer.output}")]), learnable=True)
     engine.state.flow.nodes[END_ID].pre_asserts = [Assertion("false", "fail END")]
     list(engine.run())
     root, _ = compute_backward(engine.state.trace, "review failed END")
@@ -627,7 +627,7 @@ def test_backward_context_is_trace_owned_detached_and_survives_replay(monkeypatc
     from agent_composer.runtime.state import RunState, _replay_records
 
     node = RecordingBackwardNode("work", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}), reads={"x": "${input.topic}"})
-    engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]), {"topic": [1, 2]}, learn=True)
+    engine = _engine(_graph([node], [(START_ID, "work")], outputs=[FlowOutput("result", "${work.output}")]), {"topic": [1, 2]}, learnable=True)
     original = deepcopy(engine.state.flow)
     list(engine.run())
     occurrence = next(item for item in engine.state.trace.occurrences if item.node_id == "work")
@@ -655,7 +655,7 @@ def test_empty_map_retains_synthetics_without_inventing_item_contributors():
     mapper = MapNode("map", flow_id="child", child=child)
     mapper.params = [Parameter("x")]
     engine = _engine(_graph([mapper], [(START_ID, "map")], outputs=[FlowOutput("result", "${map.output}")],
-                            wiring={"map": {"over": [], "x": "${item}"}}), learn=True)
+                            wiring={"map": {"over": [], "x": "${item}"}}), learnable=True)
     list(engine.run())
     root, results = compute_backward(engine.state.trace, "review empty list")
     validate_attributed_backward(engine.state.trace, "review empty list", root, results)
@@ -743,7 +743,7 @@ def test_callback_message_mutation_does_not_change_root_or_recorded_feedback():
         return BackwardResult()
 
     end = RecordingBackwardNode(END_ID, lambda _: [1, 2], backward)
-    engine = _engine(_graph([end], [(START_ID, END_ID)]), learn=True)
+    engine = _engine(_graph([end], [(START_ID, END_ID)]), learnable=True)
     list(engine.run())
     message = [None, "review second"]
     _, results = compute_backward(engine.state.trace, message)
@@ -845,7 +845,7 @@ def test_map_bounded_projected_file_lists_compose_before_stopping(operator, monk
     expression = "${item." + "nested." * 40 + "files " + operator + "}"
     flow = _graph([mapper], [(START_ID, "map")], outputs=[FlowOutput("files", "${map.output}")],
                   wiring={"map": {"over": "${deep_map_files()}", "files": expression}})
-    engine = _engine(flow, learn=True)
+    engine = _engine(flow, learnable=True)
     list(engine.run())
     assert engine.state.trace.terminal.succeeded
     feedback = [{"uri": "Review."}]

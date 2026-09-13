@@ -165,7 +165,7 @@ def test_final_log_only_runtime_and_public_surface():
         "on_stream",
         "llm_config",
         "memory",
-        "learn",
+        "learnable",
     ]
     assert list(inspect.signature(run.resume_flow).parameters) == [
         "flow",

@@ -79,7 +79,7 @@ def test_owner_contexts_include_general_occurrences_and_empty_frames(monkeypatch
     for current in flow.nodes.values():
         stack = (outer, local) if current is node else (outer,)
         current.memory_scope = MemoryScope("root", ("root", current.id), stack)
-    engine = _engine(flow, {"topic": "reefs"}, learn=True, memory_layout=layout,
+    engine = _engine(flow, {"topic": "reefs"}, learnable=True, memory_layout=layout,
                      memory_snapshots=(MemorySnapshotEnvelope(_POLICY, {}),))
     list(engine.run())
     trace = engine.state.trace
@@ -209,7 +209,7 @@ def _owner_engine(flow, inputs=None, **kwargs):
     resolved = resolve_memory_layout(flow)
     apply_memory_layout(flow, resolved)
     layout = tuple(frame.spec for frame in resolved.frames)
-    engine = _engine(flow, inputs, learn=True, memory_layout=layout,
+    engine = _engine(flow, inputs, learnable=True, memory_layout=layout,
                      memory_snapshots=(MemorySnapshotEnvelope(_POLICY, {}),), **kwargs)
     return engine, layout
 
@@ -348,7 +348,7 @@ def test_owner_context_root_fallback_uses_only_actual_source_zero_fields(same_bo
     state, log = RunState(flow), MemoryRunLog(_RUN_ID)
     layout = _layout((frame,))
     commit_prepared(log, state, prepare_run_started(state, RunStartData(
-        _RUN_ID, _FINGERPRINT, pool, {}, {}, 0, learn=True,
+        _RUN_ID, _FINGERPRINT, pool, {}, {}, 0, learnable=True,
         memory_layout=layout, memory_snapshots=(MemorySnapshotEnvelope(_POLICY, {}),),
     )))
     list(FlowEngine(state, log, grow_builder=build_grow, num_workers=0).run())
@@ -492,7 +492,7 @@ def test_owner_feedback_uses_recorded_execution_coordinates_independently_of_mem
     ) if scope_available else None)
     node.backward = lambda *_: BackwardResult(self_feedback=("local",))
     layout = _layout(node.memory_scope.frame_stack)
-    state, log = _start_trace_node(node, layout=layout, learn=True)
+    state, log = _start_trace_node(node, layout=layout, learnable=True)
     commit_prepared(log, state, prepare_node_failed(
         state, Failure("node.execute", "failed", node.id), evidence=_evidence(node.memory_scope),
         forward_capture=_forward_capture(node, {"question": "q"}),
@@ -563,7 +563,7 @@ def _new_state(
     node: Node,
     *,
     layout: tuple[MemoryFrameSpec, ...] | None,
-    learn: bool,
+    learnable: bool,
     route_handle: str | None = None,
 ) -> tuple[RunState, MemoryRunLog]:
     """Initialize a direct reducer authority and leave START ready."""
@@ -591,7 +591,7 @@ def _new_state(
                 num_workers=0,
                 memory_layout=layout,
                 memory_snapshots=snapshots,
-                learn=learn,
+                learnable=learnable,
             ),
         ),
     )
@@ -602,15 +602,15 @@ def _start_trace_node(
     node: Node,
     *,
     layout: tuple[MemoryFrameSpec, ...] | None,
-    learn: bool,
+    learnable: bool,
     route_handle: str | None = None,
 ) -> tuple[RunState, MemoryRunLog]:
     """Drive START and leave ``node`` as the sole in-flight outcome."""
-    state, log = _new_state(node, layout=layout, learn=learn, route_handle=route_handle)
+    state, log = _new_state(node, layout=layout, learnable=learnable, route_handle=route_handle)
     commit_prepared(log, state, prepare_node_started(state, START_ID))
     commit_prepared(log, state, prepare_node_succeeded(
         state, START_ID, {},
-        forward_capture=_forward_capture(state.flow.nodes[START_ID], {}) if learn else None,
+        forward_capture=_forward_capture(state.flow.nodes[START_ID], {}) if learnable else None,
     ))
     commit_prepared(log, state, prepare_node_started(state, node.id))
     return state, log
@@ -636,7 +636,7 @@ def _successful_terminal(
     scope = _scope(node.id, frames=frames)
     node.memory_scope = scope
     layout = _layout(scope.frame_stack)
-    state, log = _start_trace_node(node, layout=layout, learn=True)
+    state, log = _start_trace_node(node, layout=layout, learnable=True)
     commit_prepared(
         log,
         state,
@@ -672,7 +672,7 @@ def test_runstarted_retains_defensive_memory_authority_and_projects_episodes() -
     assert state.memory_snapshots == (
         MemorySnapshotEnvelope(_POLICY, {"epoch": 4}),
     )
-    assert state.learn is True
+    assert state.learnable is True
     assert state.learning_state.frame_order == (outer, agent)
 
     outer_episode = state.learning_state.episodes_for(outer)
@@ -706,7 +706,7 @@ def test_engine_episodes_use_the_physical_start_sequence_for_every_outcome(kind)
 
     node = Spawner("agent") if kind == "growth" else _TraceNode("agent")
     node.memory_scope = _scope(node.id)
-    state, log = _start_trace_node(node, layout=_layout(node.memory_scope.frame_stack), learn=True,
+    state, log = _start_trace_node(node, layout=_layout(node.memory_scope.frame_stack), learnable=True,
                                    route_handle="go" if kind == "route" else None)
     physical_sequence = state.trace.started[node.id]
     outcome_sequence = state.next_sequence
@@ -746,7 +746,7 @@ def test_failure_episode_uses_full_canonical_durable_failure_json() -> None:
     scope = _scope(node.id, frames=(agent,))
     node.memory_scope = scope
     layout = _layout((agent,))
-    state, _log = _start_trace_node(node, layout=layout, learn=True)
+    state, _log = _start_trace_node(node, layout=layout, learnable=True)
     failure = Failure(
         "node.execute",
         "visible",
@@ -774,15 +774,15 @@ def test_failure_episode_uses_full_canonical_durable_failure_json() -> None:
     assert episode.output is None
 
 
-@pytest.mark.parametrize("enabled,learn", [(False, False), (True, False)])
+@pytest.mark.parametrize("enabled,learnable", [(False, False), (True, False)])
 def test_evidence_is_rejected_when_learning_is_not_enabled(
     enabled: bool,
-    learn: bool,
+    learnable: bool,
 ) -> None:
     node = _TraceNode("agent")
     node.memory_scope = _scope(node.id)
     layout = _layout(node.memory_scope.frame_stack) if enabled else None
-    state, _log = _start_trace_node(node, layout=layout, learn=learn)
+    state, _log = _start_trace_node(node, layout=layout, learnable=learnable)
 
     with pytest.raises(ValueError, match="ineligible for evaluation evidence"):
         prepare_node_succeeded(
@@ -799,7 +799,7 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
     node = _TraceNode("agent")
     node.memory_scope = _scope(node.id)
     layout = _layout(node.memory_scope.frame_stack)
-    state, _log = _start_trace_node(node, layout=layout, learn=True)
+    state, _log = _start_trace_node(node, layout=layout, learnable=True)
     with pytest.raises(ValueError, match="requires evaluation evidence"):
         prepare_node_succeeded(
             state, node.id, "done", forward_capture=_forward_capture(node, {}),
@@ -811,7 +811,7 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
     ordinary_state, _ = _start_trace_node(
         ordinary,
         layout=ordinary_layout,
-        learn=True,
+        learnable=True,
     )
     with pytest.raises(ValueError, match="ineligible"):
         prepare_node_succeeded(
@@ -840,7 +840,7 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
     mismatched_state, _ = _start_trace_node(
         mismatched,
         layout=mismatched_layout,
-        learn=True,
+        learnable=True,
     )
     with pytest.raises(ValueError, match="exact recorded frame stack"):
         prepare_node_succeeded(
@@ -854,7 +854,7 @@ def test_learning_requires_evidence_and_rejects_ineligible_or_unrecorded_scope(
 
 def test_empty_enabled_layout_retains_scope_free_evidence_without_episodes() -> None:
     node = _TraceNode("agent")
-    state, _log = _start_trace_node(node, layout=(), learn=True)
+    state, _log = _start_trace_node(node, layout=(), learnable=True)
 
     prepared = prepare_node_succeeded(
         state, node.id, "done", evidence=_evidence(None),
@@ -888,7 +888,7 @@ def test_learning_rejects_trace_scope_that_omits_an_applicable_frame(
     state, _log = _start_trace_node(
         node,
         layout=_layout((outer, agent)),
-        learn=True,
+        learnable=True,
     )
 
     with pytest.raises(ValueError, match="exact recorded frame stack"):
@@ -924,7 +924,7 @@ def test_expanded_map_occurrence_projects_and_replays_from_live_node_scope() -> 
     state, log = _start_trace_node(
         spawner,
         layout=_layout((outer,)),
-        learn=True,
+        learnable=True,
     )
     pristine_flow = copy.deepcopy(state.flow)
 
@@ -1122,7 +1122,7 @@ def test_graph_outcome_uses_constant_memory_roots_and_indexed_scope(
         static_path=target.static_path,
         frame_stack=(target,),
     )
-    state, log = _start_trace_node(node, layout=_layout(refs), learn=True)
+    state, log = _start_trace_node(node, layout=_layout(refs), learnable=True)
 
     def reject_full_layout_validation(*_args, **_kwargs) -> None:
         pytest.fail("hot graph transition rescanned the complete memory layout")

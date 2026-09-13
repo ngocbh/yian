@@ -80,7 +80,7 @@ from agent_composer.typesys.values import (
 )
 
 
-SCHEMA_VERSION: Final = 6
+SCHEMA_VERSION: Final = 7
 """The one run-record wire schema understood by this release."""
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
@@ -111,14 +111,14 @@ class RunStartedRecord:
     num_workers: int
     memory_layout: tuple[MemoryFrameSpec, ...] | None = None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
-    learn: bool = False
+    learnable: bool = False
 
     def __post_init__(self) -> None:
         """Validate the enabled-memory shape and its canonical policy inventory."""
         _validate_run_memory_configuration(
             self.memory_layout,
             self.memory_snapshots,
-            self.learn,
+            self.learnable,
         )
 
 
@@ -459,11 +459,11 @@ def _validate_optional_evidence(evidence: EvaluationEvidence | None) -> None:
 def _validate_run_memory_configuration(
     layout: tuple[MemoryFrameSpec, ...] | None,
     snapshots: tuple[MemorySnapshotEnvelope, ...] | None,
-    learn: bool,
+    learnable: bool,
 ) -> None:
     """Validate one RunStarted memory configuration and canonical ordering."""
-    if type(learn) is not bool:
-        raise TypeError("learn must be a boolean")
+    if type(learnable) is not bool:
+        raise TypeError("learnable must be a boolean")
     if (layout is None) != (snapshots is None):
         raise ValueError(
             "memory_layout and memory_snapshots must both be enabled or disabled"
@@ -898,7 +898,7 @@ class _RunStartedPayload(_StrictModel):
     num_workers: int = Field(ge=0)
     memory_layout: list[_MemoryFrameSpecPayload] | None
     memory_snapshots: list[_MemorySnapshotEnvelopePayload] | None
-    learn: bool
+    learnable: bool
 
 
 class _RunResumedPayload(_StrictModel):
@@ -2284,7 +2284,7 @@ def _revalidate_run_record(record: RunRecord) -> None:
             record.num_workers,
             record.memory_layout,
             record.memory_snapshots,
-            record.learn,
+            record.learnable,
         )
         return
     if type(record) is RunResumedRecord:
@@ -2366,7 +2366,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
         _validate_run_memory_configuration(
             record.memory_layout,
             record.memory_snapshots,
-            record.learn,
+            record.learnable,
         )
         raw = {
             "flow_fingerprint": record.flow_fingerprint,
@@ -2389,7 +2389,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                     for snapshot in record.memory_snapshots
                 ]
             ),
-            "learn": record.learn,
+            "learnable": record.learnable,
         }
     elif isinstance(record, RunResumedRecord):
         raw = {
@@ -2521,7 +2521,7 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
                     for snapshot in values["memory_snapshots"]
                 )
             ),
-            learn=values["learn"],
+            learnable=values["learnable"],
         )
     if kind == "run_resumed":
         return RunResumedRecord(

@@ -31,9 +31,9 @@ def test_forward_capture_round_trips_invocation_names_and_structural_layout():
     assert decoded.record.forward_capture.input_names == ("result",)
     assert decoded.record.forward_capture.variable_names == ("instruction",)
     assert decoded.record.forward_capture.node_data == {"input_output_paths": {"result": []}}
-    assert SCHEMA_VERSION == 6
+    assert SCHEMA_VERSION == 7
     old = json.loads(encode_record(envelope))
-    old["schema"] = 5
+    old["schema"] = 6
     with pytest.raises(ValueError, match="schema"):
         decode_record(json.dumps(old))
 
@@ -99,7 +99,7 @@ nodes:
 output: ${work.output}
 asserts: ["${work.output} != null"]
 """).compiled
-    engine = _engine(flow, learn=True)
+    engine = _engine(flow, learnable=True)
     original = copy.deepcopy(engine.state.flow)
     list(engine.run())
     occurrences = {item.node_id: item for item in engine.state.trace.occurrences}
@@ -154,7 +154,7 @@ def test_static_capture_host_fault_does_not_append_a_node_outcome():
         raise expected
 
     node.capture_backward_context = fail
-    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learn=True)
+    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learnable=True)
     with pytest.raises(ValueError) as caught:
         list(engine.run())
     assert caught.value is expected
@@ -228,7 +228,7 @@ output: {left: '${left.output}', right: '${right.output}'}
         return Output({"topic": ctx.prompt})
 
     monkeypatch.setitem(agent_module.MODES, "plain", mode)
-    engine = _engine(flow, learn=True)
+    engine = _engine(flow, learnable=True)
     original = copy.deepcopy(engine.state.flow)
     list(engine.run())
     assert isinstance(engine.state.result, RunSucceeded), engine.state.result
@@ -289,7 +289,7 @@ def test_agent_render_capture_host_and_append_failures_do_not_install_worker_dat
     node = AgentNode("writer", prompt="actual prompt")
     modes = []
     monkeypatch.setitem(agent_module.MODES, "plain", lambda ctx: modes.append(ctx.prompt) or Output(ctx.prompt))
-    engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learn=True)
+    engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learnable=True)
     canonical, append = evaluator.canonical_seed, engine.log.append
 
     def fail_capture(value, **kwargs):
@@ -344,7 +344,7 @@ def test_discarded_agent_worker_keeps_render_capture_out_of_accepted_trace(monke
     flow = _graph([slow, FuncNode("bad", fail)], [
         (START_ID, "slow"), (START_ID, "bad"), ("slow", END_ID), ("bad", END_ID),
     ])
-    engine = _engine(flow, learn=True, num_workers=2, stop_event=stop)
+    engine = _engine(flow, learnable=True, num_workers=2, stop_event=stop)
     list(engine.run())
     assert rendered == ["captured but discarded"]
     assert "slow" in engine.state.trace.started
@@ -382,9 +382,9 @@ def test_forward_capture_round_trips_without_memory_scope():
     assert capture.node_data == {"saved": [2]}
     with pytest.raises(FrozenInstanceError):
         capture.scope = None
-    assert SCHEMA_VERSION == 6
+    assert SCHEMA_VERSION == 7
     old = json.loads(encode_record(envelope))
-    old["schema"] = 4
+    old["schema"] = 6
     with pytest.raises(ValueError, match="schema"):
         decode_record(json.dumps(old))
 
@@ -453,7 +453,7 @@ def test_trace_source_is_the_actual_commit_as_producer():
     flow = _graph([producer, FuncNode("target", lambda _: None), consumer], [
         (START_ID, "physical"), ("target", "read"), ("read", END_ID),
     ])
-    engine = _engine(flow, learn=True)
+    engine = _engine(flow, learnable=True)
     list(engine.run())
     trace = engine.state.trace
     occurrences = {item.node_id: item for item in trace.occurrences}
@@ -509,7 +509,7 @@ def test_failed_binding_and_rejected_outcomes_retain_canonical_failures(stage):
     node.is_spawner = True
     wiring = {"work": {"x": "${input.x:?missing}" if stage == "binding" else 1}}
     engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)], wiring=wiring),
-                     learn=True, grow_builder=lambda *_: None)
+                     learnable=True, grow_builder=lambda *_: None)
     list(engine.run())
     accepted = engine.state.trace.occurrences[-1]
     assert accepted.node_id == "work"
@@ -523,7 +523,7 @@ def test_trace_is_applied_only_after_successful_append(monkeypatch):
     from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
     from tests.engine._graph_builder import _engine, _forward_capture, _graph
 
-    engine = _engine(_graph([], [(START_ID, END_ID)]), learn=True)
+    engine = _engine(_graph([], [(START_ID, END_ID)]), learnable=True)
     state, log = engine.state, engine.log
     commit_prepared(log, state, prepare_node_started(state, START_ID))
     trace = state.trace
@@ -583,7 +583,7 @@ def test_pooled_lookup_keeps_value_and_producer_identity_together(monkeypatch):
     flow = _graph([consumer, FuncNode("peer", produce)], [
         (START_ID, "consumer"), (START_ID, "peer"), ("consumer", END_ID),
     ])
-    engine = _engine(flow, learn=True, num_workers=2, on_event=observe)
+    engine = _engine(flow, learnable=True, num_workers=2, on_event=observe)
     list(engine.run())
     occurrences = {entry.node_id: entry for entry in engine.state.trace.occurrences}
     peer, read = occurrences["peer"], occurrences["consumer"]
@@ -625,7 +625,7 @@ def test_discarded_pooled_outcomes_are_not_trace_occurrences():
     flow = _graph([FuncNode("slow", discard), FuncNode("bad", fail)], [
         (START_ID, "slow"), (START_ID, "bad"), ("slow", END_ID), ("bad", END_ID),
     ])
-    engine = _engine(flow, learn=True, num_workers=2, stop_event=stop)
+    engine = _engine(flow, learnable=True, num_workers=2, stop_event=stop)
     list(engine.run())
     assert body_finished == [True]
     trace = engine.state.trace
@@ -657,7 +657,7 @@ def test_trace_memory_scope_is_detached_and_replayed_without_evidence():
     node = FuncNode("code", lambda _: {"items": [1]})
     node.memory_scope = scope
     engine = _engine(_graph([node], [(START_ID, "code")], outputs=[FlowOutput("value", "${code.output}")]),
-                     learn=True, memory_layout=(MemoryFrameSpec(frame, "memory", {}),),
+                     learnable=True, memory_layout=(MemoryFrameSpec(frame, "memory", {}),),
                      memory_snapshots=(MemorySnapshotEnvelope("memory", {}),))
     original = deepcopy(engine.state.flow)
     list(engine.run())
@@ -688,7 +688,7 @@ def test_trace_rejects_forged_memory_scope_before_append_and_when_copied(bad):
     frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
     node = FuncNode("code", lambda _: "done")
     node.memory_scope = MemoryScope("root", ("root", "code"), (frame,))
-    state, log = _start_trace_node(node, layout=(MemoryFrameSpec(frame, "memory", {}),), learn=True)
+    state, log = _start_trace_node(node, layout=(MemoryFrameSpec(frame, "memory", {}),), learnable=True)
     prepared = prepare_node_succeeded(state, node.id, "done", forward_capture=_forward_capture(node, {}))
     occurrence = prepared._plan.trace_delta.occurrence
     malformed = object() if bad == "carrier" else deepcopy(node.memory_scope)
@@ -722,7 +722,7 @@ def _prepared_scoped_outcome(kind, *, scoped=True):
     node = (Spawner if kind == "growth" else FuncNode)("physical", lambda _: "done")
     frame = MemoryFrameRef("root", ("root",), MemoryOwner.FLOW)
     node.memory_scope = MemoryScope("root", ("root", node.id), (frame,)) if scoped else None
-    state, log = _start_trace_node(node, layout=(MemoryFrameSpec(frame, "memory", {}),), learn=True,
+    state, log = _start_trace_node(node, layout=(MemoryFrameSpec(frame, "memory", {}),), learnable=True,
                                    route_handle="go" if kind == "route" else None)
     original = deepcopy(state.flow)
     kwargs = {"forward_capture": _forward_capture(node, {})}
@@ -768,7 +768,7 @@ def _prepared_terminal_route(*, sibling=False):
     from tests.engine._graph_builder import _engine, _forward_capture
     from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
 
-    engine = _engine(_terminal_skip_route_flow(sibling=sibling), learn=True)
+    engine = _engine(_terminal_skip_route_flow(sibling=sibling), learnable=True)
     state, log = engine.state, engine.log
     original = deepcopy(state.flow)
     commit_prepared(log, state, prepare_node_started(state, START_ID))
@@ -790,7 +790,7 @@ def _prepared_trace_frontier(kind):
     from tests.engine._graph_builder import _engine, _forward_capture
     from tests.engine.test_run_state_outcomes import _terminal_skip_route_flow
 
-    engine = _engine(_terminal_skip_route_flow(), learn=True)
+    engine = _engine(_terminal_skip_route_flow(), learnable=True)
     state, log = engine.state, engine.log
     original = deepcopy(state.flow)
     commit_prepared(log, state, prepare_node_started(state, START_ID))
@@ -1164,7 +1164,7 @@ def test_terminal_trace_root_start_latch_must_match_the_accepted_start(change):
     from tests.engine._graph_builder import _engine, _forward_capture, _graph
     from tests.engine.test_run_state_outcomes import _state_snapshot
 
-    engine = _engine(_graph([], [(START_ID, END_ID)]), learn=True)
+    engine = _engine(_graph([], [(START_ID, END_ID)]), learnable=True)
     state, log = engine.state, engine.log
     commit_prepared(log, state, prepare_node_started(state, START_ID))
     prepared = prepare_node_succeeded(
@@ -1348,7 +1348,7 @@ def test_learn_false_omits_backward_capture():
     from tests.engine._graph_builder import _engine, _graph
 
     flow = _graph([], [(START_ID, END_ID)])
-    engine = _engine(flow, learn=False)
+    engine = _engine(flow, learnable=False)
     list(engine.run())
     assert engine.state.trace is None
     assert all(node.execution_scope is None for node in flow.nodes.values())
@@ -1369,7 +1369,7 @@ def test_paired_resolver_preserves_pool_namespaces(path, value, present, source_
     from agent_composer.compile.model import START_ID, END_ID
     from tests.engine._graph_builder import _engine, _graph
 
-    engine = _engine(_graph([], [(START_ID, END_ID)]), {"x": None, "items": [1]}, learn=True)
+    engine = _engine(_graph([], [(START_ID, END_ID)]), {"x": None, "items": [1]}, learnable=True)
     resolved = engine.state.trace.resolve(path)
     assert resolved.value == value
     assert resolved.present is present
@@ -1383,11 +1383,11 @@ def test_reducer_requires_capture_exactly_when_learning():
     from agent_composer.runtime.state import commit_prepared, prepare_node_started, prepare_node_succeeded
     from tests.engine._graph_builder import _engine, _forward_capture, _graph
 
-    for learn in (False, True):
-        engine = _engine(_graph([], [(START_ID, END_ID)]), learn=learn)
+    for learnable in (False, True):
+        engine = _engine(_graph([], [(START_ID, END_ID)]), learnable=learnable)
         state = engine.state
         commit_prepared(engine.log, state, prepare_node_started(state, START_ID))
-        capture = None if learn else _forward_capture(state.flow.nodes[START_ID], {})
+        capture = None if learnable else _forward_capture(state.flow.nodes[START_ID], {})
         with pytest.raises(ValueError, match="capture"):
             prepare_node_succeeded(state, START_ID, {}, forward_capture=capture)
 
@@ -1478,7 +1478,7 @@ def test_nested_growth_preserves_authored_paths_and_local_driver_zero(kind):
     from agent_composer.nodes.contracts import ExecutionPosition
     from tests.engine._graph_builder import _engine
 
-    engine = _engine(_nested_growth_flow(kind), {"n": 9}, learn=True)
+    engine = _engine(_nested_growth_flow(kind), {"n": 9}, learnable=True)
     list(engine.run())
     trace = engine.state.trace
     occurrences = {item.node_id: item for item in trace.occurrences}
@@ -1524,7 +1524,7 @@ def test_missing_seed_selector_is_an_accepted_growth_failure(path):
         fragment.input_connections = (SeedConnection(fragment.start_id, "x", path),)
         return fragment
 
-    engine = _engine(_seed_call_flow(), {"seed": 7}, learn=True, grow_builder=invalid_selector)
+    engine = _engine(_seed_call_flow(), {"seed": 7}, learnable=True, grow_builder=invalid_selector)
     list(engine.run())
     record = engine.state.trace.occurrences[-1].record
     assert isinstance(record, NodeFailedRecord)
@@ -1545,7 +1545,7 @@ def test_growth_recipe_tampering_fails_replay_before_apply(change):
     from agent_composer.runtime.state import RunState, _replay_records, prepare_record
     from tests.engine._graph_builder import _engine
 
-    engine = _engine(_seed_call_flow(), {"seed": 7}, learn=True)
+    engine = _engine(_seed_call_flow(), {"seed": 7}, learnable=True)
     original = copy.deepcopy(engine.state.flow)
     for node_id in (START_ID, "spawn"):
         engine._commit_started(node_id)
@@ -1584,7 +1584,7 @@ def test_reference_looking_seed_strings_use_actual_forward_binding(seed, expecte
     from tests.engine._graph_builder import _engine
 
     peer = FuncNode("peer", lambda _: expected)
-    engine = _engine(_seed_call_flow(extra_nodes=(peer,), extra_first=early_peer), {"seed": seed}, learn=True)
+    engine = _engine(_seed_call_flow(extra_nodes=(peer,), extra_first=early_peer), {"seed": seed}, learnable=True)
     list(engine.run())
     trace = engine.state.trace
     occurrences = {item.node_id: item for item in trace.occurrences}
@@ -1613,7 +1613,7 @@ def test_incomplete_child_binding_joins_only_safe_captured_fields():
     from tests.engine._graph_builder import _engine
 
     engine = _engine(_seed_call_flow({"safe": "${input.safe}", "x": "${input.seed}"}),
-                     {"safe": 7, "seed": '${null :? "missing"}'}, learn=True)
+                     {"safe": 7, "seed": '${null :? "missing"}'}, learnable=True)
     list(engine.run())
     trace = engine.state.trace
     child = trace.occurrences[-1]
@@ -1635,7 +1635,7 @@ def test_seed_connections_wait_for_append_and_survive_unfinished_start_retry(mon
     from agent_composer.runtime.trace import capture_bindings
     from tests.engine._graph_builder import _engine
 
-    engine = _engine(_seed_call_flow(), {"seed": 7}, learn=True)
+    engine = _engine(_seed_call_flow(), {"seed": 7}, learnable=True)
     engine._commit_started(START_ID)
     engine._commit_outcome(START_ID, engine._evaluate(START_ID, emit_stream=None))
     engine._commit_started("spawn")
@@ -1730,7 +1730,7 @@ def test_pruned_seed_connections_do_not_leak_into_reused_node_ids(skip_first):
     flow = _graph([first, Prune("prune"), again], [
         (START_ID, "first"), ("first", "prune"), ("prune", "again"), ("again", END_ID),
     ], wiring={"first": {"x": "${input.first}"}, "prune": {}, "again": {"x": "${input.second}"}})
-    engine = _engine(flow, {"first": 7, "second": 11}, learn=True, grow_builder=builder, on_event=observe)
+    engine = _engine(flow, {"first": 7, "second": 11}, learnable=True, grow_builder=builder, on_event=observe)
     list(engine.run())
     assert isinstance(engine.state.result, RunSucceeded)
     trace = engine.state.trace
@@ -1777,7 +1777,7 @@ nodes:
     input: {n: '${input.n}'}
 output: ${spawn.output}
 """).compiled
-    engine = _engine(flow, {"n": 9}, learn=True)
+    engine = _engine(flow, {"n": 9}, learnable=True)
     list(engine.run())
     trace = engine.state.trace
     occurrences = {item.node_id: item for item in trace.occurrences}
@@ -1813,7 +1813,7 @@ def test_null_materialized_seed_keeps_its_selected_source(kind):
         node.params = [Parameter("x")]
         flow = _graph([node], [(START_ID, "spawn"), ("spawn", END_ID)],
                       wiring={"spawn": {"over": "${[input.seed]}", "x": "${item}"}})
-    engine = _engine(flow, {"seed": None}, learn=True)
+    engine = _engine(flow, {"seed": None}, learnable=True)
     list(engine.run())
     trace = engine.state.trace
     root = next(item for item in trace.occurrences if item.node_id == START_ID)
@@ -1847,7 +1847,7 @@ def test_map_seed_routes_preserve_equal_item_positions(over, inputs, expected):
     node.params = [Parameter("x")]
     flow = _graph([node], [(START_ID, "spawn"), ("spawn", END_ID)],
                   wiring={"spawn": {"over": over, "x": "${item}"}})
-    engine = _engine(flow, inputs, learn=True)
+    engine = _engine(flow, inputs, learnable=True)
     list(engine.run())
     trace = engine.state.trace
     occurrences = {item.node_id: item for item in trace.occurrences}
@@ -1899,7 +1899,7 @@ nodes:
     input: {{n: '${{input.n}}'}}
 output: ${{spawn.output}}
 """).compiled
-    engine = _engine(flow, {"n": 9}, learn=True)
+    engine = _engine(flow, {"n": 9}, learnable=True)
     list(engine.run())
     trace = engine.state.trace
     occurrences = {item.node_id: item for item in trace.occurrences}
@@ -1984,7 +1984,7 @@ output: ${{spawn.output}}
         snapshots[engine.state.next_sequence] = _trace_snapshot(engine.state.trace)
         actual_nodes.update(engine.state.flow.nodes)
 
-    engine = _engine(flow, {"n": 9} if kind.startswith("nested-") else None, learn=True, on_event=observe)
+    engine = _engine(flow, {"n": 9} if kind.startswith("nested-") else None, learnable=True, on_event=observe)
     original = copy.deepcopy(engine.state.flow)
     observe(None)
     list(engine.run())
@@ -2024,7 +2024,7 @@ def test_retry_clears_unfinished_start_identity_and_primed_input_is_replaced():
     from tests.engine._graph_builder import _engine, _graph
 
     node = FuncNode("read", lambda inputs: inputs, reads={"x": "${input.x}"})
-    engine = _engine(_graph([node], [(START_ID, "read"), ("read", END_ID)]), {"x": 2}, learn=True)
+    engine = _engine(_graph([node], [(START_ID, "read"), ("read", END_ID)]), {"x": 2}, learnable=True)
     trace = engine.state.trace
     assert trace.resolve("input.x").source == SourceRef(engine.state.run_id, 0, ("x",))
     commit_prepared(engine.log, engine.state, prepare_node_started(engine.state, START_ID))
@@ -2048,7 +2048,7 @@ def test_capture_canonicalizes_supported_binding_objects():
 
     raw = {"values": (1, 2), "file": FileRef(uri="file:///tmp/example.txt")}
     node = FuncNode("work", lambda _: "done", reads=raw)
-    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learn=True)
+    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learnable=True)
     list(engine.run())
     record = next(item.record for item in engine.state.trace.occurrences if item.node_id == "work")
     assert record.forward_capture.bound_inputs == canonical_seed(raw)[1]
@@ -2064,7 +2064,7 @@ def test_a_lookup_retains_its_entry_when_a_new_writer_commits(monkeypatch):
     from tests.engine._graph_builder import _engine, _forward_capture, _graph
 
     node = FuncNode("read", lambda inputs: inputs, reads={"x": "${input.x}"})
-    engine = _engine(_graph([node], [(START_ID, "read"), ("read", END_ID)]), {"x": 10}, learn=True)
+    engine = _engine(_graph([node], [(START_ID, "read"), ("read", END_ID)]), {"x": 10}, learnable=True)
     trace = engine.state.trace
     entry_read = threading.Event()
     continue_read = threading.Event()
@@ -2184,7 +2184,7 @@ def test_learning_retains_opaque_calls_with_arguments(
 
     monkeypatch.setitem(TEMPLATE_FNS, "collect_args", collect_args)
     node = FuncNode("work", body, reads={"x": "${collect_args(" + arguments + ")}"})
-    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learn=True)
+    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learnable=True)
     list(engine.run())
     assert isinstance(engine.state.result, RunSucceeded)
     capture = next(entry.record.forward_capture for entry in engine.state.trace.occurrences
@@ -2220,7 +2220,7 @@ def test_learning_retains_valid_results_of_noncanonical_unicode_temporaries(temp
 
     monkeypatch.setitem(TEMPLATE_FNS, "bad_text", bad_text)
     node = FuncNode("work", body, reads={"x": "${bad_text() == bad_text()}"})
-    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learn=True)
+    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learnable=True)
     list(engine.run())
     assert isinstance(engine.state.result, RunSucceeded)
     envelope = next(item for item in engine.log
@@ -2254,7 +2254,7 @@ def test_learning_retains_noncanonical_partial_temporary_comparisons(
 
     monkeypatch.setitem(TEMPLATE_FNS, "partial_text", partial_text)
     node = FuncNode("work", lambda inputs: inputs, reads={"x": "${partial_text() != null}"})
-    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learn=True)
+    engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)]), learnable=True)
     list(engine.run())
     assert isinstance(engine.state.result, RunSucceeded)
     envelope = next(item for item in engine.log

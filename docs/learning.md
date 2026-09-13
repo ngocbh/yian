@@ -7,7 +7,7 @@ whether to enable retention and when to submit feedback.
 
 ```mermaid
 flowchart LR
-    forward["run_flow(..., learn=True)"] --> result["terminal RunResult"]
+    forward["run_flow(..., learnable=True)"] --> result["terminal RunResult"]
     result --> attempt["result.backward(feedback)"]
     attempt --> fold["reverse fold over accepted data lineage"]
     fold --> nodes["node backward hooks"]
@@ -26,7 +26,7 @@ and `RunResult.learning` is its learning projection.
 
 ## Retention and memory are separate
 
-`learn=True` makes a run learnable. It retains accepted inputs, outputs, selected
+`learnable=True` makes a run learnable. It retains accepted inputs, outputs, selected
 data routes, and invocation context so a later reverse pass can attribute
 feedback. It does **not** require a memory backend, and it does not call a learner
 during forward execution.
@@ -34,11 +34,11 @@ during forward execution.
 `memory=` is separate host-provided infrastructure for recall and durable policy
 updates. An authored `long_term_memory` declaration chooses a policy name; the
 host supplies its implementation under that name. Recall can be enabled without
-`learn=True`, and a learnable run can operate without any memory policy.
+`learnable=True`, and a learnable run can operate without any memory policy.
 
 | Setting | What it enables | What forward execution does |
 | --- | --- | --- |
-| `learn=True` | Retained execution and a later `backward()` call | Records accepted facts; does not learn or commit |
+| `learnable=True` | Retained execution and a later `backward()` call | Records accepted facts; does not learn or commit |
 | `memory={...}` | Recall for declared memory frames | Opens policy snapshots and provides recalled context |
 | Both | Feedback-informed frame learning | Retains execution and recalls; still does not write memory |
 
@@ -57,7 +57,7 @@ no successful output shape.
 ```python
 from agent_composer import run_flow
 
-result = run_flow(flow, {"topic": "routing"}, learn=True)
+result = run_flow(flow, {"topic": "routing"}, learnable=True)
 forward_output = result.output
 
 outcome = result.backward({
@@ -161,7 +161,7 @@ from agent_composer import run_flow
 from agent_composer.run import resume_flow
 
 log = Path("reviewable-run.jsonl")
-result = run_flow(flow, {"topic": "routing"}, log=log, learn=True)
+result = run_flow(flow, {"topic": "routing"}, log=log, learnable=True)
 
 # Later, possibly in another process:
 recovered = resume_flow(flow, log=log)

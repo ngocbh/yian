@@ -376,7 +376,7 @@ def test_scope_free_model_evidence_is_accepted_with_forward_capture(monkeypatch)
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: _PlainChat("done"))
     node = AgentNode("work")
     engine = _engine(
-        _graph([node], [(START_ID, node.id), (node.id, END_ID)]), learn=True,
+        _graph([node], [(START_ID, node.id), (node.id, END_ID)]), learnable=True,
     )
     list(engine.run())
     record = next(
@@ -426,7 +426,7 @@ def test_actual_render_capture_survives_later_failures_without_fabricating_evide
     monkeypatch.setattr(llm_clients, "model_from_config", factory)
     layout, snapshots = _learning_configuration(node)
     engine = _engine(_graph([node], [(START_ID, "work"), ("work", END_ID)],
-                            wiring={"work": {"topic": "reefs"}}), learn=True,
+                            wiring={"work": {"topic": "reefs"}}), learnable=True,
                      memory_layout=layout, memory_snapshots=snapshots, memory_recall=recall)
     list(engine.run())
     record = next(item.record for item in engine.state.trace.occurrences if item.node_id == "work")
@@ -1184,7 +1184,7 @@ def _inflight_state(node: Node):
         flow,
         memory_layout=layout,
         memory_snapshots=snapshots,
-        learn=True,
+        learnable=True,
     )
     commit_prepared(
         engine.log,
@@ -1286,7 +1286,7 @@ def test_dispatcher_contract_failures_retain_the_same_evidence(arm: str) -> None
         grow_builder=grow_builder,
         memory_layout=layout,
         memory_snapshots=snapshots,
-        learn=True,
+        learnable=True,
     )
 
     list(engine.run())
@@ -1336,7 +1336,7 @@ def test_pooled_dispatch_discards_late_sibling_evidence_with_its_outcome() -> No
         num_workers=2,
         memory_layout=layout,
         memory_snapshots=snapshots,
-        learn=True,
+        learnable=True,
     )
 
     list(engine.run())
